@@ -473,6 +473,19 @@ enum InferenceWorkloadClass {
 }
 
 impl InferenceWorkloadClass {
+    /// Resolve a queue from host-issued scheduling authority after caller authorization.
+    /// 在调用方授权后，从宿主签发的调度权限解析队列。
+    /// `caller` is frozen registration context; returns no new model-route permissions.
+    /// `caller` 是冻结的注册上下文；返回值不授予新的模型路由权限。
+    fn from_caller(caller: &InferenceCallerContext) -> Self {
+        match caller.scheduling_class {
+            vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope => {
+                Self::from_usage_scope(caller.usage_scope)
+            }
+            vulcan_ai_contract::InferenceSchedulingClass::InternalQuery => Self::Interactive,
+        }
+    }
+
     /// Derives one scheduler class from a host-injected usage scope.
     /// 从宿主注入的用途范围派生一项调度类别。
     ///
@@ -586,7 +599,13 @@ impl InferenceSchedulerState {
         {
             return false;
         }
-        let background_must_progress = !self.background.is_empty()
+        // Yield priority only when the waiting background head can actually use its own capacity.
+        // 仅当等待中的后台队首确实能使用自身容量时让出优先级。
+        // A busy background slot must not stall foreground queries after repeated priority admissions.
+        // 后台槽位已占用时，不得在多次优先受理后阻塞前台查询。
+        let background_must_progress = self.active_background
+            < INFERENCE_SCHEDULER_BACKGROUND_CAPACITY
+            && !self.background.is_empty()
             && self.background_bypass_count >= INFERENCE_SCHEDULER_MAX_PRIORITY_BYPASS;
         match class {
             InferenceWorkloadClass::Interactive => !background_must_progress,
@@ -733,9 +752,9 @@ impl InferenceWorkloadScheduler {
     ///
     /// # Parameters
     /// 参数
-    /// `self` retains queue ownership, `usage_scope` selects the trusted lane, and
+    /// `self` retains queue ownership, `class` selects the host-authorized lane, and
     /// `deadline_unix_ms` bounds queue waiting.
-    /// `self` 保留队列所有权，`usage_scope` 选择可信通道，`deadline_unix_ms`
+    /// `self` 保留队列所有权，`class` 选择宿主已授权通道，`deadline_unix_ms`
     /// 限制排队等待时间。
     ///
     /// # Returns
@@ -744,10 +763,9 @@ impl InferenceWorkloadScheduler {
     /// 返回 RAII 容量许可，或稳定截止时间/锁失败。
     async fn acquire(
         self: &Arc<Self>,
-        usage_scope: InferenceUsageScope,
+        class: InferenceWorkloadClass,
         deadline_unix_ms: Option<u64>,
     ) -> Result<InferenceSchedulerPermit, ConfiguredInferenceError> {
-        let class = InferenceWorkloadClass::from_usage_scope(usage_scope);
         let ticket = {
             let mut state = self.state.lock().map_err(lock_error)?;
             let ticket = state.next_ticket;
@@ -796,15 +814,23 @@ impl InferenceWorkloadScheduler {
     }
 }
 
-/// Owns one caller concurrency reservation until execution terminates.
-/// 在执行终止前拥有一项调用方并发预留。
-struct CallerExecutionPermit {
+/// Owns one caller reservation from queue admission through execution termination.
+/// 从排队准入直到执行终止持有一项调用方预留。
+struct CallerConcurrencyReservation {
     /// Stable caller identifier.
     /// 稳定调用方标识。
     caller_id: String,
     /// Shared active-execution counters.
     /// 共享活动执行计数器。
     counters: Arc<Mutex<BTreeMap<String, u32>>>,
+}
+
+/// Retains both caller and scheduler ownership after successful admission.
+/// 成功准入后同时保留调用方和调度器所有权。
+struct CallerExecutionPermit {
+    /// The same reservation created before queue waiting, never a second counter increment.
+    /// 排队等待前创建的同一预留，绝不再次递增计数。
+    _caller_reservation: CallerConcurrencyReservation,
     /// Priority-scheduled shared workload slot.
     /// 按优先级调度的共享工作负载槽位。
     _scheduler_permit: InferenceSchedulerPermit,
@@ -1258,9 +1284,9 @@ impl InternalInferenceTelemetryFacts {
     }
 }
 
-impl Drop for CallerExecutionPermit {
-    /// Releases exactly one caller reservation.
-    /// 精确释放一项调用方预留。
+impl Drop for CallerConcurrencyReservation {
+    /// Releases only this reservation on queue cancellation, rejection, or execution completion.
+    /// 在排队取消、拒绝或执行完成时仅释放此项预留。
     fn drop(&mut self) {
         release_caller_counter(self.counters.as_ref(), self.caller_id.as_str());
     }
@@ -2856,30 +2882,24 @@ impl ConfiguredInferenceService {
             }
             counters.insert(caller.caller_id.clone(), current + 1);
         }
-        let scheduler_permit = match self
-            .workload_scheduler
-            .acquire(caller.usage_scope, caller.deadline_unix_ms)
-            .await
-        {
-            Ok(permit) => permit,
-            Err(error) => {
-                release_caller_counter(
-                    self.caller_execution_counts.as_ref(),
-                    caller.caller_id.as_str(),
-                );
-                return Err(error);
-            }
-        };
-        if let Err(error) = self.reserve_caller_rate_budget(caller, input_units) {
-            release_caller_counter(
-                self.caller_execution_counts.as_ref(),
-                caller.caller_id.as_str(),
-            );
-            return Err(error);
-        }
-        Ok(CallerExecutionPermit {
+        // Establish cancellation-safe ownership before the first await can suspend this reservation.
+        // 在首个 await 可能挂起此预留之前，建立能够安全处理取消的所有权。
+        let caller_reservation = CallerConcurrencyReservation {
             caller_id: caller.caller_id.clone(),
             counters: Arc::clone(&self.caller_execution_counts),
+        };
+        // Queue failure or future cancellation drops the same reservation without manual rollback.
+        // 队列失败或协程取消会丢弃同一预留，不需要手动回滚。
+        let scheduler_permit = self
+            .workload_scheduler
+            .acquire(
+                InferenceWorkloadClass::from_caller(caller),
+                caller.deadline_unix_ms,
+            )
+            .await?;
+        self.reserve_caller_rate_budget(caller, input_units)?;
+        Ok(CallerExecutionPermit {
+            _caller_reservation: caller_reservation,
             _scheduler_permit: scheduler_permit,
         })
     }
@@ -3767,6 +3787,9 @@ fn authorize_caller(
 /// 返回一个有界后台调用方，其身份会成为原生账本消费者。
 fn provider_model_validation_caller() -> InferenceCallerContext {
     InferenceCallerContext {
+        // Model validation keeps its existing scheduling behavior.
+        // 模型验证保留既有调度行为。
+        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
         caller_id: PROVIDER_MODEL_VALIDATION_CONSUMER_ID.to_string(),
         allowed_consumer_profile_ids: BTreeSet::from([String::from(
             PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
@@ -4774,6 +4797,13 @@ fn embedding_request_with_internal_defaults(
     selection: &ResolvedPublicAiSelection,
     mut request: EmbeddingRequest,
 ) -> EmbeddingRequest {
+    // Preserve admitted request dimensions before consulting this consumer's optional choice.
+    // 优先保留已准入请求的维度，再读取该消费者自己的可选维度选择。
+    request.dimensions = consumer_embedding_request_dimensions(
+        configuration,
+        &request.consumer_profile_id,
+        request.dimensions,
+    );
     let Some(overrides) =
         internal_model_overrides(configuration, selection, AiOperation::EmbeddingCreate)
     else {
@@ -4792,6 +4822,27 @@ fn embedding_request_with_internal_defaults(
         request.encoding = encoding;
     }
     request
+}
+
+/// Resolve dimensions from the admitted request and its exact consumer profile.
+/// 从已准入请求及其精确消费者配置档解析维度。
+///
+/// `configuration` owns saved profiles; `consumer_profile_id` selects one profile;
+/// `explicit_dimensions` preserves an already frozen request. Returns no value when
+/// neither declares dimensions, allowing the existing model-level default policy.
+/// `configuration` 持有保存的配置；`consumer_profile_id` 选择唯一配置档；
+/// `explicit_dimensions` 保留已冻结请求。两者均未声明时返回空值，沿用模型级默认策略。
+fn consumer_embedding_request_dimensions(
+    configuration: &PersistedAiConfiguration,
+    consumer_profile_id: &str,
+    explicit_dimensions: Option<u32>,
+) -> Option<u32> {
+    explicit_dimensions.or_else(|| {
+        configuration
+            .inference_profiles
+            .get(consumer_profile_id)
+            .and_then(|profile| profile.embedding_dimensions)
+    })
 }
 
 /// Applies host-owned rerank defaults without changing query or candidate identity.
@@ -4896,7 +4947,7 @@ fn llm_route_snapshot(
 /// 返回值
 /// A non-secret route snapshot whose binding identity matches the configured operation.
 /// 返回绑定身份与已配置操作一致且不含秘密的路由快照。
-fn configured_route_snapshot(
+pub(crate) fn configured_route_snapshot(
     selection: &ResolvedPublicAiSelection,
     route: &InferenceRouteConfiguration,
 ) -> ExecutionRouteSnapshot {
@@ -6109,6 +6160,48 @@ mod tests {
         InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration,
     };
 
+    /// Assert dimension precedence without changing another consumer's default policy.
+    /// 验证维度优先级且不改变其他消费者的默认策略。
+    ///
+    /// Takes no parameters and returns nothing; failed isolation or precedence panics.
+    /// 无参数、无返回值；隔离或优先级断言不成立时测试失败。
+    #[test]
+    fn consumer_embedding_dimensions_preserve_admission_and_isolate_peers() {
+        // configuration contains one explicit VCE dimension and a legacy VMM profile.
+        // configuration 包含 VCE 明确维度与沿用旧策略的 VMM 配置档。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.inference_profiles.insert(
+            String::from("vce"),
+            InferenceProfile {
+                embedding_dimensions: Some(1024),
+                ..Default::default()
+            },
+        );
+        configuration
+            .inference_profiles
+            .insert(String::from("vmm"), InferenceProfile::default());
+        assert_eq!(
+            consumer_embedding_request_dimensions(&configuration, "vce", None),
+            Some(1024)
+        );
+        assert_eq!(
+            consumer_embedding_request_dimensions(&configuration, "vce", Some(2048)),
+            Some(2048)
+        );
+        assert_eq!(
+            consumer_embedding_request_dimensions(&configuration, "vmm", None),
+            None
+        );
+        assert_eq!(
+            consumer_embedding_request_dimensions(&configuration, "knowledge-test", None),
+            None
+        );
+        assert_eq!(
+            consumer_embedding_request_dimensions(&configuration, "vmm", Some(768)),
+            Some(768)
+        );
+    }
+
     /// Builds one authorized deterministic test caller.
     /// 构建一个已授权确定性测试调用方。
     ///
@@ -6118,6 +6211,9 @@ mod tests {
     /// 返回具有全部操作权限的 VMM 后台调用方。
     fn test_caller() -> InferenceCallerContext {
         InferenceCallerContext {
+            // Existing caller fixtures retain usage-scope scheduling.
+            // 既有调用方夹具保留用途范围调度。
+            scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
             caller_id: String::from("vmm-test"),
             allowed_consumer_profile_ids: BTreeSet::from([String::from("vmm")]),
             permissions: BTreeSet::from([
@@ -6471,18 +6567,241 @@ mod tests {
         assert!(state.can_admit(InferenceWorkloadClass::Background, 3));
     }
 
+    /// Prove foreground query capacity survives a busy background slot and repeated fair-queue bypass.
+    /// 证明前台查询容量不会被繁忙后台槽及反复公平队列越过所阻塞。
+    /// No inputs; checks actual permits and queue cleanup without model or storage traffic.
+    /// 无输入；检查实际许可和队列清理，不产生模型或存储流量。
+    #[tokio::test]
+    async fn internal_query_scheduler_remains_live_during_background_work() {
+        // One shared scheduler reproduces the production background bottleneck.
+        // 一个共享调度器复现生产后台瓶颈。
+        let scheduler = Arc::new(InferenceWorkloadScheduler::default());
+        // Keep the original background task alive throughout all foreground queries.
+        // 在全部前台查询期间保持原后台任务存活。
+        let background = scheduler
+            .acquire(InferenceWorkloadClass::Background, None)
+            .await
+            .expect("background capacity");
+        // A second background ticket tests fairness without being allowed to consume foreground slots.
+        // 第二张后台票据测试公平性，不允许其占用前台槽位。
+        let mut waiting = Box::pin(scheduler.acquire(InferenceWorkloadClass::Background, None));
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        // Only the host-issued scheduling class changes, not the authorized route scope.
+        // 仅改变宿主签发调度类别，不改变授权路由用途。
+        let mut caller = test_caller();
+        caller.scheduling_class = vulcan_ai_contract::InferenceSchedulingClass::InternalQuery;
+        caller
+            .authorize("vmm", InferencePermission::Embedding)
+            .expect("internal authorization");
+        for _ in 0..=INFERENCE_SCHEDULER_MAX_PRIORITY_BYPASS {
+            // Every request must finish while background capacity is still occupied.
+            // 每项请求都必须在后台容量仍被占用时完成。
+            let query = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                scheduler.acquire(InferenceWorkloadClass::from_caller(&caller), None),
+            )
+            .await
+            .expect("foreground cannot wait for background")
+            .expect("query capacity");
+            drop(query);
+        }
+        drop(background);
+        // Once background capacity is free, the retained queue head must also make progress.
+        // 后台容量释放后，保留的队首也必须推进。
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("background fairness")
+            .expect("second background capacity");
+        drop(second);
+        // Both priority and background permits return to the same bounded scheduler.
+        // 优先和后台许可都归还同一个有界调度器。
+        let state = scheduler.state.lock().expect("scheduler");
+        assert_eq!(state.active_total, 0);
+        assert_eq!(state.active_background, 0);
+        assert!(state.background.is_empty());
+        assert!(state.interactive.is_empty());
+    }
+
+    /// Enforce total capacity and remove cancelled foreground tickets without changing background capacity.
+    /// 执行总容量约束并移除已取消的前台票据，不改变后台容量。
+    /// No inputs; uses real scheduler permits and bounded timeout failures.
+    /// 无输入；使用真实调度许可及有界超时失败。
+    #[tokio::test]
+    async fn internal_query_scheduler_bounds_capacity_and_cleans_cancellation() {
+        // The fixture owns every slot so it cannot depend on timing from another test.
+        // 夹具持有全部槽位，不依赖其他测试的时序。
+        let scheduler = Arc::new(InferenceWorkloadScheduler::default());
+        // Retain all admitted foreground work until deadline and cancellation have been checked.
+        // 在检查截止时间和取消之前保留全部已准入前台工作。
+        let mut permits = Vec::new();
+        for _ in 0..INFERENCE_SCHEDULER_TOTAL_CAPACITY {
+            permits.push(
+                scheduler
+                    .acquire(InferenceWorkloadClass::Interactive, None)
+                    .await
+                    .expect("bounded foreground permit"),
+            );
+        }
+        assert!(
+            scheduler
+                .acquire(
+                    InferenceWorkloadClass::Interactive,
+                    Some(current_unix_millis().saturating_add(5))
+                )
+                .await
+                .is_err()
+        );
+        // Dropping an enqueued request mirrors cooperative cancellation before model dispatch.
+        // 丢弃已排队请求对应模型派发前的协作取消。
+        let mut pending = Box::pin(scheduler.acquire(InferenceWorkloadClass::Interactive, None));
+        assert!(futures_util::poll!(pending.as_mut()).is_pending());
+        drop(pending);
+        assert!(
+            scheduler
+                .state
+                .lock()
+                .expect("cancelled queue")
+                .interactive
+                .is_empty()
+        );
+        drop(permits);
+        assert_eq!(
+            scheduler
+                .state
+                .lock()
+                .expect("released capacity")
+                .active_total,
+            0
+        );
+    }
+
+    /// Scheduling grants cannot change route authorization or promote externally authenticated callers.
+    /// 调度授权不能改变路由授权或提升外部鉴权调用方。
+    /// No inputs; verifies the shared caller authorization and default scheduling contract.
+    /// 无输入；验证共同调用方授权及默认调度契约。
+    #[test]
+    fn internal_query_scheduling_preserves_authorization() {
+        // Begin with the same caller used by existing internal inference tests.
+        // 从既有内部推理测试使用的同一调用方开始。
+        let mut caller = test_caller();
+        assert_eq!(
+            InferenceWorkloadClass::from_caller(&caller),
+            InferenceWorkloadClass::Background
+        );
+        caller.scheduling_class = vulcan_ai_contract::InferenceSchedulingClass::InternalQuery;
+        assert_eq!(
+            InferenceWorkloadClass::from_caller(&caller),
+            InferenceWorkloadClass::Interactive
+        );
+        assert!(
+            caller
+                .authorize("vmm", InferencePermission::Embedding)
+                .is_ok()
+        );
+        assert!(
+            caller
+                .authorize("unowned", InferencePermission::Embedding)
+                .is_err()
+        );
+        for scope in [
+            InferenceUsageScope::ExternalService,
+            InferenceUsageScope::InteractiveAgent,
+        ] {
+            caller.usage_scope = scope;
+            assert!(
+                caller
+                    .authorize("vmm", InferencePermission::Embedding)
+                    .is_err()
+            );
+        }
+    }
+
+    /// Reject forged scheduling grants while allowing separately registered query authority over one profile.
+    /// 拒绝伪造调度权限，同时允许在同一配置档上单独注册查询权限。
+    /// No inputs; exercises the real host registry without credentials, model requests or databases.
+    /// 无输入；执行真实宿主注册表，不访问凭据、模型或数据库。
+    #[test]
+    fn internal_query_scheduling_rejects_forged_capability_handles() {
+        use vulcan_ai_contract::{
+            HostAiCapabilityRegistration, HostAiPort, InferenceSchedulingClass,
+        };
+        // An empty private profile admits status inspection without enabling any operation.
+        // 空私有配置档允许状态检查，不启用任何操作。
+        let runtime = Arc::new(PublicAiRuntime::unavailable().expect("private runtime"));
+        // No persisted configuration or model profile is changed by this fixture.
+        // 此夹具不改变任何持久化配置或模型配置档。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .inference_profiles
+            .insert("vmm".into(), InferenceProfile::default());
+        runtime
+            .replace_configuration(configuration)
+            .expect("private profile");
+        // The production host owns the exact registry used to validate returned handles.
+        // 生产宿主持有用于验证返回句柄的精确注册表。
+        let port = crate::internal_ai::ConfiguredInferenceHostAiPort::new(Arc::new(
+            ConfiguredInferenceService::new(runtime),
+        ));
+        // Keep the existing authorization scope and explicitly grant status inspection.
+        // 保持既有授权用途并明确授予状态检查权限。
+        let mut caller = test_caller();
+        caller.permissions.insert(InferencePermission::Status);
+        // The background registration freezes its scheduling class with the caller identity.
+        // 后台注册将调度类别与调用方身份一起冻结。
+        let registration = HostAiCapabilityRegistration {
+            registration_id: "scheduling-index".into(),
+            owner_id: "scheduling-fixture".into(),
+            consumer_profile_id: "vmm".into(),
+            caller,
+            requirements: Vec::new(),
+        };
+        // Own a second trusted registration rather than mutating a previously issued handle.
+        // 持有第二份受信注册，而不是篡改已签发句柄。
+        let mut query_registration = registration.clone();
+        query_registration.registration_id = "scheduling-query".into();
+        query_registration.caller.scheduling_class = InferenceSchedulingClass::InternalQuery;
+        // This exact handle is registered as background and must not be promoted by its holder.
+        // 此精确句柄注册为后台，持有方不得将其提升。
+        let mut forged = port
+            .register_capability(registration)
+            .expect("index registration");
+        forged.caller.scheduling_class = InferenceSchedulingClass::InternalQuery;
+        assert_eq!(
+            port.capability_snapshot(&forged)
+                .expect_err("forged promotion rejected")
+                .code,
+            vulcan_ai_contract::HostAiErrorCode::PermissionDenied
+        );
+        // The query capability is independently revocable and cannot revoke its background peer.
+        // 查询能力可独立撤销，不得撤销其后台同伴。
+        let query = port
+            .register_capability(query_registration)
+            .expect("query registration");
+        assert!(port.capability_snapshot(&query).is_ok());
+        port.unregister_capability(&query.registration_id)
+            .expect("query revocation");
+        assert!(port.capability_snapshot(&query).is_err());
+        assert_eq!(
+            port.capability_handle("scheduling-index")
+                .expect("index survives")
+                .caller
+                .scheduling_class,
+            InferenceSchedulingClass::ByUsageScope
+        );
+    }
+
     /// Verifies queue deadlines remove abandoned tickets without leaking capacity.
     /// 验证队列截止时间会移除被放弃票据且不会泄漏容量。
     #[tokio::test]
     async fn workload_scheduler_deadline_cleans_waiting_ticket() {
         let scheduler = Arc::new(InferenceWorkloadScheduler::default());
         let first = scheduler
-            .acquire(InferenceUsageScope::InternalBackground, None)
+            .acquire(InferenceWorkloadClass::Background, None)
             .await
             .expect("first background slot");
         let error = match scheduler
             .acquire(
-                InferenceUsageScope::InternalBackground,
+                InferenceWorkloadClass::Background,
                 Some(current_unix_millis().saturating_add(5)),
             )
             .await
@@ -6856,6 +7175,242 @@ mod tests {
         assert_eq!(
             narrow_output_limit(None, [None, None, Some(900), Some(700)]),
             Some(700)
+        );
+    }
+
+    /// Verify cancelling queued work releases its caller reservation in every scheduling lane.
+    /// 验证取消排队工作会在每条调度通道归还其调用方预留。
+    /// No inputs or output; real permits and explicit future polling avoid provider calls and timing races.
+    /// 无输入或输出；真实许可与显式协程轮询避免供应商调用和计时竞争。
+    #[tokio::test]
+    async fn queued_caller_permit_cancellation_releases_reservation() {
+        // Cover background indexing, host-issued foreground queries, and the unchanged external lane.
+        // 覆盖后台索引、宿主签发的前台查询及保持原规则的外部通道。
+        for (usage_scope, scheduling_class, capacity) in [
+            (
+                InferenceUsageScope::InternalBackground,
+                vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
+                INFERENCE_SCHEDULER_BACKGROUND_CAPACITY,
+            ),
+            (
+                InferenceUsageScope::InternalBackground,
+                vulcan_ai_contract::InferenceSchedulingClass::InternalQuery,
+                INFERENCE_SCHEDULER_TOTAL_CAPACITY,
+            ),
+            (
+                InferenceUsageScope::ExternalService,
+                vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
+                INFERENCE_SCHEDULER_EXTERNAL_CAPACITY,
+            ),
+        ] {
+            // This private service cannot dispatch to any configured provider or user storage.
+            // 此私有服务不能派发到任何已配置供应商或用户存储。
+            let service = ConfiguredInferenceService::new(Arc::new(
+                PublicAiRuntime::unavailable().expect("private runtime"),
+            ));
+            // The exact caller budget remains shared across every reservation of this identity.
+            // 此身份的每次预留都共享精确调用方预算。
+            let mut caller = test_caller();
+            caller.usage_scope = usage_scope;
+            caller.scheduling_class = scheduling_class;
+            // Freeze the lane from the same host-authorized context used in production.
+            // 从生产使用的同一宿主授权上下文冻结通道。
+            let class = InferenceWorkloadClass::from_caller(&caller);
+            // Retain all lane capacity so each tested request must really enter the queue.
+            // 保留全部通道容量，使每个被测请求都必须真实进入队列。
+            let mut blockers = Vec::new();
+            for _ in 0..capacity {
+                blockers.push(
+                    service
+                        .workload_scheduler
+                        .acquire(class, None)
+                        .await
+                        .expect("blocker"),
+                );
+            }
+            for _ in 0..3 {
+                // Polling once establishes the actual reservation before cancellation drops the future.
+                // 单次轮询在取消丢弃协程前建立真实预留。
+                let mut queued = Box::pin(service.acquire_caller_permit(&caller, 1));
+                assert!(futures_util::poll!(queued.as_mut()).is_pending());
+                assert_eq!(
+                    service
+                        .caller_execution_counts
+                        .lock()
+                        .expect("counts")
+                        .get(&caller.caller_id)
+                        .copied(),
+                    Some(1)
+                );
+                assert_eq!(
+                    service
+                        .workload_scheduler
+                        .state
+                        .lock()
+                        .expect("queue")
+                        .queue(class)
+                        .len(),
+                    1
+                );
+                drop(queued);
+                assert!(
+                    service
+                        .caller_execution_counts
+                        .lock()
+                        .expect("released counts")
+                        .is_empty(),
+                    "cancelled queue must release caller reservation: {class:?}"
+                );
+                assert!(
+                    service
+                        .workload_scheduler
+                        .state
+                        .lock()
+                        .expect("released queue")
+                        .queue(class)
+                        .is_empty()
+                );
+                assert!(
+                    service
+                        .caller_rate_windows
+                        .lock()
+                        .expect("uncharged rate")
+                        .is_empty()
+                );
+            }
+            drop(blockers);
+            // The same identity must remain usable after more cancellations than its concurrency budget.
+            // 取消次数超过并发预算后，同一身份仍必须可用。
+            let recovered = service
+                .acquire_caller_permit(&caller, 1)
+                .await
+                .expect("recovered caller");
+            drop(recovered);
+            assert!(
+                service
+                    .caller_execution_counts
+                    .lock()
+                    .expect("final counts")
+                    .is_empty()
+            );
+            assert_eq!(
+                service
+                    .workload_scheduler
+                    .state
+                    .lock()
+                    .expect("final capacity")
+                    .active_total,
+                0
+            );
+        }
+    }
+
+    /// Verify failed or completed admission releases only its own reservation and scheduler slot.
+    /// 验证失败或完成的准入仅释放其自身预留和调度槽位。
+    /// No inputs or output; assertions cover deadline, rate, concurrency rejection, and retained peers.
+    /// 无输入或输出；断言覆盖截止时间、速率、并发拒绝和保留同伴。
+    #[tokio::test]
+    async fn caller_permit_failures_and_completion_preserve_peer_reservations() {
+        // All counters and scheduler permits belong to this private service.
+        // 全部计数器和调度许可属于此私有服务。
+        let service = ConfiguredInferenceService::new(Arc::new(
+            PublicAiRuntime::unavailable().expect("private runtime"),
+        ));
+        // Keep the first admitted execution alive while the same caller queues another request.
+        // 同一调用方排队另一项请求时，保持首项已准入执行存活。
+        let mut caller = test_caller();
+        caller.budget.max_concurrent_executions = 2;
+        caller.budget.max_requests_per_minute = Some(1);
+        // This live owner must survive every rejected or cancelled sibling request below.
+        // 此存活所有者必须跨越以下每个被拒绝或取消的同伴请求。
+        let active = service
+            .acquire_caller_permit(&caller, 1)
+            .await
+            .expect("active owner");
+        // The second reservation cannot acquire the occupied background slot.
+        // 第二项预留不能获取已占用的后台槽位。
+        let mut queued = Box::pin(service.acquire_caller_permit(&caller, 1));
+        assert!(futures_util::poll!(queued.as_mut()).is_pending());
+        // A rejected third reservation must not decrement either existing owner.
+        // 被拒绝的第三项预留不得递减任何既有所有者。
+        let rejected = service
+            .acquire_caller_permit(&caller, 1)
+            .await
+            .err()
+            .expect("concurrency rejection");
+        assert!(rejected.message.contains("concurrent execution limit"));
+        assert_eq!(
+            service
+                .caller_execution_counts
+                .lock()
+                .expect("two owners")
+                .get(&caller.caller_id)
+                .copied(),
+            Some(2)
+        );
+        drop(queued);
+        assert_eq!(
+            service
+                .caller_execution_counts
+                .lock()
+                .expect("retained owner")
+                .get(&caller.caller_id)
+                .copied(),
+            Some(1)
+        );
+        // An already-expired deadline fails while waiting without disturbing the running owner.
+        // 已过期截止时间在等待时失败，不干扰运行中的所有者。
+        caller.deadline_unix_ms = Some(0);
+        let expired = service
+            .acquire_caller_permit(&caller, 1)
+            .await
+            .err()
+            .expect("deadline rejection");
+        assert!(expired.message.contains("deadline expired"));
+        assert_eq!(
+            service
+                .caller_execution_counts
+                .lock()
+                .expect("owner after deadline")
+                .get(&caller.caller_id)
+                .copied(),
+            Some(1)
+        );
+        caller.deadline_unix_ms = None;
+        drop(active);
+        // The rate rejection happens after scheduling, so both independently owned resources must unwind.
+        // 速率拒绝发生在调度后，因此两个独立持有的资源都必须释放。
+        let rate_limited = service
+            .acquire_caller_permit(&caller, 1)
+            .await
+            .err()
+            .expect("rate rejection");
+        assert!(rate_limited.message.contains("per-minute request"));
+        assert!(
+            service
+                .caller_execution_counts
+                .lock()
+                .expect("final counts")
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .workload_scheduler
+                .state
+                .lock()
+                .expect("final scheduler")
+                .active_total,
+            0
+        );
+        assert_eq!(
+            service
+                .caller_rate_windows
+                .lock()
+                .expect("one admitted charge")
+                .get(&caller.caller_id)
+                .expect("caller rate")
+                .request_count,
+            1
         );
     }
 

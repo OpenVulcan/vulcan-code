@@ -3,6 +3,7 @@
 
 pub mod chunking;
 pub mod embedding;
+pub mod embedding_execution;
 pub mod engine;
 pub mod identity;
 pub mod indexing;
@@ -11,6 +12,7 @@ pub mod model;
 pub mod path_index;
 pub mod ports;
 pub mod query;
+pub mod refresh_control;
 pub mod retrieval;
 pub mod state;
 pub mod structure;
@@ -33,10 +35,12 @@ pub use embedding::{
     EmbeddingBatch, EmbeddingError, EmbeddingInput, EmbeddingPlan, EmbeddingSpace, EmbeddingVector,
     SegmentVector, TextSegment, normalize_l2, split_text,
 };
+pub use embedding_execution::VceEmbeddingExecutionContract;
 pub use engine::{
     RefreshResult, RetrieveResult, VceConfig, VceConfigError, VceDegradation, VceDegradedFeature,
     VceEngine, VceEngineSnapshot, VceEngineState, VceError, VceManagementSnapshot,
-    VceQueryStatistics, VceRefreshSummary, VceRetrievalSummary, VceWorkspaceStatistics,
+    VceQueryStatistics, VceRefreshSummary, VceRetrievalLimits, VceRetrievalSummary,
+    VceWorkspaceStatistics,
 };
 pub use identity::{
     PathError, blob_name, chunk_id, chunk_id_with_offset, content_hash, is_sha256_identity,
@@ -72,6 +76,10 @@ pub use ports::{
     VceSourceReadRequest, VceSourceReadResponse,
 };
 pub use query::{QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
+pub use refresh_control::{
+    VceCancelOutcome, VceRefreshControl, VceRefreshObserver, VceRefreshPhase, VceRefreshProgress,
+    VceRefreshUnit,
+};
 pub use retrieval::{
     CoverageConfig, RankedHits, RerankCallback, RetrievalPipeline, RrfConfig,
     append_path_fallbacks, apply_path_boost, apply_source_priority, coverage_select,

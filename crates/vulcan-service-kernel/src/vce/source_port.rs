@@ -14,6 +14,9 @@ use vulcan_context_engine::{
     FileObservation, FileSource, VceFuture, VcePortError, VcePortOperation, VceSourceDocument,
     VceSourcePort, VceSourceReadRequest, VceSourceReadResponse, blob_name, normalize_relative_path,
 };
+use vulcan_context_engine::{
+    VceRefreshControl, VceRefreshPhase, VceRefreshProgress, VceRefreshUnit,
+};
 use vulcan_service_api::WorkspaceFileFilterOptions;
 
 use crate::workspace_files::{
@@ -201,9 +204,27 @@ impl VceProjectSourceAdapter {
     /// 返回值
     /// A bounded deterministic manifest that does not retain source bodies.
     /// 返回不保留源码正文的有界确定性清单。
-    pub(crate) async fn scan_full(&self) -> Result<VceSourceManifest, String> {
+    #[cfg(test)]
+    async fn scan_full(&self) -> Result<VceSourceManifest, String> {
+        self.scan_full_observed(VceRefreshControl::default(), String::from("source-scan"))
+            .await
+    }
+
+    /// Scan using the exact host job's cancellation and real file-progress observer.
+    /// 使用精确宿主作业的取消与真实文件进度观察器扫描。
+    ///
+    /// `control` is shared with later indexing; `operation_id` identifies this scan. Returns metadata
+    /// only after the blocking worker has completed or acknowledged cooperative cancellation.
+    /// `control` 与后续索引共享；`operation_id` 标识此扫描。仅在阻塞工作完成或确认协作取消后返回元数据。
+    pub(crate) async fn scan_full_observed(
+        &self,
+        control: VceRefreshControl,
+        operation_id: String,
+    ) -> Result<VceSourceManifest, String> {
+        // adapter is an immutable clone owned by the blocking worker until its scan exits.
+        // adapter 是由阻塞工作线程持有到扫描退出的不可变克隆。
         let adapter = self.clone();
-        tokio::task::spawn_blocking(move || adapter.scan_full_blocking())
+        tokio::task::spawn_blocking(move || adapter.scan_full_blocking(&control, &operation_id))
             .await
             .map_err(|error| format!("VCE full source scan task failed: {error}"))?
     }
@@ -220,31 +241,60 @@ impl VceProjectSourceAdapter {
     /// 返回值
     /// Metadata observations, removals, and the full-refresh escalation flag.
     /// 返回元数据观察、删除项与全量刷新升级标记。
-    pub(crate) async fn scan_paths(
-        &self,
-        relative_paths: BTreeSet<String>,
-    ) -> Result<VcePathRefresh, String> {
-        let adapter = self.clone();
-        tokio::task::spawn_blocking(move || adapter.scan_paths_blocking(relative_paths))
-            .await
-            .map_err(|error| format!("VCE path source scan task failed: {error}"))?
+    #[cfg(test)]
+    async fn scan_paths(&self, relative_paths: BTreeSet<String>) -> Result<VcePathRefresh, String> {
+        self.scan_paths_observed(
+            relative_paths,
+            VceRefreshControl::default(),
+            String::from("source-path-scan"),
+        )
+        .await
     }
 
-    /// Perform one complete blocking scan behind the asynchronous boundary.
-    /// 在异步边界之后执行一次完整阻塞扫描。
+    /// Observe a path delta under the same cancellation boundary as subsequent indexing.
+    /// 在与后续索引相同的取消边界下观察路径差异。
     ///
-    /// # Returns
-    /// 返回值
-    /// A complete bounded metadata manifest.
-    /// 返回完整且有界的元数据清单。
-    fn scan_full_blocking(&self) -> Result<VceSourceManifest, String> {
+    /// `relative_paths` is the exact dirty set; `control` and `operation_id` belong to the host job.
+    /// Returns observations/removals only after the worker exits, without retaining detached scanning.
+    /// `relative_paths` 是精确脏路径集；`control` 与 `operation_id` 属于宿主作业。
+    /// 仅在工作线程退出后返回观察与删除项，不保留脱离作业的扫描。
+    pub(crate) async fn scan_paths_observed(
+        &self,
+        relative_paths: BTreeSet<String>,
+        control: VceRefreshControl,
+        operation_id: String,
+    ) -> Result<VcePathRefresh, String> {
+        // adapter freezes the same root and filters for the bounded blocking worker.
+        // adapter 为有界阻塞工作线程冻结相同根目录与过滤规则。
+        let adapter = self.clone();
+        tokio::task::spawn_blocking(move || {
+            adapter.scan_paths_blocking(relative_paths, &control, &operation_id)
+        })
+        .await
+        .map_err(|error| format!("VCE path source scan task failed: {error}"))?
+    }
+
+    /// Build the shared source walker, optionally pruning unrelated paths before descending.
+    /// 构建共享源码遍历器，可选择在向下遍历之前剪除无关路径。
+    /// `allowed_nodes` contains exact changed paths and their ancestors, or is absent for a full scan.
+    /// `allowed_nodes` 包含精确变更路径及其祖先，全量扫描时为空。
+    /// Returns the host walker with hierarchical ignore, hard exclusions, and project rules intact.
+    /// 返回保留分层忽略、硬排除和项目规则的宿主遍历器。
+    fn source_walk_builder(&self, allowed_nodes: Option<HashSet<PathBuf>>) -> ignore::WalkBuilder {
+        // filters retain the authoritative host filesystem policy for both entry points.
+        // filters 为两个入口保留权威宿主文件系统策略。
         let filters = WorkspaceFileFilterOptions::default();
         let mut walker = workspace_file_walk_builder(self.project_root(), &filters, None);
         walker.add_custom_ignore_filename(".oceignore");
+        // root and extra_ignore remain immutable for the lifetime of the traversal closure.
+        // root 与 extra_ignore 在遍历闭包的整个生命周期中保持不可变。
         let root = Arc::clone(&self.project_root);
         let extra_ignore = Arc::clone(&self.extra_ignore);
         walker.filter_entry(move |entry| {
-            !is_hard_ignored_entry(root.as_path(), entry.path())
+            allowed_nodes
+                .as_ref()
+                .is_none_or(|nodes| nodes.contains(entry.path()))
+                && !is_hard_ignored_entry(root.as_path(), entry.path())
                 && !entry
                     .path()
                     .strip_prefix(root.as_path())
@@ -258,12 +308,80 @@ impl VceProjectSourceAdapter {
                             .is_ignore()
                     })
         });
+        walker
+    }
+
+    /// Resolve admitted changed files through the same hierarchical policy as a complete scan.
+    /// 通过与完整扫描相同的分层策略解析准入的变更文件。
+    /// `relative_paths` is the dirty set; `control` cancels traversal. Returns admitted file identities.
+    /// `relative_paths` 为脏路径集；`control` 取消遍历。返回已准入文件身份。
+    /// Unrelated directories are pruned, and no source body is read by this admission pass.
+    /// 无关目录被剪除，此准入阶段不读取任何源码正文。
+    fn admitted_changed_paths(
+        &self,
+        relative_paths: &BTreeSet<String>,
+        control: &VceRefreshControl,
+    ) -> Result<HashSet<String>, String> {
+        // allowed_nodes contains only the requested paths and root-bounded ancestors.
+        // allowed_nodes 仅包含请求路径与受根边界限制的祖先。
+        let mut allowed_nodes = HashSet::new();
+        for relative_path in relative_paths {
+            control.check().map_err(|error| error.to_string())?;
+            let normalized = validate_relative_path(relative_path)?;
+            let absolute = self.project_root().join(normalized);
+            for ancestor in absolute.ancestors() {
+                if !ancestor.starts_with(self.project_root()) {
+                    break;
+                }
+                allowed_nodes.insert(ancestor.to_path_buf());
+            }
+        }
+        // admitted_files is metadata-only; actual reads still verify the immutable source fingerprint.
+        // admitted_files 仅含元数据身份；实际读取仍校验不可变源码指纹。
+        let mut admitted_files = HashSet::new();
+        for entry in self.source_walk_builder(Some(allowed_nodes)).build() {
+            control.check().map_err(|error| error.to_string())?;
+            let entry =
+                entry.map_err(|error| format!("scan VCE changed path admission: {error}"))?;
+            if entry.file_type().is_some_and(|kind| kind.is_file()) {
+                admitted_files.insert(relative_path_text(self.project_root(), entry.path())?);
+            }
+        }
+        control.check().map_err(|error| error.to_string())?;
+        Ok(admitted_files)
+    }
+
+    /// Perform one complete blocking scan behind the asynchronous boundary.
+    /// 在异步边界之后执行一次完整阻塞扫描。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A complete bounded metadata manifest.
+    /// 返回完整且有界的元数据清单。
+    fn scan_full_blocking(
+        &self,
+        control: &VceRefreshControl,
+        operation_id: &str,
+    ) -> Result<VceSourceManifest, String> {
+        control.check().map_err(|error| error.to_string())?;
+        control.observe(VceRefreshProgress {
+            phase: VceRefreshPhase::Scanning,
+            operation_id: operation_id.to_owned(),
+            unit: VceRefreshUnit::Files,
+            completed: 0,
+            total: None,
+            current_path: None,
+        });
+        // walker uses the same admission rules as path-scoped refreshes without pruning.
+        // walker 与路径级刷新使用同一准入规则，此处不剪枝。
+        let walker = self.source_walk_builder(None);
 
         let mut observations = Vec::new();
         let mut admitted_files = 0usize;
         let mut skipped_files = 0usize;
         let mut admitted_bytes = 0u64;
         for walked_entry in walker.build() {
+            control.check().map_err(|error| error.to_string())?;
             let walked_entry = walked_entry
                 .map_err(|error| format!("scan VCE project source manifest: {error}"))?;
             if walked_entry.depth() == 0
@@ -278,7 +396,7 @@ impl VceProjectSourceAdapter {
                 ));
             }
             let relative_path = relative_path_text(self.project_root(), walked_entry.path())?;
-            match self.observe_present_path(&relative_path)? {
+            match self.observe_present_path(&relative_path, None)? {
                 ObservedPath::Observation(observation) => {
                     if observation.skip_reason.is_some() {
                         skipped_files += 1;
@@ -300,7 +418,16 @@ impl VceProjectSourceAdapter {
                     ));
                 }
             }
+            control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Scanning,
+                operation_id: operation_id.to_owned(),
+                unit: VceRefreshUnit::Files,
+                completed: (admitted_files + skipped_files) as u64,
+                total: None,
+                current_path: Some(relative_path),
+            });
         }
+        control.check().map_err(|error| error.to_string())?;
         observations.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(VceSourceManifest {
             observations,
@@ -325,22 +452,49 @@ impl VceProjectSourceAdapter {
     fn scan_paths_blocking(
         &self,
         relative_paths: BTreeSet<String>,
+        control: &VceRefreshControl,
+        operation_id: &str,
     ) -> Result<VcePathRefresh, String> {
+        // total is known for the exact admitted path set, unlike a filesystem walk.
+        // total 对精确准入路径集已知，与文件系统遍历不同。
+        let total = relative_paths.len() as u64;
+        control.check().map_err(|error| error.to_string())?;
+        control.observe(VceRefreshProgress {
+            phase: VceRefreshPhase::Scanning,
+            operation_id: operation_id.to_owned(),
+            unit: VceRefreshUnit::Files,
+            completed: 0,
+            total: Some(total),
+            current_path: None,
+        });
         let mut observations = Vec::new();
         let mut removed_paths = Vec::new();
         let mut requires_full_refresh = false;
-        for relative_path in relative_paths {
+        // admitted_paths comes from the production hierarchy-aware walker, never raw watcher events.
+        // admitted_paths 来自生产分层规则遍历器，绝不直接信任原始监听事件。
+        let admitted_paths = self.admitted_changed_paths(&relative_paths, control)?;
+        for (position, relative_path) in relative_paths.into_iter().enumerate() {
+            control.check().map_err(|error| error.to_string())?;
             let relative_path = validate_relative_path(&relative_path)?;
             if is_ignore_control_path(&relative_path) {
                 requires_full_refresh = true;
-                continue;
+            } else {
+                match self.observe_present_path(&relative_path, Some(&admitted_paths))? {
+                    ObservedPath::Observation(observation) => observations.push(observation),
+                    ObservedPath::Removed => removed_paths.push(relative_path.clone()),
+                    ObservedPath::RequiresFullRefresh => requires_full_refresh = true,
+                }
             }
-            match self.observe_present_path(&relative_path)? {
-                ObservedPath::Observation(observation) => observations.push(observation),
-                ObservedPath::Removed => removed_paths.push(relative_path),
-                ObservedPath::RequiresFullRefresh => requires_full_refresh = true,
-            }
+            control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Scanning,
+                operation_id: operation_id.to_owned(),
+                unit: VceRefreshUnit::Files,
+                completed: position as u64 + 1,
+                total: Some(total),
+                current_path: Some(relative_path),
+            });
         }
+        control.check().map_err(|error| error.to_string())?;
         observations.sort_by(|left, right| left.path.cmp(&right.path));
         removed_paths.sort();
         Ok(VcePathRefresh {
@@ -362,7 +516,13 @@ impl VceProjectSourceAdapter {
     /// 返回值
     /// The exact watcher observation outcome for this path.
     /// 返回此路径对应的精确监听观察结果。
-    fn observe_present_path(&self, relative_path: &str) -> Result<ObservedPath, String> {
+    fn observe_present_path(
+        &self,
+        relative_path: &str,
+        // admitted_paths is absent only after a full walker has already admitted this entry.
+        // admitted_paths 仅在全量遍历器已经准入此条目时为空。
+        admitted_paths: Option<&HashSet<String>>,
+    ) -> Result<ObservedPath, String> {
         let resolved = match resolve_existing_source_path(self.project_root(), relative_path) {
             Ok(path) => path,
             Err(SourcePathError::Missing) => return Ok(ObservedPath::Removed),
@@ -374,6 +534,7 @@ impl VceProjectSourceAdapter {
             return Ok(ObservedPath::RequiresFullRefresh);
         }
         if !metadata.is_file()
+            || admitted_paths.is_some_and(|paths| !paths.contains(relative_path))
             || is_hard_ignored_relative_path(relative_path)
             || self
                 .extra_ignore
@@ -1142,6 +1303,126 @@ mod tests {
         assert_eq!(manifest.observations.len(), 1);
         assert_eq!(manifest.observations[0].path, "src/lib.rs");
         fs::remove_dir_all(root).expect("remove source fixture");
+    }
+
+    /// Keep watcher path admission identical to full scans across hierarchical ignore sources.
+    /// 在分层忽略规则来源之间保持监听路径准入与全量扫描完全一致。
+    /// Takes no parameters; returns unit after comparing isolated full and incremental manifests.
+    /// 无参数；隔离的全量与增量清单对比通过后返回空值。
+    #[tokio::test]
+    async fn path_scan_preserves_hierarchical_ignore_admission() {
+        // root contains only synthetic sources and local ignore rules, without provider calls.
+        // root 仅包含合成源码与本地忽略规则，不调用供应商。
+        let root = temp_project("delta-ignore");
+        fs::create_dir_all(root.join(".git/info")).unwrap();
+        fs::create_dir_all(root.join("src/nested")).unwrap();
+        fs::write(root.join(".gitignore"), "git-hidden.rs\n").unwrap();
+        fs::write(root.join(".ignore"), "ignore-hidden.rs\n").unwrap();
+        fs::write(root.join(".oceignore"), "oce-hidden.rs\n").unwrap();
+        fs::write(root.join(".git/info/exclude"), "exclude-hidden.rs\n").unwrap();
+        fs::write(
+            root.join("src/.gitignore"),
+            "nested/*\n!nested/visible.rs\n",
+        )
+        .unwrap();
+        // paths represent raw watcher events, including files that must never reach embedding.
+        // paths 表示原始监听事件，包含绝不能进入向量处理的文件。
+        let paths = BTreeSet::from([
+            String::from("git-hidden.rs"),
+            String::from("ignore-hidden.rs"),
+            String::from("oce-hidden.rs"),
+            String::from("exclude-hidden.rs"),
+            String::from("src/nested/hidden.rs"),
+            String::from("src/nested/visible.rs"),
+        ]);
+        for path in &paths {
+            fs::write(root.join(path), "fn synthetic() {}\n").unwrap();
+        }
+        fs::create_dir_all(root.join("unrelated/deep")).unwrap();
+        fs::write(
+            root.join("unrelated/deep/untouched.rs"),
+            "fn untouched() {}\n",
+        )
+        .unwrap();
+        // adapter applies the same host-owned source contract to both scan entry points.
+        // adapter 将同一个宿主持有源码契约应用于两个扫描入口。
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[]).unwrap();
+        let full = adapter.scan_full().await.unwrap();
+        let delta = adapter.scan_paths(paths.clone()).await.unwrap();
+        // admitted proves the path pass does not return unrelated source branches.
+        // admitted 证明路径准入阶段不会返回无关源码分支。
+        let admitted = adapter
+            .admitted_changed_paths(&paths, &VceRefreshControl::default())
+            .unwrap();
+        // expected excludes ignore control documents not present in this watcher batch.
+        // expected 排除未出现在此监听批次中的忽略控制文档。
+        let expected = full
+            .observations
+            .into_iter()
+            .filter(|observation| paths.contains(&observation.path))
+            .collect::<Vec<_>>();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].path, "src/nested/visible.rs");
+        assert_eq!(
+            admitted,
+            HashSet::from([String::from("src/nested/visible.rs")])
+        );
+        assert_eq!(delta.observations, expected);
+        assert_eq!(delta.removed_paths.len(), 5);
+        assert!(!delta.requires_full_refresh);
+    }
+
+    /// Verify a cancellation observed during scanning stops the joined worker before later files.
+    /// 验证扫描期间观察到的取消在后续文件之前停止已汇合的工作线程。
+    ///
+    /// Takes no parameters and returns nothing; all files and observations belong to a temporary fixture.
+    /// 无参数、无返回值；全部文件和观察属于临时夹具。
+    #[tokio::test]
+    async fn full_scan_reports_real_progress_and_cooperatively_cancels() {
+        // root is isolated and unrelated to the user's workspace or existing indexes.
+        // root 与用户工作区和现有索引隔离。
+        let root = temp_project("scan-cancel");
+        for number in 0..16 {
+            fs::write(root.join(format!("source-{number}.rs")), "fn source() {}\n")
+                .expect("write bounded scan fixture");
+        }
+        // adapter freezes this fixture's root and existing source limits.
+        // adapter 冻结此夹具根与现有源码限制。
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
+            .expect("activate scan fixture");
+        // events records only real completions from the blocking worker.
+        // events 仅记录阻塞工作线程的真实完成量。
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        // control and requested share cancellation without creating an observer ownership cycle.
+        // control 与 requested 共享取消且不形成观察器归属循环。
+        let control = VceRefreshControl::default();
+        let requested = control.clone();
+        let control = control.with_observer(Arc::new(move |progress: VceRefreshProgress| {
+            if progress.completed == 1 {
+                assert_eq!(
+                    requested.cancel(),
+                    vulcan_context_engine::VceCancelOutcome::Accepted
+                );
+            }
+            sink.lock().unwrap().push(progress);
+        }));
+        let error = adapter
+            .scan_full_observed(control, String::from("scan-job-1"))
+            .await
+            .expect_err("scan must acknowledge cancellation");
+        assert_eq!(error, super::super::manager::VCE_REFRESH_CANCELLED_ERROR);
+        // observed is read after worker completion; no detached traversal remains active.
+        // observed 在工作线程完成后读取；不存在仍在活动的脱离任务遍历。
+        let observed = events.lock().unwrap();
+        assert_eq!(observed.last().unwrap().completed, 1);
+        assert!(
+            observed
+                .iter()
+                .all(|progress| progress.total.is_none() && progress.operation_id == "scan-job-1")
+        );
+        fs::remove_dir_all(root).expect("remove isolated scan fixture");
     }
 
     /// Deferred reads return exactly the manifest version requested by VCE.

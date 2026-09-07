@@ -193,6 +193,9 @@ pub enum VceOperationKind {
     /// Incremental file or Git refresh.
     /// 增量文件或 Git 刷新。
     IncrementalRefresh,
+    /// One completed storage-port mutation, not a logical host indexing job.
+    /// 一次已完成的存储端口变更，不代表宿主逻辑索引作业。
+    StorageMutation,
     /// Integrity verification without mutation.
     /// 不产生修改的完整性校验。
     VerifyIntegrity,
@@ -1188,5 +1191,11 @@ mod tests {
 
         operation.error = None;
         assert!(validate_operation_summary(&operation).is_ok());
+        // A storage receipt has no refresh policy; logical refresh history still requires the real policy.
+        // 存储回执没有刷新策略；逻辑刷新历史仍要求真实策略。
+        operation.kind = VceOperationKind::StorageMutation;
+        assert!(validate_operation_summary(&operation).is_ok());
+        operation.kind = VceOperationKind::IncrementalRefresh;
+        assert!(validate_operation_summary(&operation).is_err());
     }
 }

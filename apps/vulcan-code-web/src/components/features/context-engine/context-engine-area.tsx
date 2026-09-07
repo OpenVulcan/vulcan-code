@@ -11,7 +11,11 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { Combobox } from "@/components/ui/combobox";
+import { VceEmbeddingSettings } from "./vce-embedding-settings";
+import { vceDimensionDomain } from "./vce-embedding-dimensions";
+import { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
+export { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
 import { useI18n } from "@/i18n";
 import {
   loadPublicAiSettings,
@@ -141,62 +145,6 @@ export function vceCandidateEligible(
     ));
 }
 
-/// Creates a deterministic identity for one exact public-AI inference route.
-/// 为一条精确公共 AI 推理路由创建确定性身份。
-///
-/// Parameters: `route` contains provider, service, account, model, binding, operation, and scope.
-/// 参数：`route` 包含供应商、服务、账号、模型、绑定、操作与作用域。
-/// Returns: a stable selector value without parsing persisted composite keys.
-/// 返回值：无需解析持久化组合键的稳定选择器值。
-export function vceInferenceRouteKey(route: PublicAiInferenceRoute): string {
-  const binding = route.binding.kind === "protocol"
-    ? `protocol:${route.binding.protocol_profile_id}`
-    : `action:${route.binding.action_binding_id}`;
-  return [
-    route.provider_id,
-    route.service_entry_id,
-    route.connection_id,
-    route.model_id,
-    binding,
-    route.operation,
-    route.usage_scope,
-  ].join("\u0000");
-}
-
-/// Builds searchable options for exact ContextEngine model routes.
-/// 为精确的 ContextEngine 模型路由构建可搜索选项。
-///
-/// Parameters: `candidates` contains only routes already accepted by the VCE capability contract.
-/// 参数：`candidates` 仅包含已经通过 VCE 能力契约的路由。
-/// Returns: options searchable by model, provider, account, service entry, binding, and identifiers.
-/// 返回值：可按模型、供应商、账号、服务入口、绑定及标识符搜索的选项。
-export function vceRoutePickerOptions(
-  candidates: PublicAiInternalInferenceCandidate[],
-): ComboboxOption[] {
-  return candidates.map((candidate) => {
-    // bindingId preserves the exact protocol or action identity as searchable metadata.
-    // bindingId 将精确协议或动作身份保留为可搜索元数据。
-    const bindingId = candidate.route.binding.kind === "protocol"
-      ? candidate.route.binding.protocol_profile_id
-      : candidate.route.binding.action_binding_id;
-    return {
-      value: vceInferenceRouteKey(candidate.route),
-      label: `${candidate.modelDisplayName} · ${candidate.connectionDisplayName}`,
-      description: `${candidate.providerDisplayName} · ${candidate.serviceEntryDisplayName}`,
-      keywords: [
-        candidate.route.model_id,
-        candidate.providerDisplayName,
-        candidate.route.provider_id,
-        candidate.connectionDisplayName,
-        candidate.route.connection_id,
-        candidate.serviceEntryDisplayName,
-        candidate.route.service_entry_id,
-        bindingId,
-      ],
-    };
-  });
-}
-
 /// Renders and owns the fixed ContextEngine settings surface.
 /// 渲染并管理固定的 ContextEngine 设置界面。
 ///
@@ -230,15 +178,35 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
   // testSummaries 保留真实向量与重排请求成功后的紧凑事实。
   const [testSummaries, setTestSummaries] = React.useState<Partial<Record<VceRouteKind, string>>>({});
   const mutationInFlightRef = React.useRef(false);
+  // Every settings read shares one observation sequence; late successes and errors lose authority.
+  // 全部设置读取共享一个观察序号；迟到成功及错误失去权威。
+  const observationSequence = React.useRef(0);
 
+  // Reload both authoritative projections; only the latest live read may update the page.
+  // 重载两项权威投影；仅最新且仍有效的读取可以更新页面。
+  // No parameters; returns the accepted snapshot/sequence or null when this read fails or loses authority.
+  // 无参数；返回已接纳快照及序号，读取失败或失去权威时返回空值。
   const reload = React.useCallback(async () => {
-    const [nextSnapshot, nextReadiness] = await Promise.all([
-      loadPublicAiSettings(),
-      loadVceConfigurationStatus(),
-    ]);
-    setSnapshot(nextSnapshot);
-    setReadiness(nextReadiness);
-    setError(null);
+    // admitted owns this exact read, including its failure path.
+    // admitted 持有此次精确读取，包括其失败路径。
+    const admitted = ++observationSequence.current;
+    try {
+      const [nextSnapshot, nextReadiness] = await Promise.all([
+        loadPublicAiSettings(),
+        loadVceConfigurationStatus(),
+      ]);
+      if (observationSequence.current !== admitted) return null;
+      setSnapshot(nextSnapshot);
+      setReadiness(nextReadiness);
+      // Test summaries belong to a verified observation, not every future model shown in the same slot.
+      // 测试摘要属于已验证观察，而非同一槽位以后显示的所有模型。
+      setTestSummaries({});
+      setError(null);
+      return { snapshot: nextSnapshot, sequence: admitted };
+    } catch (cause) {
+      if (observationSequence.current === admitted) setError(errorMessage(cause));
+      return null;
+    }
   }, []);
 
   // recheck reloads both catalogs under the same mutation gate used by route saves and tests.
@@ -261,24 +229,11 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
   }, [reload]);
 
   React.useEffect(() => {
-    let active = true;
-    void Promise.all([loadPublicAiSettings(), loadVceConfigurationStatus()])
-      .then(([nextSnapshot, nextReadiness]) => {
-        if (active) {
-          setSnapshot(nextSnapshot);
-          setReadiness(nextReadiness);
-          setError(null);
-        }
-      })
-      .catch((cause) => {
-        if (active) {
-          setError(errorMessage(cause));
-        }
-      });
+    void reload();
     return () => {
-      active = false;
+      observationSequence.current += 1;
     };
-  }, [props.workbenchRevision]);
+  }, [props.workbenchRevision, reload]);
 
   // profile is the sole persisted public-AI route set owned by VCE.
   // profile 是 VCE 唯一持有的持久化公共 AI 路由集合。
@@ -330,22 +285,22 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     setError(null);
     setTestSummaries((current) => ({ ...current, [definition.kind]: undefined }));
     try {
-      const next = await savePublicAiInferenceRoute({
+      await savePublicAiInferenceRoute({
         consumerProfileId: VCE_CONSUMER_PROFILE_ID,
         purposeId: definition.purposeId,
         operation: definition.operation,
         route,
       });
-      const nextReadiness = await loadVceConfigurationStatus();
-      setSnapshot(next);
-      setReadiness(nextReadiness);
+      // Read current authority after acknowledgement; do not replay a possibly superseded save snapshot.
+      // 确认后读取当前权威，不重放可能已被替换的保存快照。
+      await reload();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
       mutationInFlightRef.current = false;
       setBusyKey(null);
     }
-  }, []);
+  }, [reload]);
 
   // testRoute executes an existing real-provider test for one non-LLM route.
   // testRoute 对一条非 LLM 路由执行现有真实 Provider 测试。
@@ -358,11 +313,37 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     mutationInFlightRef.current = true;
     setBusyKey(`test:${definition.kind}`);
     setError(null);
+    // This read sequence owns the test response and any error; unrelated newer reads retire both.
+    // 此读取序号持有测试响应及错误；无关较新读取使二者退役。
+    let testObservation = observationSequence.current;
+    // Freeze the displayed saved route and dimension before the host resolves the actual execution.
+    // 在宿主解析实际执行前固定展示中的已保存路由及维度。
+    const testedRoute = routeForDefinition(profile, definition);
+    const testedDimension = profile?.embedding_dimensions;
     try {
+      if (!testedRoute) throw new Error(copy("请先保存测试模型。", "Save the model before testing."));
       const result = await testPublicAiInferenceRoute({
         consumerProfileId: VCE_CONSUMER_PROFILE_ID,
         operation: definition.operation,
       });
+      if (observationSequence.current !== testObservation) return;
+      // Re-read after execution; the test response itself has no authority to restore old configuration.
+      // 执行后重新读取；测试响应本身无权恢复旧配置。
+      const reloaded = await reload();
+      if (reloaded === null || observationSequence.current !== reloaded.sequence) return;
+      testObservation = reloaded.sequence;
+      // Match full saved routing intent plus the actual non-secret execution identity returned by the host.
+      // 同时匹配完整已保存路由意图及宿主返回的实际非敏感执行身份。
+      const currentProfile = reloaded.snapshot.inferenceProfiles[VCE_CONSUMER_PROFILE_ID];
+      const currentRoute = routeForDefinition(currentProfile, definition);
+      if (!currentRoute || vceInferenceRouteKey(currentRoute) !== vceInferenceRouteKey(testedRoute)
+        || result.operation !== definition.operation || result.providerId !== currentRoute.provider_id
+        || result.serviceEntryId !== currentRoute.service_entry_id || result.connectionId !== currentRoute.connection_id
+        || result.modelId !== currentRoute.model_id
+        || (definition.kind === "embedding" && (currentProfile?.embedding_dimensions !== testedDimension
+          || testedDimension === undefined || result.dimensions !== testedDimension))) {
+        throw new Error(copy("模型配置或测试目标已变化，请重新测试当前模型。", "Model configuration or test target changed; test the current model again."));
+      }
       const detail = definition.kind === "embedding"
         ? copy(
           `${result.resultCount} 条结果 · ${result.dimensions ?? 0} 维 · ${result.durationMs} ms`,
@@ -373,14 +354,13 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           `${result.resultCount} results · ${result.durationMs} ms`,
         );
       setTestSummaries((current) => ({ ...current, [definition.kind]: detail }));
-      await reload();
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (observationSequence.current === testObservation) setError(errorMessage(cause));
     } finally {
       mutationInFlightRef.current = false;
       setBusyKey(null);
     }
-  }, [copy, reload]);
+  }, [copy, profile, reload]);
 
   // unresolvedRouteCount summarizes the remaining configuration work without repeating every diagnostic.
   // unresolvedRouteCount 汇总剩余配置工作，避免重复展示每一条诊断。
@@ -390,7 +370,9 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     : 3;
 
   return (
-    <section className="mx-auto w-full max-w-6xl space-y-5">
+    // Measure the settings pane itself: workbench sidebars can leave a narrow pane in a wide window.
+    // 测量设置面板自身：工作台侧栏可能让宽窗口中的内容区域仍然很窄。
+    <section className="@container/vce mx-auto w-full max-w-6xl space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b pb-4">
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -408,8 +390,8 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {copy(
-                "为 AI 提供项目级代码语义检索；模型准备完成后，索引、文件监听和检索工具会自动启用。",
-                "Provides project-scoped semantic code retrieval for AI; indexing, file watching, and retrieval tools start automatically when the models are ready.",
+                "为 AI 提供项目级代码语义检索；配置模型后，在项目设置中启用并明确创建索引。",
+                "Provides project-scoped semantic code retrieval for AI. After configuring models, enable a project and explicitly create its index in project settings.",
               )}
             </p>
           </div>
@@ -440,7 +422,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
       {error ? (
         <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span>{error}</span>
+          <span className="min-w-0 break-words">{error}</span>
         </div>
       ) : null}
 
@@ -458,7 +440,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
             </p>
           </div>
           <span className="text-xs text-muted-foreground">
-            {copy("修改后立即校验", "Validated after every change")}
+            {copy("向量变更需要确认", "Embedding changes require confirmation")}
           </span>
         </div>
         {!snapshot || !readiness ? (
@@ -474,6 +456,20 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
                 vceCandidateEligible(candidate, definition.kind)
               ));
               const status = statusForDefinition(readiness, definition.kind);
+              if (definition.kind === "embedding") {
+                return <VceEmbeddingSettings key={definition.kind} candidates={candidates}
+                  route={profile?.embedding} dimension={profile?.embedding_dimensions}
+                  status={readiness.embedding} disabled={busyKey !== null}
+                  testing={busyKey === "test:embedding"} testSummary={testSummaries.embedding}
+                  onTest={() => testRoute(definition)}
+                  onBusyChange={(busy) => { mutationInFlightRef.current = busy; setBusyKey(busy ? "draft:embedding" : null); }}
+                  onSaved={async () => {
+                    setTestSummaries((current) => ({ ...current, embedding: undefined }));
+                    // Use the same observation fence after embedding commits as every other route read.
+                    // 向量提交后与其他路由读取使用相同的观察保护。
+                    await reload();
+                  }} />;
+              }
               return (
                 <VceRouteField
                   candidates={candidates}
@@ -523,7 +519,7 @@ function VceRouteField(props: VceRouteFieldProps) {
   // selectedValue 仅在持久化路由仍是合格的精确候选项时存在。
   const selectedValue = candidateByKey.has(selectedKey) ? selectedKey : undefined;
   return (
-    <div className="grid gap-4 px-4 py-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(18rem,1.25fr)_auto] lg:items-start">
+    <div className="grid gap-4 px-4 py-4 @3xl/vce:grid-cols-[minmax(0,0.9fr)_minmax(18rem,1.25fr)_auto] @3xl/vce:items-start">
       <div className="flex min-w-0 items-start gap-3">
         <span className={props.status?.available
           ? "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
@@ -564,10 +560,10 @@ function VceRouteField(props: VceRouteFieldProps) {
           <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">{props.testSummary}</p>
         ) : null}
         {props.status?.issue ? (
-          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{props.status.issue}</p>
+          <p className="mt-2 break-words text-xs text-amber-700 dark:text-amber-300">{props.status.issue}</p>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+      <div className="flex flex-wrap items-center gap-2 @3xl/vce:justify-end">
         {props.onTest ? (
           <Button
             disabled={props.disabled || !props.route}
@@ -623,19 +619,12 @@ function statusForDefinition(
   return readiness.queryRewrite;
 }
 
-/// Reports whether one embedding contract has a single deterministic positive dimension.
-/// 判断一个向量契约是否具有唯一且确定的正维度。
+/// Reports whether one embedding contract declares at least one explicit supported dimension.
+/// 判断一个向量契约是否声明至少一个明确受支持维度。
 function deterministicEmbeddingDimension(
   capability: NonNullable<PublicAiInternalInferenceCandidate["capabilities"]["embedding"]>,
 ): boolean {
-  if ((capability.default_dimensions ?? 0) > 0) {
-    return true;
-  }
-  if (capability.dimensions.length === 1 && capability.dimensions[0] > 0) {
-    return true;
-  }
-  return (capability.minimum_dimensions ?? 0) > 0
-    && capability.minimum_dimensions === capability.maximum_dimensions;
+  return vceDimensionDomain(capability) !== null;
 }
 
 /// Reports whether one LLM contract and route can explicitly disable reasoning.

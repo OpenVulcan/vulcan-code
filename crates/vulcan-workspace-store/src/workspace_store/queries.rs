@@ -18,6 +18,8 @@ pub(super) async fn query_project_rows(
 SELECT p.id, p.name, p.root_path, p.pinned, p.sort_order, p.icon_pack, p.icon_key,
        p.codebase_memory_enabled, p.archived,
        v.enabled AS vce_enabled,
+       v.update_mode AS vce_update_mode,
+       v.auto_update_min_interval_seconds AS vce_auto_update_min_interval_seconds,
        v.revision AS vce_revision,
        v.migrated_from_codebase_memory AS vce_migrated_from_codebase_memory,
        v.max_file_bytes AS vce_max_file_bytes,

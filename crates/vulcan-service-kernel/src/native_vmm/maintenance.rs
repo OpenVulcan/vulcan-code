@@ -2,6 +2,41 @@
 //! 宿主持有的原生 VMM 项目内容维护。
 
 use super::driver::{NativeVmmCoreRuntime, NativeVmmVectorSpaceDescriptor};
+use super::retention_policy;
+use super::turn_details::resolve_turn_details;
+
+#[path = "binding_cache_projection.rs"]
+mod binding_cache_projection;
+#[path = "binding_review.rs"]
+mod binding_review;
+#[path = "content_projection.rs"]
+mod content_projection;
+pub(super) use content_projection::NativeVmmContentProjection;
+#[path = "lexical_maintenance.rs"]
+mod lexical_maintenance;
+#[path = "manual_removal.rs"]
+mod manual_removal;
+#[path = "manual_session_lifecycle.rs"]
+mod manual_session_lifecycle;
+#[path = "profile_cache.rs"]
+mod profile_cache;
+#[path = "recall_publication.rs"]
+mod recall_publication;
+#[path = "recycle_records.rs"]
+mod recycle_records;
+#[path = "removal_impact.rs"]
+mod removal_impact;
+pub(crate) use recall_publication::NativeVmmRecallPublication;
+#[path = "retention_preview.rs"]
+mod retention_preview;
+#[path = "session_archive.rs"]
+mod session_archive;
+#[path = "session_restart.rs"]
+mod session_restart;
+
+#[cfg(test)]
+#[path = "retention_worker_tests.rs"]
+pub(super) mod retention_worker_tests;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -20,24 +55,54 @@ use vulcan_memorymesh_core::{
 };
 use vulcan_service_api::{
     VmmNativeNoiseTestResult, VmmNativePiiFormulaTestResult, VmmNativePiiTestResult,
-    VmmNativeResourceCatalogSummary, VmmNativeResourceFileContent,
-    VmmNativeResourceSettingsSummary,
+    VmmNativeRecallPolicySummary, VmmNativeResourceCatalogSummary, VmmNativeResourceFileContent,
+    VmmNativeResourceSettingsSummary, VmmNativeRuntimePolicySummary,
 };
+use vulcan_service_api::{VmmNativeRetentionSettingsSummary, VmmNativeRetrievalPolicySummary};
 use vulcan_workspace_store::vmm_data_plane::{
     NativeVmmPendingAnalysisJob, NativeVmmProject, NativeVmmProjectAccess,
     NativeVmmProjectBindingAccess, NativeVmmProjectUsage, VMM_PENDING_ANALYSIS_BYPASSED,
     VMM_PENDING_ANALYSIS_COMPLETED, VMM_PENDING_ANALYSIS_CORRUPTED, VmmDataPlaneHandle,
 };
 
+/// Creates the same scoped command for scheduled execution and isolated manual previews.
+/// 为周期执行和隔离人工预览创建相同作用域的命令。
+/// Takes the project, evaluation time, frozen policy and unique operation; returns a validated command.
+/// 接收项目、评估时间、冻结策略和唯一操作标识，返回已校验命令。
+fn retention_command(
+    project_id: u64,
+    now_ns: i64,
+    policy: &RetentionPolicy,
+    operation: String,
+) -> Result<RetentionCommand, String> {
+    // The write scope remains the project while the fixed personal scope is visible for expiry.
+    // 写入作用域仍为项目，固定个人作用域仅参与可见的到期收敛。
+    let scope_id = project_scope(project_id)?;
+    Ok(RetentionCommand {
+        mutation_identity: MutationIdentity {
+            operation_id: OperationId::new(operation.clone()).map_err(|error| error.to_string())?,
+            idempotency_key: IdempotencyKey::new(operation).map_err(|error| error.to_string())?,
+            request_fingerprint: format!("fp256:{}", "0".repeat(64)),
+            source_kind: MutationSourceKind::BackgroundWorker,
+            request_source_id: format!("native-vmm-retention:{project_id}"),
+            observed_at_ns: now_ns,
+        },
+        subject_id: native_vmm_subject_id()?,
+        scope_access: ScopeAccess {
+            write_scope: scope_id.clone(),
+            visible_scopes: vec![scope_id, native_vmm_subject_scope()?],
+        },
+        now_ns,
+        policy: policy.clone(),
+    })
+}
+
 /// Identifies the sole host-owned user used by native VMM subject and personal-profile scope.
 /// 标识原生 VMM 主体与个人画像作用域使用的唯一宿主持有用户。
 const NATIVE_VMM_USER_ID: u64 = 1;
-/// Matches the external VMM retention worker cadence after the eager startup pass.
-/// 与外置 VMM 在启动立即执行后使用的保留工作器周期保持一致。
-const NATIVE_VMM_RETENTION_INTERVAL: Duration = Duration::from_secs(30 * 60);
-/// Matches the external PostAction maintenance cadence for materializing expired profiles.
-/// 与外置 PostAction 将到期画像物化为过期状态的维护周期保持一致。
-const NATIVE_VMM_PROFILE_EXPIRY_INTERVAL: Duration = Duration::from_secs(30);
+/// Bounds detection latency for policy files edited outside the settings page.
+/// 限制设置页面之外编辑策略文件的检测延迟。
+const NATIVE_VMM_POLICY_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 /// Carries one native VMM project together with all current consumers.
 /// 携带一个原生 VMM 项目及其全部当前使用方。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +215,9 @@ pub(crate) struct NativeVmmTurnStatusCounts {
 /// 汇总可归属于一个宿主会话的全部原生记忆记录。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NativeVmmMemorySessionSummary {
+    /// Persisted lifecycle; absent for content-only sessions without extraction metadata.
+    /// 持久化生命周期；仅有内容、没有提取元数据的会话为空。
+    pub status: Option<vulcan_memorymesh_core::StorageSessionStatus>,
     /// Stable host session identity persisted by Core.
     /// Core 持久化的稳定宿主会话标识。
     pub session_source_id: String,
@@ -201,6 +269,12 @@ pub(crate) struct NativeVmmTurnRecordSummary {
     /// Stable native numeric turn identity.
     /// 稳定的原生数字回合标识。
     pub turn_id: u64,
+    /// Current preceding same-owner turn IDs, ordered by numeric identity.
+    /// 当前同归属的前序回合 ID，按数字身份排序。
+    pub previous_turn_ids: Vec<u64>,
+    /// Current following same-owner turn IDs, ordered by numeric identity.
+    /// 当前同归属的后续回合 ID，按数字身份排序。
+    pub next_turn_ids: Vec<u64>,
     /// Stable host session identity owning the turn.
     /// 拥有该回合的稳定宿主会话标识。
     pub session_source_id: String,
@@ -432,6 +506,9 @@ pub(crate) struct NativeVmmProfileRecords {
 /// 汇总一个供人工维护使用的耐久原生保留回收批次。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct NativeVmmRecycleBatchSummary {
+    /// Exact persisted manual identities, including selected sessions with no body records.
+    /// 准确持久化人工身份，包含没有正文记录的所选会话。
+    pub manual_selection: Option<vulcan_service_api::VmmNativeRemovalTarget>,
     /// Stable batch identity used by restore and purge commands.
     /// 恢复与清除命令使用的稳定批次身份。
     pub batch_id: String,
@@ -477,8 +554,8 @@ pub(crate) struct NativeVmmRecycleBin {
 /// 报告最近一次以及当前进程内原生保留状态。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct NativeVmmRetentionStatus {
-    /// Whether periodic retention is enabled by the global native backend.
-    /// 周期保留是否已由全局原生后端启用。
+    /// Whether both the native backend and periodic cleanup switch are enabled.
+    /// 原生后端和周期清洗开关是否同时启用。
     pub enabled: bool,
     /// Whether one manual or scheduled pass is currently running.
     /// 当前是否正在运行一次人工或定时维护。
@@ -486,11 +563,11 @@ pub(crate) struct NativeVmmRetentionStatus {
     /// Whether the independent profile-expiry convergence worker is currently running.
     /// 独立画像过期收敛工作器当前是否正在运行。
     pub profile_expiry_running: bool,
-    /// Fixed scheduled interval in minutes.
-    /// 固定定时周期的分钟数。
+    /// Effective configured scheduled interval in minutes.
+    /// 当前生效的已配置定时周期分钟数。
     pub interval_minutes: u64,
-    /// Fixed profile-expiry convergence interval in seconds.
-    /// 固定画像过期收敛周期的秒数。
+    /// Effective configured profile-expiry convergence interval in seconds.
+    /// 当前生效的已配置画像过期收敛周期秒数。
     pub profile_expiry_interval_seconds: u64,
     /// Frozen VMM-aligned retention policy.
     /// 已冻结且与 VMM 对齐的保留策略。
@@ -811,6 +888,9 @@ impl NativeVmmRetentionApplyResult {
 /// 基于一个共享运行时提供原生项目迁移与清空操作。
 #[derive(Clone)]
 pub(crate) struct NativeVmmMaintenance {
+    /// Optional host hook owner; isolated Core fixtures intentionally have no host outbox.
+    /// 可选宿主 Hook 归属方；隔离 Core 夹具刻意不存在宿主待写回队列。
+    writeback_runtime: Option<vulcan_agent_runtime::agent_runtime::vmm_hooks::VmmHookRuntimeHandle>,
     /// Shared native Core runtime whose mutation gate is the maintenance commit boundary.
     /// 以其变更门作为维护提交边界的共享原生 Core 运行时。
     runtime: Arc<NativeVmmCoreRuntime>,
@@ -853,6 +933,18 @@ pub(crate) struct NativeVmmMaintenance {
     /// Stores the latest completed retention status for diagnostics and the management page.
     /// 保存最近一次已完成保留状态，供诊断与管理页面使用。
     retention_last_status: Arc<RwLock<NativeVmmRetentionStatus>>,
+    /// Holds only the latest server-prepared manual cleanup plan; a new preview replaces it.
+    /// 仅保留服务端最近准备的人工清洗计划，新预览替换旧预览。
+    retention_preview: Arc<Mutex<Option<retention_preview::PreparedRetentionCleanup>>>,
+    /// Holds the latest bounded server-prepared archive selection.
+    /// 保存最近一份有界服务端归档选择。
+    session_archive_preview: Arc<Mutex<Option<session_archive::PreparedSessionArchive>>>,
+    /// Holds the latest forgotten-session restart preview independently of archive operations.
+    /// 独立于归档操作保存最近的已遗忘会话重新启用预览。
+    session_restart_preview: Arc<Mutex<Option<session_restart::PreparedSessionRestart>>>,
+    /// Holds the latest exact manual recycle selection independently of policy cleanup.
+    /// 独立于策略清洗保存最近的准确人工回收选择。
+    removal_preview: Arc<Mutex<Option<manual_removal::PreparedManualRemoval>>>,
 }
 
 impl NativeVmmMaintenance {
@@ -885,6 +977,176 @@ impl NativeVmmMaintenance {
     /// 持久化资源状态无效或不可读时返回错误。
     pub(crate) async fn resource_catalog(&self) -> Result<VmmNativeResourceCatalogSummary, String> {
         self.runtime.resource_catalog().await
+    }
+
+    /// Reads validated native business settings; failures remain visible to the maintenance caller.
+    /// 读取经过校验的原生业务设置；失败保持对维护调用者可见。
+    pub(crate) async fn runtime_policy(&self) -> Result<VmmNativeRuntimePolicySummary, String> {
+        self.runtime.runtime_policy().await
+    }
+
+    /// Reads caller overrides only for an existing native host binding, without changing its enabled state.
+    /// 仅为存在的原生宿主绑定读取调用方覆盖，不改变绑定启用状态。
+    pub(crate) async fn host_project_policy(
+        &self,
+        host_project_id: &str,
+    ) -> Result<vulcan_service_api::VmmNativeHostProjectPolicySummary, String> {
+        let _gate = self.operation_gate.read().await;
+        self.bound_project(host_project_id)
+            .await?
+            .ok_or_else(|| "该 VulcanCode 项目尚未绑定原生记忆项目".to_owned())?;
+        self.runtime.host_project_policy(host_project_id).await
+    }
+
+    /// Saves only the caller's business overrides while holding its binding stable.
+    /// 保持绑定稳定期间仅保存调用方业务覆盖。
+    pub(crate) async fn update_host_project_policy(
+        &self,
+        edit: vulcan_service_api::VmmNativeHostProjectPolicyEdit,
+    ) -> Result<vulcan_service_api::VmmNativeHostProjectPolicySummary, String> {
+        let _gate = self.operation_gate.read().await;
+        self.bound_project(&edit.host_project_id)
+            .await?
+            .ok_or_else(|| "该 VulcanCode 项目尚未绑定原生记忆项目".to_owned())?;
+        self.runtime
+            .update_host_project_policy(&edit.host_project_id, edit.overrides)
+            .await
+    }
+
+    /// Persists explicitly supplied recall settings and returns their next-command effective values.
+    /// 持久化显式提供的召回设置，并返回下一命令使用的有效值。
+    /// Returns an error when validation, persistence, or activation fails.
+    /// 校验、持久化或激活失败时返回错误。
+    pub(crate) async fn update_runtime_policy(
+        &self,
+        recall: VmmNativeRecallPolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        self.runtime.update_runtime_policy(recall).await
+    }
+
+    /// Saves explicit ranking values, preserving the independently stored recall group.
+    /// 保存显式排序值，保留独立保存的召回组。
+    /// Returns effective values or an explicit validation/persistence error.
+    /// 返回有效值或明确的校验/持久化错误。
+    pub(crate) async fn update_retrieval_policy(
+        &self,
+        retrieval: VmmNativeRetrievalPolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        self.runtime.update_retrieval_policy(retrieval).await
+    }
+
+    /// Saves text intake controls without restarting workers or reprocessing historical turns.
+    /// 保存文本入库控制项，不重启工作器或重新处理历史回合。
+    /// Returns the accepted full policy or the exact validation/persistence error.
+    /// 返回接纳的完整策略或准确的校验/持久化错误。
+    pub(crate) async fn update_text_policy(
+        &self,
+        text: vulcan_service_api::VmmNativeTextPolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        self.runtime.update_text_policy(text).await
+    }
+
+    /// Saves global profile lifetimes without retrospectively changing stored deadlines or triggering extraction.
+    /// 保存全局画像生命周期，不追溯更改存储期限或触发提炼。
+    /// Returns accepted settings or the exact validation/persistence failure.
+    /// 返回接纳设置或准确的校验/持久化失败。
+    pub(crate) async fn update_profile_policy(
+        &self,
+        profiles: vulcan_service_api::VmmNativeProfilePolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        self.runtime.update_profile_policy(profiles).await
+    }
+
+    /// Saves explicit cleanup settings and wakes both periodic workers only after success.
+    /// 保存显式清洗设置，且仅在成功后唤醒两个周期工作器。
+    /// Returns the complete saved policy or the exact configuration failure.
+    /// 返回完整已保存策略或准确配置失败。
+    pub(crate) async fn update_retention_settings(
+        &self,
+        settings: VmmNativeRetentionSettingsSummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let policy = self.runtime.update_retention_settings(settings).await?;
+        self.retention_notify.notify_one();
+        self.profile_expiry_notify.notify_one();
+        Ok(policy)
+    }
+
+    /// Reads project-owned retention settings only while the exact memory project exists.
+    /// 仅在准确记忆项目存在时读取项目持有的保留设置。
+    /// The catalog gate prevents deletion between existence validation and configuration access.
+    /// 目录锁防止存在性验证和配置访问之间发生删除。
+    pub(crate) async fn project_retention_summary(
+        &self,
+        project_id: u64,
+    ) -> Result<vulcan_service_api::VmmNativeProjectRetentionSummary, String> {
+        let _project_guard = self.project_mutation_gate.lock().await;
+        self.ensure_project(project_id).await?;
+        self.runtime.project_retention_summary(project_id).await
+    }
+
+    /// Saves an explicit override or inheritance request without changing any existing memory or batch.
+    /// 保存显式覆盖或继承请求，不更改任何现有记忆或批次。
+    /// Invalid projects and invalid rules fail before the user configuration is persisted.
+    /// 非法项目和非法规则在用户配置持久化之前失败。
+    pub(crate) async fn update_project_retention(
+        &self,
+        edit: vulcan_service_api::VmmNativeProjectRetentionEdit,
+    ) -> Result<vulcan_service_api::VmmNativeProjectRetentionSummary, String> {
+        let _project_guard = self.project_mutation_gate.lock().await;
+        let (project_id, rules) = match edit {
+            vulcan_service_api::VmmNativeProjectRetentionEdit::Override { project_id, rules } => {
+                (project_id, Some(rules))
+            }
+            vulcan_service_api::VmmNativeProjectRetentionEdit::Inherit { project_id } => {
+                (project_id, None)
+            }
+        };
+        self.ensure_project(project_id).await?;
+        let saved = self
+            .runtime
+            .save_project_retention(project_id, rules)
+            .await?;
+        self.retention_notify.notify_one();
+        Ok(saved)
+    }
+
+    /// Reads profile rules only for an existing stable memory project.
+    /// 仅为已存在的稳定记忆项目读取画像规则。
+    /// Returns project-only inheritance metadata while preventing concurrent catalog deletion.
+    /// 在阻止并发目录删除的同时返回仅项目的继承元数据。
+    pub(crate) async fn project_profile_policy_summary(
+        &self,
+        project_id: u64,
+    ) -> Result<vulcan_service_api::VmmNativeProjectProfilePolicySummary, String> {
+        let _project_guard = self.project_mutation_gate.lock().await;
+        self.ensure_project(project_id).await?;
+        self.runtime
+            .project_profile_policy_summary(project_id)
+            .await
+    }
+
+    /// Updates only project profile defaults; existing nodes and personal rules are not rewritten.
+    /// 仅更新项目画像默认规则；不重写已有节点和个人规则。
+    /// Takes an explicit whole-group edit and returns the saved effective policy for the next command.
+    /// 接收显式完整组编辑，返回下一命令使用的已保存有效策略。
+    pub(crate) async fn update_project_profile_policy(
+        &self,
+        edit: vulcan_service_api::VmmNativeProjectProfilePolicyEdit,
+    ) -> Result<vulcan_service_api::VmmNativeProjectProfilePolicySummary, String> {
+        let _project_guard = self.project_mutation_gate.lock().await;
+        let (project_id, rules) = match edit {
+            vulcan_service_api::VmmNativeProjectProfilePolicyEdit::Override {
+                project_id,
+                rules,
+            } => (project_id, Some(rules)),
+            vulcan_service_api::VmmNativeProjectProfilePolicyEdit::Inherit { project_id } => {
+                (project_id, None)
+            }
+        };
+        self.ensure_project(project_id).await?;
+        self.runtime
+            .save_project_profile_policy(project_id, rules)
+            .await
     }
 
     /// Reads one exact native Core resource file.
@@ -999,7 +1261,11 @@ impl NativeVmmMaintenance {
         data_plane: VmmDataPlaneHandle,
         operation_gate: Arc<RwLock<()>>,
     ) -> Self {
+        // Defaults are read from the sole cleanup-policy owner, not independently redefined.
+        // 从唯一清洗策略归属方读取默认值，不单独重定义。
+        let defaults = retention_policy::defaults();
         Self {
+            writeback_runtime: None,
             runtime,
             data_plane,
             operation_gate,
@@ -1013,12 +1279,18 @@ impl NativeVmmMaintenance {
             retention_run_gate: Arc::new(Mutex::new(())),
             retention_running: Arc::new(AtomicBool::new(false)),
             profile_expiry_running: Arc::new(AtomicBool::new(false)),
+            retention_preview: Arc::new(Mutex::new(None)),
+            session_archive_preview: Arc::new(Mutex::new(None)),
+            session_restart_preview: Arc::new(Mutex::new(None)),
+            removal_preview: Arc::new(Mutex::new(None)),
             retention_last_status: Arc::new(RwLock::new(NativeVmmRetentionStatus {
                 enabled: false,
                 running: false,
                 profile_expiry_running: false,
-                interval_minutes: 30,
-                profile_expiry_interval_seconds: 30,
+                interval_minutes: u64::from(defaults.scan_interval_minutes),
+                profile_expiry_interval_seconds: u64::from(
+                    defaults.profile_expiry_interval_seconds,
+                ),
                 policy: RetentionPolicy::v1(),
                 last_started_at_unix_ms: None,
                 last_finished_at_unix_ms: None,
@@ -1032,6 +1304,29 @@ impl NativeVmmMaintenance {
                 recycle_batch_count: 0,
             })),
         }
+    }
+
+    /// Installs the existing host admission owner before this maintenance facade is published.
+    /// 在发布本维护门面之前安装既有宿主准入归属方。
+    pub(crate) fn with_writeback_runtime(
+        mut self,
+        runtime: vulcan_agent_runtime::agent_runtime::vmm_hooks::VmmHookRuntimeHandle,
+    ) -> Self {
+        self.writeback_runtime = Some(runtime);
+        self
+    }
+
+    /// Revokes only the former exact owner after a successful binding transaction, under the operation gate.
+    /// 成功绑定事务后，在操作门内仅撤销此前准确归属。
+    fn revoke_previous_writebacks(
+        &self,
+        host_project_id: &str,
+        previous_project_id: u64,
+    ) -> Result<(), String> {
+        if let Some(runtime) = &self.writeback_runtime {
+            runtime.revoke_native_project_writebacks(host_project_id, previous_project_id)?;
+        }
+        Ok(())
     }
 
     /// Shares the backend activation gate and wake signal with the native PostAction worker.
@@ -1080,7 +1375,21 @@ impl NativeVmmMaintenance {
     /// # Errors
     /// Returns the exact Core planning, snapshot validation, or durable persistence failure.
     /// Core 规划、快照校验或耐久持久化失败时返回准确错误。
+    #[cfg(test)]
     pub(crate) async fn run_retention_once(&self) -> Result<NativeVmmRetentionApplyResult, String> {
+        let settings = self.runtime.retention_settings().await?;
+        let policy = retention_policy::resolve(&settings)?;
+        self.run_retention_with_policy(&policy).await
+    }
+
+    /// Runs manual or scheduled cleanup using one admitted policy for every phase.
+    /// 使用同一已准入策略运行人工或定时清洗的所有阶段。
+    /// `policy` stays immutable throughout the pass; failures remain visible in maintenance status.
+    /// `policy` 在本轮始终不可变；失败保留在维护状态中。
+    async fn run_retention_with_policy(
+        &self,
+        policy: &RetentionPolicy,
+    ) -> Result<NativeVmmRetentionApplyResult, String> {
         let _run_guard = self.retention_run_gate.lock().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
             return Err(String::from(
@@ -1095,7 +1404,7 @@ impl NativeVmmMaintenance {
             status.last_error = None;
         }
 
-        let outcome = self.run_retention_once_inner().await;
+        let outcome = self.run_retention_once_inner(policy).await;
         let finished_at_unix_ms = native_vmm_now_ns().map(unix_ns_to_ms).ok();
         let current_snapshot = self.runtime.storage_snapshot().ok();
         {
@@ -1128,9 +1437,14 @@ impl NativeVmmMaintenance {
     /// Returns an error when the durable Core snapshot cannot be read.
     /// 无法读取耐久 Core 快照时返回错误。
     pub(crate) async fn retention_status(&self) -> Result<NativeVmmRetentionStatus, String> {
+        let settings = self.runtime.retention_settings().await?;
         let snapshot = self.runtime.storage_snapshot()?;
         let mut status = self.retention_last_status.read().await.clone();
-        status.enabled = self.native_backend_enabled.load(Ordering::Acquire);
+        status.enabled = self.native_backend_enabled.load(Ordering::Acquire) && settings.enabled;
+        status.interval_minutes = u64::from(settings.scan_interval_minutes);
+        status.profile_expiry_interval_seconds =
+            u64::from(settings.profile_expiry_interval_seconds);
+        status.policy = retention_policy::resolve(&settings)?;
         status.running = self.retention_running.load(Ordering::Acquire);
         status.profile_expiry_running = self.profile_expiry_running.load(Ordering::Acquire);
         status.pending_cold_jobs = usize_to_u64(snapshot.retention_cold_turn_jobs.len());
@@ -1421,7 +1735,6 @@ impl NativeVmmMaintenance {
             None => None,
         };
         let snapshot = self.runtime.storage_snapshot()?;
-        let policy = RetentionPolicy::v1();
         let mut batches = snapshot
             .retention_trash_batches
             .iter()
@@ -1431,7 +1744,7 @@ impl NativeVmmMaintenance {
                         .as_ref()
                         .is_none_or(|scope| batch.scope_id == *scope)
             })
-            .map(|batch| retention_batch_summary(batch, &policy))
+            .map(retention_batch_summary)
             .collect::<Result<Vec<_>, _>>()?;
         batches.sort_by(|left, right| {
             right
@@ -1471,7 +1784,6 @@ impl NativeVmmMaintenance {
             return Ok(existing);
         }
         let now_ns = native_vmm_now_ns()?;
-        let policy = RetentionPolicy::v1();
         let before = self.runtime.storage_snapshot()?;
         if before.storage_version != expected_storage_version {
             return Err(format!(
@@ -1484,10 +1796,7 @@ impl NativeVmmMaintenance {
             .iter()
             .find(|batch| batch.batch_id == batch_id)
             .ok_or_else(|| format!("原生 VMM 回收批次 `{batch_id}` 不存在。"))?;
-        let expires_at_ns = batch
-            .recycled_at_ns
-            .saturating_add(retention_duration_ns(policy.trash_retention_ms)?);
-        if expires_at_ns <= now_ns {
+        if batch.expires_at_ns <= now_ns {
             return Err(format!("原生 VMM 回收批次 `{batch_id}` 已到期，不能恢复。"));
         }
         ensure_recycle_restore_has_no_conflicts(&before, batch)?;
@@ -1519,16 +1828,16 @@ impl NativeVmmMaintenance {
                         .position(|batch| batch.batch_id == batch_id)
                         .ok_or_else(|| format!("原生 VMM 回收批次 `{batch_id}` 不存在。"))?;
                     let batch = &snapshot.retention_trash_batches[batch_index];
-                    let expires_at_ns = batch
-                        .recycled_at_ns
-                        .saturating_add(retention_duration_ns(policy.trash_retention_ms)?);
-                    if expires_at_ns <= now_ns {
+                    // Provider checks and lock acquisition can outlive the preview's time boundary.
+                    // 供应商检查和锁等待可能跨过预检时的时间边界。
+                    let apply_now_ns = native_vmm_now_ns()?;
+                    if batch.expires_at_ns <= apply_now_ns {
                         return Err(format!("原生 VMM 回收批次 `{batch_id}` 已到期，不能恢复。"));
                     }
                     ensure_recycle_restore_has_no_conflicts(snapshot, batch)?;
                     let batch = snapshot.retention_trash_batches.remove(batch_index);
-                    let summary = retention_batch_summary(&batch, &policy)?;
-                    restore_retention_batch(snapshot, batch);
+                    let summary = retention_batch_summary(&batch)?;
+                    restore_retention_batch(snapshot, batch)?;
                     Ok(summary)
                 },
             )
@@ -1550,7 +1859,6 @@ impl NativeVmmMaintenance {
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
         let mutation_kind = format!("retention_purge:{batch_id}:{expected_storage_version}");
-        let policy = RetentionPolicy::v1();
         let summary = self
             .runtime
             .transform_storage_snapshot(
@@ -1564,7 +1872,12 @@ impl NativeVmmMaintenance {
                         .position(|batch| batch.batch_id == batch_id)
                         .ok_or_else(|| format!("原生 VMM 回收批次 `{batch_id}` 不存在。"))?;
                     let batch = snapshot.retention_trash_batches.remove(batch_index);
-                    let summary = retention_batch_summary(&batch, &policy)?;
+                    let summary = retention_batch_summary(&batch)?;
+                    manual_session_lifecycle::apply(
+                        snapshot,
+                        batch.manual_selection.as_ref(),
+                        false,
+                    )?;
                     remove_outcomes_referencing_dataset(snapshot, &batch.dataset);
                     Ok(summary)
                 },
@@ -1576,15 +1889,34 @@ impl NativeVmmMaintenance {
 
     /// Executes one serialized process-wide retention pass under the canonical lock order.
     /// 按规范锁顺序执行一次串行化的进程级保留运行。
-    async fn run_retention_once_inner(&self) -> Result<NativeVmmRetentionApplyResult, String> {
+    async fn run_retention_once_inner(
+        &self,
+        policy: &RetentionPolicy,
+    ) -> Result<NativeVmmRetentionApplyResult, String> {
         // Every native project mutation acquires the catalog gate before the operation barrier.
         // 每个原生项目变更都先获取目录门，再获取操作屏障。
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
         self.runtime.recover_storage_mutations().await?;
         let mut aggregate = NativeVmmRetentionApplyResult::default();
-        for project in self.data_plane.list_projects().await? {
-            match self.run_project_retention(project.id).await {
+        // Freeze the complete owner-policy map once; later project edits cannot split this pass.
+        // 一次性冻结完整归属方策略映射；后续项目编辑不能拆分当前轮次。
+        let projects = self.data_plane.list_projects().await?;
+        let policies = self
+            .runtime
+            .project_retention_policies(
+                policy,
+                &projects
+                    .iter()
+                    .map(|project| project.id)
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+        for project in projects {
+            let project_policy = policies
+                .get(&project.id)
+                .ok_or_else(|| format!("缺少已准入的记忆项目 {} 保留策略。", project.id))?;
+            match self.run_project_retention(project.id, project_policy).await {
                 Ok(result) => aggregate.merge(&result),
                 Err(error) => aggregate
                     .project_failures
@@ -1601,58 +1933,103 @@ impl NativeVmmMaintenance {
     /// Waits while native retention is inactive and otherwise runs eager plus 30-minute full passes.
     /// 在原生保留未启用时等待，否则执行启动立即运行与每 30 分钟完整运行。
     async fn run_retention_worker(self) {
-        loop {
-            if !self.native_backend_enabled.load(Ordering::Acquire) {
-                self.retention_notify.notified().await;
-                continue;
-            }
-            match self.run_retention_once().await {
-                Ok(result) if !result.project_failures.is_empty() => {
-                    if let Some(error) = retention_project_failure_message(&result) {
-                        eprintln!("[webui-service] native VMM retention project failures: {error}");
-                    }
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    eprintln!("[webui-service] native VMM retention pass failed: {error}");
-                }
-            }
-            let retention_sleep = tokio::time::sleep(NATIVE_VMM_RETENTION_INTERVAL);
-            tokio::pin!(retention_sleep);
-            tokio::select! {
-                () = &mut retention_sleep => {}
-                () = self.retention_notify.notified() => {}
-            }
-        }
+        self.run_periodic_cleanup(false).await;
     }
 
     /// Runs profile-expiry convergence on its own 30-second schedule independently of full retention.
     /// 按独立的 30 秒节拍运行画像过期收敛，不受完整保留调度循环控制。
     async fn run_profile_expiry_worker(self) {
+        self.run_periodic_cleanup(true).await;
+    }
+
+    /// Reloads cleanup policy on notifications and bounded polls while keeping the configured cadence.
+    /// 在通知和有界轮询时重载清洗策略，同时保持用户配置的执行周期。
+    /// `profile_only` selects the independent profile worker; this long-lived loop has no normal return.
+    /// `profile_only` 选择独立画像工作器；此长期循环不正常返回。
+    async fn run_periodic_cleanup(self, profile_only: bool) {
+        let notify = if profile_only {
+            &self.profile_expiry_notify
+        } else {
+            &self.retention_notify
+        };
+        let mut last_completed = None;
+        let mut was_enabled = false;
         loop {
             if !self.native_backend_enabled.load(Ordering::Acquire) {
-                self.profile_expiry_notify.notified().await;
+                was_enabled = false;
+                notify.notified().await;
                 continue;
             }
-            let profile_expiry_sleep = tokio::time::sleep(NATIVE_VMM_PROFILE_EXPIRY_INTERVAL);
-            tokio::pin!(profile_expiry_sleep);
-            tokio::select! {
-                () = &mut profile_expiry_sleep => {
-                    if !self.native_backend_enabled.load(Ordering::Acquire) {
-                        continue;
+            // A bad file suspends execution with an explicit error; it never activates fallback defaults.
+            // 错误文件会以明确错误暂停执行，绝不启用回退默认值。
+            let settings = self.runtime.retention_settings().await;
+            let mut wait = NATIVE_VMM_POLICY_REFRESH_INTERVAL;
+            match settings {
+                Ok(settings) if settings.enabled => {
+                    let now = tokio::time::Instant::now();
+                    if !was_enabled {
+                        last_completed = if profile_only { Some(now) } else { None };
+                        was_enabled = true;
                     }
-                    if let Err(error) = self.run_profile_expiry_once().await {
-                        eprintln!("[webui-service] native VMM profile expiry pass failed: {error}");
+                    let interval = if profile_only {
+                        Duration::from_secs(u64::from(settings.profile_expiry_interval_seconds))
+                    } else {
+                        Duration::from_secs(u64::from(settings.scan_interval_minutes) * 60)
+                    };
+                    let remaining = retention_policy::remaining_wait(now, last_completed, interval);
+                    if remaining.is_zero() {
+                        let outcome = match retention_policy::resolve(&settings) {
+                            Ok(policy) if profile_only => {
+                                self.run_profile_expiry_once(&policy).await
+                            }
+                            Ok(policy) => self.run_retention_with_policy(&policy).await,
+                            Err(error) => Err(error),
+                        };
+                        match outcome {
+                            Ok(result) => {
+                                if let Some(error) = retention_project_failure_message(&result) {
+                                    eprintln!(
+                                        "[webui-service] native VMM periodic cleanup project failures: {error}"
+                                    );
+                                }
+                            }
+                            Err(error) => eprintln!(
+                                "[webui-service] native VMM periodic cleanup failed: {error}"
+                            ),
+                        }
+                        // Measure the next interval after completion so a slow scan never spins continuously.
+                        // 从完成时间开始计算下一周期，避免慢扫描持续空转执行。
+                        last_completed = Some(tokio::time::Instant::now());
+                        wait = wait.min(interval);
+                    } else {
+                        wait = wait.min(remaining);
                     }
                 }
-                () = self.profile_expiry_notify.notified() => {}
+                Ok(_) => was_enabled = false,
+                Err(error) => {
+                    was_enabled = false;
+                    let mut status = self.retention_last_status.write().await;
+                    if profile_only {
+                        status.profile_expiry_last_error = Some(error.clone());
+                    } else {
+                        status.last_error = Some(error.clone());
+                    }
+                    eprintln!("[webui-service] native VMM cleanup configuration failed: {error}");
+                }
+            }
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                () = notify.notified() => {}
             }
         }
     }
 
     /// Runs one bounded profile-expiry convergence without triggering the heavier retention phases.
     /// 运行一次有界画像过期收敛，且不触发更重的其他保留阶段。
-    async fn run_profile_expiry_once(&self) -> Result<NativeVmmRetentionApplyResult, String> {
+    async fn run_profile_expiry_once(
+        &self,
+        base: &RetentionPolicy,
+    ) -> Result<NativeVmmRetentionApplyResult, String> {
         if !self.native_backend_enabled.load(Ordering::Acquire) {
             return Ok(NativeVmmRetentionApplyResult::default());
         }
@@ -1671,7 +2048,7 @@ impl NativeVmmMaintenance {
             let _project_guard = self.project_mutation_gate.lock().await;
             let _operation_guard = self.operation_gate.write().await;
             self.runtime.recover_storage_mutations().await?;
-            let policy = native_profile_expiry_policy();
+            let policy = native_profile_expiry_policy(base);
             let mut aggregate = NativeVmmRetentionApplyResult::default();
             for project in self.data_plane.list_projects().await? {
                 match self.run_project_profile_expiry(project.id, &policy).await {
@@ -1716,10 +2093,10 @@ impl NativeVmmMaintenance {
     async fn run_project_retention(
         &self,
         project_id: u64,
+        policy: &RetentionPolicy,
     ) -> Result<NativeVmmRetentionApplyResult, String> {
-        let policy = RetentionPolicy::v1();
         let mut aggregate = NativeVmmRetentionApplyResult::default();
-        let first = self.run_project_retention_pass(project_id, &policy).await?;
+        let first = self.run_project_retention_pass(project_id, policy).await?;
         let completed_cold_jobs = u32::try_from(first.completed_cold_jobs)
             .map_err(|error| format!("原生 VMM 冷回合完成计数超出 u32 范围：{error}"))?;
         let remaining_cold_job_limit = policy
@@ -1734,7 +2111,8 @@ impl NativeVmmMaintenance {
             // portion of that same batch and disables every other plan family.
             // 外置 VMM 会先扫描再领取一个 16 条作业批次。原生规划无法引用尚未存在的作业，
             // 因此后续阶段只执行同一批次尚未使用的额度，并关闭其他全部计划族。
-            let follow_up_policy = native_cold_turn_follow_up_policy(remaining_cold_job_limit);
+            let follow_up_policy =
+                native_cold_turn_follow_up_policy(policy, remaining_cold_job_limit);
             let follow_up = self
                 .run_project_retention_pass(project_id, &follow_up_policy)
                 .await?;
@@ -1749,7 +2127,10 @@ impl NativeVmmMaintenance {
             // 有意排除刚扫描出的冷会话，因此这里用有界的仅闲置后续轮次恢复该顺序，同时不重复画像、
             // 终态记忆、冷扫描、向量或清除工作。
             let idle_follow_up = self
-                .run_project_retention_pass(project_id, &native_idle_session_follow_up_policy())
+                .run_project_retention_pass(
+                    project_id,
+                    &native_idle_session_follow_up_policy(policy),
+                )
                 .await?;
             aggregate.merge(&idle_follow_up);
         }
@@ -1828,31 +2209,12 @@ impl NativeVmmMaintenance {
         now_ns: i64,
         policy: &RetentionPolicy,
     ) -> Result<RetentionPlanSet, String> {
-        let subject_id = native_vmm_subject_id()?;
-        let scope_id = project_scope(project_id)?;
-        let subject_scope_id = native_vmm_subject_scope()?;
         let operation = format!("native-vmm-retention-plan:{}", uuid::Uuid::new_v4());
         let result = self
             .runtime
-            .run(CoreCommand::Retention(RetentionCommand {
-                mutation_identity: MutationIdentity {
-                    operation_id: OperationId::new(operation.clone())
-                        .map_err(|error| error.to_string())?,
-                    idempotency_key: IdempotencyKey::new(operation)
-                        .map_err(|error| error.to_string())?,
-                    request_fingerprint: format!("fp256:{}", "0".repeat(64)),
-                    source_kind: MutationSourceKind::BackgroundWorker,
-                    request_source_id: format!("native-vmm-retention:{project_id}"),
-                    observed_at_ns: now_ns,
-                },
-                subject_id,
-                scope_access: ScopeAccess {
-                    write_scope: scope_id.clone(),
-                    visible_scopes: vec![scope_id, subject_scope_id],
-                },
-                now_ns,
-                policy: policy.clone(),
-            }))
+            .run(CoreCommand::Retention(retention_command(
+                project_id, now_ns, policy, operation,
+            )?))
             .await
             .map_err(|error| error.to_string())?;
         let CommandResult::Retention(plan) = result else {
@@ -1915,6 +2277,24 @@ impl NativeVmmMaintenance {
         )
     }
 
+    /// Reads lightweight session summaries without materializing turn bodies or loading analysis jobs.
+    /// 读取轻量会话摘要，不构造回合正文或加载分析作业。
+    /// Takes the exact native project ID; returns a coherent storage version and ordered session summaries.
+    /// 接收准确原生项目 ID；返回一致的存储版本及有序会话摘要。
+    pub(crate) async fn session_summaries(
+        &self,
+        project_id: u64,
+    ) -> Result<(u64, Vec<NativeVmmMemorySessionSummary>), String> {
+        let _project_guard = self.project_mutation_gate.lock().await;
+        let _operation_guard = self.operation_gate.read().await;
+        self.ensure_project(project_id).await?;
+        let snapshot = self.runtime.storage_snapshot()?;
+        Ok((
+            snapshot.storage_version,
+            build_session_summaries(&snapshot, project_id)?,
+        ))
+    }
+
     /// Loads every durable profile-node state for one explicit native target.
     /// 加载一个明确原生目标的全部持久画像节点状态。
     ///
@@ -1960,6 +2340,7 @@ impl NativeVmmMaintenance {
         // Owner rebinding cannot cross an in-flight operation that already resolved its write scope.
         // 所有者重绑不能跨越已经解析写入作用域的进行中操作。
         let _operation_guard = self.operation_gate.write().await;
+        let previous = self.bound_project(vulcan_project_id).await?;
         let project = self
             .data_plane
             .project_by_id(vmm_project_id)
@@ -1968,6 +2349,11 @@ impl NativeVmmMaintenance {
         self.data_plane
             .bind_vulcan_project(vulcan_project_id, vmm_project_id)
             .await?;
+        if let Some(previous) = previous
+            && previous.id != vmm_project_id
+        {
+            self.revoke_previous_writebacks(vulcan_project_id, previous.id)?;
+        }
         Ok(project)
     }
 
@@ -2018,9 +2404,17 @@ impl NativeVmmMaintenance {
         // One write guard keeps functional requests outside the complete association transaction.
         // 单个写守卫使功能请求无法进入完整关联事务的中间状态。
         let _operation_guard = self.operation_gate.write().await;
-        self.data_plane
+        let previous = self.bound_project(vulcan_project_id).await?;
+        let access = self
+            .data_plane
             .set_project_access(vulcan_project_id, owner_project_id, linked_project_ids)
-            .await
+            .await?;
+        if let Some(previous) = previous
+            && previous.id != owner_project_id
+        {
+            self.revoke_previous_writebacks(vulcan_project_id, previous.id)?;
+        }
+        Ok(access)
     }
 
     /// Creates or reuses the project tag and binds it as the unique write owner.
@@ -2034,6 +2428,7 @@ impl NativeVmmMaintenance {
         // Creation and binding publish one new owner only after active native operations drain.
         // 创建与绑定仅在活动原生操作排空后发布新的所有者。
         let _operation_guard = self.operation_gate.write().await;
+        let previous = self.bound_project(vulcan_project_id).await?;
         let project = self
             .data_plane
             .ensure_project(project_name, vulcan_project_id)
@@ -2041,6 +2436,11 @@ impl NativeVmmMaintenance {
         self.data_plane
             .bind_vulcan_project(vulcan_project_id, project.id)
             .await?;
+        if let Some(previous) = previous
+            && previous.id != project.id
+        {
+            self.revoke_previous_writebacks(vulcan_project_id, previous.id)?;
+        }
         Ok(project)
     }
 
@@ -2120,9 +2520,14 @@ impl NativeVmmMaintenance {
         // Unbinding waits until no active operation can still rely on the previous owner.
         // 解绑会等待，直到没有活动操作仍依赖此前所有者。
         let _operation_guard = self.operation_gate.write().await;
+        let previous = self.bound_project(vulcan_project_id).await?;
         self.data_plane
             .unbind_vulcan_project(vulcan_project_id)
-            .await
+            .await?;
+        if let Some(previous) = previous {
+            self.revoke_previous_writebacks(vulcan_project_id, previous.id)?;
+        }
+        Ok(())
     }
 
     /// Replaces one bound VulcanCode project's ordered recall-only project list.
@@ -2212,6 +2617,9 @@ impl NativeVmmMaintenance {
             self.data_plane
                 .delete_project_with_bindings(project_id)
                 .await?;
+            for owner in &preview.usage.owner_vulcan_project_ids {
+                self.revoke_previous_writebacks(owner, project_id)?;
+            }
             self.prune_orphaned_terminal_analysis_jobs().await?;
             return Ok(preview);
         }
@@ -2247,6 +2655,9 @@ impl NativeVmmMaintenance {
         self.data_plane
             .delete_project_with_bindings(project_id)
             .await?;
+        for owner in &deleted_preview.usage.owner_vulcan_project_ids {
+            self.revoke_previous_writebacks(owner, project_id)?;
+        }
         self.prune_orphaned_terminal_analysis_jobs().await?;
         Ok(deleted_preview)
     }
@@ -2475,11 +2886,13 @@ impl NativeVmmMaintenance {
 ///
 /// # Returns
 /// 返回值
-/// The frozen v1 expiry limit with every unrelated retention family disabled.
-/// 返回保留 v1 画像过期上限、并关闭所有无关保留计划族的策略。
+/// The admitted base policy with every unrelated retention family disabled.
+/// 返回已准入基础策略的副本，并关闭所有无关保留计划族。
+/// `base` supplies the exact policy admitted for this scan.
+/// `base` 提供本轮扫描已准入的准确策略。
 #[must_use]
-fn native_profile_expiry_policy() -> RetentionPolicy {
-    let mut policy = RetentionPolicy::v1();
+fn native_profile_expiry_policy(base: &RetentionPolicy) -> RetentionPolicy {
+    let mut policy = base.clone();
     policy.memory_recycle_limit = 0;
     policy.cold_turn_scan_limit = 0;
     policy.cold_turn_job_limit = 0;
@@ -2493,15 +2906,20 @@ fn native_profile_expiry_policy() -> RetentionPolicy {
 /// 构建当前周期入队冷回合作业后使用的仅执行后续策略。
 ///
 /// # Parameters
+/// `base` supplies the policy frozen for the first pass of this cycle.
+/// `base` 提供本周期首个阶段冻结的策略。
 /// `remaining_job_limit` is the unused portion of the frozen per-cycle execution budget.
 /// `remaining_job_limit` 是冻结单周期执行额度中尚未使用的部分。
 ///
 /// # Returns
-/// A v1 policy with every family disabled except bounded due cold-job execution.
-/// 返回除有界到期冷作业执行外关闭所有计划族的 v1 策略。
+/// The same admitted policy with only bounded due cold-job execution enabled.
+/// 返回同一已准入策略，仅启用有界到期冷作业执行。
 #[must_use]
-fn native_cold_turn_follow_up_policy(remaining_job_limit: u32) -> RetentionPolicy {
-    let mut policy = RetentionPolicy::v1();
+fn native_cold_turn_follow_up_policy(
+    base: &RetentionPolicy,
+    remaining_job_limit: u32,
+) -> RetentionPolicy {
+    let mut policy = base.clone();
     policy.profile_expiry_limit = 0;
     policy.memory_recycle_limit = 0;
     policy.cold_turn_scan_limit = 0;
@@ -2516,11 +2934,13 @@ fn native_cold_turn_follow_up_policy(remaining_job_limit: u32) -> RetentionPolic
 /// 构建当前周期发现冷会话后使用的仅闲置后续策略。
 ///
 /// # Returns
-/// A v1 policy with every family disabled except bounded idle-session recycling.
-/// 返回除有界闲置会话回收外关闭所有计划族的 v1 策略。
+/// The admitted base policy with only bounded idle-session recycling enabled.
+/// 返回已准入基础策略，仅启用有界闲置会话回收。
+/// `base` supplies the policy frozen for the first pass of this cycle.
+/// `base` 提供本周期首个阶段冻结的策略。
 #[must_use]
-fn native_idle_session_follow_up_policy() -> RetentionPolicy {
-    let mut policy = RetentionPolicy::v1();
+fn native_idle_session_follow_up_policy(base: &RetentionPolicy) -> RetentionPolicy {
+    let mut policy = base.clone();
     policy.profile_expiry_limit = 0;
     policy.memory_recycle_limit = 0;
     policy.cold_turn_scan_limit = 0;
@@ -2640,6 +3060,11 @@ fn apply_retention_plan(
     batch_prefix: &str,
 ) -> Result<NativeVmmRetentionApplyResult, String> {
     validate_native_retention_plan_bounds(plan, policy)?;
+    // Freeze the selected policy deadline once for every new batch in this atomic pass.
+    // 为本次原子处理中新建的全部批次一次性冻结选定策略的截止时间。
+    let expires_at_ns = now_ns
+        .checked_add(retention_duration_ns(policy.trash_retention_ms)?)
+        .ok_or_else(|| String::from("原生 VMM 回收批次到期时间超出可表示范围。"))?;
     if !plan.vector_gc_retry.is_empty() {
         return Err(String::from(
             "原生 VMM 使用快照变更日志完成向量清理，不接受独立向量 GC 计划。",
@@ -2753,6 +3178,7 @@ fn apply_retention_plan(
         plan.subject_id.clone(),
         plan.scope_id.clone(),
         now_ns,
+        expires_at_ns,
         RetentionReasonCode::TerminalMemoryRecycle,
     );
     move_memories_to_retention_batch(snapshot, &terminal_ids, &mut terminal_batch);
@@ -2766,7 +3192,7 @@ fn apply_retention_plan(
         .map(|job| job.session_source_id.clone())
         .collect::<BTreeSet<_>>();
     let mut enqueued_session_ids = BTreeSet::new();
-    for planned in &plan.cold_turn_enqueue {
+    for (job_index, planned) in plan.cold_turn_enqueue.iter().enumerate() {
         if planned.reason != RetentionReasonCode::ColdTurnRecycle
             || !enqueued_session_ids.insert(planned.session_source_id.clone())
         {
@@ -2800,7 +3226,9 @@ fn apply_retention_plan(
         snapshot
             .retention_cold_turn_jobs
             .push(StorageRetentionColdTurnJob {
-                job_id: format!("native-vmm-cold-turn-job:{}", uuid::Uuid::new_v4()),
+                // Replaying the same admitted step must recreate the identities used by follow-ups.
+                // 重放同一个准入步骤必须重建后续阶段引用的相同身份。
+                job_id: format!("native-vmm-cold-turn-job:{batch_prefix}:{job_index:08}"),
                 subject_id: plan.subject_id.clone(),
                 scope_id: plan.scope_id.clone(),
                 session_source_id: session_source_id.clone(),
@@ -2854,6 +3282,7 @@ fn apply_retention_plan(
         plan.subject_id.clone(),
         plan.scope_id.clone(),
         now_ns,
+        expires_at_ns,
         RetentionReasonCode::ColdTurnRecycle,
     );
     move_turns_to_retention_batch(snapshot, &cold_turn_ids, &mut cold_batch);
@@ -2930,6 +3359,7 @@ fn apply_retention_plan(
         plan.subject_id.clone(),
         plan.scope_id.clone(),
         now_ns,
+        expires_at_ns,
         RetentionReasonCode::IdleSessionRecycle,
     );
     move_memories_to_retention_batch(snapshot, &idle_memory_ids, &mut idle_batch);
@@ -2942,7 +3372,6 @@ fn apply_retention_plan(
         .saturating_add(usize_to_u64(idle_batch.dataset.turns.len()));
     push_retention_batch(snapshot, idle_batch);
 
-    let trash_retention_ns = retention_duration_ns(policy.trash_retention_ms)?;
     let mut purge_ids = BTreeSet::new();
     for planned in &plan.trash_purge {
         if planned.reason != RetentionReasonCode::TrashExpiryPurge
@@ -2966,7 +3395,7 @@ fn apply_retention_plan(
         if batch.subject_id != plan.subject_id
             || batch.scope_id != plan.scope_id
             || batch.recycled_at_ns > now_ns
-            || now_ns.saturating_sub(batch.recycled_at_ns) < trash_retention_ns
+            || now_ns < batch.expires_at_ns
         {
             return Err(format!(
                 "原生 VMM 回收站批次 `{}` 的所有权或到期状态已变化，请重新规划。",
@@ -2980,6 +3409,17 @@ fn apply_retention_plan(
         .filter(|batch| purge_ids.contains(batch.batch_id.as_str()))
         .flat_map(|batch| dataset_domain_ids(&batch.dataset))
         .collect::<BTreeSet<_>>();
+    // Session ownership is small metadata; do not clone retained vectors just to forget a session.
+    // 会话归属是小型元数据，不为遗忘会话而复制保留向量。
+    let purged_selections = snapshot
+        .retention_trash_batches
+        .iter()
+        .filter(|batch| purge_ids.contains(batch.batch_id.as_str()))
+        .filter_map(|batch| batch.manual_selection.clone())
+        .collect::<Vec<_>>();
+    for selection in &purged_selections {
+        manual_session_lifecycle::apply(snapshot, Some(selection), false)?;
+    }
     snapshot
         .retention_trash_batches
         .retain(|batch| !purge_ids.contains(batch.batch_id.as_str()));
@@ -2994,17 +3434,31 @@ fn apply_retention_plan(
 /// 将一个耐久回收批次投影为稳定的人工维护摘要。
 fn retention_batch_summary(
     batch: &StorageRetentionTrashBatch,
-    policy: &RetentionPolicy,
 ) -> Result<NativeVmmRecycleBatchSummary, String> {
-    let expires_at_ns = batch
-        .recycled_at_ns
-        .saturating_add(retention_duration_ns(policy.trash_retention_ms)?);
     Ok(NativeVmmRecycleBatchSummary {
+        manual_selection: batch
+            .manual_selection
+            .as_ref()
+            .map(|selection| match selection {
+                vulcan_memorymesh_core::StorageManualRecycleSelection::Sessions { sessions } => {
+                    vulcan_service_api::VmmNativeRemovalTarget::Sessions {
+                        ids: sessions
+                            .iter()
+                            .map(|session| session.session_source_id.to_string())
+                            .collect(),
+                    }
+                }
+                vulcan_memorymesh_core::StorageManualRecycleSelection::Turns { turn_ids } => {
+                    vulcan_service_api::VmmNativeRemovalTarget::Turns {
+                        ids: turn_ids.iter().map(ToString::to_string).collect(),
+                    }
+                }
+            }),
         batch_id: batch.batch_id.clone(),
         project_id: native_project_id_from_scope(&batch.scope_id)?,
         reason: retention_reason_token(batch.reason).to_owned(),
         recycled_at_unix_ms: unix_ns_to_ms(batch.recycled_at_ns),
-        expires_at_unix_ms: unix_ns_to_ms(expires_at_ns),
+        expires_at_unix_ms: unix_ns_to_ms(batch.expires_at_ns),
         turn_count: usize_to_u64(batch.dataset.turns.len()),
         memory_count: usize_to_u64(batch.dataset.memories.len()),
         profile_node_count: usize_to_u64(batch.dataset.profile_nodes.len()),
@@ -3018,6 +3472,7 @@ fn ensure_recycle_restore_has_no_conflicts(
     snapshot: &StorageSnapshot,
     batch: &StorageRetentionTrashBatch,
 ) -> Result<(), String> {
+    manual_session_lifecycle::validate(snapshot, batch.manual_selection.as_ref())?;
     let active_turn_ids = snapshot
         .dataset
         .turns
@@ -3133,7 +3588,11 @@ fn ensure_recycle_restore_has_no_conflicts(
 
 /// Restores every record in one already-validated recycle batch into active storage.
 /// 将一个已经校验的回收批次中的全部记录恢复到活动存储。
-fn restore_retention_batch(snapshot: &mut StorageSnapshot, batch: StorageRetentionTrashBatch) {
+fn restore_retention_batch(
+    snapshot: &mut StorageSnapshot,
+    batch: StorageRetentionTrashBatch,
+) -> Result<(), String> {
+    manual_session_lifecycle::apply(snapshot, batch.manual_selection.as_ref(), true)?;
     snapshot.dataset.turns.extend(batch.dataset.turns);
     snapshot.dataset.memories.extend(batch.dataset.memories);
     snapshot
@@ -3149,6 +3608,7 @@ fn restore_retention_batch(snapshot: &mut StorageSnapshot, batch: StorageRetenti
         .chat_compact_boundaries
         .extend(batch.dataset.chat_compact_boundaries);
     snapshot.analysis_attempts.extend(batch.analysis_attempts);
+    Ok(())
 }
 
 /// Builds the unique durable identity of one compact-boundary row.
@@ -3183,6 +3643,8 @@ const fn retention_reason_token(reason: RetentionReasonCode) -> &'static str {
         RetentionReasonCode::TrashExpiryPurge => "trash_expiry_purge",
         RetentionReasonCode::VectorGcRetry => "vector_gc_retry",
         RetentionReasonCode::ProfileExpiry => "profile_expiry",
+        RetentionReasonCode::ManualSessionRecycle => "manual_session_recycle",
+        RetentionReasonCode::ManualTurnRecycle => "manual_turn_recycle",
     }
 }
 
@@ -3193,6 +3655,7 @@ fn retention_trash_batch(
     subject_id: SubjectId,
     scope_id: ScopeId,
     recycled_at_ns: i64,
+    expires_at_ns: i64,
     reason: RetentionReasonCode,
 ) -> StorageRetentionTrashBatch {
     StorageRetentionTrashBatch {
@@ -3200,14 +3663,16 @@ fn retention_trash_batch(
         subject_id,
         scope_id,
         recycled_at_ns,
+        expires_at_ns,
         reason,
+        manual_selection: None,
         dataset: ExportDataset::empty(),
         analysis_attempts: Vec::new(),
     }
 }
 
-/// Persists a recycle batch only when it contains at least one domain record.
-/// 仅在回收批次包含至少一条领域记录时持久化该批次。
+/// Persists a recycle batch containing domain records or an exact manual session selection.
+/// 持久化含领域记录或准确人工会话选择的回收批次。
 fn push_retention_batch(snapshot: &mut StorageSnapshot, batch: StorageRetentionTrashBatch) {
     if batch.dataset.turns.is_empty()
         && batch.dataset.memories.is_empty()
@@ -3215,6 +3680,7 @@ fn push_retention_batch(snapshot: &mut StorageSnapshot, batch: StorageRetentionT
         && batch.dataset.context_evidence.is_empty()
         && batch.dataset.chat_compact_boundaries.is_empty()
         && batch.analysis_attempts.is_empty()
+        && batch.manual_selection.is_none()
     {
         return;
     }
@@ -3450,6 +3916,17 @@ fn retention_session_latest_activity_ns(
                 .iter()
                 .filter(|attempt| session_turn_ids.contains(&attempt.turn_id))
                 .map(|attempt| attempt.mutation_identity.observed_at_ns),
+        )
+        .chain(
+            snapshot
+                .memory_sessions
+                .iter()
+                .filter(|session| {
+                    session.subject_id == *subject_id
+                        && session.scope_id == *scope_id
+                        && session.session_source_id == *session_source_id
+                })
+                .filter_map(|session| session.last_extraction_completed_at_ns),
         )
         .max()
 }
@@ -4100,10 +4577,27 @@ fn apply_migration_records(
         target_scope,
         &rename_map,
     );
+    // Move the authoritative observation window with its session, never merge it by display name.
+    // 将权威观察窗口随会话移动，绝不按显示名称合并。
+    for session in &mut snapshot.memory_sessions {
+        if &session.scope_id == source_scope {
+            session.scope_id = target_scope.clone();
+            rename_session(&mut session.session_source_id, &rename_map);
+        }
+    }
     for batch in &mut snapshot.retention_trash_batches {
         if &batch.scope_id == source_scope {
             batch.scope_id = target_scope.clone();
             apply_migration_dataset(&mut batch.dataset, source_scope, target_scope, &rename_map);
+            if let Some(vulcan_memorymesh_core::StorageManualRecycleSelection::Sessions {
+                sessions,
+            }) = &mut batch.manual_selection
+            {
+                for session in sessions {
+                    session.scope_id = target_scope.clone();
+                    rename_session(&mut session.session_source_id, &rename_map);
+                }
+            }
         }
     }
     for job in &mut snapshot.retention_cold_turn_jobs {
@@ -4179,6 +4673,9 @@ fn clear_project(
         .collect::<BTreeSet<_>>();
 
     snapshot.dataset.turns.retain(|turn| turn.scope_id != scope);
+    snapshot
+        .memory_sessions
+        .retain(|session| session.scope_id != scope);
     snapshot
         .dataset
         .memories
@@ -4582,30 +5079,25 @@ fn profile_source_kind_token(source_kind: ProfileSourceKind) -> &'static str {
     }
 }
 
-/// Builds project-scoped session, turn, memory, and profile provenance records.
-/// 构建项目级会话、回合、记忆与画像来源记录。
+/// Builds lightweight project-scoped session summaries without projecting record bodies.
+/// 构建轻量项目级会话摘要，不投影记录正文。
 ///
 /// # Parameters
 /// 参数
-/// `snapshot` is the coherent Core storage snapshot, `project_id` selects its project scope,
-/// `session_source_id` optionally selects record details, and `analysis_jobs` supplies audit state.
-/// `snapshot` 是一致的 Core 存储快照，`project_id` 选择其项目作用域，
-/// `session_source_id` 可选地选择记录详情，`analysis_jobs` 提供审计状态。
+/// `snapshot` is the coherent Core storage snapshot and `project_id` selects its exact owner scope.
+/// `snapshot` 是一致的 Core 存储快照，`project_id` 选择其准确归属作用域。
 ///
 /// # Returns
 /// 返回值
 /// A stable provenance projection or one explicit identity-integrity error.
 /// 返回稳定的来源投影，或一个明确的身份完整性错误。
-fn build_memory_records(
+fn build_session_summaries(
     snapshot: &StorageSnapshot,
     project_id: u64,
-    session_source_id: Option<&str>,
-    analysis_jobs: &[NativeVmmPendingAnalysisJob],
-) -> Result<NativeVmmMemoryRecords, String> {
+) -> Result<Vec<NativeVmmMemorySessionSummary>, String> {
     let scope = project_scope(project_id)?;
     let subject_scope = native_vmm_subject_scope()?;
     let fixed_subject = native_vmm_subject_id()?;
-    let evaluated_at_ns = native_vmm_now_ns()?;
     let project_session_ids = project_sessions(snapshot, &scope);
     let project_turn_sessions = snapshot
         .dataset
@@ -4672,6 +5164,22 @@ fn build_memory_records(
             observe_session_activity(accumulator, unix_ns_to_ms(profile.updated_at_ns));
         }
     }
+    // A successful extraction remains session activity even when its source body has been recycled.
+    // 即使来源正文已回收，成功提炼仍属于会话活动。
+    // Read only the fixed native subject's authoritative commit time; never infer success from a watermark.
+    // 仅读取固定原生主体的权威提交时间，不根据观察水位推断成功。
+    for session in snapshot
+        .memory_sessions
+        .iter()
+        .filter(|session| session.scope_id == scope && session.subject_id == fixed_subject)
+    {
+        if let Some(completed_at_ns) = session.last_extraction_completed_at_ns {
+            let accumulator = accumulators
+                .entry(session.session_source_id.as_str().to_owned())
+                .or_default();
+            observe_session_activity(accumulator, unix_ns_to_ms(completed_at_ns));
+        }
+    }
     for boundary in snapshot
         .dataset
         .chat_compact_boundaries
@@ -4684,10 +5192,19 @@ fn build_memory_records(
         observe_session_activity(accumulator, unix_ns_to_ms(boundary.compacted_at_ns));
     }
 
+    // Index exact persisted owners once; content-only rows remain explicitly unregistered.
+    // 对准确持久化归属建立一次索引；仅含内容的记录保持明确未登记。
+    let session_statuses = snapshot
+        .memory_sessions
+        .iter()
+        .filter(|session| session.scope_id == scope && session.subject_id == fixed_subject)
+        .map(|session| (session.session_source_id.as_str(), session.status))
+        .collect::<BTreeMap<_, _>>();
     let mut sessions = accumulators
         .into_iter()
         .map(
             |(session_source_id, accumulator)| NativeVmmMemorySessionSummary {
+                status: session_statuses.get(session_source_id.as_str()).copied(),
                 session_source_id,
                 turn_count: accumulator.turn_count,
                 turn_statuses: accumulator.turn_statuses,
@@ -4706,6 +5223,26 @@ fn build_memory_records(
             .cmp(&left.last_activity_at_unix_ms)
             .then_with(|| left.session_source_id.cmp(&right.session_source_id))
     });
+
+    Ok(sessions)
+}
+
+/// Builds authoritative project/session provenance using the shared lightweight session summary projection.
+/// 使用共享轻量会话摘要投影构造权威项目/会话来源。
+/// Takes a coherent snapshot, project, optional exact session and persisted analysis jobs; returns records or an integrity error.
+/// 接收一致快照、项目、可选准确会话及持久分析作业；返回记录或完整性错误。
+fn build_memory_records(
+    snapshot: &StorageSnapshot,
+    project_id: u64,
+    session_source_id: Option<&str>,
+    analysis_jobs: &[NativeVmmPendingAnalysisJob],
+) -> Result<NativeVmmMemoryRecords, String> {
+    let scope = project_scope(project_id)?;
+    let subject_scope = native_vmm_subject_scope()?;
+    let fixed_subject = native_vmm_subject_id()?;
+    let evaluated_at_ns = native_vmm_now_ns()?;
+    let project_session_ids = project_sessions(snapshot, &scope);
+    let sessions = build_session_summaries(snapshot, project_id)?;
 
     let selected_session_source_id = session_source_id
         .map(str::trim)
@@ -4803,11 +5340,26 @@ fn build_memory_records(
         profile_ids.dedup();
     }
 
-    let mut turns = snapshot
-        .dataset
-        .turns
+    // requested_turns preserves the selected active anchors for the shared native detail resolver.
+    // requested_turns 保留选中活跃锚点，供共享原生详情解析器使用。
+    let requested_turns = selected_turn_ids
         .iter()
-        .filter(|turn| selected_turn_ids.contains(turn.id.as_str()))
+        .map(|id| TurnId::new(id.clone()).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    // detail_turns uses the same window rule as the AI endpoint and the same snapshot as counts.
+    // detail_turns 与 AI 入口使用同一窗口规则，并与统计使用同一快照。
+    let detail_turns = resolve_turn_details(
+        &snapshot.dataset.turns,
+        &fixed_subject,
+        &ScopeAccess {
+            write_scope: scope.clone(),
+            visible_scopes: vec![scope.clone()],
+        },
+        &requested_turns,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut turns = detail_turns
+        .iter()
         .map(|turn| {
             let generated = memories_by_turn
                 .get(turn.id.as_str())
@@ -4829,6 +5381,16 @@ fn build_memory_records(
             let analysis_job = analysis_jobs_by_turn.get(turn.id.as_str()).copied();
             Ok(NativeVmmTurnRecordSummary {
                 turn_id: native_numeric_id(turn.id.as_str(), "vmm-turn-", "回合")?,
+                previous_turn_ids: turn
+                    .previous_turn_ids
+                    .iter()
+                    .map(|id| native_numeric_id(id.as_str(), "vmm-turn-", "前序回合"))
+                    .collect::<Result<Vec<_>, _>>()?,
+                next_turn_ids: turn
+                    .next_turn_ids
+                    .iter()
+                    .map(|id| native_numeric_id(id.as_str(), "vmm-turn-", "后续回合"))
+                    .collect::<Result<Vec<_>, _>>()?,
                 session_source_id: turn.session_source_id.as_str().to_owned(),
                 created_at_unix_ms: unix_ns_to_ms(turn.created_at_ns),
                 status: turn_status_token(turn.status).to_owned(),
@@ -5084,6 +5646,15 @@ fn memory_category_token(category: MemoryCategory) -> &'static str {
 /// 收集显式锚定到一个项目作用域的每个会话身份。
 fn project_sessions(snapshot: &StorageSnapshot, scope: &ScopeId) -> BTreeSet<String> {
     let mut sessions = BTreeSet::new();
+    // Sessions remain present after their old turn bodies are pruned or recycled.
+    // 在旧回合正文被清理或回收后，会话仍然存在。
+    sessions.extend(
+        snapshot
+            .memory_sessions
+            .iter()
+            .filter(|session| &session.scope_id == scope)
+            .map(|session| session.session_source_id.as_str().to_owned()),
+    );
     for dataset in project_datasets(snapshot, scope) {
         for turn in &dataset.turns {
             if &turn.scope_id == scope {
@@ -5138,6 +5709,12 @@ fn session_rename_plan(
 /// 收集每个持久会话身份，以防止跨项目冲突。
 fn all_session_ids(snapshot: &StorageSnapshot) -> BTreeSet<String> {
     let mut sessions = BTreeSet::new();
+    sessions.extend(
+        snapshot
+            .memory_sessions
+            .iter()
+            .map(|session| session.session_source_id.as_str().to_owned()),
+    );
     for dataset in std::iter::once(&snapshot.dataset).chain(
         snapshot
             .retention_trash_batches
@@ -5260,6 +5837,7 @@ mod tests {
             next_entity_sequence: 0,
             outcomes: Vec::new(),
             analysis_attempts: Vec::new(),
+            memory_sessions: Vec::new(),
             noise_prototypes: Vec::new(),
             retention_trash_batches: Vec::new(),
             retention_cold_turn_jobs: Vec::new(),
@@ -5455,6 +6033,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(2).expect("scope"),
             1,
+            100,
             RetentionReasonCode::TerminalMemoryRecycle,
         );
         let mut current_recycled = memory(
@@ -5566,6 +6145,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(1).expect("scope"),
             1,
+            100,
             RetentionReasonCode::TerminalMemoryRecycle,
         );
         recycle_batch.dataset.memories.push(memory(
@@ -5607,6 +6187,7 @@ mod tests {
             subject.clone(),
             scope.clone(),
             1,
+            100,
             RetentionReasonCode::TerminalMemoryRecycle,
         );
         let retained = memory(
@@ -5662,6 +6243,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(2).expect("scope"),
             1,
+            100,
             RetentionReasonCode::ColdTurnRecycle,
         );
         recycle_batch
@@ -5721,6 +6303,50 @@ mod tests {
                 String::from("orphan-bypassed")
             ]
         );
+    }
+
+    /// Verifies activity derives from successful extraction commits without inventing timestamps or crossing projects.
+    /// 验证活动取自成功提炼提交，不伪造时间或跨越项目。
+    #[test]
+    fn memory_records_include_authoritative_extraction_activity() {
+        // Include one normal, one bodyless and one never-completed session, plus another project's newer commit.
+        // 包含普通、正文已移除和尚未成功的三个会话，以及其他项目更新的提交。
+        let mut snapshot = empty_snapshot(12);
+        let mut source_turn = turn("vmm-turn-11", 2, "session-with-turn");
+        source_turn.created_at_ns = 1_000_000;
+        snapshot.dataset.turns.push(source_turn);
+        for (project_id, session_id, completed_at_ns) in [
+            (2, "session-with-turn", Some(8_000_000)),
+            (2, "session-bodyless", Some(6_000_000)),
+            (2, "session-pending", None),
+            (3, "session-with-turn", Some(100_000_000)),
+        ] {
+            snapshot
+                .memory_sessions
+                .push(vulcan_memorymesh_core::StorageMemorySession {
+                    subject_id: native_vmm_subject_id().expect("fixed subject"),
+                    status: vulcan_memorymesh_core::StorageSessionStatus::Active,
+                    scope_id: project_scope(project_id).expect("scope"),
+                    session_source_id: SessionSourceId::new(session_id).expect("session"),
+                    last_extraction_observed_at_ns: 0,
+                    last_extraction_completed_at_ns: completed_at_ns,
+                });
+        }
+        let before = serde_json::to_value(&snapshot).expect("before read");
+        let records = build_memory_records(&snapshot, 2, None, &[]).expect("records");
+        assert_eq!(records.sessions.len(), 3);
+        assert_eq!(records.sessions[0].session_source_id, "session-with-turn");
+        assert_eq!(records.sessions[0].first_activity_at_unix_ms, Some(1));
+        assert_eq!(records.sessions[0].last_activity_at_unix_ms, Some(8));
+        assert_eq!(records.sessions[1].session_source_id, "session-bodyless");
+        assert_eq!(records.sessions[1].turn_count, 0);
+        assert_eq!(records.sessions[1].memory_count, 0);
+        assert_eq!(records.sessions[1].first_activity_at_unix_ms, Some(6));
+        assert_eq!(records.sessions[1].last_activity_at_unix_ms, Some(6));
+        assert_eq!(records.sessions[2].session_source_id, "session-pending");
+        assert_eq!(records.sessions[2].first_activity_at_unix_ms, None);
+        assert_eq!(records.sessions[2].last_activity_at_unix_ms, None);
+        assert_eq!(serde_json::to_value(&snapshot).expect("after read"), before);
     }
 
     /// Verifies session browsing exposes extraction states, retries, levels, and memory provenance.
@@ -5838,6 +6464,8 @@ mod tests {
         assert_eq!(records.sessions[0].memory_levels.stable, 1);
         assert_eq!(records.turns.len(), 2);
         assert_eq!(records.turns[0].turn_id, 12);
+        assert_eq!(records.turns[0].previous_turn_ids, vec![11]);
+        assert!(records.turns[0].next_turn_ids.is_empty());
         assert_eq!(records.turns[0].extracted, Some(false));
         assert_eq!(records.turns[0].analysis_attempt_count, 2);
         assert_eq!(
@@ -5845,6 +6473,8 @@ mod tests {
             Some("provider timeout")
         );
         assert_eq!(records.turns[1].turn_id, 11);
+        assert!(records.turns[1].previous_turn_ids.is_empty());
+        assert_eq!(records.turns[1].next_turn_ids, vec![12]);
         assert_eq!(records.turns[1].extracted, Some(true));
         assert_eq!(
             records.turns[1].analysis_job_state.as_deref(),
@@ -6011,7 +6641,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.dataset.turns[0].scope_id,
-            project_scope(2).unwrap()
+            project_scope(2).expect("source project scope")
         );
 
         let mut changed = snapshot.clone();
@@ -6020,6 +6650,70 @@ mod tests {
         assert_ne!(
             preview.preview_fingerprint,
             changed_preview.preview_fingerprint
+        );
+    }
+
+    /// Verifies body-free session records participate in migration preview, renaming and clear.
+    /// 验证没有正文的会话记录参与迁移预检、改名和清空。
+    #[test]
+    fn migration_moves_session_watermarks_and_clear_resets_only_the_owner_project() {
+        // snapshot keeps independent windows, even though source and target reuse the same session ID.
+        // snapshot 保留独立窗口，即使来源和目标复用了同一会话 ID。
+        let mut snapshot = empty_snapshot(7);
+        for (project_id, id, observed, completed) in [
+            (2, "session-a", 20, 25),
+            (3, "session-a", 40, 45),
+            (4, "session-a-1", 60, 65),
+        ] {
+            snapshot
+                .memory_sessions
+                .push(vulcan_memorymesh_core::StorageMemorySession {
+                    subject_id: SubjectId::new("vmm-subject:1").expect("subject"),
+                    status: vulcan_memorymesh_core::StorageSessionStatus::Active,
+                    scope_id: project_scope(project_id).expect("scope"),
+                    session_source_id: SessionSourceId::new(id).expect("session"),
+                    last_extraction_observed_at_ns: observed,
+                    last_extraction_completed_at_ns: Some(completed),
+                });
+        }
+        // preview counts metadata-only sessions and reserves IDs owned by every other project.
+        // preview 统计仅有元数据的会话，并保留所有其他项目占用的 ID。
+        let preview = preview_migration(&snapshot, 2, 3).expect("preview");
+        assert_eq!(preview.source.sessions, 1);
+        assert_eq!(preview.target_before.sessions, 1);
+        assert_eq!(preview.target_after.sessions, 2);
+        assert_eq!(preview.session_renames[0].to, "session-a-2");
+        apply_migration(&mut snapshot, &preview).expect("move");
+        assert!(project_sessions(&snapshot, &project_scope(2).expect("source")).is_empty());
+        // moved retains its own successful boundary instead of inheriting the target's boundary.
+        // moved 保留自己的成功边界，而不是继承目标的边界。
+        let moved = snapshot
+            .memory_sessions
+            .iter()
+            .find(|session| session.session_source_id.as_str() == "session-a-2")
+            .expect("moved session");
+        assert_eq!(moved.scope_id, project_scope(3).expect("target"));
+        assert_eq!(moved.last_extraction_observed_at_ns, 20);
+        assert_eq!(moved.last_extraction_completed_at_ns, Some(25));
+        assert_eq!(
+            retention_session_latest_activity_ns(
+                &snapshot,
+                &moved.subject_id,
+                &moved.scope_id,
+                &moved.session_source_id
+            ),
+            Some(25)
+        );
+        assert!(vulcan_memorymesh_core::InMemoryStorage::from_snapshot(snapshot.clone()).is_ok());
+        clear_project(&mut snapshot, 3).expect("clear target");
+        assert_eq!(snapshot.memory_sessions.len(), 1);
+        assert_eq!(
+            snapshot.memory_sessions[0].scope_id,
+            project_scope(4).expect("unrelated project")
+        );
+        assert_eq!(
+            snapshot.memory_sessions[0].last_extraction_observed_at_ns,
+            60
         );
     }
 
@@ -6047,7 +6741,7 @@ mod tests {
         snapshot.dataset.profile_nodes = vec![
             profile_node(
                 "vmm-profile-1",
-                project_scope(2).unwrap(),
+                project_scope(2).expect("source project scope"),
                 "project preference",
             ),
             profile_node(
@@ -6058,7 +6752,7 @@ mod tests {
         ];
         snapshot.dataset.chat_compact_boundaries = vec![ChatCompactBoundary {
             subject_id: SubjectId::new("vmm-subject:1").expect("subject id"),
-            scope_id: project_scope(2).unwrap(),
+            scope_id: project_scope(2).expect("source project scope"),
             session_source_id: SessionSourceId::new("session-a").expect("session id"),
             compacted_turn_id: TurnId::new("source-turn").expect("turn id"),
             compacted_at_ns: 2,
@@ -6069,7 +6763,7 @@ mod tests {
 
         assert_eq!(
             snapshot.dataset.turns[0].scope_id,
-            project_scope(3).unwrap()
+            project_scope(3).expect("target project scope")
         );
         assert_eq!(
             snapshot.dataset.turns[0].session_source_id.as_str(),
@@ -6082,7 +6776,7 @@ mod tests {
         assert_eq!(snapshot.dataset.memories[0].id.as_str(), "vmm-memory-1");
         assert_eq!(
             snapshot.dataset.memories[0].scope_id,
-            project_scope(3).unwrap()
+            project_scope(3).expect("target project scope")
         );
         assert_eq!(
             snapshot.dataset.memories[0]
@@ -6104,7 +6798,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.dataset.profile_nodes[0].scope_id,
-            project_scope(3).unwrap()
+            project_scope(3).expect("target project scope")
         );
         assert_eq!(
             snapshot.dataset.profile_nodes[1].scope_id,
@@ -6112,7 +6806,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.dataset.chat_compact_boundaries[0].scope_id,
-            project_scope(3).unwrap()
+            project_scope(3).expect("target project scope")
         );
         assert_eq!(
             snapshot.dataset.chat_compact_boundaries[0]
@@ -6121,7 +6815,7 @@ mod tests {
             "session-a-1"
         );
         assert_eq!(
-            project_content_counts(&snapshot, &project_scope(2).unwrap()),
+            project_content_counts(&snapshot, &project_scope(2).expect("source project scope")),
             NativeVmmProjectContentCounts::default()
         );
     }
@@ -6139,7 +6833,9 @@ mod tests {
                 subject_id: native_vmm_subject_id().expect("subject"),
                 scope_id: source_scope.clone(),
                 recycled_at_ns: 1,
+                expires_at_ns: 100,
                 reason: RetentionReasonCode::ColdTurnRecycle,
+                manual_selection: None,
                 dataset: ExportDataset {
                     turns: vec![turn("source-trash-turn", 2, "recycled-session")],
                     ..ExportDataset::empty()
@@ -6151,7 +6847,9 @@ mod tests {
                 subject_id: native_vmm_subject_id().expect("subject"),
                 scope_id: target_scope.clone(),
                 recycled_at_ns: 1,
+                expires_at_ns: 100,
                 reason: RetentionReasonCode::ColdTurnRecycle,
+                manual_selection: None,
                 dataset: ExportDataset {
                     turns: vec![turn("target-trash-turn", 3, "recycled-session")],
                     ..ExportDataset::empty()
@@ -6223,7 +6921,7 @@ mod tests {
         snapshot.dataset.profile_nodes = vec![
             profile_node(
                 "vmm-profile-1",
-                project_scope(2).unwrap(),
+                project_scope(2).expect("source project scope"),
                 "project preference",
             ),
             profile_node(
@@ -6234,7 +6932,7 @@ mod tests {
         ];
         snapshot.dataset.chat_compact_boundaries = vec![ChatCompactBoundary {
             subject_id: SubjectId::new("vmm-subject:1").expect("subject id"),
-            scope_id: project_scope(2).unwrap(),
+            scope_id: project_scope(2).expect("source project scope"),
             session_source_id: SessionSourceId::new("session-a").expect("session id"),
             compacted_turn_id: TurnId::new("source-turn").expect("turn id"),
             compacted_at_ns: 2,
@@ -6255,7 +6953,9 @@ mod tests {
             subject_id: native_vmm_subject_id().expect("subject"),
             scope_id: project_scope(2).expect("project scope"),
             recycled_at_ns: 1,
+            expires_at_ns: 100,
             reason: RetentionReasonCode::IdleSessionRecycle,
+            manual_selection: None,
             dataset: ExportDataset {
                 turns: vec![turn("recycled-turn", 2, "session-recycled")],
                 memories: vec![recycled_memory],
@@ -6345,6 +7045,10 @@ mod tests {
     /// 验证终态保留会把记忆及证据原子保存在耐久回收站中。
     #[test]
     fn retention_recycles_terminal_memory_with_context_evidence() {
+        // A non-default window must become part of the new durable batch, not a display-time guess.
+        // 非默认窗口必须成为新耐久批次的一部分，不能在展示时推算。
+        let mut policy = RetentionPolicy::v1();
+        policy.trash_retention_ms = 12;
         let mut snapshot = empty_snapshot(5);
         let mut deleted = memory(
             "vmm-memory-terminal",
@@ -6378,19 +7082,18 @@ mod tests {
                 reason: RetentionReasonCode::TerminalMemoryRecycle,
             });
 
-        let result = apply_retention_plan(
-            &mut snapshot,
-            &plan,
-            &RetentionPolicy::v1(),
-            100,
-            "retention-test",
-        )
-        .expect("apply retention");
+        let result = apply_retention_plan(&mut snapshot, &plan, &policy, 100, "retention-test")
+            .expect("apply retention");
 
         assert_eq!(result.recycled_memories, 1);
         assert!(snapshot.dataset.memories.is_empty());
         assert!(snapshot.dataset.context_evidence.is_empty());
         assert_eq!(snapshot.retention_trash_batches.len(), 1);
+        assert_eq!(snapshot.retention_trash_batches[0].recycled_at_ns, 100);
+        assert_eq!(
+            snapshot.retention_trash_batches[0].expires_at_ns,
+            12_000_100
+        );
         assert_eq!(
             snapshot.retention_trash_batches[0].dataset.memories.len(),
             1
@@ -6712,7 +7415,7 @@ mod tests {
     /// 验证入队后续阶段不会重复扫描，也不会超过一个外置 VMM 作业批次。
     #[test]
     fn cold_turn_follow_up_uses_only_remaining_execution_budget() {
-        let policy = native_cold_turn_follow_up_policy(7);
+        let policy = native_cold_turn_follow_up_policy(&RetentionPolicy::v1(), 7);
         assert_eq!(policy.profile_expiry_limit, 0);
         assert_eq!(policy.memory_recycle_limit, 0);
         assert_eq!(policy.cold_turn_scan_limit, 0);
@@ -6721,7 +7424,7 @@ mod tests {
         assert_eq!(policy.vector_gc_limit, 0);
         assert_eq!(policy.trash_purge_limit, 0);
         assert_eq!(
-            native_cold_turn_follow_up_policy(u32::MAX).cold_turn_job_limit,
+            native_cold_turn_follow_up_policy(&RetentionPolicy::v1(), u32::MAX).cold_turn_job_limit,
             RetentionPolicy::v1().cold_turn_job_limit
         );
     }
@@ -6730,7 +7433,7 @@ mod tests {
     /// 验证同周期闲置后续阶段不会重复任何更早的保留阶段。
     #[test]
     fn idle_session_follow_up_keeps_only_idle_recycling_enabled() {
-        let policy = native_idle_session_follow_up_policy();
+        let policy = native_idle_session_follow_up_policy(&RetentionPolicy::v1());
         assert_eq!(policy.profile_expiry_limit, 0);
         assert_eq!(policy.memory_recycle_limit, 0);
         assert_eq!(policy.cold_turn_scan_limit, 0);
@@ -6741,6 +7444,54 @@ mod tests {
         );
         assert_eq!(policy.vector_gc_limit, 0);
         assert_eq!(policy.trash_purge_limit, 0);
+    }
+
+    /// Verifies every specialized follow-up keeps the business rules admitted by its first pass.
+    /// 验证所有专用后续阶段保留首轮已准入的业务规则。
+    #[test]
+    fn retention_follow_up_preserves_admitted_business_rules() {
+        // Distinct values make an accidental reset to v1 defaults observable in every phase.
+        // 使用不同于默认值的配置，使任一阶段意外重置为 v1 默认值都能被检测。
+        let mut base = RetentionPolicy::v1();
+        base.turn_hot_window_size = 17;
+        base.session_idle_ms = 12_345;
+        base.trash_retention_ms = 54_321;
+        base.protected_priority_floor = 73;
+        base.protected_memory_level_floor = 2;
+        base.skip_protected_shared_memories = false;
+        base.profile_expiry_limit = 9;
+        base.cold_turn_job_limit = 5;
+        base.idle_session_limit = 3;
+        for derived in [
+            native_profile_expiry_policy(&base),
+            native_cold_turn_follow_up_policy(&base, u32::MAX),
+            native_idle_session_follow_up_policy(&base),
+        ] {
+            assert_eq!(derived.turn_hot_window_size, base.turn_hot_window_size);
+            assert_eq!(derived.session_idle_ms, base.session_idle_ms);
+            assert_eq!(derived.trash_retention_ms, base.trash_retention_ms);
+            assert_eq!(
+                derived.protected_priority_floor,
+                base.protected_priority_floor
+            );
+            assert_eq!(
+                derived.protected_memory_level_floor,
+                base.protected_memory_level_floor
+            );
+            assert_eq!(
+                derived.skip_protected_shared_memories,
+                base.skip_protected_shared_memories
+            );
+        }
+        assert_eq!(native_profile_expiry_policy(&base).profile_expiry_limit, 9);
+        assert_eq!(
+            native_cold_turn_follow_up_policy(&base, u32::MAX).cold_turn_job_limit,
+            5
+        );
+        assert_eq!(
+            native_idle_session_follow_up_policy(&base).idle_session_limit,
+            3
+        );
     }
 
     /// Verifies apply-time idle validation includes compaction activity rather than turn creation alone.
@@ -6797,6 +7548,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(2).expect("scope"),
             2_000_000,
+            9_000_000,
             RetentionReasonCode::IdleSessionRecycle,
         );
         batch.dataset.turns.push(turn("vmm-turn-1", 2, "session-a"));
@@ -6809,19 +7561,780 @@ mod tests {
             MemoryLevel::Phase,
         ));
 
-        let summary =
-            retention_batch_summary(&batch, &RetentionPolicy::v1()).expect("recycle batch summary");
+        let summary = retention_batch_summary(&batch).expect("recycle batch summary");
 
         assert_eq!(summary.project_id, 2);
         assert_eq!(summary.reason, "idle_session_recycle");
         assert_eq!(summary.recycled_at_unix_ms, 2);
         assert_eq!(summary.turn_count, 1);
         assert_eq!(summary.memory_count, 1);
-        assert_eq!(
-            summary.expires_at_unix_ms,
-            2 + i64::try_from(RetentionPolicy::v1().trash_retention_ms)
-                .expect("trash retention ms")
+        assert_eq!(summary.expires_at_unix_ms, 9);
+        // Missing persisted deadlines must fail instead of being backfilled from current defaults.
+        // 缺失持久化截止时间必须报错，不可按当前默认窗口回填。
+        let mut json = serde_json::to_value(&batch).expect("serialize batch");
+        json.as_object_mut()
+            .expect("batch object")
+            .remove("expires_at_ns");
+        assert!(serde_json::from_value::<StorageRetentionTrashBatch>(json).is_err());
+    }
+
+    /// Inspects exact retained pages without leaking active records, other projects or vector arrays.
+    /// 查看准确保留页，不泄露活动记录、其他项目或向量数组。
+    #[test]
+    fn recycle_records_preserve_families_and_versioned_ownership() {
+        use vulcan_service_api::{
+            VmmNativeRecycleRecord, VmmNativeRecycleRecordKind as Kind, VmmNativeRecycleRecordQuery,
+        };
+        let mut snapshot = empty_snapshot(7);
+        let mut batch = retention_trash_batch(
+            "inspection".to_owned(),
+            native_vmm_subject_id().expect("subject"),
+            project_scope(2).expect("scope"),
+            1,
+            100,
+            RetentionReasonCode::IdleSessionRecycle,
         );
+        batch
+            .dataset
+            .turns
+            .push(turn("vmm-turn-1", 2, "source-session"));
+        for id in ["vmm-memory-3", "vmm-memory-1", "vmm-memory-2"] {
+            batch.dataset.memories.push(memory(
+                id,
+                2,
+                "source-session",
+                Some("vmm-turn-1"),
+                MemorySourceKind::Turn,
+                MemoryLevel::Phase,
+            ));
+        }
+        batch.dataset.memories[0].embedding = Some(vec![0.123, 0.456]);
+        batch.dataset.profile_nodes.push(profile_node(
+            "profile-project",
+            project_scope(2).expect("scope"),
+            "项目画像原文",
+        ));
+        batch.dataset.profile_nodes.push(profile_node(
+            "profile-user",
+            native_vmm_subject_scope().expect("personal"),
+            "用户画像原文",
+        ));
+        batch
+            .dataset
+            .context_evidence
+            .push(vulcan_memorymesh_core::MemoryContextEvidence {
+                memory_id: MemoryId::new("vmm-memory-1").expect("memory"),
+                context_key: "fruit".to_owned(),
+                context_value: "西瓜".to_owned(),
+                support_count: 4,
+                rebuttal_count: 2,
+                last_supported_at_ns: None,
+                last_rebutted_at_ns: None,
+                version: 1,
+            });
+        snapshot.retention_trash_batches.push(batch);
+        snapshot.dataset.memories.push(memory(
+            "active-only",
+            2,
+            "source-session",
+            None,
+            MemorySourceKind::Direct,
+            MemoryLevel::Phase,
+        ));
+        let before = snapshot.clone();
+        let query = VmmNativeRecycleRecordQuery {
+            vmm_project_id: 2,
+            batch_id: "inspection".to_owned(),
+            record_kind: Kind::Memory,
+            offset: 0,
+            limit: 2,
+            expected_storage_version: Some(7),
+        };
+        let first = recycle_records::build_page(&snapshot, query.clone()).expect("first page");
+        assert_eq!(first.total, 3);
+        assert_eq!(first.next_offset, Some(2));
+        assert_eq!(first.records.len(), 2);
+        assert!(
+            matches!(&first.records[0], VmmNativeRecycleRecord::Memory { memory_id, source_turn_id: Some(turn), .. } if memory_id == "vmm-memory-1" && turn == "vmm-turn-1")
+        );
+        let last = recycle_records::build_page(
+            &snapshot,
+            VmmNativeRecycleRecordQuery {
+                offset: 2,
+                ..query.clone()
+            },
+        )
+        .expect("last page");
+        assert_eq!(last.records.len(), 1);
+        assert_eq!(last.next_offset, None);
+        assert!(
+            !serde_json::to_string(&last)
+                .expect("wire")
+                .contains("embedding")
+        );
+        for (kind, total) in [(Kind::Turn, 1), (Kind::Profile, 2), (Kind::Evidence, 1)] {
+            let page = recycle_records::build_page(
+                &snapshot,
+                VmmNativeRecycleRecordQuery {
+                    record_kind: kind,
+                    ..query.clone()
+                },
+            )
+            .expect("family");
+            assert_eq!(page.total, total);
+            let wire = serde_json::to_value(&page).expect("family wire");
+            match kind {
+                Kind::Profile => {
+                    assert_eq!(wire["records"][0]["target"], "project");
+                    assert_eq!(wire["records"][1]["target"], "user");
+                }
+                Kind::Evidence => {
+                    assert_eq!(wire["records"][0]["contextValue"], "西瓜");
+                    assert_eq!(wire["records"][0]["supportCount"], 4);
+                    assert_eq!(wire["records"][0]["rebuttalCount"], 2);
+                }
+                Kind::Turn => assert_eq!(wire["records"][0]["sessionSourceId"], "source-session"),
+                Kind::Memory => unreachable!(),
+            }
+        }
+        for invalid in [
+            VmmNativeRecycleRecordQuery {
+                vmm_project_id: 3,
+                ..query.clone()
+            },
+            VmmNativeRecycleRecordQuery {
+                expected_storage_version: Some(6),
+                ..query.clone()
+            },
+            VmmNativeRecycleRecordQuery {
+                limit: 0,
+                ..query.clone()
+            },
+            VmmNativeRecycleRecordQuery {
+                limit: 101,
+                ..query.clone()
+            },
+            VmmNativeRecycleRecordQuery {
+                batch_id: "missing".to_owned(),
+                ..query.clone()
+            },
+        ] {
+            assert!(recycle_records::build_page(&snapshot, invalid).is_err());
+        }
+        assert_eq!(snapshot, before);
+        snapshot.retention_trash_batches.clear();
+        assert!(recycle_records::build_page(&snapshot, query).is_err());
+    }
+
+    /// Verifies delayed native recall and persisted leases use current visibility without touching unrelated hooks.
+    /// 验证迟到原生召回及持久租约使用当前可见性，不触及无关 Hook。
+    #[test]
+    fn recall_publication_reconciles_resident_and_delayed_sources() {
+        use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
+            ConversationPrecheckOutcome, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
+            VmmRecallBatchHookEffect, vmm_recall_batch_effect_from_report,
+            vmm_session_status_effect_from_report,
+        };
+        use vulcan_vmm::{ContextItem, SessionMemoryStatus, VmmRecallBatch, VmmSessionMemoryState};
+        // A real UUID preserves the host-to-native session identity contract.
+        // 真实 UUID 保持宿主到原生的会话身份契约。
+        let session_id = uuid::Uuid::nil();
+        // Owner and linked scopes are declared explicitly; project 4 is intentionally inaccessible.
+        // 明确声明归属及连带作用域；项目 4 被刻意设为不可访问。
+        let access = ScopeAccess {
+            write_scope: project_scope(2).expect("owner"),
+            visible_scopes: vec![
+                project_scope(2).expect("owner"),
+                project_scope(3).expect("linked"),
+            ],
+        };
+        // Four original rows contrast live owner, live linked, foreign and logically deleted content.
+        // 四条原记录对照活动归属、活动连带、外部及逻辑删除内容。
+        let mut snapshot = empty_snapshot(1);
+        for (id, project) in [(1, 2), (2, 3), (3, 4), (4, 2)] {
+            snapshot.dataset.memories.push(memory(
+                &format!("vmm-memory-{id}"),
+                project,
+                &session_id.to_string(),
+                None,
+                MemorySourceKind::Direct,
+                MemoryLevel::Persistent,
+            ));
+        }
+        snapshot.dataset.memories[3].state = MemoryState::Deleted;
+        // Missing ID 5 represents a previously recalled record now removed from active storage.
+        // 缺失 ID 5 表示此前召回、现已移出活动存储的记录。
+        let batch = VmmRecallBatch {
+            ttl_turns: 3,
+            injection_tag: "vmm".to_owned(),
+            injection_description: "memory".to_owned(),
+            items: (1..=5)
+                .map(|id| ContextItem {
+                    memory_id: id,
+                    text: format!("memory-{id}"),
+                    ..Default::default()
+                })
+                .collect(),
+        };
+        for paused in [false, true] {
+            // Each scenario starts with the same already persisted cache and delayed response.
+            // 每种场景从相同的已有持久缓存及迟到响应开始。
+            let mut state = VmmSessionMemoryState::new(session_id.to_string(), "1").expect("state");
+            state
+                .select_read_source(
+                    &session_id.to_string(),
+                    Some(
+                        &crate::native_vmm::client::memory_read_source_from_access(&access)
+                            .expect("source"),
+                    ),
+                    "1",
+                )
+                .expect("select source");
+            state
+                .apply_recall_batch(&session_id.to_string(), "user-1", &batch, "2")
+                .expect("previous recall");
+            // Preserve an unrelated hook payload and metadata as exact controls.
+            // 保留无关 Hook 载荷及元数据作为准确对照。
+            let mut report = vulcan_hooks::HookDispatchReport::empty(vulcan_hooks::HookPayload {
+                value: serde_json::json!({"user_content": "unchanged"}),
+            });
+            report.metadata.insert(
+                "unrelated".to_owned(),
+                vec![serde_json::json!({"keep": true})],
+            );
+            report.metadata.insert(
+                HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_owned(),
+                vec![serde_json::json!(VmmRecallBatchHookEffect {
+                    read_source: crate::native_vmm::client::memory_read_source_from_access(&access)
+                        .expect("recall source"),
+                    batch: batch.clone()
+                })],
+            );
+            // The correlated outcome deliberately arrives after source visibility changes.
+            // 关联结果刻意在来源可见性改变后到达。
+            let mut outcome = ConversationPrecheckOutcome {
+                session_id,
+                turn_id: "new-turn".to_owned(),
+                report: Ok(report),
+            };
+            // The independent lifecycle is authoritative, even when all recalled IDs still exist.
+            // 即使全部召回 ID 仍然存在，独立生命周期仍是权威。
+            let mut current = snapshot.clone();
+            if paused {
+                current
+                    .memory_sessions
+                    .push(vulcan_memorymesh_core::StorageMemorySession {
+                        subject_id: native_vmm_subject_id().expect("subject"),
+                        scope_id: access.write_scope.clone(),
+                        session_source_id: SessionSourceId::new(session_id.to_string())
+                            .expect("session"),
+                        status: vulcan_memorymesh_core::StorageSessionStatus::Recycled,
+                        last_extraction_observed_at_ns: 0,
+                        last_extraction_completed_at_ns: None,
+                    });
+            }
+            // Production storage validation precedes the bounded publication lookup.
+            // 生产存储校验先于有界发布查询。
+            let storage =
+                vulcan_memorymesh_core::InMemoryStorage::from_snapshot(current).expect("storage");
+            recall_publication::reconcile_recall(
+                &storage,
+                &native_vmm_subject_id().expect("subject"),
+                &access,
+                &SessionSourceId::new(session_id.to_string()).expect("session"),
+                &mut state,
+                Some(&mut outcome),
+                "3",
+            )
+            .expect("reconcile");
+            // Typed status and recall remain separate; an empty/paused batch is removed entirely.
+            // 类型化状态与召回保持分离；空或暂停批次被整体移除。
+            let report = outcome.report.as_ref().expect("report");
+            assert_eq!(
+                report.payload.value,
+                serde_json::json!({"user_content": "unchanged"})
+            );
+            assert_eq!(
+                report.metadata["unrelated"],
+                vec![serde_json::json!({"keep": true})]
+            );
+            if paused {
+                assert_eq!(state.session_memory_status, SessionMemoryStatus::Recycled);
+                assert!(state.active_leases.is_empty());
+                assert!(
+                    vmm_recall_batch_effect_from_report(report)
+                        .expect("typed recall")
+                        .is_none()
+                );
+            } else {
+                assert_eq!(
+                    state.active_leases.keys().cloned().collect::<Vec<_>>(),
+                    ["memory:1", "memory:2"]
+                );
+                // Applying the delayed response cannot reintroduce removed, deleted or out-of-scope memory.
+                // 应用迟到响应不能重新引入已移除、已删除或作用域外记忆。
+                let effect = vmm_recall_batch_effect_from_report(report)
+                    .expect("typed recall")
+                    .expect("retained recall");
+                assert_eq!(
+                    effect
+                        .batch
+                        .items
+                        .iter()
+                        .map(|item| item.memory_id)
+                        .collect::<Vec<_>>(),
+                    [1, 2]
+                );
+                state
+                    .apply_recall_batch(&session_id.to_string(), "user-2", &effect.batch, "4")
+                    .expect("safe delayed batch");
+                assert_eq!(state.active_leases.len(), 2);
+            }
+            assert_eq!(
+                vmm_session_status_effect_from_report(report)
+                    .expect("typed status")
+                    .expect("status")
+                    .status,
+                state.session_memory_status
+            );
+        }
+    }
+
+    /// Builds valid source-linked content with an empty owner and same-name foreign session.
+    /// 构造有效来源关联内容，包含空归属及其他项目同名会话。
+    /// Returns a canonical snapshot for both whole-session and individual-turn moves.
+    /// 返回供完整会话及独立回合移动使用的规范快照。
+    fn manual_removal_snapshot() -> StorageSnapshot {
+        // Begin with the exact production storage shape.
+        // 从准确生产存储结构开始。
+        let mut snapshot = empty_snapshot(17);
+        for (project, session) in [(2, "a"), (2, "empty"), (3, "a")] {
+            snapshot
+                .memory_sessions
+                .push(vulcan_memorymesh_core::StorageMemorySession {
+                    subject_id: native_vmm_subject_id().expect("subject"),
+                    scope_id: project_scope(project).expect("scope"),
+                    session_source_id: SessionSourceId::new(session).expect("session"),
+                    status: vulcan_memorymesh_core::StorageSessionStatus::Archived,
+                    last_extraction_observed_at_ns: 20,
+                    last_extraction_completed_at_ns: Some(30),
+                });
+        }
+        snapshot.dataset.turns = vec![
+            turn("vmm-turn-2", 2, "a"),
+            turn("vmm-turn-10", 2, "a"),
+            turn("vmm-turn-20", 3, "a"),
+        ];
+        for (id, project, source) in [
+            ("source", 2, Some("vmm-turn-2")),
+            ("direct", 2, None),
+            ("foreign", 3, Some("vmm-turn-20")),
+        ] {
+            // Include persistent direct writes; manual removal must not apply periodic eligibility filters.
+            // 包含持久直写；人工移除不能应用周期清洗资格过滤。
+            let mut record = memory(
+                id,
+                project,
+                "a",
+                source,
+                MemorySourceKind::Direct,
+                MemoryLevel::Persistent,
+            );
+            record.vector_space_id =
+                Some(VectorSpaceId::new("original-generation").expect("generation"));
+            record.embedding = Some(vec![0.25, 0.75]);
+            snapshot.dataset.memories.push(record);
+        }
+        for (id, scope) in [
+            ("project-profile", project_scope(2).expect("project")),
+            (
+                "user-profile",
+                native_vmm_subject_scope().expect("personal"),
+            ),
+        ] {
+            // Both profile families explicitly cite the selected turn but remain independently owned.
+            // 两类画像均明确引用所选回合，但保持独立归属。
+            let mut node = profile_node(id, scope, id);
+            node.source_turn_ids = vec![TurnId::new("vmm-turn-2").expect("turn")];
+            snapshot.dataset.profile_nodes.push(node);
+        }
+        snapshot
+            .dataset
+            .context_evidence
+            .push(vulcan_memorymesh_core::MemoryContextEvidence {
+                memory_id: MemoryId::new("source").expect("memory"),
+                context_key: "branch".to_owned(),
+                context_value: "main".to_owned(),
+                support_count: 1,
+                rebuttal_count: 0,
+                last_supported_at_ns: None,
+                last_rebutted_at_ns: None,
+                version: 1,
+            });
+        for (project, id) in [(2, "vmm-turn-10"), (3, "vmm-turn-20")] {
+            snapshot.dataset.chat_compact_boundaries.push(
+                vulcan_memorymesh_core::ChatCompactBoundary {
+                    subject_id: native_vmm_subject_id().expect("subject"),
+                    scope_id: project_scope(project).expect("scope"),
+                    session_source_id: SessionSourceId::new("a").expect("session"),
+                    compacted_turn_id: TurnId::new(id).expect("turn"),
+                    compacted_at_ns: 40,
+                },
+            );
+        }
+        vulcan_memorymesh_core::InMemoryStorage::from_snapshot(snapshot)
+            .expect("valid fixture")
+            .snapshot()
+    }
+
+    /// Checks exact source moves, profile/vector preservation, session metadata and reversible identity.
+    /// 检查准确来源移动、画像及向量保留、会话元数据及可恢复身份。
+    #[test]
+    fn manual_removal_moves_originals_and_restores_exact_owner() {
+        use vulcan_service_api::{
+            VmmNativeRemovalPreview, VmmNativeRemovalQuery, VmmNativeRemovalTarget,
+        };
+        for selection in [
+            VmmNativeRemovalTarget::Sessions {
+                ids: vec!["a".to_owned(), "empty".to_owned()],
+            },
+            VmmNativeRemovalTarget::Turns {
+                ids: vec!["vmm-turn-2".to_owned()],
+            },
+        ] {
+            // Each variant starts from a fresh canonical snapshot.
+            // 每种变体从新的规范快照开始。
+            let before = manual_removal_snapshot();
+            // The target kind alone controls whether session metadata and compaction move.
+            // 只有目标种类决定会话元数据及压缩是否移动。
+            let whole = matches!(&selection, VmmNativeRemovalTarget::Sessions { .. });
+            // Build the same impact used by the production preview.
+            // 构建生产预览使用的相同影响。
+            let impact = removal_impact::build_impact(
+                &before,
+                VmmNativeRemovalQuery {
+                    vmm_project_id: 2,
+                    selection,
+                },
+                2,
+            )
+            .expect("impact");
+            // The transaction candidate preserves the original snapshot for comparison.
+            // 事务候选保留原始快照用于比较。
+            let mut snapshot = before.clone();
+            // Both paths must keep the same source IDs and declared vector generation.
+            // 两条路径均须保留相同来源 ID 及声明向量代次。
+            let result = manual_removal::apply_manual_removal(
+                &mut snapshot,
+                VmmNativeRemovalPreview {
+                    preview_id: "exact-source".to_owned(),
+                    impact: impact.clone(),
+                    trash_retention_ms: 50,
+                },
+                100,
+            )
+            .expect("move originals");
+            assert_eq!(result.storage_version, before.storage_version + 1);
+            assert_eq!(result.impact, impact);
+            assert_eq!(snapshot.dataset.profile_nodes, before.dataset.profile_nodes);
+            assert_eq!(snapshot.retention_trash_batches.len(), 1);
+            // The complete batch, including saved session originals, is validated by the real loader.
+            // 完整批次连同保存的原会话一起由真实加载器校验。
+            let mut persisted = vulcan_memorymesh_core::InMemoryStorage::from_snapshot(snapshot)
+                .expect("valid moved snapshot")
+                .snapshot();
+            // Remove the batch as the production restore transaction does.
+            // 像生产恢复事务一样取出批次。
+            let batch = persisted.retention_trash_batches.remove(0);
+            // UI summaries must preserve original empty-session selections rather than infer them from turns.
+            // 界面摘要必须保留原始空会话选择，而非从回合推测它们。
+            let summary = retention_batch_summary(&batch).expect("manual source projection");
+            assert_eq!(
+                summary.manual_selection,
+                Some(impact.query.selection.clone())
+            );
+            assert_eq!(batch.expires_at_ns, 50_000_100);
+            assert!(batch.dataset.profile_nodes.is_empty());
+            assert_eq!(batch.dataset.memories.len(), if whole { 2 } else { 1 });
+            assert_eq!(batch.dataset.turns.len(), if whole { 2 } else { 1 });
+            assert_eq!(
+                batch.dataset.chat_compact_boundaries.len(),
+                usize::from(whole)
+            );
+            assert_eq!(batch.dataset.context_evidence.len(), 1);
+            for moved in &batch.dataset.memories {
+                assert_eq!(
+                    Some(moved),
+                    before
+                        .dataset
+                        .memories
+                        .iter()
+                        .find(|memory| memory.id == moved.id)
+                );
+            }
+            if !whole {
+                assert_eq!(persisted.memory_sessions, before.memory_sessions);
+            }
+            ensure_recycle_restore_has_no_conflicts(&persisted, &batch)
+                .expect("restore exact identity");
+            restore_retention_batch(&mut persisted, batch).expect("restore originals");
+            // External whole-session restore activates only the exact restored owners.
+            // 外置完整会话恢复只激活准确恢复的归属。
+            let mut expected = before;
+            if whole {
+                for session in &mut expected.memory_sessions {
+                    if session.scope_id == project_scope(2).expect("scope") {
+                        session.status = vulcan_memorymesh_core::StorageSessionStatus::Active;
+                    }
+                }
+            }
+            assert_eq!(
+                vulcan_memorymesh_core::InMemoryStorage::from_snapshot(persisted)
+                    .expect("valid restored")
+                    .snapshot(),
+                expected
+            );
+        }
+    }
+
+    /// Rejects stale membership and invalid deadlines before changing any transaction content.
+    /// 在改变事务内容之前拒绝过期成员关系及无效截止时间。
+    #[test]
+    fn manual_removal_rejects_changed_impact_without_partial_mutation() {
+        use vulcan_service_api::{
+            VmmNativeRemovalPreview, VmmNativeRemovalQuery, VmmNativeRemovalTarget,
+        };
+        // Capture one exact turn with both ordinary and independent profile sources.
+        // 捕获一个同时关联普通记忆及独立画像来源的准确回合。
+        let before = manual_removal_snapshot();
+        // This immutable impact is the server-owned confirmation baseline.
+        // 此不可变影响是服务端确认基线。
+        let impact = removal_impact::build_impact(
+            &before,
+            VmmNativeRemovalQuery {
+                vmm_project_id: 2,
+                selection: VmmNativeRemovalTarget::Turns {
+                    ids: vec!["vmm-turn-2".to_owned()],
+                },
+            },
+            2,
+        )
+        .expect("impact");
+        for case in 0..4 {
+            // Each rejection receives its own untouched transaction candidate.
+            // 每种拒绝情况取得自己的未改动事务候选。
+            let mut snapshot = before.clone();
+            // Only explicit test inputs differ, not the production selection algorithm.
+            // 只改变明确测试输入，而非生产选择算法。
+            let mut preview = VmmNativeRemovalPreview {
+                preview_id: "reject".to_owned(),
+                impact: impact.clone(),
+                trash_retention_ms: 50,
+            };
+            match case {
+                0 => preview.impact.memory_ids.clear(),
+                1 => preview.impact.storage_version += 1,
+                2 => preview.trash_retention_ms = 0,
+                3 => preview.trash_retention_ms = u64::MAX,
+                _ => unreachable!(),
+            }
+            assert!(manual_removal::apply_manual_removal(&mut snapshot, preview, 100).is_err());
+            assert_eq!(snapshot, before);
+        }
+    }
+
+    /// Verifies manual source inspection includes direct and persistent memories without applying retention filters.
+    /// 验证人工来源检查包含直写及持久记忆，不应用保留清洗过滤。
+    #[test]
+    fn removal_impact_resolves_exact_sources_and_numeric_hot_windows() {
+        use vulcan_service_api::{VmmNativeRemovalQuery, VmmNativeRemovalTarget};
+        // Same-name foreign sessions and empty sessions must remain separate authoritative records.
+        // 同名外部项目会话与空会话必须保留为独立权威记录。
+        let mut snapshot = empty_snapshot(17);
+        for (project, id) in [(2, "a"), (2, "b"), (2, "empty"), (3, "a")] {
+            snapshot
+                .memory_sessions
+                .push(vulcan_memorymesh_core::StorageMemorySession {
+                    subject_id: native_vmm_subject_id().expect("subject"),
+                    scope_id: project_scope(project).expect("scope"),
+                    session_source_id: SessionSourceId::new(id).expect("session"),
+                    status: vulcan_memorymesh_core::StorageSessionStatus::Active,
+                    last_extraction_observed_at_ns: 0,
+                    last_extraction_completed_at_ns: None,
+                });
+        }
+        for (id, project, session) in [
+            (10, 2, "a"),
+            (2, 2, "a"),
+            (1, 2, "a"),
+            (20, 2, "b"),
+            (30, 3, "a"),
+        ] {
+            snapshot
+                .dataset
+                .turns
+                .push(turn(&format!("vmm-turn-{id}"), project, session));
+        }
+        snapshot.dataset.turns[0].status = TurnStatus::Completed;
+        for (id, project, session, source) in [
+            ("m1", 2, "a", Some("vmm-turn-1")),
+            ("m2", 2, "a", None),
+            ("m3", 2, "b", Some("vmm-turn-2")),
+            ("m4", 2, "b", Some("vmm-turn-20")),
+            ("m5", 3, "a", Some("vmm-turn-1")),
+        ] {
+            snapshot.dataset.memories.push(memory(
+                id,
+                project,
+                session,
+                source,
+                MemorySourceKind::Direct,
+                MemoryLevel::Persistent,
+            ));
+        }
+        snapshot.dataset.memories[1].state = MemoryState::Deleted;
+        snapshot.dataset.memories[0].vector_space_id =
+            Some(VectorSpaceId::new("generation").expect("space"));
+        snapshot.dataset.memories[0].embedding = Some(vec![1.0]);
+        for (id, scope, sources) in [
+            (
+                "project",
+                project_scope(2).expect("scope"),
+                vec!["vmm-turn-1"],
+            ),
+            (
+                "user",
+                native_vmm_subject_scope().expect("user scope"),
+                vec!["vmm-turn-1", "vmm-turn-20"],
+            ),
+            (
+                "foreign",
+                project_scope(3).expect("scope"),
+                vec!["vmm-turn-1"],
+            ),
+            ("manual", project_scope(2).expect("scope"), vec![]),
+        ] {
+            let mut node = profile_node(id, scope, id);
+            node.source_turn_ids = sources
+                .into_iter()
+                .map(|id| TurnId::new(id).expect("source"))
+                .collect();
+            if id == "project" {
+                node.subject_id = None;
+            }
+            snapshot.dataset.profile_nodes.push(node);
+        }
+        for id in ["m1", "m4"] {
+            snapshot
+                .dataset
+                .context_evidence
+                .push(vulcan_memorymesh_core::MemoryContextEvidence {
+                    memory_id: MemoryId::new(id).expect("memory"),
+                    context_key: "branch".to_owned(),
+                    context_value: "main".to_owned(),
+                    support_count: 1,
+                    rebuttal_count: 0,
+                    last_supported_at_ns: None,
+                    last_rebutted_at_ns: None,
+                    version: 1,
+                });
+        }
+        let before = snapshot.clone();
+        let query = VmmNativeRemovalQuery {
+            vmm_project_id: 2,
+            selection: VmmNativeRemovalTarget::Sessions {
+                ids: vec!["a".to_owned(), "a".to_owned()],
+            },
+        };
+        let impact =
+            removal_impact::build_impact(&snapshot, query.clone(), 2).expect("session impact");
+        assert_eq!(impact.session_source_ids, ["a"]);
+        assert_eq!(impact.turn_ids, ["vmm-turn-1", "vmm-turn-2", "vmm-turn-10"]);
+        assert_eq!(impact.hot_window_turn_ids, ["vmm-turn-2", "vmm-turn-10"]);
+        assert_eq!(impact.pending_turn_ids, ["vmm-turn-1", "vmm-turn-2"]);
+        assert_eq!(impact.memory_ids, ["m1", "m2", "m3"]);
+        assert_eq!(impact.vector_memory_ids, ["m1"]);
+        assert_eq!(impact.project_profile_node_ids, ["project"]);
+        assert_eq!(impact.user_profile_node_ids, ["user"]);
+        assert_eq!(impact.context_evidence.len(), 1);
+        assert_eq!(impact.context_evidence[0].memory_id, "m1");
+        assert_eq!(impact.storage_version, 17);
+        let turn_impact = removal_impact::build_impact(
+            &snapshot,
+            VmmNativeRemovalQuery {
+                vmm_project_id: 2,
+                selection: VmmNativeRemovalTarget::Turns {
+                    ids: vec!["vmm-turn-2".to_owned()],
+                },
+            },
+            1,
+        )
+        .expect("single turn");
+        assert_eq!(turn_impact.memory_ids, ["m3"]);
+        assert!(turn_impact.hot_window_turn_ids.is_empty());
+        assert!(turn_impact.user_profile_node_ids.is_empty());
+        let empty = removal_impact::build_impact(
+            &snapshot,
+            VmmNativeRemovalQuery {
+                vmm_project_id: 2,
+                selection: VmmNativeRemovalTarget::Sessions {
+                    ids: vec!["empty".to_owned()],
+                },
+            },
+            2,
+        )
+        .expect("empty session still exists");
+        assert_eq!(empty.session_source_ids, ["empty"]);
+        assert!(empty.turn_ids.is_empty());
+        assert!(empty.memory_ids.is_empty());
+        for selection in [
+            VmmNativeRemovalTarget::Sessions { ids: vec![] },
+            VmmNativeRemovalTarget::Sessions {
+                ids: vec!["a".to_owned(); 101],
+            },
+            VmmNativeRemovalTarget::Sessions {
+                ids: vec![" a".to_owned()],
+            },
+            VmmNativeRemovalTarget::Sessions {
+                ids: vec!["missing".to_owned()],
+            },
+            VmmNativeRemovalTarget::Turns {
+                ids: vec!["vmm-turn-30".to_owned()],
+            },
+            VmmNativeRemovalTarget::Turns {
+                ids: vec!["vmm-turn-wrong".to_owned()],
+            },
+            VmmNativeRemovalTarget::Turns {
+                ids: vec!["vmm-turn-2".to_owned(), "vmm-turn-404".to_owned()],
+            },
+        ] {
+            assert!(
+                removal_impact::build_impact(
+                    &snapshot,
+                    VmmNativeRemovalQuery {
+                        vmm_project_id: 2,
+                        selection
+                    },
+                    2
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(snapshot, before);
+        snapshot.memory_sessions[0].status = vulcan_memorymesh_core::StorageSessionStatus::Archived;
+        assert!(
+            removal_impact::build_impact(&snapshot, query.clone(), 0)
+                .expect("archived allowed")
+                .hot_window_turn_ids
+                .is_empty()
+        );
+        for status in [
+            vulcan_memorymesh_core::StorageSessionStatus::Recycled,
+            vulcan_memorymesh_core::StorageSessionStatus::Forgotten,
+        ] {
+            snapshot.memory_sessions[0].status = status;
+            assert!(removal_impact::build_impact(&snapshot, query.clone(), 2).is_err());
+        }
     }
 
     /// Verifies restoring a batch moves its original vector-bearing records without regeneration.
@@ -6834,6 +8347,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(2).expect("scope"),
             1,
+            100,
             RetentionReasonCode::TerminalMemoryRecycle,
         );
         let mut restored_memory = memory(
@@ -6848,7 +8362,7 @@ mod tests {
         batch.dataset.memories.push(restored_memory);
 
         ensure_recycle_restore_has_no_conflicts(&snapshot, &batch).expect("conflict-free restore");
-        restore_retention_batch(&mut snapshot, batch);
+        restore_retention_batch(&mut snapshot, batch).expect("restore original records");
 
         assert_eq!(snapshot.dataset.memories.len(), 1);
         assert_eq!(
@@ -6871,6 +8385,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(2).expect("scope"),
             1,
+            100,
             RetentionReasonCode::ColdTurnRecycle,
         );
         batch
@@ -7020,6 +8535,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(3).expect("scope"),
             50,
+            200,
             RetentionReasonCode::ColdTurnRecycle,
         );
         let mut snapshot = empty_snapshot(1);
@@ -7038,6 +8554,42 @@ mod tests {
         assert_eq!(snapshot.retention_trash_batches.len(), 1);
     }
 
+    /// Verifies a shortened default cannot purge an existing batch before its frozen deadline.
+    /// 验证缩短默认窗口不能在已有批次冻结截止时间之前清除该批次。
+    #[test]
+    fn retention_purge_preserves_deadline_when_default_is_shortened() {
+        // The shortened default would have expired this batch, but its frozen deadline has not.
+        // 缩短后的默认窗口会认为批次已到期，但批次冻结的截止时间尚未到达。
+        let mut policy = RetentionPolicy::v1();
+        policy.trash_retention_ms = 1;
+        let mut snapshot = empty_snapshot(1);
+        snapshot.retention_trash_batches.push(retention_trash_batch(
+            String::from("long-lived-batch"),
+            native_vmm_subject_id().expect("subject"),
+            project_scope(2).expect("scope"),
+            1,
+            10_000_000,
+            RetentionReasonCode::ColdTurnRecycle,
+        ));
+        let mut plan = retention_plan(2);
+        plan.trash_purge
+            .push(vulcan_memorymesh_core::PlannedTrashBatchRef {
+                batch_id: String::from("long-lived-batch"),
+                reason: RetentionReasonCode::TrashExpiryPurge,
+            });
+        let error = apply_retention_plan(&mut snapshot, &plan, &policy, 9_999_999, "shortened")
+            .expect_err("frozen deadline has not elapsed");
+        assert!(error.contains("所有权或到期状态"));
+        assert_eq!(
+            snapshot.retention_trash_batches[0].expires_at_ns,
+            10_000_000
+        );
+        let result = apply_retention_plan(&mut snapshot, &plan, &policy, 10_000_000, "due")
+            .expect("exact frozen deadline permits purge");
+        assert_eq!(result.purged_trash_batches, 1);
+        assert!(snapshot.retention_trash_batches.is_empty());
+    }
+
     /// Verifies permanent trash purge also removes idempotency receipts for purged records.
     /// 验证永久清除回收站时也会删除引用已清除记录的幂等收据。
     #[test]
@@ -7049,6 +8601,7 @@ mod tests {
             native_vmm_subject_id().expect("subject"),
             project_scope(2).expect("scope"),
             1,
+            100,
             RetentionReasonCode::ColdTurnRecycle,
         );
         batch.dataset.memories.push(memory(
@@ -7068,8 +8621,9 @@ mod tests {
                 batch_id: String::from("trash-batch-expired"),
                 reason: RetentionReasonCode::TrashExpiryPurge,
             });
-        let now_ns = 1_i64
-            .saturating_add(retention_duration_ns(policy.trash_retention_ms).expect("duration"));
+        // The current default is much longer; only the batch's original deadline governs purge.
+        // 当前默认窗口远长于该批次；清除仅由批次原始截止时间决定。
+        let now_ns = 100;
 
         let result = apply_retention_plan(&mut snapshot, &plan, &policy, now_ns, "retention-purge")
             .expect("expired trash purge");
@@ -7130,7 +8684,7 @@ mod tests {
     /// 验证快速画像工作器不能触发任何无关保留阶段。
     #[test]
     fn profile_expiry_policy_disables_every_unrelated_retention_family() {
-        let policy = native_profile_expiry_policy();
+        let policy = native_profile_expiry_policy(&RetentionPolicy::v1());
         assert_eq!(policy.profile_expiry_limit, 256);
         assert_eq!(policy.memory_recycle_limit, 0);
         assert_eq!(policy.cold_turn_scan_limit, 0);

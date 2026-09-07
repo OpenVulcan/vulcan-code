@@ -17,8 +17,8 @@ pub struct RetentionPolicy {
     /// Carries the session idle duration before idle-session evaluation.
     /// 携带会话进入 idle-session 评估前的空闲时长。
     pub session_idle_ms: u64,
-    /// Carries the trash retention window before purge plans are produced.
-    /// 携带产生清除计划前的回收站保留窗口。
+    /// Defines the expiry window for newly recycled batches, not existing batch deadlines.
+    /// 定义新回收批次的到期窗口，不改变已有批次的截止时间。
     pub trash_retention_ms: u64,
     /// Carries the lowest protected priority on the normalized zero-to-one-hundred scale.
     /// 携带零到一百规范尺度上的最低受保护优先级。
@@ -75,6 +75,12 @@ pub enum RetentionReasonCode {
     /// Indicates deterministic expiry of one due active profile node.
     /// 表示对一个已到期活跃画像节点执行确定性过期收敛。
     ProfileExpiry = 6,
+    /// Indicates explicit whole-session recycling rather than idle-session policy cleanup.
+    /// 表示显式完整会话回收，不是闲置会话策略清洗。
+    ManualSessionRecycle = 7,
+    /// Indicates explicit selected-turn recycling without changing the session lifecycle.
+    /// 表示显式所选回合回收，不改变会话生命周期。
+    ManualTurnRecycle = 8,
 }
 
 /// Identifies one exact due active profile node selected for expiry convergence.

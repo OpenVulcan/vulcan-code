@@ -7,6 +7,9 @@ export interface ProjectSettingsDialogTarget {
   // Project being configured by the settings dialog.
   // 设置弹窗正在配置的项目。
   project: ProjectSummary;
+  // Optional explicit navigation target supplied by a project-owned feature entry.
+  // 项目自有功能入口提供的可选明确导航目标。
+  initialSection?: ProjectSettingsSectionId;
 }
 
 export type { ProjectSettingsRevision } from "@/types";

@@ -36,7 +36,8 @@ use crate::{
         },
         execution_models::ExecutionTurnStartMode,
         vmm_hooks::{
-            VMM_PRECHECK_HOOK_ID, stabilize_vmm_profile_system_prompt_blocks,
+            VMM_PRECHECK_HOOK_ID, apply_vmm_profile_sync_state, reconcile_vmm_precheck_publication,
+            reconcile_vmm_profile_publication, stabilize_vmm_profile_system_prompt_blocks,
             vmm_profile_placement_phase,
         },
     },
@@ -380,6 +381,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
 /// 独立准备线路完成后继续一个共享提示词回合所需的输入。
 #[derive(Clone)]
 pub struct SharedPromptTurnContinueInput {
+    /// Exact current host lineage; required for active VMM, including explicit absence of compaction.
+    /// 准确当前宿主沿革；活动 VMM 必须提供，包括压缩的明确缺失状态。
+    pub vmm_context_epoch: Option<vulcan_vmm::VmmContextEpoch>,
     /// Started prompt turn waiting for both independent preparation outcomes.
     /// 正在等待两条独立准备线路结果的已启动提示词回合。
     pub start: SharedPromptTurnStart,
@@ -389,6 +393,9 @@ pub struct SharedPromptTurnContinueInput {
     /// Completed independent profile preparation outcome.
     /// 已完成的独立画像准备结果。
     pub profile_outcome: ConversationProfileOutcome,
+    /// Current profile read source resolved at publication, never inferred from incoming results.
+    /// 发布时解析的当前画像读取来源，绝不从传入结果反推。
+    pub vmm_profile_read_source: Option<vulcan_vmm::VmmMemoryReadSource>,
     /// Project-local configuration for the execution workspace.
     /// 执行工作区的项目级配置。
     pub project_configuration: ProjectVulcanCodeConfigurationFile,
@@ -836,7 +843,7 @@ pub fn continue_shared_prompt_turn_after_preparation(
 pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     vmm_session_memory: &mut vulcan_vmm::VmmSessionMemoryState,
-    input: SharedPromptTurnContinueInput,
+    mut input: SharedPromptTurnContinueInput,
 ) -> Result<SharedPromptTurnContinuation, String> {
     let session_id = input.start.session_id;
     if input.precheck_outcome.session_id != session_id {
@@ -881,15 +888,40 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     // vmmDomainActive 同时要求功能策略开启以及宿主持有的服务实时就绪事实成立。
     let feature_policy = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env();
     let vmm_domain_active = feature_policy.session_state_enabled && input.start.vmm_runtime_ready;
+    // Source selection precedes anchor binding and failure reuse, including the inactive-source boundary.
+    // 来源选择先于锚点绑定和失败复用，包括来源停用边界。
+    let source_updated_at = current_unix_millis_text();
+    if vmm_session_memory.select_read_source(
+        &session_id.to_string(),
+        input
+            .vmm_profile_read_source
+            .as_ref()
+            .filter(|_| vmm_domain_active),
+        &source_updated_at,
+    )? {
+        runtime_state.conversation_state.continuation = Default::default();
+        runtime_state.updated_at = source_updated_at;
+    }
     if vmm_domain_active {
+        // Freeze rendering mode before the authoritative epoch, since a mode change resets cached anchors.
+        // 在权威纪元之前冻结渲染模式，因为模式变化会重置缓存锚点。
+        let now = current_unix_millis_text();
+        let mode_report = vmm_session_memory
+            .synchronize_stable_anchor_rendering(feature_policy.stable_anchors_enabled, &now)?;
+        // Source changes and history rewinds are reconciled even for continuations without a new user message.
+        // 即使续接没有新增用户消息，也对账来源改变及历史回退。
+        let context_epoch = input.vmm_context_epoch.as_ref().ok_or_else(|| {
+            "Active VMM requires the exact current host context epoch.".to_owned()
+        })?;
+        let epoch_report = vmm_session_memory.synchronize_context_epoch(context_epoch, &now)?;
+        if mode_report.changed || epoch_report.changed {
+            runtime_state.conversation_state.continuation = Default::default();
+            runtime_state.updated_at = now.clone();
+        }
         if let Some(target_message_id) = input.start.canonical_user_message_id.as_deref() {
             // now is shared by the atomic local pre-provider VMM boundary transition.
             // now 由 Provider 调用前的原子本地 VMM 边界转换共享。
             let now = current_unix_millis_text();
-            // mode_report records an explicit rollout epoch transition when policy changed.
-            // mode_report 记录策略变化时的显式灰度纪元转换。
-            let mode_report = vmm_session_memory
-                .synchronize_stable_anchor_rendering(feature_policy.stable_anchors_enabled, &now)?;
             // pending_report binds local expiry and compaction state even when the remote hook fails.
             // pending_report 即使在远端 Hook 失败时也会绑定本地到期与压缩状态。
             let pending_report =
@@ -898,10 +930,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             // active_turn_report 将终态 TTL 消费限定到当前精确逻辑回合。
             let active_turn_report =
                 vmm_session_memory.register_active_turn(&expected_turn_id, &now)?;
-            if mode_report.changed {
-                runtime_state.conversation_state.continuation = Default::default();
-            }
-            if mode_report.changed || pending_report.changed || active_turn_report.changed {
+            if pending_report.changed || active_turn_report.changed {
                 runtime_state.updated_at = now;
             }
         } else if input.start.source.runs_completed_turn_hooks()
@@ -912,13 +941,31 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             ));
         }
     }
+    // Revalidate before either successful results or failure fallback can restore a baseline.
+    // 在成功结果或失败复用可以恢复基线之前重新校验。
+    if reconcile_vmm_profile_publication(
+        &mut runtime_state.vmm_profile_sync,
+        &mut runtime_state.context_injection_state,
+        &mut input.profile_outcome,
+        input
+            .vmm_profile_read_source
+            .as_ref()
+            .filter(|_| vmm_domain_active),
+    )? {
+        profile_failure_detail =
+            Some("画像来源在准备后发生变化，旧画像结果未注入本次请求。".to_owned());
+    }
     // Profile preparation owns only the persistent baseline and append-only profile deltas.
     // 画像准备仅持有持久化基线与仅追加画像增量。
     match input.profile_outcome.report {
         Ok(report) => {
-            if vmm_domain_active && let Some(effect) = vmm_profile_sync_effect_from_report(&report)
+            if vmm_domain_active && let Some(effect) = vmm_profile_sync_effect_from_report(&report)?
             {
-                runtime_state.vmm_profile_sync = effect.state;
+                apply_vmm_profile_sync_state(
+                    &mut runtime_state.vmm_profile_sync,
+                    &mut runtime_state.context_injection_state,
+                    effect.state,
+                );
                 runtime_state.updated_at = current_unix_millis_text();
             }
             if !report.injections.is_empty() {
@@ -931,8 +978,17 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             system_prompt_hook_blocks = report.system_prompt_blocks;
         }
         Err(error) => {
+            let retention = if runtime_state
+                .vmm_profile_sync
+                .base_profile_content
+                .is_some()
+            {
+                "继续复用同来源画像基线"
+            } else {
+                "本次不注入旧来源画像"
+            };
             let detail = format!(
-                "会话 `{}` 的画像准备未能完成，已继续复用持久化画像基线：{error}",
+                "会话 `{}` 的画像准备未能完成，{retention}：{error}",
                 input.start.session_title
             );
             profile_failure_detail = Some(detail);
@@ -940,6 +996,16 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     }
     // User-prompt precheck owns recall, prompt transformation, and its own non-profile Hook outputs.
     // 用户提示 precheck 仅持有召回、提示词转换及其自身的非画像 Hook 输出。
+    if reconcile_vmm_precheck_publication(
+        &mut input.precheck_outcome,
+        input
+            .vmm_profile_read_source
+            .as_ref()
+            .filter(|_| vmm_domain_active),
+    )? {
+        precheck_failure_detail =
+            Some("记忆来源在准备后发生变化，旧召回及会话状态未应用。".to_owned());
+    }
     match input.precheck_outcome.report {
         Ok(report) => {
             if vmm_domain_active

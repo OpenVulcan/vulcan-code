@@ -873,6 +873,9 @@ fn knowledge_display_batch_output_schema() -> Value {
 /// 创建资料库分离式整理任务使用的有界宿主调用身份。
 fn knowledge_curation_caller(consumer_profile_id: &str) -> Result<InferenceCallerContext, String> {
     Ok(InferenceCallerContext {
+        // Preserve knowledge curation scheduling; this contract extension changes no knowledge behavior.
+        // 保留知识整理调度；此契约扩展不改变知识库行为。
+        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
         caller_id: String::from("vulcan-code-knowledge-curation"),
         allowed_consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
         permissions: BTreeSet::from([InferencePermission::Status, InferencePermission::Llm]),
@@ -896,6 +899,9 @@ fn knowledge_curation_caller(consumer_profile_id: &str) -> Result<InferenceCalle
 /// 创建资料库专属向量批次使用的受限宿主调用身份。
 fn knowledge_embedding_caller(consumer_profile_id: &str) -> Result<InferenceCallerContext, String> {
     Ok(InferenceCallerContext {
+        // Preserve knowledge embedding scheduling without granting foreground execution.
+        // 保留知识向量调度，不授予前台执行权限。
+        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
         caller_id: String::from("vulcan-code-knowledge-embedding"),
         allowed_consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
         permissions: BTreeSet::from([InferencePermission::Status, InferencePermission::Embedding]),

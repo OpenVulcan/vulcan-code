@@ -20,6 +20,282 @@ use crate::{
 
 use super::*;
 
+/// Builds the exact native source used by profile publication fixtures.
+/// 构建画像发布夹具使用的准确原生来源。
+fn test_profile_read_source() -> vulcan_vmm::VmmMemoryReadSource {
+    vulcan_vmm::VmmMemoryReadSource::new(
+        vulcan_vmm::VmmMemorySource::native(7).expect("profile owner"),
+        vec![7],
+    )
+    .expect("profile read source")
+}
+
+/// Exercises the actual prompt reducer with current, stale, disabled and mixed-source recall/status effects.
+/// 使用当前、过期、停用与混合来源召回及状态效果验证实际提示词归约器。
+/// Returns after proving only the exact current source reaches the request and lifecycle state.
+/// 证明只有准确当前来源进入请求及生命周期状态后返回。
+#[test]
+fn precheck_publication_rejects_stale_recall_and_lifecycle_together() {
+    for case in [
+        "matched",
+        "owner",
+        "linked",
+        "disabled",
+        "backend",
+        "mixed_status",
+        "empty_stale",
+    ] {
+        // Each scenario has a real correlated prompt boundary and an independent pristine memory controller state.
+        // 每个场景都有真实关联提示词边界与独立纯净记忆控制器状态。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        // The current host identity is deliberately independent from the incoming response.
+        // 当前宿主身份刻意独立于传入响应。
+        let current = test_profile_read_source();
+        // Freeze the source to be admitted at the host publication boundary.
+        // 冻结宿主发布边界准入的来源。
+        let expected = (case != "disabled").then_some(current.clone());
+        // Select the exact source divergence under test, not a numeric-memory-ID fallback.
+        // 选择待测准确来源差异，而非数字记忆 ID 兜底。
+        let incoming = match case {
+            "owner" | "empty_stale" => vulcan_vmm::VmmMemoryReadSource::new(
+                vulcan_vmm::VmmMemorySource::native(8).expect("other owner"),
+                vec![8],
+            )
+            .expect("other source"),
+            "linked" => vulcan_vmm::VmmMemoryReadSource::new(current.owner.clone(), vec![7, 8])
+                .expect("linked source"),
+            "backend" => vulcan_vmm::VmmMemoryReadSource::new(
+                vulcan_vmm::VmmMemorySource::external(
+                    &vulcan_vmm::VmmTransportConfig::from_effective(&VmmEffectiveConfig {
+                        grpc_target: "127.0.0.1:50051".to_owned(),
+                        ..Default::default()
+                    }),
+                    1,
+                    7,
+                )
+                .expect("remote owner"),
+                Vec::new(),
+            )
+            .expect("remote source"),
+            _ => current.clone(),
+        };
+        // Mixed metadata must not let a valid recall conceal a foreign lifecycle decision.
+        // 混合元数据不能让合法召回掩盖其他来源的生命周期决定。
+        let status_source = if case == "mixed_status" {
+            vulcan_vmm::VmmMemoryReadSource::new(
+                vulcan_vmm::VmmMemorySource::native(8).expect("status owner"),
+                vec![8],
+            )
+            .expect("status source")
+        } else {
+            incoming.clone()
+        };
+        // Begin through the existing canonical user-message path.
+        // 通过既有规范用户消息路径启动。
+        let start = begin_user_prompt(&mut runtime_state);
+        // The profile line is independent and intentionally skipped.
+        // 画像线路独立并刻意跳过。
+        let profile_outcome = start.profile_request.clone().skip();
+        // Only typed VMM effects are populated, preserving normal precheck correlation.
+        // 仅填充类型化 VMM 效果，保留正常 precheck 关联。
+        let mut precheck_outcome = start.precheck_request.clone().skip();
+        // The report is built once before the real reducer receives it.
+        // 在真实归约器接收前只构建一次报告。
+        let report = precheck_outcome.report.as_mut().expect("report");
+        report.metadata.insert(
+            crate::agent_runtime::conversation_hooks::HOOK_METADATA_VMM_SESSION_STATUS_EFFECT
+                .to_owned(),
+            vec![serde_json::json!(
+                crate::agent_runtime::conversation_hooks::VmmSessionStatusHookEffect {
+                    read_source: status_source,
+                    status: if case == "matched" {
+                        vulcan_vmm::SessionMemoryStatus::Active
+                    } else {
+                        vulcan_vmm::SessionMemoryStatus::Recycled
+                    },
+                }
+            )],
+        );
+        if case != "empty_stale" {
+            report.metadata.insert(
+                HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_owned(),
+                vec![serde_json::json!(VmmRecallBatchHookEffect {
+                    read_source: incoming,
+                    batch: VmmRecallBatch {
+                        ttl_turns: 2,
+                        injection_tag: "vmm".to_owned(),
+                        injection_description: "memory".to_owned(),
+                        items: vec![ContextItem {
+                            memory_id: 17,
+                            text: "source-fenced-memory".to_owned(),
+                            ..Default::default()
+                        }],
+                    },
+                })],
+            );
+        }
+        // The memory state is independently owned by the correlated host session.
+        // 记忆状态独立归属于关联宿主会话。
+        let mut state = test_vmm_session_memory(start.session_id);
+        // Run the production reducer rather than only calling a metadata helper.
+        // 执行生产归约器，而非仅调用元数据辅助函数。
+        let result = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+            &mut runtime_state,
+            &mut state,
+            SharedPromptTurnContinueInput {
+                vmm_context_epoch: Some(
+                    vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+                ),
+                vmm_profile_read_source: expected,
+                start,
+                precheck_outcome,
+                profile_outcome,
+                project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: true,
+            },
+        )
+        .expect(case);
+        assert_eq!(
+            state.session_memory_status,
+            vulcan_vmm::SessionMemoryStatus::Active,
+            "{case}"
+        );
+        assert_eq!(
+            state.active_leases.len(),
+            usize::from(case == "matched"),
+            "{case}"
+        );
+        assert_eq!(
+            result.precheck_failure_detail.is_some(),
+            case != "matched",
+            "{case}"
+        );
+        assert_eq!(
+            state
+                .cache_epoch
+                .anchors
+                .iter()
+                .any(|anchor| anchor.prefix.contains("source-fenced-memory")),
+            case == "matched",
+            "{case}"
+        );
+    }
+}
+
+/// Verifies ordinary admission resynchronizes edited, rebound and rendering-mode cache lineages.
+/// 验证普通准入会重新同步编辑、重绑及渲染模式变化后的缓存沿革。
+/// Runs three explicit host transitions and checks the actual outgoing overlay; no Provider is called.
+/// 执行三种明确宿主转换并检查实际传出覆盖层，不调用 Provider。
+#[test]
+fn ordinary_admission_reconciles_context_after_edit_rebind_and_mode_change() {
+    // Each case owns an isolated controller candidate; source replacement must not retain old memory.
+    // 每种情况持有隔离控制器候选；来源替换不能保留旧记忆。
+    for (generation, project_id, initial_stable_mode) in [(2, 1, true), (1, 2, true), (1, 1, false)]
+    {
+        // The start creates the exact current canonical user independently of the old cache target.
+        // 启动过程独立于旧缓存目标，创建准确当前规范用户。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let start = begin_user_prompt(&mut runtime_state);
+        let target = start
+            .canonical_user_message_id
+            .clone()
+            .expect("current user");
+        let mut state = test_vmm_session_memory(start.session_id);
+        let source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(1).expect("original owner"),
+            vec![1],
+        )
+        .expect("original source");
+        state
+            .select_read_source(&start.session_id.to_string(), Some(&source), "1")
+            .expect("source");
+        state
+            .synchronize_stable_anchor_rendering(initial_stable_mode, "1")
+            .expect("mode");
+        state
+            .synchronize_context_epoch(
+                &vulcan_vmm::VmmContextEpoch::new(1, None).expect("old context"),
+                "1",
+            )
+            .expect("old epoch");
+        state
+            .apply_recall_batch(
+                &start.session_id.to_string(),
+                "old-position",
+                &VmmRecallBatch {
+                    ttl_turns: 3,
+                    injection_tag: "VMM_MEMORY".to_owned(),
+                    injection_description: "Relevant memories.".to_owned(),
+                    items: vec![ContextItem {
+                        memory_id: 17,
+                        text: "resident-body".to_owned(),
+                        ..Default::default()
+                    }],
+                },
+                "1",
+            )
+            .expect("old recall");
+        // Current binding and V1 lineage are independently supplied by their declared host owners.
+        // 当前绑定与 V1 沿革由各自声明的宿主归属方独立提供。
+        let current_source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(project_id).expect("owner"),
+            vec![project_id],
+        )
+        .expect("current source");
+        let context = vulcan_vmm::VmmContextEpoch::new(generation, None).expect("current context");
+        let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+            &mut runtime_state,
+            &mut state,
+            SharedPromptTurnContinueInput {
+                vmm_context_epoch: Some(context.clone()),
+                vmm_profile_read_source: Some(current_source),
+                precheck_outcome: start.precheck_request.clone().skip(),
+                profile_outcome: start.profile_request.clone().skip(),
+                start,
+                project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: true,
+            },
+        )
+        .expect("ordinary admission");
+        assert_eq!(state.cache_epoch.epoch_id, context.cache_epoch_id());
+        assert!(state.cache_epoch.covered_compaction_id.is_none());
+        assert!(
+            state
+                .cache_epoch
+                .anchors
+                .iter()
+                .all(|anchor| anchor.target_message_id == target)
+        );
+        if project_id == 2 {
+            assert!(state.active_leases.is_empty());
+            assert!(state.cache_epoch.anchors.is_empty());
+        } else {
+            assert_eq!(state.active_leases.len(), 1);
+            assert_eq!(state.cache_epoch.anchors.len(), 1);
+            // Validate the emitted Provider overlay rather than only the controller's intermediate state.
+            // 验证发出的 Provider 覆盖层，而非只检查控制器中间状态。
+            let injection = continuation
+                .request
+                .context_injection
+                .expect("current overlay");
+            assert_eq!(
+                injection.cache_epoch_id.as_deref(),
+                Some(context.cache_epoch_id().as_str())
+            );
+            assert_eq!(injection.anchored_prefixes[0].target_message_id, target);
+            assert!(
+                injection.anchored_prefixes[0]
+                    .prefix
+                    .contains("resident-body")
+            );
+        }
+    }
+}
+
 /// Creates strict controller-owned VMM state for one prompt-turn test session.
 /// 为一个提示词回合测试会话创建严格归属于控制器的 VMM 状态。
 fn test_vmm_session_memory(session_id: SessionId) -> VmmSessionMemoryState {
@@ -251,6 +527,13 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
     // profile_outcome remains independent and empty because this test targets recall ownership only.
     // profile_outcome 保持独立且为空，因为该测试只验证召回归属。
     let profile_outcome = start.profile_request.clone().skip();
+    // Freeze the same native owner in the response and the host's independent publication input.
+    // 在响应与宿主独立发布输入中冻结同一原生归属。
+    let read_source = vulcan_vmm::VmmMemoryReadSource::new(
+        vulcan_vmm::VmmMemorySource::native(1).expect("owner"),
+        vec![1],
+    )
+    .expect("read source");
     // report is the single successful hook report consumed by the shared prompt continuation.
     // report 是共享提示词续接逻辑消费的唯一成功 Hook 报告。
     let report = precheck_outcome
@@ -260,6 +543,7 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
     report.metadata.insert(
         HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
         vec![serde_json::json!(VmmRecallBatchHookEffect {
+            read_source: read_source.clone(),
             batch: VmmRecallBatch {
                 ttl_turns: 2,
                 injection_tag: String::from("VMM_MEMORY"),
@@ -281,6 +565,10 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: Some(read_source),
             start,
             precheck_outcome,
             profile_outcome,
@@ -380,6 +668,10 @@ fn stopped_vmm_service_bypasses_every_memory_path_without_canonical_user_id() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: None,
             precheck_outcome: start.precheck_request.clone().skip(),
             profile_outcome: start.profile_request.clone().skip(),
             start,
@@ -394,7 +686,18 @@ fn stopped_vmm_service_bypasses_every_memory_path_without_canonical_user_id() {
     assert!(!continuation.request.vmm_runtime_ready);
     assert!(continuation.request.context_injection.is_none());
     assert!(continuation.request.system_prompt_hook_blocks.is_empty());
-    assert_eq!(vmm_session_memory, original_vmm_state);
+    assert!(vmm_session_memory.active_leases.is_empty());
+    assert!(vmm_session_memory.cache_epoch.anchors.is_empty());
+    assert!(vmm_session_memory.pending_prompt_events.is_empty());
+    assert!(vmm_session_memory.revision > original_vmm_state.revision);
+    assert_eq!(
+        vmm_session_memory.committed_command_hashes,
+        original_vmm_state.committed_command_hashes
+    );
+    assert_eq!(
+        vmm_session_memory.completed_turn_sequence,
+        original_vmm_state.completed_turn_sequence
+    );
 }
 
 /// Begins one user-authored prompt turn used by session boundary tests.
@@ -469,6 +772,10 @@ fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: None,
             precheck_outcome: start.precheck_request.clone().skip(),
             profile_outcome: start.profile_request.clone().skip(),
             start,
@@ -672,6 +979,10 @@ fn manual_continuation_preparation_preserves_exact_hook_correlation() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: None,
             precheck_outcome: start.precheck_request.clone().skip(),
             profile_outcome: start.profile_request.clone().skip(),
             start,
@@ -712,6 +1023,7 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
     runtime_state.vmm_profile_sync.base_profile_content =
         Some(String::from("[USER]\n[P1][L2][W0] stable profile"));
+    runtime_state.vmm_profile_sync.read_source = Some(test_profile_read_source());
     // hook_runtime prepares the Goal continuation identity without running remote precheck handlers.
     // hook_runtime 在不运行远端 precheck 处理器的情况下准备目标续轮身份。
     let mut hook_runtime = ConversationHookRuntime::new();
@@ -761,6 +1073,10 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: Some(test_profile_read_source()),
             start,
             precheck_outcome,
             profile_outcome,
@@ -789,6 +1105,84 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
     );
 }
 
+/// Failure and delayed success never publish a former source, while same-source failure preserves its baseline.
+/// 失败和迟到成功绝不发布此前来源，同来源失败则保留其基线。
+#[test]
+fn profile_publication_rechecks_sources_for_failure_and_delayed_success() {
+    // Exercise the actual shared continuation output, not only a cache comparison helper.
+    // 验证实际共享继续执行的输出，而不只是缓存比较辅助函数。
+    for (same_source, failed) in [(false, true), (false, false), (true, true)] {
+        let old_source = test_profile_read_source();
+        let expected = if same_source {
+            old_source.clone()
+        } else {
+            vulcan_vmm::VmmMemoryReadSource::new(old_source.owner.clone(), vec![7, 8])
+                .expect("linked scope changed")
+        };
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.vmm_profile_sync = VmmProfileSyncState {
+            read_source: Some(old_source),
+            base_profile_content: Some("old-profile-secret".to_owned()),
+            ..Default::default()
+        };
+        let old_profile = runtime_state.vmm_profile_sync.clone();
+        let start = begin_user_prompt(&mut runtime_state);
+        let precheck_outcome = start.precheck_request.clone().skip();
+        let mut profile_outcome = start.profile_request.clone().skip();
+        if failed {
+            profile_outcome.report = Err("simulated profile read failure".to_owned());
+        } else {
+            profile_outcome
+                .report
+                .as_mut()
+                .expect("successful delayed report")
+                .metadata
+                .insert(
+                    HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_owned(),
+                    vec![serde_json::json!(VmmProfileSyncHookEffect {
+                        state: old_profile
+                    })],
+                );
+        }
+        let mut controller = test_vmm_session_memory(start.session_id);
+        let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+            &mut runtime_state,
+            &mut controller,
+            SharedPromptTurnContinueInput {
+                vmm_context_epoch: Some(
+                    vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+                ),
+                start,
+                precheck_outcome,
+                profile_outcome,
+                vmm_profile_read_source: Some(expected.clone()),
+                project_configuration: Default::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: true,
+            },
+        )
+        .expect("ordinary prompt continues");
+        assert!(continuation.profile_failure_detail.is_some());
+        assert_eq!(runtime_state.vmm_profile_sync.read_source, Some(expected));
+        assert_eq!(
+            continuation
+                .request
+                .system_prompt_hook_blocks
+                .iter()
+                .any(|block| block.content.contains("old-profile-secret")),
+            same_source,
+        );
+        assert_eq!(
+            runtime_state
+                .vmm_profile_sync
+                .base_profile_content
+                .is_some(),
+            same_source
+        );
+    }
+}
+
 /// Verifies precheck output cannot mutate or replace the system-profile line.
 /// 验证 precheck 输出无法修改或替换系统画像线路。
 #[test]
@@ -798,6 +1192,7 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
     runtime_state.vmm_profile_sync.base_profile_content =
         Some(String::from("[USER]\nauthoritative profile"));
+    runtime_state.vmm_profile_sync.read_source = Some(test_profile_read_source());
     // start prepares sibling profile and precheck requests for one correlated prompt turn.
     // start 为一个关联提示词回合准备同级画像与 precheck 请求。
     let start = begin_user_prompt(&mut runtime_state);
@@ -812,6 +1207,7 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
         HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
         vec![serde_json::json!(VmmProfileSyncHookEffect {
             state: VmmProfileSyncState {
+                read_source: Some(test_profile_read_source()),
                 base_profile_content: Some(String::from("[USER]\nprofile-line update")),
                 ..VmmProfileSyncState::default()
             }
@@ -851,6 +1247,10 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: Some(test_profile_read_source()),
             start,
             precheck_outcome,
             profile_outcome,
@@ -932,6 +1332,10 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: None,
             start,
             precheck_outcome,
             profile_outcome,
@@ -989,6 +1393,20 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
     // vmm_session_memory models the Core controller state that already owns one expired lease.
     // vmm_session_memory 模拟已经持有一条过期租约的 Core 控制器状态。
     let mut vmm_session_memory = test_vmm_session_memory(session_id);
+    // The failure fallback is valid only for a cache whose source still matches the current host binding.
+    // 失败复用仅对来源仍匹配当前宿主绑定的缓存有效。
+    let read_source = test_profile_read_source();
+    vmm_session_memory
+        .select_read_source(&session_id.to_string(), Some(&read_source), "1")
+        .expect("select cache source");
+    // The expired resident and the next request share one proven, uncompacted host lineage.
+    // 过期驻留项与下一请求共享同一已证明的未压缩宿主沿革。
+    vmm_session_memory
+        .synchronize_context_epoch(
+            &vulcan_vmm::VmmContextEpoch::new(1, None).expect("resident context"),
+            "1",
+        )
+        .expect("seed resident lineage");
     vmm_session_memory
         .apply_recall_batch(
             &session_id.to_string(),
@@ -1036,6 +1454,10 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
         &mut runtime_state,
         &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
+            vmm_context_epoch: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+            ),
+            vmm_profile_read_source: Some(read_source),
             start,
             precheck_outcome,
             profile_outcome,

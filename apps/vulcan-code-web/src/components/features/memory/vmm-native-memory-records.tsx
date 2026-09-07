@@ -12,6 +12,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Sheet,
@@ -21,6 +22,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { useI18n, type TranslationKey } from "@/i18n"
+import { NativeSessionStatus, VmmNativeSessionArchive } from "./vmm-native-session-archive"
+import { VmmNativeRemoval } from "./vmm-native-removal"
 import type {
   VmmMemoryActionResult,
   VmmMemorySnapshot,
@@ -38,11 +41,14 @@ import type {
 // SESSION_OVERVIEW_VALUE 是用于项目级会话汇总的非身份选择器值。
 const SESSION_OVERVIEW_VALUE = "__native_session_overview__"
 
-// VmmNativeMemoryRecordsProps defines native provenance data and read-only actions.
-// VmmNativeMemoryRecordsProps 定义原生来源数据与只读动作。
+// VmmNativeMemoryRecordsProps defines native provenance data and preview-confirmed maintenance actions.
+// VmmNativeMemoryRecordsProps 定义原生来源数据及经预览确认的维护动作。
 interface VmmNativeMemoryRecordsProps {
+  // Explicit browser selection bypasses the full-project prefetch; null session requests overview.
+  // 明确的浏览选择绕过全项目预取；空会话明确请求项目概览。
+  initialSelection?: { projectId: number; sessionSourceId: string | null }
   busy: boolean
-  snapshot: VmmMemorySnapshot
+  snapshot: Pick<VmmMemorySnapshot, "selectedProjectId" | "selectedConversationId">
   onRunAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -169,7 +175,7 @@ export function nativeRecordCounts(
 
 // VmmNativeMemoryRecords renders project/session provenance, extraction status, and clickable records.
 // VmmNativeMemoryRecords 渲染项目/会话来源、提取状态与可点击记录。
-function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemoryRecordsProps) {
+function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection }: VmmNativeMemoryRecordsProps) {
   const { t } = useI18n()
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   const [records, setRecords] = React.useState<VmmNativeMemoryRecordsSummary | null>(null)
@@ -179,34 +185,61 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
   const [selectedMemory, setSelectedMemory] = React.useState<VmmNativeMemoryRecordSummary | null>(null)
   const [selectedProfile, setSelectedProfile] = React.useState<VmmNativeProfileRecordSummary | null>(null)
   const [localBusy, setLocalBusy] = React.useState(false)
+  // Batch selections use original source identities and reset whenever records are reloaded.
+  // 批量选择使用原始来源身份，并在记录重新加载时清空。
+  const [removalSessions, setRemovalSessions] = React.useState<string[]>([])
+  const [removalTurns, setRemovalTurns] = React.useState<string[]>([])
+  // Failed reads are explicit and never presented as an empty successful provenance result.
+  // 读取失败明确显示，绝不展示为成功的空来源结果。
+  const [loadError, setLoadError] = React.useState(false)
   const [catalogRefreshVersion, setCatalogRefreshVersion] = React.useState(0)
   const loadedContextRef = React.useRef<string | null>(null)
   const requestSequenceRef = React.useRef(0)
   const effectiveBusy = busy || localBusy
+  // Mount lifetime is separate from effect replay; Strict Mode must not invalidate the admitted read.
+  // 挂载生命周期与副作用重放分离；严格模式不能失效已接纳的读取。
+  const mountedRef = React.useRef(true)
+  React.useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false } }, [])
 
   // loadProjectRecords loads session summaries first, then the preferred exact session when present.
   // loadProjectRecords 先加载会话汇总，再在存在时加载首选准确会话。
   const loadProjectRecords = React.useCallback(async (
     nextProjectId: number,
     preferredSessionId?: string | null,
+    exactSelection = false,
   ) => {
     const sequence = requestSequenceRef.current + 1
     requestSequenceRef.current = sequence
     setRecords(null)
     setSelectedTurn(null)
+    setRemovalSessions([])
+    setRemovalTurns([])
     setSelectedMemory(null)
     setSelectedProfile(null)
+    setLoadError(false)
     setLocalBusy(true)
     try {
+      // A selected list row already supplies its exact identity; do not download unrelated bodies.
+      // 已选列表行已提供准确身份；不下载无关正文。
+      if (exactSelection) {
+        const result = await onRunAction("native_memory_records", nativeMemoryRecordsRequest(nextProjectId, preferredSessionId))
+        if (mountedRef.current && requestSequenceRef.current === sequence) {
+          setRecords(nativeMemoryRecordsValue(result))
+          setLoadError(nativeMemoryRecordsValue(result) === null)
+          setSessionId(preferredSessionId ?? SESSION_OVERVIEW_VALUE)
+        }
+        return
+      }
       const overviewResult = await onRunAction(
         "native_memory_records",
         nativeMemoryRecordsRequest(nextProjectId),
       )
-      if (requestSequenceRef.current !== sequence) {
+      if (!mountedRef.current || requestSequenceRef.current !== sequence) {
         return
       }
       const overview = nativeMemoryRecordsValue(overviewResult)
       if (!overview) {
+        setLoadError(true)
         return
       }
       setRecords(overview)
@@ -219,16 +252,21 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
         "native_memory_records",
         nativeMemoryRecordsRequest(nextProjectId, nextSessionId),
       )
-      if (requestSequenceRef.current !== sequence) {
+      if (!mountedRef.current || requestSequenceRef.current !== sequence) {
         return
       }
       const detail = nativeMemoryRecordsValue(detailResult)
       if (detail) {
         setSessionId(nextSessionId)
         setRecords(detail)
+      } else {
+        setRecords(null)
+        setLoadError(true)
       }
+    } catch {
+      if (mountedRef.current && requestSequenceRef.current === sequence) { setRecords(null); setLoadError(true) }
     } finally {
-      if (requestSequenceRef.current === sequence) {
+      if (mountedRef.current && requestSequenceRef.current === sequence) {
         setLocalBusy(false)
       }
     }
@@ -243,6 +281,10 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
     }
     const sequence = requestSequenceRef.current + 1
     requestSequenceRef.current = sequence
+    setRecords(null)
+    setLoadError(false)
+    setRemovalSessions([])
+    setRemovalTurns([])
     setSelectedTurn(null)
     setSelectedMemory(null)
     setSelectedProfile(null)
@@ -255,47 +297,64 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
           nextSessionId === SESSION_OVERVIEW_VALUE ? null : nextSessionId,
         ),
       )
-      if (requestSequenceRef.current !== sequence) {
+      if (!mountedRef.current || requestSequenceRef.current !== sequence) {
         return
       }
       const nextRecords = nativeMemoryRecordsValue(result)
       if (nextRecords) {
         setSessionId(nextSessionId)
         setRecords(nextRecords)
+      } else {
+        setLoadError(true)
       }
+    } catch {
+      if (mountedRef.current && requestSequenceRef.current === sequence) setLoadError(true)
     } finally {
-      if (requestSequenceRef.current === sequence) {
+      if (mountedRef.current && requestSequenceRef.current === sequence) {
         setLocalBusy(false)
       }
     }
   }, [onRunAction, projectId])
 
   React.useEffect(() => {
-    const contextKey = `${snapshot.selectedProjectId ?? ""}\u0000${snapshot.selectedConversationId ?? ""}`
+    const contextKey = initialSelection
+      ? JSON.stringify(initialSelection)
+      : `${snapshot.selectedProjectId ?? ""}\u0000${snapshot.selectedConversationId ?? ""}`
     if (loadedContextRef.current === contextKey || busy) {
       return
     }
     loadedContextRef.current = contextKey
+    // Capture catalog ownership independently; late responses cannot overwrite a newer selection.
+    // 独立捕获目录归属；迟到响应不能覆盖更新的选择。
+    const sequence = requestSequenceRef.current + 1
+    requestSequenceRef.current = sequence
+    setLoadError(false)
+    setRecords(null)
+    setRemovalSessions([])
+    setRemovalTurns([])
     setLocalBusy(true)
     void onRunAction("native_project_catalog").then(async (result) => {
+      if (!mountedRef.current || requestSequenceRef.current !== sequence) return
       const nextCatalog = nativeProjectCatalogValue(result)
       if (!nextCatalog) {
-        loadedContextRef.current = null
+        setLoadError(true)
         return
       }
       setCatalog(nextCatalog)
-      const ownerId = nativeProjectOwnerId(nextCatalog, snapshot.selectedProjectId)
+      const ownerId = initialSelection ? initialSelection.projectId : nativeProjectOwnerId(nextCatalog, snapshot.selectedProjectId)
       if (ownerId === null) {
         setProjectId("")
         setRecords(null)
         return
       }
       setProjectId(String(ownerId))
-      await loadProjectRecords(ownerId, snapshot.selectedConversationId)
+      await loadProjectRecords(ownerId, initialSelection ? initialSelection.sessionSourceId : snapshot.selectedConversationId, initialSelection !== undefined)
+    }).catch(() => {
+      if (mountedRef.current && requestSequenceRef.current === sequence) setLoadError(true)
     }).finally(() => {
-      setLocalBusy(false)
+      if (mountedRef.current) setLocalBusy(false)
     })
-  }, [busy, catalogRefreshVersion, loadProjectRecords, onRunAction, snapshot.selectedConversationId, snapshot.selectedProjectId])
+  }, [busy, catalogRefreshVersion, initialSelection, loadProjectRecords, onRunAction, snapshot.selectedConversationId, snapshot.selectedProjectId])
 
   const selectedSession = records?.sessions.find(
     (session) => session.sessionSourceId === records.selectedSessionSourceId,
@@ -304,6 +363,11 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
     (project) => String(project.projectId) === projectId,
   ) ?? null
   const projectOverview = records !== null && records.selectedSessionSourceId == null
+  // Display labels remain separate from immutable mutation targets.
+  // 展示标签与不可变的变更目标保持分离。
+  const sessionNames = React.useMemo(() => new Map(
+    (records?.sessions ?? []).map((session) => [session.sessionSourceId, nativeSessionLabel(session)]),
+  ), [records])
   const recordCounts = React.useMemo(
     () => nativeRecordCounts(records?.turns ?? [], records?.memories ?? []),
     [records],
@@ -319,6 +383,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
         <CardDescription>{t("memory.nativeRecords.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {loadError ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionList.detailFailed")}</p> : null}
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
           <div className="space-y-2">
             <Label>{t("memory.nativeRecords.project")}</Label>
@@ -382,7 +447,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
           </Button>
         </div>
 
-        {!catalog?.projects.length && !effectiveBusy ? (
+        {!catalog?.projects.length && !effectiveBusy && !loadError ? (
           <NativeRecordsEmpty
             description={t("memory.nativeRecords.noProjects")}
             title={t("memory.nativeRecords.title")}
@@ -415,11 +480,14 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
         {records && projectOverview && records.sessions.length > 0 ? (
           <section className="space-y-3">
             <h3 className="text-sm font-medium">{t("memory.nativeRecords.sessions")}</h3>
+            <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "sessions", ids: removalSessions }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadProjectRecords(records.projectId, null)} />
             <div className="grid gap-3 md:grid-cols-2">
               {records.sessions.map((session) => (
+                <div className="relative" key={session.sessionSourceId}>
+                <Checkbox className="absolute left-3 top-4" aria-label={`${t("memory.removal.selectSession")} ${nativeSessionLabel(session)}`} checked={removalSessions.includes(session.sessionSourceId)} disabled={effectiveBusy || (session.status !== "active" && session.status !== "archived") || (!removalSessions.includes(session.sessionSourceId) && removalSessions.length >= 100)} onCheckedChange={(checked) => setRemovalSessions((current) => checked === true ? [...current, session.sessionSourceId] : current.filter((id) => id !== session.sessionSourceId))} />
                 <button
-                  className="rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
-                  key={session.sessionSourceId}
+                  className="w-full rounded-xl border p-4 pl-10 text-left transition-colors hover:bg-muted/40"
+                  disabled={effectiveBusy}
                   onClick={() => void loadSessionRecords(session.sessionSourceId)}
                   type="button"
                 >
@@ -427,6 +495,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                     <div className="min-w-0">
                       <p className="truncate font-medium">{nativeSessionLabel(session)}</p>
                       <p className="truncate font-mono text-xs text-muted-foreground">{session.sessionSourceId}</p>
+                      <NativeSessionStatus status={session.status} />
                     </div>
                     <Eye className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   </div>
@@ -443,12 +512,27 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                     </p>
                   ) : null}
                 </button>
+                </div>
               ))}
             </div>
           </section>
         ) : null}
 
         {records && selectedSession ? <NativeSessionSummary session={selectedSession} /> : null}
+        {records && selectedSession ? (
+          <VmmNativeSessionArchive
+            key={`${records.projectId}:${selectedSession.sessionSourceId}:${selectedSession.status}`}
+            projectId={records.projectId}
+            sessions={[selectedSession]}
+            busy={effectiveBusy}
+            onBusyChange={setLocalBusy}
+            onRunAction={onRunAction}
+            onRefresh={() => loadSessionRecords(selectedSession.sessionSourceId)}
+          />
+        ) : null}
+        {records && selectedSession && (selectedSession.status === "active" || selectedSession.status === "archived") ? (
+          <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "sessions", ids: [selectedSession.sessionSourceId] }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadSessionRecords(selectedSession.sessionSourceId)} />
+        ) : null}
 
         {records ? (
           <>
@@ -458,14 +542,17 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                   ? "memory.nativeRecords.projectTurnRecords"
                   : "memory.nativeRecords.turnRecords")}
               </h3>
+              {records.turns.length > 0 ? <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "turns", ids: removalTurns }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadSessionRecords(sessionId)} /> : null}
               {records.turns.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noTurns")}</p>
               ) : (
                 <div className="space-y-2">
                   {records.turns.map((turn) => (
+                    <div className="relative" key={turn.turnId}>
+                    <Checkbox className="absolute left-3 top-4" aria-label={`${t("memory.removal.selectTurn")} #${turn.turnId}`} checked={removalTurns.includes(`vmm-turn-${turn.turnId}`)} disabled={effectiveBusy || !Number.isSafeInteger(turn.turnId) || turn.turnId <= 0 || (!removalTurns.includes(`vmm-turn-${turn.turnId}`) && removalTurns.length >= 100)} onCheckedChange={(checked) => setRemovalTurns((current) => checked === true ? [...current, `vmm-turn-${turn.turnId}`] : current.filter((id) => id !== `vmm-turn-${turn.turnId}`))} />
                     <button
-                      className="w-full rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
-                      key={turn.turnId}
+                      className="w-full rounded-xl border p-4 pl-10 text-left transition-colors hover:bg-muted/40"
+                      disabled={effectiveBusy}
                       onClick={() => setSelectedTurn(turn)}
                       type="button"
                     >
@@ -498,6 +585,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                         </p>
                       ) : null}
                     </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -589,6 +677,8 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
       </CardContent>
 
       <NativeTurnSheet
+        turns={records?.turns ?? []}
+        onOpenTurn={setSelectedTurn}
         memories={records?.memories ?? []}
         profiles={records?.profileNodes ?? []}
         onClose={() => setSelectedTurn(null)}
@@ -716,10 +806,40 @@ function NativeRecordsEmpty({ title, description }: { title: string; description
   )
 }
 
+// NativeTurnWindowRecord contains the server-owned identities needed for local detail navigation.
+// NativeTurnWindowRecord 包含本地详情导航需要的服务端权威身份。
+type NativeTurnWindowRecord = Pick<VmmNativeTurnRecordSummary, "turnId" | "sessionSourceId" | "previousTurnIds" | "nextTurnIds">
+
+// nativeAdjacentTurns resolves server-ordered neighbors from loaded records without inferring a window.
+// nativeAdjacentTurns 从已加载记录解析服务端有序邻居，不在客户端推测窗口。
+// Missing records cannot be opened; records from another session never become navigation targets.
+// 缺失记录不可打开；其他会话的记录绝不成为导航目标。
+export function nativeAdjacentTurns<T extends NativeTurnWindowRecord>(
+  turn: NativeTurnWindowRecord | null,
+  turns: T[],
+): { previous: T[], next: T[] } {
+  if (turn === null) return { previous: [], next: [] }
+  // byId indexes the current project response, not records cached from another project.
+  // byId 索引当前项目响应，而非其他项目的缓存记录。
+  const byId = new Map(turns.map((item) => [item.turnId, item]))
+  // resolve preserves the authoritative ID order and excludes unavailable or foreign records.
+  // resolve 保留权威 ID 顺序，并排除不可用或其他会话记录。
+  const resolve = (ids: number[]): T[] => ids.flatMap((id) => {
+    // candidate may be absent when the current loaded response no longer contains this identity.
+    // 当前加载响应不再包含该身份时，candidate 可以不存在。
+    const candidate = byId.get(id)
+    if (candidate === undefined || candidate.sessionSourceId !== turn.sessionSourceId) return []
+    return [candidate]
+  })
+  return { previous: resolve(turn.previousTurnIds), next: resolve(turn.nextTurnIds) }
+}
+
 // NativeTurnSheet shows the exact persisted timeline and extraction diagnostics for one turn.
 // NativeTurnSheet 展示一个回合的准确持久时间线与提取诊断。
-function NativeTurnSheet({
+export function NativeTurnSheet({
   turn,
+  turns,
+  onOpenTurn,
   memories,
   profiles,
   onClose,
@@ -727,6 +847,8 @@ function NativeTurnSheet({
   onOpenProfile,
 }: {
   turn: VmmNativeTurnRecordSummary | null
+  turns: VmmNativeTurnRecordSummary[]
+  onOpenTurn: (turn: VmmNativeTurnRecordSummary) => void
   memories: VmmNativeMemoryRecordSummary[]
   profiles: VmmNativeProfileRecordSummary[]
   onClose: () => void
@@ -737,6 +859,9 @@ function NativeTurnSheet({
   const generatedMemories = turn
     ? memories.filter((memory) => turn.generatedMemoryIds.includes(memory.memoryId))
     : []
+  // adjacent resolves only the server-provided window from the same loaded session snapshot.
+  // adjacent 仅从同一已加载会话快照中解析服务端提供的窗口。
+  const adjacent = nativeAdjacentTurns(turn, turns)
   const generatedProfiles = turn
     ? profiles.filter((profile) => turn.generatedProfileNodeIds.includes(profile.profileNodeId))
     : []
@@ -750,6 +875,27 @@ function NativeTurnSheet({
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-4 px-4 pb-4">
+          {([
+            ["memory.nativeRecords.previousTurns", adjacent.previous],
+            ["memory.nativeRecords.nextTurns", adjacent.next],
+          ] as const).map(([label, neighbors]) => neighbors.length > 0 ? (
+            <section className="space-y-2" key={label}>
+              <h3 className="text-sm font-medium">{t(label)}</h3>
+              <div className="space-y-2">
+                {neighbors.map((neighbor) => (
+                  <button
+                    className="flex w-full items-center gap-2 rounded-lg border p-3 text-left transition-colors hover:bg-muted/40"
+                    key={neighbor.turnId}
+                    onClick={() => onOpenTurn(neighbor)}
+                    type="button"
+                  >
+                    <span className="shrink-0 text-xs text-muted-foreground">#{neighbor.turnId}</span>
+                    <span className="truncate text-sm">{neighbor.userPreview}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null)}
           {turn?.analysisDetails ? (
             <NativeDetail label={t("memory.nativeRecords.analysisDetails")} value={turn.analysisDetails} />
           ) : null}

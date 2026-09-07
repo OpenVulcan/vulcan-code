@@ -151,6 +151,21 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             .map_err(|error| format!("项目索引 `{}` 的 VCE 忽略规则 JSON 无效：{error}", row.id))?;
     let vce = ProjectVceSettings {
         enabled: vce_enabled,
+        update_mode: match row.vce_update_mode.as_deref() {
+            None | Some("manual") => vulcan_workbench_model::ProjectVceUpdateMode::Manual,
+            Some("automatic") => vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
+            Some(invalid) => {
+                return Err(format!(
+                    "项目索引 `{}` 的语义更新模式无效：`{invalid}`。",
+                    row.id
+                ));
+            }
+        },
+        auto_update_min_interval_seconds: match row.vce_auto_update_min_interval_seconds {
+            Some(seconds) => u32::try_from(seconds)
+                .map_err(|error| format!("项目索引 `{}` 的语义更新间隔无效：{error}", row.id))?,
+            None => vulcan_workbench_model::default_vce_auto_update_min_interval_seconds(),
+        },
         revision: vce_revision,
         migrated_from_codebase_memory: vce_migrated_from_codebase_memory,
         max_file_bytes: vce_max_file_bytes,
@@ -809,6 +824,8 @@ mod tests {
             codebase_memory_enabled: 0,
             vce_enabled: 0,
             vce_revision: 1,
+            vce_update_mode: None,
+            vce_auto_update_min_interval_seconds: None,
             vce_migrated_from_codebase_memory: 1,
             vce_max_file_bytes: 1_048_576,
             vce_extra_ignore_patterns_json: String::from("[]"),
@@ -820,6 +837,52 @@ mod tests {
             vce_max_context_chars: 32_000,
             archived: 0,
         }
+    }
+
+    /// Verify missing project update policy defaults without accepting malformed explicit values.
+    /// 验证缺失的项目更新策略使用默认值，同时不接受格式错误的明确值。
+    ///
+    /// Takes no parameters and returns nothing; checks loading, isolation and bounds.
+    /// 无参数、无返回值；检查加载、隔离与边界。
+    #[test]
+    fn project_vce_policy_loading_preserves_missing_and_explicit_choices() {
+        // legacy has no policy columns populated by an earlier application.
+        // legacy 的策略列尚未由旧应用填充。
+        let legacy = stored_project_row_for_loading_test();
+        // loaded receives in-memory defaults without modifying the stored input.
+        // loaded 接收内存默认值而不修改存储输入。
+        let loaded = validate_project_row(legacy.clone()).expect("legacy policy");
+        assert_eq!(
+            loaded.vce.update_mode,
+            vulcan_workbench_model::ProjectVceUpdateMode::Manual
+        );
+        assert_eq!(loaded.vce.auto_update_min_interval_seconds, 300);
+        assert!(legacy.vce_update_mode.is_none());
+        // explicit selects automatic updates and an independently persisted interval.
+        // explicit 选择自动更新及独立持久化间隔。
+        let mut explicit = legacy.clone();
+        explicit.vce_update_mode = Some(String::from("automatic"));
+        explicit.vce_auto_update_min_interval_seconds = Some(600);
+        // selected is the exact settings row after normal loading validation.
+        // selected 是通过常规加载校验后的精确设置记录。
+        let selected = validate_project_row(explicit).expect("explicit policy");
+        assert_eq!(
+            selected.vce.update_mode,
+            vulcan_workbench_model::ProjectVceUpdateMode::Automatic
+        );
+        assert_eq!(selected.vce.auto_update_min_interval_seconds, 600);
+        for interval in [-1, 0, 59, 86_401, i64::MAX] {
+            // invalid tests explicit invalid values rather than treating them as absent.
+            // invalid 测试明确无效值，不能将其当成缺省。
+            let mut invalid = legacy.clone();
+            invalid.vce_auto_update_min_interval_seconds = Some(interval);
+            assert!(validate_project_row(invalid).is_err());
+        }
+        // invalid_mode must not be converted into manual or automatic by a fallback.
+        // invalid_mode 不得被兜底转换为手动或自动。
+        let mut invalid_mode = legacy;
+        invalid_mode.vce_update_mode = Some(String::from("true"));
+        assert!(validate_project_row(invalid_mode).is_err());
     }
 
     /// Verifies project validation rejects every scalar state that previously used coercion or clamping.

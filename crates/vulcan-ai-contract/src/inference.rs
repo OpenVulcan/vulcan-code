@@ -52,6 +52,19 @@ pub enum InferenceUsageScope {
     ExternalService,
 }
 
+/// Selects scheduling independently of model-route authorization; only the host may grant this class.
+/// 独立于模型路由授权选择调度类别；只有宿主可以授予此类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InferenceSchedulingClass {
+    /// Preserve the existing queue selected by the authorized usage scope.
+    /// 保留由授权用途范围选择的既有队列。
+    #[default]
+    ByUsageScope,
+    /// Run a host-owned internal query in foreground capacity without changing its route authorization.
+    /// 将宿主持有的内部查询放入前台容量，不改变其路由授权。
+    InternalQuery,
+}
+
 /// Defines hard limits assigned by the host to one caller.
 /// 定义宿主分配给一个调用方的硬限制。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +105,9 @@ pub struct InferenceCallerContext {
     /// Real execution usage context.
     /// 真实执行使用场景。
     pub usage_scope: InferenceUsageScope,
+    /// Immutable host-issued scheduling authority, never a model or external request parameter.
+    /// 不可变的宿主签发调度权限，绝非模型或外部请求参数。
+    pub scheduling_class: InferenceSchedulingClass,
     /// Optional interactive session identity proven by the host.
     /// 由宿主证明的可选交互会话身份。
     pub interactive_session_id: Option<String>,
@@ -121,6 +137,13 @@ impl InferenceCallerContext {
         consumer_profile_id: &str,
         permission: InferencePermission,
     ) -> Result<(), String> {
+        if self.scheduling_class == InferenceSchedulingClass::InternalQuery
+            && self.usage_scope != InferenceUsageScope::InternalBackground
+        {
+            return Err(String::from(
+                "Internal query scheduling requires a host-owned internal usage scope.",
+            ));
+        }
         if self.caller_id.trim().is_empty() {
             return Err(String::from("Inference caller identity must not be empty."));
         }
@@ -1620,6 +1643,9 @@ mod tests {
     #[test]
     fn caller_budget_rejects_zero_rate_limits() {
         let caller = InferenceCallerContext {
+            // Preserve this fixture's existing usage-scope scheduling.
+            // 保留此夹具既有的用途范围调度。
+            scheduling_class: InferenceSchedulingClass::ByUsageScope,
             caller_id: String::from("vmm"),
             allowed_consumer_profile_ids: BTreeSet::from([String::from("vmm")]),
             permissions: BTreeSet::from([InferencePermission::Embedding]),

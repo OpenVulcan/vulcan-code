@@ -490,11 +490,22 @@ pub struct InferenceProfile {
     /// 可选的已配置向量路由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<InferenceRouteConfiguration>,
+    /// Exact consumer-owned embedding dimensions; absence preserves the existing consumer policy.
+    /// 消费者独立选择的明确向量维度；缺省时保持该消费者原有策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dimensions: Option<u32>,
     /// Optional configured rerank route.
     /// 可选的已配置重排路由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rerank: Option<InferenceRouteConfiguration>,
 }
+
+#[path = "context_engine_embedding_policy.rs"]
+mod context_engine_embedding_policy;
+pub use context_engine_embedding_policy::{
+    ContextEngineEmbeddingCompatibilityRecord, ContextEngineEmbeddingDecision,
+    ContextEngineEmbeddingScope,
+};
 
 /// Persists operation-specific internal model defaults without account selection.
 /// 持久化不含账号选择的操作专属内部模型默认值。
@@ -900,6 +911,10 @@ pub struct PersistedAiConfiguration {
     /// 按稳定消费者配置档标识分组的独立推理路由。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inference_profiles: BTreeMap<String, InferenceProfile>,
+    /// Exact user-reviewed ContextEngine embedding compatibility; never shared with VMM or knowledge.
+    /// 用户审查的精确 ContextEngine 向量兼容关系；绝不与 VMM 或知识库共享。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_engine_embedding_compatibility: Vec<ContextEngineEmbeddingCompatibilityRecord>,
     /// Operation-specific internal model defaults.
     /// 操作专属内部模型默认值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1047,6 +1062,7 @@ impl Default for PersistedAiConfiguration {
                 (String::from("vce"), InferenceProfile::default()),
                 (String::from("vmm"), InferenceProfile::default()),
             ]),
+            context_engine_embedding_compatibility: Vec::new(),
             internal_model_overrides: BTreeMap::new(),
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
@@ -4276,6 +4292,30 @@ mod tests {
         assert!(historical.inference_profiles.contains_key("vce"));
     }
 
+    /// Verifies explicit consumer dimensions survive serialization without changing peer profiles.
+    /// 验证消费者的明确维度在序列化后保留，且不会改变其他配置档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Completes when VCE retains its numeric choice and legacy VMM keeps an absent choice.
+    /// 当 VCE 保留数值选择、旧 VMM 保持未设置时正常完成。
+    #[test]
+    fn inference_profile_preserves_explicit_consumer_embedding_dimensions() {
+        // Each profile owns its choice; a missing peer value must not inherit VCE's setting.
+        // 每个配置档独立拥有选择；缺少设置的配置档不能继承 VCE 的维度。
+        let profiles: BTreeMap<String, InferenceProfile> =
+            serde_json::from_value(serde_json::json!({
+                "vce": { "embedding_dimensions": 1024 },
+                "vmm": {}
+            }))
+            .expect("valid consumer profiles");
+        // Re-serialization exposes accidental field loss without relying on a new Rust field.
+        // 再次序列化用于发现字段丢失，而不依赖新增 Rust 字段访问。
+        let serialized = serde_json::to_value(&profiles).expect("serializable consumer profiles");
+        assert_eq!(serialized["vce"]["embedding_dimensions"], 1024);
+        assert!(serialized["vmm"].get("embedding_dimensions").is_none());
+    }
+
     /// Verifies a current-schema file repairs the system VCE profile without copying VMM routes.
     /// 验证当前 Schema 文件会修复系统 VCE 配置档，且不会复制 VMM 路由。
     #[test]
@@ -4951,6 +4991,7 @@ mod tests {
                     (String::from("retained-purpose"), ReasoningEffort::None),
                 ]),
                 embedding: Some(removed_embedding_route),
+                embedding_dimensions: None,
                 rerank: Some(retained_rerank_route),
             },
         );
@@ -5553,6 +5594,7 @@ mod tests {
             llm_routes: BTreeMap::from([(String::from("precheck_l1"), llm_route)]),
             llm_reasoning_efforts: BTreeMap::new(),
             embedding: Some(embedding_route),
+            embedding_dimensions: None,
             rerank: Some(rerank_route),
         };
         let mut configuration = PersistedAiConfiguration {

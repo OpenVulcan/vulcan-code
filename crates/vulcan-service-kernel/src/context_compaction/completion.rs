@@ -2,6 +2,50 @@
 //! 上下文压缩 completion 辅助逻辑。
 
 use super::*;
+
+/// Verifies the model summary inside a display record against the exact durable assistant text.
+/// 校验显示记录中的模型摘要是否与精确持久化助手正文一致。
+/// Accepts the Agent summary record and V1 receipt text; returns canonical text or an explicit mismatch.
+/// 接受 Agent 摘要记录与 V1 回执正文，返回规范正文或明确的不一致错误。
+pub(super) fn verified_compaction_summary_body(
+    summary_record_body: &str,
+    durable_assistant_text: &str,
+) -> Result<String, String> {
+    // The Agent adds continuation instructions for display; V1 persists only the model summary.
+    // Agent 为显示添加续接指令；V1 仅持久化模型摘要。
+    let summary = vulcan_context_compaction::extract_compaction_model_summary(summary_record_body)
+        .ok_or_else(|| String::from("Context compaction result has no valid canonical summary."))?;
+    if summary != durable_assistant_text {
+        return Err(String::from(
+            "Context compaction summary differs from the exact durable assistant semantic.",
+        ));
+    }
+    Ok(summary)
+}
+
+/// Checks production summary wrapping without weakening exact durable-text equality.
+/// 检查生产摘要包装，同时保持精确持久正文相等要求。
+#[cfg(test)]
+#[test]
+fn compaction_summary_verification_preserves_canonical_identity() {
+    // The standard constructor is the same continuation wrapper used by CompactionResult.
+    // 标准构造器与 CompactionResult 使用相同的续接包装。
+    let summary = "Preserve the PostgreSQL decision.";
+    let wrapped = vulcan_context_compaction::build_compaction_continuation_prompt(summary);
+    assert_ne!(wrapped, summary);
+    assert_eq!(
+        verified_compaction_summary_body(&wrapped, summary).expect("verified continuation wrapper"),
+        summary
+    );
+    assert_eq!(
+        verified_compaction_summary_body(summary, summary).expect("verified plain summary"),
+        summary
+    );
+    assert!(verified_compaction_summary_body(&wrapped, "Different decision.").is_err());
+    assert!(verified_compaction_summary_body(&wrapped, &format!("{summary} ")).is_err());
+    assert!(verified_compaction_summary_body("", "").is_err());
+}
+
 /// Exact active-stream ownership behavior required by one context-compaction commit.
 /// 单次上下文压缩提交所需的精确活动流所有权行为。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,7 +297,7 @@ fn dispatch_context_compaction_committed_hook(
 /// 返回值
 /// Returns a committed or rejected durable outcome, or an error only when no terminal workspace state could be committed.
 /// 返回已提交或已拒绝的可持久化终态；仅在无法提交任何工作区终态时返回错误。
-pub(crate) fn finish_webui_context_compaction_execution(
+pub(crate) async fn finish_webui_context_compaction_execution(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
@@ -309,7 +353,6 @@ pub(crate) fn finish_webui_context_compaction_execution(
         ensure_context_compaction_commit_owner(&guard, session_id, commit_mode)?;
     }
 
-    let summary_body = execution.compaction_result.summary_record.body.clone();
     let provider_request_count = execution.provider_request_count;
     let completed_assistant = durability.completed_assistant_text.ok_or_else(|| {
         String::from(
@@ -322,11 +365,12 @@ pub(crate) fn finish_webui_context_compaction_execution(
     let locked_baseline = durability.locked_baseline.ok_or_else(|| {
         String::from("Context compaction finished without its exact locked baseline projection.")
     })?;
-    if completed_assistant.text != summary_body {
-        return Err(String::from(
-            "Context compaction summary differs from the exact durable assistant semantic.",
-        ));
-    }
+    // Commit only the canonical summary already persisted by the same physical API.
+    // 仅提交同一次物理 API 已持久化的规范摘要。
+    let summary_body = verified_compaction_summary_body(
+        &execution.compaction_result.summary_record.body,
+        &completed_assistant.text,
+    )?;
     if completed_assistant.seq.value() >= api_terminal.value.stats_seq.value() {
         return Err(String::from(
             "Context compaction assistant semantic must precede its durable API terminal.",
@@ -369,6 +413,33 @@ pub(crate) fn finish_webui_context_compaction_execution(
         }
     };
 
+    // VMM is derived from the committed V1 ID; failures stop continuation without pretending to roll back that commit.
+    // VMM 派生自已提交 V1 ID；失败会停止续接，但不会伪称回滚该提交。
+    // Read generation and compaction together from the same authoritative owner after commit.
+    // 提交后从同一权威归属方同时读取代次与压缩身份。
+    let (generation, current_compaction_id) = handle
+        .read(|document| {
+            (
+                document.segment_generation(),
+                document.runtime_lock.current_compaction_id,
+            )
+        })
+        .map_err(|error| format!("Failed to read committed V1 context epoch: {error}"))?;
+    if current_compaction_id != Some(compaction_receipt.value) {
+        return Err("V1 context changed before committed VMM compaction publication.".to_owned());
+    }
+    // Keep the optional compaction encoding identical to ordinary Provider admission.
+    // 保持可选压缩编码与普通 Provider 准入相同。
+    let context = vulcan_vmm::VmmContextEpoch::new(
+        generation,
+        Some(compaction_receipt.value.value().to_string()),
+    )?;
+    super::vmm_projection::publish_vmm_compaction_epoch(state, agent_runtime, session_id, &context)
+        .await
+        .map_err(|error| {
+            format!("V1 compaction committed, but VMM epoch publication failed: {error}")
+        })?;
+
     // The retained workspace is now display-only projection. It must not retain
     // another compaction checkpoint or runtime anchor.
     // 此后的保留工作区仅是显示投影，不得再保存另一份压缩检查点或 runtime 锚点。
@@ -385,6 +456,15 @@ pub(crate) fn finish_webui_context_compaction_execution(
             workspace
                 .session_run_phases
                 .insert(session_id, previous_phase);
+            // This is only the Hook's derived identity hint; the V1 receipt remains the sole compaction authority.
+            // 此值仅是 Hook 的派生身份提示；V1 回执仍是唯一压缩权威。
+            workspace
+                .session_runtime_state
+                .get_mut(&session_id)
+                .ok_or_else(|| {
+                    "Committed V1 compaction has no active session projection.".to_owned()
+                })?
+                .last_compaction_id = Some(compaction_receipt.value.value().to_string());
             if let Some(session) = workspace
                 .sessions
                 .iter_mut()

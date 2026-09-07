@@ -305,6 +305,28 @@ pub async fn bootstrap_application_data_plane(
     }
 }
 
+/// Prepare the production application schema on an already attached, caller-owned test controller.
+/// 在已经附着且由调用方持有的测试控制器上准备生产应用数据结构。
+/// The controller supplies exact private bindings. Returns initialization errors without creating a controller
+/// or resolving the user's application directory; available only to explicitly enabled test fixtures.
+/// 控制器提供精确私有绑定。返回初始化错误，不创建控制器或解析用户应用目录；仅供明确启用的测试夹具使用。
+#[cfg(feature = "test-support")]
+pub async fn prepare_application_schema_for_test(
+    controller: &ControllerRuntimeHandle,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            &controller.sqlite_binding_id,
+            build_application_schema_script(),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("Initialize private application schema: {error}"))?;
+    ensure_application_schema_migrations(&controller.client, &controller.sqlite_binding_id).await
+}
+
 /// Builds one controller client config from the persisted application configuration.
 /// 根据持久化应用配置构建控制器客户端配置。
 fn build_controller_client_config(
@@ -424,6 +446,8 @@ CREATE TABLE IF NOT EXISTS project_vce_settings (
     query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
     max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
     max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
+    update_mode TEXT CHECK(update_mode IN ('manual', 'automatic')),
+    auto_update_min_interval_seconds INTEGER CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400),
     updated_at TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -461,6 +485,20 @@ FROM projects
 WHERE 1 = 1
 ON CONFLICT(project_id) DO NOTHING;
 "#,
+    )
+    .await?;
+    // Nullable additions preserve legacy policy absence until the user explicitly saves.
+    // 可空的追加字段保留旧策略缺省状态，直到用户明确保存。
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE project_vce_settings ADD COLUMN update_mode TEXT CHECK(update_mode IN ('manual', 'automatic'));",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE project_vce_settings ADD COLUMN auto_update_min_interval_seconds INTEGER CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400);",
     )
     .await?;
     ensure_optional_schema_statement(
@@ -950,6 +988,8 @@ CREATE TABLE IF NOT EXISTS project_vce_settings (
     query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
     max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
     max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
+    update_mode TEXT CHECK(update_mode IN ('manual', 'automatic')),
+    auto_update_min_interval_seconds INTEGER CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400),
     updated_at TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -1362,7 +1402,9 @@ VALUES
                 APP_SPACE_ID,
                 &binding_id,
                 r#"
-UPDATE project_vce_settings SET enabled = 0, revision = 9 WHERE project_id = 'legacy-true';
+UPDATE project_vce_settings SET enabled = 0, revision = 9,
+    update_mode = 'automatic', auto_update_min_interval_seconds = 600
+WHERE project_id = 'legacy-true';
 INSERT INTO projects (id, name, root_path, codebase_memory_enabled, created_at, updated_at)
 VALUES ('new-project', 'New Project', 'D:/fixtures/new-project', 1, '2026-09-04T00:00:01Z', '2026-09-04T00:00:01Z');
 "#,
@@ -1402,6 +1444,48 @@ VALUES ('new-project', 'New Project', 'D:/fixtures/new-project', 1, '2026-09-04T
                 migrated_from_codebase_memory: 1,
             }
         );
+        // policies verify migrations preserve explicit choices and leave missing values null.
+        // policies 验证迁移保留明确选择，并让缺失值继续保持空值。
+        let policies = client.query_sqlite_json_typed(
+            APP_SPACE_ID,
+            &binding_id,
+            "SELECT project_id, update_mode, auto_update_min_interval_seconds FROM project_vce_settings ORDER BY project_id;",
+            Vec::new(),
+        ).await.expect("query policies after repeated migration");
+        // policy_rows uses the controller's verified JSON row-array contract.
+        // policy_rows 使用已验证的控制器 JSON 行数组契约。
+        let policy_rows: Vec<serde_json::Value> =
+            serde_json::from_str(&policies.json_data).expect("decode policies");
+        assert_eq!(policy_rows[1]["project_id"], "legacy-true");
+        assert_eq!(policy_rows[1]["update_mode"], "automatic");
+        assert_eq!(policy_rows[1]["auto_update_min_interval_seconds"], 600);
+        assert!(policy_rows[0]["update_mode"].is_null());
+        assert!(policy_rows[0]["auto_update_min_interval_seconds"].is_null());
+        assert!(policy_rows[2]["update_mode"].is_null());
+        // Removing only the two new columns models a genuine pre-policy schema in this fixture.
+        // 仅移除两个新列，在本测试夹具中模拟真正的旧策略表结构。
+        client.execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            &binding_id,
+            "ALTER TABLE project_vce_settings DROP COLUMN update_mode; ALTER TABLE project_vce_settings DROP COLUMN auto_update_min_interval_seconds;",
+            Vec::new(),
+        ).await.expect("simulate prior policy schema");
+        ensure_application_schema_migrations(&client, &binding_id)
+            .await
+            .expect("migrate prior policy schema");
+        // migrated_policy proves the migration adds nullable fields, not persisted defaults.
+        // migrated_policy 证明迁移追加可空字段而不写入持久化默认值。
+        let migrated_policy = client.query_sqlite_json_typed(
+            APP_SPACE_ID,
+            &binding_id,
+            "SELECT COUNT(*) AS missing FROM project_vce_settings WHERE update_mode IS NULL AND auto_update_min_interval_seconds IS NULL;",
+            Vec::new(),
+        ).await.expect("query absent policies");
+        // missing_rows contains the one aggregate row returned by the exact query.
+        // missing_rows 包含精确查询返回的唯一聚合行。
+        let missing_rows: Vec<serde_json::Value> =
+            serde_json::from_str(&migrated_policy.json_data).expect("decode count");
+        assert_eq!(missing_rows[0]["missing"], 3);
         client
             .shutdown()
             .await

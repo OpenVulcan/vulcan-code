@@ -94,7 +94,10 @@ impl VcePortOperation {
 
 /// Bind one VCE index port to an immutable code-semantic namespace and vector contract.
 /// 将一个 VCE 索引端口绑定到不可变的代码语义命名空间和向量契约。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Serialization preserves identity only; decoded bindings still require normal host/core admission checks.
+/// 序列化仅保留身份；解码绑定仍须经过正常宿主／核心准入检查。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VceIndexBinding {
     /// Host-owned code-semantic namespace identity.
     /// 宿主持有的代码语义命名空间身份。

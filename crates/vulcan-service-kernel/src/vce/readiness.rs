@@ -19,6 +19,137 @@ use super::{
     vce_rerank_truncation,
 };
 
+/// Build a weak host authority for publication without retaining a service-state ownership cycle.
+/// 构建弱宿主发布权威，不保留服务状态所有权环。
+///
+/// `state` owns live global readiness and project intent. Returns a synchronous resolver that
+/// checks only the admitted embedding/source contract, not unrelated queries or scheduling options.
+/// `state` 持有实时全局就绪及项目意图。返回同步解析器，仅检查已准入向量及源码契约，
+/// 不检查无关查询或调度选项。
+pub(crate) fn vce_publication_authority(
+    state: &SharedServiceBridgeState,
+) -> super::VcePublicationAuthority {
+    // Weak ownership lets service shutdown release every manager and controller binding.
+    // 弱归属允许服务关闭释放全部管理器和控制器绑定。
+    let state = Arc::downgrade(state);
+    Arc::new(
+        move |contract: &super::VcePublicationContract| -> Result<(), super::VcePublicationError> {
+            let state = state
+                .upgrade()
+                .ok_or_else(|| String::from("ContextEngine host stopped before publication"))?;
+            let readiness = require_vce_configuration_ready(&state)?;
+            if readiness.embedding_dimension != Some(contract.dimension)
+                || readiness.embedding_physical_fingerprint.as_deref()
+                    != Some(contract.embedding_fingerprint.as_str())
+            {
+                return Err(super::VcePublicationError::Rejected(String::from(
+                    "ContextEngine embedding contract changed before publication; synchronize again under the new configuration",
+                )));
+            }
+            // Resolve one exact workspace project while holding the state lock only for metadata cloning.
+            // 仅为元数据克隆持有状态锁，并解析一个精确工作区项目。
+            let project = {
+                let guard = state
+                    .lock()
+                    .map_err(|error| format!("Lock ContextEngine publication state: {error}"))?;
+                guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| {
+                        workspace
+                            .task_projects
+                            .iter()
+                            .find(|project| project.id == contract.project_id)
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        String::from("ContextEngine publication project no longer exists")
+                    })?
+            };
+            if !project.vce.enabled
+                || project.vce.max_file_bytes != contract.max_file_bytes
+                || project.vce.extra_ignore_patterns != contract.extra_ignore_patterns
+            {
+                return Err(super::VcePublicationError::Rejected(String::from(
+                    "ContextEngine project authorization or source filter changed before publication",
+                )));
+            }
+            let root = crate::workspace_files::workspace_file_canonical_root(&project.path)?;
+            if crate::normalized_workspace_path_text_from_path(&root) != contract.canonical_root {
+                return Err(super::VcePublicationError::Rejected(String::from(
+                    "ContextEngine project root changed before publication",
+                )));
+            }
+            // A confirmed independent target does not consume predecessor vectors, so it requires no compatibility grant.
+            // 已确认的独立目标不使用前驱向量，因此不需要兼容授权。
+            // Live route, enablement, filters and root were still checked above; persistence rechecks the exact receipt.
+            // 上方仍已检查实时路由、开关、过滤及根目录；持久层复查精确回执。
+            if contract.validates_replacement_admission()? {
+                return Ok(());
+            }
+            if let Some(provenance) = &contract.provenance {
+                if provenance.original.project_id != contract.project_id {
+                    return Err(super::VcePublicationError::Rejected(String::from(
+                        "ContextEngine provenance belongs to another project",
+                    )));
+                }
+                // Compatibility is checked from exact current persisted decisions, including a revoked approval.
+                // 兼容根据精确当前持久化决定检查，包括已撤销的批准。
+                let (runtime, _) = vce_ai_runtime_handles(&state)?;
+                let configuration = runtime.configuration_snapshot()?;
+                let route = configuration
+                    .inference_profiles
+                    .get(VCE_CONSUMER_PROFILE_ID)
+                    .and_then(|profile| profile.embedding.clone())
+                    .ok_or_else(|| {
+                        String::from("ContextEngine embedding route disappeared during admission")
+                    })?;
+                let candidate = super::embedding_policy::inspect_embedding_candidate(
+                    &runtime,
+                    &configuration,
+                    route,
+                    Some(contract.dimension),
+                )?;
+                if candidate.physical_fingerprint != contract.embedding_fingerprint {
+                    return Err(super::VcePublicationError::Rejected(String::from(
+                        "ContextEngine candidate changed during admission",
+                    )));
+                }
+                // The canonical root has already been verified above; this hash uses the same host normalization.
+                // 上方已经校验规范根；此摘要使用相同宿主规范化方式。
+                let root_hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+                    contract.canonical_root.as_bytes(),
+                ));
+                match super::embedding_policy::inspect_embedding_project_impact(
+                    provenance,
+                    Ok(&root_hash),
+                    &candidate,
+                    &configuration.context_engine_embedding_compatibility,
+                )? {
+                    Some(impact) if !impact.compatible() => {
+                        return Err(super::VcePublicationError::RebuildRequired(String::from(
+                            "ContextEngine index requires explicit direct embedding compatibility approval or rebuilding",
+                        )));
+                    }
+                    // An empty binding has no approved vector history and cannot silently change its physical schema.
+                    // 空绑定没有已批准向量历史，也不能静默改变其物理结构。
+                    None if provenance.original.physical_fingerprint
+                        != contract.embedding_fingerprint
+                        || provenance.original.root_hash != root_hash
+                        || provenance.original.dimension != contract.dimension =>
+                    {
+                        return Err(super::VcePublicationError::RebuildRequired(String::from(
+                            "ContextEngine uninitialized binding requires explicit replacement before changing its contract",
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
 /// Internal VCE readiness facts including the storage compatibility identity.
 /// VCE 内部就绪事实，包含存储兼容性身份。
 #[derive(Clone, Debug)]
@@ -29,6 +160,9 @@ pub(crate) struct VceConfigurationReadiness {
     /// Exact embedding identity that must match an active project index.
     /// 必须与活动项目索引匹配的精确向量身份。
     pub(crate) embedding_physical_fingerprint: Option<String>,
+    /// Saved consumer dimension, validated whenever the embedding capability is available.
+    /// 消费者保存的维度；向量能力可用时已完成校验。
+    pub(crate) embedding_dimension: Option<u32>,
 }
 
 /// Computes the only configuration gate used by VCE lifecycle and tool surfaces.
@@ -110,9 +244,15 @@ pub(crate) fn vce_project_tool_enabled(state: &SharedServiceBridgeState, project
     }) else {
         return false;
     };
-    project.vce.enabled
-        && guard.vce_runtime.as_ref().is_some_and(|manager| {
-            manager.project_can_serve_now(project_id, project.vce.revision, expected_fingerprint)
+    // Copy exact eligibility before invoking an authority which itself briefly reads host state.
+    // 调用同样会短暂读取宿主状态的权威前，复制精确资格，避免重入同一状态锁。
+    let enabled = project.vce.enabled;
+    let revision = project.vce.revision;
+    let manager = guard.vce_runtime.clone();
+    drop(guard);
+    enabled
+        && manager.is_some_and(|manager| {
+            manager.project_can_serve_now(project_id, revision, expected_fingerprint)
         })
 }
 
@@ -136,7 +276,11 @@ fn try_vce_configuration_readiness(
     let snapshot = configured_inference
         .capability_snapshot(&vce_status_caller(), VCE_CONSUMER_PROFILE_ID)
         .map_err(|error| error.to_string())?;
-    let embedding = evaluate_embedding(profile.embedding.is_some(), &snapshot);
+    let embedding = evaluate_embedding(
+        profile.embedding.is_some(),
+        profile.embedding_dimensions,
+        &snapshot,
+    );
     let query_rewrite = evaluate_query_rewrite(
         Arc::as_ref(&runtime),
         &configuration,
@@ -162,6 +306,7 @@ fn try_vce_configuration_readiness(
             issues,
         },
         embedding_physical_fingerprint: embedding.1,
+        embedding_dimension: profile.embedding_dimensions,
     })
 }
 
@@ -188,6 +333,9 @@ fn vce_ai_runtime_handles(
 fn vce_status_caller() -> InferenceCallerContext {
     InferenceCallerContext {
         caller_id: String::from("vulcan-code-vce:configuration-readiness"),
+        // Readiness only inspects capabilities and does not request foreground execution.
+        // 准备度只检查能力，不请求前台执行权限。
+        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
         allowed_consumer_profile_ids: BTreeSet::from([String::from(VCE_CONSUMER_PROFILE_ID)]),
         permissions: BTreeSet::from([InferencePermission::Status]),
         usage_scope: InferenceUsageScope::InternalBackground,
@@ -208,6 +356,7 @@ fn vce_status_caller() -> InferenceCallerContext {
 /// 评估必需的任务专用或 Provider 默认稠密浮点向量路由。
 fn evaluate_embedding(
     configured: bool,
+    dimension: Option<u32>,
     snapshot: &InferenceCapabilitySnapshot,
 ) -> (api::VceConfigurationCapabilityStatus, Option<String>) {
     if !configured {
@@ -216,6 +365,14 @@ fn evaluate_embedding(
             None,
         );
     }
+    // Configuration must retain a numeric dimension; a model's default cannot complete it.
+    // 配置必须保存数值维度，不能以模型默认值补全。
+    let Some(dimension) = dimension else {
+        return (
+            unavailable_capability(true, "请在语义引擎设置中确认并保存明确的向量维度。"),
+            None,
+        );
+    };
     let Some(operation) = exact_operation(snapshot, AiOperation::EmbeddingCreate, None) else {
         return (
             unavailable_capability(true, "VCE Embedding 能力快照缺失。"),
@@ -234,7 +391,7 @@ fn evaluate_embedding(
             None,
         );
     }
-    match vce_embedding_physical_fingerprint(snapshot) {
+    match vce_embedding_physical_fingerprint(snapshot, dimension) {
         Ok(fingerprint) => (available_capability(), Some(fingerprint)),
         Err(error) => (unavailable_capability(true, error), None),
     }
@@ -366,6 +523,7 @@ fn unavailable_readiness(issue: impl Into<String>) -> VceConfigurationReadiness 
             issues: vec![issue],
         },
         embedding_physical_fingerprint: None,
+        embedding_dimension: None,
     }
 }
 

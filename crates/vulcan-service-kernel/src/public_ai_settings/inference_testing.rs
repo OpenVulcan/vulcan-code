@@ -133,6 +133,13 @@ pub(crate) async fn service_test_public_ai_inference_route(
             let embedding = operation.embedding.as_ref().ok_or_else(|| {
                 String::from("The configured route does not declare embedding capabilities.")
             })?;
+            // dimensions freezes the same consumer choice used by indexing and retrieval.
+            // dimensions 冻结与建库、检索相同的消费者维度选择。
+            let dimensions = settings_embedding_dimensions(
+                &configuration,
+                &request.consumer_profile_id,
+                embedding,
+            )?;
             let request_id = format!("settings_embedding_test_{}", uuid::Uuid::new_v4().simple());
             let response = service
                 .create_embeddings(
@@ -151,7 +158,7 @@ pub(crate) async fn service_test_public_ai_inference_route(
                             },
                         }],
                         task: preferred_embedding_task(embedding)?,
-                        dimensions: None,
+                        dimensions,
                         output_kind: preferred_embedding_output_kind(embedding)?,
                         encoding: preferred_embedding_encoding(embedding)?,
                         invalid_input_policy: Default::default(),
@@ -242,6 +249,36 @@ pub(crate) async fn service_test_public_ai_inference_route(
     }
 }
 
+/// Validate the saved dimension before a settings test can issue a provider request.
+/// 在设置测试发起供应商请求前校验已保存维度。
+///
+/// `configuration` owns the profiles; `consumer_profile_id` identifies the exact consumer;
+/// `capabilities` is its resolved model declaration. Returns its saved dimension or an
+/// error for an incomplete VCE choice; other consumers retain optional default semantics.
+/// `configuration` 持有配置档；`consumer_profile_id` 标识精确消费者；
+/// `capabilities` 是解析后的模型声明。返回保存维度，VCE 选择不完整时返回错误；
+/// 其他消费者保留可选默认语义。
+fn settings_embedding_dimensions(
+    configuration: &PersistedAiConfiguration,
+    consumer_profile_id: &str,
+    capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
+) -> Result<Option<u32>, String> {
+    // dimensions belongs exclusively to the selected profile, never a peer consumer.
+    // dimensions 仅属于选中的配置档，绝不借用其他消费者。
+    let dimensions = configuration
+        .inference_profiles
+        .get(consumer_profile_id)
+        .and_then(|profile| profile.embedding_dimensions);
+    if consumer_profile_id == crate::vce::VCE_CONSUMER_PROFILE_ID {
+        // dimension must be explicitly saved before testing VCE or admitting its engine.
+        // dimension 必须在测试 VCE 或准入引擎前由用户明确保存。
+        let dimension =
+            dimensions.ok_or_else(|| String::from("请先在语义引擎设置中确认并保存向量维度。"))?;
+        crate::vce::validate_explicit_embedding_dimension(capabilities, dimension)?;
+    }
+    Ok(dimensions)
+}
+
 /// Returns the configured inference service without retaining the shared state lock.
 /// 返回已配置推理服务且不保留共享状态锁。
 ///
@@ -294,6 +331,9 @@ fn settings_inference_test_caller(
         })?;
     Ok(InferenceCallerContext {
         caller_id: String::from("vulcan-code-settings-inference-test"),
+        // Settings tests retain their declared usage-scope scheduling.
+        // 设置测试保留已声明用途范围的调度。
+        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
         allowed_consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
         permissions: BTreeSet::from([InferencePermission::Status, permission]),
         usage_scope,

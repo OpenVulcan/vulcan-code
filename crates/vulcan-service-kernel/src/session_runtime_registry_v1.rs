@@ -185,6 +185,9 @@ pub(crate) enum SuccessfulTurnSettlement {
 /// 在 API 启动前由唯一会话 owner 捕获的不可变 V1 账本投影。
 #[derive(Debug, Clone)]
 pub(crate) struct SessionProviderProjectionSnapshot {
+    /// Exact durable compaction identity captured with this projection's retained boundary.
+    /// 与本投影保留边界一同捕获的准确持久压缩身份。
+    pub(crate) current_compaction_id: Option<CompactionId>,
     /// Exact pending prompt sequences admitted by Core before their first physical API.
     /// 在首次物理API前由Core准入的精确待准备提示词序号。
     pub(crate) preparing_user_prompt_media_seqs: Vec<Seq>,
@@ -1708,6 +1711,7 @@ impl SessionHandle {
             through_seq,
             preparing_user_prompt_media_seqs,
             initialized_locked_baseline,
+            current_compaction_id,
         ) = {
             let document = self
                 .document
@@ -1749,6 +1753,7 @@ impl SessionHandle {
                 Seq::try_new(through_value)?,
                 document.preparing_user_prompt_media_seqs(),
                 LockedBaselineProjection::from_initialized_runtime_lock(&document.runtime_lock)?,
+                document.runtime_lock.current_compaction_id,
             )
         };
         let range = locator.load_event_range(Seq::try_new(1)?, through_seq)?;
@@ -1775,6 +1780,7 @@ impl SessionHandle {
             .map(|projected| projected.item.clone())
             .collect();
         Ok(SessionProviderProjectionSnapshot {
+            current_compaction_id,
             preparing_user_prompt_media_seqs,
             segment_generation,
             document_revision,

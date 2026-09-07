@@ -578,29 +578,52 @@ fn coverage_select_in_order(hits: Vec<SearchHit>, config: CoverageConfig) -> Vec
     if config.max_per_path == 0 || config.max_chars == 0 || config.max_results == 0 {
         return Vec::new();
     }
+    // Cost each candidate once using the authoritative renderer, including Unicode paths, line numbers and offsets.
+    // 使用权威渲染器为每个候选计费一次，包含 Unicode 路径、行号及字符偏移。
+    let budgeted_hits = hits
+        .into_iter()
+        .map(|hit| {
+            let rendered_chars = render_context(std::slice::from_ref(&hit)).chars().count();
+            (hit, rendered_chars)
+        })
+        .collect::<Vec<_>>();
     let mut selected = Vec::new();
     let mut selected_paths = BTreeSet::new();
     let mut selected_ids = BTreeSet::new();
     let mut selected_chars = 0usize;
 
-    for hit in &hits {
+    for (hit, rendered_chars) in &budgeted_hits {
         if selected.len() >= config.max_results || selected_paths.contains(&hit.path) {
             continue;
         }
-        if can_select(hit, &selected, &selected_ids, selected_chars, config) {
-            selected_chars = selected_chars.saturating_add(hit.char_len());
+        if can_select(
+            hit,
+            *rendered_chars,
+            &selected,
+            &selected_ids,
+            selected_chars,
+            config,
+        ) {
+            selected_chars = selected_chars.saturating_add(*rendered_chars);
             selected_paths.insert(hit.path.clone());
             selected_ids.insert(hit.id.clone());
             selected.push(hit.clone());
         }
     }
 
-    for hit in &hits {
+    for (hit, rendered_chars) in &budgeted_hits {
         if selected.len() >= config.max_results {
             break;
         }
-        if can_select(hit, &selected, &selected_ids, selected_chars, config) {
-            selected_chars = selected_chars.saturating_add(hit.char_len());
+        if can_select(
+            hit,
+            *rendered_chars,
+            &selected,
+            &selected_ids,
+            selected_chars,
+            config,
+        ) {
+            selected_chars = selected_chars.saturating_add(*rendered_chars);
             selected_ids.insert(hit.id.clone());
             selected.push(hit.clone());
         }
@@ -608,8 +631,8 @@ fn coverage_select_in_order(hits: Vec<SearchHit>, config: CoverageConfig) -> Vec
     selected
 }
 
-/// Render structured hits as line-numbered context only after selection is complete.
-/// 只有在选择完成后将结构化命中渲染为带行号的上下文。
+/// Render structured hits as line-numbered context for final output or exact selection cost.
+/// 将结构化命中渲染为带行号的上下文，用于最终输出或准确计算选择开销。
 pub fn render_context(hits: &[SearchHit]) -> String {
     if hits.is_empty() {
         return "No code context found.\n".to_owned();
@@ -641,6 +664,21 @@ pub fn render_context(hits: &[SearchHit]) -> String {
     output
 }
 
+/// Render budget-selected `hits`, omitting the empty-result notice when `max_chars` cannot contain it.
+/// 渲染已按预算选择的 `hits`；当 `max_chars` 不足时省略空结果提示。
+/// Returns whole source blocks without truncation; callers must select nonempty hits within the same budget.
+/// 返回不截断的完整源码块；调用方必须按同一预算选择非空命中。
+pub(crate) fn render_selected_context(hits: &[SearchHit], max_chars: usize) -> String {
+    // output uses the same formatter as candidate costing; an empty notice is not indexed source.
+    // output 与候选计费使用同一格式器；空结果提示并非索引源码。
+    let output = render_context(hits);
+    if hits.is_empty() && output.chars().count() > max_chars {
+        String::new()
+    } else {
+        output
+    }
+}
+
 /// Sort hits by score and stable source identity.
 /// 按分数和稳定源码身份对命中结果排序。
 fn sort_hits(hits: &mut [SearchHit]) {
@@ -657,15 +695,20 @@ fn sort_hits(hits: &mut [SearchHit]) {
 
 /// Check whether a candidate can enter the coverage-selected context.
 /// 判断候选结果是否可以进入覆盖度选择后的上下文。
+/// `hit` and `rendered_chars` describe the candidate; selected state and `config` enforce identity, overlap and budgets.
+/// `hit` 与 `rendered_chars` 描述候选；已选状态与 `config` 约束身份、重叠及预算。
+/// Returns true only when the complete rendered block fits without truncating source.
+/// 仅当完整渲染块能够容纳且不截断源码时返回真。
 fn can_select(
     hit: &SearchHit,
+    rendered_chars: usize,
     selected: &[SearchHit],
     selected_ids: &BTreeSet<String>,
     selected_chars: usize,
     config: CoverageConfig,
 ) -> bool {
     if selected_ids.contains(&hit.id)
-        || selected_chars.saturating_add(hit.char_len()) > config.max_chars
+        || selected_chars.saturating_add(rendered_chars) > config.max_chars
         || selected
             .iter()
             .filter(|selected_hit| selected_hit.path == hit.path)
@@ -1078,20 +1121,75 @@ mod tests {
             ChunkKind::Recursive,
         )
         .unwrap();
+        // hits and max_chars include both complete rendered fragments, not only their source text.
+        // hits 与 max_chars 包含两个完整渲染片段，不仅计算源码正文。
+        let hits = vec![
+            SearchHit::from_chunk(&first, 1.0, SearchSource::Dense, HitKind::Content),
+            SearchHit::from_chunk(&second, 0.9, SearchSource::Dense, HitKind::Content),
+        ];
+        let max_chars = render_context(&hits).chars().count();
         let selected = coverage_select(
-            vec![
-                SearchHit::from_chunk(&first, 1.0, SearchSource::Dense, HitKind::Content),
-                SearchHit::from_chunk(&second, 0.9, SearchSource::Dense, HitKind::Content),
-            ],
+            hits,
             CoverageConfig {
                 max_per_path: 2,
-                max_chars: 8,
+                max_chars,
                 overlap_threshold: 0.6,
                 max_results: 2,
             },
         );
 
         assert_eq!(selected.len(), 2);
+    }
+
+    /// Verify exact Unicode output budgets include headers, offsets and multi-digit line numbers.
+    /// 验证准确的 Unicode 输出预算包含标题、字符偏移及多位行号。
+    /// No inputs or return value; one missing character must exclude the whole block without source truncation.
+    /// 无参数及返回值；少一个字符的预算必须排除整个块，不能截断源码。
+    #[test]
+    fn rendered_budget_includes_complete_unicode_block() {
+        // chunk contains a nonzero offset, a Unicode path and a trailing newline across a line-number boundary.
+        // chunk 包含非零偏移、Unicode 路径及跨行号位数边界的结尾换行。
+        let chunk = Chunk::new_with_start_char_offset(
+            "blob",
+            12,
+            "src/语义.rs",
+            "语义搜索\n完成\n",
+            99,
+            100,
+            ChunkKind::Recursive,
+        )
+        .expect("valid Unicode chunk");
+        let hits = vec![SearchHit::from_chunk(
+            &chunk,
+            1.0,
+            SearchSource::Dense,
+            HitKind::Content,
+        )];
+        let expected = render_context(&hits);
+        let max_chars = expected.chars().count();
+        assert!(expected.len() > max_chars);
+        let config = CoverageConfig {
+            max_chars,
+            ..CoverageConfig::default()
+        };
+        let selected = coverage_select(hits.clone(), config);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(render_selected_context(&selected, max_chars), expected);
+        assert!(
+            coverage_select(
+                hits,
+                CoverageConfig {
+                    max_chars: max_chars - 1,
+                    ..config
+                }
+            )
+            .is_empty()
+        );
+        assert!(render_selected_context(&[], 1).is_empty());
+        assert_eq!(
+            render_selected_context(&[], 100),
+            "No code context found.\n"
+        );
     }
 
     /// Verify line-numbered rendering remains a final formatting operation.

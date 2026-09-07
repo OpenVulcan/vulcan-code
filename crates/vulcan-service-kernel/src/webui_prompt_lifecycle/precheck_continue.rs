@@ -18,6 +18,42 @@ use crate::{
     sync_hydrated_session_dialogue_ready_marker,
 };
 
+/// Acquires native publication ownership only for an effectively enabled native prompt.
+/// 只为实际启用原生记忆的提示词获取发布归属。
+/// Takes the same admitted runtime and start as continuation; external and disabled paths remain untouched.
+/// 接收与继续执行相同的准入运行时及起点；外置及禁用路径保持不变。
+async fn prepare_native_recall_publication(
+    state: &SharedServiceBridgeState,
+    agent_runtime: &AgentRuntimeBridge,
+    start: &SharedPromptTurnStart,
+) -> Result<Option<crate::native_vmm::NativeVmmRecallPublication>, String> {
+    if !start.vmm_runtime_ready
+        || !vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
+    {
+        return Ok(None);
+    }
+    // Use the live hook projection, not the detached provider configuration captured before inference.
+    // 使用活动 Hook 投影，而非推理前捕获的脱离状态 Provider 配置。
+    let effective = agent_runtime
+        .vmm_hook_runtime
+        .resolve_publication_config(start.session_id, &start.workspace_path)?;
+    if !effective.enabled || effective.backend_mode != vulcan_vmm::VmmBackendMode::Native {
+        return Ok(None);
+    }
+    // Clone the native owner without retaining the service mutex over the asynchronous publication barrier.
+    // 克隆原生归属方，不跨异步发布屏障持有服务互斥锁。
+    let maintenance = state
+        .lock()
+        .map_err(|error| format!("锁定原生记忆发布状态失败：{error}"))?
+        .native_vmm_maintenance
+        .clone()
+        .ok_or_else(|| "原生记忆发布运行时尚未就绪。".to_owned())?;
+    maintenance
+        .prepare_recall_publication(start.project_id.as_deref(), &start.session_id.to_string())
+        .await
+        .map(Some)
+}
+
 /// Immutable VMM service readiness captured before one prompt turn is admitted.
 /// 在单个提示词回合准入前捕获的不可变 VMM 服务就绪事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +289,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     expected_kernel_generation: u64,
     profile_outcome: ConversationProfileOutcome,
     precheck_outcome: ConversationPrecheckOutcome,
+    native_publication: Option<&crate::native_vmm::NativeVmmRecallPublication>,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
     let session_id = start.session_id;
     let continue_started_at = current_unix_millis_value();
@@ -333,23 +370,51 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     );
     // Effective disable revokes session leases before pending events bind to the current user message.
     // 生效禁用会在待处理事件绑定当前用户消息之前撤销会话租约。
-    let effective_vmm_enabled = {
-        let session_layer = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .map(|runtime_state| &runtime_state.vmm);
-        vulcan_vmm::VmmEffectiveConfig::resolve(
-            &agent_runtime.provider_configuration.vmm,
-            Some(&project_configuration.vmm),
-            session_layer,
-        )
-        .enabled
-    };
+    let effective_vmm = agent_runtime
+        .vmm_hook_runtime
+        .resolve_publication_config(session_id, &start.workspace_path)?;
+    let effective_vmm_enabled = effective_vmm.enabled;
+    let effective_vmm_backend = effective_vmm.backend_mode;
     // vmmDomainActive cannot be inferred from configuration or retained session state.
     // vmmDomainActive 不能从配置或保留的会话状态反向推断。
     let vmm_domain_active = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
         && start.vmm_runtime_ready
         && effective_vmm_enabled;
+    if vmm_domain_active
+        && effective_vmm_backend == vulcan_vmm::VmmBackendMode::Native
+        && native_publication.is_none()
+    {
+        return Err("原生记忆配置在提示词发布前发生变化，请重新发起。".to_owned());
+    }
+    // Freeze the current profile identity independently of the returned profile effect.
+    // 独立于传回画像效果，冻结当前画像身份。
+    let vmm_profile_read_source = if vmm_domain_active {
+        match effective_vmm_backend {
+            vulcan_vmm::VmmBackendMode::Native => Some(
+                native_publication
+                    .ok_or_else(|| "原生画像发布缺少当前来源屏障。".to_owned())?
+                    .profile_read_source()?,
+            ),
+            vulcan_vmm::VmmBackendMode::ExternalGrpc => Some(
+                vulcan_vmm::VmmMemoryReadSource::new(
+                    vulcan_vmm::VmmMemorySource::external(
+                        &vulcan_vmm::VmmTransportConfig::from_effective(&effective_vmm),
+                        effective_vmm
+                            .user_id
+                            .ok_or_else(|| "外置画像发布缺少记忆用户 ID。".to_owned())?,
+                        effective_vmm
+                            .project_id
+                            .ok_or_else(|| "外置画像发布缺少记忆项目 ID。".to_owned())?,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    Vec::new(),
+                )
+                .map_err(|error| error.to_string())?,
+            ),
+        }
+    } else {
+        None
+    };
     let runtime_reasoning_effort = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -372,7 +437,30 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     // therefore needs a second request-building pass against the already committed VMM state.
     // continuation_input 需要克隆，因为幂等命令回执会跳过变更器，必须基于已提交 VMM 状态
     // 再构建一次请求。
-    let continuation_input = SharedPromptTurnContinueInput {
+    // Capture the authoritative lineage without using a retained workbench compaction mirror.
+    // 捕获权威沿革，不使用保留的工作台压缩镜像。
+    let vmm_context_epoch = if vmm_domain_active {
+        let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+            state, session_id,
+        )?;
+        let (generation, compaction_id) = handle
+            .read(|document| {
+                (
+                    document.segment_generation(),
+                    document
+                        .runtime_lock
+                        .current_compaction_id
+                        .map(|id| id.value().to_string()),
+                )
+            })
+            .map_err(|error| format!("Failed to read VMM host context epoch: {error}"))?;
+        Some(vulcan_vmm::VmmContextEpoch::new(generation, compaction_id)?)
+    } else {
+        None
+    };
+    let mut continuation_input = SharedPromptTurnContinueInput {
+        vmm_context_epoch,
+        vmm_profile_read_source,
         start,
         profile_outcome,
         precheck_outcome,
@@ -383,59 +471,130 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         ),
         patch_visible_user_prompt_record: runs_user_prompt_precheck,
     };
-    let replay_continuation_input = continuation_input.clone();
+    // Validate current native nodes before cloning replay input or taking the Hook configuration read guard.
+    // 在克隆重放输入或取得 Hook 配置读守卫之前校验当前原生节点。
+    if let Some(publication) = native_publication {
+        // The admitted candidate is the exact runtime row that shared continuation will consume.
+        // 已准入候选就是共享续接即将消费的准确运行态行。
+        let runtime = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| {
+                format!("Native profile publication requires session `{session_id}` runtime state.")
+            })?;
+        if publication.reconcile_profile(runtime, &mut continuation_input.profile_outcome)? {
+            // Repair the early Hook cache write without acquiring a write lock inside its publication read guard.
+            // 修复早先 Hook 缓存写入，不在其发布读守卫内获取写锁。
+            agent_runtime
+                .vmm_hook_runtime
+                .store_profile_sync_state(session_id, runtime.vmm_profile_sync.clone())?;
+        }
+    }
+    let mut replay_continuation_input = continuation_input.clone();
     let continuation = if vmm_domain_active {
         // vmmController is opened only after every service/configuration prerequisite is true.
         // 仅当全部服务与配置前提成立后才打开 vmmController。
         let vmm_controller =
             open_registered_session_vmm_controller(state, session_id, &vmm_command_timestamp)?;
-        // vmmCommit owns both shared prompt VMM mutation and durable publication under one session lock.
-        // vmmCommit 在同一会话锁内拥有共享提示词 VMM 变更与持久发布。
-        let vmm_commit = vmm_controller.execute_command(
-            &vmm_command_id,
-            &vmm_command_timestamp,
-            |candidate| {
-                // continuation is built against the exact isolated controller candidate.
-                // continuation 基于精确的隔离控制器候选状态构建。
-                let continuation = continue_shared_prompt_turn_after_preparation(
-                    &mut workspace_snapshot,
-                    candidate,
-                    continuation_input,
+        // Freeze the admitted source before moving the preparation input into the durable mutator.
+        // 在将准备输入移入持久变更器前，冻结已准入来源。
+        let publication_source = continuation_input
+            .vmm_profile_read_source
+            .clone()
+            .ok_or_else(|| "Active VMM publication requires an exact read source.".to_owned())?;
+        // Resolve the workspace before taking the configuration read guard; no service lock is acquired inside it.
+        // 在取得配置读守卫前解析工作区；守卫内部不再取得服务锁。
+        let publication_workspace = continuation_input.start.workspace_path.clone();
+        // Keep configuration stable through both the original commit and duplicate-receipt reconciliation.
+        // 在首次提交和重复回执协调期间始终保持配置稳定。
+        agent_runtime.vmm_hook_runtime.with_current_profile_publication(
+            session_id,
+            &publication_workspace,
+            &publication_source,
+            || -> Result<_, String> {
+                // vmmCommit owns both shared prompt VMM mutation and durable publication under one session lock.
+                // vmmCommit 在同一会话锁内拥有共享提示词 VMM 变更与持久发布。
+                let vmm_commit = vmm_controller.execute_command(
+                    &vmm_command_id,
+                    &vmm_command_timestamp,
+                    |candidate| {
+                        // Recheck resident and delayed incoming recall before binding pending events to the user message.
+                        // 在向用户消息绑定待处理事件前，复查驻留召回及迟到传入召回。
+                        if let Some(publication) = native_publication {
+                            publication.reconcile(
+                                candidate,
+                                &mut continuation_input.precheck_outcome,
+                                &vmm_command_timestamp,
+                            )?;
+                        }
+                        // continuation is built against the exact isolated controller candidate.
+                        // continuation 基于精确的隔离控制器候选状态构建。
+                        let continuation = continue_shared_prompt_turn_after_preparation(
+                            &mut workspace_snapshot,
+                            candidate,
+                            continuation_input,
+                        )?;
+                        continuation_result = Some(continuation);
+                        Ok(())
+                    },
                 )?;
-                continuation_result = Some(continuation);
-                Ok(())
+                // A duplicate receipt rebuilds only the transient request from committed state.
+                // 重复回执只会从已提交状态重建临时请求。
+                Ok(if vmm_commit.applied {
+                    continuation_result.ok_or_else(|| {
+                        format!(
+                            "Core VMM Provider-boundary command `{vmm_command_id}` committed without a continuation result."
+                        )
+                    })?
+                } else {
+                    if continuation_result.is_some() {
+                        return Err(format!(
+                            "Core VMM Provider-boundary command `{vmm_command_id}` returned an invalid duplicate continuation result."
+                        ));
+                    }
+                    webui_trace(
+                        "precheck_continue_vmm_command_replayed",
+                        format!("session={session_id} command_id={vmm_command_id}"),
+                    );
+                    // Persist changed native visibility through its own controller command before rebuilding
+                    // the transient request; the original provider receipt remains untouched.
+                    // 在重建临时请求前，通过独立控制器命令持久化变化后的原生可见性；
+                    // 原始 Provider 回执保持不变。
+                    if let Some(publication) = native_publication {
+                        publication.reconcile_replayed_boundary(
+                            &vmm_controller,
+                            &mut replay_continuation_input.precheck_outcome,
+                            &vmm_command_timestamp,
+                        )?;
+                    } else {
+                        // A remote source change also needs durable invalidation when the original command cannot rerun.
+                        // 原命令不能重跑时，远端来源变化同样需要持久失效处理。
+                        vmm_controller.reconcile_read_source(
+                            replay_continuation_input.vmm_profile_read_source.as_ref(),
+                            &vmm_command_timestamp,
+                        )?;
+                    };
+                    // Reconcile lineage durably even though the original boundary receipt cannot run again.
+                    // 即使原始边界回执不能再次执行，也要持久协调沿革。
+                    let mut replay_vmm_state = vmm_controller.reconcile_context_epoch(
+                        replay_continuation_input.vmm_context_epoch.as_ref().ok_or_else(||
+                            "Active VMM replay requires the exact host context epoch.".to_owned())?,
+                        &publication_source,
+                        &vmm_command_timestamp,
+                    )?;
+                    continue_shared_prompt_turn_after_preparation(
+                        &mut workspace_snapshot,
+                        &mut replay_vmm_state,
+                        replay_continuation_input,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "Core VMM Provider-boundary command `{vmm_command_id}` was already committed, but continuation reconstruction failed: {error}"
+                        )
+                    })?
+                })
             },
-        )?;
-        // A duplicate receipt rebuilds only the transient request from committed state.
-        // 重复回执只会从已提交状态重建临时请求。
-        if vmm_commit.applied {
-            continuation_result.ok_or_else(|| {
-                format!(
-                    "Core VMM Provider-boundary command `{vmm_command_id}` committed without a continuation result."
-                )
-            })?
-        } else {
-            if continuation_result.is_some() {
-                return Err(format!(
-                    "Core VMM Provider-boundary command `{vmm_command_id}` returned an invalid duplicate continuation result."
-                ));
-            }
-            webui_trace(
-                "precheck_continue_vmm_command_replayed",
-                format!("session={session_id} command_id={vmm_command_id}"),
-            );
-            let mut replay_vmm_state = vmm_commit.state.clone();
-            continue_shared_prompt_turn_after_preparation(
-                &mut workspace_snapshot,
-                &mut replay_vmm_state,
-                replay_continuation_input,
-            )
-            .map_err(|error| {
-                format!(
-                    "Core VMM Provider-boundary command `{vmm_command_id}` was already committed, but continuation reconstruction failed: {error}"
-                )
-            })?
-        }
+        )??
     } else {
         // An unconfigured or stopped service bypasses every VMM controller and uses empty local state.
         // 未完成配置或已停止的服务会绕过全部 VMM Controller，并使用空的本地状态继续普通请求。
@@ -839,16 +998,23 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
             ),
         );
         let continue_started_at = current_unix_millis_value();
-        match continue_webui_prompt_turn_after_preparation_from_state(
-            &app,
-            &state,
-            &controller_runtime,
-            &agent_runtime,
-            start,
-            expected_kernel_generation,
-            profile_outcome,
-            precheck_outcome,
-        ) {
+        // Acquire the short native barrier after AI preparation and before capturing the final workspace owner.
+        // 在 AI 准备之后、捕获最终工作区归属之前获取短时原生屏障。
+        let native_publication =
+            prepare_native_recall_publication(&state, &agent_runtime, &start).await;
+        match native_publication.and_then(|publication| {
+            continue_webui_prompt_turn_after_preparation_from_state(
+                &app,
+                &state,
+                &controller_runtime,
+                &agent_runtime,
+                start,
+                expected_kernel_generation,
+                profile_outcome,
+                precheck_outcome,
+                publication.as_ref(),
+            )
+        }) {
             Ok(Some(request)) => {
                 webui_after_precheck_trace(
                     "after_precheck_18_stream_spawn_call",

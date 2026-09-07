@@ -1399,6 +1399,13 @@ export type TranslationKey =
   | "memory.rules.noProject"
   | "memory.rules.applied"
   | "memory.content.title"
+  | "memory.content.retrieval"
+  | "memory.content.finalScore"
+  | "memory.content.creationSource"
+  | "memory.content.totalEvidence"
+  | "memory.content.matchedEvidence"
+  | "memory.content.contextAdjustment"
+  | "memory.content.contextNotObserved"
   | "memory.content.description"
   | "memory.content.nativeDescription"
   | "memory.content.sessionRequiredTitle"
@@ -1420,6 +1427,67 @@ export type TranslationKey =
   | "memory.content.write"
   | "memory.content.sourceConversation"
   | "memory.nativeRecords.title"
+  | "memory.sessionList.title"
+  | "memory.sessionList.description"
+  | "memory.sessionList.back"
+  | "memory.sessionList.projectSources"
+  | "memory.sessionList.search"
+  | "memory.sessionList.status"
+  | "memory.sessionList.extraction"
+  | "memory.sessionList.allStates"
+  | "memory.sessionList.allExtraction"
+  | "memory.sessionList.from"
+  | "memory.sessionList.before"
+  | "memory.sessionList.sort"
+  | "memory.sessionList.newest"
+  | "memory.sessionList.oldest"
+  | "memory.sessionList.titleSort"
+  | "memory.sessionList.apply"
+  | "memory.sessionList.loading"
+  | "memory.sessionList.failed"
+  | "memory.sessionList.detailFailed"
+  | "memory.sessionList.invalidDates"
+  | "memory.sessionList.selectPage"
+  | "memory.sessionList.selected"
+  | "memory.sessionList.mixed"
+  | "memory.sessionList.select"
+  | "memory.sessionList.empty"
+  | "memory.sessionList.total"
+  | "memory.sessionList.previous"
+  | "memory.sessionList.next"
+  | "memory.sessionArchive.active"
+  | "memory.sessionArchive.archived"
+  | "memory.sessionArchive.recycled"
+  | "memory.sessionArchive.forgotten"
+  | "memory.sessionArchive.unregistered"
+  | "memory.sessionArchive.archive"
+  | "memory.sessionArchive.unarchive"
+  | "memory.sessionArchive.description"
+  | "memory.sessionArchive.confirm"
+  | "memory.removal.sessions"
+  | "memory.removal.turns"
+  | "memory.removal.selectSession"
+  | "memory.removal.selectTurn"
+  | "memory.removal.title"
+  | "memory.removal.description"
+  | "memory.removal.sessionEffect"
+  | "memory.removal.turnEffect"
+  | "memory.removal.vectors"
+  | "memory.removal.hotTurns"
+  | "memory.removal.hotWindow"
+  | "memory.removal.context"
+  | "memory.removal.projectProfiles"
+  | "memory.removal.userProfiles"
+  | "memory.removal.retention"
+  | "memory.removal.days"
+  | "memory.removal.sources"
+  | "memory.removal.confirm"
+  | "memory.removal.failed"
+  | "memory.sessionRestart.action"
+  | "memory.sessionRestart.description"
+  | "memory.sessionRestart.confirm"
+  | "memory.sessionRestart.failed"
+  | "memory.sessionArchive.failed"
   | "memory.nativeRecords.description"
   | "memory.nativeRecords.project"
   | "memory.nativeRecords.session"
@@ -1463,6 +1531,8 @@ export type TranslationKey =
   | "memory.nativeRecords.expiresAt"
   | "memory.nativeRecords.turn"
   | "memory.nativeRecords.timeline"
+  | "memory.nativeRecords.previousTurns"
+  | "memory.nativeRecords.nextTurns"
   | "memory.nativeRecords.analysisDetails"
   | "memory.nativeRecords.lastError"
   | "memory.nativeRecords.statusPending"
@@ -1582,6 +1652,7 @@ export type TranslationKey =
   | "memory.profile.instructionPlaceholder"
   | "memory.profile.applyInstruction"
   | "memory.profile.preview"
+  | "memory.profile.invalidBundleMode"
   | "memory.profile.previewDescription"
   | "memory.profile.nativePreviewDescription"
   | "memory.profile.priority"
@@ -1645,6 +1716,131 @@ export type TranslationKey =
   | "memory.resources.title"
   | "memory.resources.description"
   | "memory.resources.invalidResponse"
+  | "memory.policy.title"
+  | "memory.textPolicy.title"
+  | "memory.hostPolicy.title"
+  | "memory.hostPolicy.description"
+  | "memory.hostPolicy.inherited"
+  | "memory.hostPolicy.overridden"
+  | "memory.hostPolicy.inherit"
+  | "memory.hostPolicy.saved"
+  | "memory.hostPolicy.connection"
+  | "memory.profilePolicy.title"
+  | "memory.profilePolicy.description"
+  | "memory.profilePolicy.user"
+  | "memory.profilePolicy.project"
+  | "memory.profilePolicy.transient"
+  | "memory.profilePolicy.situational"
+  | "memory.profilePolicy.stable"
+  | "memory.profilePolicy.baseMs"
+  | "memory.profilePolicy.stepMs"
+  | "memory.profilePolicy.maxMs"
+  | "memory.profilePolicy.unit"
+  | "memory.profilePolicy.hint"
+  | "memory.profilePolicy.save"
+  | "memory.profilePolicy.saved"
+  | "memory.textPolicy.description"
+  | "memory.textPolicy.fold"
+  | "memory.textPolicy.budget"
+  | "memory.textPolicy.budgetHint"
+  | "memory.textPolicy.save"
+  | "memory.textPolicy.saved"
+  | "memory.policy.description"
+  | "memory.policy.precheckHistory"
+  | "memory.policy.precheckBudget"
+  | "memory.policy.recallTopK"
+  | "memory.policy.reviewLimit"
+  | "memory.policy.reviewScore"
+  | "memory.policy.queryLimit"
+  | "memory.policy.postactionHistory"
+  | "memory.policy.postactionBudget"
+  | "memory.policy.extractedPriority"
+  | "memory.policy.extractedWeight"
+  | "memory.policy.extractedExpiry"
+  | "memory.policy.extractedStability"
+  | "memory.policy.extractedLevel"
+  | "memory.policy.working"
+  | "memory.policy.stable"
+  | "memory.policy.archival"
+  | "memory.policy.expiryRange"
+  | "memory.policy.extractedHint"
+  | "memory.policy.days"
+  | "memory.policy.hours"
+  | "memory.policy.minutes"
+  | "memory.policy.seconds"
+  | "memory.policy.milliseconds"
+  | "memory.policy.durationUnit"
+  | "memory.policy.userSource"
+  | "memory.policy.defaultSource"
+  | "memory.policy.scoreHint"
+  | "memory.policy.invalidValues"
+  | "memory.policy.invalidResponse"
+  | "memory.policy.saved"
+  | "memory.policy.save"
+  | "memory.policy.resetDraft"
+  | "memory.ranking.title"
+  | "memory.cleanup.title"
+  | "memory.projectRetention.title"
+  | "memory.projectRetention.description"
+  | "memory.projectProfile.title"
+  | "memory.projectProfile.description"
+  | "memory.projectProfile.inherited"
+  | "memory.projectProfile.saved"
+  | "memory.projectRetention.select"
+  | "memory.projectRetention.reload"
+  | "memory.projectRetention.inherited"
+  | "memory.projectRetention.overridden"
+  | "memory.projectRetention.saved"
+  | "memory.projectRetention.save"
+  | "memory.projectRetention.inherit"
+  | "memory.projectRetention.fillGlobal"
+  | "memory.cleanup.description"
+  | "memory.cleanup.enabled"
+  | "memory.cleanup.scan"
+  | "memory.cleanup.profileScan"
+  | "memory.cleanup.hotWindow"
+  | "memory.cleanup.idle"
+  | "memory.cleanup.trash"
+  | "memory.cleanup.protection"
+  | "memory.cleanup.protectionHint"
+  | "memory.cleanup.protectShared"
+  | "memory.cleanup.priority"
+  | "memory.cleanup.level"
+  | "memory.cleanup.session"
+  | "memory.cleanup.phase"
+  | "memory.cleanup.stable"
+  | "memory.cleanup.persistent"
+  | "memory.cleanup.unit"
+  | "memory.cleanup.days"
+  | "memory.cleanup.hours"
+  | "memory.cleanup.minutes"
+  | "memory.cleanup.seconds"
+  | "memory.cleanup.milliseconds"
+  | "memory.cleanup.invalid"
+  | "memory.cleanup.save"
+  | "memory.cleanup.saved"
+  | "memory.ranking.description"
+  | "memory.ranking.hybrid"
+  | "memory.ranking.mmr"
+  | "memory.ranking.decay"
+  | "memory.ranking.advanced"
+  | "memory.ranking.lexical"
+  | "memory.ranking.rrf"
+  | "memory.ranking.replace"
+  | "memory.ranking.dedupe"
+  | "memory.ranking.dedupePool"
+  | "memory.ranking.replacePool"
+  | "memory.ranking.rerank"
+  | "memory.ranking.lambda"
+  | "memory.ranking.shape"
+  | "memory.ranking.scale"
+  | "memory.ranking.floor"
+  | "memory.ranking.reinforce"
+  | "memory.ranking.crossSession"
+  | "memory.ranking.scoreHint"
+  | "memory.ranking.save"
+  | "memory.ranking.saved"
+  | "memory.ranking.invalidValues"
   | "memory.resources.loading"
   | "memory.resources.refresh"
   | "memory.resources.promptBundle"
@@ -1720,6 +1916,20 @@ export type TranslationKey =
   | "memory.maintenance.description"
   | "memory.maintenance.invalidResponse"
   | "memory.maintenance.runNow"
+  | "memory.lexical.title"
+  | "memory.lexical.description"
+  | "memory.lexical.documents"
+  | "memory.lexical.rows"
+  | "memory.lexical.rebuild"
+  | "memory.lexical.confirmTitle"
+  | "memory.lexical.confirmDescription"
+  | "memory.lexical.completed"
+  | "memory.lexical.countsNote"
+  | "memory.maintenance.previewCleanup"
+  | "memory.maintenance.cleanupPreviewTitle"
+  | "memory.maintenance.cleanupPreviewDescription"
+  | "memory.maintenance.cleanupImpact"
+  | "memory.maintenance.cleanupRecordIds"
   | "memory.maintenance.status"
   | "memory.maintenance.statusDescription"
   | "memory.maintenance.worker"
@@ -1782,10 +1992,28 @@ export type TranslationKey =
   | "memory.maintenance.memories"
   | "memory.maintenance.profiles"
   | "memory.maintenance.evidence"
+  | "memory.recycleRecords.inspect"
+  | "memory.recycleRecords.description"
+  | "memory.recycleRecords.reload"
+  | "memory.recycleRecords.total"
+  | "memory.recycleRecords.failed"
+  | "memory.recycleRecords.empty"
+  | "memory.recycleRecords.previous"
+  | "memory.recycleRecords.next"
+  | "memory.recycleRecords.session"
+  | "memory.recycleRecords.savedStatus"
+  | "memory.recycleRecords.sourceTurns"
+  | "memory.recycleRecords.userProfile"
+  | "memory.recycleRecords.projectProfile"
+  | "memory.recycleRecords.support"
+  | "memory.recycleRecords.rebuttal"
   | "memory.maintenance.expiresAt"
   | "memory.maintenance.reasonTerminal"
   | "memory.maintenance.reasonColdTurn"
   | "memory.maintenance.reasonIdle"
+  | "memory.maintenance.reasonManualSession"
+  | "memory.maintenance.reasonManualTurn"
+  | "memory.maintenance.manualSources"
   | "vmm.experience.deployment.disabled"
   | "vmm.experience.deployment.external"
   | "vmm.experience.setup.notConfigured"
@@ -4475,6 +4703,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.rules.noProject": "没有可用项目",
     "memory.rules.applied": "设置已应用。",
     "memory.content.title": "记忆内容",
+    "memory.content.retrieval": "检索说明",
+    "memory.content.finalScore": "最终检索分值",
+    "memory.content.creationSource": "记忆创建来源",
+    "memory.content.totalEvidence": "全部情境：支持 / 反驳",
+    "memory.content.matchedEvidence": "本次匹配：支持 / 反驳",
+    "memory.content.contextAdjustment": "情境净调整",
+    "memory.content.contextNotObserved": "本次未评估情境证据，不代表没有已存证据。",
     "memory.content.description": "使用自然语言搜索、查看和维护当前用户与项目的长期记忆。",
     "memory.content.nativeDescription": "使用自然语言搜索、查看和维护当前绑定原生记忆项目中的长期记忆。",
     "memory.content.sessionRequiredTitle": "新增记忆需要关联会话",
@@ -4496,6 +4731,67 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.write": "保存记忆",
     "memory.content.sourceConversation": "来源会话",
     "memory.nativeRecords.title": "原生记忆来源",
+    "memory.sessionList.title": "记忆会话",
+    "memory.sessionList.description": "按项目筛选会话摘要，选择后查看提取记录和生成的记忆。勾选仅对当前页有效。",
+    "memory.sessionList.back": "返回会话列表",
+    "memory.sessionList.projectSources": "查看项目全部来源",
+    "memory.sessionList.search": "会话标题或 ID",
+    "memory.sessionList.status": "会话状态",
+    "memory.sessionList.extraction": "提取状态",
+    "memory.sessionList.allStates": "全部会话状态",
+    "memory.sessionList.allExtraction": "全部提取状态",
+    "memory.sessionList.from": "最近活动起始日期（本地）",
+    "memory.sessionList.before": "最近活动截止日期（含当天，本地）",
+    "memory.sessionList.sort": "排序方式",
+    "memory.sessionList.newest": "最近活动优先",
+    "memory.sessionList.oldest": "最早活动优先",
+    "memory.sessionList.titleSort": "标题顺序",
+    "memory.sessionList.apply": "应用筛选",
+    "memory.sessionList.loading": "正在加载会话摘要…",
+    "memory.sessionList.failed": "未能加载会话列表。请刷新重试；详细原因请查看操作提示。",
+    "memory.sessionList.detailFailed": "未能加载来源详情。请刷新重试；详细原因请查看操作提示。",
+    "memory.sessionList.invalidDates": "请选择有效的起止日期，截止日期不得早于起始日期。",
+    "memory.sessionList.selectPage": "全选当前页",
+    "memory.sessionList.selected": "已选 {count} 个会话",
+    "memory.sessionList.mixed": "批量归档要求选中会话全部为活动，取消归档要求全部为已归档。",
+    "memory.sessionList.select": "选择会话",
+    "memory.sessionList.empty": "没有符合筛选条件的会话。",
+    "memory.sessionList.total": "共 {total} 个会话 · 第 {page} 页",
+    "memory.sessionList.previous": "上一页",
+    "memory.sessionList.next": "下一页",
+    "memory.sessionArchive.active": "活动",
+    "memory.sessionArchive.archived": "已归档",
+    "memory.sessionArchive.recycled": "已回收",
+    "memory.sessionArchive.forgotten": "已遗忘",
+    "memory.sessionArchive.unregistered": "尚未建立提取会话",
+    "memory.sessionArchive.archive": "归档会话",
+    "memory.sessionArchive.unarchive": "取消归档",
+    "memory.sessionArchive.description": "仅改变会话的管理分类，不删除记忆、画像或向量，也不关闭召回与提炼。预览有效期为五分钟；期间记录有变更时，需要重新预览。",
+    "memory.sessionArchive.confirm": "确认变更",
+    "memory.removal.sessions": "预览回收会话",
+    "memory.removal.turns": "预览回收所选回合",
+    "memory.removal.selectSession": "选择回收会话",
+    "memory.removal.selectTurn": "选择回收回合",
+    "memory.removal.title": "确认移入记忆回收站",
+    "memory.removal.description": "将以下原始记录及关联普通记忆、向量移入回收站，不复制、不重建向量。保留全部用户画像和项目画像，不删除 VulcanCode 聊天会话。",
+    "memory.removal.sessionEffect": "回收整个记忆会话后暂停其记忆处理，可在回收站恢复。",
+    "memory.removal.turnEffect": "仅回收所选回合及其普通记忆；不改变记忆会话的启用状态。",
+    "memory.removal.vectors": "关联向量",
+    "memory.removal.hotTurns": "影响热窗口回合",
+    "memory.removal.hotWindow": "当前热窗口大小",
+    "memory.removal.context": "关联情境条目",
+    "memory.removal.projectProfiles": "关联项目画像（保留）",
+    "memory.removal.userProfiles": "关联用户画像（保留）",
+    "memory.removal.retention": "从确认执行时起保留",
+    "memory.removal.days": "天；到期后可由清洗任务永久清除。",
+    "memory.removal.sources": "查看准确来源会话与回合",
+    "memory.removal.confirm": "确认移入回收站",
+    "memory.removal.failed": "回收未完成，请查看动作错误并重新预览。预览过期或数据变化后不能继续使用原确认。",
+    "memory.sessionRestart.action": "重新启用记忆",
+    "memory.sessionRestart.description": "仅重新开启这些已遗忘会话后续的记忆读取与写入。不会恢复已删除的记忆、画像或向量，也不会重新发送或提炼历史对话。",
+    "memory.sessionRestart.confirm": "确认重新启用",
+    "memory.sessionRestart.failed": "未能重新启用记忆，请重新预览。详细原因请查看操作提示。",
+    "memory.sessionArchive.failed": "未能完成归档操作，请重新预览。详细原因请查看操作提示。",
     "memory.nativeRecords.description": "按原生记忆项目和宿主会话查看回合提取状态、各级记忆数量及每条记忆的准确来源。",
     "memory.nativeRecords.project": "记忆项目",
     "memory.nativeRecords.session": "宿主会话",
@@ -4539,6 +4835,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.nativeRecords.expiresAt": "过期时间",
     "memory.nativeRecords.turn": "回合",
     "memory.nativeRecords.timeline": "完整会话内容",
+    "memory.nativeRecords.previousTurns": "前序回合",
+    "memory.nativeRecords.nextTurns": "后续回合",
     "memory.nativeRecords.analysisDetails": "提取详情",
     "memory.nativeRecords.lastError": "最近提取错误",
     "memory.nativeRecords.statusPending": "待提取",
@@ -4658,8 +4956,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.instructionPlaceholder": "例如：不要再把旧数据库方案视为当前决定。",
     "memory.profile.applyInstruction": "应用指令",
     "memory.profile.preview": "最终画像预览",
+    "memory.profile.invalidBundleMode": "画像服务未返回明确的内容模式，无法显示预览。请刷新并检查服务响应。",
     "memory.profile.previewDescription": "这是提供给记忆服务的完整画像文本，仅在排查或核对时需要查看。",
-    "memory.profile.nativePreviewDescription": "这是原生记忆内核为当前所选用户或项目整理的完整画像文本，仅在排查或核对时需要查看。",
+    "memory.profile.nativePreviewDescription": "这是原生记忆内核返回的画像文本。完整模式包含固定用户与选定项目的组合内容；拆分模式只显示当前选中的画像类别。",
     "memory.profile.priority": "优先级",
     "memory.profile.level": "层级",
     "memory.profile.stateSummary": "画像状态",
@@ -4721,6 +5020,131 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.title": "原生资源与规则",
     "memory.resources.description": "按提示词、PII 与噪音分页选择组合、验证规则并维护用户目录覆盖；编辑器只显示当前实际生效内容。",
     "memory.resources.invalidResponse": "原生 VMM 资源接口返回了不匹配的结果。",
+    "memory.policy.title": "原生默认策略 · 召回与提炼",
+    "memory.textPolicy.title": "文本入库清洗",
+    "memory.hostPolicy.title": "本项目的原生业务参数",
+    "memory.hostPolicy.description": "按当前 VulcanCode 项目分别覆盖参数，不改变记忆绑定、连带读取范围或固定用户画像。各组独立保存；未覆盖的组实时继承全局，连接与注入开关单独管理。",
+    "memory.hostPolicy.inherited": "继承当前全局设置；编辑并保存后仅本项目覆盖",
+    "memory.hostPolicy.overridden": "使用本项目覆盖",
+    "memory.hostPolicy.inherit": "恢复本组全局继承",
+    "memory.hostPolicy.saved": "本项目参数已保存，下一个命令生效。",
+    "memory.hostPolicy.connection": "启用连接与注入参数覆盖",
+    "memory.profilePolicy.title": "画像保留期限",
+    "memory.profilePolicy.description": "分别设置固定用户画像和项目画像默认期限。只影响之后生成或修订的画像，不重写已有截止时间。",
+    "memory.profilePolicy.user": "用户画像",
+    "memory.profilePolicy.project": "项目画像默认值",
+    "memory.profilePolicy.transient": "短期",
+    "memory.profilePolicy.situational": "情境",
+    "memory.profilePolicy.stable": "稳定",
+    "memory.profilePolicy.baseMs": "基础期限",
+    "memory.profilePolicy.stepMs": "每次刷新延长",
+    "memory.profilePolicy.maxMs": "最长保留",
+    "memory.profilePolicy.unit": "时间单位（适用于本行三个数值）",
+    "memory.profilePolicy.hint": "期限 = 基础期限 + 刷新次数 × 延长量，不超过最长保留。基础期限至少 1 毫秒且不大于最长保留；延长量可为 0；期限上限为 3650 天。切换单位会按新单位解释本行数值。持久级始终不过期。",
+    "memory.profilePolicy.save": "保存画像期限",
+    "memory.profilePolicy.saved": "画像期限已保存，仅对之后生成或修订的画像生效。",
+    "memory.textPolicy.description": "仅影响之后提交的用户问题、中间交互和最终回答，不重新清洗历史。媒体与思考内容始终清理；PII 和噪音仍按各自设置执行。",
+    "memory.textPolicy.fold": "折叠长代码与机器日志",
+    "memory.textPolicy.budget": "每个文本片段的目标 Token 预算",
+    "memory.textPolicy.budgetHint": "256–131072；按近似 Token 估算保留头尾，默认 1200。它不是整个模型请求的硬上限，后续 L1 的目标回合与历史预算单独设置。",
+    "memory.textPolicy.save": "保存文本清洗设置",
+    "memory.textPolicy.saved": "文本清洗设置已保存，仅对新入库片段生效。",
+    "memory.policy.description": "独立设置对话前召回与对话后提炼参数。保存到用户 VMM 配置目录，供新命令使用；已经开始的命令保持原策略。本区设置为全局默认，不修改项目绑定。",
+    "memory.policy.precheckHistory": "对话前召回 · 历史轮数",
+    "memory.policy.precheckBudget": "对话前召回 · 历史 Token 预算",
+    "memory.policy.recallTopK": "每个查询召回条数",
+    "memory.policy.reviewLimit": "合并后送审条数上限",
+    "memory.policy.reviewScore": "候选送审评分下限",
+    "memory.policy.queryLimit": "检索查询数量上限",
+    "memory.policy.postactionHistory": "对话后提炼 · 已提炼历史轮数",
+    "memory.policy.postactionBudget": "对话后提炼 · 当前轮次与历史 Token 预算",
+    "memory.policy.extractedPriority": "新提炼记忆 · 默认优先级",
+    "memory.policy.extractedWeight": "新提炼记忆 · 初始刷新权重",
+    "memory.policy.extractedExpiry": "新提炼记忆 · 有效期",
+    "memory.policy.extractedStability": "新提炼记忆 · 保留稳定性",
+    "memory.policy.extractedLevel": "新提炼记忆 · 记忆等级",
+    "memory.policy.working": "短期工作",
+    "memory.policy.stable": "稳定保留",
+    "memory.policy.archival": "归档保留",
+    "memory.policy.expiryRange": "1 毫秒至 3650 天，必须能精确表示为整数毫秒。",
+    "memory.policy.extractedHint": "这些默认值仅影响之后构建的提炼命令，不改写已有记忆，不改变画像规则或写入归属；有效期从原始回合发生时间起算，不是保存配置的时间。",
+    "memory.policy.days": "天",
+    "memory.policy.hours": "小时",
+    "memory.policy.minutes": "分钟",
+    "memory.policy.seconds": "秒",
+    "memory.policy.milliseconds": "毫秒",
+    "memory.policy.durationUnit": "有效期单位",
+    "memory.policy.userSource": "当前来源：用户保存的全局策略",
+    "memory.policy.defaultSource": "当前来源：内置默认值（尚未写入用户配置）",
+    "memory.policy.scoreHint": "送审评分使用各查询内的审核排名投影，不是原始向量或全文分数。Token 预算约束业务上下文，不代表整个模型请求的硬上限。",
+    "memory.policy.invalidValues": "请填写范围内的有效数值；除评分外，其他参数必须为整数。",
+    "memory.policy.invalidResponse": "原生策略接口未返回有效结果，当前草稿尚未保存。",
+    "memory.policy.saved": "策略已保存，新命令将使用此设置。",
+    "memory.policy.save": "保存召回与提炼策略",
+    "memory.policy.resetDraft": "填入内置默认值（保存后生效）",
+    "memory.ranking.title": "原生默认策略 · 检索排序",
+    "memory.cleanup.title": "原生默认策略 · 定期清洗",
+    "memory.projectRetention.title": "项目数据保留规则",
+    "memory.projectProfile.title": "项目画像规则",
+    "memory.projectProfile.description": "按记忆项目设置画像的初始期限、刷新延长量和上限。新规则用于新的画像处理命令，不重写已有画像；个人画像始终使用全局规则。",
+    "memory.projectProfile.inherited": "当前继承全局项目画像规则",
+    "memory.projectProfile.saved": "项目画像规则已保存，将用于新的画像处理命令。",
+    "memory.projectRetention.description": "按记忆项目设置热回合窗口、闲置与回收期限及保护规则。保存后用于下一轮清洗；已有回收批次期限不变。扫描开关、周期与个人画像仍使用全局设置。",
+    "memory.projectRetention.select": "选择记忆项目",
+    "memory.projectRetention.reload": "重新读取规则",
+    "memory.projectRetention.inherited": "当前继承全局数据保留规则",
+    "memory.projectRetention.overridden": "当前使用此记忆项目的独立规则",
+    "memory.projectRetention.saved": "项目保留规则已保存，将用于下一轮清洗。",
+    "memory.projectRetention.save": "保存项目覆盖",
+    "memory.projectRetention.inherit": "恢复全局继承",
+    "memory.projectRetention.fillGlobal": "填入当前全局值（尚未保存）",
+    "memory.cleanup.description": "调整自动清洗周期和保留规则。关闭自动清洗后仍可手动运行；新规则用于下一轮，已有回收批次保留原到期时间。",
+    "memory.cleanup.enabled": "启用定期清洗与画像过期扫描",
+    "memory.cleanup.scan": "完整清洗周期（分钟）",
+    "memory.cleanup.profileScan": "画像过期扫描周期（秒）",
+    "memory.cleanup.hotWindow": "每个会话保留的最新回合数",
+    "memory.cleanup.idle": "会话闲置多久后允许清洗",
+    "memory.cleanup.trash": "新回收批次的保留时长",
+    "memory.cleanup.protection": "高级 · 共享记忆保护",
+    "memory.cleanup.protectionHint": "启用保护时，达到优先级或记忆等级任一阈值的共享终态记忆会被保留。仅控制自动回收，不改变已有记忆的等级。",
+    "memory.cleanup.protectShared": "保护重要的共享终态记忆",
+    "memory.cleanup.priority": "受保护的最低优先级（0–100）",
+    "memory.cleanup.level": "受保护的最低记忆等级",
+    "memory.cleanup.session": "会话级",
+    "memory.cleanup.phase": "阶段级",
+    "memory.cleanup.stable": "稳定级",
+    "memory.cleanup.persistent": "持久级",
+    "memory.cleanup.unit": "单位",
+    "memory.cleanup.days": "天",
+    "memory.cleanup.hours": "小时",
+    "memory.cleanup.minutes": "分钟",
+    "memory.cleanup.seconds": "秒",
+    "memory.cleanup.milliseconds": "毫秒",
+    "memory.cleanup.invalid": "请输入范围内的完整整数；周期、保留时长与回合数必须大于零。",
+    "memory.cleanup.save": "保存清洗设置",
+    "memory.cleanup.saved": "清洗设置已保存，工作器将读取新配置。",
+    "memory.ranking.description": "调整新检索的候选与排序。保存不会重新生成向量，也不会重新提炼历史聊天；读取时衰减不会删除记忆。",
+    "memory.ranking.hybrid": "向量与全文融合",
+    "memory.ranking.mmr": "多样性选择（MMR）",
+    "memory.ranking.decay": "读取时衰减",
+    "memory.ranking.advanced": "高级排序参数",
+    "memory.ranking.lexical": "混合检索候选窗口下限",
+    "memory.ranking.rrf": "排名融合常数（RRF）",
+    "memory.ranking.replace": "替代候选审核评分下限",
+    "memory.ranking.dedupe": "硬去重余弦阈值（0 关闭）",
+    "memory.ranking.dedupePool": "硬去重候选窗口",
+    "memory.ranking.replacePool": "替代审核相似记忆数量",
+    "memory.ranking.rerank": "重排候选数量（0 关闭）",
+    "memory.ranking.lambda": "MMR 相关性权重",
+    "memory.ranking.shape": "Weibull 分布形状",
+    "memory.ranking.scale": "Weibull 时间尺度（小时）",
+    "memory.ranking.floor": "衰减倍率下限",
+    "memory.ranking.reinforce": "强化权重",
+    "memory.ranking.crossSession": "跨会话采纳加成",
+    "memory.ranking.scoreHint": "混合候选窗口由向量与全文共用。替代候选按审核后的评分筛选；硬去重单独使用余弦相似度，不能与全文 BM25 分值混用。关闭阶段会保留其参数，供再次开启时使用。",
+    "memory.ranking.save": "保存检索排序策略",
+    "memory.ranking.saved": "排序策略已保存，新命令将使用此设置。",
+    "memory.ranking.invalidValues": "请填写有效范围内的数值。候选数量必须为整数，RRF 必须是无前导零的正十进制整数。",
     "memory.resources.loading": "正在加载原生资源…",
     "memory.resources.refresh": "刷新资源",
     "memory.resources.promptBundle": "记忆提示词语言",
@@ -4793,9 +5217,23 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.resetConfirmAction": "确认恢复内置内容",
     "memory.resources.userPromptOnly": "用户提示词（不接收 system、assistant 或 tool 内容）",
     "memory.maintenance.title": "清洗与回收",
-    "memory.maintenance.description": "原生 VMM 启用后立即执行一次清洗，随后每 30 分钟运行；这里可查看策略、手动运行并维护回收站。",
+    "memory.maintenance.description": "启用周期清洗后按当前设置运行；这里可查看策略、预览人工清洗影响并维护回收站。",
     "memory.maintenance.invalidResponse": "原生 VMM 清洗接口返回了不匹配的结果。",
     "memory.maintenance.runNow": "立即清洗",
+    "memory.lexical.title": "全文检索索引",
+    "memory.lexical.description": "使用 Jieba 分词搜索记忆摘要与详情。可从当前活跃记忆重新生成全文文档并重建索引，不调用模型、不重新生成向量。",
+    "memory.lexical.documents": "全文源文档",
+    "memory.lexical.rows": "全文索引行",
+    "memory.lexical.rebuild": "重建全文索引",
+    "memory.lexical.confirmTitle": "确认重建全文索引？",
+    "memory.lexical.confirmDescription": "将从全部原生项目的 {count} 条活跃记忆重新生成全文索引，修复缺失或陈旧的派生文档。记忆正文、原向量、项目绑定与回收站内容均不改变。内容版本发生变化时将要求刷新后重新确认。",
+    "memory.lexical.completed": "已重建 {count} 条全文索引，未生成向量。",
+    "memory.lexical.countsNote": "计数用于对照，数量相等不代表分词内容一定完整；查询仍按项目权限和有效期过滤。",
+    "memory.maintenance.previewCleanup": "预览清洗",
+    "memory.maintenance.cleanupPreviewTitle": "确认清洗这些记录？",
+    "memory.maintenance.cleanupPreviewDescription": "记忆与回合移入回收站，画像仅标记过期；已到期回收批次及其中内容将永久清除。预览有效期为 5 分钟，数据或规则改变后需要重新预览。范围为全部原生记忆项目，不受回收站筛选影响。",
+    "memory.maintenance.cleanupImpact": "回收记忆 {memories} 条、回合 {turns} 个；过期画像 {profiles} 条；永久清除批次 {batches} 个。",
+    "memory.maintenance.cleanupRecordIds": "查看受影响记录标识",
     "memory.maintenance.status": "定期清洗状态",
     "memory.maintenance.statusDescription": "清洗由宿主串行调度，关系数据与 LanceDB 向量通过同一耐久变更账本提交。",
     "memory.maintenance.worker": "完整清洗工作器",
@@ -4858,10 +5296,28 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.memories": "记忆",
     "memory.maintenance.profiles": "画像节点",
     "memory.maintenance.evidence": "情境证据",
+    "memory.recycleRecords.inspect": "查看回收内容",
+    "memory.recycleRecords.description": "仅查看本批次实际保留的记录，不恢复内容，不与活动记录合并。会话 ID 仅表示记录来源，并非批次原始选择。",
+    "memory.recycleRecords.reload": "刷新明细",
+    "memory.recycleRecords.total": "共 {count} 条",
+    "memory.recycleRecords.failed": "无法加载回收明细，批次或版本可能已变化。请刷新重试，详细原因请查看操作提示。",
+    "memory.recycleRecords.empty": "本批次没有此类记录。",
+    "memory.recycleRecords.previous": "上一页",
+    "memory.recycleRecords.next": "下一页",
+    "memory.recycleRecords.session": "来源会话",
+    "memory.recycleRecords.savedStatus": "回收时的提取状态",
+    "memory.recycleRecords.sourceTurns": "来源回合",
+    "memory.recycleRecords.userProfile": "用户画像",
+    "memory.recycleRecords.projectProfile": "项目画像",
+    "memory.recycleRecords.support": "支持",
+    "memory.recycleRecords.rebuttal": "反驳",
     "memory.maintenance.expiresAt": "自动清除时间",
     "memory.maintenance.reasonTerminal": "终态记忆",
     "memory.maintenance.reasonColdTurn": "冷回合",
     "memory.maintenance.reasonIdle": "闲置会话",
+    "memory.maintenance.reasonManualSession": "人工回收会话",
+    "memory.maintenance.reasonManualTurn": "人工回收回合",
+    "memory.maintenance.manualSources": "查看原始人工选择",
     "vmm.experience.deployment.disabled": "未启用",
     "vmm.experience.deployment.external": "外部服务",
     "vmm.experience.setup.notConfigured": "未配置",
@@ -7566,6 +8022,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.rules.noProject": "No projects available",
     "memory.rules.applied": "Settings applied.",
     "memory.content.title": "Memory content",
+    "memory.content.retrieval": "Retrieval details",
+    "memory.content.finalScore": "Final retrieval score",
+    "memory.content.creationSource": "Memory creation source",
+    "memory.content.totalEvidence": "All contexts: support / rebuttal",
+    "memory.content.matchedEvidence": "Matched: support / rebuttal",
+    "memory.content.contextAdjustment": "Net context adjustment",
+    "memory.content.contextNotObserved": "Context evidence was not evaluated for this query; stored evidence may still exist.",
     "memory.content.description": "Use natural language to search, inspect, and maintain durable memory for the current user and project.",
     "memory.content.nativeDescription": "Use natural language to search, inspect, and maintain durable memory in the currently bound native memory project.",
     "memory.content.sessionRequiredTitle": "A conversation is required to add memory",
@@ -7587,6 +8050,67 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.write": "Save memory",
     "memory.content.sourceConversation": "Source conversation",
     "memory.nativeRecords.title": "Native memory provenance",
+    "memory.sessionList.title": "Memory sessions",
+    "memory.sessionList.description": "Filter session summaries by project, then open extraction records and generated memories. Selection applies only to this page.",
+    "memory.sessionList.back": "Back to sessions",
+    "memory.sessionList.projectSources": "View all project provenance",
+    "memory.sessionList.search": "Session title or ID",
+    "memory.sessionList.status": "Session status",
+    "memory.sessionList.extraction": "Extraction status",
+    "memory.sessionList.allStates": "All session states",
+    "memory.sessionList.allExtraction": "All extraction states",
+    "memory.sessionList.from": "Activity from (local date)",
+    "memory.sessionList.before": "Activity through (inclusive local date)",
+    "memory.sessionList.sort": "Sort by",
+    "memory.sessionList.newest": "Latest activity first",
+    "memory.sessionList.oldest": "Earliest activity first",
+    "memory.sessionList.titleSort": "Title order",
+    "memory.sessionList.apply": "Apply filters",
+    "memory.sessionList.loading": "Loading session summaries…",
+    "memory.sessionList.failed": "Could not load sessions. Refresh and check the action notification for details.",
+    "memory.sessionList.detailFailed": "Could not load provenance. Refresh and check the action notification for details.",
+    "memory.sessionList.invalidDates": "Choose valid dates with the end on or after the start.",
+    "memory.sessionList.selectPage": "Select this page",
+    "memory.sessionList.selected": "{count} sessions selected",
+    "memory.sessionList.mixed": "Archive requires all selected sessions to be active; unarchive requires all to be archived.",
+    "memory.sessionList.select": "Select session",
+    "memory.sessionList.empty": "No sessions match these filters.",
+    "memory.sessionList.total": "{total} sessions · Page {page}",
+    "memory.sessionList.previous": "Previous",
+    "memory.sessionList.next": "Next",
+    "memory.sessionArchive.active": "Active",
+    "memory.sessionArchive.archived": "Archived",
+    "memory.sessionArchive.recycled": "Recycled",
+    "memory.sessionArchive.forgotten": "Forgotten",
+    "memory.sessionArchive.unregistered": "Extraction session not yet registered",
+    "memory.sessionArchive.archive": "Archive session",
+    "memory.sessionArchive.unarchive": "Unarchive session",
+    "memory.sessionArchive.description": "Only changes the management classification. Memories, profiles and vectors are preserved; recall and extraction remain enabled. This preview expires after five minutes and must be refreshed if records change.",
+    "memory.sessionArchive.confirm": "Confirm change",
+    "memory.removal.sessions": "Preview session recycling",
+    "memory.removal.turns": "Preview selected turn recycling",
+    "memory.removal.selectSession": "Select session for recycling",
+    "memory.removal.selectTurn": "Select turn for recycling",
+    "memory.removal.title": "Confirm move to memory recycle bin",
+    "memory.removal.description": "Move the original records, associated ordinary memories and vectors to the recycle bin without copying or re-embedding. Keep all user and project profiles. VulcanCode conversations are not deleted.",
+    "memory.removal.sessionEffect": "Recycling a whole memory session pauses its memory processing. Restore it from the recycle bin.",
+    "memory.removal.turnEffect": "Recycle only selected turns and their ordinary memories. The memory session remains in its current enabled state.",
+    "memory.removal.vectors": "Associated vectors",
+    "memory.removal.hotTurns": "Affected hot-window turns",
+    "memory.removal.hotWindow": "Current hot-window size",
+    "memory.removal.context": "Associated context entries",
+    "memory.removal.projectProfiles": "Related project profiles (kept)",
+    "memory.removal.userProfiles": "Related user profiles (kept)",
+    "memory.removal.retention": "Retained from execution for",
+    "memory.removal.days": "days; cleanup may permanently purge expired records.",
+    "memory.removal.sources": "Inspect exact source sessions and turns",
+    "memory.removal.confirm": "Confirm move to recycle bin",
+    "memory.removal.failed": "Recycling did not complete. Inspect the action error and request a fresh preview. Expired or changed plans cannot be confirmed again.",
+    "memory.sessionRestart.action": "Restart memory",
+    "memory.sessionRestart.description": "Enable future memory reads and writes for these forgotten sessions only. Deleted memories, profiles and vectors are not restored, and historical conversations are not resent or re-extracted.",
+    "memory.sessionRestart.confirm": "Confirm restart",
+    "memory.sessionRestart.failed": "Memory was not restarted. Preview again and check the action notification for details.",
+    "memory.sessionArchive.failed": "The archive operation did not complete. Preview again and check the action notification for details.",
     "memory.nativeRecords.description": "Inspect turn extraction state, memory levels, and exact provenance by native memory project and host conversation.",
     "memory.nativeRecords.project": "Memory project",
     "memory.nativeRecords.session": "Host conversation",
@@ -7630,6 +8154,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.nativeRecords.expiresAt": "Expires",
     "memory.nativeRecords.turn": "Turn",
     "memory.nativeRecords.timeline": "Complete conversation content",
+    "memory.nativeRecords.previousTurns": "Previous turns",
+    "memory.nativeRecords.nextTurns": "Following turns",
     "memory.nativeRecords.analysisDetails": "Extraction details",
     "memory.nativeRecords.lastError": "Latest extraction error",
     "memory.nativeRecords.statusPending": "Pending extraction",
@@ -7749,8 +8275,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.instructionPlaceholder": "For example: Do not treat the old database approach as the current decision.",
     "memory.profile.applyInstruction": "Apply instruction",
     "memory.profile.preview": "Final profile preview",
+    "memory.profile.invalidBundleMode": "The profile service did not return an explicit content mode. Refresh and check the service response.",
     "memory.profile.previewDescription": "This is the complete profile text supplied to the memory service. Open it only for review or troubleshooting.",
-    "memory.profile.nativePreviewDescription": "This is the complete profile text prepared by the native memory core for the selected user or project. Open it only for review or troubleshooting.",
+    "memory.profile.nativePreviewDescription": "Profile text returned by the native memory core. Full mode combines the fixed user and selected project; split mode shows only the selected profile category.",
     "memory.profile.priority": "Priority",
     "memory.profile.level": "Level",
     "memory.profile.stateSummary": "Profile states",
@@ -7812,6 +8339,131 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.title": "Native resources and rules",
     "memory.resources.description": "Select, validate, and override Prompt, PII, and Noise resources by category. The editor shows only the currently effective content.",
     "memory.resources.invalidResponse": "The native VMM resource API returned an unexpected result.",
+    "memory.policy.title": "Native defaults · Recall and extraction",
+    "memory.textPolicy.title": "Text intake cleanup",
+    "memory.hostPolicy.title": "Native business settings for this project",
+    "memory.hostPolicy.description": "Override settings for this VulcanCode project without changing memory ownership, linked reads or fixed-user profiles. Groups save independently; unmodified groups inherit current globals. Connection and injection controls remain separate.",
+    "memory.hostPolicy.inherited": "Inherits current globals; edit and save to override for this project",
+    "memory.hostPolicy.overridden": "Using this project's override",
+    "memory.hostPolicy.inherit": "Restore global inheritance for this group",
+    "memory.hostPolicy.saved": "Project settings saved for the next command.",
+    "memory.hostPolicy.connection": "Override connection and injection settings",
+    "memory.profilePolicy.title": "Profile lifetimes",
+    "memory.profilePolicy.description": "Configure fixed-user lifetimes and project defaults independently. Applies to newly generated or revised profiles without rewriting existing deadlines.",
+    "memory.profilePolicy.user": "User profiles",
+    "memory.profilePolicy.project": "Project profile defaults",
+    "memory.profilePolicy.transient": "Transient",
+    "memory.profilePolicy.situational": "Situational",
+    "memory.profilePolicy.stable": "Stable",
+    "memory.profilePolicy.baseMs": "Base lifetime",
+    "memory.profilePolicy.stepMs": "Extension per refresh",
+    "memory.profilePolicy.maxMs": "Maximum lifetime",
+    "memory.profilePolicy.unit": "Time unit (applies to all three values in this row)",
+    "memory.profilePolicy.hint": "Lifetime = base + refresh weight × extension, capped at the maximum. Base must be at least 1 ms and no greater than the maximum; extension may be zero. Limit: 3650 days. Changing a unit interprets this row's values in the selected unit. Persistent profiles never expire.",
+    "memory.profilePolicy.save": "Save profile lifetimes",
+    "memory.profilePolicy.saved": "Profile lifetimes saved for subsequently generated or revised profiles.",
+    "memory.textPolicy.description": "Applies only to newly submitted user prompts, intermediate dialogue and final replies, without reprocessing history. Media and thoughts are always removed; PII and noise follow their independent settings.",
+    "memory.textPolicy.fold": "Fold long code and machine logs",
+    "memory.textPolicy.budget": "Target token budget per text fragment",
+    "memory.textPolicy.budgetHint": "256–131072; approximate head/tail token target, default 1200. This is not a hard limit for the whole model request. The later L1 target-plus-history budget is configured separately.",
+    "memory.textPolicy.save": "Save text cleanup settings",
+    "memory.textPolicy.saved": "Text cleanup settings saved for new intake fragments only.",
+    "memory.policy.description": "Configure pre-turn recall and post-turn extraction independently. Explicit saves go to the user VMM directory and affect new commands only. Running commands keep their admitted policy. These global defaults do not change project bindings.",
+    "memory.policy.precheckHistory": "Pre-turn recall · History turns",
+    "memory.policy.precheckBudget": "Pre-turn recall · History token budget",
+    "memory.policy.recallTopK": "Results recalled per query",
+    "memory.policy.reviewLimit": "Merged reviewer candidate limit",
+    "memory.policy.reviewScore": "Reviewer admission score floor",
+    "memory.policy.queryLimit": "Retrieval query limit",
+    "memory.policy.postactionHistory": "Post-turn extraction · Refined history turns",
+    "memory.policy.postactionBudget": "Post-turn extraction · Target and history token budget",
+    "memory.policy.extractedPriority": "New extracted memories · Default priority",
+    "memory.policy.extractedWeight": "New extracted memories · Initial refresh weight",
+    "memory.policy.extractedExpiry": "New extracted memories · Lifetime",
+    "memory.policy.extractedStability": "New extracted memories · Retention stability",
+    "memory.policy.extractedLevel": "New extracted memories · Memory level",
+    "memory.policy.working": "Working",
+    "memory.policy.stable": "Stable",
+    "memory.policy.archival": "Archival",
+    "memory.policy.expiryRange": "1 millisecond to 3650 days; must resolve to exact integer milliseconds.",
+    "memory.policy.extractedHint": "These defaults affect subsequently built extraction commands only. Existing memories, profile rules and write ownership are unchanged. Lifetime starts at the original turn time, not the settings save time.",
+    "memory.policy.days": "Days",
+    "memory.policy.hours": "Hours",
+    "memory.policy.minutes": "Minutes",
+    "memory.policy.seconds": "Seconds",
+    "memory.policy.milliseconds": "Milliseconds",
+    "memory.policy.durationUnit": "Lifetime unit",
+    "memory.policy.userSource": "Current source: User-saved global policy",
+    "memory.policy.defaultSource": "Current source: Built-in defaults (no user file written)",
+    "memory.policy.scoreHint": "Reviewer admission uses query-local rank projection, not raw vector or full-text scores. Token budgets govern business context, not a hard limit on the complete model request.",
+    "memory.policy.invalidValues": "Enter valid values within the displayed ranges. All fields except the score must be integers.",
+    "memory.policy.invalidResponse": "The native policy API did not return a valid result. The current draft has not been saved.",
+    "memory.policy.saved": "Policy saved. New commands will use these settings.",
+    "memory.policy.save": "Save recall and extraction policy",
+    "memory.policy.resetDraft": "Fill built-in defaults (save to apply)",
+    "memory.ranking.title": "Native defaults · Retrieval ranking",
+    "memory.cleanup.title": "Native defaults · Periodic cleanup",
+    "memory.projectRetention.title": "Project data retention",
+    "memory.projectRetention.description": "Configure the memory project's hot-turn window, idle and recycle durations, and protection rules. Saved rules apply to the next cleanup; existing recycle deadlines remain unchanged. Scheduling and personal profiles remain global.",
+    "memory.projectProfile.title": "Project profile rules",
+    "memory.projectProfile.description": "Set initial lifetimes, refresh extensions and caps per memory project. New rules apply to new profile commands without rewriting existing nodes. Personal profiles always use global rules.",
+    "memory.projectProfile.inherited": "Inheriting global project profile rules",
+    "memory.projectProfile.saved": "Project profile rules saved for new profile commands.",
+    "memory.projectRetention.select": "Select memory project",
+    "memory.projectRetention.reload": "Reload rules",
+    "memory.projectRetention.inherited": "Currently inheriting global data retention rules",
+    "memory.projectRetention.overridden": "Currently using this memory project's own rules",
+    "memory.projectRetention.saved": "Project retention rules saved for the next cleanup.",
+    "memory.projectRetention.save": "Save project override",
+    "memory.projectRetention.inherit": "Restore global inheritance",
+    "memory.projectRetention.fillGlobal": "Fill current global values (not saved)",
+    "memory.cleanup.description": "Tune automatic cleanup and retention. Manual runs remain available when scheduling is off. New rules apply to the next pass; existing recycle deadlines stay unchanged.",
+    "memory.cleanup.enabled": "Enable periodic cleanup and profile-expiry scans",
+    "memory.cleanup.scan": "Full cleanup interval (minutes)",
+    "memory.cleanup.profileScan": "Profile-expiry scan interval (seconds)",
+    "memory.cleanup.hotWindow": "Newest turns protected per session",
+    "memory.cleanup.idle": "Session inactivity before cleanup",
+    "memory.cleanup.trash": "Retention of new recycle batches",
+    "memory.cleanup.protection": "Advanced · Shared-memory protection",
+    "memory.cleanup.protectionHint": "When protection is enabled, shared terminal memories meeting either threshold are retained. This controls automatic recycling, not stored memory levels.",
+    "memory.cleanup.protectShared": "Protect important shared terminal memories",
+    "memory.cleanup.priority": "Minimum protected priority (0–100)",
+    "memory.cleanup.level": "Minimum protected memory level",
+    "memory.cleanup.session": "Session",
+    "memory.cleanup.phase": "Phase",
+    "memory.cleanup.stable": "Stable",
+    "memory.cleanup.persistent": "Persistent",
+    "memory.cleanup.unit": "Unit",
+    "memory.cleanup.days": "days",
+    "memory.cleanup.hours": "hours",
+    "memory.cleanup.minutes": "minutes",
+    "memory.cleanup.seconds": "seconds",
+    "memory.cleanup.milliseconds": "milliseconds",
+    "memory.cleanup.invalid": "Enter valid whole numbers. Intervals, retention durations, and turn counts must be positive.",
+    "memory.cleanup.save": "Save cleanup settings",
+    "memory.cleanup.saved": "Cleanup settings saved; workers will load the new configuration.",
+    "memory.ranking.description": "Tune candidates and ranking for new searches. Saving does not regenerate vectors or re-extract old conversations. Read-time decay does not delete memories.",
+    "memory.ranking.hybrid": "Vector/full-text fusion",
+    "memory.ranking.mmr": "Diversity selection (MMR)",
+    "memory.ranking.decay": "Read-time decay",
+    "memory.ranking.advanced": "Advanced ranking parameters",
+    "memory.ranking.lexical": "Shared hybrid candidate window floor",
+    "memory.ranking.rrf": "Rank fusion constant (RRF)",
+    "memory.ranking.replace": "Replacement reviewer score floor",
+    "memory.ranking.dedupe": "Hard-dedupe cosine threshold (0 disables)",
+    "memory.ranking.dedupePool": "Hard-dedupe candidate window",
+    "memory.ranking.replacePool": "Replacement reviewer similar-memory count",
+    "memory.ranking.rerank": "Rerank candidate count (0 disables)",
+    "memory.ranking.lambda": "MMR relevance weight",
+    "memory.ranking.shape": "Weibull shape",
+    "memory.ranking.scale": "Weibull scale (hours)",
+    "memory.ranking.floor": "Decay multiplier floor",
+    "memory.ranking.reinforce": "Reinforcement weight",
+    "memory.ranking.crossSession": "Cross-session adoption boost",
+    "memory.ranking.scoreHint": "Vector and full-text share the hybrid candidate window. Replacement uses reviewer-projected scores; hard dedupe uses cosine independently, never raw BM25. Disabled stages retain their parameters for later re-enablement.",
+    "memory.ranking.save": "Save retrieval ranking policy",
+    "memory.ranking.saved": "Ranking policy saved. New commands will use these settings.",
+    "memory.ranking.invalidValues": "Enter values within their valid ranges. Candidate counts must be integers; RRF must be a positive decimal integer without leading zeroes.",
     "memory.resources.loading": "Loading native resources…",
     "memory.resources.refresh": "Refresh resources",
     "memory.resources.promptBundle": "Memory prompt language",
@@ -7884,9 +8536,23 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.resetConfirmAction": "Restore built-in content",
     "memory.resources.userPromptOnly": "User prompt only (system, assistant, and tool content are not accepted)",
     "memory.maintenance.title": "Cleanup and recycle bin",
-    "memory.maintenance.description": "Native VMM runs an eager cleanup when enabled and then every 30 minutes. Inspect policy, run it now, and maintain recycled data here.",
+    "memory.maintenance.description": "Periodic cleanup follows the current settings when enabled. Inspect policy, preview manual cleanup, and maintain recycled data here.",
     "memory.maintenance.invalidResponse": "The native VMM retention API returned an unexpected result.",
     "memory.maintenance.runNow": "Run cleanup now",
+    "memory.lexical.title": "Full-text search index",
+    "memory.lexical.description": "Search memory summaries and details with Jieba. Recreate full-text documents from current active memories and rebuild the index without model calls or embedding generation.",
+    "memory.lexical.documents": "Full-text source documents",
+    "memory.lexical.rows": "Full-text index rows",
+    "memory.lexical.rebuild": "Rebuild full-text index",
+    "memory.lexical.confirmTitle": "Rebuild the full-text index?",
+    "memory.lexical.confirmDescription": "Recreate the full-text index from {count} active memories across all native projects, repairing missing or stale derived documents. Memory content, existing vectors, project bindings, and recycle-bin contents remain unchanged. Refresh and confirm again if the content version changes.",
+    "memory.lexical.completed": "Rebuilt {count} full-text rows without generating embeddings.",
+    "memory.lexical.countsNote": "Counts are observational; equal counts do not prove complete tokenization. Queries still enforce project access and expiry filters.",
+    "memory.maintenance.previewCleanup": "Preview cleanup",
+    "memory.maintenance.cleanupPreviewTitle": "Clean up these records?",
+    "memory.maintenance.cleanupPreviewDescription": "Memories and turns move to the recycle bin; profile nodes are only marked expired. Expired recycle batches and their contents are permanently removed. The preview expires after 5 minutes and must be refreshed if data or rules change. All native memory projects are included, regardless of the recycle-bin filter.",
+    "memory.maintenance.cleanupImpact": "Recycle {memories} memories and {turns} turns; expire {profiles} profile nodes; permanently remove {batches} batches.",
+    "memory.maintenance.cleanupRecordIds": "View affected record IDs",
     "memory.maintenance.status": "Scheduled cleanup status",
     "memory.maintenance.statusDescription": "The host serializes cleanup and commits relational data plus LanceDB vectors through one durable mutation journal.",
     "memory.maintenance.worker": "Full cleanup worker",
@@ -7949,10 +8615,28 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.memories": "Memories",
     "memory.maintenance.profiles": "Profile nodes",
     "memory.maintenance.evidence": "Context evidence",
+    "memory.recycleRecords.inspect": "Inspect retained content",
+    "memory.recycleRecords.description": "Inspect only records retained in this batch, without restoring or merging active content. Session IDs identify record sources, not the batch's original selection.",
+    "memory.recycleRecords.reload": "Reload details",
+    "memory.recycleRecords.total": "{count} records",
+    "memory.recycleRecords.failed": "Unable to load retained records. The batch or version may have changed. Reload and check the action notification for details.",
+    "memory.recycleRecords.empty": "This batch contains no records of this type.",
+    "memory.recycleRecords.previous": "Previous",
+    "memory.recycleRecords.next": "Next",
+    "memory.recycleRecords.session": "Source session",
+    "memory.recycleRecords.savedStatus": "Extraction state at recycling",
+    "memory.recycleRecords.sourceTurns": "Source turns",
+    "memory.recycleRecords.userProfile": "User profile",
+    "memory.recycleRecords.projectProfile": "Project profile",
+    "memory.recycleRecords.support": "Support",
+    "memory.recycleRecords.rebuttal": "Rebuttal",
     "memory.maintenance.expiresAt": "Automatic purge time",
     "memory.maintenance.reasonTerminal": "Terminal memory",
     "memory.maintenance.reasonColdTurn": "Cold turns",
     "memory.maintenance.reasonIdle": "Idle session",
+    "memory.maintenance.reasonManualSession": "Manually recycled sessions",
+    "memory.maintenance.reasonManualTurn": "Manually recycled turns",
+    "memory.maintenance.manualSources": "Inspect original manual selection",
     "vmm.experience.deployment.disabled": "Disabled",
     "vmm.experience.deployment.external": "External service",
     "vmm.experience.setup.notConfigured": "Not configured",

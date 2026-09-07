@@ -25,6 +25,12 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tracing::warn;
 
+/// Registration-scoped read-only observation evidence.
+/// 注册范围的只读观察证据。
+mod health;
+pub use health::LiveWatchObservationHealth;
+use health::{LiveWatchHealthState, LiveWatchLoopGuard};
+
 /// Coalesced file change notification for one subscriber.
 /// 单个订阅者收到的合并文件变更通知。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +293,9 @@ impl PathWatchCounts {
 /// Actual notify backend state.
 /// 真实 notify 后端状态。
 struct LiveFileWatcherInner {
+    /// Read-only observation evidence also updated by actual backend registration failures.
+    /// 实际后端注册失败也会更新的只读观察证据。
+    health: Arc<LiveWatchHealthState>,
     /// Notify watcher instance.
     /// notify 监听器实例。
     watcher: RecommendedWatcher,
@@ -428,6 +437,9 @@ impl Drop for LiveWatchRegistration {
 /// Multi-subscriber live file watcher.
 /// 多订阅实时文件监听器。
 pub struct LiveFileWatcher {
+    /// Health evidence has the same exact lifetime as this watcher, never a global singleton.
+    /// 健康证据与本监听器具有相同精确生命周期，绝非全局单例。
+    health: Arc<LiveWatchHealthState>,
     /// Optional live notify backend.
     /// 可选实时 notify 后端。
     inner: Option<Arc<Mutex<LiveFileWatcherInner>>>,
@@ -445,11 +457,16 @@ impl LiveFileWatcher {
         let watcher = notify::recommended_watcher(move |res| {
             let _ = raw_tx_clone.send(res);
         })?;
+        // Share backend failure evidence without changing existing subscriber event shapes.
+        // 共享后端失败证据，不改变既有订阅者事件结构。
+        let health = Arc::new(LiveWatchHealthState::default());
         let inner = LiveFileWatcherInner {
+            health: Arc::clone(&health),
             watcher,
             watched_paths: HashMap::new(),
         };
         let file_watcher = Self {
+            health,
             inner: Some(Arc::new(Mutex::new(inner))),
             state: Arc::new(RwLock::new(WatchState::default())),
         };
@@ -461,6 +478,7 @@ impl LiveFileWatcher {
     /// 创建惰性监听器，但仍支持测试用合成通知。
     pub fn noop() -> Self {
         Self {
+            health: Arc::new(LiveWatchHealthState::default()),
             inner: None,
             state: Arc::new(RwLock::new(WatchState::default())),
         }
@@ -660,6 +678,7 @@ impl LiveFileWatcher {
 
         if existing_mode.is_some() {
             if let Err(err) = guard.watcher.unwatch(path) {
+                guard.health.record_gap();
                 warn!("failed to unwatch {}: {err}", path.display());
             }
             guard.watched_paths.remove(path);
@@ -669,10 +688,12 @@ impl LiveFileWatcher {
             return;
         };
         if !path.exists() {
+            guard.health.record_gap();
             return;
         }
 
         if let Err(err) = guard.watcher.watch(path, next_mode) {
+            guard.health.record_gap();
             warn!("failed to watch {}: {err}", path.display());
             return;
         }
@@ -718,12 +739,24 @@ impl LiveFileWatcher {
     /// 将原始 notify 事件桥接为订阅者通知。
     fn spawn_event_loop(&self, mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>) {
         if let Ok(handle) = Handle::try_current() {
+            // Construct ownership before spawning so dropping an unpolled future also retires liveness.
+            // 派生任务前构造归属，使丢弃未轮询未来值也会退役存活状态。
+            let health_guard = LiveWatchLoopGuard(Arc::clone(&self.health));
+            self.health.running.store(true, Ordering::Release);
             let state = Arc::clone(&self.state);
             let inner = self.inner.as_ref().map(Arc::downgrade);
             handle.spawn(async move {
+                // Keep this guard until the exact consumer exits or is cancelled.
+                // 保留此守卫直到精确消费者退出或被取消。
+                let event_loop_health = health_guard;
                 loop {
                     match raw_rx.recv().await {
                         Some(Ok(event)) => {
+                            // A rescan flag may have no paths; retain the gap before ordinary event filtering.
+                            // 重新扫描标志可能没有路径；在普通事件过滤之前保留缺口。
+                            if event.need_rescan() {
+                                event_loop_health.0.record_gap();
+                            }
                             if !is_mutating_event(&event) || event.paths.is_empty() {
                                 continue;
                             }
@@ -731,6 +764,7 @@ impl LiveFileWatcher {
                             Self::notify_subscribers(&state, inner.as_ref(), &event.paths).await;
                         }
                         Some(Err(err)) => {
+                            event_loop_health.0.record_gap();
                             warn!("file watcher error: {err}");
                         }
                         None => break,

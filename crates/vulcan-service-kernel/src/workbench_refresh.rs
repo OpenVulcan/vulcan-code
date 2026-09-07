@@ -431,6 +431,13 @@ async fn refresh_workbench_snapshot_with_selected_session(
         }
         // Use the latest runtime configuration so a concurrent settings publication is not rolled back.
         // 使用最新运行时配置，避免回滚并发设置发布。
+        if let Some(retained) = guard.workspace_snapshot.as_ref() {
+            crate::vce::preserve_newer_vce_project_settings(
+                &mut refreshed_snapshot.task_projects,
+                &retained.task_projects,
+                &mut workbench.projects,
+            )?;
+        }
         let mut selected_provider_configuration = guard
             .agent_runtime
             .as_ref()

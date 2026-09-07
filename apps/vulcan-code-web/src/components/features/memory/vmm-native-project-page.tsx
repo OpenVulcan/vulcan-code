@@ -28,6 +28,8 @@ import type {
 } from "@/types"
 
 import type { MemoryActionRunOptions } from "./use-memory-area-controller"
+import { VmmNativeProjectRetention } from "./vmm-native-project-retention"
+import { VmmNativeProjectProfilePolicy } from "./vmm-native-project-profile-policy"
 
 // VmmNativeProjectPageProps defines native project catalog data and guarded maintenance actions.
 // VmmNativeProjectPageProps 定义原生项目目录数据与受保护维护动作。
@@ -367,6 +369,8 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
         </CardContent>
       </Card>
 
+      {catalog ? <VmmNativeProjectRetention projects={catalog.projects} busy={effectiveBusy} onRunAction={runAction} /> : null}
+      {catalog ? <VmmNativeProjectProfilePolicy projects={catalog.projects} busy={effectiveBusy} onRunAction={runAction} /> : null}
       {preview ? <NativePreviewCard busy={effectiveBusy} onCancel={() => setPreview(null)} onConfirm={() => void executePreview()} preview={preview} /> : null}
     </div>
   )

@@ -1,4 +1,6 @@
 import React from "react";
+import { VceFloatingNode } from "@/components/features/code-context/vce-project-controls";
+import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import {
   ArrowDown,
   ArrowUp,
@@ -385,6 +387,9 @@ export function ConversationSessionTodolistPanel(props: {
     }
     void props.onReviewRepositoryOrderChange?.(next);
   }, [orderedReviewRepositories, props.onReviewRepositoryOrderChange, reviewRepositoryOrderKeys, reviewRepositoryOrderStorageKey]);
+  // Semantic observation belongs to the selected project and does not require a Git repository.
+  // 语义观察归所选项目持有，不要求存在 Git 仓库。
+  const hasSemanticIndex = useVceProjectVisibility();
   const hasTodolist = Boolean(props.todolist?.items.length);
   const terminalSessions = React.useMemo(
     () => props.terminalSessions
@@ -415,6 +420,7 @@ export function ConversationSessionTodolistPanel(props: {
     props.todolist,
     hasTerminalSessions,
     hasSubagentTasks,
+    hasSemanticIndex,
   ].filter(Boolean).length;
   // renderExpanded follows the requested target state while transitionPhase keeps a short animation marker.
   // renderExpanded 跟随请求的目标状态，transitionPhase 则短暂保留动画标记。
@@ -465,7 +471,7 @@ export function ConversationSessionTodolistPanel(props: {
     ? `conversation-session-tool-transitioning is-${transitionPhase}`
     : null;
 
-  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions && !hasSubagentTasks) {
+  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions && !hasSubagentTasks && !hasSemanticIndex) {
     return null;
   }
 
@@ -517,6 +523,7 @@ export function ConversationSessionTodolistPanel(props: {
             <strong>{subagentTasks.length}</strong>
           </span>
         ) : null}
+        <VceFloatingNode collapsed />
         <Maximize2 className="conversation-session-tool-expand-hint" size={12} />
       </button>
     );
@@ -595,6 +602,7 @@ export function ConversationSessionTodolistPanel(props: {
           onOpenReviewChanges={() => props.onOpenReviewChanges()}
         />
       ) : null}
+      <VceFloatingNode />
       {hasTerminalSessions ? (
         <ConversationSessionTerminalSection
           summariesById={terminalSummaryById}

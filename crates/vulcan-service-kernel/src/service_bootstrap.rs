@@ -44,6 +44,10 @@ mod error;
 mod startup_snapshot;
 mod startup_updates;
 
+#[cfg(test)]
+#[path = "service_bootstrap/vce_startup_tests.rs"]
+mod vce_startup_tests;
+
 pub(super) use error::*;
 pub(super) use startup_snapshot::*;
 pub(super) use startup_updates::*;
@@ -963,6 +967,7 @@ fn run_service_bootstrap(
             Arc::clone(&internal_ai_port),
             data_plane,
             event_emitter.clone(),
+            crate::vce::vce_publication_authority(state),
         )),
         Err(error) => {
             eprintln!("[webui-service] optional native VCE bootstrap unavailable: {error}");
@@ -978,6 +983,7 @@ fn run_service_bootstrap(
                 watcher,
                 manager.clone(),
                 event_emitter.clone(),
+                Arc::clone(&runtime),
             ))
         }
         _ => None,
@@ -1002,6 +1008,9 @@ fn run_service_bootstrap(
             .await
             .map_err(|error| format!("原生 VMM Core 初始化失败：{error}"))?,
         );
+        // Install committed-content publication before any client or background worker can mutate Core.
+        // 在任何客户端或后台工作器可以变更 Core 之前安装已提交内容发布。
+        native_vmm_runtime.install_content_projection(state, event_emitter)?;
         // nativeVmmOperationGate separates concurrent functional reads/writes from exclusive project maintenance.
         // nativeVmmOperationGate 将并发功能读写与独占项目维护隔离。
         let native_vmm_operation_gate = Arc::new(tokio::sync::RwLock::new(()));
@@ -1009,7 +1018,8 @@ fn run_service_bootstrap(
             Arc::clone(&native_vmm_runtime),
             native_vmm_data_plane.clone(),
             Arc::clone(&native_vmm_operation_gate),
-        );
+        )
+        .with_writeback_runtime(vmm_hook_runtime.clone());
         if native_vmm_bootstrap_is_required(&global_vmm_effective)
             && let Err(error) = native_vmm_maintenance.validate_host_ai().await
         {
@@ -1371,36 +1381,13 @@ fn run_service_bootstrap(
         initial_projection_started_at,
         format!("selected={selected_session_id}"),
     );
-    // VCE enablement survives restart and each project failure remains isolated from service readiness.
-    // VCE 启用意图会跨重启保留，且每个项目失败均与服务就绪状态隔离。
+    // VCE startup retains only its already-created service boundary; project indexing is explicit.
+    // VCE 启动只保留已创建的服务边界；项目索引必须由用户明确触发。
     let vce_started_at = start_bootstrap_stage("vce");
-    let vce_result = match runtime.block_on(crate::vce::reconcile_vce_projects(state)) {
-        Ok(report) if report.failures.is_empty() => {
-            logs.push(format!(
-                "代码语义索引已协调 {} 个项目。",
-                report.reconciled_projects.len()
-            ));
-            "ready"
-        }
-        Ok(report) => {
-            for (project_id, error) in &report.failures {
-                eprintln!(
-                    "[webui-service] VCE project bootstrap degraded for `{project_id}`: {error}"
-                );
-            }
-            logs.push(format!(
-                "代码语义索引已协调 {} 个项目，{} 个项目降级。",
-                report.reconciled_projects.len(),
-                report.failures.len()
-            ));
-            "degraded"
-        }
-        Err(error) => {
-            eprintln!("[webui-service] VCE bootstrap degraded: {error}");
-            "degraded"
-        }
-    };
-    trace_bootstrap_stage("vce", vce_started_at, format!("result={vce_result}"));
+    logs.push(String::from(
+        "语义引擎服务已准备；项目索引等待用户明确创建或同步。",
+    ));
+    trace_bootstrap_stage("vce", vce_started_at, "result=lazy_ready");
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();
@@ -1453,26 +1440,6 @@ fn run_service_bootstrap(
 /// 仅当记忆已启用且当前选择原生后端时返回 `true`。
 fn native_vmm_bootstrap_is_required(effective: &vulcan_vmm::VmmEffectiveConfig) -> bool {
     effective.enabled && effective.backend_mode == vulcan_vmm::VmmBackendMode::Native
-}
-
-#[cfg(test)]
-mod native_vmm_bootstrap_tests {
-    use super::native_vmm_bootstrap_is_required;
-
-    /// Verifies only an enabled native selection turns local bootstrap failure into a service failure.
-    /// 验证只有已启用的原生选择才会把本地启动失败升级为服务失败。
-    #[test]
-    fn inactive_or_external_vmm_does_not_require_native_bootstrap() {
-        let mut effective = vulcan_vmm::VmmEffectiveConfig::default();
-        assert!(!native_vmm_bootstrap_is_required(&effective));
-
-        effective.enabled = true;
-        effective.backend_mode = vulcan_vmm::VmmBackendMode::ExternalGrpc;
-        assert!(!native_vmm_bootstrap_is_required(&effective));
-
-        effective.backend_mode = vulcan_vmm::VmmBackendMode::Native;
-        assert!(native_vmm_bootstrap_is_required(&effective));
-    }
 }
 
 /// Refreshes every configured public AI catalog into process memory during startup.
@@ -1710,4 +1677,24 @@ fn prepare_vulcan_plugin_runtime(
             )
         })?;
     Ok((vulcan_plugin_runtime, vulcan_plugin_catalog))
+}
+
+#[cfg(test)]
+mod native_vmm_bootstrap_tests {
+    use super::native_vmm_bootstrap_is_required;
+
+    /// Verifies only an enabled native selection turns local bootstrap failure into a service failure.
+    /// 验证只有已启用的原生选择才会把本地启动失败升级为服务失败。
+    #[test]
+    fn inactive_or_external_vmm_does_not_require_native_bootstrap() {
+        let mut effective = vulcan_vmm::VmmEffectiveConfig::default();
+        assert!(!native_vmm_bootstrap_is_required(&effective));
+
+        effective.enabled = true;
+        effective.backend_mode = vulcan_vmm::VmmBackendMode::ExternalGrpc;
+        assert!(!native_vmm_bootstrap_is_required(&effective));
+
+        effective.backend_mode = vulcan_vmm::VmmBackendMode::Native;
+        assert!(native_vmm_bootstrap_is_required(&effective));
+    }
 }

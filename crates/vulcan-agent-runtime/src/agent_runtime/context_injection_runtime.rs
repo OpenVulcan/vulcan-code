@@ -1,6 +1,7 @@
 //! host runtime adapters for shared context-injection state and hook helpers.
 //! 共享上下文注入状态与 hook helper 的宿主运行时适配器。
 
+use sha2::{Digest, Sha256};
 use vulcan_context_injection::{
     ContextInjectionState, InjectionHelper, InjectionInsert, InjectionKind, InjectionPanelCard,
     InjectionRenderOptions, InjectionRendererRegistry,
@@ -28,16 +29,34 @@ pub fn core_provider_context_injection_from_state_for_turn(
         registry: &registry,
         current_turn_marker,
     };
-    let view = state.resolve_view_with_options(&options);
+    let mut view = state.resolve_view_with_options(&options);
     // feature_policy independently gates state consumption and provider anchor rendering.
     // feature_policy 分别控制状态消费与 Provider 锚点渲染。
     let feature_policy = VmmRuntimeFeaturePolicy::from_env();
     let vmm_domain_active = feature_policy.session_state_enabled && vmm_runtime_ready;
-    let anchored_prefixes = if vmm_domain_active
+    let anchor_rendering_active = vmm_domain_active
         && feature_policy.stable_anchors_enabled
         && vmm_state.session_memory_status.allows_runtime_memory()
-        && vmm_state.stable_anchor_rendering_enabled
-    {
+        && vmm_state.stable_anchor_rendering_enabled;
+    // After compaction, a request-local hidden block carries live memory until the next real user can own an anchor.
+    // 压缩后，由请求局部隐藏块承载活动记忆，直到下一个真实用户消息可以拥有锚点。
+    let pending_baseline = if anchor_rendering_active {
+        vmm_state.pending_active_baseline_prefix()
+    } else {
+        None
+    };
+    // The fingerprint includes exact baseline bytes without exposing those bytes in diagnostic identities.
+    // 指纹覆盖准确基线字节，但不在诊断身份中暴露正文。
+    if let Some(prefix) = &pending_baseline {
+        view.fingerprint = format!(
+            "{}|vmm-pending:{}:{}",
+            view.fingerprint,
+            vmm_state.cache_epoch.epoch_id,
+            hex::encode(Sha256::digest(prefix.as_bytes()))
+        );
+        view.persistent_blocks.push(prefix.clone());
+    }
+    let anchored_prefixes = if anchor_rendering_active {
         vmm_state
             .cache_epoch
             .anchors
@@ -51,7 +70,7 @@ pub fn core_provider_context_injection_from_state_for_turn(
     } else {
         Vec::new()
     };
-    let mutation_kind = if !view.transient_prefix.trim().is_empty() {
+    let mutation_kind = if pending_baseline.is_some() || !view.transient_prefix.trim().is_empty() {
         CoreProviderContextMutationKind::HistoricalRewrite
     } else if anchored_prefixes.is_empty() {
         CoreProviderContextMutationKind::None
@@ -84,10 +103,12 @@ pub fn core_provider_context_injection_from_state_for_turn(
         transient_prefix: view.transient_prefix,
         anchored_prefixes,
         mutation_kind,
-        cache_epoch_id: (vmm_domain_active && !vmm_state.cache_epoch.anchors.is_empty())
-            .then(|| vmm_state.cache_epoch.epoch_id.clone()),
-        anchor_revision: (vmm_domain_active && !vmm_state.cache_epoch.anchors.is_empty())
-            .then_some(vmm_state.cache_epoch.anchor_revision),
+        cache_epoch_id: (vmm_domain_active
+            && (!vmm_state.cache_epoch.anchors.is_empty() || pending_baseline.is_some()))
+        .then(|| vmm_state.cache_epoch.epoch_id.clone()),
+        anchor_revision: (vmm_domain_active
+            && (!vmm_state.cache_epoch.anchors.is_empty() || pending_baseline.is_some()))
+        .then_some(vmm_state.cache_epoch.anchor_revision),
         rewrite_fingerprint,
         active_memory_body_bytes: cache_pressure.active_body_bytes,
         active_memory_estimated_tokens: cache_pressure.active_body_estimated_tokens,
@@ -377,5 +398,90 @@ mod tests {
         assert!(overlay_before_expiry.active_memory_body_bytes > 0);
         assert_eq!(overlay_after_expiry.active_memory_body_bytes, 0);
         assert!(overlay_after_expiry.reclaimable_anchor_bytes > 0);
+    }
+
+    /// Keeps memory visible after compaction without inventing a user, then binds it once to the next real user.
+    /// 压缩后不虚构用户仍保持记忆可见，随后仅向下一真实用户绑定一次。
+    /// Uses a real lease transition and verifies both request-only rendering and stop gating.
+    /// 使用真实租约转换，验证请求局部渲染及停用门禁。
+    #[test]
+    fn compaction_pending_baseline_survives_without_canonical_user() {
+        // Seed one active lease and an old anchor under the actual state transition API.
+        // 通过实际状态转换 API 建立一个活动租约和旧锚点。
+        let mut memory = VmmSessionMemoryState::default();
+        memory
+            .synchronize_stable_anchor_rendering(true, "1")
+            .expect("anchors enabled");
+        memory
+            .apply_recall_batch(
+                "session-a",
+                "old-user",
+                &VmmRecallBatch {
+                    ttl_turns: 3,
+                    injection_tag: String::from("memory"),
+                    injection_description: String::from("memory"),
+                    items: vec![ContextItem {
+                        memory_id: 7,
+                        text: String::from("live-compacted-memory"),
+                        ..Default::default()
+                    }],
+                },
+                "1",
+            )
+            .expect("recall");
+        memory
+            .begin_cache_epoch("9", None, "2")
+            .expect("exact compaction epoch");
+        assert!(memory.cache_epoch.anchors.is_empty());
+        assert_eq!(memory.active_leases.len(), 1);
+        // The canonical state remains unchanged when a provider-only baseline is rendered.
+        // 渲染 Provider 专属基线时，规范状态保持不变。
+        let before = memory.clone();
+        let overlay = core_provider_context_injection_from_state_for_turn(
+            &ContextInjectionState::default(),
+            &memory,
+            None,
+            true,
+        )
+        .expect("pending memory remains visible");
+        assert!(overlay.anchored_prefixes.is_empty());
+        assert_eq!(overlay.cache_epoch_id.as_deref(), Some("9"));
+        assert_eq!(overlay.persistent_blocks.len(), 1);
+        assert!(overlay.persistent_blocks[0].contains("live-compacted-memory"));
+        assert!(overlay.rewrite_fingerprint.is_some());
+        assert_eq!(memory, before);
+        assert!(
+            core_provider_context_injection_from_state_for_turn(
+                &ContextInjectionState::default(),
+                &memory,
+                None,
+                false,
+            )
+            .is_none()
+        );
+        memory
+            .bind_pending_state_to_user("actual-next-user", "3")
+            .expect("real user arrives");
+        // Rendering must switch from the hidden baseline to one exact anchor, never duplicate both.
+        // 渲染必须从隐藏基线切换为一个准确锚点，不能同时重复两者。
+        let anchored = core_provider_context_injection_from_state_for_turn(
+            &ContextInjectionState::default(),
+            &memory,
+            Some("next-turn"),
+            true,
+        )
+        .expect("new anchor");
+        assert!(anchored.persistent_blocks.is_empty());
+        assert_eq!(anchored.anchored_prefixes.len(), 1);
+        assert_eq!(
+            anchored.anchored_prefixes[0].target_message_id,
+            "actual-next-user"
+        );
+        assert!(
+            anchored.anchored_prefixes[0]
+                .prefix
+                .contains("live-compacted-memory")
+        );
+        assert!(memory.pending_active_baseline_prefix().is_none());
     }
 }

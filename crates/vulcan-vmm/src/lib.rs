@@ -4,9 +4,12 @@
 pub mod adapter;
 pub mod client;
 pub mod config;
+pub mod context_epoch;
 pub mod protocol;
 pub mod session_state;
+pub mod source;
 pub mod transport;
+pub mod writeback_permit;
 
 /// Generated VMM gRPC client and protobuf bindings.
 /// 生成的 VMM gRPC 客户端与 protobuf 绑定。
@@ -35,6 +38,7 @@ pub use config::{
     VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmEffectiveConfigSource,
     VmmNativeProjectBindingMode, VmmRuntimeFeaturePolicy,
 };
+pub use context_epoch::VmmContextEpoch;
 pub use protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
     ChatCompactResponse, ContextItem, DeleteMemoriesRequest, DeleteMemoriesResponse,
@@ -42,17 +46,19 @@ pub use protocol::{
     EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
     GetProfileNodesRequest, GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse,
     HealthzResponse, ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult,
-    MemorySearchHit, MigrateProjectRequest, MigrateProjectResponse, PostActionRequest,
-    PostActionResponse, PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode,
-    PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind,
-    ProfileTarget, ProjectEntry, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
-    ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsRequest,
-    SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry, UserEntry,
-    WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
+    MemorySearchHit, MemorySearchRetrieval, MigrateProjectRequest, MigrateProjectResponse,
+    PostActionRequest, PostActionResponse, PostActionTimelineItem, PostActionTimelineType,
+    PreCheckRecallMode, PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry,
+    ProfileNodeSourceKind, ProfileTarget, ProjectEntry, ResolveProjectRequest,
+    ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse, RetiredProfileNodeEntry,
+    SearchMemoryEventsRequest, SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry,
+    UserEntry, WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
 };
 pub use session_state::{
     VMM_SESSION_MEMORY_MAX_BYTES, VMM_SESSION_MEMORY_SCHEMA_VERSION, VmmCacheEpoch,
     VmmCachePressure, VmmLeaseTransitionReport, VmmMemoryLease, VmmPendingPromptEvent,
     VmmPromptAnchor, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState,
 };
+pub use source::{VmmMemoryReadSource, VmmMemorySource};
 pub use transport::{TonicVmmClient, VmmTransportConfig};
+pub use writeback_permit::VmmWritebackPermit;

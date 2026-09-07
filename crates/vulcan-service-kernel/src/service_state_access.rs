@@ -47,13 +47,23 @@ impl ProviderConfigurationTransaction {
         configuration: &ProviderConfigurationFile,
         error_context: &str,
     ) -> Result<(), String> {
-        vulcan_provider_config::config::save_configuration_file(configuration).map_err(|error| {
-            if error_context.is_empty() {
-                error
-            } else {
-                format!("{error_context}: {error}")
-            }
-        })
+        // Tests may explicitly own a private destination; production always uses the user path.
+        // 测试可以明确持有私有目标；生产始终使用用户路径。
+        #[cfg(test)]
+        let path = crate::tests::provider_configuration_persistence_scope::current_path()
+            .unwrap_or_else(vulcan_provider_config::config::configuration_file_path);
+        // Keep the production path independent from every test-only override.
+        // 保持生产路径与全部测试专用覆盖相互独立。
+        #[cfg(not(test))]
+        let path = vulcan_provider_config::config::configuration_file_path();
+        vulcan_provider_config::config::save_configuration_file_at_path(configuration, &path)
+            .map_err(|error| {
+                if error_context.is_empty() {
+                    error
+                } else {
+                    format!("{error_context}: {error}")
+                }
+            })
     }
 }
 
@@ -590,6 +600,12 @@ fn persist_public_ai_configuration_with_custom_manifests(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     save_error_context: &str,
 ) -> Result<(), String> {
+    // Only an explicitly scoped kernel test replaces the root; production never compiles this seam.
+    // 仅明确设置作用域的内核测试替换根目录；生产构建不编译此接缝。
+    #[cfg(test)]
+    let app_data_root = crate::tests::public_ai_persistence_scope::current_root()
+        .unwrap_or_else(vulcan_workspace_store::data_plane::application_data_root);
+    #[cfg(not(test))]
     let app_data_root = vulcan_workspace_store::data_plane::application_data_root();
     vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
         configuration,

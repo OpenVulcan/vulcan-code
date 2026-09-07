@@ -25,6 +25,9 @@ pub(crate) enum ProviderTransportTurnStartMode {
     /// The controller should run from provider-visible input already in the snapshot.
     /// 控制器应从快照中已有的 Provider 可见输入启动。
     RestoredCheckpoint,
+    /// Resume a host-admitted Continue action with its retained provider-visible history.
+    /// 使用保留的 Provider 可见历史恢复宿主已准入的继续动作。
+    ContinuedProviderTurn,
 }
 
 /// Owned provider transport execution request used to route one prepared runtime turn into the correct provider-specific adapter.

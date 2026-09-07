@@ -1,4 +1,4 @@
-﻿//! Resource and immutable configuration conformance tests.
+//! Resource and immutable configuration conformance tests.
 //! 资源与不可变配置一致性测试。
 
 #![allow(clippy::expect_used)]
@@ -315,7 +315,7 @@ fn memory_policy_and_snapshot_impacts_are_explicit() {
     let original = registry
         .register(ConfigBundle::default())
         .expect("default policy must compile");
-    assert_eq!(original.memory_policy.schema_version, 7);
+    assert_eq!(original.memory_policy.schema_version, 10);
     assert!(!original.memory_policy_digest.is_empty());
     assert!(!original.prompt_digest.is_empty());
     assert!(!original.pii_digest.is_empty());
@@ -601,6 +601,45 @@ fn postaction_policy_rejects_unbounded_zero_limits() {
             })
             .expect_err("zero PostAction bounds must fail registration");
         assert_eq!(error.code, ErrorCode::InvalidConfiguration, "{name}");
+    }
+}
+
+/// Verifies independent PreCheck budgets are bounded and both affect immutable snapshot identity.
+/// 验证独立 PreCheck 预算受边界约束，且两个字段都影响不可变快照身份。
+#[test]
+fn precheck_history_policy_is_independent_and_digest_bound() {
+    let mut registry = ConfigRegistry::new().expect("registry");
+    let original = registry
+        .register(ConfigBundle::default())
+        .expect("defaults");
+    for (history, tokens) in [(2, 6000), (3, 4096)] {
+        let changed = registry
+            .register(ConfigBundle {
+                memory_policy: MemoryPolicy {
+                    precheck_history_turn_limit: history,
+                    precheck_max_input_tokens: tokens,
+                    ..MemoryPolicy::default()
+                },
+                ..ConfigBundle::default()
+            })
+            .expect("valid independent setting");
+        assert_ne!(original.id, changed.id);
+        assert_eq!(changed.memory_policy.postaction_history_turn_limit, 3);
+        assert_eq!(changed.memory_policy.postaction_max_input_tokens, 6000);
+    }
+    for (history, tokens) in [(0, 6000), (65, 6000), (3, 0), (3, 131073)] {
+        assert!(
+            registry
+                .register(ConfigBundle {
+                    memory_policy: MemoryPolicy {
+                        precheck_history_turn_limit: history,
+                        precheck_max_input_tokens: tokens,
+                        ..MemoryPolicy::default()
+                    },
+                    ..ConfigBundle::default()
+                })
+                .is_err()
+        );
     }
 }
 

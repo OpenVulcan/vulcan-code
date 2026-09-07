@@ -239,7 +239,7 @@ impl ServiceShellHost for TestServiceShellHost {
 
 /// Builds a shared test shell host.
 /// 构建共享测试宿主壳。
-pub(super) fn test_service_shell_host() -> Arc<dyn ServiceShellHost> {
+pub(crate) fn test_service_shell_host() -> Arc<dyn ServiceShellHost> {
     Arc::new(TestServiceShellHost)
 }
 
@@ -601,7 +601,7 @@ impl Drop for TestControllerRuntimeRoot {
 
 /// Builds a minimal agent-runtime bridge for lifecycle unit tests.
 /// 为生命周期单元测试构建最小代理运行时桥。
-pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
+pub(crate) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
     // plugin_root provides isolated path identities without requiring a Lua engine.
     // plugin_root 提供隔离路径身份，且不要求存在 Lua 引擎。
     let plugin_root = std::env::temp_dir().join(format!("vulcan-plugin-test-{}", Uuid::new_v4()));

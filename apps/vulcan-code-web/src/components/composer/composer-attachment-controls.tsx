@@ -1,4 +1,5 @@
 import React from "react";
+import { VceComposerMenu } from "@/components/features/code-context/vce-project-controls";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
   BrainCircuit,
@@ -181,6 +182,7 @@ export function ComposerAttachmentMenu(props: {
           onOpenKnowledge={props.onOpenKnowledge}
           projectId={props.projectId}
         />
+        <VceComposerMenu />
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <BrainCircuit size={15} />

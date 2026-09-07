@@ -882,119 +882,136 @@ pub(super) fn spawn_conversation_completion_hook_task(
     mut completion_request: ConversationCompletionRequest,
 ) {
     spawn_service_task(async move {
-        // Current readiness may only revoke the immutable admission-time VMM permission.
-        // 当前就绪事实只能撤销不可变的准入期 VMM 权限。
-        let vmm_runtime_ready = match webui_vmm_runtime_readiness(&state) {
+        // Current readiness can only revoke the turn's previously admitted VMM permission.
+        // 当前就绪状态只能撤销回合此前准入的 VMM 权限。
+        let ready = match webui_vmm_runtime_readiness(&state) {
             Ok(readiness) => readiness.service_ready,
             Err(error) => {
-                eprintln!(
-                    "[webui-service] VMM completion readiness check failed; treating service as stopped: {error}"
-                );
+                eprintln!("[webui-service] VMM completion readiness check failed: {error}");
                 false
             }
         };
-        completion_request.restrict_vmm_runtime_readiness(vmm_runtime_ready);
+        completion_request.restrict_vmm_runtime_readiness(ready);
         let outcome = completion_request.run().await;
         let session_id = outcome.session_id;
         if let Err(error) = outcome.report.as_ref() {
             eprintln!(
-                "[webui-service] completed-turn hook failed for {}: {}",
-                outcome.turn_id, error
+                "[webui-service] completed-turn hook failed for {}: {error}",
+                outcome.turn_id
             );
         }
         if outcome.vmm_writeback_effects.is_empty() {
             return;
         }
-        // A service stop during hook execution revokes every returned VMM side effect.
-        // Hook 执行期间发生服务停止时，撤销其返回的全部 VMM 副作用。
         match webui_vmm_runtime_readiness(&state) {
             Ok(readiness) if readiness.service_ready => {}
             Ok(_) => return,
             Err(error) => {
-                eprintln!(
-                    "[webui-service] VMM writeback readiness check failed; dropping stopped-service effects: {error}"
-                );
+                eprintln!("[webui-service] VMM writeback readiness check failed: {error}");
                 return;
             }
         }
-        // authoritative_status is the last successful PostAction lifecycle observation in FIFO order.
-        // authoritative_status 是按 FIFO 顺序最后一次成功 PostAction 观察到的生命周期状态。
-        let authoritative_status = outcome
+        // Open the existing durable controller before taking the outer service lock; publication is validated later.
+        // 取得外层服务锁之前打开既有持久控制器；实际发布稍后再校验。
+        let now = current_unix_millis_text();
+        let controller = if outcome
             .vmm_writeback_effects
             .iter()
-            .rev()
-            .find_map(|effect| match effect {
-                VmmWritebackHookEffect::SessionStatus { status } => Some(*status),
-                _ => None,
-            });
-        if let Some(status) = authoritative_status {
-            let now = current_unix_millis_text();
-            let controller = match open_registered_session_vmm_controller(&state, session_id, &now)
-            {
-                Ok(controller) => controller,
+            .any(|effect| matches!(effect, VmmWritebackHookEffect::SessionStatus { .. }))
+        {
+            match open_registered_session_vmm_controller(&state, session_id, &now) {
+                Ok(controller) => Some(controller),
                 Err(error) => {
                     eprintln!(
                         "[webui-service] failed to open VMM session controller after PostAction for {session_id}: {error}"
                     );
                     return;
                 }
-            };
-            let command_id = format!(
-                "postaction-session-status:{}:{}",
-                outcome.turn_id,
-                serde_json::to_string(&status).unwrap_or_else(|_| String::from("invalid"))
-            );
-            if let Err(error) = controller.execute_command(&command_id, &now, |candidate| {
-                candidate
-                    .apply_authoritative_session_status(&session_id.to_string(), status, &now)
-                    .map(|_| ())
-            }) {
-                eprintln!(
-                    "[webui-service] failed to persist authoritative VMM session status for {session_id}: {error}"
-                );
+            }
+        } else {
+            None
+        };
+        let mut guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("failed to lock service state: {error}");
                 return;
             }
+        };
+        // Lock order is service state, hook admission, then session controller; configuration cannot interleave publication.
+        // 锁顺序为服务状态、Hook 准入、会话控制器；配置变更不能穿插发布。
+        let result = agent_runtime
+            .vmm_hook_runtime
+            .with_current_writeback_effects(
+                session_id,
+                outcome.vmm_writeback_effects,
+                |effects| -> Result<(), String> {
+                    if effects.is_empty() {
+                        return Ok(());
+                    }
+                    let workspace = guard
+                        .workspace_snapshot
+                        .as_mut()
+                        .ok_or_else(|| "workspace snapshot is not ready".to_owned())?;
+                    if let Some((permit_id, status)) =
+                        effects.iter().rev().find_map(|effect| match effect {
+                            VmmWritebackHookEffect::SessionStatus { permit_id, status } => {
+                                Some((*permit_id, *status))
+                            }
+                            _ => None,
+                        })
+                    {
+                        // A new generation must not reuse a previous destination's status command receipt.
+                        // 新代次不得复用此前目的地的状态命令回执。
+                        let command_id = format!(
+                            "postaction-session-status:{permit_id}:{}:{}",
+                            outcome.turn_id,
+                            serde_json::to_string(&status).map_err(|error| error.to_string())?
+                        );
+                        controller
+                            .as_ref()
+                            .ok_or_else(|| {
+                                "VMM lifecycle effect has no opened session controller.".to_owned()
+                            })?
+                            .execute_command(&command_id, &now, |candidate| {
+                                candidate
+                                    .apply_authoritative_session_status(
+                                        &session_id.to_string(),
+                                        status,
+                                        &now,
+                                    )
+                                    .map(|_| ())
+                            })?;
+                    }
+                    if let Some(runtime_state) =
+                        workspace.session_runtime_state.get_mut(&session_id)
+                    {
+                        apply_vmm_writeback_effects_to_runtime_state(runtime_state, effects, &now);
+                        runtime_state.updated_at = now.clone();
+                    }
+                    Ok(())
+                },
+            )
+            .and_then(|result| result);
+        if let Err(error) = result {
+            eprintln!(
+                "[webui-service] failed to publish VMM writeback effects for {session_id}: {error}"
+            );
+            return;
         }
-        {
-            let mut guard = match state.lock() {
-                Ok(guard) => guard,
-                Err(error) => {
-                    eprintln!("failed to lock service state: {error}");
-                    return;
-                }
-            };
-            let workspace = match guard.workspace_snapshot.as_mut() {
-                Some(workspace) => workspace,
-                None => {
-                    eprintln!(
-                        "[webui-service] apply completed-turn hook effects failed: workspace snapshot is not ready"
-                    );
-                    return;
-                }
-            };
-            let now = current_unix_millis_text();
-            if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) {
-                apply_vmm_writeback_effects_to_runtime_state(
-                    runtime_state,
-                    outcome.vmm_writeback_effects,
-                    &now,
-                );
-                runtime_state.updated_at = now;
-            }
-            // snapshotRefreshError must not discard already-applied Hook effects or skip persistence.
-            // snapshotRefreshError 不得丢弃已应用的 Hook 副作用，也不得跳过持久化。
-            if let Err(snapshot_refresh_error) = refresh_exact_vmm_hook_session_projection(
+        // Release admission's read guard before refreshing the mirror under its write lock.
+        // 在以写锁刷新镜像之前释放准入读守卫。
+        if let Some(workspace) = guard.workspace_snapshot.as_ref()
+            && let Err(error) = refresh_exact_vmm_hook_session_projection(
                 &agent_runtime.vmm_hook_runtime,
                 workspace,
                 session_id,
-            ) {
-                eprintln!(
-                    "[webui-service] failed to refresh VMM hook runtime after completed-turn effects for session {session_id}: {snapshot_refresh_error}"
-                );
-            }
+            )
+        {
+            eprintln!(
+                "[webui-service] failed to refresh VMM hook runtime after completed-turn effects for session {session_id}: {error}"
+            );
         }
-        // The VMM controller command above is the durable owner; workspace state is only a live UI projection.
-        // 上述 VMM Controller 命令是持久化所有者；workspace 状态仅作为实时 UI 投影。
     });
 }
 

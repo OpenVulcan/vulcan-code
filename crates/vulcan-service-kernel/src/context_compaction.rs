@@ -86,6 +86,7 @@ mod draft;
 mod messages;
 mod persist_display;
 mod streaming;
+mod vmm_projection;
 
 pub(super) use auto_compaction::*;
 pub(super) use budget::*;

@@ -877,6 +877,9 @@ export interface PublicAiInternalInferenceCandidate {
 // PublicAiInferenceProfile stores consumer-isolated routes.
 // PublicAiInferenceProfile 保存消费者隔离路由。
 export interface PublicAiInferenceProfile {
+  // Exact consumer dimension; VCE requires explicit saving while peer consumers may omit it.
+  // 精确消费者维度；VCE 要求明确保存，其他消费者可以省略。
+  embedding_dimensions?: number;
   llm_routes?: Record<string, PublicAiInferenceRoute>;
   // Exact reasoning effort selected independently for each restricted LLM purpose.
   // 为每个受限 LLM 用途独立选择的准确思考档位。

@@ -325,6 +325,10 @@ pub struct VmmSessionMemoryState {
     /// Exact host session identifier owning this state.
     /// 拥有该状态的精确宿主会话标识。
     pub session_id: String,
+    /// Exact source of resident recall and lifecycle state; absent until a host publication selects a source.
+    /// 驻留召回与生命周期状态的准确来源；在宿主发布选择来源前为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_source: Option<crate::VmmMemoryReadSource>,
     /// Monotonic state revision used by atomic persistence and diagnostics.
     /// 供原子持久化与诊断使用的单调状态版本。
     pub revision: u64,
@@ -372,6 +376,7 @@ impl Default for VmmSessionMemoryState {
         Self {
             schema_version: VMM_SESSION_MEMORY_SCHEMA_VERSION,
             session_id: String::new(),
+            read_source: None,
             revision: 0,
             session_memory_status: SessionMemoryStatus::Active,
             committed_command_hashes: Vec::new(),
@@ -388,6 +393,53 @@ impl Default for VmmSessionMemoryState {
 }
 
 impl VmmSessionMemoryState {
+    /// Selects the current host read source and discards foreign or unowned cached memory atomically.
+    /// 选择当前宿主读取来源，并原子丢弃其他来源或无来源的缓存记忆。
+    /// Takes the exact host session, optional active source and timestamp; returns whether state changed.
+    /// 接收准确宿主会话、可选活动来源和时间戳；返回状态是否改变。
+    /// Controller receipts and logical-turn lineage survive source switches; old bodies, anchors and status do not.
+    /// 来源切换保留控制器回执和逻辑回合沿革，不保留旧正文、锚点和状态。
+    pub fn select_read_source(
+        &mut self,
+        session_id: &str,
+        source: Option<&crate::VmmMemoryReadSource>,
+        updated_at: &str,
+    ) -> Result<bool, String> {
+        validate_mutation_timestamp(updated_at)?;
+        if let Some(source) = source {
+            source.validate().map_err(|error| error.to_string())?;
+        }
+        // Validate ownership before the no-op path, without mutating the retained state on failure.
+        // 在无操作路径之前校验归属，失败时不修改保留状态。
+        let mut candidate = self.clone();
+        candidate.ensure_owner(session_id, updated_at)?;
+        if self.read_source.as_ref() == source
+            && (source.is_some()
+                || (self.active_leases.is_empty()
+                    && self.pending_prompt_events.is_empty()
+                    && self.cache_epoch.anchors.is_empty()
+                    && self.session_memory_status == SessionMemoryStatus::Active))
+        {
+            return Ok(false);
+        }
+        // A monotonic revision makes a fresh source epoch distinct even when returning to an earlier source.
+        // 单调版本确保即使切回早先来源，新来源纪元仍然不同。
+        let revision = candidate.next_revision()?;
+        candidate.read_source = source.cloned();
+        candidate.active_leases.clear();
+        candidate.pending_prompt_events.clear();
+        candidate.cache_epoch = VmmCacheEpoch {
+            epoch_id: format!("source-{revision}"),
+            ..VmmCacheEpoch::default()
+        };
+        candidate.session_memory_status = SessionMemoryStatus::Active;
+        candidate.revision = revision;
+        candidate.updated_at = updated_at.to_owned();
+        candidate.validate(session_id)?;
+        *self = candidate;
+        Ok(true)
+    }
+
     /// Builds one pristine state owned by an exact host session.
     /// 构建一份归属于精确宿主会话的纯净状态。
     ///
@@ -496,6 +548,7 @@ impl VmmSessionMemoryState {
     /// 返回该状态是否从未获得会话归属或持久化 VMM 数据。
     pub fn is_pristine(&self) -> bool {
         self.session_id.is_empty()
+            && self.read_source.is_none()
             && self.revision == 0
             && self.session_memory_status == SessionMemoryStatus::Active
             && self.completed_turn_sequence == 0
@@ -618,6 +671,9 @@ impl VmmSessionMemoryState {
     /// Success only when every persisted invariant is satisfied.
     /// 仅当全部持久化不变量满足时返回成功。
     pub fn validate(&self, expected_session_id: &str) -> Result<(), String> {
+        if let Some(source) = &self.read_source {
+            source.validate().map_err(|error| error.to_string())?;
+        }
         if self.schema_version != VMM_SESSION_MEMORY_SCHEMA_VERSION {
             return Err(format!(
                 "Unsupported VMM session memory schema version {}.",
@@ -1387,43 +1443,75 @@ impl VmmSessionMemoryState {
         baseline_target_message_id: Option<&str>,
         updated_at: &str,
     ) -> Result<VmmLeaseTransitionReport, String> {
+        self.reset_cache_epoch(
+            compaction_id,
+            Some(compaction_id),
+            baseline_target_message_id,
+            updated_at,
+        )
+    }
+
+    /// Synchronizes the complete authoritative host lineage before binding any current user memory.
+    /// 在绑定任何当前用户记忆之前，同步完整权威宿主沿革。
+    /// Takes the explicit generation/optional-compaction identity and timestamp; returns the atomic transition report.
+    /// 接收明确的代次/可选压缩身份及时间戳，返回原子转换报告。
+    pub fn synchronize_context_epoch(
+        &mut self,
+        context: &crate::VmmContextEpoch,
+        updated_at: &str,
+    ) -> Result<VmmLeaseTransitionReport, String> {
+        self.reset_cache_epoch(
+            &context.cache_epoch_id(),
+            context.compaction_id(),
+            None,
+            updated_at,
+        )
+    }
+
+    /// Replaces only cache-epoch state using explicit identities, preserving receipts and logical turn counters.
+    /// 使用明确身份仅替换缓存纪元状态，保留回执及逻辑回合计数。
+    /// Takes the opaque epoch, optional compaction, optional actual user and timestamp; capacity errors restore the old state.
+    /// 接收不透明纪元、可选压缩、可选真实用户及时间戳；容量错误恢复原状态。
+    fn reset_cache_epoch(
+        &mut self,
+        epoch_id: &str,
+        compaction_id: Option<&str>,
+        baseline_target_message_id: Option<&str>,
+        updated_at: &str,
+    ) -> Result<VmmLeaseTransitionReport, String> {
         if self.is_pristine() {
             return Ok(VmmLeaseTransitionReport::default());
         }
-        if compaction_id.trim().is_empty() {
-            return Err(String::from(
-                "VMM cache epoch transition requires a non-empty compaction id.",
-            ));
+        if epoch_id.trim().is_empty() || compaction_id.is_some_and(|id| id.trim().is_empty()) {
+            return Err("VMM cache epoch requires explicit non-empty identities.".to_owned());
         }
-        if baseline_target_message_id.is_some_and(|message_id| message_id.trim().is_empty()) {
-            return Err(String::from(
-                "VMM cache epoch received an empty baseline user-message id.",
-            ));
+        if baseline_target_message_id.is_some_and(|id| id.trim().is_empty()) {
+            return Err("VMM cache epoch received an empty baseline user-message id.".to_owned());
         }
-        if self.cache_epoch.covered_compaction_id.as_deref() == Some(compaction_id) {
+        if self.cache_epoch.epoch_id == epoch_id
+            && self.cache_epoch.covered_compaction_id.as_deref() == compaction_id
+        {
             return Ok(VmmLeaseTransitionReport::default());
         }
         validate_mutation_timestamp(updated_at)?;
-        // previous_state preserves the old epoch if the new active baseline exceeds capacity.
-        // previous_state 在新活动基线超过容量时保留旧纪元。
+        // Preserve atomicity if the new live baseline cannot fit the existing capacity contract.
+        // 新活动基线不能满足既有容量契约时，保持原子性。
         let previous_state = self.clone();
-        // next_revision proves the new epoch can receive a distinct durable revision.
-        // next_revision 证明新纪元可以获得不同的持久化修订号。
         self.next_revision()?;
-        // expired_keys are reclaimed only after the canonical compaction draft has succeeded.
-        // expired_keys 仅在规范压缩草稿成功后执行物理回收。
+        // Expired residents are reclaimed only at the proven context boundary.
+        // 仅在已证明的上下文边界回收过期驻留项。
         let expired_keys = self
             .active_leases
             .iter()
             .filter(|(_, lease)| !lease.is_active_at(self.completed_turn_sequence))
-            .map(|(memory_key, _)| memory_key.clone())
+            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        for memory_key in &expired_keys {
-            self.active_leases.remove(memory_key);
+        for key in &expired_keys {
+            self.active_leases.remove(key);
         }
         self.cache_epoch = VmmCacheEpoch {
-            epoch_id: compaction_id.to_string(),
-            covered_compaction_id: Some(compaction_id.to_string()),
+            epoch_id: epoch_id.to_owned(),
+            covered_compaction_id: compaction_id.map(str::to_owned),
             anchors: Vec::new(),
             anchor_revision: 0,
             needs_active_baseline: self.stable_anchor_rendering_enabled
@@ -1433,14 +1521,16 @@ impl VmmSessionMemoryState {
         for lease in self.active_leases.values_mut() {
             lease.active_anchor_id = None;
         }
+        // The optional immediate target is used only by callers already holding a real canonical user ID.
+        // 仅已持有真实规范用户 ID 的调用方使用可选即时目标。
         let mut report = VmmLeaseTransitionReport {
             expired_lease_count: expired_keys.len(),
             changed: true,
-            ..VmmLeaseTransitionReport::default()
+            ..Default::default()
         };
         if self.stable_anchor_rendering_enabled
-            && let Some(target_message_id) = baseline_target_message_id
-            && self.bind_active_baseline_if_needed(target_message_id, updated_at)
+            && let Some(target) = baseline_target_message_id
+            && self.bind_active_baseline_if_needed(target, updated_at)
         {
             report.appended_anchor_count = 1;
         }
@@ -1669,20 +1759,36 @@ impl VmmSessionMemoryState {
         true
     }
 
+    /// Renders live memory during the anchorless interval after compaction, without mutating canonical history.
+    /// 在压缩后尚无锚点的间隔渲染活动记忆，不修改规范历史。
+    /// Returns no block outside the pending baseline state or when no unexpired active lease remains.
+    /// 不处于等待基线状态或没有未过期活动租约时，不返回文本块。
+    pub fn pending_active_baseline_prefix(&self) -> Option<String> {
+        if !self.stable_anchor_rendering_enabled || !self.cache_epoch.needs_active_baseline {
+            return None;
+        }
+        // Only still-active leases cross the boundary; historical anchor bodies are never used as a fallback.
+        // 只有仍活动的租约跨越边界；历史锚点正文绝不充当备用内容。
+        let items = self
+            .active_leases
+            .values()
+            .filter(|lease| lease.is_active_at(self.completed_turn_sequence))
+            .map(|lease| lease.item.clone())
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return None;
+        }
+        Some(render_grouped_memory_prefix(
+            "VMM_MEMORY_BASELINE",
+            "Active VMM memories retained across context compaction.",
+            &items,
+        ))
+    }
+
     /// Re-anchors every active lease once after compaction when a target message exists.
     /// 压缩后在目标消息存在时一次性重新锚定全部活动租约。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `target_message_id` is the exact user message receiving the active baseline.
-    /// `target_message_id` 是接收活动基线的精确用户消息。
-    /// `updated_at` is the anchor creation timestamp.
-    /// `updated_at` 是锚点创建时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when a baseline anchor was appended.
-    /// 追加了基线锚点时返回 `true`。
+    /// Takes the exact user-message ID and timestamp; returns whether a baseline anchor was appended.
+    /// 接收准确用户消息 ID 及时间戳，返回是否追加了基线锚点。
     fn bind_active_baseline_if_needed(
         &mut self,
         target_message_id: &str,
@@ -2185,6 +2291,170 @@ fn estimate_vmm_text_tokens_from_bytes(byte_count: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies source switches remove all memory bodies without erasing command receipts or terminal lineage.
+    /// 验证来源切换移除全部记忆正文，而不清除命令回执或终态沿革。
+    /// Uses exact native owners and reused numeric IDs; returns after round-trip and same-source assertions.
+    /// 使用准确原生归属及复用数字 ID；完成切回和同来源断言后返回。
+    #[test]
+    fn source_switch_preserves_receipts_but_never_reuses_old_bodies() {
+        // The linked-scope change deliberately keeps the same write owner.
+        // 连带范围变化刻意保持相同写入归属。
+        let first = crate::VmmMemoryReadSource::new(
+            crate::VmmMemorySource::native(7).expect("owner"),
+            vec![7],
+        )
+        .expect("source");
+        // A distinct visibility set must still invalidate cached context.
+        // 不同可见范围仍必须使缓存上下文失效。
+        let linked =
+            crate::VmmMemoryReadSource::new(first.owner.clone(), vec![7, 8]).expect("linked");
+        // Create a real lease, terminal receipt and active next turn through public state operations.
+        // 通过公共状态操作创建真实租约、终态回执及下一活动回合。
+        let mut state = VmmSessionMemoryState::new("session-a", "1").expect("state");
+        state
+            .select_read_source("session-a", Some(&first), "1")
+            .expect("select");
+        state
+            .apply_recall_batch(
+                "session-a",
+                "user-1",
+                &recall_batch(3, vec![memory_item(11, "old-source-body", 1.0)]),
+                "2",
+            )
+            .expect("recall");
+        state.register_active_turn("turn-1", "2").expect("active");
+        state.consume_turn("turn-1", "3").expect("terminal");
+        state
+            .register_active_turn("turn-2", "4")
+            .expect("next active");
+        state
+            .record_committed_controller_command("receipt-1", state.revision, "4")
+            .expect("receipt");
+        // Disable leaves immutable old anchors and body-free events, both of which source selection must discard.
+        // 禁用会留下旧不可变锚点及无正文事件，来源选择必须同时丢弃二者。
+        state.disable("5").expect("disable");
+        assert!(!state.cache_epoch.anchors.is_empty());
+        assert!(!state.pending_prompt_events.is_empty());
+        // Same-source selection must be an exact no-op, not a cache refresh or history rewrite.
+        // 同来源选择必须准确无操作，而非缓存刷新或历史重写。
+        let before = state.clone();
+        assert!(
+            !state
+                .select_read_source("session-a", Some(&first), "6")
+                .expect("same source")
+        );
+        assert_eq!(state, before);
+        assert!(
+            state
+                .select_read_source("session-a", Some(&linked), "7")
+                .expect("scope change")
+        );
+        assert!(state.active_leases.is_empty());
+        assert!(state.cache_epoch.anchors.is_empty());
+        assert!(state.pending_prompt_events.is_empty());
+        assert_ne!(state.cache_epoch.epoch_id, before.cache_epoch.epoch_id);
+        assert_eq!(
+            state.committed_command_hashes,
+            before.committed_command_hashes
+        );
+        assert_eq!(
+            state.completed_turn_sequence,
+            before.completed_turn_sequence
+        );
+        assert_eq!(state.last_consumed_turn_id, before.last_consumed_turn_id);
+        assert_eq!(state.active_turn_id, before.active_turn_id);
+        assert!(state.has_committed_controller_command("receipt-1"));
+        state
+            .apply_recall_batch(
+                "session-a",
+                "user-2",
+                &recall_batch(3, vec![memory_item(11, "new-source-body", 1.0)]),
+                "8",
+            )
+            .expect("same ID new source");
+        assert!(
+            state
+                .select_read_source("session-a", Some(&first), "9")
+                .expect("switch back")
+        );
+        assert!(state.active_leases.is_empty());
+        assert!(state.cache_epoch.anchors.is_empty());
+        state.validate("session-a").expect("valid switched state");
+        assert_eq!(
+            serde_json::from_str::<VmmSessionMemoryState>(
+                &serde_json::to_string(&state).expect("encode")
+            )
+            .expect("decode"),
+            state
+        );
+    }
+
+    /// Verifies missing or inactive sources cannot retain unowned content and invalid selections are atomic.
+    /// 验证缺失或停用来源不能保留无归属内容，且无效来源选择保持原子性。
+    /// Returns after validating unknown-cache cleanup, exact ownership, invalid scope and revision exhaustion.
+    /// 验证未知缓存清理、准确归属、无效范围及版本耗尽后返回。
+    #[test]
+    fn source_selection_clears_unowned_cache_and_rejects_invalid_changes_atomically() {
+        // An unselected cache represents content with no source proof and must never be relabeled.
+        // 未选择来源的缓存表示没有来源证明的内容，绝不能重新贴上来源标签。
+        let mut state = VmmSessionMemoryState::new("session-a", "1").expect("state");
+        state
+            .apply_recall_batch(
+                "session-a",
+                "user-1",
+                &recall_batch(3, vec![memory_item(11, "unowned-body", 1.0)]),
+                "2",
+            )
+            .expect("recall");
+        assert!(
+            state
+                .select_read_source("session-a", None, "3")
+                .expect("clear unowned")
+        );
+        assert!(state.active_leases.is_empty());
+        assert!(state.cache_epoch.anchors.is_empty());
+        // An inactive empty cache stays unchanged on repeated publication.
+        // 停用的空缓存在重复发布时保持不变。
+        let before = state.clone();
+        assert!(
+            !state
+                .select_read_source("session-a", None, "4")
+                .expect("empty no-op")
+        );
+        assert_eq!(state, before);
+        // Invalid inputs must leave every byte of the retained state unchanged.
+        // 无效输入必须保持保留状态的每个字节不变。
+        let invalid = crate::VmmMemoryReadSource {
+            owner: crate::VmmMemorySource::native(7).expect("owner"),
+            visible_project_ids: vec![8],
+        };
+        assert!(
+            state
+                .select_read_source("session-a", Some(&invalid), "5")
+                .is_err()
+        );
+        assert!(
+            state
+                .select_read_source("other-session", None, "5")
+                .is_err()
+        );
+        assert!(state.select_read_source("session-a", None, "").is_err());
+        assert_eq!(state, before);
+        // Exhaustion is tested against a valid changed source so the no-op branch cannot conceal it.
+        // 使用有效变化来源测试耗尽，避免无操作分支掩盖错误。
+        let valid = crate::VmmMemoryReadSource::new(invalid.owner, vec![7]).expect("source");
+        state.revision = u64::MAX;
+        // Keep an exact snapshot after deliberate exhaustion.
+        // 刻意耗尽之后保留准确快照。
+        let exhausted = state.clone();
+        assert!(
+            state
+                .select_read_source("session-a", Some(&valid), "6")
+                .is_err()
+        );
+        assert_eq!(state, exhausted);
+    }
 
     /// Builds one deterministic memory-backed VMM item for state-machine tests.
     /// 为状态机测试构建一条确定性的长期记忆 VMM 条目。

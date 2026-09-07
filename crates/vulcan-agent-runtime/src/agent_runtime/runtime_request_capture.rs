@@ -126,6 +126,9 @@ pub async fn capture_runtime_provider_wire_request_with_media_projection(
             crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::RestoredCheckpoint => {
                 ProviderTransportTurnStartMode::RestoredCheckpoint
             }
+            crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::ContinuedProviderTurn => {
+                ProviderTransportTurnStartMode::ContinuedProviderTurn
+            }
         },
         launch.core_snapshot,
         launch.task_runtime,

@@ -255,6 +255,19 @@ impl TonicVmmClient {
 
 #[async_trait]
 impl VmmClient for TonicVmmClient {
+    /// Resolves cached-memory ownership locally from this connection and the exact remote IDs.
+    /// 根据此连接及准确远端 ID 在本地解析缓存记忆归属。
+    /// Host project is intentionally unused externally; no management RPC or credential output occurs.
+    /// 外部模式明确不使用宿主项目；不发起管理 RPC 或输出凭据。
+    async fn memory_source(
+        &self,
+        _host_project_id: &str,
+        user_id: u64,
+        project_id: u64,
+    ) -> Result<crate::VmmMemorySource, VmmClientError> {
+        crate::VmmMemorySource::external(&self.config, user_id, project_id)
+    }
+
     /// Calls VMM Healthz.
     /// 调用 VMM Healthz。
     async fn healthz(&self) -> Result<HealthzResponse, VmmClientError> {
@@ -375,12 +388,41 @@ impl VmmClient for TonicVmmClient {
         Ok(protocol_delete_user_response(response.into_inner()))
     }
 
-    /// Calls VMM GetProfileNodes.
-    /// 调用 VMM GetProfileNodes。
+    /// Resolves an exact remote read identity without probing externally managed visibility.
+    /// 解析准确远端读取身份，不探测外部自行管理的可见范围。
+    /// Takes request user/project IDs and returns the configured transport identity with no local scopes.
+    /// 接收请求用户/项目 ID，返回不包含本地范围的已配置传输身份。
+    async fn memory_read_source(
+        &self,
+        _host_project_id: &str,
+        user_id: u64,
+        project_id: u64,
+    ) -> Result<crate::VmmMemoryReadSource, VmmClientError> {
+        // External query scope is owned by VMM, not inferred or configured by the host.
+        // 外置查询范围由 VMM 拥有，不由宿主推断或配置。
+        crate::VmmMemoryReadSource::new(
+            crate::VmmMemorySource::external(&self.config, user_id, project_id)?,
+            Vec::new(),
+        )
+    }
+
+    /// Calls VMM GetProfileNodes after verifying the optional local read expectation.
+    /// 核对可选本地读取预期后调用 VMM GetProfileNodes。
     async fn get_profile_nodes(
         &self,
         request: GetProfileNodesRequest,
     ) -> Result<GetProfileNodesResponse, VmmClientError> {
+        // Direct management requests retain their target-specific ID semantics without a cache expectation.
+        // 未提供缓存预期时，直接管理请求保留其目标专属 ID 语义。
+        if let Some(expected) = request.expected_read_source.as_ref() {
+            self.memory_read_source(
+                &request.host_project_id,
+                request.user_id,
+                request.project_id,
+            )
+            .await?
+            .verify_expected(Some(expected))?;
+        }
         let mut client = self.client.clone();
         let response = client
             .get_profile_nodes(
@@ -432,12 +474,21 @@ impl VmmClient for TonicVmmClient {
         &self,
         request: PreCheckRequest,
     ) -> Result<PreCheckResponse, VmmClientError> {
+        // Freeze this immutable connection and exact request IDs before consuming the request.
+        // 在消费请求前冻结本不可变连接及请求的准确身份。
+        let read_source = self
+            .memory_read_source(
+                &request.host_project_id,
+                request.user_id,
+                request.project_id,
+            )
+            .await?;
         let mut client = self.client.clone();
         let response = client
             .pre_check(self.precheck_request(grpc_precheck_request(request), "precheck")?)
             .await
             .map_err(status_error)?;
-        protocol_precheck_response(response.into_inner())
+        protocol_precheck_response(response.into_inner(), read_source)
     }
 
     /// Calls VMM PostAction.
@@ -446,6 +497,10 @@ impl VmmClient for TonicVmmClient {
         &self,
         request: PostActionRequest,
     ) -> Result<PostActionResponse, VmmClientError> {
+        // Verify against the frozen connected route before creating or sending the wire request.
+        // 创建或发送线上请求前，根据冻结的已连接路由校验。
+        crate::VmmMemorySource::external(&self.config, request.user_id, request.project_id)?
+            .verify_expected(request.expected_source.as_ref())?;
         let mut client = self.client.clone();
         let response = client
             .post_action(self.post_action_request(grpc_post_action_request(request), "postaction")?)
@@ -457,6 +512,17 @@ impl VmmClient for TonicVmmClient {
             trace_id: response.trace_id,
             session_memory_status: protocol_session_memory_status(response.session_memory_status)?,
         })
+    }
+
+    /// Checks revocation immediately before dispatch on the immutable connected remote route.
+    /// 在不可变已连接远端路由上派发之前立即检查撤销状态。
+    async fn post_action_with_permit(
+        &self,
+        request: PostActionRequest,
+        permit: &crate::VmmWritebackPermit,
+    ) -> Result<PostActionResponse, VmmClientError> {
+        permit.validate_request(&request)?;
+        self.post_action(request).await
     }
 
     /// Calls VMM ChatCompact.
@@ -545,7 +611,7 @@ impl VmmClient for TonicVmmClient {
 
 /// Normalizes a host:port target into a tonic endpoint URL.
 /// 将 host:port 目标规范化为 tonic endpoint URL。
-fn normalize_endpoint(target: &str) -> Result<String, VmmClientError> {
+pub(crate) fn normalize_endpoint(target: &str) -> Result<String, VmmClientError> {
     let target = target.trim();
     if target.is_empty() {
         return Err(VmmClientError::new(
@@ -832,6 +898,66 @@ mod tests {
     };
     use crate::protocol::{PostActionTimelineType, ProfileNodeSourceKind};
 
+    /// Verifies exact local source retention for empty and non-empty responses and rejects missing provenance.
+    /// 验证空与非空响应均保留准确本地来源，并拒绝缺失来源的响应。
+    /// Uses synthetic transport configuration only; returns after conversion and serialization assertions.
+    /// 仅使用合成传输配置；完成转换与序列化断言后返回。
+    #[test]
+    fn precheck_response_preserves_frozen_source_without_remote_scope_inference() {
+        // This synthetic credential must remain only in local configuration, never in the response.
+        // 此合成凭据只能留在本地配置中，不能进入响应。
+        let config = VmmTransportConfig::from_effective(&VmmEffectiveConfig {
+            grpc_target: "127.0.0.1:50051".to_owned(),
+            grpc_api_key: Some("synthetic-precheck-secret".to_owned()),
+            ..Default::default()
+        });
+        // The host owns the route identity; remote protobuf has no authority to supply it.
+        // 宿主拥有路由身份；远端 protobuf 无权提供该身份。
+        let source = crate::VmmMemoryReadSource::new(
+            crate::VmmMemorySource::external(&config, 3, 7).expect("owner"),
+            Vec::new(),
+        )
+        .expect("source");
+        for has_content in [false, true] {
+            // Exercise both an empty lifecycle result and actual memory content through the production converter.
+            // 通过生产转换器验证空生命周期结果与真实格式记忆内容。
+            let response = protocol_precheck_response(
+                crate::grpc::PreCheckResponse {
+                    should_inject: has_content,
+                    context_items: if has_content {
+                        vec![crate::grpc::ContextItem {
+                            memory_id: 11,
+                            text: "frozen-source-content".to_owned(),
+                            ..Default::default()
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    session_memory_status: crate::grpc::SessionMemoryStatus::Active as i32,
+                    ..Default::default()
+                },
+                source.clone(),
+            )
+            .expect("response");
+            assert_eq!(response.read_source, source);
+            assert!(response.read_source.visible_project_ids.is_empty());
+            assert_eq!(response.context_items.len(), usize::from(has_content));
+            // A serialized local response must not silently recreate a missing read identity.
+            // 序列化本地响应不能静默重建缺失的读取身份。
+            let mut serialized = serde_json::to_value(&response).expect("serialize");
+            assert!(!serialized.to_string().contains("synthetic-precheck-secret"));
+            assert_eq!(
+                serde_json::from_value::<PreCheckResponse>(serialized.clone()).expect("decode"),
+                response
+            );
+            serialized
+                .as_object_mut()
+                .expect("object")
+                .remove("read_source");
+            assert!(serde_json::from_value::<PreCheckResponse>(serialized).is_err());
+        }
+    }
+
     /// Verifies that protocol recall modes retain the updated gRPC wire values, especially the active compact-aware value 1.
     /// 验证协议召回模式保持更新后的 gRPC 线协议数值，尤其锁定当前启用的压缩感知模式值 1。
     #[test]
@@ -878,6 +1004,7 @@ mod tests {
     #[test]
     fn post_action_conversion_keeps_wire_timeline_types() {
         let request = grpc_post_action_request(PostActionRequest {
+            expected_source: Some(crate::VmmMemorySource::native(2).expect("local metadata only")),
             operation_id: String::from("operation"),
             session_id: String::from("s"),
             user_id: 1,
@@ -895,9 +1022,105 @@ mod tests {
         assert_eq!(request.timeline[0].content, "ask");
     }
 
+    /// Rejects revoked, unowned and wrong-route deliveries before reaching a listening test endpoint.
+    /// 在到达监听中的测试端点之前拒绝已撤销、无来源及路由不匹配的投递。
+    #[tokio::test]
+    async fn guarded_post_action_rejects_before_any_remote_connection() {
+        // A private loopback listener detects accidental dispatch without a real VMM service or paid model.
+        // 私有回环监听器检测意外派发，不需要真实 VMM 服务或付费模型。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("test listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let config = VmmTransportConfig::from_effective(&VmmEffectiveConfig {
+            grpc_target: format!(
+                "http://{}",
+                listener.local_addr().expect("listener address")
+            ),
+            ..Default::default()
+        });
+        let source = crate::VmmMemorySource::external(&config, 1, 7).expect("remote source");
+        let client = TonicVmmClient {
+            client: VmmServiceClient::new(
+                Endpoint::from_shared(config.grpc_target.clone())
+                    .expect("endpoint")
+                    .connect_lazy(),
+            ),
+            config,
+        };
+        let request = PostActionRequest {
+            expected_source: Some(source),
+            user_id: 1,
+            project_id: 7,
+            ..Default::default()
+        };
+        let revoked = crate::VmmWritebackPermit::new().expect("old permit");
+        revoked.revoke();
+        assert_eq!(
+            client
+                .post_action_with_permit(request.clone(), &revoked)
+                .await
+                .expect_err("cancelled")
+                .kind,
+            "writeback_cancelled"
+        );
+        let current = crate::VmmWritebackPermit::new().expect("current permit");
+        assert_eq!(
+            client
+                .post_action_with_permit(PostActionRequest::default(), &current)
+                .await
+                .expect_err("missing provenance")
+                .kind,
+            "missing_memory_source"
+        );
+        let wrong_route = PostActionRequest {
+            expected_source: Some(crate::VmmMemorySource::native(7).expect("native")),
+            ..request
+        };
+        assert_eq!(
+            client
+                .post_action_with_permit(wrong_route, &current)
+                .await
+                .expect_err("wrong route")
+                .kind,
+            "memory_source_changed"
+        );
+        // Profile preparation must reject a wrong backend locally before any gRPC dispatch too.
+        // 画像准备也必须在任何 gRPC 派发前于本地拒绝错误后端。
+        assert_eq!(
+            client
+                .get_profile_nodes(GetProfileNodesRequest {
+                    expected_read_source: Some(
+                        crate::VmmMemoryReadSource::new(
+                            crate::VmmMemorySource::native(7).expect("native owner"),
+                            vec![7],
+                        )
+                        .expect("native read scope")
+                    ),
+                    user_id: 1,
+                    project_id: 7,
+                    target: ProfileTarget::ProfileTargetProject,
+                    limit: 50,
+                    ..Default::default()
+                })
+                .await
+                .expect_err("wrong profile source")
+                .kind,
+            "memory_read_source_changed"
+        );
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("no connection dispatched")
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
     #[test]
     fn profile_management_conversion_keeps_targets_and_nodes() {
         let request = grpc_get_profile_nodes_request(GetProfileNodesRequest {
+            expected_read_source: None,
             target: ProfileTarget::ProfileTargetTeam,
             user_id: 7,
             project_id: 11,

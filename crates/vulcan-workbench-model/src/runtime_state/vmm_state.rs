@@ -5,6 +5,9 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VmmWritebackOutboxEntry {
+    /// Exact process-local delivery generation; old generations are never adopted after a source switch.
+    /// 准确进程内投递代次；来源切换后绝不接管旧代次。
+    pub permit_id: u64,
     /// Stable local outbox entry identifier.
     /// 稳定的本地 outbox 条目标识。
     pub id: String,
@@ -32,6 +35,10 @@ pub struct VmmWritebackOutboxEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VmmProfileSyncState {
+    /// Exact source and native visibility that produced this baseline and its deltas.
+    /// 产生当前基线及增量的准确来源和原生可见范围。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_source: Option<vulcan_vmm::VmmMemoryReadSource>,
     /// Latest compaction id already covered by a full profile hook injection.
     /// 已被全量画像 hook 注入覆盖的最近压缩标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,12 +69,34 @@ impl VmmProfileSyncState {
     /// Returns whether no profile sync state has been initialized yet.
     /// 返回当前是否尚未初始化任何画像同步状态。
     pub fn is_empty(&self) -> bool {
-        self.covered_compaction_id.is_none()
+        self.read_source.is_none()
+            && self.covered_compaction_id.is_none()
             && self.completed_turns_since_sync == 0
             && self.nodes_by_id.is_empty()
             && self.base_profile_content.is_none()
             && self.delta_profile_content.is_none()
             && self.updated_at.is_none()
+    }
+
+    /// Starts a fresh baseline whenever the owner, transport or native visibility changes.
+    /// 归属、传输或原生可见范围变化时开始新基线。
+    /// Takes the current validated read source; returns whether all prior baseline/delta metadata was reset.
+    /// 接收当前已校验读取来源；返回是否重置了全部此前基线及增量元数据。
+    pub fn select_read_source(
+        &mut self,
+        source: &vulcan_vmm::VmmMemoryReadSource,
+    ) -> Result<bool, vulcan_vmm::VmmClientError> {
+        source.validate()?;
+        if self.read_source.as_ref() == Some(source) {
+            return Ok(false);
+        }
+        // Numeric node IDs and refresh watermarks belong to one source, not to the host session alone.
+        // 数字节点 ID 和刷新水位属于一个来源，而不是仅属于宿主会话。
+        *self = Self {
+            read_source: Some(source.clone()),
+            ..Default::default()
+        };
+        Ok(true)
     }
 
     /// Records one completed logical user turn after provider success.
@@ -80,6 +109,51 @@ impl VmmProfileSyncState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A source switch resets profile content and refresh metadata even before the threshold is reached.
+    /// 即使尚未达到阈值，来源切换也重置画像内容和刷新元数据。
+    #[test]
+    fn profile_baseline_is_bound_to_complete_read_source() {
+        // Preserve same-source cache stability and reset only when its exact read identity changes.
+        // 保持同来源缓存稳定，仅在准确读取身份变化时重置。
+        let owner = vulcan_vmm::VmmMemorySource::native(7).expect("owner");
+        let first = vulcan_vmm::VmmMemoryReadSource::new(owner.clone(), vec![7, 8])
+            .expect("initial visibility");
+        let mut state = VmmProfileSyncState {
+            read_source: Some(first.clone()),
+            base_profile_content: Some("old baseline".to_owned()),
+            delta_profile_content: Some("old delta".to_owned()),
+            covered_compaction_id: Some("compaction".to_owned()),
+            completed_turns_since_sync: 2,
+            updated_at: Some("42".to_owned()),
+            ..Default::default()
+        };
+        let before = state.clone();
+        assert!(!state.select_read_source(&first).expect("same source"));
+        assert_eq!(state, before);
+        let changed =
+            vulcan_vmm::VmmMemoryReadSource::new(owner, vec![7, 9]).expect("changed visibility");
+        assert!(state.select_read_source(&changed).expect("new source"));
+        assert_eq!(
+            state,
+            VmmProfileSyncState {
+                read_source: Some(changed),
+                ..Default::default()
+            }
+        );
+        // A baseline without provenance is never silently assigned to a current project.
+        // 没有来源的基线绝不被静默归入当前项目。
+        state.read_source = None;
+        state.base_profile_content = Some("unowned".to_owned());
+        assert!(state.select_read_source(&first).expect("unowned reset"));
+        assert!(state.base_profile_content.is_none());
+        assert!(!state.is_empty());
+        let json = serde_json::to_value(&state).expect("encode");
+        assert_eq!(
+            serde_json::from_value::<VmmProfileSyncState>(json).expect("decode"),
+            state
+        );
+    }
 
     /// Verifies the removed profile field alias is rejected instead of migrated or ignored.
     /// 验证已移除的画像字段别名会被拒绝，而不是迁移或忽略。

@@ -585,6 +585,7 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
             durability: ProviderV1FinishedDurability::default(),
         },
     )
+    .await
     .expect("fallback failure record should commit");
 
     assert!(matches!(
@@ -704,7 +705,9 @@ async fn context_compaction_without_v1_durability_cannot_write_legacy_checkpoint
             retained_from_seq: Seq::try_new(1).expect("valid retained sequence"),
             durability: ProviderV1FinishedDurability::default(),
         },
-    ) {
+    )
+    .await
+    {
         Ok(_) => panic!("missing V1 durability must reject before any projection mutation"),
         Err(error) => error,
     };

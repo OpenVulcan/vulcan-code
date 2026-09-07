@@ -302,7 +302,11 @@ where
                         })
                     };
                     let run_future = async {
-                        let effective_turn_start_mode = if retry_resumes_seeded_input {
+                        // A transport retry must retain the already-admitted continuation mode and exact history.
+                        // 传输重试必须保留已准入的继续模式及精确历史。
+                        let effective_turn_start_mode = if retry_resumes_seeded_input
+                            && turn_start_mode != ProviderTransportTurnStartMode::ContinuedProviderTurn
+                        {
                             ProviderTransportTurnStartMode::RestoredCheckpoint
                         } else {
                             turn_start_mode
@@ -324,6 +328,17 @@ where
                                     &provider_adapter,
                                     &tool_executor,
                                     &tool_policy,
+                                    checkpoint,
+                                    intervention,
+                                )
+                                .await
+                            }
+                            ProviderTransportTurnStartMode::ContinuedProviderTurn => {
+                                controller.run_restored_provider_loop_streaming_with_checkpoints_and_interventions(
+                                    &provider_adapter,
+                                    &tool_executor,
+                                    &tool_policy,
+                                    None,
                                     checkpoint,
                                     intervention,
                                 )

@@ -72,14 +72,14 @@ describe("ContextEngine candidate contract", () => {
       tasks: ["provider_default"],
       output_kinds: ["dense"],
       encodings: ["float"],
-      dimensions: [],
+      dimensions: [1_024],
       default_dimensions: 1_024,
       normalization: "l2",
       distance_metric: "cosine",
     };
 
     expect(vceCandidateEligible(candidate, "embedding")).toBe(true);
-    candidate.capabilities.embedding.default_dimensions = undefined;
+    candidate.capabilities.embedding.dimensions = [];
     expect(vceCandidateEligible(candidate, "embedding")).toBe(false);
   });
 

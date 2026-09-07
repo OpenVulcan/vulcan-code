@@ -116,6 +116,10 @@ pub struct RetiredProfileNodeEntry {
 /// VMM GetProfileNodes 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetProfileNodesRequest {
+    /// Optional local source expectation, excluded from the external gRPC request.
+    /// 可选本地来源预期，不进入外置 gRPC 请求。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_read_source: Option<crate::VmmMemoryReadSource>,
     /// Requested profile target.
     /// 请求的画像目标。
     pub target: ProfileTarget,

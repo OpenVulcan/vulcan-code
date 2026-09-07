@@ -16,6 +16,10 @@ use crate::{
     public_ai_workbench_selection_after_route_revocation,
 };
 
+#[cfg(test)]
+#[path = "publication/vce_compensation_tests.rs"]
+mod vce_compensation_tests;
+
 /// Combines two independent rollback results without hiding either failure.
 /// 合并两个独立回滚结果且不隐藏任何失败。
 ///

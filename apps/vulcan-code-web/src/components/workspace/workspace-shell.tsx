@@ -1,4 +1,5 @@
 import React from "react";
+import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
   ConversationSessionCommitDialog,
@@ -140,6 +141,9 @@ function resolveWorkspaceSubagentTask(
 // WorkspaceShellContent renders the workspace shell after sidebar context is available.
 // WorkspaceShellContent 在侧栏上下文可用后渲染工作台外壳。
 function WorkspaceShellContent(props: WorkspaceShellProps) {
+  // Shared semantic state can make the floating panel visible without Git, terminals, or agents.
+  // 共享语义状态可独立于 Git、终端或智能体使浮动面板可见。
+  const semanticNodeVisible = useVceProjectVisibility();
   // sidebar controls the left project tree that can collapse automatically.
   // sidebar 控制可自动折叠的左侧项目树。
   const sidebar = useSidebar();
@@ -672,11 +676,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   );
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
-  const sessionToolPanelVisible = hasSelectedChatConversation && (
+  const sessionToolPanelVisible = (props.mainView === "chat" && semanticNodeVisible) || (hasSelectedChatConversation && (
     sessionGitCommitActionVisible
     || visibleSessionTerminalSessions.length > 0
     || visibleSessionSubagentTaskCount > 0
-  );
+  ));
 
   // refreshProjectGitSummary reloads the shared Git summary for one project path.
   // refreshProjectGitSummary 重新加载单个项目路径的共享 Git 摘要。

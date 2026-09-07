@@ -1,11 +1,26 @@
 //! Authoritative embedded resources, typed configuration, and immutable snapshots.
 //! 权威嵌入资源、强类型配置与不可变快照。
 
+mod conversation_text;
+mod machine_text;
 mod noise;
 mod pii;
 mod pii_condition;
+mod profile_policy;
+mod resource_path;
 mod source_regex;
+mod text_policy;
+mod token_budget;
 
+pub use conversation_text::{
+    clean_conversation_text_for_memory, normalize_memory_whitespace, sanitize_postaction_text,
+    sanitize_postaction_text_with_policy,
+};
+pub use profile_policy::{ProfileLifetimePolicy, ProfileLifetimeRule, ProfilePolicy};
+pub use text_policy::PostActionTextPolicy;
+pub use token_budget::{clip_memory_text_to_default_budget, estimate_memory_tokens};
+
+pub use machine_text::{MachineBlockRules, MachineTextCleanerConfig, clean_machine_text};
 pub use noise::{
     DEFAULT_SEMANTIC_THRESHOLD, NOISE_RULE_SCHEMA_VERSION, NoiseDecision, NoiseDetector,
     NoisePhraseTarget, NoisePolicy, NoisePrototypeRow,
@@ -39,7 +54,7 @@ pub const REQUIRED_PROMPT_SCENES: [&str; 5] = [
 
 /// Identifies the typed memory-policy schema compiled into one snapshot.
 /// 标识编译进一个快照的强类型记忆策略 Schema。
-pub const MEMORY_POLICY_SCHEMA_VERSION: u32 = 7;
+pub const MEMORY_POLICY_SCHEMA_VERSION: u32 = 10;
 
 /// Defines the maximum UTF-8 byte length of one configuration identifier or selector.
 /// 定义单个配置标识或选择器允许的最大 UTF-8 字节长度。
@@ -81,12 +96,24 @@ pub struct MemoryPolicy {
     /// Carries the default lifetime of subject-owned direct memories.
     /// 携带主体归属主动记忆的默认生命周期。
     pub direct_memory_subject_expiry_ms: u64,
+    /// Limits the same-session history presented to `PreCheck`, independently of extraction.
+    /// 独立于提炼过程，限制传递给 `PreCheck` 的同会话历史轮数。
+    pub precheck_history_turn_limit: u32,
+    /// Limits the approximate historical-input token budget for `PreCheck`.
+    /// 限制 `PreCheck` 历史输入的近似 Token 预算。
+    pub precheck_max_input_tokens: u32,
     /// Limits already-refined historical turns loaded for `PostAction` L1.
     /// 限制为 `PostAction` L1 加载的已提炼历史轮次数量。
     pub postaction_history_turn_limit: u32,
     /// Limits the approximate target-plus-history token budget for `PostAction` L1.
     /// 限制 `PostAction` L1 目标轮次与历史上下文的近似 Token 预算。
     pub postaction_max_input_tokens: u32,
+    /// Freezes reduction of each intake fragment before mandatory Core privacy/noise admission.
+    /// 在强制 Core 隐私/噪音准入之前冻结各入库片段的缩减规则。
+    pub postaction_text: PostActionTextPolicy,
+    /// Separates newly generated user and project profile lifetimes; existing node deadlines are not rewritten.
+    /// 分离新生成用户与项目画像的生命周期；不改写既有节点截止时间。
+    pub profiles: ProfilePolicy,
     /// Carries the normalized default priority for turn-extracted memories.
     /// 携带轮次提炼记忆的规范化默认优先级。
     pub postaction_memory_priority: u32,
@@ -119,8 +146,12 @@ impl Default for MemoryPolicy {
             direct_memory_session_expiry_ms: 15 * 24 * 60 * 60 * 1_000,
             direct_memory_environment_expiry_ms: 180 * 24 * 60 * 60 * 1_000,
             direct_memory_subject_expiry_ms: 365 * 24 * 60 * 60 * 1_000,
+            precheck_history_turn_limit: 3,
+            precheck_max_input_tokens: 6_000,
             postaction_history_turn_limit: 3,
             postaction_max_input_tokens: 6_000,
+            postaction_text: PostActionTextPolicy::default(),
+            profiles: ProfilePolicy::default(),
             postaction_memory_priority: 20,
             postaction_memory_stability: MemoryStability::Stable,
             postaction_memory_level: MemoryLevel::Stable,
@@ -1143,6 +1174,15 @@ fn snapshot_digest(
 /// 在记忆策略影响快照前校验其封闭契约。
 #[allow(clippy::too_many_lines)]
 fn validate_memory_policy(policy: &MemoryPolicy) -> Result<(), CoreError> {
+    for rules in [&policy.profiles.user, &policy.profiles.project] {
+        rules
+            .validate()
+            .map_err(|error| config_error(ErrorCode::InvalidConfiguration, error))?;
+    }
+    policy
+        .postaction_text
+        .validate()
+        .map_err(|error| config_error(ErrorCode::InvalidConfiguration, error))?;
     if policy.schema_version != MEMORY_POLICY_SCHEMA_VERSION {
         return Err(config_error(
             ErrorCode::InvalidConfiguration,
@@ -1162,6 +1202,14 @@ fn validate_memory_policy(policy: &MemoryPolicy) -> Result<(), CoreError> {
         return Err(config_error(
             ErrorCode::InvalidConfiguration,
             "PreCheck policy limits or reviewer score are invalid",
+        ));
+    }
+    if !(1..=64).contains(&policy.precheck_history_turn_limit)
+        || !(1..=131_072).contains(&policy.precheck_max_input_tokens)
+    {
+        return Err(config_error(
+            ErrorCode::InvalidConfiguration,
+            "PreCheck history must be between 1 and 64 and its input token budget between 1 and 131072",
         ));
     }
     if !(1..=64).contains(&policy.postaction_history_turn_limit) {
@@ -1529,8 +1577,21 @@ fn digest_memory_policy(policy: &MemoryPolicy) -> String {
     hasher.update(policy.direct_memory_session_expiry_ms.to_le_bytes());
     hasher.update(policy.direct_memory_environment_expiry_ms.to_le_bytes());
     hasher.update(policy.direct_memory_subject_expiry_ms.to_le_bytes());
+    hasher.update(policy.precheck_history_turn_limit.to_le_bytes());
+    hasher.update(policy.precheck_max_input_tokens.to_le_bytes());
     hasher.update(policy.postaction_history_turn_limit.to_le_bytes());
     hasher.update(policy.postaction_max_input_tokens.to_le_bytes());
+    hasher.update([u8::from(policy.postaction_text.fold_machine_text)]);
+    hasher.update(policy.postaction_text.max_fragment_tokens.to_le_bytes());
+    // Include both role-specific triples in fixed role/level/field order.
+    // 按固定角色/等级/字段顺序包含两组角色专属三元规则。
+    for rules in [&policy.profiles.user, &policy.profiles.project] {
+        for rule in [&rules.transient, &rules.situational, &rules.stable] {
+            hasher.update(rule.base_ms.to_le_bytes());
+            hasher.update(rule.step_ms.to_le_bytes());
+            hasher.update(rule.max_ms.to_le_bytes());
+        }
+    }
     hasher.update(policy.postaction_memory_priority.to_le_bytes());
     hasher.update((policy.postaction_memory_stability as u32).to_le_bytes());
     hasher.update((policy.postaction_memory_level as u32).to_le_bytes());

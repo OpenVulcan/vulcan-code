@@ -1,4 +1,123 @@
 use super::*;
+#[path = "vmm_recycle.rs"]
+mod recycle;
+pub use recycle::*;
+#[path = "vmm_removal.rs"]
+mod removal;
+pub use removal::*;
+
+/// Selects exact forgotten sessions for reactivation without restoring deleted content.
+/// 选择准确已遗忘会话重新启用，不恢复已删除内容。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeSessionRestartSelection {
+    /// Stable owner project ID, independent of display names.
+    /// 独立于显示名称的稳定归属项目 ID。
+    pub vmm_project_id: u64,
+    /// One to one hundred exact session identities, normalized by the server.
+    /// 一至一百个准确会话身份，由服务端归一化。
+    pub session_source_ids: Vec<String>,
+}
+
+/// Captures the immutable server selection and observed version before restart confirmation.
+/// 在重新启用确认前记录不可变服务端选择及观察版本。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeSessionRestartPreview {
+    /// Opaque server-owned preview identity.
+    /// 服务端拥有的不透明预览身份。
+    pub preview_id: String,
+    /// Exact authoritative version observed during preview.
+    /// 预览时观察的准确权威版本。
+    pub storage_version: u64,
+    /// Exact project and normalized session identities.
+    /// 准确项目及已归一化会话身份。
+    pub selection: VmmNativeSessionRestartSelection,
+}
+
+/// Confirms an existing restart preview; callers cannot replace its targets.
+/// 确认已有重新启用预览；调用方不能替换目标。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeSessionRestartConfirmation {
+    /// Opaque prepared preview identity.
+    /// 已准备预览的不透明身份。
+    pub preview_id: String,
+    /// Explicit approval after the user inspects the preview.
+    /// 用户查看预览后的明确同意。
+    pub confirmed: bool,
+}
+
+/// Reports committed reactivation without implying content restoration or historical replay.
+/// 报告已提交重新启用，不表示内容恢复或历史重放。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeSessionRestartResult {
+    /// Authoritative version after the classification change.
+    /// 分类变更后的权威版本。
+    pub storage_version: u64,
+    /// Exact committed project and session identities.
+    /// 准确已提交项目及会话身份。
+    pub selection: VmmNativeSessionRestartSelection,
+}
+
+/// Selects native memory sessions for archive classification without changing their content.
+/// 选择原生记忆会话进行归档分类，不修改其内容。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeSessionArchiveSelection {
+    /// Exact owner project ID.
+    /// 准确的归属项目 ID。
+    pub vmm_project_id: u64,
+    /// Exact session identities; the server validates and sorts the selection.
+    /// 准确会话身份；服务端校验并排序选择。
+    pub session_source_ids: Vec<String>,
+    /// True archives active sessions; false unarchives archived sessions.
+    /// 为真时归档活动会话，为假时取消已归档会话的归档。
+    pub archived: bool,
+}
+
+/// Holds the immutable server-prepared selection shown before archive confirmation.
+/// 保存归档确认前展示的服务端不可变选择。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeSessionArchivePreview {
+    /// Opaque identity of the latest server-prepared preview.
+    /// 最近服务端预览的不透明身份。
+    pub preview_id: String,
+    /// Authoritative content version observed during preview.
+    /// 预览时观察到的权威内容版本。
+    pub storage_version: u64,
+    /// Exact normalized operation and session identities.
+    /// 准确归一化的操作及会话身份。
+    pub selection: VmmNativeSessionArchiveSelection,
+}
+
+/// Confirms only a prepared preview, never a replacement client-supplied selection.
+/// 只确认已准备预览，不接受客户端替换选择。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeSessionArchiveConfirmation {
+    /// Opaque server-prepared preview identity.
+    /// 服务端预览的不透明身份。
+    pub preview_id: String,
+    /// Explicit user confirmation after inspecting the preview.
+    /// 用户查看预览后的明确确认。
+    pub confirmed: bool,
+}
+
+/// Reports the exact committed archive classification and resulting storage version.
+/// 报告准确已提交的归档分类及结果存储版本。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeSessionArchiveResult {
+    /// Resulting authoritative version.
+    /// 结果权威版本。
+    pub storage_version: u64,
+    /// Committed selection; content, vectors and extraction watermarks are unchanged.
+    /// 已提交选择；内容、向量和提炼水位均不变。
+    pub selection: VmmNativeSessionArchiveSelection,
+}
 
 /// Summarizes one VMM memory bundle or node group.
 /// 汇总单个 VMM 记忆集合或节点组。
@@ -806,11 +925,161 @@ pub struct VmmNativeTurnStatusCounts {
     pub corrupted: u64,
 }
 
+/// Selects one explicit native session list lifecycle category, including unregistered content-only rows.
+/// 选择明确的原生会话列表生命周期类别，包含尚未登记的仅内容记录。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeSessionListStatus {
+    /// Includes every lifecycle category.
+    /// 包含全部生命周期类别。
+    All,
+    /// Includes active sessions only.
+    /// 仅包含活动会话。
+    Active,
+    /// Includes archived sessions only.
+    /// 仅包含归档会话。
+    Archived,
+    /// Includes recycled sessions only.
+    /// 仅包含回收会话。
+    Recycled,
+    /// Includes forgotten sessions only.
+    /// 仅包含遗忘会话。
+    Forgotten,
+    /// Includes content-only rows with no persisted session lifecycle.
+    /// 仅包含没有持久化会话生命周期的内容记录。
+    Unregistered,
+}
+
+/// Selects sessions containing at least one turn in the exact persisted extraction state.
+/// 选择至少包含一个准确持久提取状态回合的会话。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeSessionExtractionFilter {
+    /// Includes sessions regardless of their turn counts.
+    /// 不限制会话回合计数。
+    All,
+    /// Includes sessions with pending turns.
+    /// 包含具有待提取回合的会话。
+    Pending,
+    /// Includes sessions with completed extraction turns, including valid empty results.
+    /// 包含具有已完成提取回合的会话，包括有效空结果。
+    Completed,
+    /// Includes processed turns with an unknown extraction result.
+    /// 包含已处理但提取结果未知的回合。
+    ProcessedUnknown,
+    /// Includes explicitly bypassed analysis turns.
+    /// 包含明确跳过分析的回合。
+    AnalysisBypassed,
+    /// Includes corrupted turns.
+    /// 包含损坏回合。
+    Corrupted,
+}
+
+/// Defines deterministic list ordering with source-ID tie breaks.
+/// 定义使用来源 ID 打破平局的确定性列表排序。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeSessionListSort {
+    /// Shows most recently active sessions first; missing activity remains last.
+    /// 最近活动的会话优先；缺少活动时间的记录仍置后。
+    LastActivityDesc,
+    /// Shows earliest activity first; missing activity remains last.
+    /// 最早活动优先；缺少活动时间的记录仍置后。
+    LastActivityAsc,
+    /// Sorts live host titles, using source IDs for untitled rows and ties.
+    /// 按实时宿主标题排序；无标题记录及平局使用来源 ID。
+    TitleAsc,
+}
+
+/// Defines a bounded native session list request; every filter is applied before pagination.
+/// 定义有界原生会话列表请求；全部筛选在分页前应用。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeSessionListQuery {
+    /// Exact native owner ID, independent of its name.
+    /// 准确原生归属 ID，独立于名称。
+    pub vmm_project_id: u64,
+    /// Explicit lifecycle filter.
+    /// 明确生命周期筛选。
+    pub status: VmmNativeSessionListStatus,
+    /// Matches sessions with at least one selected extraction state; all imposes no count condition.
+    /// 匹配至少有一个所选提取状态回合的会话；all 不限制计数。
+    pub extraction_status: VmmNativeSessionExtractionFilter,
+    /// Explicit ordering before pagination.
+    /// 分页前的明确排序。
+    pub sort: VmmNativeSessionListSort,
+    /// Case-insensitive substring of the host title or exact source ID; at most 512 characters.
+    /// 宿主标题或准确来源 ID 的不区分大小写子串；最多 512 个字符。
+    pub search: String,
+    /// Inclusive last-activity lower bound in Unix milliseconds; null disables it.
+    /// 最近活动 Unix 毫秒下界（含）；null 表示不限制。
+    pub last_activity_from_unix_ms: Option<i64>,
+    /// Exclusive last-activity upper bound in Unix milliseconds; null disables it.
+    /// 最近活动 Unix 毫秒上界（不含）；null 表示不限制。
+    pub last_activity_before_unix_ms: Option<i64>,
+    /// Number of filtered rows to skip.
+    /// 跳过的已筛选记录数。
+    pub offset: u32,
+    /// Maximum returned rows, from 1 through 100.
+    /// 最大返回记录数，范围 1 至 100。
+    pub limit: u16,
+    /// Optional Core version from the preceding page; stale content must be refreshed.
+    /// 可选前页 Core 版本；内容变更后必须刷新。
+    pub expected_storage_version: Option<u64>,
+}
+
+/// Returns one filtered native session page without transporting turn or memory bodies.
+/// 返回一页已筛选原生会话，不传输回合或记忆正文。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeSessionListPage {
+    /// Coherent Core content version for subsequent page requests.
+    /// 用于后续分页请求的一致 Core 内容版本。
+    pub storage_version: u64,
+    /// Exact native project owner.
+    /// 准确原生项目归属。
+    pub project_id: u64,
+    /// Count after all filters and before pagination.
+    /// 全部筛选后、分页前的计数。
+    pub total: u64,
+    /// Accepted filtered-row offset.
+    /// 已接纳的筛选记录偏移量。
+    pub offset: u32,
+    /// Accepted maximum page size.
+    /// 已接纳的最大分页数量。
+    pub limit: u16,
+    /// Only this page's ordered lightweight summaries.
+    /// 仅本页有序轻量摘要。
+    pub sessions: Vec<VmmNativeMemorySessionSummary>,
+}
+
+/// Identifies a persisted native session lifecycle without deriving it from content counts.
+/// 标识持久化原生会话生命周期，不从内容数量推导。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeSessionStatus {
+    /// Ordinary runtime memory is enabled.
+    /// 普通运行时记忆已启用。
+    Active,
+    /// Archived classification keeps runtime memory enabled.
+    /// 归档分类保持运行时记忆启用。
+    Archived,
+    /// Runtime memory is paused while content is recoverable.
+    /// 内容可恢复期间暂停运行时记忆。
+    Recycled,
+    /// Runtime memory remains paused until explicit restart.
+    /// 显式重新启用前保持运行时记忆暂停。
+    Forgotten,
+}
+
 /// Summarizes native memory activity attributable to one host session.
 /// 汇总可归属于一个宿主会话的原生记忆活动。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmNativeMemorySessionSummary {
+    /// Persisted lifecycle, or null for content-only sessions without extraction metadata.
+    /// 持久化生命周期；仅有内容而没有提取元数据的会话为 null。
+    pub status: Option<VmmNativeSessionStatus>,
     /// Stable host session identity persisted by Core.
     /// Core 持久化的稳定宿主会话标识。
     pub session_source_id: String,
@@ -870,6 +1139,12 @@ pub struct VmmNativeTurnRecordSummary {
     /// Stable native numeric turn identity.
     /// 稳定的原生数字回合标识。
     pub turn_id: u64,
+    /// Current preceding same-owner turn IDs in numeric order.
+    /// 当前同归属的前序回合 ID，按数字排序。
+    pub previous_turn_ids: Vec<u64>,
+    /// Current following same-owner turn IDs in numeric order.
+    /// 当前同归属的后续回合 ID，按数字排序。
+    pub next_turn_ids: Vec<u64>,
     /// Stable host session identity owning the turn.
     /// 拥有该回合的稳定宿主会话标识。
     pub session_source_id: String,
@@ -1214,6 +1489,454 @@ pub struct VmmNativeClearResult {
     pub removed: VmmNativeProjectContentCounts,
 }
 
+/// Closed stability classes for newly extracted memories, independent of ownership.
+/// 新提炼记忆的封闭稳定性分类，独立于归属关系。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeExtractedMemoryStability {
+    /// Short-lived working content.
+    /// 短期工作内容。
+    Working,
+    /// Ordinary durable content.
+    /// 常规持久内容。
+    Stable,
+    /// Archival content requiring explicit lifecycle management.
+    /// 需要显式生命周期管理的归档内容。
+    Archival,
+}
+
+/// Closed extracted-memory levels, independent of project ownership and profile lifetime rules.
+/// 封闭的提炼记忆等级，独立于项目归属及画像生命周期规则。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeExtractedMemoryLevel {
+    /// Session-level working memory.
+    /// 会话级工作记忆。
+    Session,
+    /// Phase-level memory.
+    /// 阶段级记忆。
+    Phase,
+    /// Stable memory.
+    /// 稳定记忆。
+    Stable,
+    /// Persistent memory.
+    /// 持久记忆。
+    Persistent,
+}
+
+/// User-editable recall and extraction policy, excluding host-owned score contract identities.
+/// 用户可编辑的召回与提炼策略，不包含宿主持有的评分契约身份。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeRecallPolicySummary {
+    /// Maximum same-session historical turns supplied to PreCheck, from 1 to 64.
+    /// 提供给 PreCheck 的同会话历史轮数上限，范围为 1 至 64。
+    pub precheck_history_turn_limit: u32,
+    /// Approximate historical-input budget, from 1 to 131072 tokens.
+    /// 历史输入的近似预算，范围为 1 至 131072 Token。
+    pub precheck_max_input_tokens: u32,
+    /// Results recalled per independent query, bounded by the Core retrieval maximum.
+    /// 每个独立查询召回的结果数，受 Core 检索上限约束。
+    pub precheck_recall_top_k: u32,
+    /// Maximum merged and redacted candidates reviewed by PreCheck L2, from 1 to 256.
+    /// PreCheck L2 审核的跨组合并脱敏候选上限，范围为 1 至 256。
+    pub precheck_review_candidate_limit: u32,
+    /// Admission threshold on the query-local reviewer score, not raw vector or BM25 values.
+    /// 查询内审核评分的准入阈值，不是原始向量分或 BM25 分值。
+    pub precheck_min_review_score: f64,
+    /// Maximum query fan-out used by retrieval, from 1 to 64.
+    /// 检索使用的最大查询扇出数量，范围为 1 至 64。
+    pub max_search_queries: u32,
+    /// Maximum already-refined historical turns supplied to PostAction L1, from 1 to 64.
+    /// 提供给 PostAction L1 的已提炼历史轮数上限，范围为 1 至 64。
+    pub postaction_history_turn_limit: u32,
+    /// Approximate target-plus-history budget for PostAction L1, from 1 to 131072 tokens.
+    /// PostAction L1 目标轮次与历史的近似预算，范围为 1 至 131072 Token。
+    pub postaction_max_input_tokens: u32,
+    /// Priority assigned only to newly extracted memories, from 0 to 100.
+    /// 仅分配给新提炼记忆的优先级，范围为 0 至 100。
+    pub postaction_memory_priority: u32,
+    /// Retention stability assigned at extraction; does not rewrite existing rows.
+    /// 提炼时分配的保留稳定性；不改写既有记录。
+    pub postaction_memory_stability: VmmNativeExtractedMemoryStability,
+    /// Lifecycle level assigned at extraction; does not change the unique write owner.
+    /// 提炼时分配的生命周期等级；不改变唯一写入归属。
+    pub postaction_memory_level: VmmNativeExtractedMemoryLevel,
+    /// Initial refresh weight for new memories, from 1 to 1000000.
+    /// 新记忆的初始刷新权重，范围为 1 至 1000000。
+    pub postaction_memory_refresh_weight: u32,
+    /// Exact lifetime from original turn time, from one millisecond to ten 365-day years.
+    /// 从原始回合时间起算的准确有效期，范围为一毫秒至十个 365 天年。
+    pub postaction_memory_expiry_ms: u64,
+}
+
+/// Editable retrieval ranking values; score producers and algorithm versions remain host-owned.
+/// 可编辑的检索排序值；评分生产者和算法版本仍由宿主持有。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeRetrievalPolicySummary {
+    /// Enables vector/full-text fusion.
+    /// 启用向量与全文融合。
+    pub hybrid_enabled: bool,
+    /// Minimum shared physical candidate window when hybrid retrieval is enabled.
+    /// 混合检索启用时的共同物理候选窗口下限。
+    pub lexical_candidate_floor: u32,
+    /// Exact positive signed-64 RRF constant, encoded as decimal text for lossless browser transport.
+    /// 准确的有符号64位正 RRF 常数，以十进制文本在浏览器间无损传输。
+    pub rrf_k: String,
+    /// Minimum final reviewer score for replacement candidates, not raw cosine similarity.
+    /// 替代候选的最终审核评分下限，不是原始余弦相似度。
+    pub replace_min_similarity: f64,
+    /// Exact cosine threshold for hard duplication; zero disables hard deduplication.
+    /// 硬重复的准确余弦阈值；零表示关闭硬去重。
+    pub hard_dedupe_cosine_threshold: f64,
+    /// Candidate window used before hard-duplicate review.
+    /// 硬重复审核前使用的候选窗口。
+    pub hard_dedupe_pool_top_k: u32,
+    /// Similar-memory window presented to the replacement reviewer.
+    /// 提供给替代审核器的相似记忆窗口。
+    pub replacement_top_k: u32,
+    /// Rerank candidate count; zero disables this optional stage.
+    /// 重排候选数量；零表示关闭此可选阶段。
+    pub rerank_top_n: u32,
+    /// Enables MMR diversity selection.
+    /// 启用 MMR 多样性选择。
+    pub mmr_enabled: bool,
+    /// Relevance weight in MMR, from zero to one.
+    /// MMR 中的相关性权重，范围为零至一。
+    pub mmr_lambda: f64,
+    /// Enables read-time Weibull decay without deleting stored memories.
+    /// 启用读取时 Weibull 衰减，不删除已存储记忆。
+    pub weibull_enabled: bool,
+    /// Positive Weibull distribution shape.
+    /// 正数 Weibull 分布形状。
+    pub weibull_shape: f64,
+    /// Positive Weibull scale in hours.
+    /// 以小时为单位的正数 Weibull 尺度。
+    pub weibull_scale_hours: f64,
+    /// Minimum read-time decay multiplier, from zero to one.
+    /// 读取时衰减倍率下限，范围为零至一。
+    pub weibull_min_multiplier: f64,
+    /// Nonnegative reinforcement contribution to the decay scale.
+    /// 对衰减尺度的非负强化贡献。
+    pub weibull_reinforce_weight: f64,
+    /// Nonnegative cross-session adoption contribution to the decay scale.
+    /// 对衰减尺度的非负跨会话采纳贡献。
+    pub weibull_cross_session_boost: f64,
+}
+
+/// Editable native cleanup cadence and business rules; internal batch limits remain host-owned.
+/// 可编辑的原生清洗周期与业务规则；内部批次上限仍归宿主持有。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeRetentionSettingsSummary {
+    /// Enables periodic cleanup; explicit manual cleanup remains available in native mode.
+    /// 启用周期清洗；原生模式下仍允许显式手动清洗。
+    pub enabled: bool,
+    /// Interval between complete cleanup passes, in whole minutes.
+    /// 完整清洗轮次之间的整分钟间隔。
+    pub scan_interval_minutes: u32,
+    /// Interval between independent profile-expiry scans, in whole seconds.
+    /// 独立画像过期扫描之间的整秒间隔。
+    pub profile_expiry_interval_seconds: u32,
+    /// Number of newest turns protected in each session.
+    /// 每个会话中保护的最新回合数量。
+    pub turn_hot_window_size: u32,
+    /// Minimum session inactivity before recycling, in milliseconds.
+    /// 回收前所需的最短会话不活跃毫秒数。
+    pub session_idle_ms: u64,
+    /// Frozen retention window for newly created recycle batches, in milliseconds.
+    /// 新建回收批次使用的冻结保留窗口，单位毫秒。
+    pub trash_retention_ms: u64,
+    /// Lowest protected priority on the zero-to-one-hundred scale.
+    /// 零到一百尺度上的最低受保护优先级。
+    pub protected_priority_floor: u32,
+    /// Lowest protected memory level, from session (1) through persistent (4).
+    /// 最低受保护记忆等级，从会话级（1）到持久级（4）。
+    pub protected_memory_level_floor: u32,
+    /// Preserves shared terminal memories meeting either protection threshold.
+    /// 保留达到任一保护阈值的共享终态记忆。
+    pub skip_protected_shared_memories: bool,
+}
+
+/// Memory-project-owned retention rules; worker cadence and personal profiles are deliberately excluded.
+/// 记忆项目持有的保留规则；明确排除工作器周期和个人画像。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProjectRetentionRules {
+    /// Number of newest turns protected in each project session.
+    /// 项目每个会话中保护的最新回合数量。
+    pub turn_hot_window_size: u32,
+    /// Minimum session inactivity before recycling, in milliseconds.
+    /// 回收前所需的最短会话不活跃毫秒数。
+    pub session_idle_ms: u64,
+    /// Frozen lifetime of newly created project recycle batches, in milliseconds.
+    /// 新建项目回收批次的冻结保留毫秒数。
+    pub trash_retention_ms: u64,
+    /// Lowest protected priority, inclusively from zero to one hundred.
+    /// 最低受保护优先级，包含零至一百。
+    pub protected_priority_floor: u32,
+    /// Lowest protected memory level, from session (1) through persistent (4).
+    /// 最低受保护记忆等级，从会话级（1）到持久级（4）。
+    pub protected_memory_level_floor: u32,
+    /// Preserves shared terminal memories meeting either protection threshold.
+    /// 保留达到任一保护阈值的共享终态记忆。
+    pub skip_protected_shared_memories: bool,
+}
+
+/// Exact memory-project policy query, with no host-project or display-name substitution.
+/// 准确记忆项目策略查询，不替换为宿主项目或显示名称。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProjectRetentionQuery {
+    /// Stable memory-project identity whose existence is checked before reading.
+    /// 读取前检查存在性的稳定记忆项目身份。
+    pub project_id: u64,
+}
+
+/// Explicit override or inheritance operation; omission can never silently reset a saved group.
+/// 显式覆盖或继承操作；字段遗漏绝不能静默重置已保存配置组。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VmmNativeProjectRetentionEdit {
+    /// Saves the complete six-field group for one existing memory project.
+    /// 为一个现有记忆项目保存完整六字段配置组。
+    Override {
+        /// Stable memory-project ID, not a host tag.
+        /// 稳定记忆项目 ID，不是宿主标签。
+        #[serde(rename = "projectId")]
+        project_id: u64,
+        /// Complete validated data-retention rules.
+        /// 完整且经过校验的数据保留规则。
+        rules: VmmNativeProjectRetentionRules,
+    },
+    /// Removes only this project's override and resumes current global inheritance.
+    /// 仅移除此项目的覆盖，恢复继承当前全局值。
+    Inherit {
+        /// Stable memory-project ID, unaffected by renaming.
+        /// 不受改名影响的稳定记忆项目 ID。
+        #[serde(rename = "projectId")]
+        project_id: u64,
+    },
+}
+
+/// Authoritative owner policy plus explicit inheritance metadata for the settings editor.
+/// 提供给设置编辑器的权威归属方策略与显式继承元数据。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProjectRetentionSummary {
+    /// Stable memory-project identity selected by the caller.
+    /// 调用方选择的稳定记忆项目身份。
+    pub project_id: u64,
+    /// Saved whole-group override; null explicitly denotes global inheritance.
+    /// 已保存的完整配置组覆盖；null 明确表示全局继承。
+    pub overrides: Option<VmmNativeProjectRetentionRules>,
+    /// Current validated values used by the next cleanup pass.
+    /// 下一清洗轮次使用的当前已校验值。
+    pub effective: VmmNativeProjectRetentionRules,
+    /// Current global data rules, without worker cadence or personal-profile fields.
+    /// 当前全局数据规则，不包含工作器周期或个人画像字段。
+    pub global: VmmNativeProjectRetentionRules,
+}
+
+/// Editable finite profile lifetime formula, expressed in exact milliseconds.
+/// 可编辑的有限画像生命周期公式，使用准确毫秒值。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProfileLifetimeRule {
+    /// Base duration before refresh extensions, in milliseconds.
+    /// 刷新延长前的基础期限，单位毫秒。
+    pub base_ms: u64,
+    /// Added duration per existing refresh-weight increment, in milliseconds.
+    /// 既有刷新权重每次增加对应的延长期限，单位毫秒。
+    pub step_ms: u64,
+    /// Maximum duration after extensions, in milliseconds.
+    /// 延长后的最大期限，单位毫秒。
+    pub max_ms: u64,
+}
+
+/// Finite profile levels with independently editable lifetime formulas.
+/// 可独立编辑生命周期公式的有限画像等级。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProfileLifetimes {
+    /// Short-lived profile facts.
+    /// 短期画像事实。
+    pub transient: VmmNativeProfileLifetimeRule,
+    /// Situational profile facts.
+    /// 情境画像事实。
+    pub situational: VmmNativeProfileLifetimeRule,
+    /// Stable profile facts; Persistent is deliberately not configurable.
+    /// 稳定画像事实；持久级有意不提供配置。
+    pub stable: VmmNativeProfileLifetimeRule,
+}
+
+/// Global user rules and project defaults, never resolved from node names.
+/// 全局用户规则与项目默认规则，绝不从节点名称解析。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProfilePolicySummary {
+    /// Rules owned by the one global user.
+    /// 唯一全局用户持有的规则。
+    pub user: VmmNativeProfileLifetimes,
+    /// Defaults for project-owned profile nodes.
+    /// 项目归属画像节点的默认规则。
+    pub project: VmmNativeProfileLifetimes,
+}
+
+/// Exact memory-project profile-policy query, independent of host tags and display names.
+/// 准确记忆项目画像策略查询，独立于宿主标签和显示名称。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProjectProfilePolicyQuery {
+    /// Existing stable memory-project ID.
+    /// 已存在的稳定记忆项目 ID。
+    pub project_id: u64,
+}
+
+/// Explicit complete project-profile override or restoration of global inheritance.
+/// 显式完整项目画像覆盖或恢复全局继承。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VmmNativeProjectProfilePolicyEdit {
+    /// Saves all nine project lifetime values; no personal fields are accepted.
+    /// 保存全部九个项目生命周期值；不接受个人字段。
+    Override {
+        /// Stable memory-project ID, unchanged by renaming.
+        /// 改名不会改变的稳定记忆项目 ID。
+        #[serde(rename = "projectId")]
+        project_id: u64,
+        /// Complete validated project lifecycle formulas.
+        /// 完整且经过校验的项目生命周期公式。
+        rules: VmmNativeProfileLifetimes,
+    },
+    /// Removes only this memory project's override.
+    /// 仅移除此记忆项目的覆盖。
+    Inherit {
+        /// Stable memory-project ID, never a host-project tag.
+        /// 稳定记忆项目 ID，绝不是宿主项目标签。
+        #[serde(rename = "projectId")]
+        project_id: u64,
+    },
+}
+
+/// Project-only effective profile rules and their explicit inheritance source.
+/// 仅项目画像的有效规则及其显式继承来源。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeProjectProfilePolicySummary {
+    /// Stable owner ID checked against the native project catalog.
+    /// 对照原生项目目录检查的稳定归属 ID。
+    pub project_id: u64,
+    /// Saved whole-group override; null explicitly means global inheritance.
+    /// 已保存的完整组覆盖；null 明确表示全局继承。
+    pub overrides: Option<VmmNativeProfileLifetimes>,
+    /// Formulas admitted by the next project profile command.
+    /// 下一项目画像命令准入的公式。
+    pub effective: VmmNativeProfileLifetimes,
+    /// Current global project defaults, excluding the fixed personal profile.
+    /// 当前全局项目默认规则，排除固定个人画像。
+    pub global: VmmNativeProfileLifetimes,
+}
+
+/// Editable text intake reduction without privacy or model-route switches.
+/// 可编辑的文本入库缩减，不包含隐私或模型路由开关。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeTextPolicySummary {
+    /// Enables machine text reduction while preserving mandatory media/thought/privacy handling.
+    /// 启用机器文本缩减，保留强制媒体/思考内容/隐私处理。
+    pub fold_machine_text: bool,
+    /// Approximate per-fragment intake token target, independently of the later L1 context budget.
+    /// 每片段入库近似 Token 目标，独立于后续 L1 上下文预算。
+    pub max_fragment_tokens: u32,
+}
+
+/// Host-project overrides contain only caller-owned groups; profile and retention ownership is separate.
+/// 宿主项目覆盖仅包含调用方持有的配置组；画像和保留规则另有归属。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeHostProjectPolicyOverrides {
+    /// None inherits the current global recall/extraction group.
+    /// None 表示继承当前全局召回/提炼配置组。
+    pub recall: Option<VmmNativeRecallPolicySummary>,
+    /// None inherits the current global ranking group.
+    /// None 表示继承当前全局排序配置组。
+    pub retrieval: Option<VmmNativeRetrievalPolicySummary>,
+    /// None inherits the current global intake text group.
+    /// None 表示继承当前全局入库文本配置组。
+    pub text: Option<VmmNativeTextPolicySummary>,
+}
+
+/// Explicit host-project edit; null groups restore inheritance rather than writing copied defaults.
+/// 显式宿主项目编辑；空配置组恢复继承，而不是写入复制的默认值。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmmNativeHostProjectPolicyEdit {
+    /// Exact originating VulcanCode project tag, not the memory project ID.
+    /// 准确发起方 VulcanCode 项目标签，不是记忆项目 ID。
+    pub host_project_id: String,
+    /// Explicit optional groups to persist atomically.
+    /// 要原子保存的显式可选配置组。
+    pub overrides: VmmNativeHostProjectPolicyOverrides,
+}
+
+/// Saved caller ownership plus currently resolved values, read under one configuration gate.
+/// 在同一配置锁内读取的已保存调用方归属及当前解析值。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeHostProjectPolicySummary {
+    /// Stable caller tag for which these values were resolved.
+    /// 本次解析值对应的稳定调用方标签。
+    pub host_project_id: String,
+    /// Saved optional groups; None means live global inheritance.
+    /// 已保存可选组；None 表示实时继承全局。
+    pub overrides: VmmNativeHostProjectPolicyOverrides,
+    /// Current globals layered with exactly the caller's declared groups.
+    /// 当前全局值叠加准确调用方声明配置组。
+    pub effective: VmmNativeRuntimePolicySummary,
+}
+
+/// Effective native business policy and its actual persisted ownership.
+/// 原生业务的当前有效策略及其实际持久化归属。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRuntimePolicySummary {
+    /// Effective recall and extraction settings.
+    /// 当前有效的召回与提炼设置。
+    pub recall: VmmNativeRecallPolicySummary,
+    /// Core-owned defaults used only when the user explicitly resets the visible draft.
+    /// Core 持有的默认值，仅在用户显式重置可见草稿时使用。
+    pub defaults: VmmNativeRecallPolicySummary,
+    /// Effective retrieval ranking settings.
+    /// 当前有效的检索排序设置。
+    pub retrieval: VmmNativeRetrievalPolicySummary,
+    /// Core-owned ranking defaults for an explicit draft reset.
+    /// 显式草稿重置使用的 Core 排序默认值。
+    pub retrieval_defaults: VmmNativeRetrievalPolicySummary,
+    /// Effective cleanup settings, read without invoking a model route.
+    /// 当前有效的清洗设置，读取时不调用模型路由。
+    pub retention: VmmNativeRetentionSettingsSummary,
+    /// Host and Core defaults for an explicit cleanup draft reset.
+    /// 显式重置清洗草稿使用的宿主及 Core 默认值。
+    pub retention_defaults: VmmNativeRetentionSettingsSummary,
+    /// Effective intake text settings and Core-owned reset values.
+    /// 当前有效的入库文本设置与 Core 持有的重置值。
+    pub text: VmmNativeTextPolicySummary,
+    /// Core-owned defaults for resetting only the text draft.
+    /// 仅重置文本草稿使用的 Core 默认值。
+    pub text_defaults: VmmNativeTextPolicySummary,
+    /// Independently resolved user and project profile lifetime rules.
+    /// 独立解析的用户与项目画像生命周期规则。
+    pub profiles: VmmNativeProfilePolicySummary,
+    /// Core-owned profile rules for explicit draft reset.
+    /// 显式重置草稿使用的 Core 画像规则。
+    pub profile_defaults: VmmNativeProfilePolicySummary,
+    /// Whether the user has explicitly saved the runtime policy document.
+    /// 用户是否已显式保存运行策略文档。
+    pub user_override: bool,
+}
+
 /// Native Core resource selections persisted under the host-owned VMM configuration directory.
 /// 持久化在宿主持有 VMM 配置目录下的原生 Core 资源选择。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1476,6 +2199,85 @@ pub struct VmmNativeRetentionApplyResult {
     pub project_failures: Vec<VmmNativeRetentionProjectFailure>,
 }
 
+/// Lists one project's exact manual-cleanup impact, including permanent batch removal.
+/// 列出一个项目准确的人工清洗影响，包括永久批次清除。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRetentionProjectPreview {
+    /// Stable memory project identity.
+    /// 稳定记忆项目标识。
+    pub project_id: u64,
+    /// Current display name, never used as the binding identity.
+    /// 当前显示名称，绝不用作绑定身份。
+    pub project_name: String,
+    /// Exact memory identities moved into recoverable trash.
+    /// 移入可恢复回收站的准确记忆标识。
+    pub recycled_memory_ids: Vec<String>,
+    /// Exact turn identities moved into recoverable trash.
+    /// 移入可恢复回收站的准确回合标识。
+    pub recycled_turn_ids: Vec<String>,
+    /// Exact project or fixed-user profile nodes marked expired, not deleted.
+    /// 标记为过期而非删除的准确项目或固定用户画像节点。
+    pub expired_profile_node_ids: Vec<String>,
+    /// Existing expired batches whose contents are permanently removed.
+    /// 内容将被永久移除的已有到期批次。
+    pub purged_batch_ids: Vec<String>,
+}
+
+/// Reports versioned authoritative memory count alongside actual derived full-text row counts.
+/// 报告带版本的权威记忆数量以及真实派生全文行数。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeLexicalIndexStatus {
+    /// Authority version required by explicit reconstruction.
+    /// 显式重建要求的权威版本。
+    pub storage_version: u64,
+    /// Active lifecycle memories eligible for derived indexing; query-time access/expiry filters still apply.
+    /// 处于活跃生命周期并参与派生索引的记忆，查询时仍应用访问与到期过滤。
+    pub active_memory_count: u64,
+    /// Actual derived source-document rows.
+    /// 真实派生源文档行数。
+    pub document_count: u64,
+    /// Actual indexed document rows; equal counts alone do not prove healthy tokenization.
+    /// 真实索引文档行数，仅数量相等不证明分词健康。
+    pub indexed_row_count: u64,
+}
+
+/// Returns an acknowledged full-text rebuild without changing the authoritative memory version.
+/// 返回已确认的全文重建结果，不改变权威记忆版本。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeLexicalRebuildResult {
+    /// Unchanged source snapshot version.
+    /// 未改变的源快照版本。
+    pub storage_version: u64,
+    /// Actual count acknowledged by the upstream Jieba index rebuild.
+    /// 上游 Jieba 索引重建确认的真实数量。
+    pub reindexed_memory_count: u64,
+}
+
+/// Server-owned, version-guarded manual cleanup preview; it grants no client-selected targets.
+/// 服务端拥有且受版本保护的人工清洗预览，不授予客户端自行选择目标的权限。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRetentionPreview {
+    /// Opaque identity of the latest server-prepared plan.
+    /// 服务端最近准备的计划的不透明标识。
+    pub preview_id: String,
+    /// Exact snapshot version required at confirmation.
+    /// 确认时要求的准确快照版本。
+    pub storage_version: u64,
+    /// Frozen evaluation time in Unix milliseconds.
+    /// 以 Unix 毫秒表示的冻结评估时间。
+    pub evaluated_at_unix_ms: i64,
+    /// Time after which the user must request a fresh preview.
+    /// 超过此时刻后用户必须重新预览。
+    pub expires_at_unix_ms: i64,
+    /// Project-separated impact, with personal profile identities counted only once.
+    /// 按项目分区的影响，个人画像标识只计一次。
+    pub projects: Vec<VmmNativeRetentionProjectPreview>,
+}
+
 /// One project-local failure from a complete native retention run.
 /// 一次完整原生保留运行中的项目局部失败。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -1503,11 +2305,11 @@ pub struct VmmNativeRetentionStatusSummary {
     /// Whether the independently scheduled profile-expiry convergence is running.
     /// 独立调度的画像过期收敛是否正在运行。
     pub profile_expiry_running: bool,
-    /// Fixed schedule interval in minutes.
-    /// 固定调度周期的分钟数。
+    /// Effective configured schedule interval in minutes.
+    /// 当前生效的已配置调度周期分钟数。
     pub interval_minutes: u64,
-    /// Fixed profile-expiry convergence interval in seconds.
-    /// 固定画像过期收敛周期的秒数。
+    /// Effective configured profile-expiry convergence interval in seconds.
+    /// 当前生效的已配置画像过期收敛周期秒数。
     pub profile_expiry_interval_seconds: u64,
     /// Frozen retention policy applied by Core.
     /// Core 应用的冻结保留策略。
@@ -1665,6 +2467,9 @@ pub struct VmmNativeVectorRebuildResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmNativeRecycleBatchSummary {
+    /// Original manual source selection; None identifies an automatic retention batch.
+    /// 原始人工来源选择；None 表示自动保留策略批次。
+    pub manual_selection: Option<VmmNativeRemovalTarget>,
     /// Stable batch identity used by mutation commands.
     /// 变更命令使用的稳定批次身份。
     pub batch_id: String,
@@ -1787,6 +2592,9 @@ pub enum VmmMemoryActionResponse {
     /// Native project/session/turn/memory provenance records.
     /// 原生项目/会话/回合/记忆来源记录。
     NativeMemoryRecords(VmmNativeMemoryRecordsSummary),
+    /// Native session summaries after server-side filtering and pagination.
+    /// 经过服务端筛选及分页的原生会话摘要。
+    NativeSessionList(VmmNativeSessionListPage),
     /// Native all-state user or project profile audit records.
     /// 原生全状态用户或项目画像审计记录。
     NativeProfileRecords(VmmNativeProfileRecordsSummary),
@@ -1808,6 +2616,18 @@ pub enum VmmMemoryActionResponse {
     /// Native Core resource catalog and current selections.
     /// 原生 Core 资源目录与当前选择。
     NativeResourceCatalog(VmmNativeResourceCatalogSummary),
+    /// Effective native runtime policy and explicit user-override state.
+    /// 原生运行策略有效值及显式用户覆盖状态。
+    NativeRuntimePolicy(Box<VmmNativeRuntimePolicySummary>),
+    /// Caller-specific native business values and explicit inheritance.
+    /// 调用方专属原生业务值及显式继承。
+    NativeHostProjectPolicy(Box<VmmNativeHostProjectPolicySummary>),
+    /// Memory-owner data-retention rules and exact override ownership.
+    /// 记忆归属方数据保留规则及准确覆盖归属。
+    NativeProjectRetention(Box<VmmNativeProjectRetentionSummary>),
+    /// Memory-project profile rules with explicit inheritance and no personal overrides.
+    /// 带有显式继承且不含个人覆盖的记忆项目画像规则。
+    NativeProjectProfilePolicy(Box<VmmNativeProjectProfilePolicySummary>),
     /// One native Core resource file's built-in and effective text.
     /// 一份原生 Core 资源文件的内置与生效文本。
     NativeResourceFile(VmmNativeResourceFileContent),
@@ -1826,6 +2646,27 @@ pub enum VmmMemoryActionResponse {
     /// Result counters returned by a completed manual retention run.
     /// 完成人工保留运行后返回的结果计数。
     NativeRetentionRun(VmmNativeRetentionApplyResult),
+    /// Read-only impact of the latest prepared manual cleanup.
+    /// 最近准备的人工清洗的只读影响。
+    NativeRetentionPreview(VmmNativeRetentionPreview),
+    /// Read-only archive classification preview.
+    /// 只读归档分类预览。
+    NativeSessionArchivePreview(VmmNativeSessionArchivePreview),
+    /// Confirmed session archive classification.
+    /// 已确认会话归档分类。
+    NativeSessionArchive(VmmNativeSessionArchiveResult),
+    /// Read-only forgotten-session reactivation preview.
+    /// 已遗忘会话重新启用的只读预览。
+    NativeSessionRestartPreview(VmmNativeSessionRestartPreview),
+    /// Confirmed reactivation without content restoration.
+    /// 不恢复内容的已确认重新启用。
+    NativeSessionRestart(VmmNativeSessionRestartResult),
+    /// Current native full-text authority and derived row counts.
+    /// 当前原生全文权威数量与派生行数。
+    NativeLexicalStatus(VmmNativeLexicalIndexStatus),
+    /// Explicit reconstruction of native full-text derived data.
+    /// 原生全文派生数据的显式重建。
+    NativeLexicalRebuild(VmmNativeLexicalRebuildResult),
     /// Current native embedding-generation compatibility.
     /// 当前原生 Embedding 代次兼容状态。
     NativeVectorStatus(VmmNativeVectorStatusSummary),
@@ -1838,6 +2679,18 @@ pub enum VmmMemoryActionResponse {
     /// Current native recycle-bin batches.
     /// 当前原生回收站批次。
     NativeRecycleBin(VmmNativeRecycleBinSummary),
+    /// Exact paged content retained in one recycle batch, without embeddings.
+    /// 一个回收批次保留的准确分页内容，不含嵌入向量。
+    NativeRecycleRecords(VmmNativeRecycleRecordPage),
+    /// Related source records for a read-only session or turn selection.
+    /// 只读会话或回合选择的关联来源记录。
+    NativeRemovalImpact(VmmNativeRemovalImpact),
+    /// Server-owned manual recycle confirmation with an exact source impact.
+    /// 携带准确来源影响的服务端人工回收确认。
+    NativeRemovalPreview(VmmNativeRemovalPreview),
+    /// Original records moved into one recoverable batch, with independent profiles preserved.
+    /// 原记录移入一个可恢复批次，独立画像保留。
+    NativeRemoval(VmmNativeRemovalResult),
     /// One restored or permanently purged native recycle batch.
     /// 一份已恢复或已永久清除的原生回收批次。
     NativeRecycleBatch(VmmNativeRecycleBatchSummary),

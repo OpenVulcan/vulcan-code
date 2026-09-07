@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { VmmNativeProjectCatalogSummary } from "@/types"
 
 import {
+  nativeAdjacentTurns,
   nativeMemoryRecordsRequest,
   nativePreferredSessionId,
   nativeProjectOwnerId,
@@ -38,6 +39,22 @@ const CATALOG: VmmNativeProjectCatalogSummary = {
 }
 
 describe("native memory provenance requests", () => {
+  it("navigates only server-provided same-session neighbors in the server order", () => {
+    // records deliberately uses reverse display order and includes an unrelated session.
+    // records 有意使用反向显示顺序并包含无关会话。
+    const records = [10, 4, 3, 2].map((id) => ({
+      turnId: id,
+      sessionSourceId: id === 4 ? "foreign" : "session",
+      previousTurnIds: [],
+      nextTurnIds: [],
+    }))
+    // anchor includes missing and foreign IDs to ensure neither can be opened.
+    // anchor 包含缺失及无关会话 ID，以确保它们均不可打开。
+    const anchor = { turnId: 5, sessionSourceId: "session", previousTurnIds: [2, 3, 4], nextTurnIds: [10, 99] }
+    expect(nativeAdjacentTurns(anchor, records)).toEqual({ previous: [records[3], records[2]], next: [records[0]] })
+    expect(nativeAdjacentTurns(null, records)).toEqual({ previous: [], next: [] })
+  })
+
   it("opens the selected VulcanCode project's stable native owner", () => {
     expect(nativeProjectOwnerId(CATALOG, "project-a")).toBe(2)
   })
@@ -56,6 +73,7 @@ describe("native memory provenance requests", () => {
 
   it("keeps project overview unless the exact host session exists", () => {
     const sessions = [{
+      status: null,
       sessionSourceId: "session-a",
       turnCount: 0,
       turnStatuses: {

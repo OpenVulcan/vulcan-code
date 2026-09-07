@@ -188,6 +188,11 @@ pub enum LlmInput {
     /// Carries `PostAction` analysis input.
     /// 携带 `PostAction` 分析输入。
     PostActionAnalysis {
+        /// Freezes the target-JSON plus refined-history budget from this command's configuration snapshot.
+        /// 从本命令配置快照冻结目标 JSON 加提炼历史的预算。
+        /// The native prompt adapter applies it after business projection, preserving external history-floor semantics.
+        /// 原生提示词适配器在业务投影后应用预算，保留外置最小历史语义。
+        max_input_tokens: u32,
         /// Carries the single analysis-cutoff timestamp frozen for this attempt.
         /// 携带为本次分析尝试冻结的唯一分析截止时间戳。
         current_timestamp_ns: i64,
@@ -944,6 +949,9 @@ pub struct RetentionTrashBatchFact {
     /// Carries the time at which the batch entered trash.
     /// 携带该批次进入回收站的时间。
     pub recycled_at_ns: i64,
+    /// Carries the immutable deadline persisted when the batch entered trash.
+    /// 携带批次进入回收站时持久化的不可变截止时间。
+    pub expires_at_ns: i64,
 }
 
 /// Carries one complete retention scan fact batch from the storage layer.
@@ -1276,6 +1284,19 @@ pub enum Mutation {
     /// Persists one authoritative analysis attempt identity before its first external effect.
     /// 在其首个外部 Effect 前持久化一条权威的分析尝试身份。
     PutAnalysisAttempt(AnalysisAttemptIdentity),
+    /// Advances the owner session's successful extraction window in the completed-turn batch.
+    /// 在完成回合批次内推进归属会话的成功提取窗口。
+    AdvanceSessionExtraction {
+        /// Identifies the completed turn that supplies the authoritative subject/project/session.
+        /// 标识提供权威主体/项目/会话归属的已完成回合。
+        turn_id: TurnId,
+        /// Carries the previously committed observation boundary used by this analysis.
+        /// 携带本次分析使用的上次已提交观察边界。
+        observed_after_ns: i64,
+        /// Carries the exact inclusive cutoff used by this successful analysis.
+        /// 携带本次成功分析实际使用的包含式截止时间。
+        observed_through_ns: i64,
+    },
     /// Atomically replaces one complete semantic-noise prototype bundle.
     /// 原子替换一个完整的语义 Noise 原型束。
     PutNoisePrototypeBundle {

@@ -19,6 +19,9 @@ mod provider_tools;
 mod publication;
 mod session_tools;
 mod snapshot;
+mod vce_embedding_settings;
+
+pub(crate) use vce_embedding_settings::service_preflight_vce_embedding_route;
 
 // Preserve original browser contract paths while their projection owners remain private.
 // 保留原浏览器契约路径，同时投影实现模块保持私有。

@@ -609,8 +609,24 @@ pub fn load_configuration_file() -> Result<ProviderConfigurationFile, String> {
 
 /// Saves the provider configuration file back to disk, creating parent directories when needed.
 /// 将供应商配置文件写回磁盘，并在需要时创建父目录。
+/// `config` is the complete configuration; returns success only after atomic persistence.
+/// `config` 是完整配置；仅在原子持久化成功后返回成功。
 pub fn save_configuration_file(config: &ProviderConfigurationFile) -> Result<(), String> {
-    let path = configuration_file_path();
+    save_configuration_file_at_path(config, &configuration_file_path())
+}
+
+/// Saves the complete configuration to an explicit path using the standard bounded atomic writer.
+/// 使用标准的受限原子写入器，将完整配置保存到明确指定的路径。
+/// `config` supplies the document and `path` identifies its exact destination, including the filename.
+/// `config` 提供文档，`path` 指定包含文件名在内的精确目标位置。
+/// Returns success after persistence, or the serialization, size-limit, or filesystem error.
+/// 持久化成功后返回成功，否则返回序列化、大小限制或文件系统错误。
+pub fn save_configuration_file_at_path(
+    config: &ProviderConfigurationFile,
+    path: &Path,
+) -> Result<(), String> {
+    // Share serialization and bounds with production so isolated tests exercise the real writer.
+    // 与生产共享序列化与大小限制，让隔离测试执行真实写入器。
     let content = serde_json::to_string_pretty(config)
         .map_err(|error| format!("序列化供应商配置失败：{}。", error))?;
     if content.len() as u64 > PERSISTED_CONFIGURATION_MAX_BYTES {
@@ -619,7 +635,7 @@ pub fn save_configuration_file(config: &ProviderConfigurationFile) -> Result<(),
             path.display()
         ));
     }
-    crate::atomic_file::write_file_atomically(&path, content.as_bytes())
+    crate::atomic_file::write_file_atomically(path, content.as_bytes())
         .map_err(|error| format!("写入供应商配置失败：{error}。"))
 }
 

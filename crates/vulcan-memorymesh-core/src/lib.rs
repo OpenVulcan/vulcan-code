@@ -8,16 +8,18 @@ use std::sync::{Arc, Mutex, RwLock};
 pub use vulcan_memorymesh_core_config::{
     ConfigBundle, ConfigImpact, ConfigSnapshot, MAX_RESOURCE_FILE_BYTES,
     MEMORY_POLICY_SCHEMA_VERSION, MemoryPolicy, NoiseDecision, NoisePolicy, PiiRuleTestMatch,
-    PiiRuleTestResult, PiiScrubResult, ResourceIdentity, ResourceLayer, embedded_resource_identity,
-    embedded_resource_paths, embedded_resource_text, test_pii_rule,
+    PiiRuleTestResult, PiiScrubResult, PostActionTextPolicy, ProfileLifetimePolicy,
+    ProfileLifetimeRule, ProfilePolicy, ResourceIdentity, ResourceLayer,
+    embedded_resource_identity, embedded_resource_paths, embedded_resource_text,
+    sanitize_postaction_text, sanitize_postaction_text_with_policy, test_pii_rule,
 };
 pub use vulcan_memorymesh_core_contracts::*;
 pub use vulcan_memorymesh_core_engine::{
     decayed_score, deduplicate_by_content, estimate_text_tokens, mmr_select, normalize_text,
 };
 pub use vulcan_memorymesh_core_storage::{
-    InMemoryStorage, StoragePort, StorageRetentionColdTurnJob, StorageRetentionTrashBatch,
-    StorageSnapshot,
+    InMemoryStorage, StorageManualRecycleSelection, StorageMemorySession, StoragePort,
+    StorageRetentionColdTurnJob, StorageRetentionTrashBatch, StorageSessionStatus, StorageSnapshot,
 };
 
 use vulcan_memorymesh_core_config::ConfigRegistry;
@@ -148,6 +150,35 @@ impl MemoryMeshCore {
         let snapshot = self.active_snapshot()?;
         // Acquire the only mutable command transition access.
         // 获取唯一可变命令转换访问权。
+        let mut engine = self.engine.lock().map_err(|_| lock_error("engine"))?;
+        engine.start(command, snapshot)
+    }
+
+    /// Starts `command` against the exact previously registered `snapshot_id`, without changing the active default.
+    /// 针对此前已注册的精确 `snapshot_id` 启动 `command`，不改变活跃默认配置。
+    /// Returns the command handle and first step; unknown IDs fail instead of falling back to another project.
+    /// 返回命令句柄及首个步骤；未知 ID 明确失败，不回退到其他项目配置。
+    pub fn start_with_snapshot(
+        &self,
+        command: CoreCommand,
+        snapshot_id: &ConfigSnapshotId,
+    ) -> Result<(CommandHandle, CommandStep), CoreError> {
+        // snapshot remains immutable even if another project activates or replaces a named registration.
+        // 即使其他项目激活或替换同名注册，snapshot 仍保持不可变。
+        let snapshot = self
+            .configs
+            .read()
+            .map_err(|_| lock_error("config read"))?
+            .snapshot(snapshot_id)
+            .ok_or_else(|| {
+                CoreError::new(
+                    ErrorCode::SnapshotNotFound,
+                    ErrorStage::Configuration,
+                    format!("configuration snapshot not found: {snapshot_id}"),
+                )
+            })?;
+        // engine owns exactly the same state machine used by the active-default entrypoint.
+        // engine 持有与活跃默认入口完全相同的状态机。
         let mut engine = self.engine.lock().map_err(|_| lock_error("engine"))?;
         engine.start(command, snapshot)
     }
@@ -322,7 +353,40 @@ impl MemoryMeshCore {
     ) -> Result<CommandResult, CoreError> {
         // Start the same synchronous state transition engine used by all hosts.
         // 启动所有宿主共用的同一同步状态转换引擎。
-        let (handle, mut step) = self.start(command)?;
+        let (handle, step) = self.start(command)?;
+        self.drive_async_command(handle, step, host).await
+    }
+
+    /// Runs `command` to completion using the exact registered snapshot and the normal asynchronous host lifecycle.
+    /// 使用精确注册快照及正常异步宿主生命周期，将 `command` 执行至完成。
+    /// `snapshot_id` is the caller's resolved policy identity; `host` executes unchanged typed effects.
+    /// `snapshot_id` 是调用方已解析的策略身份；`host` 执行未经改写的强类型效果。
+    /// Returns the ordinary command result or error, preserving cancellation and mutation reconciliation semantics.
+    /// 返回普通命令结果或错误，保留取消及变更对账语义。
+    pub async fn run_to_completion_with_snapshot_async(
+        &self,
+        command: CoreCommand,
+        snapshot_id: &ConfigSnapshotId,
+        host: &mut impl AsyncHostDriver,
+    ) -> Result<CommandResult, CoreError> {
+        // handle and step already retain the selected immutable policy before the first host await.
+        // handle 和 step 在首次等待宿主之前就持有选定的不可变策略。
+        let (handle, step) = self.start_with_snapshot(command, snapshot_id)?;
+        self.drive_async_command(handle, step, host).await
+    }
+
+    /// Drives an already started `handle`/`step` through the shared host loop and terminal reconciliation.
+    /// 通过共享宿主循环及终态对账驱动已经启动的 `handle`/`step`。
+    /// `host` performs each requested effect; returns the same completion/error contract as the public runners.
+    /// `host` 执行每个请求效果；返回与公共执行入口相同的完成及错误契约。
+    async fn drive_async_command(
+        &self,
+        handle: CommandHandle,
+        mut step: CommandStep,
+        host: &mut impl AsyncHostDriver,
+    ) -> Result<CommandResult, CoreError> {
+        // outcome is reconciled once, regardless of which snapshot-selection entrypoint started the command.
+        // 无论命令来自哪个快照选择入口，outcome 都只对账一次。
         let outcome = loop {
             match step {
                 CommandStep::Complete(result) => break Ok(*result),

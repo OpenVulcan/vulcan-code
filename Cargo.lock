@@ -7214,6 +7214,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "toml 1.1.4+spec-1.1.0",
  "uuid",
  "vldb-controller-client",
  "vulcan-agent-runtime",

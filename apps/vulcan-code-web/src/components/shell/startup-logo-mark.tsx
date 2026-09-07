@@ -7,10 +7,10 @@ export function StartupLogoMark() {
   // shineCanvasRef stores the transparent canvas layer used for the moving logo highlight.
   // shineCanvasRef 保存用于绘制 Logo 动态高光的透明画布层。
   const shineCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  useStartupLogoScan(shineCanvasRef, "/vulcan-logo.svg", 144);
+  useStartupLogoScan(shineCanvasRef, "/vulcan-logo-startup.png", 144);
   return (
     <div className="startup-logo-stage" aria-hidden="true">
-      <img alt="" className="startup-logo-mark" src="/vulcan-logo.svg" />
+      <img alt="" className="startup-logo-mark" src="/vulcan-logo-startup.png" />
       <canvas ref={shineCanvasRef} className="startup-logo-shine-canvas" />
     </div>
   );
@@ -64,8 +64,8 @@ function useStartupLogoScan(
     }
     maskContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
-    // logoImage loads the public SVG once; WebView2 can draw same-origin SVG into canvas.
-    // logoImage 只加载一次 public SVG；WebView2 可以将同源 SVG 绘制到画布。
+    // logoImage loads the public PNG once; WebView2 can draw same-origin bitmaps into canvas.
+    // logoImage 只加载一次 public PNG；WebView2 可以将同源位图绘制到画布。
     const logoImage = new Image();
     logoImage.decoding = "async";
     logoImage.src = logoSrc;

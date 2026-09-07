@@ -54,7 +54,9 @@ import type {
   VmmSearchMemoryEventsActionValue,
 } from "@/types"
 
-import { VmmNativeMemoryRecords } from "./vmm-native-memory-records"
+import { VmmNativeSessionBrowser } from "./vmm-native-session-browser"
+import { VmmSearchRetrieval } from "./vmm-search-retrieval"
+import type { VmmMemorySearchRetrieval } from "@/types"
 
 // MemorySearchHitView is the exact product projection used by one search card.
 // MemorySearchHitView 是单个检索卡片使用的准确产品投影。
@@ -65,6 +67,7 @@ interface MemorySearchHitView {
   preview: string
   category: string
   createdAt: string
+  retrieval?: VmmMemorySearchRetrieval
 }
 
 // TurnDetailView is the exact human-readable turn detail projection.
@@ -79,7 +82,11 @@ interface TurnDetailView {
 // VmmContentPageProps 定义内容管理状态与服务操作。
 interface VmmContentPageProps {
   busy: boolean
-  snapshot: VmmMemorySnapshot
+  // Only deployment and selected host identities are consumed by this content view.
+  // 此内容视图仅消费部署方式和选中的宿主身份。
+  snapshot: Pick<VmmMemorySnapshot, "selectedProjectId" | "selectedConversationId"> & {
+    experienceState: Pick<VmmMemorySnapshot["experienceState"], "deployment">
+  }
   result: VmmMemoryActionResult | null
   onRunAction: (
     action: string,
@@ -213,7 +220,8 @@ function VmmContentPage({
       ) : null}
 
       {snapshot.experienceState.deployment === "native" ? (
-        <VmmNativeMemoryRecords
+        <VmmNativeSessionBrowser
+          key={snapshot.selectedProjectId ?? ""}
           busy={busy}
           onRunAction={onRunAction}
           snapshot={snapshot}
@@ -265,6 +273,7 @@ function VmmContentPage({
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="line-clamp-4 text-sm text-muted-foreground">{hit.preview}</p>
+                {hit.retrieval ? <VmmSearchRetrieval retrieval={hit.retrieval} /> : null}
                 <div className="flex justify-end gap-2">
                   <Button onClick={() => void openDetails(hit)} size="sm" type="button" variant="outline">
                     <FileText className="size-4" />
@@ -428,6 +437,7 @@ function projectSearchHits(response: VmmSearchMemoryEventsActionValue): MemorySe
       preview: hit.details_preview,
       category: hit.category,
       createdAt: hit.created_datetime,
+      retrieval: hit.retrieval,
     }))
   })
 }

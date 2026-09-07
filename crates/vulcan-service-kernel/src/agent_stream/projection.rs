@@ -519,18 +519,46 @@ fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
         {
             return Ok(false);
         }
-        if expected_owner.is_some() {
-            // latestUiState belongs to concurrent queue, composer, read, and collapse interactions rather than detached prompt preparation.
-            // latestUiState 归并发队列、输入框、已读与折叠交互所有，而不归分离提示词准备所有。
-            let latest_ui_state = guard
-                .workspace_snapshot
-                .as_ref()
-                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-                .map(|runtime_state| runtime_state.ui_state.clone());
-            if let Some(latest_ui_state) = latest_ui_state {
-                // candidateRuntimeState must exist because an owner-checked preparation commit cannot synthesize a partial session.
-                // candidateRuntimeState 必须存在，因为经过所有者校验的准备提交不得合成不完整会话。
-                let candidate_runtime_state = workspace_snapshot
+        // Only the completed Preparing candidate has a source validated by profile reconciliation.
+        // 只有完成后的 Preparing 候选具有经过画像对账校验的来源。
+        let profile_publication =
+            if expected_owner.is_some() && run_phase == SessionRunPhase::Preparing {
+                workspace_snapshot
+                    .session_runtime_state
+                    .get(&session_id)
+                    .and_then(|runtime| runtime.vmm_profile_sync.read_source.as_ref())
+                    .map(|source| {
+                        let retained = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+                            "VMM profile publication requires a retained workspace.".to_owned()
+                        })?;
+                        let runtime = guard.agent_runtime.as_ref().ok_or_else(|| {
+                            "VMM profile publication requires the current host runtime.".to_owned()
+                        })?;
+                        Ok::<_, String>((
+                            runtime.vmm_hook_runtime.clone(),
+                            crate::workspace_path_for_session(retained, session_id),
+                            source.clone(),
+                        ))
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+        // Keep the existing service lock and, for profile candidates, the hook read lock through this exact merge.
+        // 在本次准确合并期间保留既有服务锁；存在画像候选时同时保留 Hook 读锁。
+        let publish = || -> Result<WorkbenchDeltaEnvelope, String> {
+            if expected_owner.is_some() {
+                // latestUiState belongs to concurrent queue, composer, read, and collapse interactions rather than detached prompt preparation.
+                // latestUiState 归并发队列、输入框、已读与折叠交互所有，而不归分离提示词准备所有。
+                let latest_ui_state = guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                    .map(|runtime_state| runtime_state.ui_state.clone());
+                if let Some(latest_ui_state) = latest_ui_state {
+                    // candidateRuntimeState must exist because an owner-checked preparation commit cannot synthesize a partial session.
+                    // candidateRuntimeState 必须存在，因为经过所有者校验的准备提交不得合成不完整会话。
+                    let candidate_runtime_state = workspace_snapshot
                     .session_runtime_state
                     .get_mut(&session_id)
                     .ok_or_else(|| {
@@ -538,43 +566,56 @@ fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
                             "prompt preparation candidate is missing runtime state for session `{session_id}`"
                         )
                     })?;
-                candidate_runtime_state.ui_state = latest_ui_state;
+                    candidate_runtime_state.ui_state = latest_ui_state;
+                }
             }
-        }
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        let generation = guard.workbench_generation;
-        guard.workbench.revision = generation;
-        if expected_owner.is_some() {
-            let retained_workspace = guard
-                .workspace_snapshot
-                .as_mut()
-                .ok_or_else(|| String::from("retained workspace is no longer initialized"))?;
-            merge_prompt_session_slice_into_retained_workspace(
-                retained_workspace,
-                workspace_snapshot,
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            if expected_owner.is_some() {
+                let retained_workspace = guard
+                    .workspace_snapshot
+                    .as_mut()
+                    .ok_or_else(|| String::from("retained workspace is no longer initialized"))?;
+                merge_prompt_session_slice_into_retained_workspace(
+                    retained_workspace,
+                    workspace_snapshot,
+                    session_id,
+                    run_phase,
+                )?;
+            } else {
+                guard.workspace_snapshot = Some(workspace_snapshot);
+            }
+            for conversation in &mut guard.workbench.conversations {
+                if conversation.id == conversation_id {
+                    conversation.run_phase = run_phase.to_string();
+                    conversation.status = session_state.label().to_string();
+                    conversation.last_updated_label = String::from("刚刚");
+                    conversation.last_updated_at = current_unix_millis_text();
+                    break;
+                }
+            }
+            Ok(WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::UpdateConversationRunPhase(
+                    UpdateConversationRunPhaseDelta {
+                        conversation_id,
+                        run_phase: run_phase.to_string(),
+                        status: Some(session_state.label().to_string()),
+                        last_updated_label: Some(String::from("now")),
+                    },
+                ),
+            })
+        };
+        if let Some((runtime, workspace_path, source)) = profile_publication {
+            runtime.with_current_profile_publication(
                 session_id,
-                run_phase,
-            )?;
+                &workspace_path,
+                &source,
+                publish,
+            )??
         } else {
-            guard.workspace_snapshot = Some(workspace_snapshot);
-        }
-        for conversation in &mut guard.workbench.conversations {
-            if conversation.id == conversation_id {
-                conversation.run_phase = run_phase.to_string();
-                conversation.status = session_state.label().to_string();
-                conversation.last_updated_label = String::from("刚刚");
-                conversation.last_updated_at = current_unix_millis_text();
-                break;
-            }
-        }
-        WorkbenchDeltaEnvelope {
-            generation,
-            delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
-                conversation_id,
-                run_phase: run_phase.to_string(),
-                status: Some(session_state.label().to_string()),
-                last_updated_label: Some(String::from("now")),
-            }),
+            publish()?
         }
     };
     emit_service_event_with_trace(

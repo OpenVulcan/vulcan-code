@@ -103,6 +103,7 @@ fn analyze_wait() -> Result<QueryWait, Box<dyn std::error::Error>> {
     );
     let profile = build_analyze_profile_node(
         &pending,
+        &vulcan_memorymesh_core_config::ProfilePolicy::default(),
         &AcceptedProfileCandidate {
             candidate_index: 0,
             normalized_content: "source profile".to_owned(),

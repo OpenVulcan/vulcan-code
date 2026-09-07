@@ -4,6 +4,204 @@ use super::*;
 /// 单个项目的代码语义生命周期或检查点变化时发送的事件。
 pub const VCE_PROJECT_CHANGED_EVENT: &str = "vce.project.changed";
 
+/// Durable job receipt notification shared by all conversations in the owning project.
+/// 持久作业回执通知，由所属项目全部会话共享。
+pub const VCE_JOB_CHANGED_EVENT: &str = "vce.job.changed";
+
+/// Explicit indexing commands accepted without implicit rebuild or compatibility approval.
+/// 不包含隐式重建或兼容批准的显式索引命令。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceJobAction {
+    /// Human-authorized first index initialization.
+    /// 人为授权首次索引初始化。
+    Initialize,
+    /// Human-authorized synchronization of an already initialized index.
+    /// 人为授权同步已初始化索引。
+    Synchronize,
+}
+
+/// Durable job categories, including independently confirmed maintenance workflows.
+/// 持久作业分类，包括独立确认的维护流程。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceJobKindSummary {
+    /// Initialize an index for the first time.
+    /// 首次初始化索引。
+    Initialize,
+    /// Synchronize source changes.
+    /// 同步源码变化。
+    Synchronize,
+    /// Rebuild an explicitly confirmed index contract.
+    /// 重建已明确确认的索引契约。
+    Rebuild,
+}
+
+/// Job execution state; it is never the authority for query eligibility.
+/// 作业执行状态；绝不作为查询资格的权威值。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceJobStateSummary {
+    /// Receipt persisted before resource admission.
+    /// 资源准入前已持久化回执。
+    Queued,
+    /// The admitted worker is executing.
+    /// 已准入工作线程正在执行。
+    Running,
+    /// Cancellation accepted; bounded work and cleanup are settling.
+    /// 取消已受理；有界处理与清理正在收敛。
+    Cancelling,
+    /// Work and authoritative checkpoint persistence succeeded.
+    /// 工作与权威检查点持久化均成功。
+    Succeeded,
+    /// Execution failed with an explicit diagnostic.
+    /// 执行失败且带明确诊断。
+    Failed,
+    /// Cancellation and unpublished staging cleanup completed.
+    /// 取消及未发布暂存清理已完成。
+    Cancelled,
+    /// A previous process exited without its terminal receipt.
+    /// 先前进程退出时未写入终态回执。
+    Interrupted,
+}
+
+/// Real phase metadata without invented global progress percentages.
+/// 真实阶段元数据，不包含虚构整体进度百分比。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceJobProgressSummary {
+    /// Exact core phase: scanning, reconciling, chunking, embedding, writing, committing, complete.
+    /// 精确核心阶段：扫描、核对、切块、向量化、写入、提交、完成。
+    pub phase: String,
+    /// Exact child operation identity that scopes phase counters.
+    /// 限定阶段计数的精确子操作身份。
+    pub operation_id: String,
+    /// Exact unit: files, blobs, batches, or none.
+    /// 精确单位：文件、块对象、批次或无单位。
+    pub unit: String,
+    /// Confirmed completed units.
+    /// 已确认完成的单位数。
+    pub completed: u64,
+    /// Known total; absent means indeterminate, not zero.
+    /// 已知总量；缺失表示未确定，而不是零。
+    pub total: Option<u64>,
+    /// Optional source-relative path, never source content or credentials.
+    /// 可选源码相对路径，绝不含源码正文或凭据。
+    pub current_path: Option<String>,
+}
+
+/// Management-safe stable job receipt returned immediately after durable admission.
+/// 持久准入后立即返回的管理安全稳定作业回执。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceJobSummary {
+    /// Prior durable job explicitly retried; unrelated later synchronizations have no retry origin.
+    /// 明确重试的先前持久作业；无关的后续同步没有重试来源。
+    #[serde(default)]
+    pub retry_of_job_id: Option<String>,
+    /// Exact owning workbench project.
+    /// 精确所属工作台项目。
+    pub project_id: String,
+    /// Stable identity used for querying and cancellation.
+    /// 用于查询与取消的稳定身份。
+    pub job_id: String,
+    /// Explicit operation category.
+    /// 明确操作分类。
+    pub kind: VceJobKindSummary,
+    /// Durable execution state.
+    /// 持久执行状态。
+    pub state: VceJobStateSummary,
+    /// Monotonic sequence allowing clients to discard reordered events.
+    /// 允许客户端丢弃乱序事件的单调序号。
+    pub sequence: u64,
+    /// Admission wall-clock milliseconds for display.
+    /// 用于显示的准入墙上时钟毫秒数。
+    pub created_at_unix_ms: u64,
+    /// Latest acknowledged receipt timestamp.
+    /// 最近已确认回执时间戳。
+    pub updated_at_unix_ms: u64,
+    /// Prior checkpoint that remains queryable during ordinary updates.
+    /// 普通更新期间仍可查询的先前检查点。
+    pub source_checkpoint_version: Option<u64>,
+    /// New authoritative checkpoint present only after success.
+    /// 仅成功后出现的新权威检查点。
+    pub result_checkpoint_version: Option<u64>,
+    /// Real phase observation, absent while still queued.
+    /// 真实阶段观察，仍在排队时缺失。
+    pub progress: Option<VceJobProgressSummary>,
+    /// Whether one subsequent manual synchronization was coalesced.
+    /// 是否合并了一个后续手动同步。
+    pub followup_requested: bool,
+    /// Bounded execution or cleanup diagnostic.
+    /// 有界执行或清理诊断。
+    pub error: Option<String>,
+}
+
+/// Exact human job command with optimistic guards and stable retry identity.
+/// 带乐观保护与稳定重试身份的精确人为作业命令。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VceJobSubmitRequest {
+    /// Optional exact prior durable job to retry after current-authority validation.
+    /// 当前权威校验后要重试的可选精确先前持久作业。
+    #[serde(default)]
+    pub retry_of_job_id: Option<String>,
+    /// Owning workbench project selected by the user.
+    /// 用户选择的所属工作台项目。
+    pub project_id: String,
+    /// Explicit first initialization or synchronization action.
+    /// 明确首次初始化或同步操作。
+    pub action: VceJobAction,
+    /// Stable client request key reused on transport retry, not on a later new click.
+    /// 传输重试时复用的稳定客户端请求键，而非后续新点击的键。
+    pub idempotency_key: String,
+    /// Exact observed project settings revision.
+    /// 精确观察到的项目设置修订。
+    pub expected_settings_revision: u64,
+    /// Exact observed checkpoint; explicit null is required before initialization.
+    /// 精确观察到的检查点；初始化前明确为空。
+    pub expected_checkpoint_version: Option<u64>,
+}
+
+/// Read the latest project job or one exact stable identity, even when models are unavailable.
+/// 读取项目最近作业或精确稳定身份，即使模型不可用也可读取。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VceJobQueryRequest {
+    /// Exact owning project.
+    /// 精确所属项目。
+    pub project_id: String,
+    /// Exact job; absent selects the latest admitted receipt.
+    /// 精确作业；缺失时选择最近准入回执。
+    pub job_id: Option<String>,
+}
+
+/// Cancel only the exact displayed job; project configuration cannot retarget cancellation.
+/// 仅取消精确展示作业；项目配置不能重新指定取消对象。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VceJobCancelRequest {
+    /// Exact owning project.
+    /// 精确所属项目。
+    pub project_id: String,
+    /// Exact stable job identity, never a child-operation prefix.
+    /// 精确稳定作业身份，绝非子操作前缀。
+    pub job_id: String,
+}
+
+/// Exact project-level update policy accepted by settings and rendered by clients.
+/// 设置接受且客户端展示的精确项目级更新策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceIndexUpdateMode {
+    /// Only explicit human sync requests schedule updates.
+    /// 仅明确的人为同步请求调度更新。
+    Manual,
+    /// Authorized file events may schedule incremental updates after initialization.
+    /// 已初始化后，获授权文件事件可调度增量更新。
+    Automatic,
+}
+
 /// Persisted project-owned settings for the native code-semantic runtime.
 /// 原生代码语义运行时使用的项目自有持久化设置。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -12,6 +210,12 @@ pub struct VceProjectSettingsSummary {
     /// Whether semantic indexing is enabled for this project.
     /// 此项目是否启用语义索引。
     pub enabled: bool,
+    /// Persisted project-wide update mode shared by every conversation.
+    /// 所有会话共享的持久化项目级更新模式。
+    pub update_mode: VceIndexUpdateMode,
+    /// Minimum automatic update admission interval in seconds.
+    /// 自动更新受理的最低间隔秒数。
+    pub auto_update_min_interval_seconds: u32,
     /// Optimistic settings revision.
     /// 乐观设置修订号。
     pub revision: u64,
@@ -52,6 +256,12 @@ pub struct VceProjectSettingsInput {
     /// Whether semantic indexing should be enabled.
     /// 是否应启用语义索引。
     pub enabled: bool,
+    /// Exact project update policy; not a conversation-level preference.
+    /// 精确项目更新策略，不是会话级偏好。
+    pub update_mode: VceIndexUpdateMode,
+    /// Automatic update interval in seconds; manual sync bypasses this interval.
+    /// 自动更新间隔秒数；手动同步绕过此间隔。
+    pub auto_update_min_interval_seconds: u32,
     /// Maximum source file size admitted for indexing.
     /// 索引允许接收的最大源码文件字节数。
     pub max_file_bytes: u64,
@@ -109,6 +319,9 @@ pub struct VceProjectRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VceProjectLifecycleState {
+    /// The enabled project has no initialized committed index.
+    /// 已启用项目尚无已初始化的已提交索引。
+    Uninitialized,
     /// Semantic indexing is disabled by project settings.
     /// 项目设置已禁用语义索引。
     Disabled,
@@ -349,6 +562,9 @@ pub struct VceIndexIntegritySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceProjectOverviewResponse {
+    /// Opaque published-index identity required by subsequent content management reads.
+    /// 后续内容管理读取必需的不透明已发布索引身份。
+    pub read_identity: Option<String>,
     /// Authoritative global configuration prerequisite state.
     /// 权威全局配置前置状态。
     pub configuration: VceGlobalConfigurationStatus,
@@ -367,6 +583,47 @@ pub struct VceProjectOverviewResponse {
     /// Current namespace integrity when active.
     /// 激活时的当前命名空间完整性。
     pub integrity: Option<VceIndexIntegritySummary>,
+}
+
+/// Source observation evidence, independent from query admission and successful update time.
+/// 源码观察证据，独立于查询准入及成功更新时间。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceSourceFreshnessSummary {
+    /// Exact live observation exists; does not alone prove the index is current.
+    /// 存在精确存活观察；单凭此项不能证明索引最新。
+    pub watching: bool,
+    /// Delivered changes remain outside the last acknowledged scan boundary.
+    /// 已投递变化仍处于最近确认扫描边界之外。
+    pub pending_changes: bool,
+    /// Continuous evidence is absent or broken; the next admitted update needs a full manifest scan.
+    /// 连续证据缺失或中断；下一次准入更新需要完整清单扫描。
+    pub reconciliation_required: bool,
+}
+
+/// Lightweight project-wide activity for composer controls and the floating status panel.
+/// 输入区控件与浮动状态面板使用的轻量项目级活动。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceProjectActivityResponse {
+    /// Authoritative global model availability, independent from project enablement.
+    /// 权威全局模型可用性，独立于项目启用。
+    pub configuration: VceGlobalConfigurationStatus,
+    /// Exact persisted project settings and optimistic revision.
+    /// 精确持久项目设置与乐观修订。
+    pub settings: VceProjectSettingsSummary,
+    /// Committed runtime metadata without taking a running query's engine lock.
+    /// 已提交运行时元数据，不获取执行中查询的引擎锁。
+    pub status: VceProjectStatusSummary,
+    /// Current authoritative tool/query admission; indexing activity does not veto a valid checkpoint.
+    /// 当前权威工具及查询准入；索引活动不否决有效检查点。
+    pub query_available: bool,
+    /// Last acknowledged successful content update; unknown for legacy indexes without job history.
+    /// 最近确认成功内容更新时间；没有作业历史的旧索引为未知。
+    pub last_successful_update_unix_ms: Option<u64>,
+    /// Read-only source evidence; never revokes an existing compatible checkpoint.
+    /// 只读源码证据；绝不撤销既有兼容检查点。
+    pub source_freshness: VceSourceFreshnessSummary,
 }
 
 /// Bounded page request shared by VCE management lists.
@@ -406,6 +663,9 @@ pub struct VcePageResponse<T> {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceFileListRequest {
+    /// Exact read identity obtained from the displayed management overview.
+    /// 从当前显示的管理概览取得的精确读取身份。
+    pub expected_read_identity: String,
     /// Exact workbench project identity.
     /// 精确工作台项目身份。
     pub project_id: String,
@@ -488,6 +748,9 @@ pub struct VceFileSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceBlobDetailRequest {
+    /// Exact read identity of the file list from which this detail was selected.
+    /// 选择此详情时所在文件列表的精确读取身份。
+    pub expected_read_identity: String,
     /// Exact workbench project identity.
     /// 精确工作台项目身份。
     pub project_id: String,
@@ -560,6 +823,9 @@ pub struct VceBlobDetailResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VcePagedProjectRequest {
+    /// Required for checkpoint integrity; absent for live operation history.
+    /// 检查点完整性读取必需；实时操作历史不携带此值。
+    pub expected_read_identity: Option<String>,
     /// Exact workbench project identity.
     /// 精确工作台项目身份。
     pub project_id: String,
@@ -667,6 +933,12 @@ pub struct VceMaintenanceActionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceMaintenancePlanResponse {
+    /// Exact embedding identity shown by this preview, retained through human confirmation.
+    /// 此预览展示的精确向量身份，保留到人为确认。
+    pub embedding_fingerprint: String,
+    /// Explicit target dimension; no provider-default dimension is inferred.
+    /// 明确目标维度；不推断供应商默认维度。
+    pub embedding_dimension: u32,
     /// Stable maintenance mode.
     /// 稳定维护模式。
     pub mode: String,
@@ -683,6 +955,12 @@ pub struct VceMaintenancePlanResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceMaintenanceExecutionRequest {
+    /// Embedding identity copied from the confirmed preview, never replaced with the latest route.
+    /// 从已确认预览复制的向量身份，绝不替换为最新路由。
+    pub expected_embedding_fingerprint: String,
+    /// Stable identity of this exact confirmed submission, retained across transport retries.
+    /// 此精确确认提交的稳定身份，在传输重试期间保留。
+    pub idempotency_key: String,
     /// Exact workbench project identity.
     /// 精确工作台项目身份。
     pub project_id: String,
@@ -700,45 +978,25 @@ pub struct VceMaintenanceExecutionRequest {
     pub action_ids: Vec<String>,
 }
 
-/// Guarded request targeting one durable or currently running operation.
-/// 面向一项持久或当前运行操作的受保护请求。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct VceOperationMutationRequest {
-    /// Exact workbench project identity.
-    /// 精确工作台项目身份。
-    pub project_id: String,
-    /// Stable operation identity shown by the management surface.
-    /// 管理界面显示的稳定操作身份。
-    pub operation_id: String,
-    /// Exact settings revision required by this command.
-    /// 此命令要求的精确设置修订号。
-    pub expected_settings_revision: u64,
-    /// Exact published checkpoint visible when the command was requested.
-    /// 请求命令时可见的精确已发布检查点。
-    #[serde(default)]
-    pub expected_checkpoint_version: Option<u64>,
-}
-
-/// Guarded mutation request for refresh, retry, cancel, rebuild, or maintenance execution.
-/// 刷新、重试、取消、重建或维护执行使用的受保护修改请求。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct VceProjectMutationRequest {
-    /// Exact workbench project identity.
-    /// 精确工作台项目身份。
-    pub project_id: String,
-    /// Exact settings revision required by this command.
-    /// 此命令要求的精确设置修订号。
-    pub expected_settings_revision: u64,
-    /// Exact published checkpoint required by destructive commands.
-    /// 破坏性命令要求的精确已发布检查点。
-    #[serde(default)]
-    pub expected_checkpoint_version: Option<u64>,
-    /// Optional action identities copied from a read-only maintenance plan.
-    /// 从只读维护计划复制的可选操作身份。
-    #[serde(default)]
-    pub action_ids: Vec<String>,
+/// Maintenance either admits asynchronous indexing or completes bounded cleanup without indexing.
+/// 维护要么准入异步索引，要么完成不执行索引的有界清理。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VceMaintenanceExecutionResponse {
+    /// Durable receipt for confirmed rebuild or repair; completion is observed through normal job queries.
+    /// 已确认重建或修复的持久回执；完成状态通过普通作业查询观察。
+    Job {
+        /// Exact admitted project job, boxed without changing its JSON representation.
+        /// 精确准入的项目作业，装箱不改变其 JSON 表示。
+        job: Box<VceJobSummary>,
+    },
+    /// Cleanup-only result with no source scanning or model invocation.
+    /// 仅清理结果，不扫描源码、不调用模型。
+    Cleaned {
+        /// Authoritative overview after cleanup; indirection keeps every response variant bounded on the stack.
+        /// 清理后的权威概览；间接存储使各响应分支的栈占用保持有界。
+        overview: Box<VceProjectOverviewResponse>,
+    },
 }
 
 /// One structured code hit returned to the model-side retrieval tool.
@@ -761,6 +1019,9 @@ pub struct VceRetrievalHit {
     /// One-based inclusive end line.
     /// 从一开始且包含边界的结束行。
     pub end_line: usize,
+    /// Zero-based Unicode-scalar offset within the first source line, preserved from the core hit.
+    /// 首行内从零开始的 Unicode 标量偏移，原样保留核心命中的值。
+    pub start_char_offset: usize,
     /// Verbatim bounded source content.
     /// 原样有界源码内容。
     pub content: String,
@@ -836,12 +1097,49 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Require explicit content-read identity on the wire while keeping job history independent.
+    /// 在线协议中要求明确内容读取身份，同时保持作业历史独立。
+    /// No parameters or I/O; checks required fields and exact round-trip identity.
+    /// 无参数和输入输出；检查必填字段与精确往返身份。
+    #[test]
+    fn content_management_requests_preserve_required_read_identity() {
+        // A file page cannot silently default to the latest publication.
+        // 文件分页不能静默默认读取最新发布。
+        let missing = json!({"projectId": "project", "page": {"limit": 25}});
+        assert!(serde_json::from_value::<VceFileListRequest>(missing).is_err());
+        assert!(
+            serde_json::from_value::<VceBlobDetailRequest>(json!({
+                "projectId": "project", "blobName": "blob"
+            }))
+            .is_err()
+        );
+        // Detail identity survives deserialization and serialization without deriving a new value.
+        // 详情身份经过反序列化与序列化保持不变，不派生新值。
+        let wire =
+            json!({"projectId": "project", "blobName": "blob", "expectedReadIdentity": "space:7"});
+        let detail: VceBlobDetailRequest =
+            serde_json::from_value(wire.clone()).expect("decode exact identity");
+        assert_eq!(
+            serde_json::to_value(detail).expect("encode exact identity"),
+            wire
+        );
+        // Shared paging permits absence only because live operation history has no content snapshot.
+        // 共享分页允许空值，仅因为实时操作历史不具备内容快照。
+        let operations: VcePagedProjectRequest = serde_json::from_value(json!({
+            "projectId": "project", "page": {"limit": 25}
+        }))
+        .expect("decode live history");
+        assert!(operations.expected_read_identity.is_none());
+    }
+
     /// Verifies settings update JSON excludes host-owned revision and migration fields.
     /// 验证设置更新 JSON 不包含宿主持有的修订与迁移字段。
     #[test]
     fn settings_input_has_no_host_owned_fields() {
         let value = serde_json::to_value(VceProjectSettingsInput {
             enabled: true,
+            update_mode: VceIndexUpdateMode::Manual,
+            auto_update_min_interval_seconds: 300,
             max_file_bytes: 1_048_576,
             extra_ignore_patterns: vec![String::from("generated/**")],
             allow_query_rewrite: false,
@@ -855,6 +1153,42 @@ mod tests {
 
         assert!(value.get("revision").is_none());
         assert!(value.get("migratedFromCodebaseMemory").is_none());
+    }
+
+    /// Verify boxed maintenance results preserve the exact browser JSON and bounded enum layout.
+    /// 验证装箱维护结果保留精确浏览器 JSON 及有界枚举布局。
+    /// No parameters. Asserts round-trip fields and size without creating any runtime or storage.
+    /// 无参数。不创建任何运行时或存储，断言往返字段及大小。
+    #[test]
+    fn maintenance_response_boxing_preserves_wire_fields() {
+        // wire is the existing tagged response, not a new wrapper around its job field.
+        // wire 为既有带标签响应，不为作业字段新增包装层。
+        let wire = json!({
+            "kind": "job",
+            "job": {
+                "retryOfJobId": null, "projectId": "project", "jobId": "job",
+                "kind": "rebuild", "state": "queued", "sequence": 1,
+                "createdAtUnixMs": 10, "updatedAtUnixMs": 10,
+                "sourceCheckpointVersion": 1, "resultCheckpointVersion": null,
+                "progress": null, "followupRequested": false, "error": null
+            }
+        });
+        // response decodes exactly the fields previously consumed by the browser.
+        // response 精确解码此前由浏览器消费的字段。
+        let response: VceMaintenanceExecutionResponse =
+            serde_json::from_value(wire.clone()).expect("decode maintenance response");
+        assert!(matches!(
+            response,
+            VceMaintenanceExecutionResponse::Job { .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(response).expect("encode maintenance response"),
+            wire
+        );
+        assert!(
+            std::mem::size_of::<VceMaintenanceExecutionResponse>()
+                <= 3 * std::mem::size_of::<usize>()
+        );
     }
 
     /// Verifies browser-facing lifecycle values remain stable snake-case identifiers.

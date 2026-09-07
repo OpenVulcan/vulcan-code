@@ -171,12 +171,12 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             "Context compaction completed without a durable V1 API terminal receipt.",
         ));
     }
-    let summary_body = execution.compaction_result.summary_record.body.as_str();
-    if completed_assistant_text.text != summary_body {
-        return Err(String::from(
-            "Context compaction summary drifted from the durable normalized V1 assistant semantic.",
-        ));
-    }
+    // Verify the canonical payload, not the Agent's display-only continuation wrapper.
+    // 校验规范正文，而非 Agent 仅用于显示的续接包装。
+    super::completion::verified_compaction_summary_body(
+        &execution.compaction_result.summary_record.body,
+        &completed_assistant_text.text,
+    )?;
     Ok(WebuiContextCompactionExecution {
         execution,
         retained_from_seq,
@@ -263,18 +263,21 @@ pub(crate) fn spawn_webui_context_compaction_task(
         // finish_result classifies both provider failures and fallback summaries before kernel closure.
         // finish_result 在关闭内核前同时分类 Provider 失败与回退摘要。
         let finish_result = match terminal_result {
-            Ok(execution) => finish_webui_context_compaction_execution(
-                &task_app,
-                &task_state,
-                &agent_runtime,
-                session_id,
-                previous_phase,
-                &status_message_id,
-                &budget_note,
-                &trigger,
-                commit_mode,
-                execution,
-            ),
+            Ok(execution) => {
+                finish_webui_context_compaction_execution(
+                    &task_app,
+                    &task_state,
+                    &agent_runtime,
+                    session_id,
+                    previous_phase,
+                    &status_message_id,
+                    &budget_note,
+                    &trigger,
+                    commit_mode,
+                    execution,
+                )
+                .await
+            }
             Err(error) => fail_webui_context_compaction_execution(
                 &task_app,
                 &task_state,

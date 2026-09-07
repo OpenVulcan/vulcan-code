@@ -354,13 +354,16 @@ impl WorkspaceState {
                     next_records.insert(path.clone(), retained);
                     continue;
                 }
-                let mut deleted = previous.clone();
-                deleted.status = FileStatus::Deleted;
-                deleted.blob_name = None;
-                deleted.content = None;
-                deleted.source = FileSource::Filesystem;
-                deleted.generation = next_generation;
-                deleted.skip_reason = None;
+                // Use the same deletion constructor as explicit observations to clear size and mtime.
+                // 使用与明确观察相同的删除构造入口，清除大小和修改时间。
+                // Preserve committed identity until publication so the old vectors are still retired exactly.
+                // 在发布前保留已提交身份，确保仍能精确退役旧向量。
+                let deleted = Self::record_from_observation(
+                    path.clone(),
+                    FileObservation::deleted(path.clone(), FileSource::Filesystem),
+                    Some(previous),
+                    next_generation,
+                )?;
                 next_records.insert(path.clone(), deleted);
             }
         }
@@ -1517,6 +1520,59 @@ mod tests {
             WorkspaceState::from_snapshot(snapshot),
             Err(WorkspaceError::InvalidSnapshot { .. })
         ));
+    }
+
+    /// Full-scan deletion must produce a restorable empty publication after retaining pending removals.
+    /// 全量扫描删除在保留待处理移除之后必须生成可恢复的空发布。
+    ///
+    /// Takes no parameters and returns nothing; validates pending and committed snapshot boundaries.
+    /// 无参数、无返回值；验证待处理与已提交快照边界。
+    #[test]
+    fn full_scan_removal_clears_live_metadata_and_preserves_pending_identity() {
+        // Cover both vector-bearing files and previously skipped files with nonzero metadata.
+        // 同时覆盖含向量文件与之前跳过且带非零元数据的文件。
+        let mut state = WorkspaceState::default();
+        state
+            .reconcile([
+                FileObservation::present(
+                    "src/lib.rs",
+                    "fn entry() {}",
+                    Some(12),
+                    FileSource::Filesystem,
+                ),
+                FileObservation::skipped(
+                    "large.bin",
+                    8192,
+                    Some(24),
+                    "binary",
+                    FileSource::Filesystem,
+                ),
+            ])
+            .expect("observe real and skipped metadata");
+        let committed_blob = state.records["src/lib.rs"]
+            .blob_name
+            .clone()
+            .expect("present blob");
+        state
+            .commit_checkpoint(Checkpoint::new("scan-delete", 1, [committed_blob.clone()]))
+            .expect("commit original");
+        let pending = state.reconcile(Vec::new()).expect("full scan now empty");
+        assert_eq!(
+            state.sync_plan().deleted_blobs,
+            BTreeSet::from([committed_blob])
+        );
+        for record in &pending.records {
+            assert_eq!(record.status, FileStatus::Deleted);
+            assert_eq!(record.size, 0);
+            assert_eq!(record.mtime_ns, None);
+            assert!(record.content.is_none() && record.skip_reason.is_none());
+        }
+        WorkspaceState::from_snapshot(pending).expect("pending deletion remains restorable");
+        state
+            .commit_checkpoint(Checkpoint::new("scan-delete", 2, Vec::new()))
+            .expect("commit empty");
+        WorkspaceState::from_snapshot(state.snapshot())
+            .expect("empty publication remains restorable");
     }
 
     /// Verify an invalid public checkpoint cannot corrupt an otherwise valid live state.

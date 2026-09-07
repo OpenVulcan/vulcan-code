@@ -67,6 +67,12 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 vulcan-process-lifecycle.workspace = true
 
 [dev-dependencies]
+# Isolates full startup and restart tests without changing user-profile environment variables.
+# 隔离完整启动和重启测试，不修改用户主目录环境变量。
+vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
+# Parses explicitly authorized live-test configuration without invoking mutating startup recovery.
+# 解析明确授权的真实测试配置，不调用会修改配置的启动恢复流程。
+toml.workspace = true
 # Exposes the deterministic HostAI Port for VCE adapter lifecycle tests only.
 # 仅为 VCE 适配器生命周期测试暴露确定性 HostAI Port。
 vulcan-ai-contract = { workspace = true, features = ["test-support"] }

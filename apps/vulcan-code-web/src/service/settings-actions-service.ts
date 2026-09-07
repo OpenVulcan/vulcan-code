@@ -40,6 +40,7 @@ import type {
   ProviderModelSecondaryRouteSummary,
   OutputStyleCatalogSummary,
   WorkbenchSnapshot,
+  VceEmbeddingSaveConfirmation,
 } from "@/types";
 import {
   hasServiceRuntime,
@@ -493,6 +494,10 @@ export async function savePublicAiInferenceRoute(request: {
   operation: PublicAiOperation;
   route: PublicAiInferenceRoute | null;
   reasoningEffort?: PublicAiReasoningEffort;
+  // VCE-only explicit dimension and reviewed impact, persisted in the same transaction.
+  // 仅 VCE 使用的明确维度与已审查影响，在同一事务持久化。
+  embeddingDimensions?: number;
+  vceEmbeddingConfirmation?: VceEmbeddingSaveConfirmation;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_inference_route",

@@ -184,7 +184,7 @@ impl VulcanCoreController {
             *self = intervention_draft;
             on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
         }
-        self.ensure_seeded_provider_turn()?;
+        self.ensure_restored_provider_turn()?;
         self.run_provider_tool_streaming_loop(
             adapter,
             executor,
@@ -504,6 +504,46 @@ impl VulcanCoreController {
             on_before_next_provider_turn,
         )
         .await
+    }
+
+    /// Validate a retained loop boundary without changing the stricter seeded-input entrypoint.
+    /// 校验保留循环边界，不改变更严格的播种输入入口。
+    /// No arguments; accepts seeded input or a tool-free assistant tail with preceding nonempty input.
+    /// 无参数；允许播种输入，或具有前置非空输入且不含工具调用的助手尾部。
+    /// Returns an explicit error before dispatch for empty history or unresolved assistant tool calls.
+    /// 对空历史或尚未解决的助手工具调用，在派发前返回明确错误。
+    fn ensure_restored_provider_turn(&mut self) -> Result<(), CoreError> {
+        if conversation_snapshot_has_seeded_provider_input(&self.snapshot) {
+            return Ok(());
+        }
+        // Continue preserves interrupted text as history; it does not fabricate another user prompt.
+        // 继续动作将中断文本保留为历史，不伪造另一条用户提示词。
+        let retained_assistant = matches!(
+            self.snapshot.messages.last().map(|message| &message.payload),
+            Some(ConversationPayload::Assistant { text, reasoning, tool_calls, .. })
+                if tool_calls.is_empty() && (!text.trim().is_empty() || !reasoning.trim().is_empty())
+        );
+        // An assistant-only transcript is not a valid source of new work even through the restore API.
+        // 即使通过恢复接口，只有助手消息的转录也不是合法的新工作来源。
+        let has_original_input = self.snapshot.messages.iter().rev().skip(1).any(|message| {
+            matches!(&message.payload,
+                ConversationPayload::UserText { text, attachments }
+                    if !text.trim().is_empty() || !attachments.is_empty())
+                || matches!(&message.payload,
+                    ConversationPayload::AgentMessage { payload, .. } if !payload.trim().is_empty())
+        });
+        if retained_assistant && has_original_input {
+            return Ok(());
+        }
+        // Keep malformed recovery explicit and never fall back to a new user turn.
+        // 明确暴露非法恢复，不降级为新用户回合。
+        let error = CoreError::InvalidState {
+            message: String::from(
+                "Restored Provider execution requires seeded input or a tool-free assistant tail with prior input.",
+            ),
+        };
+        self.mark_failed(error.to_string());
+        Err(error)
     }
 
     /// Ensures the snapshot already contains a provider-visible message that can start a seeded turn.

@@ -1,7 +1,7 @@
 //! Hook-payload projection and VMM context-injection conversion.
 //! Hook payload 投影与 VMM 上下文注入转换。
 
-use crate::config::VmmEffectiveConfig;
+use crate::config::{VmmBackendMode, VmmEffectiveConfig};
 use crate::protocol::{
     ContextItem, PostActionRequest, PostActionTimelineItem, PostActionTimelineType,
     PreCheckRequest, PreCheckResponse,
@@ -149,8 +149,9 @@ pub fn post_action_request_from_completed_payload(
     payload: &Value,
     config: &VmmEffectiveConfig,
 ) -> Result<PostActionRequest, VmmAdapterError> {
-    let projection = completed_turn_projection_from_payload(payload)?;
+    let projection = completed_turn_projection_from_payload(payload, config.backend_mode)?;
     Ok(PostActionRequest {
+        expected_source: None,
         operation_id: required_string(payload, "turn_id")?,
         session_id: projection.session_id,
         user_id: required_config_id(config.user_id, "user_id")?,
@@ -217,17 +218,35 @@ pub fn injection_from_precheck_response(
 /// 从通用 hook JSON 构建已完成回合投影。
 fn completed_turn_projection_from_payload(
     payload: &Value,
+    backend_mode: VmmBackendMode,
 ) -> Result<VmmCompletedTurnProjection, VmmAdapterError> {
     let session_id = required_string(payload, "session_id")?;
-    let user_content = compact_text(
-        &required_string(payload, "user_content")?,
-        USER_CONTENT_LIMIT,
-    );
-    let assistant_content = compact_text(
-        &required_string(payload, "assistant_content")?,
+    // Native persistence owns cleaning and token clipping; do not discard line structure before it.
+    // 原生持久化负责清洗及 Token 裁剪；在此之前不能丢弃行结构。
+    let user_content =
+        postaction_content(payload, "user_content", backend_mode, USER_CONTENT_LIMIT).ok_or_else(
+            || {
+                VmmAdapterError::new(
+                    "missing_user_content",
+                    "completed-turn payload does not contain user_content",
+                )
+            },
+        )?;
+    // Keep the final assistant boundary independent from middle ask interactions.
+    // 最终助手回答边界与中间 ask 交互保持独立。
+    let assistant_content = postaction_content(
+        payload,
+        "assistant_content",
+        backend_mode,
         ASSISTANT_CONTENT_LIMIT,
-    );
-    let timeline = parse_hook_timeline(payload.get("timeline"))
+    )
+    .ok_or_else(|| {
+        VmmAdapterError::new(
+            "missing_assistant_content",
+            "completed-turn payload does not contain assistant_content",
+        )
+    })?;
+    let timeline = parse_hook_timeline(payload.get("timeline"), backend_mode)
         .into_iter()
         .filter_map(project_hook_timeline_item)
         .collect::<Vec<_>>();
@@ -253,19 +272,30 @@ fn completed_turn_projection_from_payload(
 
 /// Parses hook timeline values into normalized items.
 /// 将 hook timeline 值解析为归一化条目。
-fn parse_hook_timeline(value: Option<&Value>) -> Vec<VmmHookTimelineItem> {
+fn parse_hook_timeline(
+    value: Option<&Value>,
+    backend_mode: VmmBackendMode,
+) -> Vec<VmmHookTimelineItem> {
     value
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(parse_hook_timeline_item).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| parse_hook_timeline_item(item, backend_mode))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 /// Parses one hook timeline item.
 /// 解析一条 hook 时间线项。
-fn parse_hook_timeline_item(value: &Value) -> Option<VmmHookTimelineItem> {
+fn parse_hook_timeline_item(
+    value: &Value,
+    backend_mode: VmmBackendMode,
+) -> Option<VmmHookTimelineItem> {
     let role = optional_string(value, "role")?;
     let kind = optional_string(value, "kind")?;
-    let content = compact_text(&optional_string(value, "content")?, TIMELINE_CONTENT_LIMIT);
+    let content = postaction_content(value, "content", backend_mode, TIMELINE_CONTENT_LIMIT)?;
     if content.is_empty() {
         return None;
     }
@@ -275,6 +305,30 @@ fn parse_hook_timeline_item(value: &Value) -> Option<VmmHookTimelineItem> {
         content,
         source_id: optional_string(value, "source_id"),
     })
+}
+
+/// Reads one nonblank PostAction field; native preserves raw layout while external retains its transport cap.
+/// 读取一个非空 PostAction 字段；原生保留原始排版，外置保留既有传输上限。
+/// `key` names the exact payload field, `limit` applies only to ExternalGrpc; absent/blank values return None.
+/// `key` 为准确载荷字段名，`limit` 仅作用于 ExternalGrpc；缺失或空白值返回 None。
+fn postaction_content(
+    payload: &Value,
+    key: &str,
+    backend_mode: VmmBackendMode,
+    limit: usize,
+) -> Option<String> {
+    // Mode comes from the saved effective configuration, never from payload shape or connection fields.
+    // 模式来自已保存的有效配置，绝不按载荷形状或连接字段猜测。
+    match backend_mode {
+        VmmBackendMode::Native => payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|content| !content.trim().is_empty())
+            .map(str::to_owned),
+        VmmBackendMode::ExternalGrpc => {
+            optional_string(payload, key).map(|content| compact_text(&content, limit))
+        }
+    }
 }
 
 /// Projects one generic hook timeline item into the VMM middle timeline contract.
@@ -723,6 +777,55 @@ mod tests {
         assert_eq!(request.timeline[2].content, "choice A");
     }
 
+    /// Verifies native PostAction preserves layout and tails while external retains its established caps.
+    /// 验证原生 PostAction 保留排版及尾部，外置则保留既有上限。
+    #[test]
+    fn completed_payload_content_preparation_is_backend_specific() {
+        // Long machine-like content must reach native cleaning before any character truncation.
+        // 长机器文本必须先到达原生清洗器，不能提前按字符截断。
+        let content = format!("  header\n\n    indented\n{}\nTAIL", "x".repeat(6500));
+        // A tool entry proves native preservation does not broaden the allowed timeline roles.
+        // 工具条目用于证明原生保留原文并未扩大允许的时间线角色。
+        let payload = json!({
+            "turn_id": "turn-layout", "session_id": "session-layout",
+            "user_content": content, "assistant_content": content,
+            "timeline": [
+                {"role": "assistant", "kind": "ask", "content": content},
+                {"role": "tool", "kind": "tool_finished", "content": "must not leak"}
+            ]
+        });
+        // Mutate only the saved backend mode between the two projections.
+        // 两次投影之间仅修改已保存的后端模式。
+        let mut config = ready_config();
+        config.backend_mode = VmmBackendMode::Native;
+        // Native projection is byte-preserving, leaving all sanitation to its own intake.
+        // 原生投影逐字节保留，将全部清洗交给自身准入。
+        let native =
+            post_action_request_from_completed_payload(&payload, &config).expect("native request");
+        assert_eq!(native.user_content, content);
+        assert_eq!(native.assistant_content, content);
+        assert_eq!(native.timeline.len(), 1);
+        assert_eq!(native.timeline[0].content, content);
+        config.backend_mode = VmmBackendMode::ExternalGrpc;
+        // External projection must not accidentally inherit native uncapped transport semantics.
+        // 外置投影不得意外继承原生无截断的传输语义。
+        let external = post_action_request_from_completed_payload(&payload, &config)
+            .expect("external request");
+        assert_eq!(
+            external.user_content,
+            compact_text(&content, USER_CONTENT_LIMIT)
+        );
+        assert_eq!(
+            external.assistant_content,
+            compact_text(&content, ASSISTANT_CONTENT_LIMIT)
+        );
+        assert_eq!(
+            external.timeline[0].content,
+            compact_text(&content, TIMELINE_CONTENT_LIMIT)
+        );
+        assert!(external.user_content.ends_with('…'));
+    }
+
     #[test]
     fn precheck_response_converts_context_items_to_transient_injection() {
         let response = PreCheckResponse {
@@ -748,7 +851,14 @@ mod tests {
                     ..ContextItem::default()
                 },
             ],
-            ..PreCheckResponse::default()
+            read_source: crate::VmmMemoryReadSource::new(
+                crate::VmmMemorySource::native(1).expect("owner"),
+                vec![1],
+            )
+            .expect("source"),
+            degraded: false,
+            trace_id: String::new(),
+            session_memory_status: crate::SessionMemoryStatus::Active,
         };
 
         let insert = injection_from_precheck_response(&response, &ready_config()).expect("insert");
@@ -802,7 +912,14 @@ mod tests {
                 created_datetime: String::from("2026-05-02 14:20:00"),
                 memory_id: 137,
             }],
-            ..PreCheckResponse::default()
+            read_source: crate::VmmMemoryReadSource::new(
+                crate::VmmMemorySource::native(1).expect("owner"),
+                vec![1],
+            )
+            .expect("source"),
+            degraded: false,
+            trace_id: String::new(),
+            session_memory_status: crate::SessionMemoryStatus::Active,
         };
         state.apply_insert_for_turn(
             injection_from_precheck_response(&response, &ready_config()).expect("insert"),

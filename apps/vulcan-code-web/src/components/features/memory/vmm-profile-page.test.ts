@@ -33,6 +33,7 @@ describe("VMM profile backend separation", () => {
     // bundle preserves independently addressable profile sections from one complete response.
     // bundle 保存一次完整响应中可独立寻址的画像段落。
     const bundle = {
+      mode: "PROFILE_BUNDLE_MODE_SPLIT" as const,
       combined_text: "combined",
       project_profile: "project profile",
       user_profile: "user profile",
@@ -41,5 +42,21 @@ describe("VMM profile backend separation", () => {
 
     expect(vmmProfileBundlePreview(bundle, "user")).toBe("user profile")
     expect(vmmProfileBundlePreview(bundle, "project")).toBe("project profile")
+  })
+
+  it("consumes only Full text even when unexpected split fields are populated", () => {
+    const bundle = { mode: "PROFILE_BUNDLE_MODE_FULL" as const, combined_text: "full with explanation", user_profile: "must not duplicate user", project_profile: "must not duplicate project", trace_id: "full" }
+    for (const target of ["user", "project"] as const) {
+      expect(vmmProfileBundlePreview(bundle, target)).toBe("full with explanation")
+      expect(vmmProfileBundlePreview({ ...bundle, combined_text: "" }, target)).toBe("")
+    }
+  })
+
+  it("does not invent a bundle mode from populated fields", () => {
+    expect(vmmProfileBundlePreview({ mode: "PROFILE_BUNDLE_MODE_UNSPECIFIED", combined_text: "ambiguous", user_profile: "user", project_profile: "project", trace_id: "unknown" }, "user")).toBeNull()
+  })
+
+  it("keeps an empty Split target empty without falling back to combined or the other role", () => {
+    expect(vmmProfileBundlePreview({ mode: "PROFILE_BUNDLE_MODE_SPLIT", combined_text: "must not fallback", user_profile: "", project_profile: "other role", trace_id: "split" }, "user")).toBe("")
   })
 })

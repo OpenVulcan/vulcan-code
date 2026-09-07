@@ -19,6 +19,286 @@ use vulcan_memorymesh_core_storage::{
     StorageRetentionTrashBatch, StorageSnapshot,
 };
 
+/// Verifies canonical attempt ordering survives independently seeded hash maps after reload.
+/// 验证规范尝试顺序在重载后独立初始化的哈希表中保持一致。
+#[test]
+fn snapshot_analysis_attempt_order_is_stable_after_reload() {
+    // Persist deliberately interleaved identities and generations through the actual mutation port.
+    // 通过实际变更端口持久化刻意交错的身份及代次。
+    let mut storage = InMemoryStorage::new();
+    let mut mutations = ["attempt-b", "attempt-a"]
+        .into_iter()
+        .map(|id| Mutation::PutTurn {
+            entity: EntityRef::Existing {
+                domain_id: id.to_owned(),
+                expected_version: 0,
+            },
+            turn: turn(id, 1),
+        })
+        .collect::<Vec<_>>();
+    for (id, generation) in [
+        ("attempt-b", 2),
+        ("attempt-a", 3),
+        ("attempt-b", 1),
+        ("attempt-a", 1),
+    ] {
+        mutations.push(Mutation::PutAnalysisAttempt(AnalysisAttemptIdentity {
+            turn_id: TurnId::new(id).expect("turn"),
+            analysis_generation: generation,
+            mutation_identity: identity(&format!("{id}-{generation}")),
+            config_snapshot_id: ConfigSnapshotId::new("attempt-order").expect("config"),
+            structured_output_contracts: vec![StructuredOutputContractId::PostActionAnalysis],
+            score_contracts: Vec::new(),
+        }));
+    }
+    storage
+        .mutate(&batch("attempt-order", mutations))
+        .expect("commit");
+    let expected = storage.snapshot();
+    assert_eq!(
+        expected
+            .analysis_attempts
+            .iter()
+            .map(|attempt| (attempt.turn_id.as_str(), attempt.analysis_generation))
+            .collect::<Vec<_>>(),
+        vec![
+            ("attempt-a", 1),
+            ("attempt-a", 3),
+            ("attempt-b", 1),
+            ("attempt-b", 2)
+        ]
+    );
+    for _ in 0..16 {
+        storage = InMemoryStorage::from_snapshot(expected.clone()).expect("reload");
+        assert_eq!(storage.snapshot(), expected);
+    }
+}
+
+/// Builds an atomic successful extraction, including the valid empty-candidate case.
+/// 构造一次原子成功提取，包含有效的空候选情况。
+/// `id` is the pending turn, and `after`/`through` are the actual analysis observation bounds.
+/// `id` 是待处理回合，`after`/`through` 是本次分析的实际观察边界。
+fn extraction_batch(key: &str, id: &TurnId, after: i64, through: i64) -> MutationBatch {
+    batch(
+        key,
+        vec![
+            Mutation::TransitionTurnStatus {
+                turn_id: id.clone(),
+                from: TurnStatus::Pending,
+                to: TurnStatus::Completed,
+                user_input_kind: Some(vulcan_memorymesh_core_contracts::TurnInputKind::Statement),
+                analysis_details: Some("valid extraction, no new candidates".to_owned()),
+            },
+            Mutation::AdvanceSessionExtraction {
+                turn_id: id.clone(),
+                observed_after_ns: after,
+                observed_through_ns: through,
+            },
+        ],
+    )
+}
+
+/// Verifies exact direct-write windows across three successes and an independent session.
+/// 验证连续三次成功及独立会话的精确直写窗口。
+#[test]
+fn successful_session_windows_exclude_already_observed_direct_writes() {
+    // storage starts without any session metadata; intake must create its zero boundary.
+    // storage 初始无会话元数据；登记必须创建零边界。
+    let mut storage = InMemoryStorage::new();
+    // targets share one owner, except the last target which belongs to another session.
+    // targets 共享同一归属，最后一个回合除外，它属于另一个会话。
+    let mut targets = (1..=5)
+        .map(|index| {
+            // target is pending, not a pre-populated success from the general turn fixture.
+            // target 是待处理状态，而不是通用回合样本预填充的成功状态。
+            let mut target = turn(&format!("window-turn-{index}"), index);
+            target.status = TurnStatus::Pending;
+            target.user_input_kind = None;
+            target.analysis_details = None;
+            target
+        })
+        .collect::<Vec<_>>();
+    targets[4].session_source_id = SessionSourceId::new("other-session").expect("session");
+    // mutations registers every turn before analysis, reproducing a populated background queue.
+    // mutations 在分析前登记全部回合，复现已有积压的后台队列。
+    let mut mutations = targets
+        .iter()
+        .map(|target| Mutation::PutTurn {
+            entity: EntityRef::Existing {
+                domain_id: target.id.to_string(),
+                expected_version: 0,
+            },
+            turn: target.clone(),
+        })
+        .collect::<Vec<_>>();
+    for (id, created_at, session) in [
+        ("direct-first", 10, "session-compact"),
+        ("direct-second", 30, "session-compact"),
+        ("direct-future", 70, "session-compact"),
+        ("direct-other", 15, "other-session"),
+    ] {
+        // direct has the same subject/project, so only the session and time window isolate it.
+        // direct 具有相同主体和项目，因此由会话及时间窗口进行隔离。
+        let mut direct = memory(id, "subject-compact", "scope-compact", "a direct fact");
+        direct.origin_session_source_id = Some(SessionSourceId::new(session).expect("session"));
+        direct.created_at_ns = created_at;
+        direct.updated_at_ns = created_at;
+        mutations.push(put_memory(direct, 0));
+    }
+    assert!(matches!(
+        storage
+            .mutate(&batch("window-seed", mutations))
+            .expect("intake"),
+        MutationOutcome::Committed { .. }
+    ));
+    assert_eq!(storage.snapshot().memory_sessions.len(), 2);
+    for (index, cutoff, expected) in [
+        (0, 20, vec!["direct-first"]),
+        (1, 40, vec!["direct-second"]),
+        (2, 60, vec![]),
+        (4, 20, vec!["direct-other"]),
+    ] {
+        // target determines the sole canonical writing session for the next execution.
+        // target 确定下一次执行的唯一规范写入会话。
+        let target = &targets[index];
+        // before is read at execution, after the previous successful commit, never at intake.
+        // before 在执行时、上一次成功提交后读取，绝非入队时读取。
+        let before = storage.snapshot();
+        // session selects the complete ownership tuple, not a display name or bare session string.
+        // session 选择完整归属元组，而不是显示名称或裸会话字符串。
+        let session = before
+            .memory_sessions
+            .iter()
+            .find(|session| {
+                session.subject_id == target.subject_id
+                    && session.scope_id == target.scope_id
+                    && session.session_source_id == target.session_source_id
+            })
+            .expect("registered session");
+        // query is exactly the PostAction context query consumed by the L1 input stage.
+        // query 是 L1 输入阶段实际消费的 PostAction 上下文查询。
+        let query = StorageQuery::PostActionContext {
+            subject_id: target.subject_id.clone(),
+            scope_access: ScopeAccess {
+                write_scope: target.scope_id.clone(),
+                visible_scopes: vec![target.scope_id.clone()],
+            },
+            session_source_id: target.session_source_id.clone(),
+            target_turn_id: target.id.clone(),
+            reference_turn_limit: 10,
+            direct_write_observed_after_ns: session.last_extraction_observed_at_ns,
+            analysis_cutoff_ns: cutoff,
+        };
+        let StorageQueryResult::PostActionContext {
+            recent_direct_writes,
+            ..
+        } = storage.query(&query).expect("analysis context")
+        else {
+            panic!("PostAction context expected")
+        };
+        assert_eq!(
+            recent_direct_writes
+                .iter()
+                .map(|item| item.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        // success atomically commits even the empty third extraction and its exact cutoff.
+        // success 原子提交包括第三次空提取在内的成功结果及精确截止时间。
+        let success = extraction_batch(
+            &format!("success-{index}"),
+            &target.id,
+            session.last_extraction_observed_at_ns,
+            cutoff,
+        );
+        assert!(matches!(
+            storage.mutate_at(&success, cutoff + 5).expect("extraction"),
+            MutationOutcome::Committed { .. }
+        ));
+    }
+    // before_failure captures both the completed turns and the successfully advanced watermark.
+    // before_failure 同时保存已完成回合及已成功推进的水位。
+    let before_failure = storage.snapshot();
+    // stale attempts cannot roll back the window or partially complete their target turn.
+    // stale 尝试不能回退窗口，也不能部分完成其目标回合。
+    let stale = extraction_batch("stale-window", &targets[3].id, 0, 80);
+    assert!(matches!(
+        storage.mutate_at(&stale, 85).expect("stale result"),
+        MutationOutcome::Rejected { .. }
+    ));
+    assert_eq!(storage.snapshot(), before_failure);
+    // reload proves the successful boundaries are independent durable facts, not queue estimates.
+    // reload 证明成功边界是独立耐久事实，而不是队列估算值。
+    let reload = InMemoryStorage::from_snapshot(before_failure.clone()).expect("reload");
+    assert_eq!(reload.snapshot(), before_failure);
+}
+
+/// Verifies an extraction cannot silently invent its commit clock or a missing session record.
+/// 验证提取不能静默伪造提交时钟或缺失会话记录。
+#[test]
+fn extraction_requires_registered_session_and_explicit_host_clock() {
+    // storage is seeded through normal intake rather than manually fabricated metadata.
+    // storage 通过正常登记初始化，而不是手动伪造元数据。
+    let mut storage = InMemoryStorage::new();
+    // target remains pending until the whole completion batch succeeds.
+    // target 在整个完成批次成功之前保持待处理状态。
+    let mut target = turn("clock-turn", 1);
+    target.status = TurnStatus::Pending;
+    target.user_input_kind = None;
+    target.analysis_details = None;
+    storage
+        .mutate(&batch(
+            "clock-seed",
+            vec![Mutation::PutTurn {
+                entity: EntityRef::Existing {
+                    domain_id: target.id.to_string(),
+                    expected_version: 0,
+                },
+                turn: target.clone(),
+            }],
+        ))
+        .expect("seed");
+    // before is the exact snapshot that all rejected attempts must preserve.
+    // before 是所有被拒绝尝试必须保持的精确快照。
+    let before = storage.snapshot();
+    // success deliberately has no inserted memories, covering successful empty extraction.
+    // success 故意不插入记忆，以覆盖成功空提取。
+    let success = extraction_batch("clock-success", &target.id, 0, 20);
+    assert!(matches!(
+        storage.mutate(&success).expect("missing clock"),
+        MutationOutcome::Rejected { .. }
+    ));
+    assert!(matches!(
+        storage.mutate_at(&success, 19).expect("early clock"),
+        MutationOutcome::Rejected { .. }
+    ));
+    assert_eq!(storage.snapshot(), before);
+    assert!(matches!(
+        storage.mutate_at(&success, 25).expect("valid clock"),
+        MutationOutcome::Committed { .. }
+    ));
+    assert_eq!(
+        storage.snapshot().memory_sessions[0].last_extraction_completed_at_ns,
+        Some(25)
+    );
+    // committed must remain unchanged on exact idempotent replay even with a later host clock.
+    // committed 在精确幂等重放时必须保持不变，即使宿主时钟已更晚。
+    let committed = storage.snapshot();
+    storage.mutate_at(&success, 90).expect("replay");
+    assert_eq!(storage.snapshot(), committed);
+    // corrupt removes required metadata without changing the existing pending turn.
+    // corrupt 移除必需元数据，但不改变既有待处理回合。
+    let mut corrupt = before;
+    corrupt.memory_sessions.clear();
+    let mut corrupt_storage = InMemoryStorage::from_snapshot(corrupt).expect("fixture snapshot");
+    assert!(matches!(
+        corrupt_storage
+            .mutate_at(&success, 25)
+            .expect("missing session"),
+        MutationOutcome::Rejected { .. }
+    ));
+}
+
 /// Verifies the vector persistence inventory retains recycle-bin embeddings for direct restore.
 /// 验证向量持久化清单会保留回收站嵌入，以支持直接恢复。
 #[test]
@@ -45,7 +325,9 @@ fn snapshot_memory_embeddings_include_recycle_bin_records() {
                 .expect("seed memory must carry its source subject"),
             scope_id: recycled.scope_id.clone(),
             recycled_at_ns: 2,
+            expires_at_ns: 100,
             reason: RetentionReasonCode::TerminalMemoryRecycle,
+            manual_selection: None,
             dataset: ExportDataset {
                 memories: vec![recycled],
                 ..ExportDataset::empty()
@@ -75,7 +357,9 @@ fn recycled_identity_survives_new_slot_allocation() {
                 .expect("subject identity must be valid"),
             scope_id: ScopeId::new("scope-retention").expect("scope identity must be valid"),
             recycled_at_ns: 1,
+            expires_at_ns: 100,
             reason: RetentionReasonCode::ColdTurnRecycle,
+            manual_selection: None,
             dataset: ExportDataset {
                 turns: vec![retention_turn("vmm-turn-1", "trash-session", 1)],
                 ..ExportDataset::empty()
@@ -113,7 +397,9 @@ fn snapshot_rejects_active_and_recycled_identity_collision() {
             subject_id: SubjectId::new("subject").expect("subject identity must be valid"),
             scope_id: ScopeId::new("scope").expect("scope identity must be valid"),
             recycled_at_ns: 1,
+            expires_at_ns: 100,
             reason: RetentionReasonCode::TerminalMemoryRecycle,
+            manual_selection: None,
             dataset: ExportDataset {
                 memories: vec![record],
                 ..ExportDataset::empty()
@@ -303,6 +589,85 @@ fn retention_turn(identity: &str, session: &str, created_at_ns: i64) -> Turn {
     value.session_source_id =
         SessionSourceId::new(session).expect("session identity must be valid");
     value
+}
+
+/// Verifies persisted deadlines survive policy edits and due filtering precedes pagination.
+/// 验证持久化截止时间不受策略修改影响，且先筛选到期批次再分页。
+#[test]
+fn retention_scan_uses_frozen_trash_deadlines_before_pagination() {
+    // An older long-lived batch must not starve a newer batch with a shorter frozen window.
+    // 较早创建的长期批次不能阻塞较晚创建但冻结窗口较短的批次。
+    let mut snapshot = InMemoryStorage::new().snapshot();
+    for (id, recycled_at_ns, expires_at_ns) in [
+        ("older-live", 1, 1_000),
+        ("newer-due", 2, 100),
+        ("next-due", 3, 101),
+    ] {
+        snapshot
+            .retention_trash_batches
+            .push(StorageRetentionTrashBatch {
+                batch_id: id.to_owned(),
+                subject_id: SubjectId::new("subject-retention").expect("subject"),
+                scope_id: ScopeId::new("scope-retention").expect("scope"),
+                recycled_at_ns,
+                expires_at_ns,
+                reason: RetentionReasonCode::ColdTurnRecycle,
+                manual_selection: None,
+                dataset: ExportDataset::empty(),
+                analysis_attempts: Vec::new(),
+            });
+    }
+    let storage = InMemoryStorage::from_snapshot(snapshot).expect("frozen batches load");
+    for trash_retention_ms in [1, RetentionPolicy::v1().trash_retention_ms, u64::MAX] {
+        let mut policy = RetentionPolicy::v1();
+        policy.trash_retention_ms = trash_retention_ms;
+        policy.trash_purge_limit = 1;
+        for (now_ns, expected_count) in [(99, 0), (100, 1), (101, 1)] {
+            let StorageQueryResult::RetentionScan(facts) = storage
+                .query(&StorageQuery::RetentionScan {
+                    subject_id: SubjectId::new("subject-retention").expect("subject"),
+                    scope_access: ScopeAccess {
+                        write_scope: ScopeId::new("scope-retention").expect("scope"),
+                        visible_scopes: vec![ScopeId::new("scope-retention").expect("scope")],
+                    },
+                    now_ns,
+                    policy: policy.clone(),
+                })
+                .expect("scan")
+            else {
+                panic!("expected retention facts");
+            };
+            assert_eq!(facts.trash_batches.len(), expected_count);
+            if expected_count == 1 {
+                assert_eq!(facts.trash_batches[0].batch_id, "newer-due");
+                assert_eq!(facts.trash_batches[0].expires_at_ns, 100);
+            }
+        }
+    }
+}
+
+/// Verifies non-forward trash deadlines are rejected when loading a snapshot.
+/// 验证加载快照时会拒绝未向前推进的回收截止时间。
+#[test]
+fn trash_deadline_is_required_and_strictly_after_recycle_time() {
+    let mut snapshot = InMemoryStorage::new().snapshot();
+    let mut batch = StorageRetentionTrashBatch {
+        batch_id: "invalid-deadline".to_owned(),
+        subject_id: SubjectId::new("subject-retention").expect("subject"),
+        scope_id: ScopeId::new("scope-retention").expect("scope"),
+        recycled_at_ns: 10,
+        expires_at_ns: 11,
+        reason: RetentionReasonCode::ColdTurnRecycle,
+        manual_selection: None,
+        dataset: ExportDataset::empty(),
+        analysis_attempts: Vec::new(),
+    };
+    for deadline in [-1, 0, 9, 10] {
+        batch.expires_at_ns = deadline;
+        snapshot.retention_trash_batches = vec![batch.clone()];
+        let error = InMemoryStorage::from_snapshot(snapshot.clone()).expect_err("invalid deadline");
+        assert!(error.contains("expiry must follow"));
+    }
 }
 
 /// Verifies cold-turn pagination selects the oldest session activity before lexical identity.
@@ -933,6 +1298,121 @@ fn memory_deletion_cascades_context_evidence() {
     assert_eq!(after.memories.len(), 1);
     assert_eq!(after.context_evidence.len(), 1);
     assert_eq!(after.context_evidence[0].memory_id, records[1].id);
+}
+
+/// Preserves real lexical score facts while rejecting unauthorized and inactive physical hits.
+/// 保留真实词法评分事实，同时拒绝未授权及失效的物理命中。
+#[test]
+fn external_lexical_materialization_filters_before_limit_and_preserves_scores() {
+    use vulcan_memorymesh_core_contracts::{
+        PhysicalCandidate, PhysicalCandidateScore, RawScoreKind, ScoreDirection,
+    };
+    // storage contains higher-ranked invalid records followed by two valid records.
+    // storage 包含排名靠前的无效记录，以及其后的两条有效记录。
+    let mut storage = InMemoryStorage::new();
+    // records share text so this test cannot accidentally pass by recomputing token overlap.
+    // records 共用文本，避免本测试因为重新计算词元重合度而意外通过。
+    let mut records = (0..9)
+        .map(|index| memory(&format!("fts-{index}"), "subject", "scope", "同一摘要"))
+        .collect::<Vec<_>>();
+    for record in &mut records {
+        record.origin_session_source_id = Some(SessionSourceId::new("selected").expect("session"));
+    }
+    records[0].source_subject_id = Some(SubjectId::new("other-subject").expect("subject"));
+    records[1].scope_id = ScopeId::new("hidden-scope").expect("scope");
+    records[2].vector_space_id = Some(VectorSpaceId::new("other-vector").expect("vector"));
+    records[3].expires_at_ns = Some(10);
+    records[4].state = MemoryState::Deleted;
+    records[5].origin_session_source_id =
+        Some(SessionSourceId::new("other-session").expect("session"));
+    records[6].origin_session_source_id = None;
+    assert!(matches!(
+        storage
+            .mutate(&batch(
+                "fts-seed",
+                records
+                    .into_iter()
+                    .map(|record| put_memory(record, 0))
+                    .collect()
+            ))
+            .expect("seed"),
+        MutationOutcome::Committed { .. }
+    ));
+    // contract names the test producer without reusing the reference token-overlap identity.
+    // contract 命名测试生产者，不复用参考词元重合度身份。
+    let contract = ScoreContractRef {
+        id: "test-sqlite-bm25".to_owned(),
+        version: 1,
+    };
+    // candidates keep negative SQLite BM25 values and zero-based physical ranks, including gaps after filtering.
+    // candidates 保留 SQLite 负 BM25 值及从零开始的物理名次，包括过滤后留下的间隙。
+    let candidates = (0..9_u32)
+        .map(|index| PhysicalCandidate {
+            memory_id: format!("fts-{index}"),
+            physical_rank: index,
+            score: PhysicalCandidateScore {
+                raw_value: -10.0 + f64::from(index),
+                raw_score_kind: RawScoreKind::Bm25,
+                direction: ScoreDirection::LowerIsBetter,
+                decision_score: None,
+                contract: contract.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    // query admits only this subject, project, vector generation, session and lifecycle time.
+    // query 只允许当前主体、项目、向量代次、会话和生命周期时刻。
+    let mut query = StorageQuery::LexicalCandidates {
+        subject_id: SubjectId::new("subject").expect("subject"),
+        scope_access: ScopeAccess {
+            write_scope: ScopeId::new("scope").expect("scope"),
+            visible_scopes: vec![ScopeId::new("scope").expect("scope")],
+        },
+        queries: vec!["同一摘要".to_owned()],
+        vector_space_id: VectorSpaceId::new("vector-1").expect("vector"),
+        boundary: CandidateQueryBoundary {
+            candidate_scope: Some(vulcan_memorymesh_core_contracts::MemoryCandidateScope {
+                scope_ids: vec![ScopeId::new("scope").expect("scope")],
+                origin_session_source_id: Some(SessionSourceId::new("selected").expect("session")),
+            }),
+            session_recall_boundary: None,
+        },
+        limit: 1,
+        expected_contract: contract.clone(),
+        now_ns: 10,
+    };
+    // result must retain the eighth physical hit, not truncate the unfiltered first hit.
+    // result 必须保留第八条物理命中，而不是先截断未过滤的首条命中。
+    let result = storage
+        .materialize_external_lexical_candidates(&query, candidates.clone())
+        .expect("materialize");
+    assert_eq!(result.candidates, vec![candidates[7].clone()]);
+    assert_eq!(result.memories[0].id.as_str(), "fts-7");
+    assert!(
+        storage
+            .materialize_external_vector_candidates(&query, candidates.clone())
+            .is_err()
+    );
+    // wrong_contract must fail even when its candidate would otherwise be filtered out.
+    // wrong_contract 即使原本会被可见性过滤，也必须明确失败。
+    let mut wrong_contract = candidates.clone();
+    wrong_contract[0].score.contract.version = 2;
+    assert_eq!(
+        storage
+            .materialize_external_lexical_candidates(&query, wrong_contract)
+            .expect_err("mixed contract")
+            .code,
+        ErrorCode::ScoreContractViolation
+    );
+    if let StorageQuery::LexicalCandidates { limit, .. } = &mut query {
+        *limit = 0;
+    }
+    assert!(
+        storage
+            .materialize_external_lexical_candidates(&query, candidates)
+            .expect("zero limit")
+            .candidates
+            .is_empty()
+    );
 }
 
 /// Candidate channels must enforce the requested vector space before ranking and truncation.

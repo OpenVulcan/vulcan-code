@@ -319,7 +319,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
                     task_id: active_stream_task_id,
                 },
                 execution,
-            )?;
+            )
+            .await?;
             // rejection_error must survive outcome consumption so automatic continuation can stop.
             // rejection_error 必须跨越终态结果消费，以便停止自动续接。
             let rejection_error = finish_outcome.rejection_error().map(str::to_owned);
@@ -345,8 +346,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
             if let Some(error) = rejection_error {
                 return Err(error);
             }
-            // refreshed_vmm_state observes the cache epoch committed by the compaction controller command.
-            // refreshed_vmm_state 观察由压缩控制器命令提交的缓存纪元。
+            // This reads the current durable VMM cache; the V1 compaction receipt alone does not advance its epoch.
+            // 此处读取当前持久 VMM 缓存；V1 压缩回执本身不会推进其纪元。
             let refreshed_vmm_state = match vmm_controller.as_ref() {
                 Some(controller) => controller.snapshot()?,
                 None => vulcan_vmm::VmmSessionMemoryState::default(),
@@ -781,6 +782,17 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
     // vmmRuntimeReady cannot become true during compaction and is revoked immediately after stop.
     // vmmRuntimeReady 在压缩期间不能由 false 变为 true，并会在服务停止后立即撤销。
     let vmm_runtime_ready = request.vmm_runtime_ready && current_vmm_service_ready;
+    refreshed.vmm_runtime_ready = vmm_runtime_ready;
+    // Keep canonical cached layers intact while projecting only currently admitted memory into this request.
+    // 保持规范缓存层不变，仅向本次请求投影当前准入的记忆。
+    let mut context_injection_state = runtime_state.context_injection_state.clone();
+    if !vmm_runtime_ready || !vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
+    {
+        vulcan_agent_runtime::agent_runtime::vmm_hooks::clear_vmm_profile_injections(
+            &mut context_injection_state,
+            &mut refreshed.system_prompt_hook_blocks,
+        );
+    }
     refreshed.conversation_state = runtime_state.conversation_state.clone();
     // The compacted state already contains the internal continuation seed, so replaying it as a
     // new UserPrompt would append the original prompt to the visible transcript a second time.
@@ -794,7 +806,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .first()
         .and_then(|event| event.turn_id.clone());
     refreshed.context_injection = core_provider_context_injection_from_state_for_turn(
-        &runtime_state.context_injection_state,
+        &context_injection_state,
         vmm_session_memory,
         turn_marker.as_deref(),
         vmm_runtime_ready,
@@ -1060,6 +1072,194 @@ pub(crate) fn build_webui_context_compaction_job_request(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// Verifies compaction refresh revokes stopped memory without changing canonical or unrelated input.
+    /// 验证压缩刷新撤销已停用记忆，不改变规范输入或无关注入。
+    /// Uses the shared prompt reducers and production refresh entry; returns after request and retained-state assertions.
+    /// 使用共享提示词归约器及生产刷新入口；请求及保留状态断言完成后返回。
+    #[tokio::test]
+    async fn compaction_refresh_removes_stopped_memory_profiles_and_readiness() {
+        use vulcan_agent_runtime::agent_runtime::conversation_hooks::ConversationHookRuntime;
+        use vulcan_agent_runtime::workbench_prompt_turn::{
+            SharedPromptTurnContinueInput, SharedPromptTurnRuntimeBeginInput,
+            begin_shared_prompt_turn_with_runtime_state,
+            continue_shared_prompt_turn_after_preparation_with_runtime_state,
+        };
+        use vulcan_context_injection::{InjectionInsert, InjectionKind};
+        use vulcan_workbench_model::{PendingSessionPromptSource, SessionRuntimeStateEntry};
+
+        // The fixture owns only in-memory service state and never opens user storage or a model connection.
+        // 夹具仅持有内存服务状态，不打开用户存储或模型连接。
+        let session_id = SessionId::from_u128(831);
+        // Generate a real canonical request rather than duplicating the evolving request structure.
+        // 生成真实规范请求，而非复制持续变化的请求结构。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        // The empty dispatcher still supplies exact correlation through the shared begin reducer.
+        // 空派发器仍通过共享开始归约器提供准确关联。
+        let mut hooks = ConversationHookRuntime::new();
+        // A normal user turn establishes the same request shape consumed by automatic compaction.
+        // 普通用户回合建立自动压缩所消费的同一请求形态。
+        let start = begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hooks,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id,
+                session_title: "memory compaction projection",
+                workspace_path: "D:/isolated-projection",
+                prompt_entry_id: "compaction-projection-turn".to_owned(),
+                continuation_action_id: None,
+                prompt: "continue after compaction",
+                hidden_model_guidance: None,
+                provider_visible_agent_messages: Vec::new(),
+                attachments: Vec::new(),
+                provider_attachments: None,
+                existing_canonical_user_message_id: None,
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: false,
+                source: PendingSessionPromptSource::UserFollowup,
+                vmm_runtime_ready: false,
+                vmm_precheck_ready: false,
+                execution_mode: "agent".to_owned(),
+                reasoning_effort: None,
+                owning_project_id: Some("project-a".to_owned()),
+            },
+        )
+        .expect("shared begin");
+        // Empty temporary memory is used only while constructing the initial no-hook request.
+        // 仅在构造初始无 Hook 请求时使用空临时记忆。
+        let mut memory = vulcan_vmm::VmmSessionMemoryState::default();
+        // Preparation runs the empty profile dispatcher and skips disabled precheck with exact turn identity.
+        // 准备执行空画像派发器，并以准确回合身份跳过已禁用预检。
+        let mut request = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+            &mut runtime_state,
+            &mut memory,
+            SharedPromptTurnContinueInput {
+                vmm_context_epoch: Some(
+                    vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+                ),
+                vmm_profile_read_source: None,
+                profile_outcome: start.profile_request.clone().run().await,
+                precheck_outcome: start.precheck_request.clone().skip(),
+                start,
+                project_configuration: Default::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: false,
+            },
+        )
+        .expect("shared request")
+        .request;
+        // Simulate memory admitted before compaction, then observe an actually stopped host at refresh.
+        // 模拟压缩前记忆已准入，然后在刷新时观察确实已停止的宿主。
+        request.vmm_runtime_ready = true;
+        request.system_prompt_hook_blocks = vec![
+            vulcan_hooks::SystemPromptHookBlock::new("vmm_profile", "old profile base"),
+            vulcan_hooks::SystemPromptHookBlock::new("other_hook", "keep system"),
+        ];
+        runtime_state.context_injection_state.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Persistent,
+                "vmm_profile_delta",
+                "profile",
+                "old profile delta",
+                None,
+            ),
+            "2",
+        );
+        runtime_state.context_injection_state.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Persistent,
+                "other_feature",
+                "generic",
+                "keep generic",
+                None,
+            ),
+            "2",
+        );
+        memory
+            .synchronize_stable_anchor_rendering(true, "2")
+            .expect("cached anchor rendering");
+        memory
+            .apply_recall_batch(
+                &session_id.to_string(),
+                "historical-user",
+                &vulcan_vmm::VmmRecallBatch {
+                    ttl_turns: 3,
+                    injection_tag: "vmm".to_owned(),
+                    injection_description: "memory".to_owned(),
+                    items: vec![vulcan_vmm::ContextItem {
+                        memory_id: 11,
+                        text: "old recalled body".to_owned(),
+                        ..Default::default()
+                    }],
+                },
+                "2",
+            )
+            .expect("old recall cache");
+        assert!(!memory.active_leases.is_empty());
+        assert!(!memory.cache_epoch.anchors.is_empty());
+        // Retain exact authority separately so request projection cannot silently clear stored state.
+        // 单独保留准确权威状态，确保请求投影不能悄悄清空存储状态。
+        let before_memory = memory.clone();
+        // The helper supplies a stopped service with no registered runtime or external health probe.
+        // 辅助夹具提供无已注册运行时或外置健康探测的已停用服务。
+        let mut service =
+            crate::tests::test_support::test_service_state_with_parent_session(session_id);
+        service
+            .workspace_snapshot
+            .as_mut()
+            .expect("workspace")
+            .session_runtime_state
+            .insert(session_id, runtime_state.clone());
+        // Only the fixture owns this service lock.
+        // 仅夹具拥有此服务锁。
+        let state = std::sync::Arc::new(std::sync::Mutex::new(service));
+        // Both original readiness values must remain false after observing the stopped host.
+        // 观察到宿主停止后，两种原始就绪值都必须保持为 false。
+        for originally_ready in [true, false] {
+            request.vmm_runtime_ready = originally_ready;
+            // Exercise the exact refresh function used by successful automatic compaction.
+            // 执行自动压缩成功后使用的准确刷新函数。
+            let refreshed =
+                refreshed_execution_request_after_context_compaction(&state, &request, &memory)
+                    .expect("refresh");
+            assert!(!refreshed.vmm_runtime_ready);
+            assert_eq!(
+                refreshed.system_prompt_hook_blocks,
+                vec![vulcan_hooks::SystemPromptHookBlock::new(
+                    "other_hook",
+                    "keep system"
+                )]
+            );
+            // The generic feature still produces a nonempty overlay, but no VMM body or profile remains.
+            // 通用功能仍产生非空覆盖层，但不再包含记忆正文或画像。
+            let overlay = refreshed.context_injection.expect("generic injection");
+            assert_eq!(overlay.persistent_blocks.len(), 1);
+            assert!(overlay.persistent_blocks[0].contains("keep generic"));
+            assert!(overlay.anchored_prefixes.is_empty());
+            assert!(overlay.cache_epoch_id.is_none());
+            assert_eq!(overlay.active_memory_body_bytes, 0);
+            assert_eq!(refreshed.prompt, request.prompt);
+            assert_eq!(
+                serde_json::to_value(&refreshed.conversation_state).expect("request history"),
+                serde_json::to_value(&runtime_state.conversation_state).expect("canonical history")
+            );
+            assert!(matches!(refreshed.turn_start_mode, Some(vulcan_agent_runtime::agent_runtime::execution_models::ExecutionTurnStartMode::RestoredCheckpoint)));
+            assert_eq!(memory, before_memory);
+            assert_eq!(
+                state
+                    .lock()
+                    .expect("service")
+                    .workspace_snapshot
+                    .as_ref()
+                    .expect("workspace")
+                    .session_runtime_state[&session_id]
+                    .context_injection_state,
+                runtime_state.context_injection_state
+            );
+            assert_eq!(request.system_prompt_hook_blocks.len(), 2);
+        }
+    }
 
     /// Builds one automatic-compaction budget with an exact effective input limit.
     /// 构建一份具有精确生效输入上限的自动压缩预算。

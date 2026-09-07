@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { canonicalProjectPath } from "@/components/features/memory/vmm-identity-project-page";
+import { VmmNativeHostProjectPolicy } from "@/components/features/memory/vmm-native-host-project-policy";
 import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/agent-skills-types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,7 @@ import type {
   ProjectSummary,
   VmmConfigDraftSummary,
   VmmNativeProjectCatalogSummary,
+  VmmMemoryActionResult,
   VmmProtocolProjectEntry,
   VmmProtocolUserEntry,
   WorkbenchSnapshot,
@@ -111,6 +113,10 @@ export function ProjectVmmSection(props: {
   const [nativeLinkedIds, setNativeLinkedIds] = React.useState<number[]>([]);
   const [nativeBindingBusy, setNativeBindingBusy] = React.useState(false);
   const [nativeBindingNotice, setNativeBindingNotice] = React.useState("");
+  // This transport accepts only caller-policy actions; the child supplies the exact host tag in its typed payload.
+  // 此传输仅接受调用方策略动作；子组件在强类型载荷中提供准确宿主标签。
+  const runNativePolicyAction = React.useCallback((action: string, payload?: Record<string, unknown>): Promise<VmmMemoryActionResult> =>
+    runVmmMemoryAction({ action, payload, commandId: crypto.randomUUID(), scope: "global", projectId: null }), []);
   const [externalUsers, setExternalUsers] = React.useState<VmmProtocolUserEntry[]>([]);
   const [externalProjects, setExternalProjects] = React.useState<VmmProtocolProjectEntry[]>([]);
   // createProjectName is the editable memory-project display name or external leaf name.
@@ -302,7 +308,7 @@ export function ProjectVmmSection(props: {
               type="checkbox"
             />
             <span>
-              <strong>{t("projectSettings.enableProjectOverride")}</strong>
+              <strong>{t(props.vmmDraft.backendMode === "native" ? "memory.hostPolicy.connection" : "projectSettings.enableProjectOverride")}</strong>
               <small>{props.vmmDraft.hasOverride ? t("projectSettings.overrideEnabledHint") : t("projectSettings.overrideDisabledHint")}</small>
             </span>
           </label>
@@ -429,6 +435,10 @@ export function ProjectVmmSection(props: {
               {props.vmmBusy === "saving" ? t("composer.capability.save.saving") : t("projectSettings.saveVmm")}
             </Button>
           </div>
+          {props.vmmDraft.backendMode === "native" && nativeCatalog?.bindings.some((binding) => binding.vulcanProjectId === props.projectId) ? (
+            <VmmNativeHostProjectPolicy key={props.projectId} hostProjectId={props.projectId}
+              busy={nativeBindingBusy || props.vmmBusy === "saving"} onRunAction={runNativePolicyAction} />
+          ) : null}
         </>
       )}
     </div>

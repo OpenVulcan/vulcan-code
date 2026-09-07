@@ -21,10 +21,11 @@ pub use management::{
 pub use memory::{
     ChatCompactRequest, ChatCompactResponse, ContextItem, DeleteMemoriesRequest,
     DeleteMemoriesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse, MemorySearchGroupResult,
-    MemorySearchHit, PostActionRequest, PostActionResponse, PostActionTimelineItem,
-    PostActionTimelineType, PreCheckRecallMode, PreCheckRequest, PreCheckResponse,
-    SearchMemoryEventsRequest, SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry,
-    WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
+    MemorySearchHit, MemorySearchRetrieval, PostActionRequest, PostActionResponse,
+    PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode, PreCheckRequest,
+    PreCheckResponse, SearchMemoryEventsRequest, SearchMemoryEventsResponse, SessionMemoryStatus,
+    TurnDetailEntry, WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem,
+    WriteMemoryResultItem,
 };
 pub use profile::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, GetProfileBundleRequest,

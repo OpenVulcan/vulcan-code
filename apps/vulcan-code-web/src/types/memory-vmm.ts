@@ -477,6 +477,9 @@ export interface VmmNativeTurnStatusCounts {
 // VmmNativeMemorySessionSummary describes one project-owned host session.
 // VmmNativeMemorySessionSummary 描述一个由项目拥有的宿主会话。
 export interface VmmNativeMemorySessionSummary {
+  // Null identifies content-only sessions, never an inferred active state.
+  // null 标识只有内容的会话，绝不推断为活动状态。
+  status: "active" | "archived" | "recycled" | "forgotten" | null;
   sessionSourceId: string;
   displayTitle?: string | null;
   turnCount: number;
@@ -487,6 +490,52 @@ export interface VmmNativeMemorySessionSummary {
   memoryLevels: VmmNativeMemoryLevelCounts;
   firstActivityAtUnixMs?: number | null;
   lastActivityAtUnixMs?: number | null;
+}
+
+// NativeSessionListStatus explicitly distinguishes all rows from unregistered content-only rows.
+// NativeSessionListStatus 明确区分全部记录与未登记的仅内容记录。
+export type VmmNativeSessionListStatus = "all" | "active" | "archived" | "recycled" | "forgotten" | "unregistered";
+
+// VmmNativeSessionListQuery carries server-side filters and a bounded page, never identity-by-title bindings.
+// VmmNativeSessionListQuery 携带服务端筛选及有界分页，不按标题绑定身份。
+export interface VmmNativeSessionListQuery {
+  // Exact owner and explicit state/text filters.
+  // 准确归属及明确状态/文本筛选。
+  vmmProjectId: number;
+  status: VmmNativeSessionListStatus;
+  // Exact persisted turn-state filter and deterministic page ordering.
+  // 准确持久回合状态筛选及确定性分页排序。
+  extractionStatus: "all" | "pending" | "completed" | "processed_unknown" | "analysis_bypassed" | "corrupted";
+  sort: "last_activity_desc" | "last_activity_asc" | "title_asc";
+  search: string;
+  // Inclusive lower and exclusive upper last-activity bounds in Unix milliseconds.
+  // 最近活动 Unix 毫秒边界，下界包含、上界不包含。
+  lastActivityFromUnixMs: number | null;
+  lastActivityBeforeUnixMs: number | null;
+  // Filtered-row offset and page size from 1 through 100.
+  // 已筛选记录偏移及 1 至 100 的分页大小。
+  offset: number;
+  limit: number;
+  // Core content version from the preceding page; null explicitly starts a fresh read.
+  // 前页 Core 内容版本；null 明确开始新的读取。
+  expectedStorageVersion: number | null;
+}
+
+// VmmNativeSessionListPage contains only this page's lightweight summaries and its full filtered count.
+// VmmNativeSessionListPage 仅包含本页轻量摘要及完整筛选计数。
+export interface VmmNativeSessionListPage {
+  // Exact owner and coherent content version.
+  // 准确归属及一致内容版本。
+  projectId: number;
+  storageVersion: number;
+  // Full filtered count, accepted offset and accepted bounded page size.
+  // 完整筛选数量、已接纳偏移及已接纳有界分页大小。
+  total: number;
+  offset: number;
+  limit: number;
+  // Only this page's ordered summaries, without turn or memory bodies.
+  // 仅本页有序摘要，不含回合或记忆正文。
+  sessions: VmmNativeMemorySessionSummary[];
 }
 
 // VmmNativeTimelineItemSummary describes one complete persisted timeline item.
@@ -501,6 +550,12 @@ export interface VmmNativeTimelineItemSummary {
 // VmmNativeTurnRecordSummary 描述一个规范回合及其提取结果。
 export interface VmmNativeTurnRecordSummary {
   turnId: number;
+  // Ordered preceding IDs resolved by the native server within the same owner session.
+  // 原生服务端在同归属会话中解析的有序前序 ID。
+  previousTurnIds: number[];
+  // Ordered following IDs resolved by the native server within the same owner session.
+  // 原生服务端在同归属会话中解析的有序后续 ID。
+  nextTurnIds: number[];
   sessionSourceId: string;
   createdAtUnixMs: number;
   status: "pending" | "completed" | "processed_unknown" | "analysis_bypassed" | "corrupted";
@@ -749,12 +804,15 @@ export interface VmmProfileNodesActionValue {
 // VmmProfileBundleActionValue is the exact final profile bundle contract.
 // VmmProfileBundleActionValue 是准确的最终画像组合契约。
 export interface VmmProfileBundleActionValue {
+  // The existing Rust protocol serializes this enum; it is the sole authority for content selection.
+  // 既有 Rust 协议会序列化此枚举；它是选择正文表示的唯一权威。
+  mode: "PROFILE_BUNDLE_MODE_UNSPECIFIED" | "PROFILE_BUNDLE_MODE_FULL" | "PROFILE_BUNDLE_MODE_SPLIT";
   combined_text: string;
-  // Project profile section returned independently from the combined prompt text.
-  // 与组合提示词文本独立返回的项目画像段落。
+  // Project section is consumable only in Split mode; Full deliberately leaves it empty.
+  // 项目分区仅在 Split 模式可消费；Full 有意将其留空。
   project_profile: string;
-  // Fixed or selected user profile section returned independently from the combined prompt text.
-  // 与组合提示词文本独立返回的固定或所选用户画像段落。
+  // User section is consumable only in Split mode; it must not be appended to Full text.
+  // 用户分区仅在 Split 模式可消费；不能追加到 Full 正文中。
   user_profile: string;
   trace_id: string;
 }
@@ -770,6 +828,27 @@ export interface VmmProfileInstructionActionValue {
 
 // VmmMemorySearchHitActionValue is one exact memory-search hit.
 // VmmMemorySearchHitActionValue 是一条准确的记忆检索命中。
+export interface VmmMemorySearchRetrieval {
+  // Creation and retrieval sources remain independent, and missing server facts are never synthesized.
+  // 创建及检索来源保持独立，不补造缺失的服务端事实。
+  source_kind: string;
+  origin: string;
+  origin_label: string;
+  origin_explanation: string;
+  final_score: number;
+  // Counts are meaningful only when the context stage was observed, not merely configured.
+  // 计数仅在已观察情境阶段时有意义，不仅依据配置。
+  context_observed: boolean;
+  support_count: number;
+  rebuttal_count: number;
+  matched_context_values: string[];
+  matched_context_support_count: number;
+  matched_context_rebuttal_count: number;
+  matched_context_score_delta: number | null;
+}
+
+// One search hit can omit retrieval facts when the external protocol does not supply them.
+// 外置协议未提供检索事实时，单条命中可不含该信息。
 export interface VmmMemorySearchHitActionValue {
   memory_id: number;
   source_turn_id: number;
@@ -777,6 +856,7 @@ export interface VmmMemorySearchHitActionValue {
   details_preview: string;
   category: string;
   created_datetime: string;
+  retrieval?: VmmMemorySearchRetrieval;
 }
 
 // VmmSearchMemoryEventsActionValue is the exact grouped memory search contract.
@@ -806,8 +886,238 @@ export interface VmmGetTurnDetailsActionValue {
   trace_id: string;
 }
 
-// VmmNativeResourceSettingsSummary is the persisted native Core composition selection.
-// VmmNativeResourceSettingsSummary 是持久化的原生 Core 组合选择。
+// VmmNativeRecallPolicySummary contains only editable values with exact Core consumers.
+// VmmNativeRecallPolicySummary 仅包含具有准确 Core 消费者的可编辑值。
+export interface VmmNativeRecallPolicySummary {
+  // Same-session history window for PreCheck, independent of extraction.
+  // 独立于提炼的 PreCheck 同会话历史窗口。
+  precheckHistoryTurnLimit: number;
+  // Approximate historical-input token budget for PreCheck.
+  // PreCheck 历史输入的近似 Token 预算。
+  precheckMaxInputTokens: number;
+  // Per-query recall window.
+  // 每个查询的召回窗口。
+  precheckRecallTopK: number;
+  // Merged and redacted L2 candidate limit.
+  // 跨组合并脱敏后的 L2 候选上限。
+  precheckReviewCandidateLimit: number;
+  // Query-local reviewer threshold, not a raw vector/BM25 score.
+  // 查询内审核阈值，不是原始向量/BM25 分值。
+  precheckMinReviewScore: number;
+  // Query fan-out bound used by retrieval.
+  // 检索使用的查询扇出上限。
+  maxSearchQueries: number;
+  // Already-refined historical turns for PostAction L1.
+  // PostAction L1 的已提炼历史轮数。
+  postactionHistoryTurnLimit: number;
+  // Approximate target-plus-history token budget for PostAction L1.
+  // PostAction L1 目标轮次与历史的近似 Token 预算。
+  postactionMaxInputTokens: number;
+  // Defaults for newly extracted memories only; existing records and fixed-user profiles are unchanged.
+  // 仅用于新提炼记忆的默认值；既有记录及固定用户画像不变。
+  postactionMemoryPriority: number;
+  postactionMemoryStability: "working" | "stable" | "archival";
+  postactionMemoryLevel: "session" | "phase" | "stable" | "persistent";
+  postactionMemoryRefreshWeight: number;
+  // Lifetime is persisted in exact milliseconds and starts at the original turn timestamp.
+  // 有效期以准确毫秒持久化，从原始回合时间起算。
+  postactionMemoryExpiryMs: number;
+}
+
+// VmmNativeRetrievalPolicySummary exposes business ranking values without producer identities.
+// VmmNativeRetrievalPolicySummary 暴露业务排序值，不暴露生产者身份。
+export interface VmmNativeRetrievalPolicySummary {
+  // Enables fusion and sets its shared physical window floor.
+  // 启用融合并设置共同物理窗口下限。
+  hybridEnabled: boolean;
+  lexicalCandidateFloor: number;
+  // Exact signed-64 positive constant; never convert this field to a JavaScript number.
+  // 准确的有符号64位正常数；绝不转换为 JavaScript 数值。
+  rrfK: string;
+  // Reviewer score floor for replacement, separately from exact cosine hard deduplication.
+  // 替代审核评分下限，与准确余弦硬去重独立。
+  replaceMinSimilarity: number;
+  hardDedupeCosineThreshold: number;
+  // Hard-dedupe, replacement-review, and optional rerank windows.
+  // 硬去重、替代审核及可选重排窗口。
+  hardDedupePoolTopK: number;
+  replacementTopK: number;
+  rerankTopN: number;
+  // MMR enablement and relevance weight.
+  // MMR 开关及相关性权重。
+  mmrEnabled: boolean;
+  mmrLambda: number;
+  // Read-time decay enablement and its distribution parameters.
+  // 读取时衰减开关及其分布参数。
+  weibullEnabled: boolean;
+  weibullShape: number;
+  weibullScaleHours: number;
+  weibullMinMultiplier: number;
+  // Nonnegative reinforcement and cross-session adoption contributions.
+  // 非负强化及跨会话采纳贡献。
+  weibullReinforceWeight: number;
+  weibullCrossSessionBoost: number;
+}
+
+// Project retention owns only data rules; worker cadence and personal profiles remain global.
+// 项目保留仅持有数据规则；工作器周期和个人画像保持全局。
+export type VmmNativeProjectRetentionRules = Pick<VmmNativeRetentionSettingsSummary,
+  "turnHotWindowSize" | "sessionIdleMs" | "trashRetentionMs" | "protectedPriorityFloor" |
+  "protectedMemoryLevelFloor" | "skipProtectedSharedMemories">
+
+// Summary carries one exact memory-owner identity and explicit whole-group inheritance.
+// 摘要携带一个准确记忆归属方身份及显式完整配置组继承信息。
+export interface VmmNativeProjectRetentionSummary {
+  projectId: number;
+  overrides: VmmNativeProjectRetentionRules | null;
+  effective: VmmNativeProjectRetentionRules;
+  global: VmmNativeProjectRetentionRules;
+}
+
+// VmmNativeRetentionSettingsSummary owns editable cleanup rules, not internal work limits.
+// VmmNativeRetentionSettingsSummary 持有可编辑清洗规则，不包含内部工作上限。
+export interface VmmNativeRetentionSettingsSummary {
+  // Periodic switch and independently configured whole-unit scan periods.
+  // 周期开关及独立配置的整单位扫描周期。
+  enabled: boolean;
+  scanIntervalMinutes: number;
+  profileExpiryIntervalSeconds: number;
+  // Per-session hot window and exact millisecond retention durations.
+  // 每会话热窗口及准确的毫秒保留时长。
+  turnHotWindowSize: number;
+  sessionIdleMs: number;
+  trashRetentionMs: number;
+  // Shared-memory protection thresholds use the Core priority and level scales.
+  // 共享记忆保护阈值使用 Core 优先级与等级尺度。
+  protectedPriorityFloor: number;
+  protectedMemoryLevelFloor: number;
+  skipProtectedSharedMemories: boolean;
+}
+
+// VmmNativeTextPolicySummary carries only the two editable intake reduction controls.
+// VmmNativeTextPolicySummary 仅携带两个可编辑的入库缩减控制项。
+export interface VmmNativeTextPolicySummary {
+  // Enables machine folding without bypassing mandatory privacy and thought cleanup.
+  // 启用机器文本折叠，不绕过强制隐私与思考内容清理。
+  foldMachineText: boolean;
+  // Approximate per-fragment token target for newly submitted content only.
+  // 仅用于新提交内容的每片段近似 Token 目标。
+  maxFragmentTokens: number;
+}
+
+// One finite profile level's capped refresh formula, in exact milliseconds.
+// 一个有限画像等级的有上限刷新公式，使用准确毫秒值。
+export interface VmmNativeProfileLifetimeRule {
+  // Duration before refresh extension.
+  // 刷新延长前的期限。
+  baseMs: number;
+  // Added duration per refresh-weight increment; zero disables extension.
+  // 每次刷新权重增加的延长期限；零表示不延长。
+  stepMs: number;
+  // Maximum duration including extensions.
+  // 包含延长量的最大期限。
+  maxMs: number;
+}
+// Persistent is non-expiring and therefore has no editable lifetime rule.
+// 持久级不过期，因此不提供可编辑的期限规则。
+export interface VmmNativeProfileLifetimes {
+  // Short-lived facts.
+  // 短期事实。
+  transient: VmmNativeProfileLifetimeRule;
+  // Situational facts.
+  // 情境事实。
+  situational: VmmNativeProfileLifetimeRule;
+  // Stable facts.
+  // 稳定事实。
+  stable: VmmNativeProfileLifetimeRule;
+}
+// Global fixed-user rules remain independent of project profile defaults.
+// 全局固定用户规则独立于项目画像默认值。
+export interface VmmNativeProfilePolicySummary {
+  // Rules for the one fixed user.
+  // 唯一固定用户的规则。
+  user: VmmNativeProfileLifetimes;
+  // Default rules for project profiles.
+  // 项目画像的默认规则。
+  project: VmmNativeProfileLifetimes;
+}
+
+// Project-only lifecycle defaults, selected by stable memory identity rather than host tag.
+// 仅项目生命周期默认规则，按稳定记忆身份选择而非宿主标签。
+export interface VmmNativeProjectProfilePolicySummary {
+  // Existing memory-project identity.
+  // 已存在的记忆项目身份。
+  projectId: number;
+  // Null explicitly inherits current global project defaults.
+  // null 明确继承当前全局项目默认值。
+  overrides: VmmNativeProfileLifetimes | null;
+  // Validated formulas for the next profile-producing command.
+  // 下一生成画像命令使用的已校验公式。
+  effective: VmmNativeProfileLifetimes;
+  // Global project rules only; personal profile rules are deliberately absent.
+  // 仅全局项目规则；明确不包含个人画像规则。
+  global: VmmNativeProfileLifetimes;
+}
+
+// Caller-owned groups never override memory-owner cleanup or the fixed user's profile rules.
+// 调用方配置组绝不覆盖记忆归属清洗或固定用户画像规则。
+export interface VmmNativeHostProjectPolicyOverrides {
+  // Null follows the current global recall/extraction group.
+  // 空值跟随当前全局召回/提炼组。
+  recall: VmmNativeRecallPolicySummary | null;
+  // Null follows the current global ranking group.
+  // 空值跟随当前全局排序组。
+  retrieval: VmmNativeRetrievalPolicySummary | null;
+  // Null follows the current global intake cleanup group.
+  // 空值跟随当前全局入库清洗组。
+  text: VmmNativeTextPolicySummary | null;
+}
+// Read under one configuration gate with exact caller identity and explicit inheritance.
+// 在同一配置锁内读取，具有准确调用方身份及显式继承状态。
+export interface VmmNativeHostProjectPolicySummary {
+  // Originating VulcanCode tag, not a VMM memory-project ID.
+  // 发起方 VulcanCode 标签，不是 VMM 记忆项目 ID。
+  hostProjectId: string;
+  // Explicit independently optional groups.
+  // 显式独立可选配置组。
+  overrides: VmmNativeHostProjectPolicyOverrides;
+  // Values resolved from current globals and only this caller's groups.
+  // 从当前全局值和仅此调用方配置组解析的值。
+  effective: VmmNativeRuntimePolicySummary;
+}
+
+// Effective native policy with exact defaults for independent draft reset.
+// 原生有效策略，附带独立重置草稿使用的准确默认值。
+export interface VmmNativeRuntimePolicySummary {
+  // Current effective recall policy.
+  // 当前有效的召回策略。
+  recall: VmmNativeRecallPolicySummary;
+  // Authoritative defaults for an explicit draft reset.
+  // 显式重置草稿使用的权威默认值。
+  defaults: VmmNativeRecallPolicySummary;
+  // Effective ranking and Core-owned ranking defaults.
+  // 有效排序设置和 Core 排序默认值。
+  retrieval: VmmNativeRetrievalPolicySummary;
+  retrievalDefaults: VmmNativeRetrievalPolicySummary;
+  // Effective cleanup group and authoritative explicit-reset values.
+  // 当前有效清洗组及权威显式重置值。
+  retention: VmmNativeRetentionSettingsSummary;
+  retentionDefaults: VmmNativeRetentionSettingsSummary;
+  // Effective text reduction and Core-owned default values.
+  // 当前有效文本缩减及 Core 持有的默认值。
+  text: VmmNativeTextPolicySummary;
+  textDefaults: VmmNativeTextPolicySummary;
+  // Effective role-specific lifetimes and authoritative reset values.
+  // 当前有效的角色专属生命周期及权威重置值。
+  profiles: VmmNativeProfilePolicySummary;
+  profileDefaults: VmmNativeProfilePolicySummary;
+  // Whether a user runtime-policy document exists.
+  // 是否存在用户运行策略文档。
+  userOverride: boolean;
+}
+
+// Native resource composition remains separate from recall and extraction parameters.
+// 原生资源组合保持独立于召回及提炼参数。
 export interface VmmNativeResourceSettingsSummary {
   promptBundle: string;
   piiLanguage: string;
@@ -986,9 +1296,148 @@ export interface VmmNativeVectorRebuildResult {
   batchCount: number;
 }
 
+// Reports source version and real derived full-text counts without asserting semantic integrity.
+// 报告源版本与真实派生全文计数，不据此宣称语义完整。
+export interface VmmNativeLexicalIndexStatus {
+  // Authoritative snapshot version required at confirmation.
+  // 确认时要求的权威快照版本。
+  storageVersion: number;
+  // Active lifecycle source count; access and expiry filters still run during queries.
+  // 活跃生命周期源数量，查询时仍执行访问及到期过滤。
+  activeMemoryCount: number;
+  // Actual derived source-document and FTS document row counts.
+  // 真实派生源文档及全文文档行数。
+  documentCount: number;
+  indexedRowCount: number;
+}
+
+// Returns the acknowledged full-text rebuild count and unchanged source version.
+// 返回已确认的全文重建数量和未改变的源版本。
+export interface VmmNativeLexicalRebuildResult {
+  // Authority was not modified by derived reconstruction.
+  // 派生重建未修改权威状态。
+  storageVersion: number;
+  // Actual rows reindexed by the upstream Jieba implementation.
+  // 上游 Jieba 实现实际重建的行数。
+  reindexedMemoryCount: number;
+}
+
+// Describes exact record identities affected by one project's confirmed cleanup stages.
+// 描述一个项目确认清洗阶段影响的准确记录标识。
+export interface VmmNativeRetentionProjectPreview {
+  // Stable project identity and current display name.
+  // 稳定项目标识与当前显示名称。
+  projectId: number;
+  projectName: string;
+  // Recoverable memory and turn identities.
+  // 可恢复的记忆和回合标识。
+  recycledMemoryIds: string[];
+  recycledTurnIds: string[];
+  // Profile nodes marked expired, never permanently deleted by expiry convergence.
+  // 标记过期的画像节点，到期收敛绝不永久删除它们。
+  expiredProfileNodeIds: string[];
+  // Existing expired batches to permanently remove.
+  // 要永久移除的已有到期批次。
+  purgedBatchIds: string[];
+}
+
+// Identifies the latest read-only server-prepared cleanup; client targets are never accepted.
+// 标识最近的只读服务端清洗预览，绝不接受客户端自行指定目标。
+export interface VmmNativeRetentionPreview {
+  // Opaque confirmation token and exact source version.
+  // 不透明确认令牌与准确源版本。
+  previewId: string;
+  storageVersion: number;
+  // Frozen evaluation and confirmation expiry times, in Unix milliseconds.
+  // 冻结评估与确认到期时间，以 Unix 毫秒表示。
+  evaluatedAtUnixMs: number;
+  expiresAtUnixMs: number;
+  // Exact impact separated by memory project.
+  // 按记忆项目分开的准确影响。
+  projects: VmmNativeRetentionProjectPreview[];
+}
+
+// Selects exact native sessions for classification without modifying their content.
+// 选择准确原生会话进行分类，不修改其内容。
+export interface VmmNativeSessionArchiveSelection {
+  // Exact owning memory project.
+  // 准确归属的记忆项目。
+  vmmProjectId: number;
+  // Stable session identities, not display titles.
+  // 稳定会话身份，而不是显示标题。
+  sessionSourceIds: string[];
+  // Archive when true; unarchive when false.
+  // 为真时归档，为假时取消归档。
+  archived: boolean;
+}
+
+// Selects forgotten sessions by exact owner and source IDs, not display names.
+// 按准确归属及来源 ID 选择已遗忘会话，不使用显示名称。
+export interface VmmNativeSessionRestartSelection {
+  // Stable owning memory project.
+  // 稳定归属记忆项目。
+  vmmProjectId: number;
+  // Exact identities normalized by the server.
+  // 服务端归一化的准确身份。
+  sessionSourceIds: string[];
+}
+
+// Describes the immutable restart preview shown before explicit confirmation.
+// 描述明确确认前展示的不可变重新启用预览。
+export interface VmmNativeSessionRestartPreview {
+  // Opaque prepared confirmation identity.
+  // 已准备确认的不透明身份。
+  previewId: string;
+  // Exact authoritative version.
+  // 准确权威版本。
+  storageVersion: number;
+  // Prepared targets without replacement content.
+  // 不含替代内容的已准备目标。
+  selection: VmmNativeSessionRestartSelection;
+}
+
+// Reports reactivated targets without implying restoration of deleted content.
+// 报告已重新启用目标，不表示恢复已删除内容。
+export interface VmmNativeSessionRestartResult {
+  // Committed authoritative version.
+  // 已提交权威版本。
+  storageVersion: number;
+  // Exact committed targets.
+  // 准确已提交目标。
+  selection: VmmNativeSessionRestartSelection;
+}
+
+// Captures the latest server-prepared archive selection and observed version.
+// 捕获最近服务端归档选择及观察版本。
+export interface VmmNativeSessionArchivePreview {
+  // Opaque server confirmation identity.
+  // 服务端不透明确认身份。
+  previewId: string;
+  // Exact observed storage version.
+  // 准确观察到的存储版本。
+  storageVersion: number;
+  // Immutable normalized selection.
+  // 不可变归一化选择。
+  selection: VmmNativeSessionArchiveSelection;
+}
+
+// Reports the exact committed classification and resulting storage version.
+// 报告准确已提交分类及结果存储版本。
+export interface VmmNativeSessionArchiveResult {
+  // Committed authoritative version.
+  // 已提交权威版本。
+  storageVersion: number;
+  // Unchanged preview selection.
+  // 未被替换的预览选择。
+  selection: VmmNativeSessionArchiveSelection;
+}
+
 // VmmNativeRecycleBatchSummary describes one recoverable native cleanup batch.
 // VmmNativeRecycleBatchSummary 描述一个可恢复的原生清洗批次。
 export interface VmmNativeRecycleBatchSummary {
+  // Original selection includes empty sessions; null means an automatic retention batch.
+  // 原始选择包含空会话；null 表示自动保留策略批次。
+  manualSelection: VmmNativeRemovalTarget | null;
   batchId: string;
   projectId: number;
   reason: string;
@@ -998,6 +1447,134 @@ export interface VmmNativeRecycleBatchSummary {
   memoryCount: number;
   profileNodeCount: number;
   contextEvidenceCount: number;
+}
+
+// Identifies the four retained business-record families exposed by batch inspection.
+// 标识批次查看公开的四类保留业务记录。
+export type VmmNativeRecycleRecordKind = "turn" | "memory" | "profile" | "evidence";
+
+// Uses exact project/batch identity and version-bound pagination, never name matching.
+// 使用准确项目、批次身份及版本绑定分页，不按名称匹配。
+export interface VmmNativeRecycleRecordQuery {
+  // Exact owning memory project.
+  // 准确归属记忆项目。
+  vmmProjectId: number;
+  // Stable retained-batch identity.
+  // 稳定保留批次身份。
+  batchId: string;
+  // Closed retained-record family.
+  // 封闭保留记录类别。
+  recordKind: VmmNativeRecycleRecordKind;
+  // Zero-based stable-order offset and bounded page size.
+  // 稳定顺序内从零开始的偏移及有界页大小。
+  offset: number;
+  limit: number;
+  // Null explicitly starts a fresh observation; a number freezes subsequent pages.
+  // Null 明确开始新观察，数字则冻结后续分页。
+  expectedStorageVersion: number | null;
+}
+
+// Exact source selection for read-only impact inspection; never a deletion authorization.
+// 用于只读影响检查的准确来源选择，绝不作为删除授权。
+export type VmmNativeRemovalTarget = { kind: "sessions" | "turns"; ids: string[] };
+
+// Freezes a server-owned selection; related independent profiles are preserved.
+// 冻结服务端选择；关联独立画像保留。
+export interface VmmNativeRemovalPreview {
+  // Opaque single-use identity valid for five minutes.
+  // 五分钟内有效的不透明单次身份。
+  previewId: string;
+  // Exact observed sources and hot-window impact.
+  // 准确观察来源及热窗口影响。
+  impact: VmmNativeRemovalImpact;
+  // Owner-specific duration starting at the actual move.
+  // 从实际移动时开始的归属专属保留时长。
+  trashRetentionMs: number;
+}
+
+// Confirms only the server selection without sending replacement targets.
+// 仅确认服务端选择，不发送替换目标。
+export interface VmmNativeRemovalConfirmation {
+  // Exact preview identity.
+  // 准确预览身份。
+  previewId: string;
+  // Explicit consent to move the previewed original records.
+  // 明确同意移动已预览的原记录。
+  confirmed: boolean;
+}
+
+// Reports the durable record move and its original impact, not profile deletion.
+// 报告耐久记录移动及其原始影响，而非画像删除。
+export interface VmmNativeRemovalResult {
+  // Version after the atomic move.
+  // 原子移动后的版本。
+  storageVersion: number;
+  // Exact restore/purge batch identity.
+  // 准确恢复或清除批次身份。
+  batchId: string;
+  // Executed source selection; listed profiles remain in active storage.
+  // 已执行来源选择；列出的画像保留在活动存储。
+  impact: VmmNativeRemovalImpact;
+}
+
+// Owner and selected canonical identities supplied to native source inspection.
+// 提交给原生来源检查的归属及所选规范身份。
+export interface VmmNativeRemovalQuery {
+  // Stable memory-project owner and exact selected family.
+  // 稳定记忆项目归属及准确所选类别。
+  vmmProjectId: number;
+  selection: VmmNativeRemovalTarget;
+}
+
+// Source relationships observed in one snapshot; profile lists remain candidates only.
+// 单份快照中观察到的来源关系；画像列表仅为候选。
+export interface VmmNativeRemovalImpact {
+  // Normalized query, snapshot version and effective project hot window.
+  // 归一化查询、快照版本及项目有效热窗口。
+  query: VmmNativeRemovalQuery;
+  storageVersion: number;
+  hotWindowSize: number;
+  // Accurate source sessions and canonical turns, including pending/hot subsets.
+  // 准确来源会话及规范回合，包含待提炼和热窗口子集。
+  sessionSourceIds: string[];
+  turnIds: string[];
+  pendingTurnIds: string[];
+  hotWindowTurnIds: string[];
+  // Ordinary memory identities and those declaring a vector generation, without vector payloads.
+  // 普通记忆身份及声明向量代次的身份，不含向量载荷。
+  memoryIds: string[];
+  vectorMemoryIds: string[];
+  // Related profile identities; these fields do not instruct profile deletion.
+  // 关联画像身份，这些字段不指示删除画像。
+  projectProfileNodeIds: string[];
+  userProfileNodeIds: string[];
+  // Complete composite keys of context edges owned by selected memories.
+  // 所选记忆拥有的情境边完整复合键。
+  contextEvidence: { memoryId: string; contextKey: string; contextValue: string }[];
+}
+
+// Contains retained text and source links only; embeddings never cross this UI contract.
+// 仅包含保留文本及来源关系，嵌入向量不经过此界面契约。
+export type VmmNativeRecycleRecord =
+  | { kind: "turn"; turnId: string; sessionSourceId: string; timeline: VmmNativeTimelineItemSummary[]; status: string; analysisDetails: string | null }
+  | { kind: "memory"; memoryId: string; sessionSourceId: string | null; sourceTurnId: string | null; summary: string; content: string; level: string; state: string; sourceKind: string }
+  | { kind: "profile"; profileNodeId: string; target: "user" | "project"; sourceTurnIds: string[]; content: string }
+  | { kind: "evidence"; memoryId: string; contextKey: string; contextValue: string; supportCount: number; rebuttalCount: number };
+
+// Returns one coherent retained-content page without merging active records.
+// 返回一致的保留内容页，不合并活动记录。
+export interface VmmNativeRecycleRecordPage {
+  // Exact echoed request and actual observed version.
+  // 准确回显请求及实际观察版本。
+  query: VmmNativeRecycleRecordQuery;
+  storageVersion: number;
+  // Family-wide count and an exact next offset, absent at the final page.
+  // 类别总数及准确下一页偏移，最后一页时为空。
+  total: number;
+  nextOffset: number | null;
+  // Retained business content without embedding vectors.
+  // 不含嵌入向量的保留业务内容。
+  records: VmmNativeRecycleRecord[];
 }
 
 // VmmNativeRecycleBinSummary is one version-guarded recycle-bin snapshot.
@@ -1043,6 +1620,7 @@ export type VmmMemoryActionResponse =
     }
   | { kind: "native_project_catalog"; value: VmmNativeProjectCatalogSummary }
   | { kind: "native_memory_records"; value: VmmNativeMemoryRecordsSummary }
+  | { kind: "native_session_list"; value: VmmNativeSessionListPage }
   | { kind: "native_profile_records"; value: VmmNativeProfileRecordsSummary }
   | { kind: "native_project_delete_preview"; value: VmmNativeProjectDeletePreview }
   | { kind: "native_migration_preview"; value: VmmNativeMigrationPreview }
@@ -1050,16 +1628,31 @@ export type VmmMemoryActionResponse =
   | { kind: "native_clear_preview"; value: VmmNativeClearPreview }
   | { kind: "native_clear"; value: VmmNativeClearResult }
   | { kind: "native_resource_catalog"; value: VmmNativeResourceCatalogSummary }
+  | { kind: "native_runtime_policy"; value: VmmNativeRuntimePolicySummary }
+  | { kind: "native_host_project_policy"; value: VmmNativeHostProjectPolicySummary }
+  | { kind: "native_project_retention"; value: VmmNativeProjectRetentionSummary }
+  | { kind: "native_project_profile_policy"; value: VmmNativeProjectProfilePolicySummary }
   | { kind: "native_resource_file"; value: VmmNativeResourceFileContent }
   | { kind: "native_pii_test"; value: VmmNativePiiTestResult }
   | { kind: "native_pii_formula_test"; value: VmmNativePiiFormulaTestResult }
   | { kind: "native_noise_test"; value: VmmNativeNoiseTestResult }
   | { kind: "native_retention_status"; value: VmmNativeRetentionStatusSummary }
   | { kind: "native_retention_run"; value: VmmNativeRetentionApplyResult }
+  | { kind: "native_retention_preview"; value: VmmNativeRetentionPreview }
+  | { kind: "native_session_archive_preview"; value: VmmNativeSessionArchivePreview }
+  | { kind: "native_session_archive"; value: VmmNativeSessionArchiveResult }
+  | { kind: "native_session_restart_preview"; value: VmmNativeSessionRestartPreview }
+  | { kind: "native_session_restart"; value: VmmNativeSessionRestartResult }
+  | { kind: "native_lexical_status"; value: VmmNativeLexicalIndexStatus }
+  | { kind: "native_lexical_rebuild"; value: VmmNativeLexicalRebuildResult }
   | { kind: "native_vector_status"; value: VmmNativeVectorStatusSummary }
   | { kind: "native_vector_rebuild_preview"; value: VmmNativeVectorRebuildPreview }
   | { kind: "native_vector_rebuild"; value: VmmNativeVectorRebuildResult }
   | { kind: "native_recycle_bin"; value: VmmNativeRecycleBinSummary }
+  | { kind: "native_recycle_records"; value: VmmNativeRecycleRecordPage }
+  | { kind: "native_removal_impact"; value: VmmNativeRemovalImpact }
+  | { kind: "native_removal_preview"; value: VmmNativeRemovalPreview }
+  | { kind: "native_removal"; value: VmmNativeRemovalResult }
   | { kind: "native_recycle_batch"; value: VmmNativeRecycleBatchSummary }
   | { kind: "management"; value: unknown };
 

@@ -2,7 +2,11 @@
 //! VMM config 辅助逻辑。
 
 use super::*;
-use crate::{mutate_project_configuration, mutate_provider_configuration};
+use crate::{mutate_project_configuration, mutate_provider_configuration_with_state_validation};
+
+#[cfg(test)]
+#[path = "config_save_test_scope.rs"]
+pub(crate) mod config_save_test_scope;
 
 /// A validated enable-time binding plan that is safe to execute after global configuration persistence.
 /// 一份已经通过校验、可在全局配置持久化后安全执行的启用期绑定计划。
@@ -16,6 +20,9 @@ enum PreparedProjectBindingPlan {
         /// Native maintenance service that owns durable project identities and bindings.
         /// 持有持久项目身份与绑定关系的原生维护服务。
         maintenance: crate::native_vmm::NativeVmmMaintenance,
+        /// Stable active host identities covered by this review; names and paths do not own native bindings.
+        /// 此次审查覆盖的稳定活动宿主身份；名称与路径不拥有原生绑定。
+        host_project_ids: std::collections::BTreeSet<String>,
         /// Validated per-project operations in submitted order.
         /// 按提交顺序保存的已校验逐项目操作。
         entries: Vec<PreparedNativeProjectBinding>,
@@ -26,6 +33,9 @@ enum PreparedProjectBindingPlan {
         /// Standalone external layer used by management requests during execution.
         /// 执行期间管理请求使用的独立外置配置层。
         layer: vulcan_vmm::VmmConfigLayer,
+        /// Active host identities and exact paths that own external project configuration writes.
+        /// 拥有外置项目配置写入的活动宿主身份及准确路径。
+        host_project_paths: std::collections::BTreeMap<String, String>,
         /// Validated per-project operations in stable project order.
         /// 按稳定项目顺序保存的已校验逐项目操作。
         entries: Vec<PreparedExternalProjectBinding>,
@@ -171,30 +181,73 @@ pub(crate) async fn save_vmm_memory_config(
     } else {
         PreparedProjectBindingPlan::None
     };
+    #[cfg(test)]
+    config_save_test_scope::pause_after_preflight().await;
+    // Freeze native associations before taking the Provider transaction; no service lock is held across this query.
+    // 在获取 Provider 事务之前冻结原生关联，此查询期间不跨异步持有服务锁。
+    // Retain the existing maintenance gate through persistence so an unbind cannot invalidate coverage between check and commit.
+    // 将既有维护门禁保留至持久化结束，避免解绑在检查与提交之间使覆盖失效。
+    let binding_coverage_guard = match &prepared_binding_plan {
+        PreparedProjectBindingPlan::Native {
+            maintenance,
+            host_project_ids,
+            entries,
+        } => {
+            // Entries have already passed exact plan validation; do not substitute targets from the latest catalog.
+            // 条目已通过准确计划校验，不从最新目录替换目标。
+            let planned_project_ids = entries
+                .iter()
+                .map(|entry| entry.vulcan_project_id.clone())
+                .collect();
+            Some(
+                maintenance
+                    .freeze_project_binding_coverage(host_project_ids, &planned_project_ids)
+                    .await?,
+            )
+        }
+        PreparedProjectBindingPlan::None | PreparedProjectBindingPlan::External { .. } => None,
+    };
     // A saved global transport may point at a different endpoint, so no previous probe remains authoritative.
     // 保存后的全局传输可能指向其他端点，因此此前的探测结果不再具备权威性。
-    mutate_provider_configuration(
+    mutate_provider_configuration_with_state_validation(
         state,
         "保存 VMM 全局配置失败",
+        |guard| validate_prepared_project_binding_scope(guard, &prepared_binding_plan),
         move |configuration| {
+            // Preflight and redacted-secret expansion were admitted against this exact VMM layer.
+            // 预检及脱敏秘密展开基于这一准确 VMM 层完成准入。
+            // Compare inside the existing transaction so concurrent VMM edits cannot be overwritten or bypass activation checks.
+            // 在既有事务内比较，避免覆盖并发 VMM 编辑或绕过启用检查。
+            if configuration.vmm != current_configuration.vmm {
+                return Err(String::from(
+                    "VMM 全局配置在预检期间已发生变化，请重新加载配置后保存。",
+                ));
+            }
             configuration.vmm = next_layer;
             Ok(())
         },
-        refresh_guard_vmm_hook_snapshot,
+        |guard, configuration| {
+            // Publish the non-failing worker switch while the same durable configuration transaction is still owned.
+            // 在仍持有同一持久配置事务时发布不会失败的工作器开关。
+            // A late request must never overwrite a newer mode after releasing the transaction and service locks.
+            // 较早请求释放事务及服务锁后，绝不能再覆盖较新的模式。
+            let committed = vulcan_vmm::VmmEffectiveConfig::resolve(&configuration.vmm, None, None);
+            if let Some(maintenance) = guard.native_vmm_maintenance.as_ref() {
+                maintenance.set_native_backend_enabled(
+                    committed.enabled
+                        && committed.backend_mode == vulcan_vmm::VmmBackendMode::Native,
+                );
+            }
+            refresh_guard_vmm_hook_snapshot(guard, configuration)
+        },
     )
     .await??;
+    // Binding execution owns its normal per-project lock and preserves bindings chosen after global commit.
+    // 绑定执行持有其常规逐项目锁，并保留全局提交后选择的绑定。
+    drop(binding_coverage_guard);
+    #[cfg(test)]
+    config_save_test_scope::pause_after_commit().await;
     clear_external_vmm_health_probe();
-    if let Some(maintenance) = state
-        .lock()
-        .map_err(|error| format!("锁定原生 VMM 保留工作器状态失败：{error}"))?
-        .native_vmm_maintenance
-        .clone()
-    {
-        maintenance.set_native_backend_enabled(
-            next_effective.enabled
-                && next_effective.backend_mode == vulcan_vmm::VmmBackendMode::Native,
-        );
-    }
     Ok(execute_prepared_project_binding_plan(state, prepared_binding_plan).await)
 }
 
@@ -359,6 +412,11 @@ async fn prepare_native_project_binding_plan(
     }
     Ok(PreparedProjectBindingPlan::Native {
         maintenance,
+        host_project_ids: workspace
+            .task_projects
+            .iter()
+            .map(|project| project.id.clone())
+            .collect(),
         entries: prepared_entries,
     })
 }
@@ -419,8 +477,74 @@ async fn prepare_external_project_binding_plan(
     }
     Ok(PreparedProjectBindingPlan::External {
         layer: next_layer.clone(),
+        host_project_paths: workspace
+            .task_projects
+            .iter()
+            .map(|project| (project.id.clone(), project.path.clone()))
+            .collect(),
         entries: prepared_entries,
     })
+}
+
+/// Rejects a changed reviewed project scope before any global configuration is persisted.
+/// 在任何全局配置持久化之前拒绝已发生变化的审查项目范围。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the current service state under the existing configuration transaction and service locks.
+/// `guard` 是既有配置事务锁与服务锁保护下的当前服务状态。
+/// `prepared` owns the exact host catalog used to validate complete binding-plan coverage.
+/// `prepared` 持有校验绑定计划完整覆盖时使用的准确宿主目录。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` for an unchanged scope or a save without binding review; otherwise an explicit reload error.
+/// 范围未变或保存无需绑定审查时返回 `Ok(())`；否则返回明确的重新加载错误。
+fn validate_prepared_project_binding_scope(
+    guard: &crate::ServiceBridgeState,
+    prepared: &PreparedProjectBindingPlan,
+) -> Result<(), String> {
+    if matches!(prepared, PreparedProjectBindingPlan::None) {
+        return Ok(());
+    }
+    // Compare only fields consumed by the selected backend, not unrelated workbench revisions.
+    // 仅比较所选后端实际消费的字段，不比较无关工作台版本。
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?;
+    // A changed full catalog invalidates the reviewed scope even when a newly added row is already bound.
+    // 即使新增行已有绑定，完整目录变化仍使已审查范围失效。
+    let unchanged = match prepared {
+        PreparedProjectBindingPlan::None => true,
+        PreparedProjectBindingPlan::Native {
+            host_project_ids, ..
+        } => {
+            workspace
+                .task_projects
+                .iter()
+                .map(|project| project.id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                == *host_project_ids
+        }
+        PreparedProjectBindingPlan::External {
+            host_project_paths, ..
+        } => {
+            workspace
+                .task_projects
+                .iter()
+                .map(|project| (project.id.clone(), project.path.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                == *host_project_paths
+        }
+    };
+    if unchanged {
+        Ok(())
+    } else {
+        Err(String::from(
+            "VMM 项目绑定范围在预检期间已发生变化，请重新加载项目列表并确认绑定计划后保存。",
+        ))
+    }
 }
 
 /// Resolves one explicit external row decision without treating the global default as a lock.
@@ -499,6 +623,7 @@ async fn execute_prepared_project_binding_plan(
         PreparedProjectBindingPlan::Native {
             maintenance,
             entries,
+            ..
         } => {
             for entry in entries {
                 let result = match entry.action {
@@ -516,7 +641,7 @@ async fn execute_prepared_project_binding_plan(
                 }
             }
         }
-        PreparedProjectBindingPlan::External { layer, entries } => {
+        PreparedProjectBindingPlan::External { layer, entries, .. } => {
             for entry in entries {
                 let remote_project_id = match entry.action {
                     PreparedExternalProjectBindingAction::BindExisting(project_id) => {
@@ -1144,6 +1269,113 @@ pub(crate) fn vmm_parse_optional_usize(value: &str, label: &str) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the external review owns exact configuration paths, but not titles or display order.
+    /// 验证外置审查归属于准确配置路径，而不依赖标题或显示顺序。
+    /// Takes no input and returns after checking accepted metadata edits and rejected scope changes.
+    /// 不接收输入，在检查允许的元数据编辑与拒绝的范围变化后返回。
+    #[test]
+    fn external_binding_scope_checks_paths_without_freezing_display_metadata() {
+        // This state fixture is used only by the pure validator; no external connection is opened.
+        // 此状态夹具仅用于纯校验器，不打开任何外置连接。
+        let mut guard = crate::tests::test_support::test_service_state_with_parent_session(
+            uuid::Uuid::new_v4(),
+        );
+        // Two exact catalog entries make order invariance observable.
+        // 两项准确目录条目使顺序无关性可被观察。
+        let projects = vec![
+            vulcan_workbench_model::TaskProjectSummary::new(
+                "project-a",
+                "Project A",
+                "D:/project-a",
+                false,
+                1,
+                None,
+                None,
+                Vec::new(),
+            ),
+            vulcan_workbench_model::TaskProjectSummary::new(
+                "project-b",
+                "Project B",
+                "D:/project-b",
+                false,
+                2,
+                None,
+                None,
+                Vec::new(),
+            ),
+        ];
+        // The external prepared plan captures the same identity/path pairs as production preflight.
+        // 已准备外置计划捕获与生产预检相同的身份及路径对。
+        let prepared = PreparedProjectBindingPlan::External {
+            layer: vulcan_vmm::VmmConfigLayer::default(),
+            host_project_paths: projects
+                .iter()
+                .map(|project| (project.id.clone(), project.path.clone()))
+                .collect(),
+            entries: Vec::new(),
+        };
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("binding scope validation fixture value")
+            .task_projects = projects.clone();
+        validate_prepared_project_binding_scope(&guard, &prepared).expect("unchanged catalog");
+        {
+            // Display-only changes must not force another binding review.
+            // 仅显示变化不得强制再次审查绑定。
+            let workspace = guard
+                .workspace_snapshot
+                .as_mut()
+                .expect("binding scope validation fixture value");
+            workspace.task_projects[0].title = "Renamed".to_owned();
+            workspace.task_projects.reverse();
+        }
+        validate_prepared_project_binding_scope(&guard, &prepared).expect("display edits");
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("binding scope validation fixture value")
+            .task_projects[0]
+            .path = "D:/relocated-project-b".to_owned();
+        assert!(
+            validate_prepared_project_binding_scope(&guard, &prepared)
+                .expect_err("binding scope validation fixture must reject invalid input")
+                .contains("重新加载")
+        );
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("binding scope validation fixture value")
+            .task_projects = projects.clone();
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("binding scope validation fixture value")
+            .task_projects
+            .pop();
+        assert!(validate_prepared_project_binding_scope(&guard, &prepared).is_err());
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("binding scope validation fixture value")
+            .task_projects = projects.clone();
+        // Adding another stable ID is invalid even when it shares an existing source path.
+        // 即使共享已有源码路径，新增另一个稳定 ID 也会使原审查失效。
+        let mut added = projects[0].clone();
+        added.id = "project-c".to_owned();
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("binding scope validation fixture value")
+            .task_projects
+            .push(added);
+        assert!(validate_prepared_project_binding_scope(&guard, &prepared).is_err());
+        guard.workspace_snapshot = None;
+        assert!(validate_prepared_project_binding_scope(&guard, &prepared).is_err());
+        validate_prepared_project_binding_scope(&guard, &PreparedProjectBindingPlan::None)
+            .expect("ordinary saves do not require project review");
+    }
 
     /// Builds one exact binding-plan entry for validation tests.
     /// 为校验测试构造一个准确的绑定计划条目。

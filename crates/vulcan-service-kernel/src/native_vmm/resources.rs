@@ -1,6 +1,9 @@
 //! Native VMM embedded-resource catalog, user overrides, and persisted composition settings.
 //! 原生 VMM 内置资源目录、用户覆盖与持久化组合设置。
 
+#[path = "runtime_policy.rs"]
+mod runtime_policy;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
@@ -213,12 +216,12 @@ impl NativeVmmResourceStore {
         let settings = self.load_settings()?;
         validate_settings(&settings, &paths)?;
         let user_layer = self.load_user_layer(&paths)?;
-        Ok(config_bundle(
+        self.compose_bundle(
             settings,
             user_layer,
             vector_space_fingerprint,
             embedding_dimension,
-        ))
+        )
     }
 
     /// Validates, persists, and activates new common composition selections.
@@ -237,12 +240,12 @@ impl NativeVmmResourceStore {
         validate_settings(&settings, &paths)?;
         let user_layer = self.load_user_layer(&paths)?;
         let active = core.active_snapshot().map_err(|error| error.to_string())?;
-        let candidate = config_bundle(
+        let candidate = self.compose_bundle(
             settings.clone(),
             user_layer,
             active.vector_space_fingerprint.clone(),
             active.embedding_dimension,
-        );
+        )?;
         validate_candidate_bundle(candidate)?;
         self.persist_settings(&settings)?;
         self.activate_current(core)?;
@@ -293,12 +296,12 @@ impl NativeVmmResourceStore {
         let mut validation_settings = settings.clone();
         select_resource_for_validation(&mut validation_settings, path)?;
         let active = core.active_snapshot().map_err(|error| error.to_string())?;
-        validate_candidate_bundle(config_bundle(
+        validate_candidate_bundle(self.compose_bundle(
             validation_settings,
             user_layer.clone(),
             active.vector_space_fingerprint.clone(),
             active.embedding_dimension,
-        ))?;
+        )?)?;
         if prompt_bundle_files.is_empty() {
             let bytes = user_layer
                 .files
@@ -365,12 +368,12 @@ impl NativeVmmResourceStore {
         let mut validation_settings = settings.clone();
         select_resource_for_validation(&mut validation_settings, path)?;
         let active = core.active_snapshot().map_err(|error| error.to_string())?;
-        validate_candidate_bundle(config_bundle(
+        validate_candidate_bundle(self.compose_bundle(
             validation_settings,
             user_layer,
             active.vector_space_fingerprint.clone(),
             active.embedding_dimension,
-        ))?;
+        )?)?;
         if let Some(bundle_name) = remove_prompt_bundle {
             self.remove_prompt_bundle(&bundle_name)?;
         } else if write_built_in {
@@ -749,6 +752,13 @@ fn config_bundle(
         vector_space_fingerprint,
         embedding_dimension,
         user_layer,
+        memory_policy: vulcan_memorymesh_core::MemoryPolicy {
+            retrieval_policy: vulcan_memorymesh_core::RetrievalPolicy {
+                lexical_contract: super::lexical::score_contract(),
+                ..vulcan_memorymesh_core::RetrievalPolicy::v1()
+            },
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

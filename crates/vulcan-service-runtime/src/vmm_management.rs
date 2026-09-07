@@ -642,6 +642,7 @@ async fn run_vmm_profile_nodes(
         parse_vmm_profile_identity_ids(management_user_ref, management_project_ref)?;
     let response = client
         .get_profile_nodes(GetProfileNodesRequest {
+            expected_read_source: None,
             target,
             user_id,
             project_id,
@@ -762,6 +763,7 @@ async fn run_vmm_search_memory_events(
         .ok_or_else(|| String::from("VMM 项目 ID 为空，无法执行记忆检索。"))?;
     let response = client
         .search_memory_events(SearchMemoryEventsRequest {
+            runtime_session_id: None,
             user_id,
             project_id,
             host_project_id: host_project_id.to_owned(),
@@ -798,6 +800,7 @@ async fn run_vmm_get_turn_details(
                 .ok_or_else(|| String::from("原生 VMM 项目身份未初始化。"))?,
             host_project_id: host_project_id.to_owned(),
             turn_ids,
+            runtime_session_id: None,
         }
     } else {
         GetTurnDetailsRequest {
@@ -866,6 +869,7 @@ async fn run_vmm_delete_memories(
     let reason = normalize_delete_memory_reason(reason);
     let response = client
         .delete_memories(DeleteMemoriesRequest {
+            runtime_session_id: None,
             user_id,
             project_id,
             host_project_id: host_project_id.to_owned(),

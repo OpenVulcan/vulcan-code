@@ -31,6 +31,9 @@ pub(crate) enum RuntimeStreamTurnStartMode {
     /// Start from provider-visible messages already seeded into the snapshot.
     /// 从已经播种到快照中的 Provider 可见消息启动。
     RestoredCheckpoint,
+    /// Resume an explicitly admitted Continue action without requiring another user-authored input.
+    /// 恢复已明确准入的继续动作，不要求另一条用户输入。
+    ContinuedProviderTurn,
 }
 
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
@@ -171,7 +174,13 @@ fn runtime_stream_turn_start_mode_for_request(
         return match mode {
             ExecutionTurnStartMode::UserPrompt => RuntimeStreamTurnStartMode::UserPrompt,
             ExecutionTurnStartMode::RestoredCheckpoint => {
-                RuntimeStreamTurnStartMode::RestoredCheckpoint
+                // Only the host-admitted action can resume an interrupted assistant tail.
+                // 只有宿主已准入的动作才可恢复中断助手尾部。
+                if request.continuation_action_id.is_some() {
+                    RuntimeStreamTurnStartMode::ContinuedProviderTurn
+                } else {
+                    RuntimeStreamTurnStartMode::RestoredCheckpoint
+                }
             }
         };
     }
@@ -474,6 +483,44 @@ mod tests {
         }
     }
 
+    /// Only an explicit restored action selects continuation, leaving new input and normal retry modes unchanged.
+    /// 只有明确的恢复动作选择继续模式，新输入和普通重试模式保持不变。
+    /// No inputs; verifies the host action identity is not inferred from prompt text or assistant history.
+    /// 无输入；验证宿主动作身份不从提示词或助手历史推测。
+    #[test]
+    fn launch_mode_requires_explicit_restored_continuation_action() {
+        // Start from the existing complete request fixture, with no model or service mutation.
+        // 从现有完整请求夹具开始，不修改模型或服务。
+        let mut request = build_test_request();
+        assert_eq!(
+            runtime_stream_turn_start_mode_for_request(&request),
+            RuntimeStreamTurnStartMode::UserPrompt
+        );
+        request.turn_start_mode = Some(ExecutionTurnStartMode::RestoredCheckpoint);
+        assert_eq!(
+            runtime_stream_turn_start_mode_for_request(&request),
+            RuntimeStreamTurnStartMode::RestoredCheckpoint
+        );
+        request.continuation_action_id = Some(
+            vulcan_session_core::v1::ClientActionId::try_new("admitted-continue-action")
+                .expect("valid host action identity"),
+        );
+        assert_eq!(
+            runtime_stream_turn_start_mode_for_request(&request),
+            RuntimeStreamTurnStartMode::ContinuedProviderTurn
+        );
+        request.turn_start_mode = Some(ExecutionTurnStartMode::UserPrompt);
+        assert_eq!(
+            runtime_stream_turn_start_mode_for_request(&request),
+            RuntimeStreamTurnStartMode::UserPrompt
+        );
+        request.turn_start_mode = None;
+        assert_eq!(
+            runtime_stream_turn_start_mode_for_request(&request),
+            RuntimeStreamTurnStartMode::UserPrompt
+        );
+    }
+
     /// Trims the effective prompt and preserves the bootstrapped controller snapshot inside the launch delta state.
     /// 裁剪生效提示词，并在启动增量状态中保留已 bootstrap 的控制器快照。
     #[test]
@@ -719,6 +766,10 @@ mod tests {
             &mut runtime_state,
             &mut vmm_session_memory,
             SharedPromptTurnContinueInput {
+                vmm_context_epoch: Some(
+                    vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+                ),
+                vmm_profile_read_source: None,
                 start,
                 precheck_outcome,
                 profile_outcome,

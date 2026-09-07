@@ -67,6 +67,12 @@ pub(super) struct StoredProjectRow {
     /// SQLite numeric native code-semantic enablement flag.
     /// SQLite 数值型原生代码语义启用标记。
     pub(super) vce_enabled: i64,
+    /// Optional persisted policy; absence materializes the conservative runtime default only.
+    /// 可选持久化策略；缺失时仅形成保守的运行时默认值。
+    pub(super) vce_update_mode: Option<String>,
+    /// Optional explicit automatic update interval in seconds, validated before use.
+    /// 使用前校验的可选明确自动更新间隔秒数。
+    pub(super) vce_auto_update_min_interval_seconds: Option<i64>,
     /// Positive optimistic revision for the project-owned VCE settings.
     /// 项目自有 VCE 设置使用的正数乐观修订号。
     pub(super) vce_revision: i64,

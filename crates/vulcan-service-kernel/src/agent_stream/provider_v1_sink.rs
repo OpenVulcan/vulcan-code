@@ -79,8 +79,21 @@ use crate::session_runtime_registry_v1::{
 };
 use crate::state::SharedServiceBridgeState;
 
+mod context_injection;
+#[cfg(test)]
+mod memory_acceptance;
+#[cfg(test)]
+pub(crate) use memory_acceptance::rebuild_memory_acceptance_request;
 mod media;
 pub(crate) use media::frozen_prompt_media_projection;
+
+/// Returns the canonical controller identifier for a zero-based V1 projection item position.
+/// 返回从零开始的 V1 投影条目位置对应的规范控制器标识。
+/// The same formatter serves controller history, exact source lookup and physical memory anchors.
+/// 同一格式化函数服务于控制器历史、准确来源查询和物理记忆锚点。
+fn provider_projection_message_id(index: usize) -> String {
+    format!("v1-provider-message-{}", index + 1)
+}
 
 /// Projects one ordered resource list into canonical controller attachments without transport state.
 /// 将一组有序资源投影为不含传输状态的规范控制器附件。
@@ -174,7 +187,7 @@ where
     for (index, item) in snapshot.items.iter().enumerate() {
         // message_id uses the same stable position identity as physical request reconstruction.
         // message_id 使用与物理请求重建相同的稳定位置身份。
-        let message_id = format!("v1-provider-message-{}", index + 1);
+        let message_id = provider_projection_message_id(index);
         // payload omits system/developer layers because those remain request prompt layers, not controller messages.
         // payload 会跳过 system/developer 层，因为它们属于请求提示词层而非控制器消息。
         let payload = match item {
@@ -360,7 +373,7 @@ pub(crate) fn provider_projection_user_message_id_for_source(
             input_seq.value()
         ));
     }
-    Ok(format!("v1-provider-message-{}", index + 1))
+    Ok(provider_projection_message_id(index))
 }
 
 /// Rebuilds the complete canonical controller state from the durable V1 projection and resource catalog.
@@ -961,6 +974,16 @@ fn rebuild_provider_transport_candidate(
     let mut system_prompt_parts = Vec::new();
     let mut latest_user_prompt = String::new();
 
+    // Render admitted overlays only after authoritative history replaces the pre-gate candidate.
+    // 只有权威历史替换闸门前候选后，才渲染已准入覆盖层。
+    let anchored_prefixes = context_injection::anchored_prefixes(
+        &snapshot,
+        candidate.controller_config.context_injection.as_ref(),
+    )?;
+    candidate.dynamic_prompt_layers = context_injection::with_persistent_blocks(
+        &candidate.dynamic_prompt_layers,
+        candidate.controller_config.context_injection.as_ref(),
+    );
     append_dynamic_prompt_messages(
         &candidate.dynamic_prompt_layers,
         &mut request_messages,
@@ -987,7 +1010,7 @@ fn rebuild_provider_transport_candidate(
             ProjectedItem::UserInput { text, resource_ids } => {
                 // Resource-bearing prompts must use the exact prevalidated result, never an unconditional Base64 fallback.
                 // 带资源提示词必须使用精确预校验结果，绝不使用无条件Base64回退。
-                let content = if resource_ids.is_empty() {
+                let mut content = if resource_ids.is_empty() {
                     vec![ContentItem::Text { text: text.clone() }]
                 } else {
                     let prepared = prepared_media.prompts.remove(&index).ok_or_else(|| {
@@ -1004,6 +1027,19 @@ fn rebuild_provider_transport_candidate(
                     }
                     prepared.content
                 };
+                // Prefix only the physical user message; canonical history and media occurrence identities stay intact.
+                // 仅前置物理用户消息；规范历史和媒体出现身份保持不变。
+                if let Some(prefix) = anchored_prefixes
+                    .get(&index)
+                    .filter(|prefix| !prefix.is_empty())
+                {
+                    content.insert(
+                        0,
+                        ContentItem::Text {
+                            text: format!("{prefix}\n\n"),
+                        },
+                    );
+                }
                 latest_user_prompt = text.clone();
                 request_messages.push(AiMessage {
                     role: MessageRole::User,
@@ -1091,7 +1127,12 @@ fn rebuild_provider_transport_candidate(
         prompt_layers: candidate.dynamic_prompt_layers.clone(),
         prompt: latest_user_prompt,
         prompt_in_history: true,
-        history: controller_snapshot.messages,
+        // Budgeting and request diagnostics include physical prefixes while controller history stays canonical.
+        // 预算及请求诊断包含物理前缀，而控制器历史保持规范内容。
+        history: context_injection::request_history_with_anchors(
+            &controller_snapshot,
+            &anchored_prefixes,
+        )?,
         temperature: facts.request.temperature,
         max_turns: candidate.request_snapshot.max_turns,
         tool_schemas: candidate.request_snapshot.tool_schemas.clone(),
@@ -2293,6 +2334,7 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 3,
+            current_compaction_id: None,
             document_revision: 19,
             retained_from_seq: Seq::try_new(1)?,
             through_seq: Seq::try_new(12)?,
@@ -2367,6 +2409,7 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 7,
+            current_compaction_id: None,
             document_revision: 31,
             retained_from_seq: Seq::try_new(1)?,
             through_seq: Seq::try_new(20)?,
@@ -2461,6 +2504,7 @@ mod tests {
             resource_ids: resources.clone(),
         };
         let mut snapshot = SessionProviderProjectionSnapshot {
+            current_compaction_id: None,
             preparing_user_prompt_media_seqs: vec![seq],
             segment_generation: 1,
             document_revision: 1,
@@ -2513,6 +2557,7 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 1,
+            current_compaction_id: None,
             document_revision: 2,
             retained_from_seq: first_seq,
             through_seq: second_seq,
@@ -2636,6 +2681,22 @@ mod tests {
                 provider_id: facts.request.provider.clone(),
                 model_id: facts.request.model.clone(),
                 temperature: facts.request.temperature,
+                // Declared overlays must survive final reconstruction without becoming canonical transcript.
+                // 已声明覆盖层必须跨最终重建保留，但不能成为规范转录。
+                context_injection: Some(vulcan_core::types::ProviderContextInjection {
+                    persistent_blocks: vec![String::from("admitted-profile-delta")],
+                    cache_epoch_id: Some(
+                        vulcan_vmm::VmmContextEpoch::new(4, None)
+                            .expect("context")
+                            .cache_epoch_id(),
+                    ),
+                    anchored_prefixes: vec![vulcan_core::types::ProviderContextAnchor {
+                        anchor_id: String::from("admitted-memory-anchor"),
+                        target_message_id: provider_projection_message_id(0),
+                        prefix: String::from("admitted-memory-body"),
+                    }],
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             controller_snapshot: ConversationSnapshot {
@@ -2708,6 +2769,7 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 4,
+            current_compaction_id: None,
             document_revision: 7,
             retained_from_seq: Seq::try_new(1).expect("valid retained seq"),
             through_seq: Seq::try_new(3).expect("valid through seq"),
@@ -2757,6 +2819,24 @@ mod tests {
         assert!(serialized.contains("dynamic-developer"));
         assert!(serialized.contains("dynamic-tool-guidance"));
         assert!(serialized.contains("dynamic-runtime-context"));
+        assert_eq!(serialized.matches("admitted-profile-delta").count(), 1);
+        assert_eq!(serialized.matches("admitted-memory-body").count(), 1);
+        // Physical prefix placement is checked directly, not inferred from a request-wide text match.
+        // 直接检查物理前缀位置，而非从整个请求的文本匹配推断。
+        let physical_user = rebuilt
+            .transport
+            .exact_request
+            .messages
+            .last()
+            .expect("physical user");
+        assert_eq!(physical_user.role, MessageRole::User);
+        assert_eq!(physical_user.content.len(), 2);
+        assert!(
+            matches!(&physical_user.content[0], ContentItem::Text { text } if text == "admitted-memory-body\n\n")
+        );
+        assert!(
+            matches!(&physical_user.content[1], ContentItem::Text { text } if text == "durable-v1-message")
+        );
         assert!(serialized.contains("persisted-baseline-content"));
         assert!(!serialized.contains("candidate-baseline-content"));
         assert!(!serialized.contains("legacy-message"));
@@ -2770,8 +2850,49 @@ mod tests {
                 system: String::from("dynamic-system"),
                 developer: String::from("dynamic-developer"),
                 tool_guidance: String::from("dynamic-tool-guidance"),
-                runtime_context: String::from("dynamic-runtime-context"),
+                runtime_context: String::from("dynamic-runtime-context\n\nadmitted-profile-delta"),
             }
+        );
+        // The request-only memory prefix never contaminates durable controller message text.
+        // 请求专属记忆前缀绝不污染持久控制器消息正文。
+        assert!(
+            !serde_json::to_string(&rebuilt.transport.controller_snapshot)
+                .expect("canonical controller snapshot")
+                .contains("admitted-memory-body")
+        );
+        assert!(matches!(
+            &rebuilt.transport.request_snapshot.history[0].payload,
+            ConversationPayload::UserText { text, .. }
+                if text == "admitted-memory-body\n\ndurable-v1-message"
+        ));
+        // Compare through the actual budget guard, not a separate test-only text length calculation.
+        // 通过实际预算守卫比较，而非另写测试专属文本长度计算。
+        let mut unprefixed_snapshot = rebuilt.transport.request_snapshot.clone();
+        if let ConversationPayload::UserText { text, .. } =
+            &mut unprefixed_snapshot.history[0].payload
+        {
+            *text = String::from("durable-v1-message");
+        } else {
+            panic!("fixture requires the exact user history item");
+        }
+        // Only the memory prefix differs; route, canonical history length and persistent layers stay identical.
+        // 唯一差异是记忆前缀；路由、规范历史长度及持久层保持一致。
+        let unprefixed_budget = rebuilt
+            .transport
+            .request_budget_guard
+            .as_ref()
+            .expect("frozen budget guard")
+            .build_v1_budget_decision(&unprefixed_snapshot, &rebuilt.projection, None)
+            .expect("unprefixed budget comparison");
+        assert!(
+            rebuilt
+                .request_budget_evidence
+                .request_text_measurement
+                .character_count
+                > unprefixed_budget
+                    .evidence
+                    .request_text_measurement
+                    .character_count
         );
         assert_eq!(
             rebuilt.transport.request_snapshot.prompt,

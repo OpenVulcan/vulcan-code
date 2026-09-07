@@ -9,16 +9,17 @@ use super::*;
 pub(super) const RPC_METHODS: &[&str] = &[
     "service_get_vce_configuration_status",
     "service_get_vce_project_overview",
+    "service_get_vce_project_activity",
     "service_update_vce_project_settings",
-    "service_refresh_vce_project",
+    "service_submit_vce_job",
+    "service_get_vce_job",
+    "service_cancel_vce_job",
     "service_list_vce_files",
     "service_get_vce_blob_detail",
     "service_list_vce_operations",
     "service_list_vce_integrity_issues",
     "service_plan_vce_maintenance",
     "service_execute_vce_maintenance",
-    "service_retry_vce_operation",
-    "service_cancel_vce_operation",
 ];
 
 /// Dispatch one VCE RPC without exposing storage or lifecycle internals to the browser.
@@ -52,12 +53,21 @@ pub(super) async fn dispatch(
         "service_get_vce_project_overview" => rpc_json_result(
             service_get_vce_project_overview(state, rpc_required_param(params, "request")?).await,
         ),
+        "service_get_vce_project_activity" => rpc_json_result(
+            service_get_vce_project_activity(state, rpc_required_param(params, "request")?).await,
+        ),
         "service_update_vce_project_settings" => rpc_json_result(
             service_update_vce_project_settings(app, state, rpc_required_param(params, "request")?)
                 .await,
         ),
-        "service_refresh_vce_project" => rpc_json_result(
-            service_refresh_vce_project(app, state, rpc_required_param(params, "request")?).await,
+        "service_submit_vce_job" => rpc_json_result(
+            service_submit_vce_job(state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_get_vce_job" => rpc_json_result(
+            service_get_vce_job(state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_cancel_vce_job" => rpc_json_result(
+            service_cancel_vce_job(state, rpc_required_param(params, "request")?).await,
         ),
         "service_list_vce_files" => rpc_json_result(
             service_list_vce_files(state, rpc_required_param(params, "request")?).await,
@@ -77,12 +87,6 @@ pub(super) async fn dispatch(
         "service_execute_vce_maintenance" => rpc_json_result(
             service_execute_vce_maintenance(app, state, rpc_required_param(params, "request")?)
                 .await,
-        ),
-        "service_retry_vce_operation" => rpc_json_result(
-            service_retry_vce_operation(app, state, rpc_required_param(params, "request")?).await,
-        ),
-        "service_cancel_vce_operation" => rpc_json_result(
-            service_cancel_vce_operation(app, state, rpc_required_param(params, "request")?).await,
         ),
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };

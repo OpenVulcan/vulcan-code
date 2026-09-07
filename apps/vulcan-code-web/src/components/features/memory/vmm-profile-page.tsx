@@ -129,19 +129,23 @@ export function vmmProfileUsesFixedNativeUser(
   return deployment === "native" && target === "user"
 }
 
-// vmmProfileBundlePreview selects the profile section matching the visible target.
-// vmmProfileBundlePreview 选择与当前可见目标匹配的画像段落。
+// vmmProfileBundlePreview consumes only the representation declared by the server's bundle mode.
+// vmmProfileBundlePreview 仅消费服务端画像包模式声明的表示。
 //
 // Parameters: bundle is the exact VMM response and target is the visible profile class.
 // 参数：bundle 是准确的 VMM 响应，target 是当前可见画像类别。
 //
-// Returns: only the user profile or project profile text requested by the page.
-// 返回：仅返回页面请求的用户画像或项目画像文本。
+// Returns: Full text or the selected Split section; null reports an unspecified/unsupported mode.
+// 返回：Full 正文或选定的 Split 分区；null 表示未指定或不支持的模式。
 export function vmmProfileBundlePreview(
   bundle: VmmProfileBundleActionValue,
   target: "user" | "project",
-): string {
-  return target === "user" ? bundle.user_profile : bundle.project_profile
+): string | null {
+  switch (bundle.mode) {
+    case "PROFILE_BUNDLE_MODE_FULL": return bundle.combined_text
+    case "PROFILE_BUNDLE_MODE_SPLIT": return target === "user" ? bundle.user_profile : bundle.project_profile
+    default: return null
+  }
 }
 
 // VmmProfilePage renders current profile content without internal node identifiers.
@@ -167,6 +171,9 @@ function VmmProfilePage({
   const [nativeStateCounts, setNativeStateCounts] = React.useState<VmmNativeProfileStateCounts | null>(null)
   const [instruction, setInstruction] = React.useState("")
   const [bundlePreview, setBundlePreview] = React.useState(snapshot.runtime.profilePreview)
+  // Invalid server modes are reported rather than guessed from whichever field is nonempty.
+  // 非法服务端模式明确报告，不从哪个字段非空来猜测。
+  const [bundleModeError, setBundleModeError] = React.useState(false)
   // nativeCatalog contains the host-owned one-level project identities available to native profiles.
   // nativeCatalog 包含原生画像可选的宿主持有单层项目身份。
   const [nativeCatalog, setNativeCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
@@ -213,6 +220,7 @@ function VmmProfilePage({
     setNodes([])
     setNativeStateCounts(null)
     setBundlePreview("")
+    setBundleModeError(false)
     automaticLoadKey.current = ""
     nativeCatalogLoadIssued.current = false
   }, [isNative])
@@ -291,7 +299,9 @@ function VmmProfilePage({
       setNativeStateCounts(result.data.value.counts)
     }
     if (result?.data.kind === "profile_bundle") {
-      setBundlePreview(vmmProfileBundlePreview(result.data.value, effectiveTarget))
+      const preview = vmmProfileBundlePreview(result.data.value, effectiveTarget)
+      setBundleModeError(preview === null)
+      setBundlePreview(preview ?? "")
     }
     if (result?.data.kind === "profile_instruction") {
       setNodes(projectProfileNodes(result.data.value.accepted_nodes))
@@ -434,6 +444,7 @@ function VmmProfilePage({
               setNodes([])
               setNativeStateCounts(null)
               setBundlePreview("")
+              setBundleModeError(false)
             }}
             value={target}
           >
@@ -472,6 +483,7 @@ function VmmProfilePage({
                   setNodes([])
                   setNativeStateCounts(null)
                   setBundlePreview("")
+                  setBundleModeError(false)
                   if (effectiveTarget === "user") {
                     setSelectedUserRef(value)
                   } else {
@@ -615,6 +627,7 @@ function VmmProfilePage({
         </CardContent>
       </Card>
 
+      {bundleModeError ? <p role="alert" className="text-sm text-destructive">{t("memory.profile.invalidBundleMode")}</p> : null}
       {bundlePreview ? (
         <Accordion className="rounded-xl border px-4" collapsible type="single">
           <AccordionItem value="bundle">

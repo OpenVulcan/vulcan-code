@@ -35,6 +35,28 @@ struct ExecutionStreamDeltaCoalescer {
 }
 
 impl ExecutionStreamDeltaCoalescer {
+    /// Await the next source item under the text buffer's flush policy.
+    /// 按文本缓冲区的刷新策略等待下一条来源事件。
+    /// `provider_stream` owns ordered events; `flush_at` is the current buffered-text deadline.
+    /// `provider_stream` 持有有序事件；`flush_at` 是当前缓冲文本的刷新期限。
+    /// Returns an unchanged item or stream end, or an elapsed deadline for pending text.
+    /// 返回未经改写的事件或流结束；有待发文本时也可返回期限到达。
+    async fn next_provider_item<S>(
+        &self,
+        provider_stream: &mut S,
+        flush_at: tokio::time::Instant,
+    ) -> Result<Option<S::Item>, tokio::time::error::Elapsed>
+    where
+        S: Stream + Unpin,
+    {
+        // An idle buffer owns no timer: reusing an elapsed flush deadline would spin until the model replies.
+        // 空闲缓冲不持有计时器：复用已过刷新期限会在模型回复前持续空转。
+        if self.is_empty() {
+            return Ok(provider_stream.next().await);
+        }
+        tokio::time::timeout_at(flush_at, provider_stream.next()).await
+    }
+
     /// Returns whether no visible delta is waiting for the next workbench flush.
     /// 返回当前是否没有等待下一次工作台刷新的可见增量。
     fn is_empty(&self) -> bool {
@@ -114,6 +136,9 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             RuntimeStreamTurnStartMode::RestoredCheckpoint => {
                 ProviderTransportTurnStartMode::RestoredCheckpoint
             }
+            RuntimeStreamTurnStartMode::ContinuedProviderTurn => {
+                ProviderTransportTurnStartMode::ContinuedProviderTurn
+            }
         };
         let preparation = launch.preparation;
         let active_agent = launch.active_agent;
@@ -176,7 +201,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 
         loop {
             let item =
-                match tokio::time::timeout_at(next_delta_flush_at, provider_stream.next()).await {
+                match delta_coalescer.next_provider_item(&mut provider_stream, next_delta_flush_at).await {
                 Ok(item) => item,
                 Err(_) => {
                     if !delta_coalescer.is_empty()
@@ -328,7 +353,110 @@ mod tests {
 
     use super::*;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+    use futures_util::FutureExt;
     use uuid::Uuid;
+
+    /// Keep an idle source pending even when an obsolete text deadline is already elapsed.
+    /// 即使过时的文本期限已到达，也保持空闲来源等待。
+    /// No parameters or return value; one direct poll detects immediate timeout without hanging a worker.
+    /// 无参数及返回值；一次直接轮询检测立即超时，不挂起工作线程。
+    #[tokio::test]
+    async fn idle_provider_wait_ignores_expired_text_flush_deadline() {
+        // Empty text has nothing to flush while a model or tool remains silent.
+        // 模型或工具保持静默时，空文本没有任何内容需要刷新。
+        let coalescer = ExecutionStreamDeltaCoalescer::default();
+        // The source deliberately produces no event and uses no provider or network.
+        // 来源明确不产生事件，不使用供应商或网络。
+        let mut provider_stream = futures_util::stream::pending::<u8>();
+        // The past deadline deterministically exposes the original immediate timeout.
+        // 已过期限确定性地暴露原有立即超时。
+        let flush_at = tokio::time::Instant::now() - Duration::from_secs(1);
+        assert!(
+            coalescer
+                .next_provider_item(&mut provider_stream, flush_at)
+                .now_or_never()
+                .is_none(),
+            "idle source must remain pending instead of repeatedly timing out"
+        );
+    }
+
+    /// Preserve the flush deadline when visible text is buffered and the source has no next item.
+    /// 存在可见缓冲文本且来源没有下一条事件时，保留刷新期限。
+    /// No parameters or return value; requires timeout without consuming or dropping the buffered text.
+    /// 无参数及返回值；要求返回超时，但不消费或丢弃缓冲文本。
+    #[tokio::test]
+    async fn buffered_provider_wait_retains_text_flush_deadline() {
+        // The real coalescer owns one pending visible output delta.
+        // 真实合并器持有一条待发送的可见输出增量。
+        let mut coalescer = ExecutionStreamDeltaCoalescer::default();
+        assert!(
+            coalescer
+                .push_event(ExecutionStreamEvent::OutputDelta {
+                    session_id: Uuid::nil(),
+                    delta: String::from("buffered text"),
+                })
+                .is_empty()
+        );
+        // The source stays silent while the exact buffered-text deadline has elapsed.
+        // 精确缓冲文本期限到达时，来源仍保持静默。
+        let mut provider_stream = futures_util::stream::pending::<u8>();
+        assert!(
+            coalescer
+                .next_provider_item(
+                    &mut provider_stream,
+                    tokio::time::Instant::now() - Duration::from_secs(1),
+                )
+                .await
+                .is_err()
+        );
+        assert!(!coalescer.is_empty());
+        assert!(matches!(coalescer.flush().as_slice(),
+            [ExecutionStreamEvent::OutputDelta { delta, .. }] if delta == "buffered text"));
+    }
+
+    /// Forward ready items and end-of-stream unchanged with either an empty or populated text buffer.
+    /// 无论文本缓冲为空或非空，都原样转发就绪事件和流结束。
+    /// No parameters or return value; assertions exercise the same waiting method as the live driver.
+    /// 无参数及返回值；断言执行与实际驱动相同的等待方法。
+    #[tokio::test]
+    async fn provider_wait_preserves_ready_items_and_stream_end() {
+        for buffered in [false, true] {
+            // Each case owns independent coalescing state and a single exact source item.
+            // 每个用例独立持有合并状态及一条精确来源事件。
+            let mut coalescer = ExecutionStreamDeltaCoalescer::default();
+            if buffered {
+                assert!(
+                    coalescer
+                        .push_event(ExecutionStreamEvent::ThinkingDelta {
+                            session_id: Uuid::nil(),
+                            delta: String::from("pending reasoning"),
+                        })
+                        .is_empty()
+                );
+            }
+            // Ready input must win without being replaced by an expired flush marker.
+            // 就绪输入必须直接返回，不能被过期刷新标记替换。
+            let mut provider_stream = futures_util::stream::iter([7_u8]);
+            // Reuse the deadline to prove neither ready input nor EOF requires advancing time.
+            // 复用期限以证明就绪输入和流结束均不要求推进时间。
+            let flush_at = tokio::time::Instant::now() - Duration::from_secs(1);
+            assert_eq!(
+                coalescer
+                    .next_provider_item(&mut provider_stream, flush_at)
+                    .await
+                    .expect("ready item"),
+                Some(7)
+            );
+            assert_eq!(
+                coalescer
+                    .next_provider_item(&mut provider_stream, flush_at)
+                    .await
+                    .expect("ready stream end"),
+                None
+            );
+            assert_eq!(coalescer.is_empty(), !buffered);
+        }
+    }
 
     /// Verifies adjacent output deltas for the same session are merged into one workbench event.
     /// 验证同一会话的相邻输出增量会合并为一个工作台事件。

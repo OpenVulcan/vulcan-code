@@ -626,6 +626,7 @@ fn snapshot(
         });
     }
     Ok(SessionProviderProjectionSnapshot {
+        current_compaction_id: None,
         preparing_user_prompt_media_seqs: preparing,
         segment_generation: 1,
         document_revision: 1,

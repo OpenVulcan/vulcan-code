@@ -1,0 +1,102 @@
+{
+  "sources": [
+    "项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 0 条。",
+    "项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 1 条。",
+    "项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 2 条。查询条件 x \u003c 3 \u0026\u0026 y \u003e 2。",
+    "项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 3 条。第一行\u2028第二行\u2029第三段；保留字面 \\u003c。"
+  ],
+  "assistant": "已记录数据库部署要求，后续按这条规则检查配置。",
+  "turns": [
+    {
+      "turn_id": 1,
+      "content_type": "DETAILS",
+      "content": "项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 0 条。"
+    },
+    {
+      "turn_id": 2,
+      "content_type": "DETAILS",
+      "content": "项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 1 条。"
+    },
+    {
+      "turn_id": 3,
+      "content_type": "RAW_TURN",
+      "content": "{\"user\":\"项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 2 条。查询条件 x \\u003c 3 \\u0026\\u0026 y \\u003e 2。\",\"timeline\":[],\"assistant\":\"已记录数据库部署要求，后续按这条规则检查配置。\"}"
+    },
+    {
+      "turn_id": 4,
+      "content_type": "RAW_TURN",
+      "content": "{\"user\":\"项目数据库采用 PostgreSQL，部署前必须核对备份与连接配置，这是历史验收规则第 3 条。第一行\\u2028第二行\\u2029第三段；保留字面 \\\\u003c。\",\"timeline\":[],\"assistant\":\"已记录数据库部署要求，后续按这条规则检查配置。\"}"
+    }
+  ],
+  "budgets": [
+    {
+      "max_tokens": 1,
+      "selected": [
+        4
+      ]
+    },
+    {
+      "max_tokens": 124,
+      "selected": [
+        4
+      ]
+    },
+    {
+      "max_tokens": 125,
+      "selected": [
+        4
+      ]
+    },
+    {
+      "max_tokens": 126,
+      "selected": [
+        4
+      ]
+    },
+    {
+      "max_tokens": 244,
+      "selected": [
+        4
+      ]
+    },
+    {
+      "max_tokens": 245,
+      "selected": [
+        3,
+        4
+      ]
+    },
+    {
+      "max_tokens": 289,
+      "selected": [
+        3,
+        4
+      ]
+    },
+    {
+      "max_tokens": 290,
+      "selected": [
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "max_tokens": 334,
+      "selected": [
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "max_tokens": 335,
+      "selected": [
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ]
+}

@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use vulcan_vmm::VmmSessionMemoryState;
 use vulcan_workspace_store::workspace_store::SessionV1StorageLocator;
@@ -100,6 +101,86 @@ pub(crate) struct SessionVmmController {
 }
 
 impl SessionVmmController {
+    /// Reconciles the cache with the exact V1 generation, compaction and admitted memory source.
+    /// 根据准确 V1 代次、压缩及准入记忆来源协调缓存。
+    /// Returns the current durable state; repeated unchanged transitions do not append receipts.
+    /// 返回当前持久状态；重复且无变化的转换不追加回执。
+    pub(crate) fn reconcile_context_epoch(
+        &self,
+        context: &vulcan_vmm::VmmContextEpoch,
+        source: &vulcan_vmm::VmmMemoryReadSource,
+        updated_at: &str,
+    ) -> Result<VmmSessionMemoryState, String> {
+        // Use the committed numeric identity, not a workspace mirror or message position.
+        // 使用已提交数字身份，而非工作区镜像或消息位置。
+        let epoch_id = context.cache_epoch_id();
+        // No canonical user is invented; the pending baseline remains request-local until a real user arrives.
+        // 不虚构规范用户；等待基线在真实用户到来前保持请求局部内容。
+        let transition = |candidate: &mut VmmSessionMemoryState| -> Result<(), String> {
+            candidate.select_read_source(&self.session_id.to_string(), Some(source), updated_at)?;
+            candidate.synchronize_stable_anchor_rendering(
+                vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().stable_anchors_enabled,
+                updated_at,
+            )?;
+            candidate.synchronize_context_epoch(context, updated_at)?;
+            Ok(())
+        };
+        // Detect a no-op using a detached observation, then recompute under the unique writer if necessary.
+        // 用脱离观察检测无操作，必要时在唯一写入锁内重新计算。
+        let before = self.snapshot()?;
+        let mut observed = before.clone();
+        transition(&mut observed)?;
+        if observed == before {
+            return Ok(before);
+        }
+        // Revision distinguishes reconciliation after later source changes while the V1 compaction stays the same.
+        // 修订号区分 V1 压缩相同但之后来源改变的再次对账。
+        let command_id = format!("vmm_context_epoch:{epoch_id}:{}", before.revision);
+        Ok(self
+            .execute_command(&command_id, updated_at, transition)?
+            .state)
+    }
+
+    /// Persists a source selection independently of an already committed provider-boundary receipt.
+    /// 独立于已经提交的 Provider 边界回执持久化来源选择。
+    /// Takes the host's current optional read source and timestamp; returns the durable selected state.
+    /// 接收宿主当前可选读取来源与时间戳；返回已持久化的选择状态。
+    /// Exact no-ops create no receipt; changed state is recomputed under the controller's existing commit lock.
+    /// 准确无操作不创建回执；变化状态在控制器既有提交锁内重新计算。
+    pub(crate) fn reconcile_read_source(
+        &self,
+        source: Option<&vulcan_vmm::VmmMemoryReadSource>,
+        updated_at: &str,
+    ) -> Result<VmmSessionMemoryState, String> {
+        // Read the current controller, not the detached state returned by the original provider receipt.
+        // 读取当前控制器，而不是原 Provider 回执返回的脱离状态。
+        let before = self.snapshot()?;
+        // This private projection decides only whether a new durable command is necessary.
+        // 此私有投影仅用于判断是否需要新的持久命令。
+        let mut observed = before.clone();
+        if !observed.select_read_source(&self.session_id.to_string(), source, updated_at)? {
+            return Ok(before);
+        }
+        // Include the requested source as well as revision so distinct concurrent selections cannot share a receipt.
+        // 同时包含请求来源与版本，避免不同并发选择共享同一回执。
+        let source_digest = hex::encode(Sha256::digest(
+            serde_json::to_vec(&source).map_err(|error| error.to_string())?,
+        ));
+        // Only an opaque digest enters the bounded command identity; no transport credential or long scope list is stored.
+        // 有界命令身份只包含不透明摘要，不保存传输凭据或长范围列表。
+        let command_id = format!(
+            "vmm_read_source_reconcile:{}:{source_digest}",
+            before.revision
+        );
+        // Recompute on the locked candidate to preserve intervening terminal counters and controller receipts.
+        // 在持锁候选上重新计算，保留期间发生的终态计数及控制器回执。
+        let committed = self.execute_command(&command_id, updated_at, |candidate| {
+            candidate.select_read_source(&self.session_id.to_string(), source, updated_at)?;
+            Ok(())
+        })?;
+        Ok(committed.state)
+    }
+
     /// Opens one controller from the strict Core-owned document or initializes a new state.
     /// 从严格的 Core 所有文档打开一个控制器，或初始化新状态。
     ///
@@ -332,6 +413,80 @@ impl Drop for SessionVmmLifecycleFence {
 }
 
 impl SessionVmmControllerRegistry {
+    /// Visits resident controllers under the lifecycle lock without opening or leaking owned handles.
+    /// 在生命周期锁内访问驻留控制器，不打开或泄漏拥有所有权的句柄。
+    /// Takes a synchronous exact-ID visitor; returns its results or the first explicit error.
+    /// 接收同步准确身份访问器；返回其结果或首个明确错误。
+    pub(crate) fn map_resident<T, F>(&self, mut visit: F) -> Result<BTreeMap<Uuid, T>, String>
+    where
+        F: FnMut(Uuid, &SessionVmmController) -> Result<T, String>,
+    {
+        // Lifecycle removal cannot close a controller until its synchronous visit has completed.
+        // 生命周期移除在同步访问完成前不能关闭控制器。
+        let guard = self.state.lock().map_err(|error| error.to_string())?;
+        guard
+            .controllers
+            .iter()
+            .map(|(session_id, controller)| {
+                visit(*session_id, controller).map(|result| (*session_id, result))
+            })
+            .collect()
+    }
+
+    /// Clears derived memory sources in every resident controller when the global memory mode changes.
+    /// 全局记忆模式变化时清除全部驻留控制器的派生记忆来源。
+    /// Takes a mutation timestamp; retains durable receipts and never opens cold or fenced sessions.
+    /// 接收修改时间戳；保留持久回执，绝不打开冷会话或栅栏中的会话。
+    pub(crate) fn clear_resident_memory_sources(&self, updated_at: &str) -> Result<(), String> {
+        // Serialize with lifecycle removal through each durable per-session command.
+        // 在每个持久会话命令期间与生命周期移除保持串行。
+        let guard = self.state.lock().map_err(|error| error.to_string())?;
+        for controller in guard.controllers.values() {
+            controller.reconcile_read_source(None, updated_at)?;
+        }
+        Ok(())
+    }
+
+    /// Reconciles native sources only for already resident controllers selected by exact host session IDs.
+    /// 仅对准确宿主会话 ID 选中的已驻留控制器对账原生来源。
+    /// Takes the selected IDs, current native binding and timestamp; returns snapshots without opening cold owners.
+    /// 接收所选 ID、当前原生绑定和时间戳；返回快照，不打开冷会话归属。
+    pub(crate) fn reconcile_resident_native_sources(
+        &self,
+        session_ids: &BTreeSet<Uuid>,
+        source: Option<&vulcan_vmm::VmmMemoryReadSource>,
+        updated_at: &str,
+    ) -> Result<BTreeMap<Uuid, VmmSessionMemoryState>, String> {
+        if let Some(source) = source {
+            source.validate().map_err(|error| error.to_string())?;
+            if !matches!(source.owner, vulcan_vmm::VmmMemorySource::Native { .. }) {
+                return Err("Native cache reconciliation requires a native source.".to_owned());
+            }
+        }
+        // Keep lifecycle removal ordered through every mutation; never retain a controller after this guard.
+        // 使生命周期移除与每次修改保持有序；不在守卫结束后保留控制器。
+        let guard = self.state.lock().map_err(|error| error.to_string())?;
+        // Only resident entries can contribute snapshots; fenced and cold sessions remain unopened.
+        // 只有驻留项提供快照；栅栏中及冷会话保持未打开。
+        let mut snapshots = BTreeMap::new();
+        for session_id in session_ids {
+            if let Some(controller) = guard.controllers.get(session_id) {
+                // External caches belong to another backend and must survive native binding maintenance.
+                // 外置缓存属于另一后端，原生绑定维护不能改变它们。
+                let before = controller.snapshot()?;
+                let current = if before.read_source.as_ref().is_some_and(|source| {
+                    matches!(source.owner, vulcan_vmm::VmmMemorySource::Native { .. })
+                }) {
+                    controller.reconcile_read_source(source, updated_at)?
+                } else {
+                    before
+                };
+                snapshots.insert(*session_id, current);
+            }
+        }
+        Ok(snapshots)
+    }
+
     /// Returns the unique controller for one session, opening it exactly once on a cache miss.
     /// 返回单个会话的唯一控制器，并在缓存未命中时仅打开一次。
     ///
@@ -623,6 +778,430 @@ mod tests {
     use super::*;
     use crate::tests::test_support::TestControllerRuntimeRoot;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use vulcan_agent_runtime::agent_runtime::vmm_hooks::{
+        VmmHookConfigSnapshot, VmmHookRuntimeHandle,
+    };
+
+    /// Proves binding maintenance changes only selected resident native owners and respects lifecycle fences.
+    /// 证明绑定维护只修改所选驻留原生归属，并遵守生命周期栅栏。
+    /// Uses isolated V1 directories; verifies durable reset, no-op saves, cold exclusion and external preservation.
+    /// 使用隔离 V1 目录；验证持久重置、无操作保存、冷会话排除及外置保留。
+    #[test]
+    fn resident_native_binding_reconciliation_is_scoped_and_lifecycle_safe() {
+        // The IDs distinguish selected, unrelated, external, fenced and never-opened sessions.
+        // ID 区分所选、无关、外置、栅栏中及从未打开的会话。
+        let ids = [
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        ];
+        let roots = ids[..4]
+            .iter()
+            .map(|id| TestControllerRuntimeRoot::new(*id))
+            .collect::<Vec<_>>();
+        let registry = SessionVmmControllerRegistry::default();
+        let old = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(1).expect("owner"),
+            vec![1],
+        )
+        .expect("source");
+        let next = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(2).expect("owner"),
+            vec![2, 3],
+        )
+        .expect("source");
+        let remote = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::external(
+                &vulcan_vmm::VmmTransportConfig::from_effective(
+                    &vulcan_vmm::VmmEffectiveConfig::resolve(
+                        &vulcan_vmm::VmmConfigLayer {
+                            grpc_target: Some("http://127.0.0.1:9000".to_owned()),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
+                    ),
+                ),
+                1,
+                1,
+            )
+            .expect("remote owner"),
+            Vec::new(),
+        )
+        .expect("remote source");
+        // Seed through the same durable writer used by normal recall; no sidecar is written directly.
+        // 通过正常召回使用的同一持久写入器播种；不直接写 sidecar。
+        let controllers = roots
+            .iter()
+            .enumerate()
+            .map(|(index, root)| {
+                let controller = registry
+                    .get_or_open(root.v1_storage_locator(), ids[index], "1")
+                    .expect("open");
+                controller
+                    .execute_command("seed", "2", |candidate| {
+                        candidate.select_read_source(
+                            &ids[index].to_string(),
+                            Some(if index == 2 { &remote } else { &old }),
+                            "2",
+                        )?;
+                        candidate.apply_recall_batch(
+                            &ids[index].to_string(),
+                            "user-1",
+                            &vulcan_vmm::VmmRecallBatch {
+                                ttl_turns: 3,
+                                injection_tag: "vmm".to_owned(),
+                                injection_description: "memory".to_owned(),
+                                items: vec![vulcan_vmm::ContextItem {
+                                    memory_id: 11,
+                                    text: "resident body".to_owned(),
+                                    ..Default::default()
+                                }],
+                            },
+                            "2",
+                        )?;
+                        Ok(())
+                    })
+                    .expect("seed cache");
+                controller
+            })
+            .collect::<Vec<_>>();
+        let before = registry.snapshots().expect("before");
+        let fence = registry
+            .begin_lifecycle_transition([ids[3]])
+            .expect("fence");
+        let selected = BTreeSet::from([ids[0], ids[2], ids[3], ids[4]]);
+        let unchanged = registry
+            .reconcile_resident_native_sources(&selected, Some(&old), "3")
+            .expect("same source");
+        assert_eq!(unchanged.get(&ids[0]), before.get(&ids[0]));
+        let changed = registry
+            .reconcile_resident_native_sources(&selected, Some(&next), "4")
+            .expect("rebind");
+        let current = changed.get(&ids[0]).expect("selected");
+        assert_eq!(current.read_source.as_ref(), Some(&next));
+        assert!(current.active_leases.is_empty());
+        assert!(current.cache_epoch.anchors.is_empty());
+        assert!(current.has_committed_controller_command("seed"));
+        assert_eq!(changed.get(&ids[2]), before.get(&ids[2]));
+        assert_eq!(
+            controllers[1].snapshot().expect("unrelated"),
+            before[&ids[1]]
+        );
+        assert!(!registry.contains(ids[3]).expect("fenced remains closed"));
+        assert!(!registry.contains(ids[4]).expect("cold remains unopened"));
+        assert_eq!(changed.len(), 2);
+        assert!(
+            registry
+                .reconcile_resident_native_sources(&selected, Some(&remote), "5")
+                .is_err()
+        );
+        // Closing and reopening proves the new binding is durable, without reviving old recalled bodies.
+        // 关闭并重开证明新绑定已持久化，且不会复活旧召回正文。
+        registry
+            .begin_lifecycle_transition([ids[0]])
+            .expect("close selected")
+            .release()
+            .expect("release selected");
+        let reopened = registry
+            .get_or_open(roots[0].v1_storage_locator(), ids[0], "6")
+            .expect("reopen");
+        assert_eq!(reopened.snapshot().expect("durable"), *current);
+        let unbound = registry
+            .reconcile_resident_native_sources(&selected, None, "7")
+            .expect("unbind");
+        assert!(unbound[&ids[0]].read_source.is_none());
+        assert_eq!(unbound.get(&ids[2]), before.get(&ids[2]));
+        fence.release().expect("release fence");
+    }
+
+    /// Rejects late source changes before either a new durable command or replay reconciliation runs.
+    /// 在新持久命令或重放协调运行前拒绝迟到的来源变化。
+    /// Uses private V1 storage and the production Hook guard; returns after disk and receipt invariants hold.
+    /// 使用私有 V1 存储和生产 Hook 守卫；磁盘及回执不变量成立后返回。
+    #[test]
+    fn publication_guard_rejects_changed_source_before_durable_mutation() {
+        // Each case owns a separate controller tree and configuration projection.
+        // 每个场景拥有独立控制器目录树和配置投影。
+        for scenario in [
+            "project",
+            "user",
+            "endpoint",
+            "credential",
+            "disabled",
+            "backend",
+        ] {
+            // The session is the same stable identity passed to both Hook and storage.
+            // 会话是同时传给 Hook 与存储的同一稳定身份。
+            let session_id = Uuid::new_v4();
+            // Only this test accesses the private storage tree.
+            // 仅本测试访问私有存储目录树。
+            let controller_root = TestControllerRuntimeRoot::new(session_id);
+            // The registry remains the sole durable writer for this session.
+            // 注册表始终是本会话唯一持久写入方。
+            let registry = SessionVmmControllerRegistry::default();
+            // Open before taking the Hook read lock, matching production lock ordering.
+            // 在取得 Hook 读锁前打开控制器，与生产锁顺序一致。
+            let controller = registry
+                .get_or_open(controller_root.v1_storage_locator(), session_id, "1")
+                .expect("controller");
+            // Explicit remote identity is required; timeout does not participate in source identity.
+            // 必须声明准确远端身份；超时不参与来源身份。
+            let mut layer = vulcan_vmm::VmmConfigLayer {
+                enabled: Some(true),
+                backend_mode: Some(vulcan_vmm::VmmBackendMode::ExternalGrpc),
+                grpc_target: Some("127.0.0.1:50051".to_owned()),
+                user_id: Some(1),
+                project_id: Some(7),
+                ..Default::default()
+            };
+            // This is the source admitted before the delayed preparation completed.
+            // 这是迟到准备完成前已准入的来源。
+            let admitted = vulcan_vmm::VmmMemoryReadSource::new(
+                vulcan_vmm::VmmMemorySource::external(
+                    &vulcan_vmm::VmmTransportConfig::from_effective(
+                        &vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None),
+                    ),
+                    1,
+                    7,
+                )
+                .expect("owner"),
+                Vec::new(),
+            )
+            .expect("source");
+            // The real Hook projection governs the same guard used around production durable commits.
+            // 真实 Hook 投影控制生产持久提交所使用的同一守卫。
+            let hooks = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+                global: layer.clone(),
+                // A retained local enable override must not reactivate the globally stopped service.
+                // 保留的本地启用覆盖不能重新激活已全局停用的服务。
+                projects_by_workspace: BTreeMap::from([(
+                    "D:/project".to_owned(),
+                    vulcan_vmm::VmmConfigLayer {
+                        enabled: Some(true),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            });
+            hooks
+                .with_current_profile_publication(session_id, "D:/project", &admitted, || {
+                    controller.execute_command("provider_boundary:original", "2", |candidate| {
+                        candidate.select_read_source(
+                            &session_id.to_string(),
+                            Some(&admitted),
+                            "2",
+                        )?;
+                        Ok(())
+                    })
+                })
+                .expect("current source")
+                .expect("original commit");
+            // Preserve the complete authority, including the original idempotent receipt.
+            // 保留完整权威状态，包括原始幂等回执。
+            let before = controller.snapshot().expect("baseline");
+            match scenario {
+                "project" => layer.project_id = Some(8),
+                "user" => layer.user_id = Some(2),
+                "endpoint" => layer.grpc_target = Some("127.0.0.1:50052".to_owned()),
+                "credential" => layer.grpc_api_key = Some("synthetic-new-key".to_owned()),
+                "disabled" => layer.enabled = Some(false),
+                "backend" => layer.backend_mode = Some(vulcan_vmm::VmmBackendMode::Native),
+                _ => unreachable!("all declared cases are handled"),
+            }
+            hooks
+                .replace_global_projection(&layer)
+                .expect("change configuration");
+            // Both closures would persist a mutation if the guard did not reject the stale source first.
+            // 如果守卫未先拒绝过期来源，两个闭包都会持久化变更。
+            for replay in [false, true] {
+                // Count actual callback admission, not just the returned error.
+                // 统计实际回调准入，而非仅检查返回错误。
+                let mut invoked = false;
+                assert!(
+                    hooks
+                        .with_current_profile_publication(
+                            session_id,
+                            "D:/project",
+                            &admitted,
+                            || {
+                                invoked = true;
+                                if replay {
+                                    controller.reconcile_read_source(None, "3").map(|_| ())
+                                } else {
+                                    controller
+                                        .execute_command(
+                                            "provider_boundary:late",
+                                            "3",
+                                            |candidate| {
+                                                candidate.select_read_source(
+                                                    &session_id.to_string(),
+                                                    None,
+                                                    "3",
+                                                )?;
+                                                Ok(())
+                                            },
+                                        )
+                                        .map(|_| ())
+                                }
+                            },
+                        )
+                        .is_err(),
+                    "{scenario}, replay={replay}"
+                );
+                assert!(!invoked, "{scenario}, replay={replay}");
+                assert_eq!(controller.snapshot().expect("unchanged"), before);
+            }
+            // Closing and reopening independently verifies no stale command reached disk.
+            // 关闭并重开，独立验证没有过期命令写入磁盘。
+            registry
+                .begin_lifecycle_transition([session_id])
+                .expect("fence")
+                .release()
+                .expect("release");
+            assert_eq!(
+                registry
+                    .get_or_open(controller_root.v1_storage_locator(), session_id, "4")
+                    .expect("reopen")
+                    .snapshot()
+                    .expect("durable state"),
+                before
+            );
+        }
+    }
+
+    /// Verifies a repeated provider receipt cannot preserve a foreign durable cache after remote rebinding.
+    /// 验证重复 Provider 回执不能在远端重绑后保留其他来源持久缓存。
+    /// Uses a private real V1 controller, source switch and reopen; returns after durable no-op and lineage checks.
+    /// 使用私有真实 V1 控制器、来源切换及重开；完成持久无操作和沿革检查后返回。
+    #[test]
+    fn source_reconciliation_persists_after_provider_receipt_replay() {
+        // Only this test owns the private session tree and its registry.
+        // 仅本测试拥有私有会话目录树及其注册表。
+        let session_id = Uuid::new_v4();
+        // The fixture uses the same locator-based storage as production.
+        // 夹具使用与生产相同的定位器存储。
+        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        // One registry controls persistence and the later lifecycle-safe reopen.
+        // 同一注册表控制持久化和后续生命周期安全重开。
+        let registry = SessionVmmControllerRegistry::default();
+        // Open the real per-session controller.
+        // 打开真实每会话控制器。
+        let controller = registry
+            .get_or_open(controller_root.v1_storage_locator(), session_id, "1")
+            .expect("controller");
+        // Remote scope policy stays server-owned; only transport identity and exact IDs participate here.
+        // 远端范围策略仍由服务端持有；此处仅涉及传输身份和准确 ID。
+        let transport =
+            vulcan_vmm::VmmTransportConfig::from_effective(&vulcan_vmm::VmmEffectiveConfig {
+                grpc_target: "127.0.0.1:50051".to_owned(),
+                grpc_api_key: Some("synthetic-source-credential".to_owned()),
+                ..Default::default()
+            });
+        // The original source owns the provider-boundary receipt and its cached memory.
+        // 原始来源拥有 Provider 边界回执及其缓存记忆。
+        let original_source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::external(&transport, 1, 7).expect("original owner"),
+            Vec::new(),
+        )
+        .expect("original source");
+        // The next source deliberately shares the same service and user, changing only project ownership.
+        // 下一来源刻意共享同一服务和用户，仅改变项目归属。
+        let next_source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::external(&transport, 1, 8).expect("next owner"),
+            Vec::new(),
+        )
+        .expect("next source");
+        controller
+            .execute_command("provider_boundary:turn-1", "2", |candidate| {
+                candidate.select_read_source(
+                    &session_id.to_string(),
+                    Some(&original_source),
+                    "2",
+                )?;
+                candidate.apply_recall_batch(
+                    &session_id.to_string(),
+                    "user-1",
+                    &vulcan_vmm::VmmRecallBatch {
+                        ttl_turns: 3,
+                        injection_tag: "vmm".to_owned(),
+                        injection_description: "memory".to_owned(),
+                        items: vec![vulcan_vmm::ContextItem {
+                            memory_id: 11,
+                            text: "old-remote-body".to_owned(),
+                            ..Default::default()
+                        }],
+                    },
+                    "2",
+                )?;
+                candidate.register_active_turn("turn-1", "2")?;
+                candidate.consume_turn("turn-1", "3")?;
+                Ok(())
+            })
+            .expect("original cache");
+        // Replaying must still skip its mutator and return the original source, proving a separate command is required.
+        // 重放仍必须跳过变更器并返回原来源，证明需要独立命令。
+        let replay = controller
+            .execute_command("provider_boundary:turn-1", "4", |_| {
+                panic!("must not replay mutation")
+            })
+            .expect("replay");
+        assert!(!replay.applied);
+        assert_eq!(replay.state.read_source.as_ref(), Some(&original_source));
+        assert_eq!(replay.state.active_leases.len(), 1);
+        // Call exactly the helper used by the external duplicate-boundary production branch.
+        // 调用外置重复边界生产分支使用的准确辅助方法。
+        let changed = controller
+            .reconcile_read_source(Some(&next_source), "4")
+            .expect("source reconciliation");
+        assert_eq!(changed.read_source.as_ref(), Some(&next_source));
+        assert!(changed.active_leases.is_empty());
+        assert!(changed.cache_epoch.anchors.is_empty());
+        assert!(changed.pending_prompt_events.is_empty());
+        assert_eq!(
+            changed.completed_turn_sequence,
+            replay.state.completed_turn_sequence
+        );
+        assert_eq!(
+            changed.last_consumed_turn_id,
+            replay.state.last_consumed_turn_id
+        );
+        assert!(changed.has_committed_controller_command("provider_boundary:turn-1"));
+        assert_eq!(changed.committed_command_hashes.len(), 2);
+        assert_eq!(
+            controller
+                .reconcile_read_source(Some(&next_source), "5")
+                .expect("no-op"),
+            changed
+        );
+        assert!(
+            !serde_json::to_string(&changed)
+                .expect("serialized state")
+                .contains("synthetic-source-credential")
+        );
+        registry
+            .begin_lifecycle_transition([session_id])
+            .expect("fence")
+            .release()
+            .expect("release");
+        // Reopening proves the invalidation was not limited to the transient request-building copy.
+        // 重开证明失效并未局限于临时请求构建副本。
+        let reopened = registry
+            .get_or_open(controller_root.v1_storage_locator(), session_id, "6")
+            .expect("reopen");
+        assert_eq!(reopened.snapshot().expect("durable snapshot"), changed);
+        // Switching back must not resurrect old content or delete the old provider receipt.
+        // 切回不能复活旧内容，也不能删除旧 Provider 回执。
+        let returned = reopened
+            .reconcile_read_source(Some(&original_source), "7")
+            .expect("return source");
+        assert!(returned.active_leases.is_empty());
+        assert!(returned.cache_epoch.anchors.is_empty());
+        assert!(returned.has_committed_controller_command("provider_boundary:turn-1"));
+        assert_eq!(returned.committed_command_hashes.len(), 3);
+    }
 
     /// Verifies every lookup for one session returns the exact same controller instance.
     /// 验证同一会话的每次查找都返回完全相同的控制器实例。
@@ -669,6 +1248,132 @@ mod tests {
             .get_or_open(controller_root.v1_storage_locator(), session_id, "3")
             .expect("reopen controller");
         assert!(!Arc::ptr_eq(&first, &reopened));
+    }
+
+    /// Persists the exact compaction epoch without retaining old position anchors or consuming a user turn.
+    /// 持久保存准确压缩纪元，不保留旧位置锚点，也不消费用户回合。
+    /// Uses a real private cache document and verifies restart, idempotency and source replacement.
+    /// 使用真实私有缓存文档，验证重启、幂等及来源替换。
+    #[test]
+    fn compaction_epoch_reconciliation_is_durable_and_source_exact() {
+        // This root contains the validated V1 locator used by the production cache owner.
+        // 此根包含生产缓存归属方使用的已验证 V1 定位器。
+        let session_id = Uuid::new_v4();
+        let root = TestControllerRuntimeRoot::new(session_id);
+        let registry = SessionVmmControllerRegistry::default();
+        let controller = registry
+            .get_or_open(root.v1_storage_locator(), session_id, "1")
+            .expect("controller");
+        // The native owner identity is fixed explicitly; display names never participate.
+        // 显式固定原生归属身份；显示名称不参与判断。
+        let source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(1).expect("owner"),
+            vec![1],
+        )
+        .expect("source");
+        controller
+            .execute_command("original-recall", "1", |candidate| {
+                candidate.synchronize_stable_anchor_rendering(true, "1")?;
+                candidate.select_read_source(&session_id.to_string(), Some(&source), "1")?;
+                candidate.apply_recall_batch(
+                    &session_id.to_string(),
+                    "old-position",
+                    &vulcan_vmm::VmmRecallBatch {
+                        ttl_turns: 3,
+                        injection_tag: String::from("vmm"),
+                        injection_description: String::from("memory"),
+                        items: vec![vulcan_vmm::ContextItem {
+                            memory_id: 7,
+                            text: String::from("active-body"),
+                            ..Default::default()
+                        }],
+                    },
+                    "1",
+                )?;
+                Ok(())
+            })
+            .expect("seed active cache");
+        // This fixture supplies the same explicit lineage captured from the V1 owner in production.
+        // 此夹具提供与生产从 V1 归属方捕获时相同的明确沿革。
+        let context = vulcan_vmm::VmmContextEpoch::new(1, Some("9".to_owned())).expect("context");
+        let compacted = controller
+            .reconcile_context_epoch(&context, &source, "2")
+            .expect("epoch transition");
+        assert_eq!(
+            compacted.cache_epoch.covered_compaction_id.as_deref(),
+            Some("9")
+        );
+        assert!(compacted.cache_epoch.anchors.is_empty());
+        assert_eq!(compacted.active_leases.len(), 1);
+        assert!(
+            compacted
+                .pending_active_baseline_prefix()
+                .expect("pending baseline")
+                .contains("active-body")
+        );
+        assert_eq!(compacted.completed_turn_sequence, 0);
+        assert!(compacted.has_committed_controller_command("original-recall"));
+        assert_eq!(
+            controller
+                .reconcile_context_epoch(&context, &source, "3")
+                .expect("idempotent"),
+            compacted
+        );
+        registry
+            .begin_lifecycle_transition([session_id])
+            .expect("close")
+            .release()
+            .expect("release");
+        let reopened = registry
+            .get_or_open(root.v1_storage_locator(), session_id, "4")
+            .expect("restart");
+        assert_eq!(reopened.snapshot().expect("durable"), compacted);
+        reopened
+            .execute_command("bind-before-edit", "4", |candidate| {
+                candidate.bind_pending_state_to_user("same-position", "4")?;
+                Ok(())
+            })
+            .expect("bind before edit");
+        // A rewind reuses message positions but advances generation and may remove compaction altogether.
+        // 回退复用消息位置但推进代次，并可能完全移除压缩。
+        let edited_context = vulcan_vmm::VmmContextEpoch::new(2, None).expect("edited context");
+        let edited = reopened
+            .reconcile_context_epoch(&edited_context, &source, "5")
+            .expect("edit");
+        assert!(edited.cache_epoch.anchors.is_empty());
+        assert!(edited.cache_epoch.covered_compaction_id.is_none());
+        assert_eq!(edited.cache_epoch.epoch_id, edited_context.cache_epoch_id());
+        assert!(
+            edited
+                .pending_active_baseline_prefix()
+                .expect("edited baseline")
+                .contains("active-body")
+        );
+        assert!(edited.has_committed_controller_command("original-recall"));
+        assert_eq!(
+            reopened
+                .reconcile_context_epoch(&edited_context, &source, "5")
+                .expect("duplicate edit"),
+            edited
+        );
+        // A later rebind under the same compaction cannot keep the previous owner's baseline.
+        // 同一压缩后的再次绑定不能保留前归属方基线。
+        let other_source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(2).expect("other owner"),
+            vec![2],
+        )
+        .expect("other source");
+        let changed = reopened
+            .reconcile_context_epoch(&edited_context, &other_source, "6")
+            .expect("new source");
+        assert!(changed.active_leases.is_empty());
+        assert!(changed.pending_active_baseline_prefix().is_none());
+        assert!(changed.cache_epoch.covered_compaction_id.is_none());
+        assert_eq!(
+            changed.cache_epoch.epoch_id,
+            edited_context.cache_epoch_id()
+        );
+        assert_eq!(changed.read_source.as_ref(), Some(&other_source));
     }
 
     /// Verifies an obsolete flat VMM document is rejected without a rebuild path.
@@ -988,6 +1693,23 @@ mod tests {
         );
         assert_eq!(
             controller.snapshot().expect("read state after failure"),
+            initial_state
+        );
+        // A failed durable source transition must not publish the private observed projection in memory.
+        // 持久来源转换失败时不能把私有观察投影发布到内存。
+        let source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(7).expect("owner"),
+            vec![7],
+        )
+        .expect("source");
+        assert!(
+            controller
+                .reconcile_read_source(Some(&source), "3")
+                .expect_err("source persistence must fail")
+                .contains("metadata.json")
+        );
+        assert_eq!(
+            controller.snapshot().expect("state after source failure"),
             initial_state
         );
     }

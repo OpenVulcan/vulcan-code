@@ -1,0 +1,497 @@
+[
+  {
+    "name": "english",
+    "payload": "{\"user\":\"Use PostgreSQL.\",\"timeline\":[],\"assistant\":\"Confirmed.\"}",
+    "tokens": 28,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 27,
+        "selected": []
+      },
+      {
+        "max_tokens": 28,
+        "selected": []
+      },
+      {
+        "max_tokens": 29,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 46,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 76,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 77,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "chinese",
+    "payload": "{\"user\":\"我喜欢西瓜和葡萄。\",\"timeline\":[],\"assistant\":\"已记录水果偏好。\"}",
+    "tokens": 42,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 41,
+        "selected": []
+      },
+      {
+        "max_tokens": 42,
+        "selected": []
+      },
+      {
+        "max_tokens": 43,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 60,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 90,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 91,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "middle-clarification",
+    "payload": "{\"user\":\"数据库选择\",\"timeline\":[{\"type\":\"assistant\",\"content\":\"需要事务吗？\"},{\"type\":\"user\",\"content\":\"是，必须支持事务。\"}],\"assistant\":\"使用 PostgreSQL。\"}",
+    "tokens": 82,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 81,
+        "selected": []
+      },
+      {
+        "max_tokens": 82,
+        "selected": []
+      },
+      {
+        "max_tokens": 83,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 100,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 130,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 131,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "missing-final",
+    "payload": "{\"user\":\"查询数据库\",\"timeline\":[{\"type\":\"assistant\",\"content\":\"哪个环境？\"}],\"assistant\":\"\"}",
+    "tokens": 49,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 48,
+        "selected": []
+      },
+      {
+        "max_tokens": 49,
+        "selected": []
+      },
+      {
+        "max_tokens": 50,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 67,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 97,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 98,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "html-operators",
+    "payload": "{\"user\":\"Keep x \\u003c 3 \\u0026\\u0026 y \\u003e 2; \\u003ctag\\u003e is literal text.\",\"timeline\":[],\"assistant\":\"A \\u0026 B\"}",
+    "tokens": 62,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 61,
+        "selected": []
+      },
+      {
+        "max_tokens": 62,
+        "selected": []
+      },
+      {
+        "max_tokens": 63,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 80,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 110,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 111,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "unicode-separators",
+    "payload": "{\"user\":\"第一行\\u2028第二行\\u2029第三段\",\"timeline\":[],\"assistant\":\"😀 café é\"}",
+    "tokens": 44,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 43,
+        "selected": []
+      },
+      {
+        "max_tokens": 44,
+        "selected": []
+      },
+      {
+        "max_tokens": 45,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 62,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 92,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 93,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "literal-escape-text",
+    "payload": "{\"user\":\"Keep literal \\\\u003c and \\\\u2028 unchanged; actual \\u003c differs.\",\"timeline\":[],\"assistant\":\"C:\\\\users\\\\test \\u0026 next\"}",
+    "tokens": 58,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 57,
+        "selected": []
+      },
+      {
+        "max_tokens": 58,
+        "selected": []
+      },
+      {
+        "max_tokens": 59,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 76,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 106,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 107,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "json-and-control",
+    "payload": "{\"user\":\"{\\\"path\\\":\\\"C:\\\\\\\\data\\\"}\\nnext\\tcolumn\\r\\nend\",\"timeline\":[],\"assistant\":\"Quote: \\\"yes\\\"; \\\\ slash\"}",
+    "tokens": 56,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 55,
+        "selected": []
+      },
+      {
+        "max_tokens": 56,
+        "selected": []
+      },
+      {
+        "max_tokens": 57,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 74,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 104,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 105,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "name": "mixed-long",
+    "payload": "{\"user\":\"保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\\n保留业务事实 PostgreSQL transaction.\",\"timeline\":[],\"assistant\":\"最终确认。\"}",
+    "tokens": 1218,
+    "references": [
+      "旧事实：数据库使用 PostgreSQL。",
+      "中间澄清：需要事务与备份。",
+      "最新决定：每天备份，保留七天。"
+    ],
+    "budgets": [
+      {
+        "max_tokens": 0,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 1217,
+        "selected": []
+      },
+      {
+        "max_tokens": 1218,
+        "selected": []
+      },
+      {
+        "max_tokens": 1219,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 1236,
+        "selected": [
+          3
+        ]
+      },
+      {
+        "max_tokens": 1266,
+        "selected": [
+          2,
+          3
+        ]
+      },
+      {
+        "max_tokens": 1267,
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  }
+]

@@ -10,7 +10,10 @@ mod subagent;
 mod turn_stats;
 
 pub use activity::{ActivityEntry, ActivityLevel};
-pub use project::{ProjectVceSettings, TaskProjectSummary};
+pub use project::{
+    ProjectVceSettings, ProjectVceUpdateMode, TaskProjectSummary,
+    default_vce_auto_update_min_interval_seconds,
+};
 pub use runtime_state::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,

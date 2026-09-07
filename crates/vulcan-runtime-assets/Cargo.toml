@@ -10,6 +10,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Enables explicit process-local path isolation for integration test executables only.
+# 仅为集成测试可执行文件启用显式的进程局部路径隔离。
+test-support = []
+
 [dependencies]
 dirs.workspace = true
 encoding_rs.workspace = true

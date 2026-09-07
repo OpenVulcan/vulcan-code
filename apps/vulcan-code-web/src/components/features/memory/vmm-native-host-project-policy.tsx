@@ -1,0 +1,148 @@
+import * as React from "react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { useI18n } from "@/i18n"
+import type { VmmMemoryActionResult, VmmNativeHostProjectPolicyOverrides, VmmNativeHostProjectPolicySummary, VmmNativeRecallPolicySummary, VmmNativeRetrievalPolicySummary, VmmNativeTextPolicySummary } from "@/types"
+import { parseRecallDraft, recallDraft, recallFields, recallChoiceFields, recallKeys } from "./vmm-native-runtime-policy"
+import { VmmNativeDurationInput } from "./vmm-native-duration-input"
+import { VmmNativeTextPolicy } from "./vmm-native-text-policy"
+import { VmmNativeRetrievalPolicy } from "./vmm-native-retrieval-policy"
+
+// CallerPolicyProps fixes the caller identity for this mounted editor; the parent keys it by project tag.
+// CallerPolicyProps 为当前挂载编辑器固定调用方身份；父级以项目标签作为组件键。
+interface CallerPolicyProps {
+  // Exact originating host tag, independent of the bound memory-project ID.
+  // 准确发起宿主标签，独立于绑定记忆项目 ID。
+  hostProjectId: string
+  // Parent binding/configuration activity disables edits during conflicting actions.
+  // 父级绑定/配置活动在冲突动作期间禁用编辑。
+  busy: boolean
+  // Existing explicit maintenance transport, never invoked with a global write action here.
+  // 既有显式维护传输；此处绝不调用全局写入动作。
+  onRunAction: (action: string, payload?: Record<string, unknown>) => Promise<VmmMemoryActionResult | null>
+}
+
+// VmmNativeHostProjectPolicy displays group inheritance and saves exact caller overrides only.
+// VmmNativeHostProjectPolicy 展示配置组继承状态，并仅保存准确调用方覆盖。
+export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }: CallerPolicyProps) {
+  const { t } = useI18n()
+  const [policy, setPolicy] = React.useState<VmmNativeHostProjectPolicySummary | null>(null)
+  const [draft, setDraft] = React.useState<ReturnType<typeof recallDraft> | null>(null)
+  const [pending, setPending] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [saved, setSaved] = React.useState(false)
+  // Refresh is explicit and retries a failed initial read without remounting unrelated project settings.
+  // 刷新是显式操作，可重试失败的首次读取而不重新挂载无关项目设置。
+  const [refresh, setRefresh] = React.useState(0)
+  // Refs preserve exact acknowledged ownership and reject concurrent or late navigation writes.
+  // 引用保留准确已确认归属，并拒绝并发写入和导航后的迟到回复。
+  const current = React.useRef<VmmNativeHostProjectPolicySummary | null>(null)
+  const mounted = React.useRef(false)
+  const occupied = React.useRef(false)
+  const initialLoadIssued = React.useRef(false)
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+
+  // accept retains an unsaved recall draft when a sibling group alone changes.
+  // accept 在仅相邻配置组变化时保留尚未保存的召回草稿。
+  const accept = React.useCallback((next: VmmNativeHostProjectPolicySummary, resetRecall = false) => {
+    const previous = current.current
+    if (resetRecall || !previous || recallKeys.some((key) => previous.effective.recall[key] !== next.effective.recall[key])) setDraft(recallDraft(next.effective.recall))
+    current.current = next
+    setPolicy(next)
+    setError(null)
+  }, [])
+
+  React.useEffect(() => {
+    if (busy || initialLoadIssued.current) return
+    initialLoadIssued.current = true
+    occupied.current = true
+    setPending(true)
+    void onRunAction("native_host_project_policy", { hostProjectId }).then((result) => {
+      if (!mounted.current) return
+      if (result?.data.kind !== "native_host_project_policy" || result.data.value.hostProjectId !== hostProjectId) throw new Error(t("memory.policy.invalidResponse"))
+      accept(result.data.value)
+    }).catch((reason: unknown) => { if (mounted.current) setError(String(reason)) }).finally(() => {
+      occupied.current = false
+      if (mounted.current) setPending(false)
+    })
+  }, [accept, busy, hostProjectId, onRunAction, t, refresh])
+
+  // save preserves sibling groups from the latest acknowledged response; null restores live inheritance.
+  // save 从最新已确认响应保留相邻配置组；空值恢复实时继承。
+  const save = async (group: keyof VmmNativeHostProjectPolicyOverrides, value: VmmNativeRecallPolicySummary | VmmNativeRetrievalPolicySummary | VmmNativeTextPolicySummary | null) => {
+    if (!current.current || occupied.current || busy) return null
+    occupied.current = true
+    setPending(true)
+    setSaved(false)
+    try {
+      const result = await onRunAction("native_host_project_policy_update", { hostProjectId, overrides: { ...current.current.overrides, [group]: value } })
+      if (!mounted.current) return null
+      if (result?.data.kind !== "native_host_project_policy" || result.data.value.hostProjectId !== hostProjectId) throw new Error(t("memory.policy.invalidResponse"))
+      accept(result.data.value, group === "recall")
+      setSaved(true)
+      return result
+    } catch (reason) {
+      if (mounted.current) setError(String(reason))
+      return null
+    } finally {
+      occupied.current = false
+      if (mounted.current) setPending(false)
+    }
+  }
+
+  // saveChild adapts the existing typed field editors to the caller endpoint, never to a global mutation.
+  // saveChild 将既有强类型字段编辑器适配到调用方端点，绝不适配到全局变更。
+  const saveChild = async (action: string, payload?: Record<string, unknown>): Promise<VmmMemoryActionResult | null> => {
+    if (!payload) throw new Error(t("memory.policy.invalidResponse"))
+    let result: VmmMemoryActionResult | null
+    if (action === "native_text_policy_update") result = await save("text", payload as unknown as VmmNativeTextPolicySummary)
+    else if (action === "native_retrieval_policy_update") result = await save("retrieval", payload as unknown as VmmNativeRetrievalPolicySummary)
+    else throw new Error("Unsupported caller policy editor action")
+    if (result?.data.kind !== "native_host_project_policy") return null
+    // Only the view-model envelope changes; all values come from the acknowledged caller response.
+    // 仅改变视图模型信封；全部值均来自已确认调用方响应。
+    const value = result.data.value.effective
+    return { ...result, kind: "native_runtime_policy", response: value, data: { kind: "native_runtime_policy", value } }
+  }
+  const parsed = draft ? parseRecallDraft(draft) : null
+  const disabled = busy || pending
+  // inheritance renders the current source and an explicit independent reset for one group.
+  // inheritance 渲染当前来源及单个配置组的显式独立重置。
+  const inheritance = (group: keyof VmmNativeHostProjectPolicyOverrides) => <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+    <span>{t(policy!.overrides[group] === null ? "memory.hostPolicy.inherited" : "memory.hostPolicy.overridden")}</span>
+    <Button variant="outline" disabled={disabled || policy!.overrides[group] === null} onClick={() => void save(group, null)}>{t("memory.hostPolicy.inherit")}</Button>
+  </div>
+  return <section className="space-y-4 rounded-lg border p-3">
+    <h3 className="font-medium">{t("memory.hostPolicy.title")}</h3>
+    <p className="text-sm text-muted-foreground">{t("memory.hostPolicy.description")}</p>
+    <Button variant="outline" disabled={disabled} onClick={() => { initialLoadIssued.current = false; setRefresh((value) => value + 1); setSaved(false) }}>{t("memory.data.refresh")}</Button>
+    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    {saved ? <p role="status">{t("memory.hostPolicy.saved")}</p> : null}
+    {policy && draft ? <>
+      <div className="space-y-3"><h4 className="font-medium">{t("memory.policy.title")}</h4>{inheritance("recall")}
+        <div className="grid gap-3 sm:grid-cols-2">{recallFields.map((field) => <div key={field.key} className="space-y-1">
+          <Label htmlFor={`caller-policy-${field.key}`}>{t(field.label)}</Label>
+          {field.key === "postactionMemoryExpiryMs" ? <VmmNativeDurationInput id={`caller-policy-${field.key}`} value={draft[field.key]} disabled={disabled} onChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }} /> : <Input id={`caller-policy-${field.key}`} type="number" min={field.min} max={field.max} step={field.step} disabled={disabled} value={draft[field.key]}
+            onChange={(event) => { setDraft({ ...draft, [field.key]: event.target.value }); setSaved(false) }} />}
+        </div>)}{recallChoiceFields.map((field) => <div key={field.key} className="space-y-1">
+          <Label htmlFor={`caller-policy-${field.key}`}>{t(field.label)}</Label>
+          <Select disabled={disabled} value={draft[field.key]} onValueChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }}>
+            <SelectTrigger id={`caller-policy-${field.key}`} className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{field.options.map((option) => <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>)}</div>
+        <p className="text-xs text-muted-foreground">{t("memory.policy.extractedHint")}</p>
+        {!parsed ? <p role="alert">{t("memory.policy.invalidValues")}</p> : null}
+        <Button disabled={disabled || !parsed} onClick={() => { if (parsed) void save("recall", parsed) }}>{t("memory.policy.save")}</Button>
+      </div>
+      <div className="space-y-2">{inheritance("retrieval")}
+        <VmmNativeRetrievalPolicy settings={policy.effective.retrieval} defaults={policy.effective.retrievalDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
+      </div>
+      <div className="space-y-2">{inheritance("text")}
+        <VmmNativeTextPolicy settings={policy.effective.text} defaults={policy.effective.textDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
+      </div>
+    </> : pending ? <p className="text-sm">{t("memory.common.loading")}</p> : null}
+  </section>
+}

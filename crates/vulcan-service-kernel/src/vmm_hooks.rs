@@ -24,6 +24,9 @@ use crate::{
     load_project_configuration, webui_trace, workspace_task_projects_including_archived,
 };
 
+#[path = "vmm_global_mode_projection.rs"]
+mod global_mode_projection;
+
 /// Process-local project VMM layer cache keyed by normalized workspace path.
 /// 按规范化工作区路径索引的进程内项目 VMM 配置层缓存。
 static PROJECT_VMM_LAYER_CACHE: OnceLock<ProjectVmmLayerCache> = OnceLock::new();
@@ -263,10 +266,45 @@ pub(super) fn refresh_guard_vmm_hook_snapshot(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
 ) -> Result<(), String> {
+    // Global activation cannot be overridden by a project; observe it without fabricated session IDs.
+    // 项目不能覆盖全局启用状态；不虚构会话 ID 来观察它。
+    let next = vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
+    let next_mode = next.enabled.then_some(next.backend_mode);
+    let mut reset_sources = next_mode.is_none();
     if let Some(agent_runtime) = guard.agent_runtime.as_ref() {
+        reset_sources |= agent_runtime.vmm_hook_runtime.global_memory_mode()? != next_mode;
         agent_runtime
             .vmm_hook_runtime
             .replace_global_projection(&provider_configuration.vmm)?;
+    }
+    if reset_sources {
+        global_mode_projection::clear_global_mode_caches(guard)?;
+    }
+    reconcile_vmm_writeback_mirrors(guard)?;
+    Ok(())
+}
+
+/// Removes revoked pending work from active and archived process-local UI mirrors using the hook admission authority.
+/// 使用 Hook 准入权威，从活动及归档的进程内界面镜像移除已撤销待处理工作。
+/// Takes the already-locked service state; does not delete accepted memory or acquire the service lock recursively.
+/// 接收已加锁服务状态；不删除已接受记忆，也不递归取得服务锁。
+pub(crate) fn reconcile_vmm_writeback_mirrors(
+    guard: &mut ServiceBridgeState,
+) -> Result<(), String> {
+    let Some(agent_runtime) = guard.agent_runtime.as_ref() else {
+        return Ok(());
+    };
+    let Some(workspace) = guard.workspace_snapshot.as_mut() else {
+        return Ok(());
+    };
+    for (session_id, runtime_state) in workspace
+        .session_runtime_state
+        .iter_mut()
+        .chain(workspace.archived_session_runtime_state.iter_mut())
+    {
+        runtime_state.vmm_writeback_outbox = agent_runtime
+            .vmm_hook_runtime
+            .current_writeback_outbox(*session_id, &runtime_state.vmm_writeback_outbox)?;
     }
     Ok(())
 }
@@ -292,7 +330,7 @@ pub(super) fn refresh_exact_vmm_hook_project_projection(
     workspace_path: &str,
     project: &vulcan_vmm::VmmConfigLayer,
 ) -> Result<(), String> {
-    let guard = state
+    let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     if let Some(agent_runtime) = guard.agent_runtime.as_ref() {
@@ -300,6 +338,7 @@ pub(super) fn refresh_exact_vmm_hook_project_projection(
             .vmm_hook_runtime
             .replace_project_projection(workspace_path, project)?;
     }
+    reconcile_vmm_writeback_mirrors(&mut guard)?;
     Ok(())
 }
 
@@ -367,6 +406,7 @@ pub(super) fn build_vmm_hook_config_snapshot(
         last_compaction_ids.insert(session_key, runtime_state.last_compaction_id.clone());
     }
     let snapshot = VmmHookConfigSnapshot {
+        writeback_admissions: Default::default(),
         global: provider_configuration.vmm.clone(),
         projects_by_workspace,
         sessions,
@@ -458,16 +498,22 @@ pub(super) fn apply_vmm_writeback_effects_to_runtime_state(
             // SessionStatus is committed by the Core VMM controller before ordinary runtime effects are applied.
             // SessionStatus 会在应用普通运行时效果前由 Core VMM 控制器提交。
             VmmWritebackHookEffect::SessionStatus { .. } => {}
-            VmmWritebackHookEffect::Flushed { entry_ids } => {
+            VmmWritebackHookEffect::Flushed { entry_ids }
+            | VmmWritebackHookEffect::Cancelled { entry_ids, .. } => {
                 let ids = entry_ids.into_iter().collect::<BTreeSet<_>>();
                 runtime_state
                     .vmm_writeback_outbox
                     .retain(|entry| !ids.contains(&entry.id));
             }
-            VmmWritebackHookEffect::Enqueue { request, error } => {
+            VmmWritebackHookEffect::Enqueue {
+                permit_id,
+                request,
+                error,
+            } => {
                 let id = format!(
-                    "vmm-outbox-{}-{}",
+                    "vmm-outbox-{}-{}-{}",
                     request.session_id,
+                    permit_id,
                     stable_vmm_outbox_request_hash(&request)
                 );
                 if let Some(existing) = runtime_state
@@ -482,6 +528,7 @@ pub(super) fn apply_vmm_writeback_effects_to_runtime_state(
                 } else {
                     runtime_state.vmm_writeback_outbox.push(
                         vulcan_workbench_model::VmmWritebackOutboxEntry {
+                            permit_id,
                             id,
                             request,
                             attempt_count: 1,
@@ -521,6 +568,27 @@ pub(super) fn apply_vmm_writeback_effects_to_runtime_state(
 /// 返回仅用于持久化 outbox 身份的确定性非加密哈希。
 fn stable_vmm_outbox_request_hash(request: &vulcan_vmm::PostActionRequest) -> u64 {
     let mut hasher = StableVmmOutboxHasher::default();
+    // Scope queue identity to the logical host turn and its exact destination, not just repeated prose.
+    // 队列身份属于逻辑宿主回合及准确目的地，不仅仅取决于重复正文。
+    hasher.write_str(&request.operation_id);
+    hasher.write_str(&request.host_project_id);
+    match &request.expected_source {
+        Some(vulcan_vmm::VmmMemorySource::Native { project_id }) => {
+            hasher.write_str("native");
+            hasher.write_u64(*project_id);
+        }
+        Some(vulcan_vmm::VmmMemorySource::ExternalGrpc {
+            route_hash,
+            user_id,
+            project_id,
+        }) => {
+            hasher.write_str("external_grpc");
+            hasher.write_str(route_hash);
+            hasher.write_u64(*user_id);
+            hasher.write_u64(*project_id);
+        }
+        None => hasher.write_str("unresolved"),
+    }
     hasher.write_str(&request.session_id);
     hasher.write_u64(request.user_id);
     hasher.write_u64(request.project_id);
@@ -708,6 +776,7 @@ mod tests {
     /// 为写回测试构建稳定的 PostAction 请求。
     fn test_post_action_request() -> vulcan_vmm::PostActionRequest {
         vulcan_vmm::PostActionRequest {
+            expected_source: Some(vulcan_vmm::VmmMemorySource::native(11).expect("test source")),
             operation_id: String::from("turn-a"),
             session_id: String::from("session-a"),
             user_id: 7,
@@ -733,6 +802,7 @@ mod tests {
         runtime_state
             .vmm_writeback_outbox
             .push(VmmWritebackOutboxEntry {
+                permit_id: 1,
                 id: String::from("outbox-a"),
                 request: test_post_action_request(),
                 attempt_count: 1,
@@ -798,6 +868,7 @@ mod tests {
         apply_vmm_writeback_effects_to_runtime_state(
             &mut runtime_state,
             vec![VmmWritebackHookEffect::Enqueue {
+                permit_id: 1,
                 request: request.clone(),
                 error: String::from("offline"),
             }],
@@ -815,6 +886,7 @@ mod tests {
         apply_vmm_writeback_effects_to_runtime_state(
             &mut runtime_state,
             vec![VmmWritebackHookEffect::Enqueue {
+                permit_id: 1,
                 request,
                 error: String::from("still offline"),
             }],
@@ -849,5 +921,73 @@ mod tests {
         );
 
         assert!(runtime_state.vmm_writeback_outbox.is_empty());
+    }
+
+    /// Keeps repeated prompts in different turns and destinations distinct, then cancels only the selected queue ID.
+    /// 区分不同回合及目的地的重复提示词，然后仅取消选中的队列 ID。
+    #[test]
+    fn writeback_identity_and_cancellation_preserve_other_turns_and_sources() {
+        // Identical content cannot merge distinct turn identities or actual native bindings.
+        // 相同正文不能合并不同回合身份或实际原生绑定。
+        let first = test_post_action_request();
+        let mut second = first.clone();
+        second.operation_id = "turn-b".to_owned();
+        let mut rebound = first.clone();
+        rebound.expected_source = Some(vulcan_vmm::VmmMemorySource::native(12).expect("rebound"));
+        assert_ne!(
+            stable_vmm_outbox_request_hash(&first),
+            stable_vmm_outbox_request_hash(&second)
+        );
+        assert_ne!(
+            stable_vmm_outbox_request_hash(&first),
+            stable_vmm_outbox_request_hash(&rebound)
+        );
+        // The actual effect consumer must remove only cancelled pending entries and ignore their late Failed effect.
+        // 实际效果消费方必须仅移除已取消待处理项，并忽略其迟到的 Failed 效果。
+        let mut state = SessionRuntimeStateEntry::default();
+        apply_vmm_writeback_effects_to_runtime_state(
+            &mut state,
+            vec![
+                VmmWritebackHookEffect::Enqueue {
+                    permit_id: 1,
+                    request: first,
+                    error: "offline".to_owned(),
+                },
+                VmmWritebackHookEffect::Enqueue {
+                    permit_id: 1,
+                    request: second,
+                    error: "offline".to_owned(),
+                },
+                VmmWritebackHookEffect::Enqueue {
+                    permit_id: 1,
+                    request: rebound,
+                    error: "offline".to_owned(),
+                },
+            ],
+            "1",
+        );
+        assert_eq!(state.vmm_writeback_outbox.len(), 3);
+        let cancelled_id = state.vmm_writeback_outbox[0].id.clone();
+        apply_vmm_writeback_effects_to_runtime_state(
+            &mut state,
+            vec![
+                VmmWritebackHookEffect::Cancelled {
+                    entry_ids: vec![cancelled_id.clone()],
+                    reason: "source changed".to_owned(),
+                },
+                VmmWritebackHookEffect::Failed {
+                    entry_id: cancelled_id.clone(),
+                    error: "late".to_owned(),
+                },
+            ],
+            "2",
+        );
+        assert_eq!(state.vmm_writeback_outbox.len(), 2);
+        assert!(
+            state
+                .vmm_writeback_outbox
+                .iter()
+                .all(|entry| entry.id != cancelled_id && entry.attempt_count == 1)
+        );
     }
 }

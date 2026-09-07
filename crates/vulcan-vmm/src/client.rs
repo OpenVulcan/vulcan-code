@@ -119,6 +119,28 @@ pub fn process_native_vmm_client() -> Result<Arc<dyn VmmClient>, VmmClientError>
 /// 异步 VMM 客户端抽象。
 #[async_trait]
 pub trait VmmClient: Send + Sync {
+    /// Resolves the actual memory owner for cache admission without running AI or remote management.
+    /// 解析缓存准入的实际记忆归属，不运行 AI 或远端管理。
+    /// Takes the host binding identity and request envelope IDs; returns an exact source identity.
+    /// 接收宿主绑定身份及请求封套 ID；返回准确来源身份。
+    async fn memory_source(
+        &self,
+        host_project_id: &str,
+        user_id: u64,
+        project_id: u64,
+    ) -> Result<crate::VmmMemorySource, VmmClientError>;
+
+    /// Resolves read ownership and native linked visibility without AI or remote management calls.
+    /// 不调用 AI 或远端管理，解析读取归属及原生连带可见范围。
+    /// Takes exact host and envelope identities; returns the complete local read source.
+    /// 接收准确宿主及封套身份；返回完整本地读取来源。
+    async fn memory_read_source(
+        &self,
+        host_project_id: &str,
+        user_id: u64,
+        project_id: u64,
+    ) -> Result<crate::VmmMemoryReadSource, VmmClientError>;
+
     /// Calls VMM Healthz.
     /// 调用 VMM Healthz。
     async fn healthz(&self) -> Result<HealthzResponse, VmmClientError>;
@@ -204,6 +226,16 @@ pub trait VmmClient: Send + Sync {
     async fn post_action(
         &self,
         request: PostActionRequest,
+    ) -> Result<PostActionResponse, VmmClientError>;
+
+    /// Delivers a queued host request under its revocable process-local admission generation.
+    /// 在可撤销进程内准入代次下投递排队宿主请求。
+    /// Takes a source-frozen request and live permit; returns acceptance or explicit terminal cancellation.
+    /// 接收来源冻结请求及活动许可；返回接受结果或明确终态取消。
+    async fn post_action_with_permit(
+        &self,
+        request: PostActionRequest,
+        permit: &crate::VmmWritebackPermit,
     ) -> Result<PostActionResponse, VmmClientError>;
 
     /// Calls VMM ChatCompact.

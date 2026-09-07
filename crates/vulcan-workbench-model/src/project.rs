@@ -5,6 +5,29 @@ use crate::SessionId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Project-owned index update policy, independent from any conversation.
+/// 项目自有的索引更新策略，与任何会话无关。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectVceUpdateMode {
+    /// Only an explicit user sync command may update the initialized index.
+    /// 只有用户明确同步命令才允许更新已初始化索引。
+    #[default]
+    Manual,
+    /// Authorized workspace file events may request incremental updates.
+    /// 获授权的工作区文件事件可以请求增量更新。
+    Automatic,
+}
+
+/// Return the conservative runtime default without persisting a policy during reads.
+/// 返回保守的运行时默认值，不在读取时持久化策略。
+///
+/// Takes no parameters and returns the five-minute automatic admission interval in seconds.
+/// 无参数，返回五分钟自动受理间隔对应的秒数。
+pub const fn default_vce_auto_update_min_interval_seconds() -> u32 {
+    300
+}
+
 /// Persisted project-owned settings for the native code-semantic index.
 /// 原生代码语义索引使用的项目自有持久化设置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,6 +36,14 @@ pub struct ProjectVceSettings {
     /// Whether the native code-semantic index is enabled for this project.
     /// 此项目是否启用原生代码语义索引。
     pub enabled: bool,
+    /// Explicit project update policy; legacy documents default to manual in memory only.
+    /// 明确项目更新策略；旧文档仅在内存中缺省为手动。
+    #[serde(default)]
+    pub update_mode: ProjectVceUpdateMode,
+    /// Minimum interval between automatic admissions; manual requests bypass this interval.
+    /// 两次自动受理之间的最低间隔；手动请求不受此间隔限制。
+    #[serde(default = "default_vce_auto_update_min_interval_seconds")]
+    pub auto_update_min_interval_seconds: u32,
     /// Optimistic settings revision incremented by every accepted update.
     /// 每次接受更新时递增的乐观设置修订号。
     pub revision: u64,
@@ -51,6 +82,8 @@ impl Default for ProjectVceSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            update_mode: ProjectVceUpdateMode::Manual,
+            auto_update_min_interval_seconds: default_vce_auto_update_min_interval_seconds(),
             revision: 1,
             migrated_from_codebase_memory: false,
             max_file_bytes: 1_048_576,
@@ -74,6 +107,11 @@ impl ProjectVceSettings {
     /// Success for a bounded internally consistent settings record, otherwise a stable error.
     /// 设置记录有界且内部一致时返回成功，否则返回稳定错误。
     pub fn validate(&self) -> Result<(), String> {
+        if !(60..=86_400).contains(&self.auto_update_min_interval_seconds) {
+            return Err(String::from(
+                "语义索引自动更新最低间隔必须位于 1 到 1440 分钟。",
+            ));
+        }
         if self.revision == 0 {
             return Err(String::from("VCE 设置修订号必须大于零。"));
         }
@@ -110,7 +148,50 @@ impl ProjectVceSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::ProjectVceSettings;
+    use super::{ProjectVceSettings, ProjectVceUpdateMode};
+
+    /// Check legacy settings read as manual while invalid explicit policies are rejected.
+    /// 验证旧设置读取为手动，同时拒绝无效的明确策略。
+    ///
+    /// Takes no parameters and returns nothing; asserts defaults, wire values and bounds.
+    /// 无参数、无返回值；断言默认值、序列化值和边界。
+    #[test]
+    fn project_vce_update_policy_defaults_and_validation() {
+        // legacy simulates a persisted document predating the two project policy fields.
+        // legacy 模拟两个项目策略字段出现前的持久化文档。
+        let mut legacy = serde_json::to_value(ProjectVceSettings::default()).expect("serialize");
+        legacy.as_object_mut().expect("object").remove("updateMode");
+        legacy
+            .as_object_mut()
+            .expect("object")
+            .remove("autoUpdateMinIntervalSeconds");
+        // settings materializes defaults without rewriting the input document.
+        // settings 仅形成内存默认值，不改写输入文档。
+        let settings: ProjectVceSettings = serde_json::from_value(legacy.clone()).expect("legacy");
+        assert_eq!(settings.update_mode, ProjectVceUpdateMode::Manual);
+        assert_eq!(settings.auto_update_min_interval_seconds, 300);
+        assert!(legacy.get("updateMode").is_none());
+        for interval in [0, 59, 86_401, u32::MAX] {
+            // invalid changes only the interval so the exact rejection is exercised.
+            // invalid 仅改变间隔，以检验精确拒绝规则。
+            let invalid = ProjectVceSettings {
+                auto_update_min_interval_seconds: interval,
+                ..settings.clone()
+            };
+            assert!(invalid.validate().is_err());
+        }
+        for interval in [60, 300, 86_400] {
+            // valid spans the supported minimum, default and maximum.
+            // valid 覆盖支持的最小值、默认值和最大值。
+            let valid = ProjectVceSettings {
+                auto_update_min_interval_seconds: interval,
+                ..settings.clone()
+            };
+            assert!(valid.validate().is_ok());
+        }
+        legacy["updateMode"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<ProjectVceSettings>(legacy).is_err());
+    }
 
     /// Verifies the persisted VCE defaults remain bounded and internally valid.
     /// 验证持久化 VCE 默认值保持有界且内部有效。

@@ -12,8 +12,8 @@ use super::*;
 ///
 /// # Returns / 返回值
 ///
-/// Success after the exact project row is committed, or an explicit storage error.
-/// 精确项目记录提交后返回成功，否则返回显式存储错误。
+/// Success after the project and its initial semantic settings commit together, or an explicit error.
+/// 项目及其初始语义设置共同提交后返回成功，否则返回显式错误。
 async fn upsert_active_project(
     controller: &ControllerRuntimeHandle,
     project: &TaskProjectSummary,
@@ -25,16 +25,35 @@ async fn upsert_active_project(
     // sort_order 使用受检查转换，避免项目顺序在宽 usize 宿主上发生截断。
     let sort_order = i64::try_from(project.order)
         .map_err(|_| String::from("写入活动项目失败：项目顺序超出 SQLite 整数范围。"))?;
-    project
-        .vce
-        .validate()
-        .map_err(|error| format!("写入活动项目失败：{error}"))?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    // Validate and encode both rows before the controller can commit any project metadata.
+    // 在控制器可能提交任何项目元数据之前，完成两条记录的校验和编码。
+    let vce_values = project_persistence_sql_values(&project_vce_settings_params(
+        &project.id,
+        &project.vce,
+        now.clone(),
+    )?)?;
+    // Preserve the existing typed field order, including SQL NULL for absent icon overrides.
+    // 保持既有强类型字段顺序，包括缺失图标覆盖对应的 SQL NULL。
+    let project_values = project_persistence_sql_values(&[
+        ControllerSqliteValue::String(project.id.clone()),
+        ControllerSqliteValue::String(project.title.clone()),
+        ControllerSqliteValue::String(project.path.clone()),
+        ControllerSqliteValue::Int64(i64::from(project.pinned)),
+        ControllerSqliteValue::Int64(0),
+        ControllerSqliteValue::Int64(sort_order),
+        optional_sqlite_string(&project.icon_pack),
+        optional_sqlite_string(&project.icon_key),
+        ControllerSqliteValue::Int64(i64::from(project.codebase_memory_enabled)),
+        ControllerSqliteValue::String(now.clone()),
+        ControllerSqliteValue::String(now),
+    ])?;
+    // Client 0.2.3 binds parameters to one statement only; this script owns the entire transaction.
+    // 客户端 0.2.3 仅向单条语句绑定参数；此脚本持有整个事务。
+    // Keep BEGIN and COMMIT on the same backend-owned connection, never across separate RPCs.
+    // 将 BEGIN 和 COMMIT 保留在同一后端连接内，绝不跨多个远程请求拆分。
+    let statement = format!(
+        r#"
+BEGIN IMMEDIATE;
 INSERT INTO projects (
     id,
     name,
@@ -47,7 +66,7 @@ INSERT INTO projects (
     codebase_memory_enabled,
     created_at,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+) VALUES ({project_values})
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     root_path = excluded.root_path,
@@ -56,30 +75,6 @@ ON CONFLICT(id) DO UPDATE SET
     sort_order = excluded.sort_order,
     codebase_memory_enabled = excluded.codebase_memory_enabled,
     updated_at = excluded.updated_at;
-"#,
-            vec![vec![
-                ControllerSqliteValue::String(project.id.clone()),
-                ControllerSqliteValue::String(project.title.clone()),
-                ControllerSqliteValue::String(project.path.clone()),
-                ControllerSqliteValue::Int64(i64::from(project.pinned)),
-                ControllerSqliteValue::Int64(0),
-                ControllerSqliteValue::Int64(sort_order),
-                optional_sqlite_string(&project.icon_pack),
-                optional_sqlite_string(&project.icon_key),
-                ControllerSqliteValue::Int64(i64::from(project.codebase_memory_enabled)),
-                ControllerSqliteValue::String(now.clone()),
-                ControllerSqliteValue::String(now),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("写入活动项目失败：{error}"))?;
-
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
 INSERT INTO project_vce_settings (
     project_id,
     enabled,
@@ -93,16 +88,54 @@ INSERT INTO project_vce_settings (
     query_max_concurrency,
     max_results,
     max_context_chars,
-    updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+    updated_at,
+    update_mode,
+    auto_update_min_interval_seconds
+) VALUES ({vce_values})
 ON CONFLICT(project_id) DO NOTHING;
+COMMIT;
 "#,
-            project_vce_settings_params(&project.id, &project.vce, current_unix_millis_text())?,
+    );
+    controller
+        .client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            statement,
+            Vec::new(),
         )
         .await
-        .map_err(|error| format!("写入活动项目 VCE 设置失败：{error}"))?;
+        .map_err(|error| format!("写入活动项目及 VCE 设置事务失败：{error}"))?;
 
     Ok(())
+}
+
+/// Encode the exact scalar subset produced by the project and VCE parameter builders.
+/// 编码项目及 VCE 参数构建器产生的精确标量子集。
+/// `parameters` contains ordered integers, text, or NULL; returns SQL values or an explicit type error.
+/// `parameters` 包含有序整数、文本或 NULL；返回 SQL 值，或明确的类型错误。
+fn project_persistence_sql_values(parameters: &[ControllerSqliteValue]) -> Result<String, String> {
+    parameters
+        .iter()
+        .map(|parameter| match parameter {
+            ControllerSqliteValue::Int64(value) => Ok(value.to_string()),
+            ControllerSqliteValue::Null => Ok(String::from("NULL")),
+            // Escape quotes before introducing literal NUL concatenation; source text never becomes SQL syntax.
+            // 先转义引号，再引入字面空字符拼接；源文本绝不成为 SQL 语法。
+            // Preserve text as text regardless of the database encoding.
+            // 无论数据库编码如何，都将文本保留为文本类型。
+            ControllerSqliteValue::String(value) => Ok(format!(
+                "'{}'",
+                value.replace('\'', "''").replace('\0', "' || char(0) || '")
+            )),
+            ControllerSqliteValue::Float64(_)
+            | ControllerSqliteValue::Bytes(_)
+            | ControllerSqliteValue::Bool(_) => {
+                Err(String::from("项目持久化参数只能使用整数、文本或 NULL。"))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| values.join(", "))
 }
 
 /// Encodes one validated project VCE settings row into stable SQLite parameters.
@@ -141,6 +174,11 @@ fn project_vce_settings_params(
         ControllerSqliteValue::Int64(max_results),
         ControllerSqliteValue::Int64(max_context_chars),
         ControllerSqliteValue::String(updated_at),
+        ControllerSqliteValue::String(match settings.update_mode {
+            vulcan_workbench_model::ProjectVceUpdateMode::Manual => String::from("manual"),
+            vulcan_workbench_model::ProjectVceUpdateMode::Automatic => String::from("automatic"),
+        }),
+        ControllerSqliteValue::Int64(i64::from(settings.auto_update_min_interval_seconds)),
     ])
 }
 
@@ -883,9 +921,11 @@ SET enabled = ?2,
     query_max_concurrency = ?10,
     max_results = ?11,
     max_context_chars = ?12,
-    updated_at = ?13
+    updated_at = ?13,
+    update_mode = ?14,
+    auto_update_min_interval_seconds = ?15
 WHERE project_id = ?1
-  AND revision = ?14
+  AND revision = ?16
   AND EXISTS (
       SELECT 1 FROM projects
       WHERE projects.id = project_vce_settings.project_id AND projects.archived = 0
@@ -1136,12 +1176,42 @@ mod tests {
             .collect()
     }
 
+    /// Verify project SQL encoding preserves text boundaries and rejects unsupported scalar kinds.
+    /// 验证项目 SQL 编码保留文本边界，并拒绝不支持的标量种类。
+    /// No inputs or output; checks the exact encoder used by the atomic creation request.
+    /// 无输入或输出；检查原子创建请求使用的精确编码器。
+    #[test]
+    fn project_persistence_values_preserve_exact_scalar_types() {
+        assert_eq!(
+            project_persistence_sql_values(&[
+                ControllerSqliteValue::Int64(i64::MIN),
+                ControllerSqliteValue::Int64(i64::MAX),
+                ControllerSqliteValue::Null,
+                ControllerSqliteValue::String(String::from("中文'\0;--")),
+                ControllerSqliteValue::String(String::new()),
+            ])
+            .expect("project scalar subset"),
+            "-9223372036854775808, 9223372036854775807, NULL, '中文''' || char(0) || ';--', ''",
+        );
+        // These real protocol variants are not produced by either project parameter builder.
+        // 两个项目参数构建器都不会产生这些真实协议变体。
+        for unsupported in [
+            ControllerSqliteValue::Float64(1.5),
+            ControllerSqliteValue::Bytes(vec![1]),
+            ControllerSqliteValue::Bool(true),
+        ] {
+            assert!(project_persistence_sql_values(&[unsupported]).is_err());
+        }
+    }
+
     /// Verifies VCE settings encode every persisted field in the SQL placeholder order.
     /// 验证 VCE 设置会按 SQL 占位符顺序编码全部持久化字段。
     #[test]
     fn project_vce_settings_parameters_preserve_typed_contract() {
         let settings = ProjectVceSettings {
             enabled: true,
+            update_mode: vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
+            auto_update_min_interval_seconds: 600,
             revision: 7,
             migrated_from_codebase_memory: true,
             max_file_bytes: 2_097_152,
@@ -1161,7 +1231,7 @@ mod tests {
         )
         .expect("encode valid VCE settings");
 
-        assert_eq!(parameters.len(), 13);
+        assert_eq!(parameters.len(), 15);
         assert_eq!(
             parameters,
             vec![
@@ -1178,6 +1248,8 @@ mod tests {
                 ControllerSqliteValue::Int64(12),
                 ControllerSqliteValue::Int64(48_000),
                 ControllerSqliteValue::String(String::from("2026-09-04T00:00:00Z")),
+                ControllerSqliteValue::String(String::from("automatic")),
+                ControllerSqliteValue::Int64(600),
             ]
         );
     }

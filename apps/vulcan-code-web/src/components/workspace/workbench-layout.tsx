@@ -1,4 +1,6 @@
 import React from "react";
+import { VceProjectSurfaceProvider } from "@/components/features/code-context/vce-project-surface";
+import { VceJobObserverProvider } from "@/components/features/code-context/vce-job-observer-context";
 import {
   FeatureShell as ExtractedFeatureShell,
   primaryFeatureAreas as buildPrimaryFeatureAreas,
@@ -993,6 +995,9 @@ export function WorkbenchLayout(props: {
   // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
   // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
   const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
+  // Semantic controls follow the conversation owner, not an independently selected terminal project.
+  // 语义控件跟随会话归属，而非独立选择的终端项目。
+  const selectedVceProject = workbenchState.projects.find((project) => project.id === selectedRouteProjectId) ?? null;
   // activeProject resolves the explicit owner used by project-level floating tools.
   // activeProject 解析项目级浮动工具使用的明确归属项目。
   const activeProject = workbenchState.projects.find((project) => project.id === activeProjectId) ?? null;
@@ -1891,6 +1896,14 @@ export function WorkbenchLayout(props: {
 
   return (
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
+      <VceJobObserverProvider serviceEpoch={props.serviceInstanceEpoch}>
+      <VceProjectSurfaceProvider
+      projectId={selectedVceProject?.id ?? null}
+      projectEnabled={selectedVceProject?.vceEnabled === true}
+      revisionKey={`${props.serviceInstanceEpoch}:${globalProjectSettingsRevision.vce}:${selectedVceProject ? projectSettingsRevisionById[selectedVceProject.id]?.vce ?? 0 : 0}`}
+      onOpenEngineSettings={() => { handleOpenWorkspaceSkills(); setActiveWorkbenchSkillSubArea("context-engine"); }}
+      onOpenProjectSettings={() => { if (selectedVceProject) setProjectSettingsTarget({ project: selectedVceProject, initialSection: "code-context" }); }}
+    >
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
       {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
@@ -2095,6 +2108,11 @@ export function WorkbenchLayout(props: {
         }}
         onCancelProjectIcon={() => setProjectIconTarget(null)}
         onCancelProjectSettings={() => setProjectSettingsTarget(null)}
+        onOpenEngineSettings={() => {
+          setProjectSettingsTarget(null);
+          handleOpenWorkspaceSkills();
+          setActiveWorkbenchSkillSubArea("context-engine");
+        }}
         onCancelRemoveProject={() => {
           if (!removeProjectSubmitting) {
             setRemoveProjectTarget(null);
@@ -2120,6 +2138,8 @@ export function WorkbenchLayout(props: {
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
       />
     </div>
+      </VceProjectSurfaceProvider>
+      </VceJobObserverProvider>
     </ComposerMediaUploadProgressContext.Provider>
   );
 }

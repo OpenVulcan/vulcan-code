@@ -2,6 +2,8 @@
 //! VMM memory actions 辅助逻辑。
 
 use super::*;
+#[path = "session_list.rs"]
+mod session_list;
 use crate::{
     commit_and_emit_project_settings_changed_delta,
     emit_context_injection_changed_delta_for_session, emit_workbench_event,
@@ -52,6 +54,14 @@ pub(crate) async fn service_run_vmm_memory_action(
         request.action.trim(),
         "native_project_catalog"
             | "native_memory_records"
+            | "native_session_list"
+            | "native_removal_impact"
+            | "native_removal_preview"
+            | "native_removal_recycle"
+            | "native_session_archive_preview"
+            | "native_session_archive"
+            | "native_session_restart_preview"
+            | "native_session_restart"
             | "native_profile_records"
             | "native_project_create_and_bind"
             | "native_project_bind_existing"
@@ -66,6 +76,18 @@ pub(crate) async fn service_run_vmm_memory_action(
             | "native_project_clear_preview"
             | "native_project_clear"
             | "native_resource_catalog"
+            | "native_runtime_policy"
+            | "native_host_project_policy"
+            | "native_host_project_policy_update"
+            | "native_runtime_policy_update"
+            | "native_retrieval_policy_update"
+            | "native_text_policy_update"
+            | "native_profile_policy_update"
+            | "native_retention_settings_update"
+            | "native_project_retention"
+            | "native_project_retention_update"
+            | "native_project_profile_policy"
+            | "native_project_profile_policy_update"
             | "native_resource_read"
             | "native_resource_write"
             | "native_resource_reset"
@@ -74,15 +96,55 @@ pub(crate) async fn service_run_vmm_memory_action(
             | "native_pii_formula_test"
             | "native_noise_test"
             | "native_retention_status"
+            | "native_retention_preview"
             | "native_retention_run"
+            | "native_lexical_status"
+            | "native_lexical_rebuild"
             | "native_vector_status"
             | "native_vector_rebuild_preview"
             | "native_vector_rebuild"
             | "native_recycle_bin"
+            | "native_recycle_records"
             | "native_recycle_restore"
             | "native_recycle_purge"
     ) {
-        return service_run_native_vmm_maintenance_action(state, request).await;
+        // Binding actions carry an exact host ID; unrelated maintenance never clears these caches.
+        // 绑定动作携带准确宿主 ID；无关维护不得清除此类缓存。
+        let binding_owner = matches!(
+            request.action.trim(),
+            "native_project_create_and_bind"
+                | "native_project_bind_existing"
+                | "native_project_set_access"
+                | "native_project_unbind"
+                | "native_project_replace_query_links"
+        )
+        .then(|| required_native_text(&request.payload, "vulcanProjectId"))
+        .transpose()?;
+        let result = service_run_native_vmm_maintenance_action(state.clone(), request).await?;
+        if let Some(host_project_id) = binding_owner {
+            // Resolve the same installed maintenance owner after the successful binding transaction.
+            // 在绑定事务成功后解析同一个已安装维护归属方。
+            let maintenance = state
+                .lock()
+                .map_err(|error| format!("原生项目关联已更新，但读取会话缓存运行态失败：{error}"))?
+                .native_vmm_maintenance
+                .clone()
+                .ok_or_else(|| {
+                    "原生项目关联已更新，但维护运行时已不可用，无法同步会话缓存。".to_owned()
+                })?;
+            for event in maintenance
+                .reconcile_host_binding_caches(&state, &host_project_id)
+                .await
+                .map_err(|error| format!("原生项目关联已更新，但会话记忆缓存同步失败：{error}"))?
+            {
+                crate::settings_runtime_projection::emit_service_event_with_trace(
+                    &app,
+                    "native_vmm_binding_context_changed",
+                    vulcan_service_api::ServiceEvent::WorkbenchDelta(Box::new(event)),
+                );
+            }
+        }
+        return Ok(result);
     }
     if request.action.trim().starts_with("management_") {
         return super::management_http::service_run_vmm_management_http_action(state, request)
@@ -185,6 +247,228 @@ async fn service_run_native_vmm_maintenance_action(
     let action = request.action.trim();
     let request_preview = request.payload.clone();
     match action {
+        "native_removal_preview" => {
+            // Decode a closed source selection without accepting hidden profile deletion flags.
+            // 解码封闭来源选择，不接受隐藏的画像删除标志。
+            let query = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("记忆回收选择格式错误：{error}"))?;
+            // A preview is read-only and freezes exact IDs rather than just counts.
+            // 预览为只读操作，冻结准确 ID 而不只是数量。
+            let preview = maintenance.preview_manual_removal(query).await?;
+            native_action_result(
+                action,
+                "已准备回收预览，用户画像和项目画像均保留。".to_owned(),
+                "native_removal_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeRemovalPreview(preview.clone()),
+            )
+        }
+        "native_removal_recycle" => {
+            // Confirmation carries no replacement target list or profile deletion option.
+            // 确认不携带替换目标列表或画像删除选项。
+            let confirmation: vulcan_service_api::VmmNativeRemovalConfirmation =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("记忆回收确认格式错误：{error}"))?;
+            if !confirmation.confirmed {
+                return Err("请先确认回收影响。".to_owned());
+            }
+            // The maintenance owner validates the token, storage version and effective policy.
+            // 维护归属方校验令牌、存储版本及有效策略。
+            let result = maintenance
+                .execute_manual_removal(&request.command_id, &confirmation.preview_id)
+                .await?;
+            native_action_result(
+                action,
+                "所选原始记录已移入回收站，用户画像和项目画像均保留。".to_owned(),
+                "native_removal",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeRemoval(result.clone()),
+            )
+        }
+        "native_removal_impact" => {
+            let query = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("记忆来源影响查询格式错误：{error}"))?;
+            let impact = maintenance.inspect_removal(query).await?;
+            native_action_result(
+                action,
+                "已检查所选来源的关联记录，未删除任何数据。".to_owned(),
+                "native_removal_impact",
+                request_preview,
+                &impact,
+                VmmMemoryActionResponse::NativeRemovalImpact(impact.clone()),
+            )
+        }
+        "native_project_retention" => {
+            let query: vulcan_service_api::VmmNativeProjectRetentionQuery =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("记忆项目保留策略查询格式错误：{error}"))?;
+            let policy = maintenance
+                .project_retention_summary(query.project_id)
+                .await?;
+            native_action_result(
+                action,
+                "已加载记忆项目保留规则与继承状态。".to_owned(),
+                "native_project_retention",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeProjectRetention(Box::new(policy.clone())),
+            )
+        }
+        "native_project_profile_policy" => {
+            let query: vulcan_service_api::VmmNativeProjectProfilePolicyQuery =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("记忆项目画像规则查询格式错误：{error}"))?;
+            let policy = maintenance
+                .project_profile_policy_summary(query.project_id)
+                .await?;
+            native_action_result(
+                action,
+                "已加载记忆项目画像规则与继承状态。".to_owned(),
+                "native_project_profile_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeProjectProfilePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_project_profile_policy_update" => {
+            let edit = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("记忆项目画像规则编辑格式错误：{error}"))?;
+            let policy = maintenance.update_project_profile_policy(edit).await?;
+            native_action_result(
+                action,
+                "记忆项目画像规则已保存，将用于新的画像处理命令。".to_owned(),
+                "native_project_profile_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeProjectProfilePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_project_retention_update" => {
+            let edit = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("记忆项目保留策略编辑格式错误：{error}"))?;
+            let policy = maintenance.update_project_retention(edit).await?;
+            native_action_result(
+                action,
+                "记忆项目保留规则已保存，将用于下一轮清洗。".to_owned(),
+                "native_project_retention",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeProjectRetention(Box::new(policy.clone())),
+            )
+        }
+        "native_host_project_policy" => {
+            let host_project_id = required_native_text(&request.payload, "hostProjectId")?;
+            let policy = maintenance.host_project_policy(&host_project_id).await?;
+            native_action_result(
+                action,
+                "已加载原生宿主项目策略及继承状态。".to_owned(),
+                "native_host_project_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeHostProjectPolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_host_project_policy_update" => {
+            let edit = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("原生宿主项目策略格式错误：{error}"))?;
+            let policy = maintenance.update_host_project_policy(edit).await?;
+            native_action_result(
+                action,
+                "原生宿主项目策略已保存，将用于新命令。".to_owned(),
+                "native_host_project_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeHostProjectPolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_runtime_policy" => {
+            let policy = maintenance.runtime_policy().await?;
+            native_action_result(
+                action,
+                String::from("已加载原生 VMM 召回与提炼策略。"),
+                "native_runtime_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeRuntimePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_runtime_policy_update" => {
+            // Strict decoding rejects unknown fields instead of accepting unsupported settings.
+            // 严格解码拒绝未知字段，不接纳尚未支持的设置。
+            let recall = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("原生 VMM 召回与提炼策略格式错误：{error}"))?;
+            let policy = maintenance.update_runtime_policy(recall).await?;
+            native_action_result(
+                action,
+                String::from("原生 VMM 召回与提炼策略已保存，将用于新命令。"),
+                "native_runtime_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeRuntimePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_retrieval_policy_update" => {
+            // Strict decoding keeps host-owned score identities out of user requests.
+            // 严格解码将宿主持有的评分身份排除在用户请求之外。
+            let retrieval = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("原生 VMM 检索排序策略格式错误：{error}"))?;
+            let policy = maintenance.update_retrieval_policy(retrieval).await?;
+            native_action_result(
+                action,
+                String::from("原生 VMM 检索排序策略已保存，将用于新命令。"),
+                "native_runtime_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeRuntimePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_profile_policy_update" => {
+            // Explicit typed groups keep user and project formulas separate; no scope ID is accepted here.
+            // 显式强类型组保持用户与项目公式独立；此处不接受作用域 ID。
+            let profiles = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("原生 VMM 画像规则格式错误：{error}"))?;
+            let policy = maintenance.update_profile_policy(profiles).await?;
+            native_action_result(
+                action,
+                String::from("原生 VMM 画像规则已保存，仅影响后续生成或修订的节点。"),
+                "native_runtime_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeRuntimePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_text_policy_update" => {
+            // Only text reduction controls are editable; privacy and reasoning cleanup remain mandatory.
+            // 仅允许编辑文本缩减控制项；隐私与思考内容清理保持强制。
+            let text = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("原生 VMM 文本清洗策略格式错误：{error}"))?;
+            let policy = maintenance.update_text_policy(text).await?;
+            native_action_result(
+                action,
+                String::from("原生 VMM 文本清洗策略已保存，仅影响新入库片段。"),
+                "native_runtime_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeRuntimePolicy(Box::new(policy.clone())),
+            )
+        }
+        "native_retention_settings_update" => {
+            // Only declared cleanup fields are accepted; Core batch limits remain host-owned.
+            // 仅接受声明的清洗字段；Core 批次上限仍由宿主持有。
+            let settings = serde_json::from_value(request.payload.clone())
+                .map_err(|error| format!("原生 VMM 清洗设置格式错误：{error}"))?;
+            let policy = maintenance.update_retention_settings(settings).await?;
+            native_action_result(
+                action,
+                String::from("原生 VMM 清洗设置已保存，周期工作器将使用新配置。"),
+                "native_runtime_policy",
+                request_preview,
+                &policy,
+                VmmMemoryActionResponse::NativeRuntimePolicy(Box::new(policy.clone())),
+            )
+        }
         "native_resource_catalog" => {
             let catalog = maintenance.resource_catalog().await?;
             native_action_result(
@@ -341,8 +625,27 @@ async fn service_run_native_vmm_maintenance_action(
                 VmmMemoryActionResponse::NativeRetentionStatus(status.clone()),
             )
         }
+        "native_retention_preview" => {
+            let preview = maintenance.preview_retention_cleanup().await?;
+            native_action_result(
+                action,
+                String::from("已生成只读清洗预览，确认前不会更改记忆内容。"),
+                "native_retention_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeRetentionPreview(preview.clone()),
+            )
+        }
         "native_retention_run" => {
-            let result = native_retention_apply_result(maintenance.run_retention_once().await?);
+            if !required_native_bool(&request.payload, "confirmed")? {
+                return Err(String::from("请先查看清洗影响并明确确认。"));
+            }
+            let preview_id = required_native_text(&request.payload, "previewId")?;
+            let result = native_retention_apply_result(
+                maintenance
+                    .execute_retention_cleanup(&request.command_id, &preview_id)
+                    .await?,
+            );
             native_action_result(
                 action,
                 format!(
@@ -358,6 +661,36 @@ async fn service_run_native_vmm_maintenance_action(
                 request_preview,
                 &result,
                 VmmMemoryActionResponse::NativeRetentionRun(result.clone()),
+            )
+        }
+        "native_lexical_status" => {
+            let status = maintenance.lexical_index_status().await?;
+            native_action_result(
+                action,
+                String::from("已读取原生全文索引计数，未修改任何内容。"),
+                "native_lexical_status",
+                request_preview,
+                &status,
+                VmmMemoryActionResponse::NativeLexicalStatus(status.clone()),
+            )
+        }
+        "native_lexical_rebuild" => {
+            let result = maintenance
+                .rebuild_lexical_index(
+                    required_native_storage_version(&request.payload, "expectedStorageVersion")?,
+                    required_native_bool(&request.payload, "confirmed")?,
+                )
+                .await?;
+            native_action_result(
+                action,
+                format!(
+                    "已从当前记忆内容重建 {} 条全文索引，未重新生成向量。",
+                    result.reindexed_memory_count
+                ),
+                "native_lexical_rebuild",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeLexicalRebuild(result.clone()),
             )
         }
         "native_vector_status" => {
@@ -437,6 +770,22 @@ async fn service_run_native_vmm_maintenance_action(
                 VmmMemoryActionResponse::NativeRecycleBin(recycle_bin.clone()),
             )
         }
+        "native_recycle_records" => {
+            // Read the exact retained batch, not the active memory-records projection.
+            // 读取准确保留批次，而非活动记忆记录投影。
+            let query: vulcan_service_api::VmmNativeRecycleRecordQuery =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("回收明细查询参数无效：{error}"))?;
+            let page = maintenance.recycle_records(query).await?;
+            native_action_result(
+                action,
+                format!("已加载 {} 条回收明细。", page.records.len()),
+                "native_recycle_records",
+                request_preview,
+                &page,
+                VmmMemoryActionResponse::NativeRecycleRecords(page.clone()),
+            )
+        }
         "native_recycle_restore" => {
             let batch_id = required_native_text(&request.payload, "batchId")?;
             let storage_version =
@@ -492,6 +841,119 @@ async fn service_run_native_vmm_maintenance_action(
                 request_preview,
                 &catalog,
                 VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_session_archive_preview" => {
+            // Decode a closed selection schema; do not guess field aliases or session ownership.
+            // 解码封闭选择结构，不猜测字段别名或会话归属。
+            let selection: vulcan_service_api::VmmNativeSessionArchiveSelection =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("归档选择参数无效：{error}"))?;
+            let preview = maintenance.preview_session_archive(selection).await?;
+            native_action_result(
+                action,
+                "已生成归档预览；此操作只改变管理分类，不删除内容或关闭记忆。".to_owned(),
+                "native_session_archive_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeSessionArchivePreview(preview.clone()),
+            )
+        }
+        "native_session_archive" => {
+            // Confirmation carries only the server preview identity and explicit user approval.
+            // 确认只携带服务端预览身份及用户明确同意。
+            let confirmation: vulcan_service_api::VmmNativeSessionArchiveConfirmation =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("归档确认参数无效：{error}"))?;
+            if !confirmation.confirmed {
+                return Err("请先查看归档预览并明确确认。".to_owned());
+            }
+            let result = maintenance
+                .execute_session_archive(&request.command_id, &confirmation.preview_id)
+                .await?;
+            native_action_result(
+                action,
+                format!(
+                    "已{} {} 个记忆会话；内容与记忆功能保持不变。",
+                    if result.selection.archived {
+                        "归档"
+                    } else {
+                        "取消归档"
+                    },
+                    result.selection.session_source_ids.len()
+                ),
+                "native_session_archive",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeSessionArchive(result.clone()),
+            )
+        }
+        "native_session_restart_preview" => {
+            // Decode only exact owner/session identities; restart never accepts replacement content.
+            // 只解码准确归属及会话身份，重新启用不接受替代内容。
+            let selection: vulcan_service_api::VmmNativeSessionRestartSelection =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("重新启用选择参数无效：{error}"))?;
+            let preview = maintenance.preview_session_restart(selection).await?;
+            native_action_result(
+                action,
+                "已生成重新启用预览；不会恢复已删除内容或重放历史对话。".to_owned(),
+                "native_session_restart_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeSessionRestartPreview(preview.clone()),
+            )
+        }
+        "native_session_restart" => {
+            // Explicit confirmation binds the command to an immutable server preview.
+            // 明确确认将命令绑定到不可变服务端预览。
+            let confirmation: vulcan_service_api::VmmNativeSessionRestartConfirmation =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("重新启用确认参数无效：{error}"))?;
+            if !confirmation.confirmed {
+                return Err("请先查看重新启用预览并明确确认。".to_owned());
+            }
+            let result = maintenance
+                .execute_session_restart(&request.command_id, &confirmation.preview_id)
+                .await?;
+            native_action_result(
+                action,
+                format!(
+                    "已重新启用 {} 个记忆会话；仅后续正常交互使用记忆，不恢复已删除内容。",
+                    result.selection.session_source_ids.len()
+                ),
+                "native_session_restart",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeSessionRestart(result.clone()),
+            )
+        }
+        "native_session_list" => {
+            let query: vulcan_service_api::VmmNativeSessionListQuery =
+                serde_json::from_value(request.payload.clone())
+                    .map_err(|error| format!("会话列表参数无效：{error}"))?;
+            session_list::validate(&query)?;
+            let (version, sessions) = maintenance.session_summaries(query.vmm_project_id).await?;
+            let titles = native_session_titles(&state)?;
+            let page = session_list::paginate(
+                query,
+                version,
+                sessions
+                    .into_iter()
+                    .map(|session| session_list::project_session_summary(session, &titles))
+                    .collect(),
+            )?;
+            native_action_result(
+                action,
+                format!(
+                    "已加载 {} 个会话，共匹配 {} 个。",
+                    page.sessions.len(),
+                    page.total
+                ),
+                "native_session_list",
+                request_preview,
+                &page,
+                VmmMemoryActionResponse::NativeSessionList(page.clone()),
             )
         }
         "native_memory_records" => {
@@ -558,6 +1020,11 @@ async fn service_run_native_vmm_maintenance_action(
             let project = maintenance
                 .create_and_bind_project(&vulcan_project_id, &project_name)
                 .await?;
+            crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
+                &mut *state
+                    .lock()
+                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+            )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
@@ -577,6 +1044,11 @@ async fn service_run_native_vmm_maintenance_action(
             let project = maintenance
                 .bind_existing_project(&vulcan_project_id, project_id)
                 .await?;
+            crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
+                &mut *state
+                    .lock()
+                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+            )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
@@ -597,6 +1069,11 @@ async fn service_run_native_vmm_maintenance_action(
             let access = maintenance
                 .set_project_access(&vulcan_project_id, owner_project_id, &linked_project_ids)
                 .await?;
+            crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
+                &mut *state
+                    .lock()
+                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+            )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
@@ -614,6 +1091,11 @@ async fn service_run_native_vmm_maintenance_action(
         "native_project_unbind" => {
             let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
             maintenance.unbind_project(&vulcan_project_id).await?;
+            crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
+                &mut *state
+                    .lock()
+                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+            )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
@@ -1091,6 +1573,7 @@ fn native_recycle_batch(
     batch: crate::native_vmm::NativeVmmRecycleBatchSummary,
 ) -> VmmNativeRecycleBatchSummary {
     VmmNativeRecycleBatchSummary {
+        manual_selection: batch.manual_selection,
         batch_id: batch.batch_id,
         project_id: batch.project_id,
         reason: batch.reason,
@@ -1165,18 +1648,7 @@ fn native_memory_records(
         sessions: records
             .sessions
             .into_iter()
-            .map(|session| VmmNativeMemorySessionSummary {
-                display_title: session_titles.get(&session.session_source_id).cloned(),
-                session_source_id: session.session_source_id,
-                turn_count: session.turn_count,
-                turn_statuses: native_turn_status_counts(session.turn_statuses),
-                memory_count: session.memory_count,
-                profile_node_count: session.profile_node_count,
-                direct_memory_count: session.direct_memory_count,
-                memory_levels: native_memory_level_counts(session.memory_levels),
-                first_activity_at_unix_ms: session.first_activity_at_unix_ms,
-                last_activity_at_unix_ms: session.last_activity_at_unix_ms,
-            })
+            .map(|session| session_list::project_session_summary(session, session_titles))
             .collect(),
         selected_session_source_id: records.selected_session_source_id,
         turns: records
@@ -1184,6 +1656,8 @@ fn native_memory_records(
             .into_iter()
             .map(|turn| VmmNativeTurnRecordSummary {
                 turn_id: turn.turn_id,
+                previous_turn_ids: turn.previous_turn_ids,
+                next_turn_ids: turn.next_turn_ids,
                 session_source_id: turn.session_source_id,
                 created_at_unix_ms: turn.created_at_unix_ms,
                 status: turn.status,

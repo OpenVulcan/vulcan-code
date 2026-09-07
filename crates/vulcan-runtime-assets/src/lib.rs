@@ -72,6 +72,10 @@ pub const fn default_vldb_controller_port() -> u16 {
 /// Builds the user Vulcan root below one explicit home directory.
 /// 根据一个明确的用户主目录构建用户级 Vulcan 根目录。
 pub fn user_vulcan_root_for_home(home: &Path) -> PathBuf {
+    #[cfg(feature = "test-support")]
+    if let Some(root) = test_support::isolated_user_root() {
+        return root;
+    }
     home.join(USER_VULCAN_ROOT_DIRECTORY_NAME)
 }
 
@@ -408,8 +412,17 @@ pub fn resolve_output_config_directory() -> Option<PathBuf> {
 /// Returns the effective controller configuration file path for the current process.
 /// 返回当前进程使用的生效控制器配置文件路径。
 pub fn resolve_controller_config_file_path() -> PathBuf {
+    #[cfg(feature = "test-support")]
+    if let Some(path) = test_support::isolated_controller_configuration_path() {
+        return path;
+    }
     resolve_app_config_directory().join("controller.json")
 }
+
+/// Explicit path isolation for standalone integration-test processes; excluded from normal builds.
+/// 独立集成测试进程的显式路径隔离；普通构建不包含此入口。
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 /// Returns one bundled controller executable path when the current process runs from one packaged output root.
 /// 当当前进程从某个打包 output 根目录运行时，返回其中的控制器可执行文件路径。

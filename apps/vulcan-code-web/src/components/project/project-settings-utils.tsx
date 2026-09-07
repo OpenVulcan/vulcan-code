@@ -11,14 +11,13 @@ import type {
 
 // projectSettingsSections builds the left-side project settings navigation.
 // projectSettingsSections 构建项目设置左侧导航。
-// Parameters: project/workbench provide current data, vceReady is the backend gate, and t localizes labels.
-// 参数：project/workbench 提供当前数据，vceReady 是后端闸门，t 负责本地化标签。
-// Returns: ordered sections with code context omitted unless the authoritative VCE gate is ready.
-// 返回值：有序分区；仅在权威 VCE 闸门就绪时包含代码上下文。
+// Parameters: project/workbench provide current data, and t localizes labels.
+// 参数：project/workbench 提供当前数据，t 负责本地化标签。
+// Returns: ordered settings sections; configuration access is independent from runtime tool admission.
+// 返回值：有序设置分区；配置访问独立于运行时工具准入。
 export function projectSettingsSections(
   project: ProjectSummary,
   workbench: WorkbenchSnapshot,
-  vceReady: boolean,
   t: (key: TranslationKey) => string,
 ): ProjectSettingsSectionSummary[] {
   const sections: ProjectSettingsSectionSummary[] = [
@@ -53,16 +52,14 @@ export function projectSettingsSections(
       detail: t("projectSettings.attachmentCleanup"),
     },
   ];
-  if (vceReady) {
-    sections.splice(2, 0, {
+  sections.splice(2, 0, {
       id: "code-context",
       icon: <Network size={16} />,
       label: t("projectSettings.codeContext.title"),
       detail: project.vceEnabled
         ? t("projectSettings.codeContext.enabled")
         : t("projectSettings.codeContext.disabled"),
-    });
-  }
+  });
   return sections;
 }
 

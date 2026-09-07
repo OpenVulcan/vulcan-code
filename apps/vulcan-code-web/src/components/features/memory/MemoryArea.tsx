@@ -14,6 +14,7 @@ import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
 import { VmmNativeProjectPage } from "./vmm-native-project-page"
 import { VmmNativeMaintenancePage } from "./vmm-native-maintenance-page"
 import { VmmNativeResourcesPage } from "./vmm-native-resources-page"
+import { VmmNativeRuntimePolicy } from "./vmm-native-runtime-policy"
 import { VmmOverviewPage } from "./vmm-overview-page"
 import { VmmProfilePage } from "./vmm-profile-page"
 import { VmmRulesPage } from "./vmm-rules-page"
@@ -415,6 +416,9 @@ export function MemoryArea(props: {
               onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
               projects={props.snapshot.projectScopes}
             />
+            {vmmUsesNativeMemoryMaintenance(props.snapshot.experienceState.deployment) ? (
+              <VmmNativeRuntimePolicy busy={operationBusy} onRunAction={runAction} />
+            ) : null}
           </main>
         </div>
       </section>

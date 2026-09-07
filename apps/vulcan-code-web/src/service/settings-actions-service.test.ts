@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
+import type { PublicAiInferenceRoute, VceEmbeddingSaveConfirmation } from "@/types";
 import {
   loadPublicAiSessionProviderToolSelections,
   rebuildPublicAiSessionProviderToolSelections,
   resetPublicAiMediaDeliveryPolicy,
   savePublicAiMediaDeliveryPolicy,
   savePublicAiSessionProviderToolSelections,
+  savePublicAiInferenceRoute,
 } from "./settings-actions-service";
 
 // The hoisted transport spy observes the real settings action without invoking a running service.
@@ -68,6 +70,54 @@ describe("media delivery settings action", () => {
     await expect(savePublicAiMediaDeliveryPolicy(mediaDeliverySettingsFixture().policy, "read-revision"))
       .rejects.toThrow("media policy publication failed");
     expect(transport.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("VCE inference route transaction request", () => {
+  // Each assertion observes one isolated production service action.
+  // 每项断言观察一个隔离的生产服务动作。
+  beforeEach(() => { transport.request.mockReset(); });
+
+  // Preserve both wire naming conventions and the exact reviewed per-project decisions.
+  // 保留两种线路命名约定及精确已审查逐项目决定。
+  it("forwards explicit dimensions and confirmation with the unchanged route", async () => {
+    // Account and action identifiers are authoritative, not derived from model display names.
+    // 账号及动作标识是权威值，不由模型展示名称推导。
+    const route: PublicAiInferenceRoute = {
+      provider_id: "provider", service_entry_id: "entry", connection_id: "account-beta", model_id: "same-model-name",
+      binding: { kind: "action", action_binding_id: "embedding-action" },
+      operation: "embedding_create", usage_scope: "internal_background",
+    };
+    // Different project decisions must stay in the same optimistic save request.
+    // 不同项目决定必须保留在同一个乐观保存请求中。
+    const confirmation: VceEmbeddingSaveConfirmation = {
+      preflightRevision: "reviewed-revision",
+      decisions: [{ projectId: "project-a", decision: "compatible" }, { projectId: "project-b", decision: "rebuild" }],
+    };
+    // Identity proves the service returns the actual backend response, not a locally assembled projection.
+    // 对象身份用于证明服务返回实际后端响应，而非本地组装的投影。
+    const published = { inferenceProfiles: { vce: { embedding: route, embedding_dimensions: 2048 } } };
+    transport.request.mockResolvedValue(published);
+    expect(await savePublicAiInferenceRoute({ consumerProfileId: "vce", operation: "embedding_create", route,
+      embeddingDimensions: 2048, vceEmbeddingConfirmation: confirmation })).toBe(published);
+    expect(transport.request).toHaveBeenCalledExactlyOnceWith("service_save_public_ai_inference_route", {
+      request: { consumerProfileId: "vce", operation: "embedding_create", route,
+        embeddingDimensions: 2048, vceEmbeddingConfirmation: confirmation },
+    });
+  });
+
+  // Clearing is an explicit null route; rejection cannot trigger a retry or default reconstruction.
+  // 清空是明确的空路由；拒绝不能触发重试或默认值重建。
+  it("preserves explicit removal and propagates its exact rejection once", async () => {
+    // The backend owns this stale-review failure and its identity must survive the service adapter.
+    // 后端持有此过期审查失败，其身份必须穿过服务适配器保持不变。
+    const rejection = new Error("VCE preflight revision changed");
+    transport.request.mockRejectedValue(rejection);
+    await expect(savePublicAiInferenceRoute({ consumerProfileId: "vce", operation: "embedding_create", route: null }))
+      .rejects.toBe(rejection);
+    expect(transport.request).toHaveBeenCalledExactlyOnceWith("service_save_public_ai_inference_route", {
+      request: { consumerProfileId: "vce", operation: "embedding_create", route: null },
+    });
   });
 });
 

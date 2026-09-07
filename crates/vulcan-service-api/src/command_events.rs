@@ -378,6 +378,9 @@ pub enum ServiceEvent {
     /// Native code-semantic project lifecycle or checkpoint change event.
     /// 原生代码语义项目生命周期或检查点变更事件。
     VceProjectChanged(Box<VceProjectChangedEvent>),
+    /// Durable index job progress shared by every surface in the owning project.
+    /// 所属项目各界面共享的持久索引作业进度。
+    VceJobChanged(Box<VceJobSummary>),
     /// Visible command-session terminal output event.
     /// 可见命令会话终端输出事件。
     CommandSessionDisplayChanged(Box<CommandSessionDisplayChangedEvent>),

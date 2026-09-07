@@ -1,6 +1,11 @@
 //! Built-in VulcanMemoryMesh hook registration for conversation memory integration.
 //! 面向会话记忆集成的内置 VulcanMemoryMesh hook 注册逻辑。
 
+#[path = "vmm_writeback_admission.rs"]
+mod writeback_admission;
+pub use writeback_admission::VmmWritebackAdmissions;
+use writeback_admission::reconcile_writeback_admissions;
+
 use crate::agent_runtime::conversation_hooks::{
     HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_PROFILE_PREPARE,
     HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
@@ -12,6 +17,7 @@ use crate::agent_runtime::conversation_hooks::{
 use crate::model::{SessionId, VmmProfileSyncState, VmmWritebackOutboxEntry};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use vulcan_context_injection::{
     InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem, InjectionKind,
@@ -60,6 +66,9 @@ const VMM_PROFILE_DELTA_INJECTION_TAG: &str = "vmm_profile_delta";
 /// 被 hook 闭包捕获的共享 VMM 配置快照。
 #[derive(Debug, Clone, Default)]
 pub struct VmmHookConfigSnapshot {
+    /// Live non-serializable delivery authority, preserved independently of incoming configuration mirrors.
+    /// 活动不可序列化投递权限，独立于传入配置镜像保留。
+    pub writeback_admissions: VmmWritebackAdmissions,
     /// Global VMM configuration layer.
     /// 全局 VMM 配置层。
     pub global: VmmConfigLayer,
@@ -90,9 +99,92 @@ pub struct VmmHookRuntimeHandle {
     /// Process-local native VMM client installed by the VulcanCode service host.
     /// 由 VulcanCode 服务宿主安装的进程内原生 VMM 客户端。
     native_client: Arc<RwLock<Option<Arc<dyn VmmClient>>>>,
+    /// Process-local admission epoch advanced when global activation or backend selection changes.
+    /// 全局启停或后端选择变化时推进的进程内准入代次。
+    profile_admission_epoch: Arc<AtomicU64>,
 }
 
 impl VmmHookRuntimeHandle {
+    /// Validates VMM read publication while preventing configuration changes during a synchronous cache or profile commit.
+    /// 在同步缓存或画像提交期间阻止配置变化，并校验记忆读取发布。
+    /// Takes exact session/workspace/source and a commit callback; native callers retain their binding barrier.
+    /// 接收准确会话/工作区/来源及提交回调；原生调用方须保持其绑定屏障。
+    /// Returns the callback result only for a current enabled source; no AI or remote scope lookup is performed.
+    /// 仅对当前启用的来源返回回调结果；不执行 AI 或远端范围查询。
+    pub fn with_current_profile_publication<R>(
+        &self,
+        session_id: SessionId,
+        workspace_path: &str,
+        expected: &vulcan_vmm::VmmMemoryReadSource,
+        publish: impl FnOnce() -> R,
+    ) -> Result<R, String> {
+        expected.validate().map_err(|error| error.to_string())?;
+        // Any service-state acquisition must precede this guard; callbacks neither acquire it nor refresh hooks.
+        // 任何服务状态锁的获取必须先于本守卫；回调既不获取该锁，也不刷新 Hook。
+        let snapshot = self.read_state("validate final VMM profile publication")?;
+        // A project override cannot keep publishing after the application-wide service is disabled.
+        // 应用级服务关闭后，项目覆盖不能继续发布结果。
+        let service_enabled = VmmEffectiveConfig::resolve(&snapshot.global, None, None).enabled;
+        let config = VmmEffectiveConfig::resolve(
+            &snapshot.global,
+            snapshot.projects_by_workspace.get(workspace_path),
+            snapshot.sessions.get(&session_id.to_string()),
+        );
+        if !service_enabled
+            || !config.enabled
+            || config.backend_mode
+                != match &expected.owner {
+                    vulcan_vmm::VmmMemorySource::Native { .. } => VmmBackendMode::Native,
+                    vulcan_vmm::VmmMemorySource::ExternalGrpc { .. } => {
+                        VmmBackendMode::ExternalGrpc
+                    }
+                }
+        {
+            return Err(
+                "VMM profile source changed before the prepared request could be committed."
+                    .to_owned(),
+            );
+        }
+        if config.backend_mode == VmmBackendMode::ExternalGrpc {
+            // External visibility is opaque; only declared transport and subject/project identity are checked.
+            // 外置可见性不透明；只核对声明的传输及主体/项目身份。
+            let actual = vulcan_vmm::VmmMemorySource::external(
+                &VmmTransportConfig::from_effective(&config),
+                config.user_id.ok_or_else(|| {
+                    "VMM profile publication requires a current user ID.".to_owned()
+                })?,
+                config.project_id.ok_or_else(|| {
+                    "VMM profile publication requires a current project ID.".to_owned()
+                })?,
+            )
+            .map_err(|error| error.to_string())?;
+            if actual != expected.owner {
+                return Err(
+                    "VMM profile source changed before the prepared request could be committed."
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(publish())
+    }
+    /// Resolves current publication policy from the same atomic projection used by live hooks.
+    /// 从活动 Hook 使用的同一原子投影解析当前发布策略。
+    /// Takes exact session and workspace identities; returns the declared configuration precedence.
+    /// 接收准确会话及工作区身份；返回声明的配置优先级解析结果。
+    pub fn resolve_publication_config(
+        &self,
+        session_id: SessionId,
+        workspace_path: &str,
+    ) -> Result<VmmEffectiveConfig, String> {
+        // Configuration refresh owns this snapshot, not the detached agent bridge.
+        // 配置刷新拥有本快照，而不是脱离状态的 Agent 桥接实例。
+        let snapshot = self.read_state("resolve VMM publication configuration")?;
+        Ok(VmmEffectiveConfig::resolve(
+            &snapshot.global,
+            snapshot.projects_by_workspace.get(workspace_path),
+            snapshot.sessions.get(&session_id.to_string()),
+        ))
+    }
     /// Builds a shared VMM hook runtime handle.
     /// 构建共享 VMM hook 运行时句柄。
     ///
@@ -109,6 +201,7 @@ impl VmmHookRuntimeHandle {
         Self {
             state: Arc::new(RwLock::new(snapshot)),
             native_client: Arc::new(RwLock::new(None)),
+            profile_admission_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -195,8 +288,8 @@ impl VmmHookRuntimeHandle {
             .map_err(|_| format!("The VMM hook runtime state is locked and cannot {operation}."))
     }
 
-    /// Replaces the configuration snapshot while preserving runtime-owned profile state.
-    /// 替换配置快照，同时保留运行时持有的画像状态。
+    /// Replaces configuration while preserving runtime profiles only across an unchanged global activation mode.
+    /// 替换配置，仅在全局启用模式不变时保留运行时画像。
     ///
     /// # Parameters
     /// 参数
@@ -211,13 +304,21 @@ impl VmmHookRuntimeHandle {
         // state is the only authority for both configuration and runtime-produced profile state.
         // state 是配置与运行时生成画像状态的唯一权威来源。
         let mut state = self.write_state("replace the configuration snapshot")?;
+        // Mode transitions cancel admitted profile preparation, including a later return to its old source.
+        // 模式转换取消已准入画像准备，包括之后切回其旧来源的情况。
+        if configured_memory_mode(&state.global) != configured_memory_mode(&snapshot.global) {
+            self.profile_admission_epoch.fetch_add(1, Ordering::AcqRel);
+            state.profile_sync.clear();
+        }
         snapshot.profile_sync = std::mem::take(&mut state.profile_sync);
+        snapshot.writeback_admissions = std::mem::take(&mut state.writeback_admissions);
+        reconcile_writeback_admissions(&mut snapshot);
         *state = snapshot;
         Ok(())
     }
 
-    /// Replaces the global layer without touching project or session maps.
-    /// 替换全局配置层，且不触碰项目或会话映射。
+    /// Replaces the global layer and invalidates profile caches on mode changes, preserving project/session configuration maps.
+    /// 替换全局层，模式变化时使画像缓存失效，保留项目及会话配置映射。
     ///
     /// # Parameters
     /// 参数
@@ -225,12 +326,31 @@ impl VmmHookRuntimeHandle {
     /// `global` 是完整的权威全局 VMM 配置层。
     /// # Returns
     /// 返回值
-    /// Returns success after one constant-scope update, or a state-lock diagnostic.
-    /// 单次常量范围更新完成后返回成功，失败时返回状态锁诊断。
+    /// Returns success after one atomic configuration/cache transition, or a state-lock diagnostic.
+    /// 单次原子配置及缓存转换完成后返回成功，失败时返回状态锁诊断。
     pub fn replace_global_projection(&self, global: &VmmConfigLayer) -> Result<(), String> {
         let mut state = self.write_state("replace the global VMM projection")?;
+        // Ordinary tuning on the same active backend retains its valid baseline and admission epoch.
+        // 同一活动后端的普通调参保留有效基线及准入代次。
+        let next_mode = configured_memory_mode(global);
+        if configured_memory_mode(&state.global) != next_mode {
+            self.profile_admission_epoch.fetch_add(1, Ordering::AcqRel);
+            state.profile_sync.clear();
+        } else if next_mode.is_none() {
+            state.profile_sync.clear();
+        }
         state.global = global.clone();
+        reconcile_writeback_admissions(&mut state);
         Ok(())
+    }
+
+    /// Reads global memory activation without fabricating a session or workspace identity.
+    /// 读取全局记忆启用状态，不虚构会话或工作区身份。
+    /// Returns the selected backend when enabled, otherwise none; lock failure remains explicit.
+    /// 启用时返回所选后端，否则返回空；锁失败保持显式。
+    pub fn global_memory_mode(&self) -> Result<Option<VmmBackendMode>, String> {
+        let state = self.read_state("inspect global memory activation")?;
+        Ok(configured_memory_mode(&state.global))
     }
 
     /// Replaces one exact project configuration layer without rebuilding other projects.
@@ -260,6 +380,7 @@ impl VmmHookRuntimeHandle {
                 .projects_by_workspace
                 .insert(workspace_path.to_string(), project.clone());
         }
+        reconcile_writeback_admissions(&mut state);
         Ok(())
     }
 
@@ -309,6 +430,7 @@ impl VmmHookRuntimeHandle {
         } else {
             state.last_compaction_ids.remove(&session_key);
         }
+        reconcile_writeback_admissions(&mut state);
         Ok(())
     }
 
@@ -327,6 +449,7 @@ impl VmmHookRuntimeHandle {
     pub fn remove_session_projection(&self, session_id: SessionId) -> Result<(), String> {
         let session_key = session_id.to_string();
         let mut state = self.write_state("remove one session VMM projection")?;
+        state.writeback_admissions.remove_session(&session_key);
         state.sessions.remove(&session_key);
         state.outboxes.remove(&session_key);
         state.last_compaction_ids.remove(&session_key);
@@ -372,10 +495,20 @@ impl VmmHookRuntimeHandle {
         &self,
         session_id: &str,
         profile_sync: VmmProfileSyncState,
+        admitted_epoch: Option<u64>,
     ) -> Result<(), String> {
         // state owns the exact session entry and prevents a second cache from diverging.
         // state 持有精确会话项，避免第二份缓存发生分叉。
         let mut state = self.write_state("store session profile synchronization state")?;
+        // Compare under the global-replacement lock so late results cannot resurrect cleared caches.
+        // 在全局替换锁内比较，防止迟到结果复活已清除缓存。
+        if admitted_epoch
+            .is_some_and(|epoch| epoch != self.profile_admission_epoch.load(Ordering::Acquire))
+        {
+            return Err(
+                "VMM profile preparation was cancelled by a global memory mode change.".to_owned(),
+            );
+        }
         if profile_sync.is_empty() {
             state.profile_sync.remove(session_id);
         } else {
@@ -405,7 +538,7 @@ impl VmmHookRuntimeHandle {
         session_id: SessionId,
         profile_sync: VmmProfileSyncState,
     ) -> Result<(), String> {
-        self.store_profile_sync_for_session(&session_id.to_string(), profile_sync)
+        self.store_profile_sync_for_session(&session_id.to_string(), profile_sync, None)
     }
 
     /// Resolves the effective VMM configuration for one hook invocation payload.
@@ -424,6 +557,18 @@ impl VmmHookRuntimeHandle {
         &self,
         invocation: &HookInvocation,
     ) -> Result<VmmEffectiveConfig, String> {
+        self.resolve_profile_admission(invocation)
+            .map(|(config, _)| config)
+    }
+
+    /// Resolves configuration and the profile admission epoch from one atomic read snapshot.
+    /// 从同一个原子读取快照解析配置及画像准入代次。
+    /// Takes the actual Hook invocation; returns the resolved config and process-local epoch.
+    /// 接收实际 Hook 调用；返回解析配置及进程内代次。
+    fn resolve_profile_admission(
+        &self,
+        invocation: &HookInvocation,
+    ) -> Result<(VmmEffectiveConfig, u64), String> {
         // snapshot keeps all layer references valid during one coherent resolution.
         // snapshot 在一次一致解析期间保持所有配置层引用有效。
         let snapshot = self.read_state("resolve effective configuration")?;
@@ -439,10 +584,9 @@ impl VmmHookRuntimeHandle {
         let session = session_id
             .as_deref()
             .and_then(|session_id| snapshot.sessions.get(session_id));
-        Ok(VmmEffectiveConfig::resolve(
-            &snapshot.global,
-            project,
-            session,
+        Ok((
+            VmmEffectiveConfig::resolve(&snapshot.global, project, session),
+            self.profile_admission_epoch.load(Ordering::Acquire),
         ))
     }
 
@@ -629,6 +773,15 @@ fn vmm_hook_timeout_ms(id: &str) -> u64 {
     }
 }
 
+/// Resolves only the global master switch and backend identity, never project/session overrides.
+/// 仅解析全局总开关及后端身份，不使用项目或会话覆盖。
+/// Takes the saved global layer; returns the enabled mode or none.
+/// 接收保存的全局层；返回已启用模式或空。
+fn configured_memory_mode(global: &VmmConfigLayer) -> Option<VmmBackendMode> {
+    let config = VmmEffectiveConfig::resolve(global, None, None);
+    config.enabled.then_some(config.backend_mode)
+}
+
 /// Returns whether one effective VMM configuration should run automatic precheck now.
 /// 返回一个最终 VMM 配置当前是否应运行自动 precheck。
 fn should_run_vmm_precheck(config: &VmmEffectiveConfig) -> bool {
@@ -671,8 +824,10 @@ async fn handle_vmm_profile_prepare(
     if !invocation_vmm_runtime_ready(&invocation) {
         return Ok(HookResult::default());
     }
-    let config = runtime
-        .resolve_effective_config(&invocation)
+    // Admit the configuration and epoch together before asynchronous profile reads.
+    // 在异步画像读取前，一起准入配置及代次。
+    let (config, admitted_epoch) = runtime
+        .resolve_profile_admission(&invocation)
         .map_err(HookError::handler)?;
     if !should_run_vmm_profile_prepare(&config) {
         return Ok(HookResult::default());
@@ -686,7 +841,11 @@ async fn handle_vmm_profile_prepare(
     };
     if let Some(session_id) = invocation_session_id(&invocation) {
         runtime
-            .store_profile_sync_for_session(&session_id, profile_sync.state.clone())
+            .store_profile_sync_for_session(
+                &session_id,
+                profile_sync.state.clone(),
+                Some(admitted_epoch),
+            )
             .map_err(HookError::handler)?;
     }
     // metadata transports the updated profile state on the profile-only line.
@@ -736,13 +895,17 @@ async fn handle_vmm_precheck(
     metadata.insert(
         HOOK_METADATA_VMM_SESSION_STATUS_EFFECT.to_string(),
         json!(VmmSessionStatusHookEffect {
+            read_source: response.read_source.clone(),
             status: response.session_memory_status,
         }),
     );
     if let Some(batch) = VmmRecallBatch::from_precheck_response(&response, &config) {
         metadata.insert(
             HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
-            json!(VmmRecallBatchHookEffect { batch }),
+            json!(VmmRecallBatchHookEffect {
+                read_source: response.read_source.clone(),
+                batch,
+            }),
         );
     }
     Ok(HookResult {
@@ -768,39 +931,86 @@ async fn handle_vmm_post_action(
     if config.diagnose_writeback_flow(true) != VmmConfigDiagnostic::Ready {
         return Ok(HookResult::default());
     }
-    let request = post_action_request_from_completed_payload(&invocation.payload.value, &config)
-        .map_err(|error| HookError::handler(error.to_string()))?;
+    let mut request =
+        post_action_request_from_completed_payload(&invocation.payload.value, &config)
+            .map_err(|error| HookError::handler(error.to_string()))?;
+    // Resolve exact ownership before connecting; an unavailable remote still has a known configured source.
+    // 连接前解析准确归属；远端不可用时依然有确定的已配置来源。
+    let source = match config.backend_mode {
+        VmmBackendMode::Native => {
+            runtime
+                .native_client()?
+                .memory_source(
+                    &request.host_project_id,
+                    request.user_id,
+                    request.project_id,
+                )
+                .await
+        }
+        VmmBackendMode::ExternalGrpc => vulcan_vmm::VmmMemorySource::external(
+            &VmmTransportConfig::from_effective(&config),
+            request.user_id,
+            request.project_id,
+        ),
+    }
+    .map_err(|error| HookError::handler(error.to_string()))?;
+    request.expected_source = Some(source.clone());
+    // The generation is admitted atomically with current configuration; later rebinding can revoke every clone.
+    // 代次与当前配置原子准入；后续重绑可以撤销全部克隆。
+    let permit = runtime
+        .admit_writeback(&invocation, &source)
+        .map_err(HookError::handler)?;
+    // Remove every foreign entry before retrying the FIFO, even if its first valid entry later fails.
+    // 重试 FIFO 前移除所有异源条目，即使后续首个有效条目失败也不保留旧来源。
+    let (outbox, mut effects) = cancel_foreign_vmm_writebacks(
+        runtime
+            .outbox_for_invocation(&invocation)
+            .map_err(HookError::handler)?,
+        &source,
+        permit.id(),
+    );
     let client = match resolve_vmm_client(&runtime, &config).await {
         Ok(client) => client,
         Err(error) => {
-            return Ok(vmm_writeback_effect_result(vec![
-                VmmWritebackHookEffect::Enqueue {
-                    request,
-                    error: error.to_string(),
-                },
-            ]));
+            effects.push(VmmWritebackHookEffect::Enqueue {
+                permit_id: permit.id(),
+                request,
+                error: error.to_string(),
+            });
+            return Ok(vmm_writeback_effect_result(effects));
         }
     };
-    // outbox is loaded from the same authoritative snapshot used for configuration resolution.
-    // outbox 从与配置解析相同的权威快照读取。
-    let outbox = runtime
-        .outbox_for_invocation(&invocation)
-        .map_err(HookError::handler)?;
-    let mut effects = flush_vmm_writeback_outbox(client.as_ref(), outbox).await;
+    effects.extend(flush_vmm_writeback_outbox(client.as_ref(), outbox, &permit).await);
     if effects
         .iter()
         .any(|effect| matches!(effect, VmmWritebackHookEffect::Failed { .. }))
     {
         effects.push(VmmWritebackHookEffect::Enqueue {
+            permit_id: permit.id(),
             request,
             error: String::from(
                 "Previous VMM writeback outbox entry is still pending; queued behind it.",
             ),
         });
     } else {
-        match accepted_post_action(client.as_ref(), request.clone()).await {
-            Ok(status) => effects.push(VmmWritebackHookEffect::SessionStatus { status }),
+        match accepted_post_action(client.as_ref(), request.clone(), &permit).await {
+            Ok(status) => effects.push(VmmWritebackHookEffect::SessionStatus {
+                status,
+                permit_id: permit.id(),
+            }),
+            Err(error)
+                if matches!(
+                    error.kind.as_str(),
+                    "memory_source_changed" | "writeback_cancelled"
+                ) =>
+            {
+                effects.push(VmmWritebackHookEffect::Cancelled {
+                    entry_ids: Vec::new(),
+                    reason: error.to_string(),
+                })
+            }
             Err(error) => effects.push(VmmWritebackHookEffect::Enqueue {
+                permit_id: permit.id(),
                 request,
                 error: error.to_string(),
             }),
@@ -916,14 +1126,28 @@ async fn maybe_sync_vmm_profile(
     let latest_compaction_id = runtime
         .last_compaction_id_for_invocation(invocation)
         .map_err(HookError::handler)?;
-    let sync_phase = vmm_profile_sync_phase(&state, latest_compaction_id.as_deref());
     let host_project_id =
         payload_string(&invocation.payload.value, "project_id").unwrap_or_default();
+    // Freeze complete read ownership before consulting cached nodes or refresh thresholds.
+    // 在查阅缓存节点或刷新阈值之前冻结完整读取归属。
+    let read_source = client
+        .memory_read_source(
+            &host_project_id,
+            config.user_id.unwrap_or_default(),
+            config.project_id.unwrap_or_default(),
+        )
+        .await
+        .map_err(|error| HookError::handler(error.to_string()))?;
+    state
+        .select_read_source(&read_source)
+        .map_err(|error| HookError::handler(error.to_string()))?;
+    let sync_phase = vmm_profile_sync_phase(&state, latest_compaction_id.as_deref());
 
     match sync_phase {
         SystemPromptHookPhase::FirstSession | SystemPromptHookPhase::AfterContextCompaction => {
             let nodes_by_id =
-                fetch_all_profile_nodes(client, config, host_project_id.as_str()).await?;
+                fetch_all_profile_nodes(client, config, host_project_id.as_str(), &read_source)
+                    .await?;
             let content = render_profile_system_prompt_from_nodes(&nodes_by_id);
             apply_vmm_profile_base_refresh(
                 &mut state,
@@ -955,7 +1179,8 @@ async fn maybe_sync_vmm_profile(
 
             let previous_nodes_by_id = state.nodes_by_id.clone();
             let latest_nodes_by_id =
-                fetch_all_profile_nodes(client, config, host_project_id.as_str()).await?;
+                fetch_all_profile_nodes(client, config, host_project_id.as_str(), &read_source)
+                    .await?;
             let delta = render_profile_node_diff(&previous_nodes_by_id, &latest_nodes_by_id);
             state.completed_turns_since_sync = 0;
             state.delta_profile_content = normalized_optional_text(&delta);
@@ -1008,12 +1233,141 @@ pub fn vmm_profile_sync_phase(
     SystemPromptHookPhase::SubsequentSession
 }
 
+/// Validates recall and lifecycle effects before either can alter the current memory state.
+/// 在召回或生命周期效果改变当前记忆状态前校验二者。
+/// Takes a correlated outcome and the host's current optional source; returns whether stale VMM effects were removed.
+/// 接收关联结果与宿主当前可选来源；返回是否移除了旧 VMM 效果。
+pub(crate) fn reconcile_vmm_precheck_publication(
+    outcome: &mut crate::agent_runtime::conversation_hooks::ConversationPrecheckOutcome,
+    expected: Option<&vulcan_vmm::VmmMemoryReadSource>,
+) -> Result<bool, String> {
+    if let Some(expected) = expected {
+        expected.validate().map_err(|error| error.to_string())?;
+    }
+    let Ok(report) = outcome.report.as_mut() else {
+        return Ok(false);
+    };
+    // Decode both effects before mutation: malformed metadata is an explicit contract error, not absence.
+    // 在变更前解码两个效果：畸形元数据属于明确契约错误，而非缺失。
+    let recall =
+        crate::agent_runtime::conversation_hooks::vmm_recall_batch_effect_from_report(report)?;
+    // Empty PreCheck responses still carry lifecycle authority and must be source-fenced.
+    // 空 PreCheck 响应仍带有生命周期权威，必须校验来源。
+    let status =
+        crate::agent_runtime::conversation_hooks::vmm_session_status_effect_from_report(report)?;
+    for source in recall
+        .iter()
+        .map(|effect| &effect.read_source)
+        .chain(status.iter().map(|effect| &effect.read_source))
+    {
+        source.validate().map_err(|error| error.to_string())?;
+    }
+    // Treat the two effects as one response; never combine status from one source with another source's content.
+    // 把两个效果视为同一响应；绝不组合一个来源的状态与另一个来源的内容。
+    let rejected = recall
+        .as_ref()
+        .is_some_and(|effect| Some(&effect.read_source) != expected)
+        || status
+            .as_ref()
+            .is_some_and(|effect| Some(&effect.read_source) != expected);
+    if rejected {
+        report
+            .metadata
+            .remove(HOOK_METADATA_VMM_RECALL_BATCH_EFFECT);
+        report
+            .metadata
+            .remove(HOOK_METADATA_VMM_SESSION_STATUS_EFFECT);
+    }
+    Ok(rejected)
+}
+
+/// Revalidates resident and incoming profile content against the current publication source.
+/// 根据当前发布来源重新校验驻留和传入画像内容。
+/// Takes current cache, injections, outcome and optional active source; returns whether a stale result was dropped.
+/// 接收当前缓存、注入、结果及可选活动来源；返回是否丢弃了旧结果。
+pub(crate) fn reconcile_vmm_profile_publication(
+    current: &mut VmmProfileSyncState,
+    injections: &mut vulcan_context_injection::ContextInjectionState,
+    outcome: &mut crate::agent_runtime::conversation_hooks::ConversationProfileOutcome,
+    expected: Option<&vulcan_vmm::VmmMemoryReadSource>,
+) -> Result<bool, String> {
+    if let Some(expected) = expected {
+        expected.validate().map_err(|error| error.to_string())?;
+    }
+    if expected.is_none() || current.read_source.as_ref() != expected {
+        // Unknown provenance cannot be relabeled as the new source even when numeric IDs happen to match.
+        // 即使数字 ID 恰好相同，也不能把未知来源重新标记为新来源。
+        *current = VmmProfileSyncState {
+            read_source: expected.cloned(),
+            ..Default::default()
+        };
+        injections.remove_group(
+            Some(InjectionKind::Persistent),
+            VMM_PROFILE_DELTA_INJECTION_TAG,
+        );
+    }
+    let Ok(report) = outcome.report.as_mut() else {
+        return Ok(false);
+    };
+    // A malformed or duplicated effect is not equivalent to a skipped hook.
+    // 畸形或重复效果不等同于跳过 Hook。
+    let effect =
+        crate::agent_runtime::conversation_hooks::vmm_profile_sync_effect_from_report(report)?;
+    let accepted = expected.is_some()
+        && effect
+            .as_ref()
+            .is_some_and(|effect| effect.state.read_source.as_ref() == expected);
+    if accepted {
+        return Ok(false);
+    }
+    let rejected = effect.is_some();
+    clear_vmm_profile_report(report);
+    Ok(rejected)
+}
+
+/// Removes only built-in VMM profile outputs from an existing dispatch report.
+/// 从既有派发报告中仅移除内置 VMM 画像输出。
+/// Takes a mutable report and preserves all other hooks' metadata, injections and system blocks.
+/// 接收可变报告，保留全部其他 Hook 的元数据、注入及系统块。
+pub fn clear_vmm_profile_report(report: &mut vulcan_hooks::HookDispatchReport) {
+    report
+        .metadata
+        .remove(HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT);
+    report
+        .injections
+        .retain(|insert| insert.tag != VMM_PROFILE_DELTA_INJECTION_TAG);
+    report
+        .system_prompt_blocks
+        .retain(|block| block.tag != VMM_PROFILE_SYSTEM_PROMPT_TAG);
+}
+
+/// Publishes one profile baseline and removes only old-source profile deltas before installing it.
+/// 发布一个画像基线，并在安装前仅移除旧来源画像增量。
+/// Takes the current baseline, shared injections and incoming state; preserves unrelated injection groups.
+/// 接收当前基线、共享注入及传入状态；保留无关的注入分组。
+pub(crate) fn apply_vmm_profile_sync_state(
+    current: &mut VmmProfileSyncState,
+    injections: &mut vulcan_context_injection::ContextInjectionState,
+    incoming: VmmProfileSyncState,
+) {
+    if current.read_source != incoming.read_source {
+        // Deltas describe the previous source's baseline and must not be applied on a new owner's baseline.
+        // 增量描述此前来源的基线，不得叠加在新归属的基线上。
+        injections.remove_group(
+            Some(InjectionKind::Persistent),
+            VMM_PROFILE_DELTA_INJECTION_TAG,
+        );
+    }
+    *current = incoming;
+}
+
 /// Fetches active profile nodes for every supported VMM target.
 /// 为所有受支持的 VMM 目标拉取 active 画像节点。
 async fn fetch_all_profile_nodes(
     client: &dyn VmmClient,
     config: &VmmEffectiveConfig,
     host_project_id: &str,
+    read_source: &vulcan_vmm::VmmMemoryReadSource,
 ) -> Result<BTreeMap<u64, ProfileNodeEntry>, HookError> {
     let mut nodes = BTreeMap::new();
     for target in [
@@ -1024,6 +1378,7 @@ async fn fetch_all_profile_nodes(
     ] {
         let response = client
             .get_profile_nodes(GetProfileNodesRequest {
+                expected_read_source: Some(read_source.clone()),
                 target,
                 user_id: config.user_id.unwrap_or_default(),
                 project_id: config.project_id.unwrap_or_default(),
@@ -1308,6 +1663,23 @@ fn base_profile_block(state: &VmmProfileSyncState) -> Option<SystemPromptHookBlo
         .map(|content| vmm_profile_hook_block(content, baseline_phase, "full"))
 }
 
+/// Removes only VMM-owned profile layers from a request-local publication projection.
+/// 仅从请求级发布投影移除记忆模块拥有的画像层。
+/// `injections` contains generic layers and `blocks` contains system Hook contributions; unrelated owners remain unchanged.
+/// `injections` 包含通用注入层，`blocks` 包含系统 Hook 贡献；其他所有者保持不变。
+/// Returns no value and does not change profile storage, canonical messages or memory extraction jobs.
+/// 无返回值，不修改画像存储、规范消息或记忆提炼作业。
+pub fn clear_vmm_profile_injections(
+    injections: &mut vulcan_context_injection::ContextInjectionState,
+    blocks: &mut Vec<SystemPromptHookBlock>,
+) {
+    injections.remove_group(
+        Some(InjectionKind::Persistent),
+        VMM_PROFILE_DELTA_INJECTION_TAG,
+    );
+    blocks.retain(|block| block.tag != VMM_PROFILE_SYSTEM_PROMPT_TAG);
+}
+
 /// Restores the persisted VMM profile baseline into every provider request without duplicating it.
 /// 将持久化的 VMM 画像基线恢复到每次 Provider 请求中，同时避免重复。
 ///
@@ -1395,14 +1767,29 @@ fn vmm_profile_hidden_user_injection(
 async fn flush_vmm_writeback_outbox(
     client: &dyn VmmClient,
     outbox: Vec<VmmWritebackOutboxEntry>,
+    permit: &vulcan_vmm::VmmWritebackPermit,
 ) -> Vec<VmmWritebackHookEffect> {
     let mut flushed = Vec::new();
     let mut effects = Vec::new();
     for entry in outbox {
-        match accepted_post_action(client, entry.request.clone()).await {
+        match accepted_post_action(client, entry.request.clone(), permit).await {
             Ok(status) => {
                 flushed.push(entry.id);
-                effects.push(VmmWritebackHookEffect::SessionStatus { status });
+                effects.push(VmmWritebackHookEffect::SessionStatus {
+                    status,
+                    permit_id: permit.id(),
+                });
+            }
+            Err(error)
+                if matches!(
+                    error.kind.as_str(),
+                    "memory_source_changed" | "writeback_cancelled"
+                ) =>
+            {
+                effects.push(VmmWritebackHookEffect::Cancelled {
+                    entry_ids: vec![entry.id],
+                    reason: error.to_string(),
+                });
             }
             Err(error) => {
                 if !flushed.is_empty() {
@@ -1424,23 +1811,53 @@ async fn flush_vmm_writeback_outbox(
     effects
 }
 
+/// Partitions pending deliveries by exact ownership without invoking any backend.
+/// 按准确归属划分待投递项，不调用任何后端。
+/// Takes the current source and queued entries; returns its FIFO and explicit cancellations for all others.
+/// 接收当前来源及队列，返回同源 FIFO 及其他条目的明确取消效果。
+fn cancel_foreign_vmm_writebacks(
+    outbox: Vec<VmmWritebackOutboxEntry>,
+    source: &vulcan_vmm::VmmMemorySource,
+    permit_id: u64,
+) -> (Vec<VmmWritebackOutboxEntry>, Vec<VmmWritebackHookEffect>) {
+    // Missing provenance cannot establish permission to replay; never guess from the request envelope.
+    // 缺失来源不能建立重放权限；绝不根据请求封套猜测。
+    let (retained, cancelled): (Vec<_>, Vec<_>) = outbox.into_iter().partition(|entry| {
+        entry.request.expected_source.as_ref() == Some(source) && entry.permit_id == permit_id
+    });
+    // Cancellation is not a successful delivery and must remain distinguishable in host effects.
+    // 取消不是成功投递，必须在宿主效果中保持可区分。
+    let effects = if cancelled.is_empty() {
+        Vec::new()
+    } else {
+        vec![VmmWritebackHookEffect::Cancelled {
+            entry_ids: cancelled.into_iter().map(|entry| entry.id).collect(),
+            reason: "Memory source changed or could not be established; pending writeback cancelled without replay.".to_owned(),
+        }]
+    };
+    (retained, effects)
+}
+
 /// Calls VMM PostAction and requires an accepted response.
 /// 调用 VMM PostAction 并要求返回 accepted。
 async fn accepted_post_action(
     client: &dyn VmmClient,
     request: vulcan_vmm::PostActionRequest,
-) -> Result<vulcan_vmm::SessionMemoryStatus, HookError> {
-    let response = client
-        .post_action(request)
-        .await
-        .map_err(|error| HookError::handler(error.to_string()))?;
+    permit: &vulcan_vmm::VmmWritebackPermit,
+) -> Result<vulcan_vmm::SessionMemoryStatus, vulcan_vmm::VmmClientError> {
+    // Retain the typed failure kind so terminal source cancellation cannot become a retryable outbox entry.
+    // 保留类型化失败类别，防止终态来源取消被转换成可重试队列项。
+    let response = client.post_action_with_permit(request, permit).await?;
     if response.accepted {
         Ok(response.session_memory_status)
     } else {
-        Err(HookError::handler(format!(
-            "VMM PostAction returned accepted=false trace_id={}",
-            response.trace_id
-        )))
+        Err(vulcan_vmm::VmmClientError::new(
+            "postaction_not_accepted",
+            format!(
+                "VMM PostAction returned accepted=false trace_id={}",
+                response.trace_id
+            ),
+        ))
     }
 }
 
@@ -1500,6 +1917,325 @@ fn invocation_vmm_runtime_ready(invocation: &HookInvocation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies request-local suppression removes every VMM profile block and only its persistent deltas.
+    /// 验证请求级屏蔽移除全部记忆画像块及其持久增量，不影响其他来源。
+    /// Takes no arguments; returns after exact preservation and repeated-call no-op assertions.
+    /// 无参数；准确保留及重复调用无变化断言完成后返回。
+    #[test]
+    fn profile_suppression_preserves_other_injection_owners() {
+        // The same profile may be present more than once after independent preparation phases.
+        // 独立准备阶段结束后，同一画像可能出现多次。
+        let mut blocks = vec![
+            vmm_profile_hook_block("old base", SystemPromptHookPhase::FirstSession, "full"),
+            SystemPromptHookBlock::new("other_hook", "keep system"),
+            vmm_profile_hook_block(
+                "old refresh",
+                SystemPromptHookPhase::AfterContextCompaction,
+                "full",
+            ),
+        ];
+        // These are production-shaped persistent profile deltas alongside another feature's data.
+        // 这里包含生产形态的持久画像增量及另一功能的数据。
+        let mut injections = vulcan_context_injection::ContextInjectionState::default();
+        injections.apply_insert(
+            vmm_profile_delta_injection("old delta", "refresh", "1"),
+            "1",
+        );
+        injections.apply_insert(
+            vmm_profile_hidden_user_injection(
+                "keep generic",
+                "test",
+                "other_feature",
+                "other",
+                "other",
+                0,
+            ),
+            "1",
+        );
+        clear_vmm_profile_injections(&mut injections, &mut blocks);
+        assert_eq!(
+            blocks,
+            vec![SystemPromptHookBlock::new("other_hook", "keep system")]
+        );
+        assert!(!injections.remove_group(
+            Some(InjectionKind::Persistent),
+            VMM_PROFILE_DELTA_INJECTION_TAG
+        ));
+        // A second suppression cannot disturb the remaining feature or its ordering.
+        // 第二次屏蔽不能扰动保留功能或其顺序。
+        let after = injections.clone();
+        clear_vmm_profile_injections(&mut injections, &mut blocks);
+        assert_eq!(injections, after);
+        assert!(injections.remove_group(Some(InjectionKind::Persistent), "other_feature"));
+        assert!(injections.is_empty());
+    }
+
+    /// Final publication retains the configuration read lock and never runs the commit after a route change.
+    /// 最终发布保留配置读锁，并且路由变化后绝不执行提交。
+    #[test]
+    fn final_profile_publication_locks_current_source_through_commit() {
+        let session = SessionId::from_u128(617);
+        let mut layer = VmmConfigLayer {
+            enabled: Some(true),
+            backend_mode: Some(VmmBackendMode::ExternalGrpc),
+            grpc_target: Some("127.0.0.1:50051".to_owned()),
+            user_id: Some(1),
+            project_id: Some(7),
+            ..Default::default()
+        };
+        let expected = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::external(
+                &VmmTransportConfig::from_effective(&VmmEffectiveConfig::resolve(
+                    &layer, None, None,
+                )),
+                1,
+                7,
+            )
+            .expect("source"),
+            Vec::new(),
+        )
+        .expect("read source");
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+            global: layer.clone(),
+            ..Default::default()
+        });
+        assert_eq!(
+            runtime
+                .with_current_profile_publication(session, "D:/project", &expected, || {
+                    assert!(
+                        runtime.state.try_write().is_err(),
+                        "configuration must remain frozen while committing"
+                    );
+                    42
+                })
+                .expect("same source commit"),
+            42
+        );
+        layer.project_id = Some(8);
+        runtime
+            .replace_global_projection(&layer)
+            .expect("change source");
+        let mut committed = false;
+        assert!(
+            runtime
+                .with_current_profile_publication(session, "D:/project", &expected, || committed =
+                    true)
+                .is_err()
+        );
+        assert!(!committed);
+        assert!(
+            runtime.state.try_write().is_ok(),
+            "guard must release after rejection"
+        );
+        // Project enablement can override the behavior layer, but cannot reactivate the global service.
+        // 项目启用可以覆盖行为层，但不能重新激活全局服务。
+        runtime
+            .replace_project_projection(
+                "D:/project",
+                &VmmConfigLayer {
+                    enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .expect("project behavior enabled");
+        layer.project_id = Some(7);
+        layer.enabled = Some(false);
+        runtime
+            .replace_global_projection(&layer)
+            .expect("stop service");
+        assert!(
+            runtime
+                .resolve_publication_config(session, "D:/project")
+                .expect("effective project behavior")
+                .enabled
+        );
+        assert!(
+            runtime
+                .with_current_profile_publication(session, "D:/project", &expected, || committed =
+                    true,)
+                .is_err()
+        );
+        assert!(
+            !committed,
+            "global stop must reject even a matching project override"
+        );
+    }
+
+    /// Publication reads current hook configuration after a global change instead of an earlier bridge clone.
+    /// 全局变化后发布读取当前 Hook 配置，而非此前的桥接克隆。
+    #[test]
+    fn publication_configuration_tracks_live_global_and_session_policy() {
+        let session = SessionId::from_u128(616);
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+            global: VmmConfigLayer {
+                enabled: Some(true),
+                backend_mode: Some(VmmBackendMode::Native),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(
+            runtime
+                .resolve_publication_config(session, "D:/project")
+                .expect("native")
+                .backend_mode,
+            VmmBackendMode::Native
+        );
+        runtime
+            .replace_global_projection(&VmmConfigLayer {
+                enabled: Some(true),
+                backend_mode: Some(VmmBackendMode::ExternalGrpc),
+                grpc_target: Some("127.0.0.1:50051".to_owned()),
+                user_id: Some(1),
+                project_id: Some(7),
+                ..Default::default()
+            })
+            .expect("changed global");
+        let current = runtime
+            .resolve_publication_config(session, "D:/project")
+            .expect("current");
+        assert_eq!(current.backend_mode, VmmBackendMode::ExternalGrpc);
+        assert_eq!(current.project_id, Some(7));
+        runtime
+            .replace_session_projection(
+                session,
+                &VmmConfigLayer {
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+                &[],
+                None,
+            )
+            .expect("disabled session");
+        assert!(
+            !runtime
+                .resolve_publication_config(session, "D:/project")
+                .expect("session override")
+                .enabled
+        );
+    }
+
+    /// Replacing a source clears its old profile deltas without removing other feature injections.
+    /// 替换来源会清除其旧画像增量，但不移除其他功能的注入。
+    #[test]
+    fn profile_source_publication_removes_only_previous_profile_deltas() {
+        // Start with a valid same-source baseline and actual production-shaped delta injection.
+        // 从有效同来源基线及实际生产形态的增量注入开始。
+        let source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::native(7).expect("owner"),
+            vec![7],
+        )
+        .expect("source");
+        let mut current = VmmProfileSyncState {
+            read_source: Some(source),
+            base_profile_content: Some("original".to_owned()),
+            ..Default::default()
+        };
+        let mut injections = vulcan_context_injection::ContextInjectionState::default();
+        injections.apply_insert(
+            vmm_profile_delta_injection("old delta", "refresh", "1"),
+            "1",
+        );
+        injections.apply_insert(
+            vmm_profile_hidden_user_injection(
+                "unrelated",
+                "test",
+                "another_feature",
+                "unrelated",
+                "unrelated",
+                0,
+            ),
+            "1",
+        );
+        let original = injections.clone();
+        let unchanged = current.clone();
+        apply_vmm_profile_sync_state(&mut current, &mut injections, unchanged);
+        assert_eq!(injections, original);
+        let changed = VmmProfileSyncState {
+            read_source: Some(
+                vulcan_vmm::VmmMemoryReadSource::new(
+                    vulcan_vmm::VmmMemorySource::native(7).expect("same owner"),
+                    vec![7, 8],
+                )
+                .expect("changed read scope"),
+            ),
+            base_profile_content: Some("new".to_owned()),
+            ..Default::default()
+        };
+        apply_vmm_profile_sync_state(&mut current, &mut injections, changed.clone());
+        assert_eq!(current, changed);
+        assert!(!injections.remove_group(
+            Some(InjectionKind::Persistent),
+            VMM_PROFILE_DELTA_INJECTION_TAG
+        ));
+        assert!(injections.remove_group(Some(InjectionKind::Persistent), "another_feature"));
+        assert!(injections.is_empty());
+    }
+
+    /// Cancels all foreign or unowned requests while retaining the exact source FIFO without transport calls.
+    /// 无传输调用地取消所有异源或无来源请求，并保留准确同源 FIFO。
+    #[test]
+    fn writeback_source_change_cancels_foreign_entries_including_later_fifo_items() {
+        // Equal numeric IDs deliberately cannot make a remote source equivalent to a native one.
+        // 特意使用相同数值 ID，远端来源仍不能等同原生来源。
+        let source = vulcan_vmm::VmmMemorySource::native(7).expect("native");
+        let remote = vulcan_vmm::VmmMemorySource::external(
+            &VmmTransportConfig::from_effective(&VmmEffectiveConfig {
+                grpc_target: "http://127.0.0.1:50051".to_owned(),
+                ..Default::default()
+            }),
+            1,
+            7,
+        )
+        .expect("remote");
+        // Each fixture names its exact provenance, including the explicitly unresolvable entry.
+        // 每个夹具明确命名自身来源，包括明确无法解析来源的条目。
+        let entries = [
+            ("first", Some(source.clone())),
+            ("remote", Some(remote)),
+            ("unowned", None),
+            (
+                "other-project",
+                Some(vulcan_vmm::VmmMemorySource::native(8).expect("other")),
+            ),
+            ("last", Some(source.clone())),
+        ]
+        .into_iter()
+        .map(|(id, expected_source)| VmmWritebackOutboxEntry {
+            permit_id: 1,
+            id: id.to_owned(),
+            request: vulcan_vmm::PostActionRequest {
+                expected_source,
+                ..Default::default()
+            },
+            attempt_count: 2,
+            last_error: Some("offline".to_owned()),
+            created_at: "1".to_owned(),
+            updated_at: "2".to_owned(),
+        })
+        .collect();
+        // A later foreign item is cancelled even when an earlier retained retry might fail.
+        // 即使更早保留项的重试可能失败，位于其后的异源条目仍被取消。
+        let (retained, effects) = cancel_foreign_vmm_writebacks(entries, &source, 1);
+        assert_eq!(
+            retained
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "last"]
+        );
+        assert!(retained.iter().all(|entry| entry.attempt_count == 2));
+        assert_eq!(effects, vec![VmmWritebackHookEffect::Cancelled {
+            entry_ids: vec!["remote".to_owned(), "unowned".to_owned(), "other-project".to_owned()],
+            reason: "Memory source changed or could not be established; pending writeback cancelled without replay.".to_owned(),
+        }]);
+        assert!(
+            cancel_foreign_vmm_writebacks(retained, &source, 1)
+                .1
+                .is_empty()
+        );
+    }
     use vulcan_hooks::{HookContext, HookPayload};
 
     /// Verifies precheck keeps its short UI protection while effect and preparation hooks receive the long host budget.
@@ -1611,6 +2347,8 @@ mod tests {
         // otherSession 证明本次更新不会重建或丢弃无关状态。
         let other_session = SessionId::from_u128(42);
         let mut initial = VmmHookConfigSnapshot::default();
+        initial.global.backend_mode = Some(VmmBackendMode::Native);
+        initial.global.enabled = Some(true);
         initial.sessions.insert(
             other_session.to_string(),
             VmmConfigLayer {
@@ -1630,9 +2368,21 @@ mod tests {
             ai_tools_enabled: Some(false),
             ..VmmConfigLayer::default()
         };
+        // A mirrored pending entry must belong to a real live admission rather than inventing a permit ID.
+        // 镜像待处理项必须属于真实活动准入，不能编造许可 ID。
+        let source = vulcan_vmm::VmmMemorySource::native(7).expect("test source");
+        let permit = runtime.admit_writeback(&HookInvocation {
+            registration: vmm_hook_registration(VMM_POST_ACTION_HOOK_ID, HOOK_CONVERSATION_TURN_COMPLETED, HookMode::Effect),
+            context: HookContext::new("projection", HOOK_CONVERSATION_TURN_COMPLETED),
+            payload: HookPayload { value: json!({ "session_id": target_session.to_string(), "project_id": "host-project" }) },
+        }, &source).expect("admit test delivery");
         let target_outbox = vec![VmmWritebackOutboxEntry {
+            permit_id: permit.id(),
             id: String::from("outbox-target"),
-            request: vulcan_vmm::PostActionRequest::default(),
+            request: vulcan_vmm::PostActionRequest {
+                expected_source: Some(source),
+                ..Default::default()
+            },
             attempt_count: 1,
             last_error: None,
             created_at: String::from("100"),
@@ -1679,7 +2429,13 @@ mod tests {
     fn vmm_snapshot_replacement_preserves_runtime_profile_state_atomically() {
         // runtime owns the only VMM configuration and profile snapshot used by the test.
         // runtime 持有测试使用的唯一 VMM 配置与画像快照。
-        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+            global: VmmConfigLayer {
+                enabled: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
         // sessionId identifies the runtime-produced profile entry that must survive refresh.
         // sessionId 标识必须在刷新后保留的运行时画像项。
         let session_id = SessionId::new_v4();
@@ -1720,6 +2476,121 @@ mod tests {
         assert_eq!(
             state.profile_sync.get(&session_id.to_string()),
             Some(&runtime_profile)
+        );
+    }
+
+    /// Verifies master-mode changes clear orphaned profiles and reject late preparation after switching back.
+    /// 验证总模式变化清除孤立画像，并拒绝切回后的迟到准备结果。
+    /// Uses the actual admission/store helpers; ordinary tuning must retain its baseline and epoch.
+    /// 使用实际准入及存储辅助方法；普通调参必须保留基线和代次。
+    #[test]
+    fn vmm_global_mode_profile_epoch_rejects_late_results_without_losing_same_mode_cache() {
+        // Native activation is explicit so the fixture never depends on transport inference.
+        // 显式启用原生模式，夹具不依赖传输推断。
+        let mut global = VmmConfigLayer {
+            enabled: Some(true),
+            backend_mode: Some(VmmBackendMode::Native),
+            ..Default::default()
+        };
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+            global: global.clone(),
+            ..Default::default()
+        });
+        let session_id = SessionId::new_v4().to_string();
+        let invocation = HookInvocation {
+            registration: vmm_hook_registration(
+                VMM_PROFILE_PREPARE_HOOK_ID,
+                HOOK_CONVERSATION_PROFILE_PREPARE,
+                HookMode::Transform,
+            ),
+            payload: HookPayload {
+                value: json!({"session_id":session_id, "vmm_runtime_ready":true}),
+            },
+            context: HookContext::new("profile-mode-test", HOOK_CONVERSATION_PROFILE_PREPARE),
+        };
+        let (_, admitted_epoch) = runtime
+            .resolve_profile_admission(&invocation)
+            .expect("admit profile");
+        let profile = VmmProfileSyncState {
+            base_profile_content: Some("accepted cached profile".to_owned()),
+            ..Default::default()
+        };
+        runtime
+            .store_profile_sync_for_session(&session_id, profile.clone(), Some(admitted_epoch))
+            .expect("initial cache");
+        global.implicit_memory_turns = Some(7);
+        runtime
+            .replace_global_projection(&global)
+            .expect("same-mode tuning");
+        assert_eq!(
+            runtime
+                .resolve_profile_admission(&invocation)
+                .expect("same epoch")
+                .1,
+            admitted_epoch
+        );
+        assert_eq!(
+            runtime
+                .read_state("check cache")
+                .expect("state")
+                .profile_sync
+                .get(&session_id),
+            Some(&profile)
+        );
+        global.enabled = Some(false);
+        runtime.replace_global_projection(&global).expect("disable");
+        assert_eq!(runtime.global_memory_mode().expect("mode"), None);
+        assert!(
+            runtime
+                .read_state("disabled cache")
+                .expect("state")
+                .profile_sync
+                .is_empty()
+        );
+        global.enabled = Some(true);
+        runtime
+            .replace_global_projection(&global)
+            .expect("enable again");
+        assert!(
+            runtime
+                .store_profile_sync_for_session(&session_id, profile.clone(), Some(admitted_epoch))
+                .is_err()
+        );
+        assert!(
+            runtime
+                .read_state("late cache rejected")
+                .expect("state")
+                .profile_sync
+                .is_empty()
+        );
+        let (_, current_epoch) = runtime
+            .resolve_profile_admission(&invocation)
+            .expect("new admission");
+        runtime
+            .store_profile_sync_for_session(&session_id, profile.clone(), Some(current_epoch))
+            .expect("current cache");
+        global.backend_mode = Some(VmmBackendMode::ExternalGrpc);
+        runtime
+            .replace_snapshot(VmmHookConfigSnapshot {
+                global,
+                ..Default::default()
+            })
+            .expect("replace backend");
+        assert_eq!(
+            runtime.global_memory_mode().expect("external mode"),
+            Some(VmmBackendMode::ExternalGrpc)
+        );
+        assert!(
+            runtime
+                .store_profile_sync_for_session(&session_id, profile, Some(current_epoch))
+                .is_err()
+        );
+        assert!(
+            runtime
+                .read_state("backend cache")
+                .expect("state")
+                .profile_sync
+                .is_empty()
         );
     }
 

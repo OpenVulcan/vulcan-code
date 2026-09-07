@@ -480,6 +480,52 @@ async fn connect_vmm_native_client(
     }
 }
 
+/// Resolves trusted native caller context without exposing lifecycle bypass controls to AI arguments.
+/// 解析可信原生调用方上下文，不向 AI 参数暴露生命周期绕过开关。
+/// Native calls require the execution's session ID; external calls retain their existing transport shape.
+/// 原生调用要求执行所属的会话 ID；外置调用保持既有传输结构。
+fn native_memory_runtime_session(
+    session_id: Option<SessionId>,
+    mode: VmmBackendMode,
+) -> Result<Option<String>, NativeToolError> {
+    match mode {
+        VmmBackendMode::Native => session_id
+            .map(|session| Some(session.to_string()))
+            .ok_or_else(|| {
+                NativeToolError::new("Native VMM tools require an exact runtime session id.")
+            }),
+        VmmBackendMode::ExternalGrpc => Ok(None),
+    }
+}
+
+/// Checks trusted native session propagation and the unchanged sessionless external boundary.
+/// 检查可信原生会话传递及保持不变的外置无会话边界。
+#[cfg(test)]
+#[test]
+fn native_memory_runtime_session_is_required_only_for_native_tools() {
+    // Use a stable host session identity to assert exact propagation, not merely presence.
+    // 使用稳定宿主会话身份断言准确传递，而不仅断言存在。
+    let session = "423db0fa-7bfb-4844-8ebc-a1eef75971fe"
+        .parse()
+        .expect("session id");
+    assert_eq!(
+        native_memory_runtime_session(Some(session), VmmBackendMode::Native)
+            .expect("native context"),
+        Some(session.to_string())
+    );
+    assert!(native_memory_runtime_session(None, VmmBackendMode::Native).is_err());
+    assert_eq!(
+        native_memory_runtime_session(Some(session), VmmBackendMode::ExternalGrpc)
+            .expect("external context"),
+        None
+    );
+    assert_eq!(
+        native_memory_runtime_session(None, VmmBackendMode::ExternalGrpc)
+            .expect("external without session"),
+        None
+    );
+}
+
 async fn execute_vmm_memory_search_tool(
     request: NativeToolExecutionRequest,
     snapshot: Arc<NativeToolRuntimeSnapshot>,
@@ -489,6 +535,10 @@ async fn execute_vmm_memory_search_tool(
     let client = connect_vmm_native_client(&config).await?;
     let response = client
         .search_memory_events(SearchMemoryEventsRequest {
+            runtime_session_id: native_memory_runtime_session(
+                request.session_id,
+                config.backend_mode,
+            )?,
             user_id: config.user_id.unwrap_or_default(),
             project_id: config.project_id.unwrap_or_default(),
             host_project_id: request.host_project_id.clone().unwrap_or_default(),
@@ -506,18 +556,59 @@ async fn execute_vmm_memory_search_tool(
                 "query_index": group.query_index,
                 "query": group.query,
                 "hit_count": group.hits.len(),
-                "hits": group.hits.into_iter().map(|hit| json!({
-                    "memory_id": hit.memory_id,
-                    "source_turn_id": hit.source_turn_id,
-                    "has_source_turn": hit.source_turn_id != 0,
-                    "abstract": hit.abstract_text,
-                    "details_preview": hit.details_preview,
-                    "category": hit.category,
-                    "created_datetime": hit.created_datetime,
-                })).collect::<Vec<_>>(),
+                "hits": group.hits.into_iter().map(memory_search_hit_output).collect::<Vec<_>>(),
             })
         }).collect::<Vec<_>>(),
     })))
+}
+
+/// Projects one exact search hit to model-visible JSON without inventing external provenance.
+/// 将准确检索命中投影为模型可见 JSON，不编造外置来源。
+/// Takes the service-owned hit and preserves every supplied retrieval fact in the returned object.
+/// 接收服务归属的命中，在返回对象中保留每项已提供检索事实。
+fn memory_search_hit_output(hit: vulcan_vmm::MemorySearchHit) -> Value {
+    // The literal object owns this result shape; only the optional observed facts extend it.
+    // 字面对象拥有该结果形状；仅可选的已观察事实对其扩展。
+    let mut value = json!({
+        "memory_id": hit.memory_id,
+        "source_turn_id": hit.source_turn_id,
+        "has_source_turn": hit.source_turn_id != 0,
+        "abstract": hit.abstract_text,
+        "details_preview": hit.details_preview,
+        "category": hit.category,
+        "created_datetime": hit.created_datetime,
+    });
+    if let Some(retrieval) = hit.retrieval {
+        value["retrieval"] = json!(retrieval);
+    }
+    value
+}
+
+/// Verifies the actual tool projection preserves supplied facts and omits absent external facts.
+/// 验证实际工具投影保留已提供事实，并省略缺失的外置事实。
+#[cfg(test)]
+#[test]
+fn memory_search_tool_preserves_optional_retrieval_facts() {
+    // The fixture deliberately separates creation from retrieval and total from matched evidence.
+    // 夹具刻意区分创建与检索来源，以及总数与匹配证据。
+    let retrieval = json!({
+        "source_kind": "direct", "origin": "lexical_rerank", "origin_label": "Lexical + Rerank",
+        "origin_explanation": "Both recorded stages executed.", "final_score": 0.875,
+        "context_observed": true, "support_count": 9, "rebuttal_count": 5,
+        "matched_context_values": ["fruit=西瓜"], "matched_context_support_count": 2,
+        "matched_context_rebuttal_count": 1, "matched_context_score_delta": -0.01
+    });
+    let native = memory_search_hit_output(vulcan_vmm::MemorySearchHit {
+        memory_id: 7,
+        source_turn_id: 2,
+        retrieval: Some(serde_json::from_value(retrieval.clone()).expect("closed fixture")),
+        ..Default::default()
+    });
+    assert_eq!(native["retrieval"], retrieval);
+    assert_eq!(native["has_source_turn"], true);
+    let external = memory_search_hit_output(vulcan_vmm::MemorySearchHit::default());
+    assert!(external.get("retrieval").is_none());
+    assert_eq!(external["has_source_turn"], false);
 }
 
 /// Executes the host-owned `vmm_turn_details` tool.
@@ -531,6 +622,10 @@ async fn execute_vmm_turn_details_tool(
     let client = connect_vmm_native_client(&config).await?;
     let response = client
         .get_turn_details(GetTurnDetailsRequest {
+            runtime_session_id: native_memory_runtime_session(
+                request.session_id,
+                config.backend_mode,
+            )?,
             user_id: config.user_id.unwrap_or_default(),
             project_id: config.project_id.unwrap_or_default(),
             host_project_id: request.host_project_id.clone().unwrap_or_default(),
@@ -618,6 +713,10 @@ async fn execute_vmm_memory_delete_tool(
     let client = connect_vmm_native_client(&config).await?;
     let response = client
         .delete_memories(DeleteMemoriesRequest {
+            runtime_session_id: native_memory_runtime_session(
+                request.session_id,
+                config.backend_mode,
+            )?,
             user_id: config.user_id.unwrap_or_default(),
             project_id: config.project_id.unwrap_or_default(),
             host_project_id: request.host_project_id.clone().unwrap_or_default(),

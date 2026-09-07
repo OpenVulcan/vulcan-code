@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import type { VceProjectOverviewResponse } from "@/types";
+import type { VceJobSummary, VceProjectOverviewResponse } from "@/types";
 import { CodeContextArea, loadAuthoritativeVceOverview } from "./code-context-area";
+import { VceJobObserverProvider } from "./vce-job-observer-context";
 
 // overviewFixture builds one complete management-safe project projection.
 // overviewFixture 构建一份完整且管理安全的项目投影。
@@ -20,6 +21,8 @@ function overviewFixture(enabled: boolean): VceProjectOverviewResponse {
     },
     settings: {
       enabled,
+      updateMode: "manual",
+      autoUpdateMinIntervalSeconds: 300,
       revision: 4,
       migratedFromCodebaseMemory: true,
       maxFileBytes: 1_048_576,
@@ -77,22 +80,58 @@ function overviewFixture(enabled: boolean): VceProjectOverviewResponse {
 function renderArea(overview: VceProjectOverviewResponse, busy = false, locale = "zh-CN") {
   return renderToStaticMarkup(
     <I18nProvider initialLocale={locale}>
+      <VceJobObserverProvider serviceEpoch={0}>
       <CodeContextArea
         busy={busy}
         onOverviewChanged={vi.fn()}
-        onRefresh={vi.fn(async () => undefined)}
-        onSave={vi.fn(async () => undefined)}
+        onRefresh={vi.fn<() => Promise<VceJobSummary>>()}
+        onSave={vi.fn(async () => overview.settings)}
+        activityError={null}
+        onReloadActivity={vi.fn(async () => undefined)}
+        onOpenEngineSettings={vi.fn()}
         overview={overview}
         projectId="project-a"
       />
+      </VceJobObserverProvider>
     </I18nProvider>,
   );
 }
 
 describe("CodeContextArea", () => {
-  // Rejected saves must recover from a fresh host snapshot instead of reusing stale component props.
-  // 被拒绝的保存必须从新的宿主快照恢复，而不是复用陈旧组件 props。
-  it("loads the authoritative project revision after a rejected save", async () => {
+  // Global model failures leave project intent editable while disabling index creation and management reads.
+  // 全局模型故障保留项目意图编辑，同时禁用索引创建及管理读取。
+  it("keeps project settings and model navigation available while index actions are closed", () => {
+    const overview = overviewFixture(true);
+    overview.configuration.ready = false;
+    overview.status.lifecycle = "blocked_configuration";
+    overview.status.checkpointVersion = null;
+    const markup = renderArea(overview);
+    expect(markup).toContain("您可以保存项目设置");
+    expect(markup).toContain("配置语义引擎模型");
+    const createButton = markup.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find((button) => button.includes("创建语义索引"));
+    expect(createButton).toContain('disabled=""');
+    const enabledSwitch = markup.match(/<button[^>]*>/g)?.find((button) => button.includes('aria-label="启用代码语义索引"'));
+    expect(enabledSwitch).toBeDefined(); expect(enabledSwitch).not.toContain('disabled=""');
+    expect(markup).not.toContain("文件与 Blob");
+  });
+  // Initialization requires a separately labelled human action, with no fabricated management data.
+  // 初始化要求单独标记的人为操作，不虚构管理数据。
+  it("separates project enablement from explicit index creation", () => {
+    const overview = overviewFixture(true);
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "uninitialized";
+    overview.counts = null;
+    const markup = renderArea(overview);
+    expect(markup).toContain("创建语义索引");
+    expect(markup).toContain("只有点击创建");
+    expect(markup).toContain("索引更新模式");
+    expect(markup).not.toContain("手动更新索引");
+    expect(markup).not.toContain("文件与 Blob");
+  });
+
+  // Expanded management reads obtain a fresh host snapshot instead of reusing stale component props.
+  // 展开的管理读取取得全新宿主快照，而不是复用陈旧组件属性。
+  it("loads the authoritative project revision for management details", async () => {
     const authoritative = overviewFixture(true);
     authoritative.settings.revision = 5;
     authoritative.status.settingsRevision = 5;

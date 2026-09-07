@@ -17,12 +17,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
+import { VmmNativeCleanupPreview } from "./vmm-native-cleanup-preview"
+import { VmmNativeLexicalIndex } from "./vmm-native-lexical-index"
+import { VmmNativeRecycleRecords } from "./vmm-native-recycle-records"
 import type {
   VmmMemoryActionResult,
   VmmNativeProjectCatalogSummary,
   VmmNativeRecycleBatchSummary,
   VmmNativeRecycleBinSummary,
   VmmNativeRetentionStatusSummary,
+  VmmNativeRetentionPreview,
+  VmmNativeLexicalIndexStatus,
   VmmNativeVectorRebuildPreview,
   VmmNativeVectorStatusSummary,
 } from "@/types"
@@ -49,6 +54,9 @@ interface RecycleConfirmation {
 export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMaintenancePageProps) {
   const { t } = useI18n()
   const [status, setStatus] = React.useState<VmmNativeRetentionStatusSummary | null>(null)
+  // Full-text state is independent of the embedding route and vector generation.
+  // 全文状态独立于嵌入路由与向量代次。
+  const [lexicalStatus, setLexicalStatus] = React.useState<VmmNativeLexicalIndexStatus | null>(null)
   const [vectorStatus, setVectorStatus] = React.useState<VmmNativeVectorStatusSummary | null>(null)
   const [vectorPreview, setVectorPreview] = React.useState<VmmNativeVectorRebuildPreview | null>(null)
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
@@ -56,12 +64,17 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
   const [projectFilter, setProjectFilter] = React.useState("all")
   const [confirmation, setConfirmation] = React.useState<RecycleConfirmation | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // Keep confirmation independent of the recycle filter and guard local cleanup submissions.
+  // 确认独立于回收站筛选，并保护本地清洗提交。
+  const [cleanupPreview, setCleanupPreview] = React.useState<VmmNativeRetentionPreview | null>(null)
+  const [cleanupPending, setCleanupPending] = React.useState(false)
 
   // loadStatus refreshes the process-local schedule and latest execution outcome.
   // loadStatus 刷新进程内调度状态与最近执行结果。
   const loadStatus = React.useCallback(async () => {
     const result = await onRunAction("native_retention_status")
     if (result?.data.kind !== "native_retention_status") {
+      setStatus(null)
       setError(t("memory.maintenance.invalidResponse"))
       return false
     }
@@ -74,10 +87,24 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
   const loadVectorStatus = React.useCallback(async () => {
     const result = await onRunAction("native_vector_status")
     if (result?.data.kind !== "native_vector_status") {
+      setVectorStatus(null)
       setError(t("memory.maintenance.invalidResponse"))
       return false
     }
     setVectorStatus(result.data.value)
+    return true
+  }, [onRunAction, t])
+
+  // loadLexicalStatus reads versioned source/index counts without calling an AI model.
+  // loadLexicalStatus 读取带版本的源及索引计数，不调用 AI 模型。
+  const loadLexicalStatus = React.useCallback(async () => {
+    const result = await onRunAction("native_lexical_status")
+    if (result?.data.kind !== "native_lexical_status") {
+      setLexicalStatus(null)
+      setError(t("memory.maintenance.invalidResponse"))
+      return false
+    }
+    setLexicalStatus(result.data.value)
     return true
   }, [onRunAction, t])
 
@@ -87,6 +114,7 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
     const payload = filter === "all" ? undefined : { vmmProjectId: Number(filter) }
     const result = await onRunAction("native_recycle_bin", payload)
     if (result?.data.kind !== "native_recycle_bin") {
+      setRecycleBin(null)
       setError(t("memory.maintenance.invalidResponse"))
       return false
     }
@@ -97,35 +125,59 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
   // loadPage refreshes status, project names, and recycle batches in channel-safe sequence.
   // loadPage 按动作通道安全的顺序刷新状态、项目名称与回收批次。
   const loadPage = React.useCallback(async () => {
-    if (!await loadStatus()) return
-    if (!await loadVectorStatus()) return
+    // Independent maintenance capabilities still load when another status endpoint fails.
+    // 其他状态端点失败时，独立的维护能力仍继续加载。
+    const hasRetentionStatus = await loadStatus()
+    const hasLexicalStatus = await loadLexicalStatus()
+    const hasVectorStatus = await loadVectorStatus()
     const catalogResult = await onRunAction("native_project_catalog")
-    if (catalogResult?.data.kind !== "native_project_catalog") {
+    const hasCatalog = catalogResult?.data.kind === "native_project_catalog"
+    if (catalogResult?.data.kind === "native_project_catalog") {
+      setCatalog(catalogResult.data.value)
+    } else {
+      setCatalog(null)
       setError(t("memory.maintenance.invalidResponse"))
-      return
     }
-    setCatalog(catalogResult.data.value)
-    if (!await loadRecycleBin(projectFilter)) return
-    setError(null)
-  }, [loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, t])
+    const hasRecycleBin = await loadRecycleBin(projectFilter)
+    if (hasRetentionStatus && hasLexicalStatus && hasVectorStatus && hasCatalog && hasRecycleBin) setError(null)
+  }, [loadLexicalStatus, loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, t])
 
   React.useEffect(() => {
     void loadPage()
   }, [loadPage])
 
-  // runCleanup executes one manual pass through the same serialized worker path.
-  // runCleanup 通过相同的串行工作器路径执行一次人工清洗。
+  // previewCleanup requests all-project impact without executing any mutation.
+  // previewCleanup 请求全部项目影响，不执行任何变更。
+  const previewCleanup = React.useCallback(async () => {
+    setCleanupPending(true)
+    try {
+      const result = await onRunAction("native_retention_preview")
+      if (result?.data.kind !== "native_retention_preview") {
+        setError(t("memory.maintenance.invalidResponse"))
+        return
+      }
+      setCleanupPreview(result.data.value)
+      setError(null)
+    } finally { setCleanupPending(false) }
+  }, [onRunAction, t])
+
+  // runCleanup confirms only the displayed server plan; a failed plan needs a new preview.
+  // runCleanup 仅确认当前显示的服务端计划，失败计划需要重新预览。
   const runCleanup = React.useCallback(async () => {
-    const result = await onRunAction("native_retention_run")
-    if (result?.data.kind !== "native_retention_run") {
-      setError(t("memory.maintenance.invalidResponse"))
-      return
+    if (!cleanupPreview || cleanupPending) return
+    setCleanupPending(true)
+    try {
+      const result = await onRunAction("native_retention_run", { previewId: cleanupPreview.previewId, confirmed: true })
+      setCleanupPreview(null)
+      if (result?.data.kind !== "native_retention_run") {
+        setError(t("memory.maintenance.invalidResponse"))
+        return
+      }
+      await loadPage()
+    } finally {
+      setCleanupPending(false)
     }
-    await loadStatus()
-    await loadVectorStatus()
-    await loadRecycleBin(projectFilter)
-    setError(null)
-  }, [loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, t])
+  }, [cleanupPending, cleanupPreview, loadPage, onRunAction, t])
 
   // previewVectorRebuild obtains the exact versioned target set before asking for confirmation.
   // previewVectorRebuild 在请求确认前获取准确的版本化目标集合。
@@ -153,9 +205,8 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
       return
     }
     setVectorPreview(null)
-    await loadVectorStatus()
-    setError(null)
-  }, [loadVectorStatus, onRunAction, t, vectorPreview])
+    await loadPage()
+  }, [loadPage, onRunAction, t, vectorPreview])
 
   // applyRecycleAction restores or permanently purges one exact versioned batch.
   // applyRecycleAction 恢复或永久清除一个准确的带版本批次。
@@ -171,11 +222,8 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
       return
     }
     setConfirmation(null)
-    await loadStatus()
-    await loadVectorStatus()
-    await loadRecycleBin(projectFilter)
-    setError(null)
-  }, [confirmation, loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, recycleBin, t])
+    await loadPage()
+  }, [confirmation, loadPage, onRunAction, recycleBin, t])
 
   const projectNames = React.useMemo(() => new Map(
     (catalog?.projects ?? []).map((entry) => [entry.projectId, entry.name]),
@@ -185,7 +233,7 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 className="text-lg font-semibold">{t("memory.maintenance.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.maintenance.description")}</p></div>
-        <div className="flex flex-wrap gap-2"><Button disabled={busy || status?.running} onClick={() => void runCleanup()} type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.runNow")}</Button><Button disabled={busy} onClick={() => void loadPage()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button></div>
+        <div className="flex flex-wrap gap-2"><Button disabled={busy || cleanupPending || status?.running} onClick={() => void previewCleanup()} type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button><Button disabled={busy || cleanupPending} onClick={() => void loadPage()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button></div>
       </div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
 
@@ -232,11 +280,13 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
         <CardHeader><CardTitle>{t("memory.maintenance.recycleBin")}</CardTitle><CardDescription>{t("memory.maintenance.recycleDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           <div className="max-w-sm space-y-2"><Label>{t("memory.maintenance.projectFilter")}</Label><Select onValueChange={setProjectFilter} value={projectFilter}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("memory.maintenance.allProjects")}</SelectItem>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
-          {recycleBin?.batches.length ? <div className="space-y-3">{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={busy} key={batch.batchId} onConfirm={(action) => setConfirmation({ action, batch })} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</div> : <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{t("memory.maintenance.emptyRecycleBin")}</div>}
+          {recycleBin?.batches.length ? <div className="space-y-3">{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={busy} key={batch.batchId} onRunAction={onRunAction} onConfirm={(action) => setConfirmation({ action, batch })} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</div> : <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{t("memory.maintenance.emptyRecycleBin")}</div>}
         </CardContent>
       </Card>
 
       <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeTitle") : t("memory.maintenance.confirmRestoreTitle")}</AlertDialogTitle><AlertDialogDescription>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeDescription") : t("memory.maintenance.confirmRestoreDescription")}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void applyRecycleAction()}>{confirmation?.action === "purge" ? t("memory.maintenance.purge") : t("memory.maintenance.restore")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <VmmNativeLexicalIndex status={lexicalStatus} busy={busy || cleanupPending} onRunAction={onRunAction} onRefresh={loadLexicalStatus} />
+      <VmmNativeCleanupPreview preview={cleanupPreview} busy={busy || cleanupPending} onClose={() => setCleanupPreview(null)} onConfirm={() => void runCleanup()} />
       <AlertDialog open={vectorPreview !== null} onOpenChange={(open) => !open && setVectorPreview(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -269,9 +319,25 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 // RecycleBatchCard renders one recoverable batch and its guarded actions.
 // RecycleBatchCard 渲染一个可恢复批次及其受保护动作。
-function RecycleBatchCard({ batch, busy, onConfirm, projectName }: { batch: VmmNativeRecycleBatchSummary; busy: boolean; onConfirm: (action: "restore" | "purge") => void; projectName: string }) {
+function RecycleBatchCard({ batch, busy, onConfirm, projectName, onRunAction }: { batch: VmmNativeRecycleBatchSummary; busy: boolean; onConfirm: (action: "restore" | "purge") => void; projectName: string; onRunAction: VmmNativeMaintenancePageProps["onRunAction"] }) {
   const { t } = useI18n()
-  return <div className="rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{projectName}</span><Badge variant="outline">{retentionReasonLabel(batch.reason, t)}</Badge></div><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{batch.batchId}</p></div><div className="flex gap-2"><Button disabled={busy} onClick={() => onConfirm("restore")} size="sm" type="button" variant="outline"><ArchiveRestore className="size-3.5" aria-hidden="true" />{t("memory.maintenance.restore")}</Button><Button disabled={busy} onClick={() => onConfirm("purge")} size="sm" type="button" variant="destructive"><Trash2 className="size-3.5" aria-hidden="true" />{t("memory.maintenance.purge")}</Button></div></div><div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4"><span>{t("memory.maintenance.turns")}: {batch.turnCount}</span><span>{t("memory.maintenance.memories")}: {batch.memoryCount}</span><span>{t("memory.maintenance.profiles")}: {batch.profileNodeCount}</span><span>{t("memory.maintenance.evidence")}: {batch.contextEvidenceCount}</span></div><div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle className="size-3.5" aria-hidden="true" /><span>{t("memory.maintenance.expiresAt")}: {formatTimestamp(batch.expiresAtUnixMs, "-")}</span></div></div>
+  return <div className="rounded-lg border p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{projectName}</span><Badge variant="outline">{retentionReasonLabel(batch.reason, t)}</Badge></div><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{batch.batchId}</p></div>
+      <div className="flex flex-wrap gap-2">
+        <VmmNativeRecycleRecords batch={batch} busy={busy} onRunAction={onRunAction} />
+        <Button disabled={busy} onClick={() => onConfirm("restore")} size="sm" type="button" variant="outline"><ArchiveRestore className="size-3.5" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
+        <Button disabled={busy} onClick={() => onConfirm("purge")} size="sm" type="button" variant="destructive"><Trash2 className="size-3.5" aria-hidden="true" />{t("memory.maintenance.purge")}</Button>
+      </div>
+    </div>
+    <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4"><span>{t("memory.maintenance.turns")}: {batch.turnCount}</span><span>{t("memory.maintenance.memories")}: {batch.memoryCount}</span><span>{t("memory.maintenance.profiles")}: {batch.profileNodeCount}</span><span>{t("memory.maintenance.evidence")}: {batch.contextEvidenceCount}</span></div>
+    {batch.manualSelection ? <details className="mt-3 text-sm">
+      <summary className="cursor-pointer">{t("memory.maintenance.manualSources")} ({batch.manualSelection.ids.length})</summary>
+      <p className="mt-2 text-xs text-muted-foreground">{t(batch.manualSelection.kind === "sessions" ? "memory.removal.sessionEffect" : "memory.removal.turnEffect")}</p>
+      <ul className="mt-2 max-h-40 overflow-y-auto">{batch.manualSelection.ids.map((id) => <li className="break-all font-mono text-xs" key={id}>{id}</li>)}</ul>
+    </details> : null}
+    <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle className="size-3.5" aria-hidden="true" /><span>{t("memory.maintenance.expiresAt")}: {formatTimestamp(batch.expiresAtUnixMs, "-")}</span></div>
+  </div>
 }
 
 // retentionReasonLabel localizes one closed Core retention reason token.
@@ -280,6 +346,8 @@ function retentionReasonLabel(reason: string, t: ReturnType<typeof useI18n>["t"]
   if (reason === "terminal_memory_recycle") return t("memory.maintenance.reasonTerminal")
   if (reason === "cold_turn_recycle") return t("memory.maintenance.reasonColdTurn")
   if (reason === "idle_session_recycle") return t("memory.maintenance.reasonIdle")
+  if (reason === "manual_session_recycle") return t("memory.maintenance.reasonManualSession")
+  if (reason === "manual_turn_recycle") return t("memory.maintenance.reasonManualTurn")
   return reason
 }
 

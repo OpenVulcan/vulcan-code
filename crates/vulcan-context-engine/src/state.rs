@@ -161,7 +161,10 @@ impl VceStateSnapshot {
         }
         if let Some(summary) = &self.last_refresh
             && (summary.generation > workspace.generation
-                || summary.checkpoint_version != checkpoint.map(|value| value.version))
+                || summary.checkpoint_version != checkpoint.map(|value| value.version)
+                // Full rebuilds may reindex unchanged members, but never more than the committed set.
+                // 完整重建可以重新索引未变化成员，但数量绝不能超过已提交集合。
+                || summary.indexed_blob_count > checkpoint.map_or(0, |value| value.members.len()))
         {
             return Err(VceStateError::InvalidField("last_refresh"));
         }
@@ -248,7 +251,10 @@ fn validate_refresh_summary(summary: &VceRefreshSummary) -> Result<(), VceStateE
             .source_revision
             .as_ref()
             .is_some_and(|revision| revision.trim().is_empty())
-        || summary.indexed_blob_count > summary.added_blob_count
+        // Path refreshes only prepare additions; full rebuilds explicitly include unchanged members.
+        // 路径刷新仅准备新增项；完整重建明确包含未变化成员。
+        || (summary.mode == crate::ports::RefreshMode::Paths
+            && summary.indexed_blob_count > summary.added_blob_count)
     {
         return Err(VceStateError::InvalidField("last_refresh"));
     }

@@ -593,39 +593,22 @@ pub fn service_prepare_for_app_shutdown(
 pub fn service_resume_after_failed_app_shutdown(
     state: &SharedServiceBridgeState,
 ) -> Result<(), String> {
-    let (session_runtime_registry, vce_runtime, service_runtime) = {
+    let (session_runtime_registry, vce_runtime) = {
         let guard = state.lock().map_err(|_| {
             String::from("The service bridge state is locked during shutdown recovery.")
         })?;
         (
             Arc::clone(&guard.session_runtime_registry),
             guard.vce_runtime.clone(),
-            guard.service_runtime.clone(),
         )
     };
     session_runtime_registry
         .resume_after_failed_shutdown()
         .map_err(|error| error.to_string())?;
-    let needs_vce_reconcile = vce_runtime
-        .as_ref()
-        .is_some_and(crate::vce::VceRuntimeManager::resume_after_failed_shutdown);
-    if needs_vce_reconcile {
-        let service_runtime = service_runtime.ok_or_else(|| {
-            String::from("VCE shutdown recovery requires the retained service runtime.")
-        })?;
-        let report = service_runtime.block_on(crate::vce::reconcile_vce_projects(state))?;
-        if !report.failures.is_empty() {
-            return Err(format!(
-                "VCE shutdown recovery failed for {} project(s): {}",
-                report.failures.len(),
-                report
-                    .failures
-                    .into_iter()
-                    .map(|(project_id, error)| format!("{project_id}: {error}"))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
+    if let Some(manager) = vce_runtime {
+        // Recovery reopens admission only; removed project handles are restored lazily, not indexed.
+        // 恢复仅重开准入；已移除项目句柄按需恢复，不在恢复流程中索引。
+        manager.resume_after_failed_shutdown();
     }
     Ok(())
 }

@@ -8,7 +8,12 @@
     reason = "the native driver must preserve the frozen HostAiError boundary contract"
 )]
 
-use super::{llm_contract, prompt, resources::NativeVmmResourceStore};
+use super::{lexical, llm_contract, prompt, resources::NativeVmmResourceStore};
+use vulcan_service_api::{VmmNativeRetentionSettingsSummary, VmmNativeRetrievalPolicySummary};
+
+#[cfg(test)]
+#[path = "lexical_driver_tests.rs"]
+mod lexical_driver_tests;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -38,13 +43,14 @@ use vulcan_memorymesh_core::{
 };
 use vulcan_service_api::{
     VmmNativeNoiseTestResult, VmmNativePiiFormulaMatchSummary, VmmNativePiiFormulaTestResult,
-    VmmNativePiiRedactionSummary, VmmNativePiiTestResult, VmmNativeResourceCatalogSummary,
-    VmmNativeResourceFileContent, VmmNativeResourceSettingsSummary,
+    VmmNativePiiRedactionSummary, VmmNativePiiTestResult, VmmNativeRecallPolicySummary,
+    VmmNativeResourceCatalogSummary, VmmNativeResourceFileContent,
+    VmmNativeResourceSettingsSummary, VmmNativeRuntimePolicySummary,
 };
 use vulcan_workspace_store::vmm_data_plane::{
     NativeVmmCoreMutation, VMM_CORE_MUTATION_COMMITTED, VMM_CORE_MUTATION_COMPLETED,
-    VMM_CORE_MUTATION_PREPARED, VmmDataPlaneHandle, VmmVectorCandidate, VmmVectorRecord,
-    VmmVectorSearchFilter,
+    VMM_CORE_MUTATION_PREPARED, VmmDataPlaneHandle, VmmLexicalDocument, VmmVectorCandidate,
+    VmmVectorRecord, VmmVectorSearchFilter,
 };
 
 /// Stable registration identity for the process-local native VMM capability.
@@ -100,6 +106,39 @@ pub(crate) struct NativeVmmCoreRuntime {
     /// Latest authoritative Host AI activation outcome used by readiness projection.
     /// 用于就绪状态投影的最近一次权威宿主 AI 激活结果。
     host_ai_status: RwLock<NativeVmmHostAiStatus>,
+}
+
+/// Allows only retention reads against an owned snapshot; no production storage handles are held.
+/// 只允许读取独占快照的清洗事实，不持有生产存储句柄。
+struct NativeVmmRetentionPreviewDriver {
+    /// Isolated facts consumed by the ordinary Core retention planner.
+    /// 由常规 Core 清洗规划器消费的隔离事实。
+    storage: InMemoryStorage,
+}
+
+impl AsyncHostDriver for NativeVmmRetentionPreviewDriver {
+    /// Returns the requested retention facts and rejects every mutation or inference effect.
+    /// 返回请求的清洗事实，并拒绝全部变更或推理效果。
+    fn execute_effect<'a>(
+        &'a mut self,
+        request: EffectRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<EffectResult, CoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            // The closed match prevents future Core changes from silently making previews writable.
+            // 封闭匹配防止未来 Core 变更悄悄赋予预览写入能力。
+            let HostEffect::StorageQuery(query @ StorageQuery::RetentionScan { .. }) =
+                request.effect
+            else {
+                return Err(core_effect_error(
+                    "Retention preview accepts only retention scan effects.",
+                ));
+            };
+            Ok(EffectResult {
+                effect_id: request.effect_id,
+                result: HostEffectResult::StorageQuery(self.storage.query(&query)?),
+            })
+        })
+    }
 }
 
 /// Carries one monotonic request-cancellation edge into every Host AI effect of a native command.
@@ -346,9 +385,11 @@ impl NativeVmmCoreRuntime {
                 ai_port,
                 capability: Arc::new(RwLock::new(None)),
                 ai_cancellation: Arc::new(NativeVmmHostAiCancellation::default()),
+                deleted_vector_rows: 0,
                 embedding_fingerprints: Arc::new(RwLock::new(BTreeMap::new())),
                 storage: Arc::new(RwLock::new(storage)),
                 mutation_gate: Arc::new(tokio::sync::Mutex::new(())),
+                content_projection: Arc::new(RwLock::new(None)),
                 data_plane,
             },
             config_gate: tokio::sync::Mutex::new(()),
@@ -358,21 +399,113 @@ impl NativeVmmCoreRuntime {
         Ok(runtime)
     }
 
+    /// Installs the host's non-owning committed-content projection before clients and workers are exposed.
+    /// 在公开客户端及工作器前安装宿主不拥有服务的已提交内容投影。
+    /// Takes the existing service and event emitter; returns an explicit projection-lock error on failure.
+    /// 接收既有服务及事件发送器；失败时返回明确投影锁错误。
+    pub(crate) fn install_content_projection(
+        &self,
+        state: &crate::state::SharedServiceBridgeState,
+        events: &vulcan_service_api::ServiceEventEmitter,
+    ) -> Result<(), String> {
+        *self
+            .host
+            .content_projection
+            .write()
+            .map_err(|error| error.to_string())? = Some(
+            super::maintenance::NativeVmmContentProjection::new(state, events),
+        );
+        Ok(())
+    }
+
+    /// Freezes committed content through final host publication, including workers whose callers were cancelled.
+    /// 在宿主最终发布期间冻结已提交内容，包含调用方已取消的工作器。
+    /// Returns the same owned mutation guard used by every Core storage effect and maintenance transition.
+    /// 返回每个 Core 存储效果及维护转换使用的同一拥有所有权的变更守卫。
+    pub(crate) async fn freeze_committed_content(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.host.mutation_gate.clone().lock_owned().await
+    }
+
     /// Runs one typed Core command to a final result through VulcanCode-owned capabilities.
     /// 通过 VulcanCode 持有的能力将一个强类型 Core 命令运行至最终结果。
     ///
     /// # Errors
     /// Returns the stable Core command, effect, or persistence failure.
     /// 返回稳定的 Core 命令、Effect 或持久化失败。
-    pub(crate) async fn run(&self, mut command: CoreCommand) -> Result<CommandResult, CoreError> {
-        if command_requires_ai_configuration(&command) {
-            let descriptor = self.ensure_host_ai_config().await?;
+    pub(crate) async fn run(&self, command: CoreCommand) -> Result<CommandResult, CoreError> {
+        self.run_for_host_project(command, "").await
+    }
+
+    /// Runs one non-AI deletion batch and returns its semantic result plus immediate physical deletions.
+    /// 执行一个不调用 AI 的删除批次，返回语义结果及即时物理删除行数。
+    /// `command` owns the caller-validated scope and identity; errors preserve the normal Core lifecycle.
+    /// `command` 持有已校验调用方的作用域与身份；错误保留常规 Core 生命周期。
+    pub(super) async fn run_memory_delete(
+        &self,
+        command: vulcan_memorymesh_core::MemoryDeleteBatchCommand,
+    ) -> Result<(CommandResult, u64), CoreError> {
+        // Deletion uses the active semantic snapshot without requiring an inference configuration.
+        // 删除使用活跃语义快照，不要求推理配置。
+        let snapshot = self.core.active_snapshot()?;
+        self.run_with_snapshot_and_vector_deletions(
+            CoreCommand::MemoryDeleteBatch(command),
+            snapshot.id.clone(),
+        )
+        .await
+    }
+
+    /// Runs with the originating host project's caller-owned policy, preserving the command's write scope.
+    /// 按发起宿主项目持有的调用策略执行，保留命令写入作用域。
+    /// Empty host identity selects only globals for explicit maintenance requests.
+    /// 空宿主身份为显式维护请求选择仅全局规则。
+    pub(super) async fn run_for_host_project(
+        &self,
+        command: CoreCommand,
+        host_project_id: &str,
+    ) -> Result<CommandResult, CoreError> {
+        // snapshot is selected once; activation by another request cannot change its execution identity.
+        // snapshot 只选择一次；其他请求的激活不能改变其执行身份。
+        let snapshot = if command_requires_ai_configuration(&command) {
+            let (descriptor, snapshot) = self
+                .ensure_host_ai_config_for_project(
+                    host_project_id,
+                    profile_policy_project_id(&command)?,
+                )
+                .await?;
             validate_command_vector_generation(&command, &descriptor.vector_space_id)?;
-        }
+            snapshot
+        } else {
+            self.core.active_snapshot()?
+        };
+        self.run_with_snapshot(command, snapshot.id.clone()).await
+    }
+
+    /// Runs a command built from an already resolved native policy without re-reading the active default.
+    /// 执行依据已解析原生策略构建的命令，不重新读取活跃默认值。
+    /// `snapshot_id` must come from this runtime's prepared context; returns the normal result/error lifecycle.
+    /// `snapshot_id` 必须来自本运行时准备的上下文；返回普通结果及错误生命周期。
+    pub(super) async fn run_with_snapshot(
+        &self,
+        command: CoreCommand,
+        snapshot_id: vulcan_memorymesh_core::ConfigSnapshotId,
+    ) -> Result<CommandResult, CoreError> {
+        self.run_with_snapshot_and_vector_deletions(command, snapshot_id)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// Executes a frozen command and returns only the physical deletions performed for that command.
+    /// 执行冻结命令，仅返回为该命令执行的物理删除行数。
+    /// `command` and `snapshot_id` retain normal execution semantics; recovery work is excluded from the count.
+    /// `command` 与 `snapshot_id` 保持常规执行语义；恢复工作不计入统计。
+    async fn run_with_snapshot_and_vector_deletions(
+        &self,
+        mut command: CoreCommand,
+        snapshot_id: vulcan_memorymesh_core::ConfigSnapshotId,
+    ) -> Result<(CommandResult, u64), CoreError> {
         if command.is_mutating() {
-            let snapshot = self.core.active_snapshot()?;
             let fingerprint =
-                vulcan_memorymesh_core::request_fingerprint(&command, snapshot.id.as_str());
+                vulcan_memorymesh_core::request_fingerprint(&command, snapshot_id.as_str());
             command_mutation_identity(&mut command).request_fingerprint = fingerprint;
         }
         // cancellation is unique to this command and shared by all physical Host AI attempts.
@@ -380,12 +513,21 @@ impl NativeVmmCoreRuntime {
         let cancellation = Arc::new(NativeVmmHostAiCancellation::default());
         let mut host = self.host.clone();
         host.ai_cancellation = Arc::clone(&cancellation);
+        // This scalar belongs to the worker clone, never to another concurrent command or the runtime template.
+        // 此标量归属工作器克隆，绝不归属其他并发命令或运行时模板。
+        host.deleted_vector_rows = 0;
         let core = Arc::clone(&self.core);
         // worker remains alive after caller cancellation long enough to resume Core with the
         // controlled Host AI cancellation result and release its command lifecycle state.
         // worker 会在调用方取消后继续存活，直至使用受控宿主 AI 取消结果恢复 Core 并释放命令生命周期状态。
-        let mut worker =
-            tokio::spawn(async move { core.run_to_completion_async(command, &mut host).await });
+        let mut worker = tokio::spawn(async move {
+            // Return statistics only after the command has reached its normal successful terminal result.
+            // 仅在命令到达常规成功终态结果后返回统计。
+            let result = core
+                .run_to_completion_with_snapshot_async(command, &snapshot_id, &mut host)
+                .await?;
+            Ok((result, host.deleted_vector_rows))
+        });
         let mut cancellation_guard = NativeVmmRunCancellationGuard::new(cancellation);
         let outcome = (&mut worker).await;
         cancellation_guard.disarm();
@@ -434,8 +576,8 @@ impl NativeVmmCoreRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// The immutable memory policy paired with the exact current vector-space identity.
-    /// 返回与准确当前向量空间标识配对的不可变记忆策略。
+    /// The immutable memory policy, exact current vector-space identity and registered snapshot ID.
+    /// 返回不可变记忆策略、准确当前向量空间标识及注册快照 ID。
     ///
     /// # Errors
     /// 错误
@@ -443,16 +585,25 @@ impl NativeVmmCoreRuntime {
     /// 返回准确的配置、快照或向量重建要求错误。
     pub(crate) async fn active_memory_context(
         &self,
-    ) -> Result<(MemoryPolicy, VectorSpaceId), String> {
-        let descriptor = self.current_vector_space_descriptor().await?;
+        host_project_id: &str,
+    ) -> Result<
+        (
+            MemoryPolicy,
+            VectorSpaceId,
+            vulcan_memorymesh_core::ConfigSnapshotId,
+        ),
+        String,
+    > {
+        let (descriptor, snapshot) = self
+            .ensure_host_ai_config_for_project(host_project_id, None)
+            .await
+            .map_err(|error| error.to_string())?;
         self.ensure_active_memories_use_vector_space(&descriptor.vector_space_id)?;
-        let policy = self
-            .core
-            .active_snapshot()
-            .map_err(|error| error.to_string())?
-            .memory_policy
-            .clone();
-        Ok((policy, descriptor.vector_space_id))
+        Ok((
+            snapshot.memory_policy.clone(),
+            descriptor.vector_space_id,
+            snapshot.id.clone(),
+        ))
     }
 
     /// Resolves the current route-derived vector generation without requiring migration completion.
@@ -470,18 +621,10 @@ impl NativeVmmCoreRuntime {
     pub(super) async fn current_vector_space_descriptor(
         &self,
     ) -> Result<NativeVmmVectorSpaceDescriptor, String> {
-        let _gate = self.config_gate.lock().await;
-        let result = self.activate_host_ai_config();
-        let status = match result.as_ref() {
-            Ok(handle) => NativeVmmHostAiStatus::ready(handle),
-            Err(error) => NativeVmmHostAiStatus::failed(error),
-        };
-        *self
-            .host_ai_status
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = status;
-        let handle = result.map_err(|error| error.to_string())?;
-        vector_space_descriptor_from_capability(&handle).map_err(|error| error.to_string())
+        self.ensure_host_ai_config()
+            .await
+            .map(|(descriptor, _)| descriptor)
+            .map_err(|error| error.to_string())
     }
 
     /// Embeds one bounded maintenance batch through the same registered Host AI capability as Core.
@@ -619,6 +762,178 @@ impl NativeVmmCoreRuntime {
     pub(crate) async fn resource_catalog(&self) -> Result<VmmNativeResourceCatalogSummary, String> {
         let _gate = self.config_gate.lock().await;
         self.resources.catalog()
+    }
+
+    /// Reads the validated business policy without writing defaults to the user directory.
+    /// 读取经过校验的业务策略，不向用户目录写入默认值。
+    /// Returns a configuration or I/O error when the user document is invalid.
+    /// 用户文档无效时返回配置或 I/O 错误。
+    pub(crate) async fn runtime_policy(&self) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.runtime_policy(&self.core)
+    }
+
+    /// Reads explicit host-project overrides under the same configuration gate as command admission.
+    /// 在命令准入使用的同一配置锁内读取显式宿主项目覆盖。
+    pub(crate) async fn host_project_policy(
+        &self,
+        host_project_id: &str,
+    ) -> Result<vulcan_service_api::VmmNativeHostProjectPolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources
+            .host_project_policy_summary(&self.core, host_project_id)
+    }
+
+    /// Saves validated caller-owned groups; the maintenance caller validates project existence first.
+    /// 保存已校验调用方配置组；维护调用方先验证项目存在。
+    pub(crate) async fn update_host_project_policy(
+        &self,
+        host_project_id: &str,
+        overrides: vulcan_service_api::VmmNativeHostProjectPolicyOverrides,
+    ) -> Result<vulcan_service_api::VmmNativeHostProjectPolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources
+            .update_host_project_policy(&self.core, host_project_id, overrides)?;
+        self.resources
+            .host_project_policy_summary(&self.core, host_project_id)
+    }
+
+    /// Saves explicit business values under the same gate used to freeze command configurations.
+    /// 在冻结命令配置使用的同一锁内保存显式业务值。
+    /// Returns the saved effective settings or the exact validation/persistence error.
+    /// 返回已保存的有效设置或准确的校验/持久化错误。
+    pub(crate) async fn update_runtime_policy(
+        &self,
+        recall: VmmNativeRecallPolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.update_runtime_policy(&self.core, recall)
+    }
+
+    /// Saves one ranking group under the same gate used to freeze command configurations.
+    /// 在冻结命令配置使用的同一锁内保存排序组。
+    /// Returns the full effective policy or an explicit validation/persistence error.
+    /// 返回完整有效策略或明确的校验/持久化错误。
+    pub(crate) async fn update_retrieval_policy(
+        &self,
+        retrieval: VmmNativeRetrievalPolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources
+            .update_retrieval_policy(&self.core, retrieval)
+    }
+
+    /// Saves intake text controls under the same gate that freezes newly admitted command snapshots.
+    /// 在冻结新准入命令快照的同一锁内保存入库文本控制项。
+    /// Returns the full accepted policy or an explicit validation/persistence failure.
+    /// 返回完整接纳策略或明确的校验/持久化失败。
+    pub(crate) async fn update_text_policy(
+        &self,
+        text: vulcan_service_api::VmmNativeTextPolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.update_text_policy(&self.core, text)
+    }
+
+    /// Saves global profile lifetimes under the same gate used by immutable command admission.
+    /// 在不可变命令准入使用的同一锁内保存全局画像生命周期。
+    /// Returns the acknowledged document without modifying existing nodes.
+    /// 返回已确认文档，不修改既有节点。
+    pub(crate) async fn update_profile_policy(
+        &self,
+        profiles: vulcan_service_api::VmmNativeProfilePolicySummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.update_profile_policy(&self.core, profiles)
+    }
+
+    /// Reads validated cleanup settings under the configuration gate without invoking AI.
+    /// 在配置锁内读取已校验清洗设置，不调用 AI。
+    /// Returns the current saved group or a configuration error.
+    /// 返回当前已保存配置组或配置错误。
+    pub(crate) async fn retention_settings(
+        &self,
+    ) -> Result<VmmNativeRetentionSettingsSummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.retention_settings()
+    }
+
+    /// Freezes memory-owner retention rules under the shared configuration gate for one admitted pass.
+    /// 在共享配置锁内为一次已准入轮次冻结记忆归属方保留规则。
+    /// Catalog IDs must be held stable by the caller; errors never activate global fallback rules.
+    /// 调用方必须保持目录 ID 稳定；错误绝不启用全局回退规则。
+    pub(crate) async fn project_retention_policies(
+        &self,
+        base: &vulcan_memorymesh_core::RetentionPolicy,
+        project_ids: &[u64],
+    ) -> Result<std::collections::BTreeMap<u64, vulcan_memorymesh_core::RetentionPolicy>, String>
+    {
+        let _gate = self.config_gate.lock().await;
+        self.resources.project_retention_policies(base, project_ids)
+    }
+
+    /// Reads one memory owner's current retention values under the shared configuration gate.
+    /// 在共享配置锁内读取一个记忆归属方的当前保留值。
+    pub(crate) async fn project_retention_summary(
+        &self,
+        project_id: u64,
+    ) -> Result<vulcan_service_api::VmmNativeProjectRetentionSummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.project_retention_summary(project_id)
+    }
+
+    /// Saves explicit owner rules and returns the authoritative post-save inheritance projection.
+    /// 保存显式归属方规则，返回保存后的权威继承投影。
+    /// The maintenance caller holds the project catalog stable throughout this operation.
+    /// 维护调用方在整个操作期间保持项目目录稳定。
+    pub(crate) async fn save_project_retention(
+        &self,
+        project_id: u64,
+        rules: Option<vulcan_service_api::VmmNativeProjectRetentionRules>,
+    ) -> Result<vulcan_service_api::VmmNativeProjectRetentionSummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.save_project_retention(project_id, rules)?;
+        self.resources.project_retention_summary(project_id)
+    }
+
+    /// Reads project-only profile formulas under the shared configuration gate.
+    /// 在共享配置锁内读取仅项目画像的公式。
+    /// Takes a catalog-validated memory ID; returns saved and effective rules without personal fields.
+    /// 接收目录已校验的记忆 ID，返回不含个人字段的已保存及有效规则。
+    pub(crate) async fn project_profile_policy_summary(
+        &self,
+        project_id: u64,
+    ) -> Result<vulcan_service_api::VmmNativeProjectProfilePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.project_profile_policy_summary(project_id)
+    }
+
+    /// Persists an explicit project-profile override or inheritance request.
+    /// 持久化显式项目画像覆盖或继承请求。
+    /// The caller holds the catalog gate; the returned summary reflects the saved configuration.
+    /// 调用方持有目录锁；返回摘要反映已保存配置。
+    pub(crate) async fn save_project_profile_policy(
+        &self,
+        project_id: u64,
+        rules: Option<vulcan_service_api::VmmNativeProfileLifetimes>,
+    ) -> Result<vulcan_service_api::VmmNativeProjectProfilePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources
+            .save_project_profile_policy(project_id, rules)?;
+        self.resources.project_profile_policy_summary(project_id)
+    }
+
+    /// Saves explicit cleanup settings through the sole policy-document owner.
+    /// 通过唯一策略文档归属方保存显式清洗设置。
+    /// Returns the full effective policy or a validation or persistence error.
+    /// 返回完整有效策略或校验、持久化错误。
+    pub(crate) async fn update_retention_settings(
+        &self,
+        settings: VmmNativeRetentionSettingsSummary,
+    ) -> Result<VmmNativeRuntimePolicySummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources
+            .update_retention_settings(&self.core, settings)
     }
 
     /// Reads one exact native embedded resource and its effective user override.
@@ -817,6 +1132,58 @@ impl NativeVmmCoreRuntime {
             .map(|storage| storage.snapshot())
     }
 
+    /// Runs a bounded synchronous recall check while borrowing authoritative storage without cloning vectors.
+    /// 借用权威存储执行有界同步召回检查，不复制向量。
+    /// Takes a read-only callback; callers retain their native operation barrier through host publication.
+    /// 接收只读回调；调用方在宿主发布完成前保持原生操作屏障。
+    pub(super) fn with_recall_publication_storage<T>(
+        &self,
+        check: impl FnOnce(&InMemoryStorage) -> Result<T, String>,
+    ) -> Result<T, String> {
+        // This read guard also prevents in-process storage publication during the exact check.
+        // 此读取守卫同时阻止准确检查期间发布进程内存储。
+        let storage = self
+            .host
+            .storage
+            .read()
+            .map_err(|_| "原生 VMM 存储读锁已损坏".to_owned())?;
+        check(&storage)
+    }
+
+    /// Plans the supplied retention command against an isolated snapshot without host writes or AI.
+    /// 针对隔离快照规划传入的清洗命令，不进行宿主写入或 AI 调用。
+    /// Returns the same Core plan used by execution, or an explicit read-only contract error.
+    /// 返回执行路径使用的同一个 Core 计划，或明确的只读契约错误。
+    pub(super) async fn preview_retention_plan(
+        &self,
+        snapshot: StorageSnapshot,
+        command: vulcan_memorymesh_core::RetentionCommand,
+    ) -> Result<vulcan_memorymesh_core::RetentionPlanSet, String> {
+        // Only the copied in-memory state is exposed to the preview command.
+        // 仅将复制的内存状态暴露给预览命令。
+        let mut host = NativeVmmRetentionPreviewDriver {
+            storage: InMemoryStorage::from_snapshot(snapshot)?,
+        };
+        // Retention is a mutation-plan command: canonical identity includes the exact frozen config.
+        // 清洗属于变更规划命令，其规范身份包含准确冻结的配置。
+        let snapshot = self
+            .core
+            .active_snapshot()
+            .map_err(|error| error.to_string())?;
+        let mut command = CoreCommand::Retention(command);
+        command_mutation_identity(&mut command).request_fingerprint =
+            vulcan_memorymesh_core::request_fingerprint(&command, snapshot.id.as_str());
+        let result = self
+            .core
+            .run_to_completion_with_snapshot_async(command, &snapshot.id, &mut host)
+            .await
+            .map_err(|error| error.to_string())?;
+        match result {
+            CommandResult::Retention(plan) => Ok(plan),
+            _ => Err(String::from("原生 VMM 清洗预览返回了非保留计划结果。")),
+        }
+    }
+
     /// Reconciles every prepared native storage transition under the runtime mutation gate.
     /// 在运行时变更门内对账每条已准备的原生存储变换。
     ///
@@ -949,19 +1316,43 @@ impl NativeVmmCoreRuntime {
 
     /// Activates a Core snapshot derived from the exact configured embedding route.
     /// 激活由精确已配置向量路由派生的 Core 快照。
-    async fn ensure_host_ai_config(&self) -> Result<NativeVmmVectorSpaceDescriptor, CoreError> {
+    async fn ensure_host_ai_config(
+        &self,
+    ) -> Result<
+        (
+            NativeVmmVectorSpaceDescriptor,
+            Arc<vulcan_memorymesh_core::ConfigSnapshot>,
+        ),
+        CoreError,
+    > {
+        self.ensure_host_ai_config_for_project("", None).await
+    }
+
+    /// Resolves host capability and caller overrides together under one admission gate.
+    /// 在同一准入锁内同时解析宿主能力与调用方覆盖。
+    async fn ensure_host_ai_config_for_project(
+        &self,
+        host_project_id: &str,
+        profile_project_id: Option<u64>,
+    ) -> Result<
+        (
+            NativeVmmVectorSpaceDescriptor,
+            Arc<vulcan_memorymesh_core::ConfigSnapshot>,
+        ),
+        CoreError,
+    > {
         let _gate = self.config_gate.lock().await;
-        let result = self.activate_host_ai_config();
+        let result = self.activate_host_ai_config(host_project_id, profile_project_id);
         let status = match result.as_ref() {
-            Ok(handle) => NativeVmmHostAiStatus::ready(handle),
+            Ok((handle, _)) => NativeVmmHostAiStatus::ready(handle),
             Err(error) => NativeVmmHostAiStatus::failed(error),
         };
         *self
             .host_ai_status
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = status;
-        let handle = result?;
-        vector_space_descriptor_from_capability(&handle)
+        let (handle, snapshot) = result?;
+        Ok((vector_space_descriptor_from_capability(&handle)?, snapshot))
     }
 
     /// Refreshes capability truth and activates the matching Core vector-space configuration.
@@ -969,22 +1360,39 @@ impl NativeVmmCoreRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// The freshly validated capability handle used to derive readiness and Core configuration.
-    /// 返回用于派生就绪状态与 Core 配置的最新校验能力句柄。
+    /// The freshly validated capability handle and the exact immutable snapshot compiled from it.
+    /// 返回最新校验能力句柄及由其编译的精确不可变快照。
     ///
     /// # Errors
     /// Returns a provider-neutral configuration error for missing routes or invalid embedding limits.
     /// 必需路由缺失或向量限制无效时返回供应商无关配置错误。
-    fn activate_host_ai_config(&self) -> Result<HostAiCapabilityHandle, CoreError> {
+    fn activate_host_ai_config(
+        &self,
+        host_project_id: &str,
+        profile_project_id: Option<u64>,
+    ) -> Result<
+        (
+            HostAiCapabilityHandle,
+            Arc<vulcan_memorymesh_core::ConfigSnapshot>,
+        ),
+        CoreError,
+    > {
         let handle = self.host.capability().map_err(host_ai_core_error)?;
         let (dimension, fingerprint) = embedding_config_from_capability(&handle)?;
-        let bundle = self
+        let mut bundle = self
             .resources
-            .current_bundle(fingerprint, dimension)
+            .current_host_project_bundle(fingerprint, dimension, host_project_id)
             .map_err(native_resource_core_error)?;
+        // Only profile-producing commands carry a memory owner; personal instructions retain globals.
+        // 仅生成画像的命令携带记忆归属；个人画像指令保留全局规则。
+        if let Some(project_id) = profile_project_id {
+            self.resources
+                .apply_memory_project_profile_policy(&mut bundle, project_id)
+                .map_err(native_resource_core_error)?;
+        }
         let snapshot = self.core.register_config(bundle)?;
         self.core.activate_config(snapshot.name.as_str())?;
-        Ok(handle)
+        Ok((handle, snapshot))
     }
 }
 
@@ -1008,6 +1416,9 @@ struct NativeVmmHostDriver {
     /// Request-scoped cancellation observed by all Host AI effects of one command.
     /// 单个命令全部宿主 AI Effect 观察的请求级取消信号。
     ai_cancellation: Arc<NativeVmmHostAiCancellation>,
+    /// Physical row deletions for this command driver only, excluding recovered earlier operations.
+    /// 仅属于此命令驱动的物理删除行数，不含恢复的先前操作。
+    deleted_vector_rows: u64,
     /// Lazily registered capability so disabled VMM does not require configured inference at startup.
     /// 延迟注册的能力，确保 VMM 禁用时启动阶段不要求已配置推理。
     capability: Arc<RwLock<Option<HostAiCapabilityHandle>>>,
@@ -1020,6 +1431,9 @@ struct NativeVmmHostDriver {
     /// Serializes snapshot-mutate-persist-swap transactions across concurrent commands.
     /// 在并发命令之间串行化快照、变更、持久化与交换事务。
     mutation_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Synchronous post-commit cache sink, shared by all cloned command drivers without owning the service.
+    /// 全部克隆命令驱动共享的同步提交后缓存接收器，不拥有服务。
+    content_projection: Arc<RwLock<Option<super::maintenance::NativeVmmContentProjection>>>,
     /// VulcanCode-hosted SQLite and LanceDB bindings.
     /// 由 VulcanCode 托管的 SQLite 与 LanceDB 绑定。
     data_plane: VmmDataPlaneHandle,
@@ -1059,8 +1473,8 @@ impl NativeVmmHostDriver {
     ///
     /// # Returns
     /// 返回值
-    /// Success after vector, relational, in-memory, and journal state agree.
-    /// 向量、关系、内存与账本状态一致后返回成功。
+    /// Actual immediate vector deletions after vector, relational, in-memory, and journal state agree.
+    /// 向量、关系、内存与账本状态一致后返回实际即时向量删除数。
     ///
     /// # Errors
     /// Returns the exact serialization, preparation, persistence, or reconciliation error.
@@ -1072,7 +1486,7 @@ impl NativeVmmHostDriver {
         before: &StorageSnapshot,
         after: &StorageSnapshot,
         output: &T,
-    ) -> Result<(), String>
+    ) -> Result<u64, String>
     where
         T: serde::Serialize,
     {
@@ -1127,15 +1541,15 @@ impl NativeVmmHostDriver {
     ///
     /// # Returns
     /// 返回值
-    /// Success after vectors, relational state, in-memory state, and cleanup agree.
-    /// 向量、关系状态、内存状态和清理结果一致后返回成功。
+    /// Actual vector deletions after vectors, relational state, memory, and cleanup agree; completed replay returns zero.
+    /// 向量、关系、内存及清理一致后返回实际向量删除数；已完成重放返回零。
     ///
     /// # Errors
     /// Returns a controlled error while leaving a resumable journal state durable.
     /// 返回受控错误，并保留可恢复的耐久账本状态。
-    async fn resume_core_mutation(&self, mutation: &NativeVmmCoreMutation) -> Result<(), String> {
+    async fn resume_core_mutation(&self, mutation: &NativeVmmCoreMutation) -> Result<u64, String> {
         if mutation.state == VMM_CORE_MUTATION_COMPLETED {
-            return Ok(());
+            return Ok(0);
         }
         let before: StorageSnapshot = serde_json::from_str(&mutation.before_snapshot_json)
             .map_err(|error| format!("解析原生 VMM 维护前快照失败：{error}"))?;
@@ -1150,11 +1564,15 @@ impl NativeVmmHostDriver {
             let relational = serde_json::to_string(&after.without_embeddings())
                 .map_err(|error| format!("序列化原生 VMM 恢复关系快照失败：{error}"))?;
             let pending_turn_id = pending_turn_id_from_core_mutation(mutation)?;
+            // Compare both active and recoverable records: a moved turn is not permanently removed.
+            // 比较活动和可恢复记录：已移动回合并非永久移除。
+            let removed_turn_ids = permanently_removed_turn_ids(&before, &after);
             self.data_plane
                 .commit_core_mutation(
                     &mutation.operation_id,
                     &relational,
                     pending_turn_id.as_deref(),
+                    &removed_turn_ids,
                 )
                 .await?;
         } else if mutation.state != VMM_CORE_MUTATION_COMMITTED {
@@ -1163,14 +1581,56 @@ impl NativeVmmHostDriver {
                 mutation.operation_id, mutation.state
             ));
         }
+        // Publish searchable text before exposing the committed relational snapshot to readers.
+        // 向读取方公开已提交关系快照前，先发布可搜索文本。
+        self.persist_lexical_transition(&before, &after).await?;
         *self
             .storage
             .write()
             .map_err(|_| String::from("原生 VMM 存储写锁已损坏，需重启后恢复维护变更"))? = staged;
-        self.delete_stale_vectors_strict(&before, &after).await?;
+        // This transition's physical count is returned, not merged into unrelated recovery or command state.
+        // 返回本次变换的物理计数，不合并到无关恢复或命令状态。
+        let deleted_vector_rows = self.delete_stale_vectors_strict(&before, &after).await?;
         self.data_plane
             .complete_core_mutation(&mutation.operation_id)
-            .await
+            .await?;
+        // Committed content remains serialized by mutation_gate through resident cache publication.
+        // 已提交内容在驻留缓存发布期间仍由 mutation_gate 串行保护。
+        // Cache errors do not mean the already committed Core transaction was rolled back.
+        // 缓存错误不表示已经提交的 Core 事务发生了回滚。
+        if let Err(error) = self.project_committed_content() {
+            eprintln!(
+                "[native-vmm] content committed but resident cache projection failed: {error}"
+            );
+        }
+        Ok(deleted_vector_rows)
+    }
+
+    /// Reconciles under a storage read guard, then emits after both storage and service locks are released.
+    /// 在存储读守卫内对账，然后在存储及服务锁均释放后发送事件。
+    /// Uses the installed sink and current committed storage; returns explicit cache-projection errors.
+    /// 使用已安装接收器及当前已提交存储；返回明确缓存投影错误。
+    fn project_committed_content(&self) -> Result<(), String> {
+        // Clone only the weak sink; retaining its installation lock across callbacks is unnecessary.
+        // 只克隆弱引用接收器；不需要在回调期间保留安装锁。
+        let projection = self
+            .content_projection
+            .read()
+            .map_err(|error| error.to_string())?
+            .clone();
+        let Some(projection) = projection else {
+            return Ok(());
+        };
+        // Borrow current storage without copying records, vectors or a complete Core snapshot.
+        // 借用当前存储，不复制记录、向量或完整 Core 快照。
+        let events = {
+            // A read guard remains compatible with ordinary controller-side recall publication checks.
+            // 读守卫与普通控制器侧召回发布检查兼容。
+            let storage = self.storage.read().map_err(|error| error.to_string())?;
+            projection.reconcile(&storage)?
+        };
+        projection.emit(events);
+        Ok(())
     }
 
     /// Returns the existing VMM AI capability or registers it exactly once on first use.
@@ -1447,23 +1907,37 @@ impl NativeVmmHostDriver {
         Ok(HostEffectResult::Rerank(entries))
     }
 
-    /// Executes a semantic storage query, using LanceDB only for the vector-producing channel.
-    /// 执行语义存储查询，仅让向量生产通道使用 LanceDB。
+    /// Executes semantic reads with controller-backed vector and lexical producers.
+    /// 通过控制器支持的向量及词法生产者执行语义读取。
     async fn execute_storage_query(
         &self,
         query: &StorageQuery,
     ) -> Result<HostEffectResult, CoreError> {
-        let _gate = if matches!(
+        // read_gate keeps both physical producers and relational visibility on one admitted state.
+        // read_gate 使两个物理生产者及关系可见性处于同一已接纳状态。
+        let read_gate = if matches!(
             query,
-            StorageQuery::VectorCandidates { .. } | StorageQuery::CandidateObservation(_)
+            StorageQuery::VectorCandidates { .. }
+                | StorageQuery::LexicalCandidates { .. }
+                | StorageQuery::CandidateObservation(_)
         ) {
             Some(self.mutation_gate.lock().await)
         } else {
             None
         };
+        if read_gate.is_some() {
+            // Complete an admitted mutation before reading its derived indexes and relational state together.
+            // 同时读取派生索引和关系状态前，先完成已接纳的变更。
+            self.recover_unfinished_core_mutations()
+                .await
+                .map_err(storage_backend_error)?;
+        }
         let result = match query {
             StorageQuery::VectorCandidates { .. } => {
                 StorageQueryResult::VectorCandidates(self.external_vector_channel(query).await?)
+            }
+            StorageQuery::LexicalCandidates { .. } => {
+                StorageQueryResult::LexicalCandidates(self.external_lexical_channel(query).await?)
             }
             StorageQuery::CandidateObservation(_) => StorageQueryResult::CandidateObservation(
                 self.external_candidate_observation(query).await?,
@@ -1479,28 +1953,28 @@ impl NativeVmmHostDriver {
         Ok(HostEffectResult::StorageQuery(result))
     }
 
-    /// Combines the LanceDB vector channel with the Core lexical channel from one relational snapshot.
-    /// 将 LanceDB 向量通道与同一关系快照中的 Core 词法通道组合。
+    /// Combines the LanceDB and Jieba channels under one native mutation gate and relational snapshot.
+    /// 在同一原生变更门和关系快照内组合 LanceDB 与 Jieba 通道。
     async fn external_candidate_observation(
         &self,
         query: &StorageQuery,
     ) -> Result<CandidateObservation, CoreError> {
         let vector = self.external_vector_channel(query).await?;
-        let local = {
-            let guard = self
-                .storage
-                .read()
-                .map_err(|_| storage_lock_error("read"))?;
-            guard.query(query)?
-        };
-        let StorageQueryResult::CandidateObservation(local) = local else {
+        let StorageQuery::CandidateObservation(request) = query else {
             return Err(core_effect_error(
-                "candidate observation query returned the wrong storage result",
+                "candidate observation requires the exact observation query",
             ));
         };
-        let mut available = local
-            .memories
-            .into_iter()
+        // lexical is absent only when explicitly disabled, never when a physical read fails.
+        // lexical 仅在显式禁用时缺失，绝不以缺失表示物理读取失败。
+        let lexical = if request.lexical_contract.is_some() {
+            Some(self.external_lexical_channel(query).await?)
+        } else {
+            None
+        };
+        let mut available = lexical
+            .iter()
+            .flat_map(|channel| channel.memories.iter().cloned())
             .map(|memory| (memory.id.as_str().to_owned(), memory))
             .collect::<BTreeMap<_, _>>();
         for memory in vector.memories.iter().cloned() {
@@ -1511,7 +1985,7 @@ impl NativeVmmHostDriver {
             .iter()
             .map(|candidate| candidate.memory_id.as_str())
             .collect::<Vec<_>>();
-        if let Some(lexical) = local.lexical_channel.as_ref() {
+        if let Some(lexical) = lexical.as_ref() {
             ordered_ids.extend(
                 lexical
                     .candidates
@@ -1533,9 +2007,236 @@ impl NativeVmmHostDriver {
             vector_channel: PhysicalCandidateChannel {
                 candidates: vector.candidates,
             },
-            lexical_channel: local.lexical_channel,
+            lexical_channel: lexical.map(|channel| PhysicalCandidateChannel {
+                candidates: channel.candidates,
+            }),
             memories,
         })
+    }
+
+    /// Searches bounded Jieba pages until enough admissible hits exist for each query or its index ends.
+    /// 逐页搜索 Jieba，直到每条查询的合法命中足够或索引读尽。
+    /// `query` fixes the ownership, lifecycle time and lexical contract; the caller holds the mutation gate.
+    /// `query` 固定归属、生命周期时刻及词法契约；调用方持有变更门。
+    /// Returns original BM25 values with external-VMM rank projection, or the exact storage failure.
+    /// 返回原始 BM25 值及外置 VMM 排名投影，或准确的存储失败。
+    async fn external_lexical_channel(
+        &self,
+        query: &StorageQuery,
+    ) -> Result<CandidateChannelResult, CoreError> {
+        // texts, limit and contract come only from the two declared lexical-bearing query variants.
+        // texts、limit 和 contract 只来自两种声明为携带词法通道的查询变体。
+        let (texts, limit, contract) = match query {
+            StorageQuery::LexicalCandidates {
+                queries,
+                limit,
+                expected_contract,
+                ..
+            } => (queries.as_slice(), *limit, expected_contract),
+            StorageQuery::CandidateObservation(request) => (
+                std::slice::from_ref(&request.query),
+                request.limit,
+                request
+                    .lexical_contract
+                    .as_ref()
+                    .ok_or_else(|| core_effect_error("lexical observation channel is disabled"))?,
+            ),
+            _ => {
+                return Err(core_effect_error(
+                    "lexical producer requires a lexical-bearing query",
+                ));
+            }
+        };
+        if *contract != lexical::score_contract().contract {
+            return Err(CoreError::new(
+                ErrorCode::ScoreContractViolation,
+                ErrorStage::Command,
+                "native lexical query does not select the declared Jieba BM25 contract",
+            ));
+        }
+        // Validate authority even for empty queries, empty indexes and a zero result limit.
+        // 对空查询、空索引及零结果上限也校验权限。
+        self.storage
+            .read()
+            .map_err(|_| storage_lock_error("read"))?
+            .materialize_external_lexical_candidates(query, Vec::new())?;
+        // best deduplicates admitted records across query texts without mixing other score spaces.
+        // best 对多条查询文本的合法记录去重，不混入其他评分空间。
+        let mut best = BTreeMap::new();
+        for text in texts {
+            // offset counts physical hits while admitted counts only authoritative visible records.
+            // offset 统计物理命中，admitted 仅统计权威可见记录。
+            let mut offset = 0_u32;
+            let mut admitted = 0_usize;
+            while admitted < limit as usize {
+                // hits is one bounded physical page, including identities later rejected by Core.
+                // hits 是一页有界物理结果，包含随后被 Core 拒绝的身份。
+                let hits = self
+                    .data_plane
+                    .search_lexical_page(text, 128, offset)
+                    .await
+                    .map_err(storage_backend_error)?;
+                // page_len distinguishes a partial last page from a fully filtered intermediate page.
+                // page_len 区分不足一页的末页及整页均被过滤的中间页。
+                let page_len = hits.len();
+                if page_len == 0 {
+                    break;
+                }
+                // candidates preserve raw producer facts before the admitted-pool rank projection.
+                // candidates 在合法候选池排名投影前保留原始生产者事实。
+                let candidates =
+                    hits.into_iter()
+                        .enumerate()
+                        .map(|(index, hit)| {
+                            Ok(PhysicalCandidate {
+                                memory_id: hit.memory_id,
+                                physical_rank: offset
+                                    .checked_add(u32::try_from(index).map_err(|_| {
+                                        core_effect_error("lexical page rank overflow")
+                                    })?)
+                                    .ok_or_else(|| core_effect_error("lexical rank overflow"))?,
+                                score: PhysicalCandidateScore {
+                                    raw_value: hit.raw_score,
+                                    raw_score_kind: RawScoreKind::Bm25,
+                                    direction: ScoreDirection::LowerIsBetter,
+                                    decision_score: None,
+                                    contract: contract.clone(),
+                                },
+                            })
+                        })
+                        .collect::<Result<Vec<_>, CoreError>>()?;
+                // page contains only the records admitted by the query's complete ownership boundary.
+                // page 仅包含被查询完整归属边界接纳的记录。
+                let page = self
+                    .storage
+                    .read()
+                    .map_err(|_| storage_lock_error("read"))?
+                    .materialize_external_lexical_candidates(query, candidates)?;
+                for (candidate, memory) in page
+                    .candidates
+                    .into_iter()
+                    .zip(page.memories)
+                    .take(limit as usize - admitted)
+                {
+                    admitted += 1;
+                    // entry keeps the strongest lexical match for an identity seen in multiple query texts.
+                    // entry 为出现在多条查询文本中的身份保留最强词法命中。
+                    let entry = best
+                        .entry(candidate.memory_id.clone())
+                        .or_insert((candidate.score.raw_value, memory));
+                    entry.0 = entry.0.min(candidate.score.raw_value);
+                }
+                if page_len < 128 {
+                    break;
+                }
+                offset = offset
+                    .checked_add(128)
+                    .ok_or_else(|| core_effect_error("lexical page offset overflow"))?;
+            }
+        }
+        // ranked uses BM25 then stable identity, and projects only the final admitted channel.
+        // ranked 按 BM25 再按稳定身份排序，仅对最终合法通道进行分数投影。
+        let mut ranked = best.into_iter().collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            left.1
+                .0
+                .total_cmp(&right.1.0)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        ranked.truncate(limit as usize);
+        // total is the actual admitted channel size, not the global unfiltered index size.
+        // total 是实际合法通道大小，而不是全局未过滤索引大小。
+        let total = ranked.len();
+        // result keeps record order aligned exactly with the projected candidate order.
+        // result 使记录顺序与投影候选顺序精确一致。
+        let mut result = CandidateChannelResult {
+            candidates: Vec::new(),
+            memories: Vec::new(),
+        };
+        for (rank, (memory_id, (raw_value, memory))) in ranked.into_iter().enumerate() {
+            result.candidates.push(PhysicalCandidate {
+                memory_id,
+                physical_rank: u32::try_from(rank)
+                    .map_err(|_| core_effect_error("lexical result rank overflow"))?,
+                score: PhysicalCandidateScore {
+                    raw_value,
+                    raw_score_kind: RawScoreKind::Bm25,
+                    direction: ScoreDirection::LowerIsBetter,
+                    decision_score: Some(lexical::rank_score(rank, total)),
+                    contract: contract.clone(),
+                },
+            });
+            result.memories.push(memory);
+        }
+        Ok(result)
+    }
+
+    /// Synchronizes searchable text for the same admitted before/after mutation used by project maintenance.
+    /// 为项目维护共用的同一已接纳前后变更同步可搜索文本。
+    /// `before`/`after` are validated Core snapshots; inactive or removed records lose their index rows.
+    /// `before`/`after` 是通过校验的 Core 快照；失效或移除记录会失去其索引行。
+    /// Returns an explicit controller error and never acknowledges an incomplete lexical transition.
+    /// 返回明确控制器错误，绝不确认尚未完成的词法变更。
+    async fn persist_lexical_transition(
+        &self,
+        before: &StorageSnapshot,
+        after: &StorageSnapshot,
+    ) -> Result<(), String> {
+        // previous resolves text changes by immutable memory identity rather than display names.
+        // previous 按不可变记忆身份解析文本变化，而不是按显示名称。
+        let previous = before
+            .dataset
+            .memories
+            .iter()
+            .map(|memory| (memory.id.as_str(), memory))
+            .collect::<BTreeMap<_, _>>();
+        // active is the authoritative post-mutation searchable lifecycle set.
+        // active 是权威的变更后可搜索生命周期集合。
+        let active = after
+            .dataset
+            .memories
+            .iter()
+            .filter(|memory| memory.state == MemoryState::Active)
+            .collect::<Vec<_>>();
+        // active_ids identifies removals without conflating ownership changes with identity changes.
+        // active_ids 标识移除，不将归属变化混同于身份变化。
+        let active_ids = active
+            .iter()
+            .map(|memory| memory.id.as_str())
+            .collect::<BTreeSet<_>>();
+        // changed skips unchanged text during recall counters and project-only ownership changes.
+        // changed 在召回计数和纯项目归属变化时跳过未变化文本。
+        let changed = active
+            .into_iter()
+            .filter(|memory| {
+                !previous.get(memory.id.as_str()).is_some_and(|old| {
+                    old.state == MemoryState::Active
+                        && old.summary == memory.summary
+                        && old.content == memory.content
+                })
+            })
+            .map(|memory| VmmLexicalDocument {
+                memory_id: memory.id.to_string(),
+                summary: memory.summary.clone(),
+                details: memory.content.clone(),
+            })
+            .collect::<Vec<_>>();
+        for chunk in changed.chunks(256) {
+            self.data_plane.upsert_lexical_documents(chunk).await?;
+        }
+        // removed names only exact previous identities now absent from the searchable set.
+        // removed 只列出当前可搜索集合中已不存在的精确旧身份。
+        let removed = before
+            .dataset
+            .memories
+            .iter()
+            .filter(|memory| !active_ids.contains(memory.id.as_str()))
+            .map(|memory| memory.id.to_string())
+            .collect::<Vec<_>>();
+        for chunk in removed.chunks(256) {
+            self.data_plane.delete_lexical_documents(chunk).await?;
+        }
+        Ok(())
     }
 
     /// Searches every query vector, keeps the best exact cosine per memory, and materializes Core visibility.
@@ -1623,7 +2324,7 @@ impl NativeVmmHostDriver {
     /// Applies one Core mutation transaction through the durable host recovery journal.
     /// 通过宿主耐久恢复账本应用一个 Core 变更事务。
     async fn execute_storage_mutation(
-        &self,
+        &mut self,
         batch: &MutationBatch,
     ) -> Result<HostEffectResult, CoreError> {
         let _gate = self.mutation_gate.lock().await;
@@ -1664,20 +2365,35 @@ impl NativeVmmHostDriver {
             .snapshot();
         let mut staged =
             InMemoryStorage::from_snapshot(before.clone()).map_err(storage_backend_error)?;
-        let outcome = staged.mutate(batch)?;
+        // Commit time belongs to the host clock, not to the turn's older business timestamp.
+        // 提交时间归属宿主时钟，不能采用回合较早的业务时间戳。
+        let committed_at_ns = i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos())
+            .map_err(|_| {
+                storage_backend_error("native VMM commit timestamp exceeds i64".to_owned())
+            })?;
+        let outcome = staged.mutate_at(batch, committed_at_ns)?;
         if !matches!(outcome, MutationOutcome::Committed { .. }) {
             return Ok(HostEffectResult::StorageMutation(outcome));
         }
         let after = staged.snapshot();
-        self.persist_prepared_storage_transition(
-            batch.identity.operation_id.as_str(),
-            mutation_kind.as_str(),
-            &before,
-            &after,
-            &outcome,
-        )
-        .await
-        .map_err(storage_uncertain_error)?;
+        // Only this newly executed command batch contributes to its response; earlier recovery is separate.
+        // 仅此新执行命令批次计入其响应；先前恢复独立处理。
+        let deleted_vector_rows = self
+            .persist_prepared_storage_transition(
+                batch.identity.operation_id.as_str(),
+                mutation_kind.as_str(),
+                &before,
+                &after,
+                &outcome,
+            )
+            .await
+            .map_err(storage_uncertain_error)?;
+        self.deleted_vector_rows = self
+            .deleted_vector_rows
+            .checked_add(deleted_vector_rows)
+            .ok_or_else(|| {
+                storage_uncertain_error(String::from("native VMM vector deletion count overflow"))
+            })?;
         // staged was validated by the semantic storage mutation before the durable transition began.
         // staged 在耐久状态变换开始前已由语义存储变更完成校验。
         drop(staged);
@@ -1743,8 +2459,8 @@ impl NativeVmmHostDriver {
     ///
     /// # Returns
     /// 返回值
-    /// Success only after every stale vector has been deleted.
-    /// 仅在全部陈旧向量删除后返回成功。
+    /// Actual physical deleted rows after every stale vector deletion completes.
+    /// 全部陈旧向量删除完成后返回实际物理删除行数。
     ///
     /// # Errors
     /// Returns the exact vector-space resolution or deletion error for durable retry.
@@ -1753,7 +2469,7 @@ impl NativeVmmHostDriver {
         &self,
         before: &StorageSnapshot,
         after: &StorageSnapshot,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let before = snapshot_vector_keys(before);
         let after = snapshot_vector_keys(after);
         let mut by_space = BTreeMap::<String, Vec<String>>::new();
@@ -1763,17 +2479,26 @@ impl NativeVmmHostDriver {
                 .or_default()
                 .push(memory_id.clone());
         }
+        // Sum per-space controller receipts without assuming every requested row still exists.
+        // 累加各空间控制器回执，不假定每个请求记录仍然存在。
+        let mut deleted_rows = 0_u64;
         for (space_id, memory_ids) in by_space {
             let binding = self
                 .data_plane
                 .resolve_vector_space(&space_id)
                 .await?
                 .ok_or_else(|| format!("原生 VMM 向量空间 `{space_id}` 不存在"))?;
-            self.data_plane
+            // The physical data plane reports the exact row total for this space.
+            // 物理数据面报告此空间的准确行数总计。
+            let space_deleted_rows = self
+                .data_plane
                 .delete_vectors(&binding, &memory_ids)
                 .await?;
+            deleted_rows = deleted_rows
+                .checked_add(space_deleted_rows)
+                .ok_or_else(|| String::from("原生 VMM 物理向量删除计数溢出"))?;
         }
-        Ok(())
+        Ok(deleted_rows)
     }
 
     /// Locks one logical vector space to the exact physical Host AI fingerprint observed at execution.
@@ -1916,6 +2641,45 @@ impl<'a> VectorQueryView<'a> {
             expected_contract: contract,
         })
     }
+}
+
+/// Computes exact permanent turn losses across the complete active and recoverable snapshots.
+/// 对照完整活动及可恢复快照，计算准确的永久回合消失集合。
+/// Takes validated before/after snapshots; returns unique stable IDs, excluding every moved turn.
+/// 接收校验后的前后快照；返回唯一稳定 ID，排除所有仅移动的回合。
+fn permanently_removed_turn_ids(before: &StorageSnapshot, after: &StorageSnapshot) -> Vec<String> {
+    // Both storage domains reserve the same canonical turn identity through recycle and restore.
+    // 回收和恢复期间，两类存储域均保留同一规范回合身份。
+    let retained = after
+        .dataset
+        .turns
+        .iter()
+        .chain(
+            after
+                .retention_trash_batches
+                .iter()
+                .flat_map(|batch| &batch.dataset.turns),
+        )
+        .map(|turn| turn.id.as_str())
+        .collect::<BTreeSet<_>>();
+    // The before set proves actual ownership; pre-existing missing jobs are not silently discarded.
+    // 变更前集合证明实际归属；原已缺失的作业不能被静默丢弃。
+    before
+        .dataset
+        .turns
+        .iter()
+        .chain(
+            before
+                .retention_trash_batches
+                .iter()
+                .flat_map(|batch| &batch.dataset.turns),
+        )
+        .map(|turn| turn.id.as_str())
+        .filter(|id| !retained.contains(id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Extracts the pending turn binding from an intake Core mutation journal entry.
@@ -2081,6 +2845,9 @@ fn native_vmm_capability_registration() -> HostAiCapabilityRegistration {
                 InferencePermission::Cancel,
             ]),
             usage_scope: InferenceUsageScope::InternalBackground,
+            // Preserve the existing VMM background scheduling until its foreground split is explicitly integrated.
+            // 在明确接入前台分流之前保留 VMM 现有后台调度。
+            scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
             interactive_session_id: None,
             deadline_unix_ms: None,
             budget: InferenceCallerBudget {
@@ -2131,6 +2898,49 @@ fn validate_native_vmm_required_capabilities(
         }
     }
     Ok(())
+}
+
+/// Resolves the exact declared project profile section of a profile-producing command.
+/// 解析生成画像的命令所明确声明的项目画像分区。
+/// Returns no override for personal-only or non-profile commands; rejects invalid native project identities.
+/// 个人专属或非画像命令不返回覆盖；拒绝无效原生项目身份。
+fn profile_policy_project_id(command: &CoreCommand) -> Result<Option<u64>, CoreError> {
+    use vulcan_memorymesh_core::SectionRole;
+    // Core assigns generated project nodes by the Environment section, not by visible read scopes.
+    // Core 按 Environment 分区分配生成的项目节点，而非按可见读取范围分配。
+    let section = match command {
+        CoreCommand::PostActionAnalyzePendingTurn(command) => command
+            .profile_sections
+            .iter()
+            .find(|section| section.role == SectionRole::Environment),
+        CoreCommand::ProfileInstruction(command) => match command.target_section.role {
+            SectionRole::Environment => Some(&command.target_section),
+            SectionRole::Subject => None,
+        },
+        _ => None,
+    };
+    let Some(section) = section else {
+        return Ok(None);
+    };
+    let project_id = section
+        .scope_id
+        .as_str()
+        .strip_prefix("vmm-project:")
+        .ok_or_else(|| {
+            native_resource_core_error(
+                "Native project profile scope must use vmm-project:<id>.".to_owned(),
+            )
+        })?
+        .parse::<u64>()
+        .map_err(|error| {
+            native_resource_core_error(format!("Invalid native project profile ID: {error}"))
+        })?;
+    if project_id == 0 {
+        return Err(native_resource_core_error(
+            "Native project profile ID must be positive.".to_owned(),
+        ));
+    }
+    Ok(Some(project_id))
 }
 
 /// Reports whether one command needs the embedding-route-derived Core snapshot before start.
@@ -2885,7 +3695,9 @@ mod tests {
     /// 返回值
     /// A complete handle whose embedding operation carries deterministic dense-float dimensions.
     /// 返回向量操作带有确定性稠密浮点维度的完整句柄。
-    fn embedding_capability_handle(tasks: BTreeSet<EmbeddingTask>) -> HostAiCapabilityHandle {
+    pub(super) fn embedding_capability_handle(
+        tasks: BTreeSet<EmbeddingTask>,
+    ) -> HostAiCapabilityHandle {
         // handle starts from the exact production registration and required operation set.
         // handle 从准确的生产注册及必需操作集合开始构造。
         let mut handle = complete_capability_handle();

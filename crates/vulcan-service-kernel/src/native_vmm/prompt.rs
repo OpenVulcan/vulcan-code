@@ -6,7 +6,7 @@ use time::{OffsetDateTime, UtcOffset, macros::format_description};
 use vulcan_memorymesh_core::{
     CoreError, ErrorCode, ErrorStage, LlmInput, MemoryCategory, MemoryScopeClass, MemorySourceKind,
     PostActionReviewContext, PreCheckTurnContext, ProfileLevel, ProfileNode, ProfileSourceKind,
-    Role, SectionRole, TurnInputKind,
+    SectionRole, TurnInputKind,
 };
 
 /// Renders one typed Core LLM input into the stable JSON body described by the bundled prompt.
@@ -16,6 +16,27 @@ use vulcan_memorymesh_core::{
 /// Returns a typed Core effect error when a timestamp or JSON value cannot be projected.
 /// 当时间戳或 JSON 值无法投影时返回强类型 Core Effect 错误。
 pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
+    // Capture one host dispatch time; a delayed L2 review must not describe the old turn time as now.
+    // 捕获一个宿主分派时间；延迟的 L2 审核不能把旧回合时间描述为现在。
+    let dispatch_at_ns =
+        i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos()).map_err(|_| {
+            CoreError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Effect,
+                "native VMM dispatch time is outside the supported nanosecond range",
+            )
+        })?;
+    render_llm_input_at(input, dispatch_at_ns)
+}
+
+/// Renders with one explicit host dispatch clock; other command-owned timestamps retain their original authority.
+/// 使用一个显式宿主分派时钟渲染；其他命令归属时间戳保留原有权威来源。
+/// Returns the exact JSON body or an explicit projection error; the clock seam supports deterministic tests.
+/// 返回准确 JSON 正文或显式投影错误；时钟注入点支持确定性测试。
+pub(super) fn render_llm_input_at(
+    input: &LlmInput,
+    dispatch_at_ns: i64,
+) -> Result<String, CoreError> {
     let value = match input {
         LlmInput::PreCheckIntent {
             recent_turns,
@@ -52,6 +73,9 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
                 .enumerate()
                 .map(|(index, candidate)| {
                     let explanation = &candidate.explanation;
+                    // origin comes from observed retrieval stages, not the memory's creation method.
+                    // origin 来自已观察检索阶段，而非记忆创建方式。
+                    let origin = super::retrieval_origin::describe_retrieval_origin(Some(explanation));
                     json!({
                         "candidate_number": index.saturating_add(1),
                         "memory_id": candidate.memory_id.as_str(),
@@ -65,9 +89,9 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
                         "score": candidate.score,
                         "score_label": "final_score",
                         "score_explanation": score_explanation(explanation),
-                        "origin": memory_source_label(candidate.source_kind),
-                        "origin_label": memory_source_label(candidate.source_kind),
-                        "origin_explanation": "Core-authoritative memory provenance",
+                        "origin": origin.origin,
+                        "origin_label": origin.label,
+                        "origin_explanation": origin.explanation,
                         "support_count": explanation.context_total_support_count,
                         "rebuttal_count": explanation.context_total_rebuttal_count,
                         "matched_context_values": explanation.context_matched_values,
@@ -86,20 +110,32 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
             })
         }
         LlmInput::PostActionAnalysis {
+            max_input_tokens,
             current_timestamp_ns,
             reference_turns,
             target_turn,
             recent_direct_writes,
         } => {
-            let references = reference_turns
-                .iter()
-                .map(|turn| {
-                    json!({
-                        "turn_id": turn.turn_id.as_str(),
-                        "details": turn.details.trim(),
+            // Build exactly the model-visible target object before selecting its reference history.
+            // 在选择参考历史之前构造模型实际可见的准确目标对象。
+            let raw_turn =
+                serde_json::to_value(super::dialogue::native_turn_dialogue(target_turn)?)
+                    .map_err(prompt_serialization_error)?;
+            // Estimate the compact emitted object, including keys, quoting, escapes, and middle-item wrappers.
+            // 估算实际输出的紧凑对象，包含键、引号、转义及中间条目包装。
+            let target_json = escape_postaction_json(
+                serde_json::to_string(&raw_turn).map_err(prompt_serialization_error)?,
+            );
+            let references =
+                select_postaction_history(reference_turns, &target_json, *max_input_tokens)
+                    .iter()
+                    .map(|turn| {
+                        json!({
+                            "turn_id": turn.turn_id.as_str(),
+                            "details": turn.details.trim(),
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
+                    .collect::<Vec<_>>();
             let direct_writes = recent_direct_writes
                 .iter()
                 .map(|memory| {
@@ -120,7 +156,7 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
                 "target_turn": {
                     "turn_id": target_turn.id.as_str(),
                     "created_datetime": format_timestamp(target_turn.created_at_ns),
-                    "raw_turn": target_turn,
+                    "raw_turn": raw_turn,
                 },
                 "recent_direct_memory_writes": direct_writes,
             })
@@ -135,7 +171,8 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
             memory_candidates,
             profile_candidates,
             current_profile_nodes,
-        ),
+            dispatch_at_ns,
+        )?,
         LlmInput::ProfileInstruction {
             target_section,
             instruction,
@@ -158,13 +195,88 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
             })
         }
     };
-    serde_json::to_string(&value).map_err(|error| {
+    let serialized = serde_json::to_string(&value).map_err(|error| {
         CoreError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Effect,
             format!("failed to encode native VMM prompt input: {error}"),
         )
-    })
+    })?;
+    // Go's L1 renderer applies the same JSON escaping as its target-budget serializer.
+    // Go 的 L1 渲染器与目标预算序列化器使用相同的 JSON 转义。
+    // Keep emitted bytes and budget bytes aligned without changing other prompt contracts.
+    // 保持输出字节与预算字节一致，不改变其他提示词契约。
+    if matches!(input, LlmInput::PostActionAnalysis { .. }) {
+        Ok(escape_postaction_json(serialized))
+    } else {
+        Ok(serialized)
+    }
+}
+
+/// Applies Go encoding/json's five additional string escapes to already valid serialized JSON.
+/// 对已合法序列化的 JSON 应用 Go encoding/json 的五种额外字符串转义。
+/// Accepts encoded JSON and returns semantically identical JSON with external-compatible token costs.
+/// 接收已编码 JSON，返回语义相同且 Token 成本与外置兼容的 JSON。
+fn escape_postaction_json(serialized: String) -> String {
+    // These characters cannot form JSON structural syntax; literal backslash escapes remain untouched.
+    // 这些字符不构成 JSON 结构语法；字面反斜杠转义保持不变。
+    let mut escaped = String::with_capacity(serialized.len());
+    for character in serialized.chars() {
+        match character {
+            '<' => escaped.push_str("\\u003c"),
+            '>' => escaped.push_str("\\u003e"),
+            '&' => escaped.push_str("\\u0026"),
+            '\u{2028}' => escaped.push_str("\\u2028"),
+            '\u{2029}' => escaped.push_str("\\u2029"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+/// Projects serialization failures into a stable effect error without exposing source dialogue.
+/// 将序列化失败投影为稳定 Effect 错误，不暴露来源对话。
+fn prompt_serialization_error(error: serde_json::Error) -> CoreError {
+    CoreError::new(
+        ErrorCode::InvalidArgument,
+        ErrorStage::Effect,
+        format!("failed to encode native VMM business input: {error}"),
+    )
+}
+
+/// Selects the newest contiguous refined-history suffix using the external target-first budget rule.
+/// 按外置目标优先预算规则选择最新的连续提炼历史后缀。
+/// `target_json` is the exact serialized business object; zero budget disables trimming as in external VMM.
+/// `target_json` 为准确序列化业务对象；预算为零时与外置 VMM 一样禁用裁剪。
+fn select_postaction_history<'a>(
+    references: &'a [vulcan_memorymesh_core::PostActionReferenceTurn],
+    target_json: &str,
+    max_tokens: u32,
+) -> &'a [vulcan_memorymesh_core::PostActionReferenceTurn] {
+    if max_tokens == 0 {
+        return references;
+    }
+    // A fully consumed target budget must not admit even the newest history item.
+    // 目标完全耗尽预算时，即使最新历史条目也不能进入。
+    let mut remaining =
+        max_tokens.saturating_sub(vulcan_memorymesh_core::estimate_text_tokens(target_json));
+    if remaining == 0 {
+        return &references[references.len()..];
+    }
+    // External semantics keep at least the latest refined turn only when some target budget remains.
+    // 外置语义仅在目标仍有剩余预算时，至少保留最新一个提炼回合。
+    let mut start = references.len();
+    for (index, reference) in references.iter().enumerate().rev() {
+        // Persisted details are the external history budget unit, not the surrounding request envelope.
+        // 持久化提炼详情是外置历史预算单位，不是外层请求信封。
+        let cost = vulcan_memorymesh_core::estimate_text_tokens(reference.details.trim());
+        if start != references.len() && cost > remaining {
+            break;
+        }
+        remaining = remaining.saturating_sub(cost);
+        start = index;
+    }
+    &references[start..]
 }
 
 /// Resolves a native durable turn identity to the numeric prompt contract used by VMM.
@@ -331,21 +443,27 @@ fn render_postaction_review(
     memory_candidates: &[vulcan_memorymesh_core::MemoryReviewCandidate],
     profile_candidates: &[vulcan_memorymesh_core::ProfileCandidate],
     current_profile_nodes: &[ProfileNode],
-) -> Value {
+    dispatch_at_ns: i64,
+) -> Result<Value, CoreError> {
     let (current_ns, turn_id, user_input_kind, user_content, assistant_content, sections) =
         match context {
             PostActionReviewContext::Turn {
                 target_turn,
                 user_input_kind,
                 profile_sections,
-            } => (
-                target_turn.created_at_ns,
-                Some(target_turn.id.as_str()),
-                Some(turn_input_kind_label(*user_input_kind)),
-                timeline_content(target_turn.timeline.as_slice(), Role::User),
-                timeline_content(target_turn.timeline.as_slice(), Role::Assistant),
-                profile_sections.as_slice(),
-            ),
+            } => {
+                // L2 reviews only the original question and final answer, exactly as the external usecase.
+                // L2 仅审核原问题及最终回答，与外置用例完全一致。
+                let dialogue = super::dialogue::native_turn_dialogue(target_turn)?;
+                (
+                    target_turn.created_at_ns,
+                    Some(target_turn.id.as_str()),
+                    Some(turn_input_kind_label(*user_input_kind)),
+                    dialogue.user,
+                    dialogue.assistant,
+                    profile_sections.as_slice(),
+                )
+            }
             PostActionReviewContext::DirectWrite { occurred_at_ns } => (
                 *occurred_at_ns,
                 None,
@@ -371,7 +489,7 @@ fn render_postaction_review(
                         "scope_level": memory_scope_label(hit.memory.scope_class),
                         "category": memory_category_number(hit.memory.category),
                         "score": hit.final_score,
-                        "origin": memory_source_label(hit.memory.source_kind),
+                        "origin": super::retrieval_origin::describe_retrieval_origin(hit.explanation.as_ref()).origin,
                         "abstract": hit.memory.summary.trim(),
                         "details": hit.memory.content.trim(),
                     })
@@ -393,7 +511,12 @@ fn render_postaction_review(
     let mut root = Map::new();
     root.insert(
         "current_datetime".to_owned(),
-        json!(format_timestamp(current_ns)),
+        // Turn review uses host dispatch time; direct-write review retains its command-frozen time.
+        // 回合审核使用宿主分派时间；主动写入审核保留命令冻结时间。
+        json!(format_timestamp(match context {
+            PostActionReviewContext::Turn { .. } => dispatch_at_ns,
+            PostActionReviewContext::DirectWrite { .. } => current_ns,
+        })),
     );
     root.insert(
         "current_turn_datetime".to_owned(),
@@ -415,8 +538,12 @@ fn render_postaction_review(
     for role in [SectionRole::Subject, SectionRole::Environment] {
         let new_candidates = profile_candidates
             .iter()
+            // The external L2 wire contract numbers each profile role independently.
+            // 外置 L2 传输契约分别对每种画像角色独立编号。
+            // The response parser maps these role-local indexes back to Core-global indexes.
+            // 响应解析器会将这些角色局部索引映射回 Core 全局索引。
+            .filter(|candidate| candidate.section_role == role)
             .enumerate()
-            .filter(|(_, candidate)| candidate.section_role == role)
             .map(|(index, candidate)| {
                 json!({
                     "candidate_index": index,
@@ -456,7 +583,7 @@ fn render_postaction_review(
             }),
         );
     }
-    Value::Object(root)
+    Ok(Value::Object(root))
 }
 
 /// Renders one active profile node for automatic post-action review.
@@ -491,18 +618,6 @@ fn render_profile_node_for_instruction(node: &ProfileNode) -> Value {
 /// 选择画像新鲜度判断与提示词展示共享的持久日期锚点。
 fn profile_date_anchor(node: &ProfileNode) -> i64 {
     node.effective_date_ns.unwrap_or(node.created_at_ns)
-}
-
-/// Joins timeline text for one exact author role without changing item order.
-/// 在不改变项目顺序的前提下拼接一个精确作者角色的时间线文本。
-fn timeline_content(items: &[vulcan_memorymesh_core::TimelineItem], role: Role) -> String {
-    items
-        .iter()
-        .filter(|item| item.role == role)
-        .map(|item| item.content.trim())
-        .filter(|content| !content.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Formats a Unix-nanosecond timestamp into the local prompt datetime form.
@@ -580,9 +695,9 @@ const fn memory_scope_label(scope: MemoryScopeClass) -> &'static str {
     }
 }
 
-/// Returns the stable prompt label for one memory source.
-/// 返回一个记忆来源的稳定提示词标签。
-const fn memory_source_label(source: MemorySourceKind) -> &'static str {
+/// Returns the stable memory creation label shared by prompt and search-result projections.
+/// 返回提示词及检索结果投影共用的稳定记忆创建标签。
+pub(super) const fn memory_source_label(source: MemorySourceKind) -> &'static str {
     match source {
         MemorySourceKind::Turn => "turn",
         MemorySourceKind::Direct => "direct",
@@ -645,9 +760,69 @@ const fn section_target_label(role: SectionRole) -> &'static str {
 }
 
 #[cfg(test)]
+#[path = "postaction_parity_tests.rs"]
+mod postaction_parity_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use vulcan_memorymesh_core::{LlmInput, PreCheckTurnContentType, PreCheckTurnContext, TurnId};
+
+    /// Verifies the actual L2 JSON separates generation source from query-local retrieval facts.
+    /// 验证实际 L2 JSON 将生成来源与查询局部检索事实分离。
+    #[test]
+    fn precheck_review_preserves_generation_and_retrieval_provenance()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (vector, lexical, expected) in [
+            (true, false, "vector_search"),
+            (false, true, "lexical_search"),
+            (true, true, "hybrid_rrf"),
+        ] {
+            // candidate is the same directly written memory observed through different channels.
+            // candidate 是通过不同通道观察到的同一条主动写入记忆。
+            let candidate = vulcan_memorymesh_core::PreCheckReviewCandidate {
+                memory_id: vulcan_memorymesh_core::MemoryId::new("vmm-memory-1")?,
+                source_turn_id: None,
+                created_at_ns: 1,
+                source_kind: MemorySourceKind::Direct,
+                scope_class: MemoryScopeClass::Environment,
+                category: MemoryCategory::General,
+                summary: String::from("Fruit preference"),
+                details: String::from("Likes watermelon and grapes"),
+                score: 0.7,
+                explanation: vulcan_memorymesh_core::ScoreExplanation {
+                    raw_vector_score: vector.then_some(0.5),
+                    raw_lexical_score: lexical.then_some(0.2),
+                    rrf_score: (vector && lexical).then_some(0.03),
+                    context_total_support_count: 9,
+                    context_total_rebuttal_count: 4,
+                    context_matched_support_count: 2,
+                    context_matched_rebuttal_count: 1,
+                    ..vulcan_memorymesh_core::ScoreExplanation::default()
+                },
+            };
+            // rendered goes through the production prompt projection, not a stand-alone label test.
+            // rendered 经过生产提示词投影，而非独立标签测试。
+            let rendered = render_llm_input(&LlmInput::PreCheckReview {
+                current_timestamp_ns: 2,
+                search_queries: vec![String::from("favorite fruit")],
+                intent_reason: None,
+                user_content: String::from("What fruit do I like?"),
+                candidates: vec![candidate],
+            })?;
+            // value verifies exact serialized fields consumed by the configured model.
+            // value 验证配置模型消费的准确序列化字段。
+            let value: Value = serde_json::from_str(&rendered)?;
+            assert_eq!(value["candidates"][0]["source_kind"], "direct");
+            assert_eq!(value["candidates"][0]["origin"], expected);
+            assert_ne!(value["candidates"][0]["origin_label"], "direct");
+            assert_eq!(value["candidates"][0]["support_count"], 9);
+            assert_eq!(value["candidates"][0]["rebuttal_count"], 4);
+            assert_eq!(value["candidates"][0]["matched_context_support_count"], 2);
+            assert_eq!(value["candidates"][0]["matched_context_rebuttal_count"], 1);
+        }
+        Ok(())
+    }
 
     /// Verifies that pre-check intent projection keeps the prompt-owned field names.
     /// 验证 PreCheck 意图投影保留提示词拥有的字段名。

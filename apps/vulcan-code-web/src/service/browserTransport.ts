@@ -8,6 +8,7 @@ import type {
   StartupSnapshot,
   WorkspaceGitChangedEvent,
   VceProjectChangedEvent,
+  VceJobSummary,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
@@ -69,6 +70,7 @@ type BrowserServiceEvent =
   | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent }
   | { kind: "workspaceGitChanged"; payload: WorkspaceGitChangedEvent }
   | { kind: "vceProjectChanged"; payload: VceProjectChangedEvent }
+  | { kind: "vceJobChanged"; payload: VceJobSummary }
   | { kind: "commandSessionDisplayChanged"; payload: CommandSessionDisplayChangedEvent }
   | { kind: "projectTerminalDisplayChanged"; payload: ProjectTerminalDisplayChangedEvent }
   | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent };
@@ -85,6 +87,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   pluginUiInvalidated: "plugin.ui.invalidated",
   workspaceGitChanged: "workspace.git.changed",
   vceProjectChanged: "vce.project.changed",
+  vceJobChanged: "vce.job.changed",
   commandSessionDisplayChanged: "command.session.display.changed",
   projectTerminalDisplayChanged: "project.terminal.display.changed",
   projectTerminalRunningCountChanged: "project.terminal.running-count.changed",

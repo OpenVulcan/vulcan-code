@@ -386,6 +386,156 @@ fn run_seeded_turn_streaming_resumes_from_tool_result() {
     });
 }
 
+/// Build a retained user/assistant boundary; text and reasoning identify the interrupted output.
+/// 构建保留的用户／助手边界；文本和推理参数指定中断输出。
+/// Returns an independent canonical snapshot without adding another user message.
+/// 返回独立规范快照，不增加另一条用户消息。
+fn retained_assistant_snapshot(text: &str, reasoning: &str) -> ConversationSnapshot {
+    ConversationSnapshot {
+        messages: vec![
+            ConversationMessage {
+                id: "continue-user".into(),
+                payload: ConversationPayload::UserText {
+                    text: "Inspect this source".into(),
+                    attachments: Vec::new(),
+                },
+            },
+            ConversationMessage {
+                id: "continue-partial-assistant".into(),
+                payload: ConversationPayload::Assistant {
+                    text: text.into(),
+                    reasoning: reasoning.into(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// A host-admitted retained loop may preserve partial output, while ordinary seeded input stays strict.
+/// 宿主已准入的保留循环可以保留部分输出，普通播种输入仍保持严格校验。
+/// No inputs; verifies text-only and reasoning-only tails and the exact next request history.
+/// 无输入；验证纯文本、纯推理尾部及下一请求的精确历史。
+#[test]
+fn run_restored_provider_loop_preserves_partial_assistant_without_new_input() {
+    // Use a single runtime worker; the test requires no shared service or network.
+    // 使用单个运行时线程；测试不需要共享服务或网络。
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        for (text, reasoning) in [("Partial answer", ""), ("", "Partial reasoning")] {
+            // Both entrypoints receive the same immutable original history.
+            // 两个入口接收相同的不可变原始历史。
+            let snapshot = retained_assistant_snapshot(text, reasoning);
+            let adapter = MockStreamingProviderAdapter::new(vec![(
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: "Continued answer".into(),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            )]);
+            let executor = MockToolExecutor::new();
+            let mut seeded =
+                VulcanCoreController::new(build_test_config(2), snapshot.clone()).unwrap();
+            assert!(
+                seeded
+                    .run_seeded_turn_streaming_with_checkpoints_and_interventions(
+                        &adapter,
+                        &executor,
+                        &AllowAllToolPolicy,
+                        |_, _| {},
+                        |_| Ok(false),
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(adapter.built_requests().is_empty());
+            let mut restored =
+                VulcanCoreController::new(build_test_config(2), snapshot.clone()).unwrap();
+            let result = restored
+                .run_restored_provider_loop_streaming_with_checkpoints_and_interventions(
+                    &adapter,
+                    &executor,
+                    &AllowAllToolPolicy,
+                    None,
+                    |_, _| {},
+                    |_| Ok(false),
+                )
+                .await
+                .expect("continue from retained assistant output");
+            assert_eq!(result.provider_turns_executed, 1);
+            assert_eq!(adapter.built_requests()[0].history, snapshot.messages);
+            assert_eq!(
+                restored.snapshot().messages.len(),
+                snapshot.messages.len() + 1
+            );
+        }
+    });
+}
+
+/// Reject empty, assistant-only and unresolved-tool recovery before the model is invoked.
+/// 在调用模型前拒绝空历史、仅助手历史和未解决工具的恢复。
+/// No inputs; verifies invalid retained boundaries cannot bypass recovery validation.
+/// 无输入；验证非法保留边界不能绕过恢复校验。
+#[test]
+fn run_restored_provider_loop_rejects_invalid_retained_boundaries() {
+    // Each case owns its history so failures cannot mutate another case.
+    // 每个用例独立持有历史，失败不能修改其他用例。
+    let mut assistant_only = retained_assistant_snapshot("Partial answer", "");
+    assistant_only.messages.remove(0);
+    let mut unresolved = retained_assistant_snapshot("Partial answer", "");
+    if let ConversationPayload::Assistant { tool_calls, .. } = &mut unresolved.messages[1].payload {
+        tool_calls.push(ConversationToolCall {
+            id: "pending-item".into(),
+            tool_call_id: Some("pending-call".into()),
+            tool_name: "read_file".into(),
+            arguments: json!({"path":"src/lib.rs"}),
+            argument_parse_error: None,
+        });
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        for snapshot in [
+            ConversationSnapshot::default(),
+            assistant_only,
+            unresolved,
+            retained_assistant_snapshot("", ""),
+        ] {
+            let adapter = MockStreamingProviderAdapter::new(Vec::new());
+            let executor = MockToolExecutor::new();
+            let mut controller = VulcanCoreController::new(build_test_config(2), snapshot).unwrap();
+            assert!(
+                controller
+                    .run_restored_provider_loop_streaming_with_checkpoints_and_interventions(
+                        &adapter,
+                        &executor,
+                        &AllowAllToolPolicy,
+                        None,
+                        |_, _| {},
+                        |_| Ok(false),
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(adapter.built_requests().is_empty());
+        }
+    });
+}
+
 /// Stops the host-owned loop with a controller error once the configured provider-turn budget has been exhausted.
 /// 一旦达到已配置的 Provider 回合预算上限，就以控制器错误终止宿主自有循环。
 #[test]

@@ -22,25 +22,23 @@ function workbenchFixture(): WorkbenchSnapshot {
 }
 
 describe("project VCE settings visibility", () => {
-  // The code-context section must not exist until backend configuration is fully ready.
-  // 后端配置完全就绪前，代码上下文分区必须不存在。
-  it("fails closed with the authoritative global readiness flag", () => {
+  // Project intent remains configurable without giving settings navigation runtime admission authority.
+  // 项目意图保持可配置，设置导航不拥有运行时准入权威。
+  it("keeps the semantic settings node for both disabled and enabled project intent", () => {
     const project = { pinned: false, vceEnabled: true } as ProjectSummary;
 
     const closed = projectSettingsSections(
-      project,
+      { ...project, vceEnabled: false },
       workbenchFixture(),
-      false,
       translationFixture,
     );
     const ready = projectSettingsSections(
       project,
       workbenchFixture(),
-      true,
       translationFixture,
     );
 
-    expect(closed.some((section) => section.id === "code-context")).toBe(false);
+    expect(closed.find((section) => section.id === "code-context")?.detail).toBe("projectSettings.codeContext.disabled");
     expect(ready.some((section) => section.id === "code-context")).toBe(true);
   });
 });

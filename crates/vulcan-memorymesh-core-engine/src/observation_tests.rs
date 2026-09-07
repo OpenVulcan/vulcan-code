@@ -475,6 +475,7 @@ fn analyze_fallback_checkpoint_rejects_partial_review() -> Result<(), Box<dyn st
     };
     let node = build_analyze_profile_node(
         &pending,
+        &vulcan_memorymesh_core_config::ProfilePolicy::default(),
         &accepted_profile_candidates[0],
         &BTreeMap::new(),
         ProfileNodeId::new("committed-profile")?,

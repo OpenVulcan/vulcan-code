@@ -382,6 +382,259 @@ struct DeterministicHost {
     scenario: HostScenario,
 }
 
+/// Observes the exact L1 inputs while returning a valid empty extraction through the real Core flow.
+/// 观察精确 L1 输入，同时通过真实 Core 流程返回有效空提取。
+struct SessionWindowHost {
+    /// Executes the existing deterministic embedding, query and atomic storage ports.
+    /// 执行既有确定性嵌入、查询及原子存储端口。
+    inner: DeterministicHost,
+    /// Records every inclusive cutoff and direct-write ID list actually delivered to L1.
+    /// 记录实际送到 L1 的每个包含式截止时间及直写 ID 列表。
+    l1_windows: Vec<(i64, Vec<MemoryId>)>,
+    /// Fails exactly one L1 call without producing any successful derived mutation.
+    /// 令恰好一次 L1 调用失败，不产生任何成功派生变更。
+    fail_next_l1: bool,
+}
+
+impl HostDriver for SessionWindowHost {
+    /// Executes `request`, observing L1 or delegating unchanged effects to the test host.
+    /// 执行 `request`，观察 L1 或将其他 Effect 原样委托给测试宿主。
+    /// Returns a valid empty structured extraction or the explicitly requested one-shot failure.
+    /// 返回有效空结构化提取，或明确要求的单次失败。
+    fn execute_effect(&mut self, request: EffectRequest) -> Result<EffectResult, CoreError> {
+        if let HostEffect::Llm(effect) = &request.effect
+            && let LlmInput::PostActionAnalysis {
+                target_turn,
+                recent_direct_writes,
+                current_timestamp_ns,
+                ..
+            } = &effect.input
+        {
+            self.l1_windows.push((
+                *current_timestamp_ns,
+                recent_direct_writes
+                    .iter()
+                    .map(|item| item.memory_id.clone())
+                    .collect(),
+            ));
+            if self.fail_next_l1 {
+                self.fail_next_l1 = false;
+                return Err(CoreError::new(
+                    ErrorCode::Internal,
+                    ErrorStage::Effect,
+                    "one-shot test analysis failure",
+                ));
+            }
+            return Ok(EffectResult {
+                effect_id: request.effect_id,
+                result: HostEffectResult::Llm(LlmOutput::PostActionAnalysis {
+                    user_input_kind: TurnInputKind::Statement,
+                    turn_id: target_turn.id.clone(),
+                    details: "Existing direct writes already capture all durable facts.".to_owned(),
+                    memories: Vec::new(),
+                    profiles: Vec::new(),
+                    context_evidence: Vec::new(),
+                }),
+            });
+        }
+        self.inner.execute_effect(request)
+    }
+}
+
+/// Writes one direct fact through the real command path and returns its committed memory ID.
+/// 通过真实命令路径写入一条直接事实，并返回已提交记忆 ID。
+/// `key` is both unique operation text and content; `session` and `at` fix ownership and observation time.
+/// `key` 同时用作唯一操作文本和内容；`session` 与 `at` 固定归属及观察时间。
+fn write_window_fact(
+    core: &MemoryMeshCore,
+    host: &mut SessionWindowHost,
+    key: &str,
+    session: &SessionSourceId,
+    at: i64,
+) -> MemoryId {
+    // identities are the same canonical fixture identities used by intake and analysis below.
+    // identities 与下方登记及分析使用同一组规范样本身份。
+    let (subject_id, scope_access, vector_space_id) = identities();
+    // written includes actual embedding and transactional storage, not a manually inserted record.
+    // written 包含实际嵌入及事务存储，而不是手动插入记录。
+    let written = core
+        .run_to_completion(
+            with_identity(
+                core,
+                |identity| {
+                    CoreCommand::MemoryWrite(MemoryWriteCommand {
+                        subject_id,
+                        replacement_scope: fixture_replacement_scope(&scope_access),
+                        item: direct_write_item(
+                            scope_access.write_scope.clone(),
+                            MemoryCategory::ProjectContext,
+                            key,
+                            Vec::new(),
+                            20,
+                        ),
+                        scope_access,
+                        session_source_id: session.clone(),
+                        vector_space_id,
+                        occurred_at_ns: at,
+                        mutation_identity: identity,
+                    })
+                },
+                key,
+                at,
+            ),
+            host,
+        )
+        .expect("direct fact");
+    match written {
+        CommandResult::MemoryWrite(result) => result.memory.id,
+        _ => panic!("memory write result"),
+    }
+}
+
+/// Exercises queued turns, a failed analysis, three successes and independent-session L1 windows.
+/// 验证积压回合、一次失败分析、三次成功及独立会话的 L1 窗口。
+#[test]
+fn l1_observes_only_direct_writes_after_the_last_successful_session_window() {
+    // core and host drive the complete intake/query/LLM/derived-commit sequence.
+    // core 与 host 驱动完整登记、查询、LLM 和派生提交序列。
+    let core = MemoryMeshCore::new().expect("core");
+    let mut host = SessionWindowHost {
+        inner: DeterministicHost::new(),
+        l1_windows: Vec::new(),
+        fail_next_l1: false,
+    };
+    host.inner.suppress_candidate_queries = true;
+    // owner identifies the same subject and writing project for both isolated sessions.
+    // owner 为两个隔离会话指定相同主体及写入项目。
+    let (subject_id, scope_access, vector_space_id) = identities();
+    // sessions differ only in their explicit host session identity.
+    // sessions 仅在明确的宿主会话身份上不同。
+    let sessions = [
+        SessionSourceId::new("window-session-a").expect("session A"),
+        SessionSourceId::new("window-session-b").expect("session B"),
+    ];
+    // first is written before every queued turn.
+    // first 在全部积压回合之前写入。
+    let first = write_window_fact(&core, &mut host, "window-fact-first", &sessions[0], 10);
+    // turns are all registered before any analysis, so intake cannot supply the later watermarks.
+    // turns 全部在任何分析之前登记，因此登记时无法提供后续水位。
+    let mut turns = Vec::new();
+    for index in 0..4 {
+        // session chooses the independent session only for the last turn.
+        // session 仅为最后一个回合选择独立会话。
+        let session = &sessions[usize::from(index == 3)];
+        // at is the earlier user-turn time, not the later extraction cutoff.
+        // at 是较早的用户回合时间，而不是较晚的提取截止时间。
+        let at = 21 + index;
+        // accepted runs normal noise/PII intake and persists the authoritative session record.
+        // accepted 执行正常 Noise/PII 登记并持久化权威会话记录。
+        let accepted = core
+            .run_to_completion(
+                with_identity(
+                    &core,
+                    |identity| {
+                        CoreCommand::PostActionIntake(PostActionIntakeCommand {
+                            input_kind: vulcan_memorymesh_core::PostActionInputKind::SingleTurn,
+                            subject_id: subject_id.clone(),
+                            scope_access: scope_access.clone(),
+                            session_source_id: session.clone(),
+                            vector_space_id: vector_space_id.clone(),
+                            timeline: vec![TimelineItem {
+                                role: Role::User,
+                                content:
+                                    "我下周要出差去北京，我喜欢提前订票，请记录我的长期出行偏好"
+                                        .to_owned(),
+                                occurred_at_ns: at,
+                            }],
+                            completed_at_ns: at,
+                            mutation_identity: identity,
+                        })
+                    },
+                    &format!("window-intake-{index}"),
+                    at,
+                ),
+                &mut host,
+            )
+            .expect("intake");
+        let CommandResult::PostActionAccepted(accepted) = accepted else {
+            panic!("intake result")
+        };
+        turns.push(accepted.turn_id.expect("pending turn"));
+    }
+    // other shares subject/project but must never enter session A's L1 direct-write input.
+    // other 共享主体和项目，但绝不能进入会话 A 的 L1 直写输入。
+    let other = write_window_fact(&core, &mut host, "window-fact-other", &sessions[1], 50);
+    // expected stores only IDs actually returned by successful direct-write commands.
+    // expected 仅保存成功直写命令实际返回的 ID。
+    let mut expected = vec![
+        (100, vec![first]),
+        (200, Vec::new()),
+        (200, Vec::new()),
+        (300, Vec::new()),
+        (100, vec![other]),
+    ];
+    for (index, cutoff) in [(0, 100), (1, 200), (2, 300), (3, 100)] {
+        if index == 1 {
+            // second arrives after the first success and must appear in the retry but not later rounds.
+            // second 在首次成功后到达，必须出现在重试中，但不能出现在更晚的轮次。
+            let second =
+                write_window_fact(&core, &mut host, "window-fact-second", &sessions[0], 150);
+            expected[1].1 = vec![second.clone()];
+            expected[2].1 = vec![second];
+        }
+        // snapshot supplies the latest committed boundary at this command's execution boundary.
+        // snapshot 在本命令执行边界提供最新已提交边界。
+        let snapshot = host.inner.storage.snapshot();
+        // session_record is selected by complete ownership, including the writing project.
+        // session_record 按包含写入项目的完整归属选择。
+        let session_record = snapshot
+            .memory_sessions
+            .iter()
+            .find(|record| {
+                record.subject_id == subject_id
+                    && record.scope_id == scope_access.write_scope
+                    && record.session_source_id == sessions[usize::from(index == 3)]
+            })
+            .expect("session record");
+        // command freezes this execution's observation interval through every Core effect.
+        // command 在每个 Core Effect 中冻结本次执行的观察区间。
+        let command = with_identity(
+            &core,
+            |identity| {
+                CoreCommand::PostActionAnalyzePendingTurn(PostActionAnalyzePendingTurnCommand {
+                    subject_id: subject_id.clone(),
+                    scope_access: scope_access.clone(),
+                    replacement_scope: fixture_replacement_scope(&scope_access),
+                    profile_sections: vec![subject_profile_section(&scope_access)],
+                    session_source_id: session_record.session_source_id.clone(),
+                    vector_space_id: vector_space_id.clone(),
+                    turn_id: turns[index].clone(),
+                    analysis_generation: 1,
+                    analysis_cutoff_ns: cutoff,
+                    direct_write_observed_after_ns: session_record.last_extraction_observed_at_ns,
+                    mutation_identity: identity,
+                })
+            },
+            &format!("window-analysis-{index}"),
+            cutoff,
+        );
+        if index == 1 {
+            host.fail_next_l1 = true;
+            assert!(core.run_to_completion(command.clone(), &mut host).is_err());
+            assert_eq!(
+                host.inner.storage.snapshot().memory_sessions,
+                snapshot.memory_sessions
+            );
+        }
+        assert!(matches!(
+            core.run_to_completion(command, &mut host)
+                .expect("analysis"),
+            CommandResult::PostActionAnalysis(_)
+        ));
+    }
+    assert_eq!(host.l1_windows, expected);
+}
+
 /// Selects one deterministic LLM scenario for the analysis and review chain.
 /// 为分析与审核链路选择一种确定性 LLM 场景。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -626,6 +879,8 @@ fn apply_retention_recycle_plan(host: &mut DeterministicHost, plan: &RetentionPl
                     RetentionReasonCode::TrashExpiryPurge => "retention-trash-expiry",
                     RetentionReasonCode::VectorGcRetry => "retention-vector-gc",
                     RetentionReasonCode::ProfileExpiry => "retention-profile-expiry",
+                    RetentionReasonCode::ManualSessionRecycle => "manual-session-recycle",
+                    RetentionReasonCode::ManualTurnRecycle => "manual-turn-recycle",
                 }
                 .to_owned(),
             ),
@@ -686,6 +941,19 @@ fn terminalize_memory(host: &mut DeterministicHost, memory_id: &str, sequence: u
 fn shared_environment_profiles_preserve_owner_through_analysis() {
     for retire_only in [false, true] {
         let mut core = MemoryMeshCore::new().expect("Core");
+        // Distinct project/user durations prove environment profiles do not inherit the user rule.
+        // 不同项目/用户期限证明环境画像不会继承用户规则。
+        let mut policy = vulcan_memorymesh_core::ConfigBundle {
+            name: "profile-lifetime".to_owned(),
+            ..Default::default()
+        };
+        policy.memory_policy.profiles.user.stable.base_ms = 17;
+        policy.memory_policy.profiles.project.stable.base_ms = 31;
+        policy.memory_policy.profiles.project.stable.step_ms = 0;
+        core.register_config(policy.clone())
+            .expect("profile policy");
+        core.activate_config("profile-lifetime")
+            .expect("activate profile policy");
         let (subject_id, scope_access, vector_space_id) = identities();
         let owner = SubjectId::new("other-profile-creator").expect("owner");
         let mut host = DeterministicHost::new();
@@ -788,6 +1056,10 @@ fn shared_environment_profiles_preserve_owner_through_analysis() {
                         let checkpoint =
                             core.export_checkpoint(&handle).expect("derived checkpoint");
                         core = MemoryMeshCore::new().expect("fresh Core");
+                        // Restore requires the exact admitted snapshot, not the fresh instance's defaults.
+                        // 恢复需要准确的准入快照，而不是新实例的默认值。
+                        core.register_config(policy.clone())
+                            .expect("restore profile policy");
                         let (restored, restored_step) = core
                             .restore_checkpoint(&checkpoint)
                             .expect("restore derived mutation");
@@ -860,10 +1132,100 @@ fn shared_environment_profiles_preserve_owner_through_analysis() {
                 previous.superseded_by.as_ref(),
                 Some(&analysis.accepted_profile_nodes[0].id)
             );
+            // Receipt projection and committed storage must share the admitted project formula.
+            // 回执投影与已提交存储必须共用准入的项目公式。
+            let node = &analysis.accepted_profile_nodes[0];
+            assert_eq!(node.expires_at_ns, Some(100 + 31 * 1_000_000));
+            assert_eq!(
+                dataset
+                    .profile_nodes
+                    .iter()
+                    .find(|stored| stored.id == node.id),
+                Some(node)
+            );
             assert_eq!(
                 analysis.accepted_profile_nodes[0].subject_id,
                 Some(subject_id)
             );
+        }
+    }
+}
+
+/// Manual profile instructions retain the admitted role-specific rule even after the active policy changes.
+/// 手动画像指令在活动策略变化后仍保留准入时的角色专属规则。
+#[test]
+fn manual_profile_lifetime_is_role_specific_and_command_frozen() {
+    for role in [SectionRole::Subject, SectionRole::Environment] {
+        let core = MemoryMeshCore::new().expect("core");
+        // Name the initial role policy before registering its immutable command snapshot.
+        // 注册不可变命令快照之前，为初始角色策略确定名称。
+        let mut policy = vulcan_memorymesh_core::ConfigBundle {
+            name: "manual-profile-lifetime".to_owned(),
+            ..Default::default()
+        };
+        policy.memory_policy.profiles.user.stable.base_ms = 17;
+        policy.memory_policy.profiles.project.stable.base_ms = 31;
+        core.register_config(policy.clone()).expect("initial rules");
+        core.activate_config(&policy.name).expect("activate");
+        let (subject_id, scope_access, _) = identities();
+        let mut host = DeterministicHost::new();
+        let command = with_identity(
+            &core,
+            |identity| {
+                CoreCommand::ProfileInstruction(ProfileInstructionCommand {
+                    subject_id: subject_id.clone(),
+                    scope_access: scope_access.clone(),
+                    target_section: ProfileViewSection {
+                        scope_id: scope_access.write_scope.clone(),
+                        role,
+                        display_label: "Lifetime fixture".to_owned(),
+                    },
+                    instruction: "Use Rust for durable storage".to_owned(),
+                    occurred_at_ns: 30,
+                    mutation_identity: identity,
+                })
+            },
+            "manual-lifetime",
+            30,
+        );
+        let (handle, mut step) = core.start(command).expect("admit command");
+        // Replacing the registered default cannot change an already admitted command's expiry formula.
+        // 替换已注册默认配置不能改变已准入命令的过期公式。
+        policy.memory_policy.profiles.user.stable.base_ms = 999;
+        policy.memory_policy.profiles.project.stable.base_ms = 999;
+        core.register_config(policy).expect("replacement rules");
+        core.activate_config("manual-profile-lifetime")
+            .expect("activate replacement");
+        loop {
+            match step {
+                CommandStep::Effects(effects) => {
+                    assert_eq!(effects.len(), 1);
+                    let result = host
+                        .execute_effect(effects.into_iter().next().expect("effect"))
+                        .expect("host");
+                    step = core.resume(&handle, result).expect("resume");
+                }
+                CommandStep::Complete(result) => {
+                    let CommandResult::ProfileInstruction(result) = *result else {
+                        panic!("instruction result")
+                    };
+                    let node = &result.accepted_nodes[0];
+                    let expected_ms = match role {
+                        SectionRole::Subject => 17,
+                        SectionRole::Environment => 31,
+                    };
+                    assert_eq!(node.expires_at_ns, Some(30 + expected_ms * 1_000_000));
+                    assert_eq!(
+                        host.storage
+                            .dataset()
+                            .profile_nodes
+                            .iter()
+                            .find(|stored| stored.id == node.id),
+                        Some(node)
+                    );
+                    break;
+                }
+            }
         }
     }
 }
@@ -1989,7 +2351,7 @@ impl HostDriver for DeterministicHost {
                     HostEffectResult::StorageMutation(MutationOutcome::Uncertain)
                 } else if self.fail_after_committed_mutation {
                     self.fail_after_committed_mutation = false;
-                    let outcome = self.storage.mutate(&batch)?;
+                    let outcome = self.storage.mutate_at(&batch, i64::MAX)?;
                     assert!(matches!(outcome, MutationOutcome::Committed { .. }));
                     return Err(CoreError::new(
                         ErrorCode::Internal,
@@ -1997,7 +2359,9 @@ impl HostDriver for DeterministicHost {
                         "test Host lost the committed mutation acknowledgement",
                     ));
                 } else {
-                    HostEffectResult::StorageMutation(self.storage.mutate(&batch)?)
+                    // This deterministic test host commits after every fixture's observation cutoff.
+                    // 此确定性测试宿主在所有样本观察截止之后提交。
+                    HostEffectResult::StorageMutation(self.storage.mutate_at(&batch, i64::MAX)?)
                 }
             }
         };
@@ -2072,6 +2436,18 @@ fn public_facade_runs_the_complete_function_set() {
     // Create Core and validate all embedded resources.
     // 创建 Core 并校验全部嵌入资源。
     let core = MemoryMeshCore::new().expect("Core must initialize");
+    // Custom user duration exercises automatic and manual profile persistence through public commands.
+    // 自定义用户期限通过公开命令验证自动与手动画像持久化。
+    let mut policy = vulcan_memorymesh_core::ConfigBundle {
+        name: "user-profile-lifetime".to_owned(),
+        ..Default::default()
+    };
+    policy.memory_policy.profiles.user.stable.base_ms = 17;
+    policy.memory_policy.profiles.user.stable.step_ms = 0;
+    policy.memory_policy.profiles.project.stable.base_ms = 31;
+    core.register_config(policy).expect("profile policy");
+    core.activate_config("user-profile-lifetime")
+        .expect("activate profile policy");
     // Create an empty deterministic host.
     // 创建空确定性宿主。
     let mut host = DeterministicHost::new();
@@ -2277,6 +2653,10 @@ fn public_facade_runs_the_complete_function_set() {
         "the profile business date must remain anchored to the source turn"
     );
     assert_eq!(
+        analysis.accepted_profile_nodes[0].expires_at_ns,
+        Some(21 + 17 * 1_000_000)
+    );
+    assert_eq!(
         analysis.accepted_profile_nodes[0].updated_at_ns, 22,
         "the analysis cutoff must deterministically represent the VMM profile commit time"
     );
@@ -2335,6 +2715,18 @@ fn public_facade_runs_the_complete_function_set() {
         return;
     };
     assert_eq!(instruction.accepted_nodes.len(), 1);
+    assert_eq!(
+        instruction.accepted_nodes[0].expires_at_ns,
+        Some(30 + 17 * 1_000_000)
+    );
+    assert_eq!(
+        host.storage
+            .dataset()
+            .profile_nodes
+            .iter()
+            .find(|node| node.id == instruction.accepted_nodes[0].id),
+        Some(&instruction.accepted_nodes[0])
+    );
     assert_eq!(instruction.retired_nodes.len(), 1);
     assert!(!instruction.review_reason.is_empty());
     assert!(instruction.receipt.is_some());
@@ -4473,12 +4865,14 @@ fn profile_timeline_preserves_historical_timezone_and_semantic_order() {
     seed_profile_node(&mut host, &subject_id, &scope_access.write_scope, 1);
     let template = host.storage.dataset().profile_nodes[0].clone();
     let mut nodes = [
-        ("winter", 1_768_451_400_000, 20, 0, 1),
-        ("ordinary", 1_784_089_800_000, 20, 0, 1),
-        ("important", 1_784_089_800_000, 60, 1, 1),
-        ("confirmed", 1_784_089_800_000, 50, 2, 1),
-        ("hard-later", 1_784_089_800_000, 100, 1, 2),
-        ("hard-first", 1_784_089_800_000, 100, 1, 1),
+        // Domain timestamps use nanoseconds, including historical timezone fixtures.
+        // 领域时间戳使用纳秒，历史时区夹具也必须如此。
+        ("winter", 1_768_451_400_000_000_000, 20, 0, 1),
+        ("ordinary", 1_784_089_800_000_000_000, 20, 0, 1),
+        ("important", 1_784_089_800_000_000_000, 60, 1, 1),
+        ("confirmed", 1_784_089_800_000_000_000, 50, 2, 1),
+        ("hard-later", 1_784_089_800_000_000_000, 100, 1, 2),
+        ("hard-first", 1_784_089_800_000_000_000, 100, 1, 1),
     ]
     .into_iter()
     .map(|(content, effective, priority, refresh, created)| {
@@ -4549,11 +4943,62 @@ fn profile_timeline_preserves_historical_timezone_and_semantic_order() {
         );
     }
     nodes[0].effective_date_ns = Some(i64::MAX);
-    assert_eq!(
+    // The maximum signed nanosecond timestamp is in year 2262, not outside Chrono's supported calendar.
+    // 最大有符号纳秒时间戳位于 2262 年，并未超出 Chrono 支持的日历范围。
+    assert!(
         query_profile_facts(&core, subject_id, scope_access, view, nodes)
-            .expect_err("unrenderable date must fail without panic")
-            .code,
-        ErrorCode::EffectMismatch
+            .expect("maximum nanosecond timestamp must render")
+            .rendered
+            .contains("2262-04-11:")
+    );
+}
+
+/// Verifies one-nanosecond midnight boundaries and the creation anchor when an effective date is absent.
+/// 验证午夜前后一纳秒边界，以及生效日期缺失时使用创建锚点。
+#[test]
+fn profile_timeline_preserves_nanosecond_midnight_boundaries() {
+    // Query the public facade with valid authoritative facts instead of calling an internal formatter.
+    // 使用有效权威事实查询公共门面，而不是调用内部格式化器。
+    let core = MemoryMeshCore::new().expect("Core");
+    let (subject_id, scope_access, _) = identities();
+    let mut host = DeterministicHost::new();
+    seed_profile_node(&mut host, &subject_id, &scope_access.write_scope, 1);
+    let template = host.storage.dataset().profile_nodes[0].clone();
+    // Exact nanoseconds on either side of the first UTC midnight after the Unix epoch.
+    // Unix 纪元后首个 UTC 午夜两侧的准确纳秒。
+    let nodes = [
+        ("before", 86_400_000_000_000 - 1),
+        ("after", 86_400_000_000_000),
+    ]
+    .into_iter()
+    .map(|(content, anchor)| {
+        // With no explicit effective date, creation time remains the sole declared fallback.
+        // 未声明生效日期时，创建时间仍是唯一已声明的备用锚点。
+        let mut node = template.clone();
+        node.id = ProfileNodeId::new(content).expect("node ID");
+        node.content = content.to_owned();
+        node.effective_date_ns = None;
+        node.created_at_ns = anchor;
+        node.updated_at_ns = anchor;
+        node
+    })
+    .collect();
+    let bundle = query_profile_facts(
+        &core,
+        subject_id,
+        scope_access.clone(),
+        ProfileView {
+            mode: ProfileViewMode::Full,
+            sections: vec![subject_profile_section(&scope_access)],
+            include_explanations: false,
+            display_timezone: "UTC".to_owned(),
+        },
+        nodes,
+    )
+    .expect("nanosecond timeline");
+    assert_eq!(
+        bundle.sections[0].rendered,
+        "1970-01-01:\n[P1][L2][W0] before\n\n1970-01-02:\n[P1][L2][W0] after"
     );
 }
 
@@ -5511,13 +5956,25 @@ fn analysis_persistence_embedding_partitions_survive_checkpoint_restore() {
 /// 验证本地 Analyze 硬去重仅对类别匹配的余弦重复项跳过 L2。
 #[test]
 fn analyze_hard_dedupe_is_local_and_category_scoped() {
-    for (same_category, lexical_only, fail_review) in [
-        (true, false, false),
-        (false, false, false),
-        (false, true, false),
-        (true, false, true),
+    for (same_category, lexical_only, fail_review, threshold) in [
+        (true, false, false, 0.99),
+        (false, false, false, 0.99),
+        (false, true, false, 0.99),
+        (true, false, true, 0.99),
+        (true, false, false, 0.0),
     ] {
         let core = MemoryMeshCore::new().expect("Core initializes");
+        // policy exercises explicit hard-dedupe disablement through the same public analysis flow.
+        // policy 通过同一公共分析流程验证显式关闭硬去重。
+        let mut policy = vulcan_memorymesh_core::ConfigBundle {
+            name: "analysis-hard-dedupe-policy".to_owned(),
+            ..Default::default()
+        };
+        policy.memory_policy.retrieval_policy.hard_dedupe[0].threshold = threshold;
+        core.register_config(policy)
+            .expect("register dedupe policy");
+        core.activate_config("analysis-hard-dedupe-policy")
+            .expect("activate dedupe policy");
         let (subject_id, scope_access, vector_space_id) = identities();
         let mut host = DeterministicHost::new();
         let long_text = format!(
@@ -5656,7 +6113,7 @@ fn analyze_hard_dedupe_is_local_and_category_scoped() {
         else {
             panic!("analysis result")
         };
-        if same_category && !fail_review {
+        if same_category && !fail_review && threshold > 0.0 {
             assert!(analysis.accepted_memory_ids.is_empty());
             assert_eq!(analysis.dropped_candidates.len(), 1);
             assert_eq!(
@@ -6870,6 +7327,34 @@ fn direct_hard_dedupe_survives_final_candidate_filtering() {
     assert!(duplicate.deduplicated);
     assert_eq!(duplicate.memory.id, seed.memory.id);
     assert_eq!(host.review_llm_calls, review_calls_before);
+    // Zero must bypass only the local hard gate while still sending the new candidate to L2.
+    // 零值必须仅跳过本地硬门控，仍将新候选发送到 L2。
+    let mut policy = vulcan_memorymesh_core::ConfigBundle {
+        name: "direct-hard-dedupe-disabled".to_owned(),
+        ..Default::default()
+    };
+    policy.memory_policy.retrieval_policy.hard_dedupe[0].threshold = 0.0;
+    core.register_config(policy)
+        .expect("register disabled hard dedupe");
+    core.activate_config("direct-hard-dedupe-disabled")
+        .expect("activate disabled hard dedupe");
+    let admitted = core
+        .run_to_completion(
+            with_identity(
+                &core,
+                |identity| build_write(identity, "prefer rust charlie", 12),
+                "write:hard-pool-disabled",
+                12,
+            ),
+            &mut host,
+        )
+        .expect("write with disabled hard dedupe");
+    let CommandResult::MemoryWrite(admitted) = admitted else {
+        panic!("write result")
+    };
+    assert!(!admitted.deduplicated);
+    assert_ne!(admitted.memory.id, seed.memory.id);
+    assert_eq!(host.review_llm_calls, review_calls_before + 1);
 }
 
 /// Verifies the recent direct-write soft-idempotency window is inclusive at 24 hours only.
@@ -7230,10 +7715,14 @@ fn retention_plans_all_seven_families_with_due_and_protection_rules() {
             RetentionTrashBatchFact {
                 batch_id: "trash-fresh".to_owned(),
                 recycled_at_ns: NOW_NS,
+                expires_at_ns: NOW_NS + 1,
             },
             RetentionTrashBatchFact {
                 batch_id: "trash-expired".to_owned(),
-                recycled_at_ns: NOW_NS - 1_000_000,
+                // A changed policy must not extend this batch's shorter original window.
+                // 策略变更不得延长该批次原先更短的窗口。
+                recycled_at_ns: NOW_NS - 10,
+                expires_at_ns: NOW_NS,
             },
         ],
     };

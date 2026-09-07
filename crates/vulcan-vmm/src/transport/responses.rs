@@ -321,10 +321,17 @@ pub(super) fn protocol_get_profile_bundle_response(
 
 /// Converts generated protobuf PreCheck response into protocol shape.
 /// 将生成的 protobuf PreCheck 响应转换为协议结构。
+/// Takes the remote body and caller-frozen local source; returns a sourced result or a source/status error.
+/// 接收远端正文与调用方冻结的本地来源；返回带来源结果或来源、状态错误。
 pub(super) fn protocol_precheck_response(
     response: crate::grpc::PreCheckResponse,
+    // Preserve the local transport identity frozen before dispatch, never infer it from the remote response.
+    // 保留派发前冻结的本地传输身份，绝不从远端响应推断。
+    read_source: crate::VmmMemoryReadSource,
 ) -> Result<PreCheckResponse, VmmClientError> {
+    read_source.validate()?;
     Ok(PreCheckResponse {
+        read_source,
         should_inject: response.should_inject,
         context_items: response
             .context_items
@@ -383,6 +390,7 @@ pub(super) fn protocol_search_memory_events_response(
                         details_preview: hit.details_preview,
                         category: hit.category,
                         created_datetime: hit.created_datetime,
+                        retrieval: None,
                     })
                     .collect(),
             })

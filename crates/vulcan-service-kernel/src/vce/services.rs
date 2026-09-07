@@ -109,6 +109,7 @@ pub(crate) async fn reconcile_vce_projects(
     let mut report = VceReconcileReport::default();
     for project in projects {
         match reconcile_vce_project_handles(
+            state,
             manager.as_ref(),
             watcher.as_ref(),
             &project,
@@ -145,7 +146,14 @@ pub(crate) async fn reconcile_vce_project(
 ) -> Result<(), String> {
     let readiness = vce_configuration_readiness(state);
     let (project, manager, watcher) = vce_project_runtime_inputs(state, project_id)?;
-    reconcile_vce_project_handles(manager.as_ref(), watcher.as_ref(), &project, &readiness).await
+    reconcile_vce_project_handles(
+        state,
+        manager.as_ref(),
+        watcher.as_ref(),
+        &project,
+        &readiness,
+    )
+    .await
 }
 
 /// Schedules one complete VCE reconciliation after a committed public-AI publication.
@@ -230,6 +238,7 @@ async fn require_vce_project_runtime_ready(
         .await
         .ok_or_else(|| format!("VCE project `{project_id}` has no active retrieval runtime."))?;
     if !runtime_status_can_serve_requests(Some(&status), project.vce.revision, expected_fingerprint)
+        || !manager.project_can_serve_now(project_id, project.vce.revision, expected_fingerprint)
     {
         return Err(format!(
             "VCE project `{project_id}` does not have a current committed retrieval checkpoint."
@@ -284,6 +293,7 @@ pub(crate) async fn service_get_vce_project_overview(
             disabled_status(&project)
         };
         return Ok(api::VceProjectOverviewResponse {
+            read_identity: None,
             configuration: readiness.status,
             status,
             settings,
@@ -294,6 +304,7 @@ pub(crate) async fn service_get_vce_project_overview(
     }
     if !project.vce.enabled {
         return Ok(api::VceProjectOverviewResponse {
+            read_identity: None,
             configuration: readiness.status,
             status: disabled_status(&project),
             settings,
@@ -303,21 +314,145 @@ pub(crate) async fn service_get_vce_project_overview(
         });
     }
     let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
-    let status = manager
-        .project_status(&project.id)
-        .await
-        .ok_or_else(|| format!("VCE 项目 `{}` 尚未协调。", project.id))?;
-    let snapshot = if status.engine.is_some() {
-        Some(manager.management_snapshot(&project.id).await?)
-    } else {
-        None
+    if manager.project_status(&project.id).await.is_none() {
+        // Lazy restoration reads existing storage only and never initializes a project.
+        // 惰性恢复只读取现有存储，绝不初始化项目。
+        let dimension = readiness
+            .embedding_dimension
+            .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?;
+        manager
+            .restore_existing_project(
+                &project.id,
+                &PathBuf::from(&project.path),
+                project.vce.clone(),
+                dimension,
+                readiness
+                    .embedding_physical_fingerprint
+                    .as_deref()
+                    .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?,
+            )
+            .await?;
+    }
+    let Some(status) = manager.project_status(&project.id).await else {
+        return Ok(api::VceProjectOverviewResponse {
+            read_identity: None,
+            configuration: readiness.status,
+            status: uninitialized_status(&project),
+            settings,
+            ai: None,
+            counts: None,
+            integrity: None,
+        });
     };
-    Ok(vce_overview_from_runtime(
-        readiness.status,
+    let (read_identity, snapshot) = if status.engine.is_some() {
+        let (identity, snapshot) = manager.management_snapshot(&project.id).await?;
+        (identity, Some(snapshot))
+    } else {
+        (None, None)
+    };
+    // Management scans may outlive a settings save or project replacement; reject the retired authority.
+    // 管理扫描可能跨越设置保存或项目替换；拒绝已退役的权威配置。
+    let current_readiness = vce_configuration_readiness(&state);
+    let (current_project, _, _) = vce_project_runtime_inputs(&state, &project.id)?;
+    if current_project.path != project.path
+        || current_project.vce != project.vce
+        || current_readiness.status != readiness.status
+        || current_readiness.embedding_physical_fingerprint
+            != readiness.embedding_physical_fingerprint
+    {
+        return Err(String::from("语义引擎配置已变化，请重新读取项目状态。"));
+    }
+    let mut overview = vce_overview_from_runtime(readiness.status, settings, status, snapshot);
+    overview.read_identity = read_identity;
+    Ok(overview)
+}
+
+/// Read lightweight project activity without management scans or waiting on a running query.
+/// 读取轻量项目活动，不进行管理扫描，不等待正在运行的查询。
+/// `state` owns configuration and `request` selects one explicit project. Returns committed metadata.
+/// `state` 持有配置，`request` 选择一个明确项目。返回已提交元数据。
+pub(crate) async fn service_get_vce_project_activity(
+    state: SharedServiceBridgeState,
+    request: api::VceProjectRequest,
+) -> Result<api::VceProjectActivityResponse, String> {
+    let readiness = vce_configuration_readiness(&state);
+    let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
+    let settings = vce_settings_summary(&project.vce);
+    let mut status = if !project.vce.enabled {
+        disabled_status(&project)
+    } else if !readiness.status.ready {
+        blocked_configuration_status(&project, &readiness.status)
+    } else {
+        uninitialized_status(&project)
+    };
+    let mut query_available = false;
+    let mut last_successful_update_unix_ms = None;
+    // Missing observation is explicitly unknown; status reads must never create a scan.
+    // 缺失观察明确为未知；状态读取绝不创建扫描。
+    let mut source_freshness = super::watcher::VceSourceFreshness::default();
+    if let Some(manager) = manager {
+        if project.vce.enabled && readiness.status.ready {
+            let dimension = readiness
+                .embedding_dimension
+                .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?;
+            let fingerprint = readiness
+                .embedding_physical_fingerprint
+                .as_deref()
+                .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?;
+            if manager.project_status(&project.id).await.is_none() {
+                manager
+                    .restore_existing_project(
+                        &project.id,
+                        &PathBuf::from(&project.path),
+                        project.vce.clone(),
+                        dimension,
+                        fingerprint,
+                    )
+                    .await?;
+            }
+            if let Some(runtime_status) = manager.project_status(&project.id).await {
+                status = vce_overview_from_runtime(
+                    readiness.status.clone(),
+                    settings.clone(),
+                    runtime_status,
+                    None,
+                )
+                .status;
+            }
+            query_available =
+                manager.project_can_serve_now(&project.id, project.vce.revision, fingerprint);
+        }
+        // Read persisted success even when current global models are unavailable; never invoke models here.
+        // 即使当前全局模型不可用，也读取持久成功时间；此处绝不调用模型。
+        last_successful_update_unix_ms = manager.last_successful_update(&project.id).await?;
+        source_freshness = manager.source_freshness(&project.id).await;
+    } else if project.vce.enabled && readiness.status.ready {
+        return Err(String::from("VCE 运行时尚未就绪。"));
+    }
+    // Reject a response whose authority changed during asynchronous metadata reads.
+    // 拒绝异步元数据读取期间权威配置已经变化的响应。
+    let current_readiness = vce_configuration_readiness(&state);
+    let (current_project, _, _) = vce_project_runtime_inputs(&state, &project.id)?;
+    if current_project.path != project.path
+        || current_project.vce != project.vce
+        || current_readiness.status != readiness.status
+        || current_readiness.embedding_physical_fingerprint
+            != readiness.embedding_physical_fingerprint
+    {
+        return Err(String::from("语义引擎配置已变化，请重新读取项目状态。"));
+    }
+    Ok(api::VceProjectActivityResponse {
+        configuration: readiness.status,
         settings,
         status,
-        snapshot,
-    ))
+        query_available,
+        last_successful_update_unix_ms,
+        source_freshness: api::VceSourceFreshnessSummary {
+            watching: source_freshness.watching,
+            pending_changes: source_freshness.pending_changes,
+            reconciliation_required: source_freshness.reconciliation_required,
+        },
+    })
 }
 
 /// Replace one project's complete VCE settings under optimistic revision control.
@@ -341,12 +476,14 @@ pub(crate) async fn service_update_vce_project_settings(
     state: SharedServiceBridgeState,
     request: api::VceProjectSettingsUpdateRequest,
 ) -> Result<api::VceProjectSettingsSummary, String> {
-    if request.settings.enabled {
-        require_vce_configuration_ready(&state)?;
-    }
+    // Project intent is independently persistable; only indexing and retrieval require global readiness.
+    // 项目意图可以独立持久化；仅索引和检索要求全局就绪。
     let project_id = stable_project_id(&request.project_id)?;
     let persist_lock = webui_workspace_persist_lock();
     let persist_guard = persist_lock.lock().await;
+    // Hold the existing publication transaction through authoritative snapshot replacement, not runtime drain.
+    // 持有现有发布事务直到权威快照替换，不跨运行时排空持有。
+    let publication_guard = crate::begin_public_ai_configuration_transaction().await;
     let (project, controller_runtime) = {
         let guard = state
             .lock()
@@ -381,7 +518,35 @@ pub(crate) async fn service_update_vce_project_settings(
         &next,
     )
     .await?;
-    refresh_workbench_snapshot(state.clone()).await?;
+    // Publish persisted project authority before a fallible full workbench projection can fail.
+    // 在可能失败的完整工作台投影前，先发布已持久化项目权威。
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("Lock persisted VCE project authority: {error}"))?;
+        let current = guard
+            .workspace_snapshot
+            .as_mut()
+            .and_then(|workspace| {
+                workspace
+                    .task_projects
+                    .iter_mut()
+                    .find(|item| item.id == project_id)
+            })
+            .ok_or_else(|| {
+                String::from("VCE settings were saved, but the project left the active workspace")
+            })?;
+        if current.vce.revision > next.revision {
+            return Err(String::from(
+                "VCE settings were saved, but a newer project revision is already active",
+            ));
+        }
+        current.vce = next.clone();
+    }
+    refresh_workbench_snapshot(state.clone())
+        .await
+        .map_err(|error| format!("VCE 设置已保存，但工作台刷新失败：{error}"))?;
+    drop(publication_guard);
     drop(persist_guard);
     let reconcile_error = reconcile_vce_project(&state, &project_id).await.err();
     commit_and_emit_project_settings_changed_delta(
@@ -397,43 +562,222 @@ pub(crate) async fn service_update_vce_project_settings(
     Ok(vce_settings_summary(&next))
 }
 
-/// Request an explicit full project refresh with revision validation.
-/// 在修订校验下请求显式项目全量刷新。
+/// Preserve newer persisted VCE settings during an older asynchronous whole-workbench refresh.
+/// 在较旧异步整工作台刷新期间保留较新的持久化 VCE 设置。
+/// `loaded` and `retained` are exact project rows, `projected` is their WebUI view; only VCE fields change.
+/// `loaded` 与 `retained` 为精确项目记录，`projected` 为其界面投影；仅改变 VCE 字段。
+/// Returns an explicit conflict when equal revisions claim different settings, never a guessed winner.
+/// 相同修订声称不同设置时返回明确冲突，绝不猜测胜者。
+pub(crate) fn preserve_newer_vce_project_settings(
+    loaded: &mut [TaskProjectSummary],
+    retained: &[TaskProjectSummary],
+    projected: &mut [api::ProjectSummary],
+) -> Result<(), String> {
+    // Indexed exact IDs avoid quadratic work when many projects are present; titles and roots are not keys.
+    // 按精确标识建立索引，避免大量项目时的平方复杂度；标题和根路径不作为键。
+    let retained_by_id = retained
+        .iter()
+        .map(|project| (project.id.as_str(), &project.vce))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for project in loaded.iter_mut() {
+        if let Some(settings) = retained_by_id.get(project.id.as_str()) {
+            if settings.revision == project.vce.revision && **settings != project.vce {
+                return Err(format!(
+                    "VCE project `{}` has conflicting settings at revision {}",
+                    project.id, settings.revision
+                ));
+            }
+            if settings.revision > project.vce.revision {
+                project.vce = (*settings).clone();
+            }
+        }
+    }
+    let loaded_by_id = loaded
+        .iter()
+        .map(|project| (project.id.as_str(), &project.vce))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for project in projected {
+        if let Some(settings) = loaded_by_id.get(project.id.as_str()) {
+            project.vce_enabled = settings.enabled;
+            project.vce_settings_revision = settings.revision;
+        }
+    }
+    Ok(())
+}
+
+/// Admit an explicit human indexing job and return a durable receipt without waiting for indexing.
+/// 准入明确人为索引作业并返回持久回执，不等待索引完成。
 ///
-/// # Parameters
-/// 参数
-/// `app` emits the resulting project lifecycle event.
-/// `app` 发送结果项目生命周期事件。
-/// `state` owns the selected runtime.
-/// `state` 持有所选运行时。
-/// `request` guards the command with the current settings revision.
-/// `request` 使用当前设置修订号保护命令。
-///
-/// # Returns
-/// 返回值
-/// The refreshed project overview.
-/// 返回刷新后的项目概览。
-pub(crate) async fn service_refresh_vce_project(
-    app: ServiceEventEmitter,
+/// `state` owns project/model authority and the retained executor; `request` contains optimistic guards.
+/// Returns the acknowledged job; no startup or setting-change path calls this mutation.
+/// `state` 持有项目、模型权威与保留执行器；`request` 包含乐观保护。
+/// 返回已确认作业；启动或设置变化路径均不调用此修改入口。
+pub(crate) async fn service_submit_vce_job(
     state: SharedServiceBridgeState,
-    request: api::VceProjectMutationRequest,
-) -> Result<api::VceProjectOverviewResponse, String> {
-    require_vce_configuration_ready(&state)?;
+    request: api::VceJobSubmitRequest,
+) -> Result<api::VceJobSummary, String> {
+    let readiness = require_vce_configuration_ready(&state)?;
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
-    validate_mutation_revision(&project, &request)?;
+    validate_project_revision(&project, request.expected_settings_revision)?;
+    if !project.vce.enabled {
+        return Err(String::from("请先在项目设置中启用语义引擎。"));
+    }
+    if request.idempotency_key.trim().is_empty() || request.idempotency_key.len() > 512 {
+        return Err(String::from("索引请求缺少有效的幂等标识。"));
+    }
     let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
-    let refresh_result = manager
-        .refresh_full(&project.id, RefreshReason::Manual)
-        .await;
-    emit_vce_project_changed(&app, &state, &project.id).await;
-    refresh_result?;
-    service_get_vce_project_overview(
-        state,
-        api::VceProjectRequest {
-            project_id: project.id,
+    let executor = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .service_runtime
+        .clone()
+        .ok_or_else(|| String::from("VCE 后台执行器尚未就绪。"))?;
+    let dimension = readiness
+        .embedding_dimension
+        .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?;
+    let fingerprint = readiness
+        .embedding_physical_fingerprint
+        .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?;
+    let initialize = request.action == api::VceJobAction::Initialize;
+    manager
+        .enable_project(
+            &project.id,
+            &PathBuf::from(&project.path),
+            project.vce.clone(),
+            dimension,
+            &fingerprint,
+            initialize,
+        )
+        .await?;
+    // Validate again after storage admission; stale public model/project intent cannot launch work.
+    // 存储准入后再次校验；过期公共模型或项目意图不能启动工作。
+    let current = require_vce_configuration_ready(&state)?;
+    let current_project = vce_project_runtime_inputs(&state, &project.id)?.0;
+    validate_project_revision(&current_project, request.expected_settings_revision)?;
+    if !current_project.vce.enabled
+        || current.embedding_physical_fingerprint.as_deref() != Some(&fingerprint)
+    {
+        return Err(String::from(
+            "项目或模型配置已变化，请刷新后重新提交索引作业。",
+        ));
+    }
+    let receipt = manager
+        .submit_job(
+            &project.id,
+            super::VceJobAdmission {
+                retry_of_job_id: request.retry_of_job_id,
+                kind: if initialize {
+                    vulcan_workspace_store::vce_data_plane::VceJobKind::Initialize
+                } else {
+                    vulcan_workspace_store::vce_data_plane::VceJobKind::Synchronize
+                },
+                idempotency_key: request.idempotency_key,
+                expected_settings_revision: request.expected_settings_revision,
+                expected_checkpoint_version: request.expected_checkpoint_version,
+                contract_fingerprint: fingerprint,
+            },
+            &executor,
+        )
+        .await?;
+    Ok(map_vce_job(receipt))
+}
+
+/// Read durable job status even if a project or model was subsequently disabled.
+/// 即使项目或模型随后关闭，也读取持久作业状态。
+///
+/// `state` validates project ownership; `request` selects an exact job or the latest receipt.
+/// Returns no receipt when this project has never admitted a job; no models or source are invoked.
+/// `state` 校验项目归属；`request` 选择精确作业或最近回执。
+/// 项目从未准入作业时返回空值；不调用模型或源码。
+pub(crate) async fn service_get_vce_job(
+    state: SharedServiceBridgeState,
+    request: api::VceJobQueryRequest,
+) -> Result<Option<api::VceJobSummary>, String> {
+    let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
+    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    manager
+        .get_job(&project.id, request.job_id.as_deref())
+        .await
+        .map(|receipt| receipt.map(map_vce_job))
+}
+
+/// Cancel only the stable displayed job without requiring the current models to remain available.
+/// 仅取消稳定展示作业，不要求当前模型仍然可用。
+///
+/// `state` validates project ownership and `request` supplies exact project/job identities.
+/// Returns the durable cancellation receipt or the already settled result.
+/// `state` 校验项目归属，`request` 提供精确项目与作业身份。返回持久取消回执或已确定结果。
+pub(crate) async fn service_cancel_vce_job(
+    state: SharedServiceBridgeState,
+    request: api::VceJobCancelRequest,
+) -> Result<api::VceJobSummary, String> {
+    let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
+    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    manager
+        .cancel_job(&project.id, &request.job_id)
+        .await
+        .map(map_vce_job)
+}
+
+/// Project storage-owned receipts into an explicit browser contract without internal ownership keys.
+/// 将存储持有回执投影为明确浏览器契约，不含内部归属键。
+///
+/// `job` is already validated by storage. Returns safe immutable display metadata.
+/// `job` 已由存储校验。返回安全不可变显示元数据。
+pub(crate) fn map_vce_job(
+    job: vulcan_workspace_store::vce_data_plane::VceStoredJob,
+) -> api::VceJobSummary {
+    use vulcan_context_engine::{VceRefreshPhase, VceRefreshUnit};
+    use vulcan_workspace_store::vce_data_plane::{VceJobKind, VceJobState};
+    api::VceJobSummary {
+        project_id: job.project_id,
+        job_id: job.job_id,
+        kind: match job.kind {
+            VceJobKind::Initialize => api::VceJobKindSummary::Initialize,
+            VceJobKind::Synchronize => api::VceJobKindSummary::Synchronize,
+            VceJobKind::Rebuild => api::VceJobKindSummary::Rebuild,
         },
-    )
-    .await
+        state: match job.state {
+            VceJobState::Queued => api::VceJobStateSummary::Queued,
+            VceJobState::Running => api::VceJobStateSummary::Running,
+            VceJobState::Cancelling => api::VceJobStateSummary::Cancelling,
+            VceJobState::Succeeded => api::VceJobStateSummary::Succeeded,
+            VceJobState::Failed => api::VceJobStateSummary::Failed,
+            VceJobState::Cancelled => api::VceJobStateSummary::Cancelled,
+            VceJobState::Interrupted => api::VceJobStateSummary::Interrupted,
+        },
+        sequence: job.sequence,
+        created_at_unix_ms: job.created_at_unix_ms,
+        updated_at_unix_ms: job.updated_at_unix_ms,
+        source_checkpoint_version: job.source_checkpoint_version,
+        retry_of_job_id: job.retry_of_job_id,
+        result_checkpoint_version: job.result_checkpoint_version,
+        progress: job.progress.map(|progress| api::VceJobProgressSummary {
+            phase: match progress.phase {
+                VceRefreshPhase::Scanning => "scanning",
+                VceRefreshPhase::Reconciling => "reconciling",
+                VceRefreshPhase::Chunking => "chunking",
+                VceRefreshPhase::Embedding => "embedding",
+                VceRefreshPhase::Writing => "writing",
+                VceRefreshPhase::Committing => "committing",
+                VceRefreshPhase::Complete => "complete",
+            }
+            .to_owned(),
+            operation_id: progress.operation_id,
+            unit: match progress.unit {
+                VceRefreshUnit::Files => "files",
+                VceRefreshUnit::Blobs => "blobs",
+                VceRefreshUnit::Batches => "batches",
+                VceRefreshUnit::None => "none",
+            }
+            .to_owned(),
+            completed: progress.completed,
+            total: progress.total,
+            current_path: progress.current_path,
+        }),
+        followup_requested: job.followup_requested,
+        error: job.error,
+    }
 }
 
 /// List one bounded page of project file/index rows.
@@ -453,7 +797,14 @@ pub(crate) async fn service_list_vce_files(
         auxiliary_failures_only: request.auxiliary_failures_only,
         page: core_page_request(request.page)?,
     });
-    match execute_management_query(&manager, &request.project_id, query).await? {
+    match execute_management_query(
+        &manager,
+        &request.project_id,
+        query,
+        Some(&request.expected_read_identity),
+    )
+    .await?
+    {
         VceManagementQueryResult::Files(page) => Ok(map_page(page, map_file_summary)),
         _ => Err(String::from("VCE 文件查询返回了不匹配的结果类型。")),
     }
@@ -469,7 +820,14 @@ pub(crate) async fn service_get_vce_blob_detail(
     let query = VceManagementQuery::BlobDetail {
         blob_name: request.blob_name,
     };
-    match execute_management_query(&manager, &request.project_id, query).await? {
+    match execute_management_query(
+        &manager,
+        &request.project_id,
+        query,
+        Some(&request.expected_read_identity),
+    )
+    .await?
+    {
         VceManagementQueryResult::BlobDetail(detail) => Ok(detail.map(map_blob_detail)),
         _ => Err(String::from("VCE Blob 查询返回了不匹配的结果类型。")),
     }
@@ -483,7 +841,7 @@ pub(crate) async fn service_list_vce_operations(
 ) -> Result<api::VcePageResponse<api::VceOperationSummary>, String> {
     let manager = vce_manager_for_project(&state, &request.project_id)?;
     let query = VceManagementQuery::Operations(core_page_request(request.page)?);
-    match execute_management_query(&manager, &request.project_id, query).await? {
+    match execute_management_query(&manager, &request.project_id, query, None).await? {
         VceManagementQueryResult::Operations(page) => Ok(map_page(page, map_operation)),
         _ => Err(String::from("VCE 作业查询返回了不匹配的结果类型。")),
     }
@@ -497,7 +855,14 @@ pub(crate) async fn service_list_vce_integrity_issues(
 ) -> Result<api::VcePageResponse<api::VceIntegrityIssueSummary>, String> {
     let manager = vce_manager_for_project(&state, &request.project_id)?;
     let query = VceManagementQuery::IntegrityIssues(core_page_request(request.page)?);
-    match execute_management_query(&manager, &request.project_id, query).await? {
+    match execute_management_query(
+        &manager,
+        &request.project_id,
+        query,
+        request.expected_read_identity.as_deref(),
+    )
+    .await?
+    {
         VceManagementQueryResult::IntegrityIssues(page) => Ok(map_page(page, map_integrity_issue)),
         _ => Err(String::from("VCE 完整性查询返回了不匹配的结果类型。")),
     }
@@ -509,10 +874,21 @@ pub(crate) async fn service_plan_vce_maintenance(
     state: SharedServiceBridgeState,
     request: api::VceMaintenancePlanRequest,
 ) -> Result<api::VceMaintenancePlanResponse, String> {
+    // readiness freezes the preview target before storage reads; later model changes invalidate new execution.
+    // readiness 在读取存储之前固定预览目标；后续模型变化会使新执行失效。
+    let readiness = require_vce_configuration_ready(&state)?;
     let manager = vce_manager_for_project(&state, &request.project_id)?;
     let mode = parse_maintenance_mode(&request.mode)?;
     let plan = load_maintenance_plan(&manager, &request.project_id, mode).await?;
-    Ok(map_maintenance_plan(plan))
+    Ok(map_maintenance_plan(
+        plan,
+        readiness
+            .embedding_physical_fingerprint
+            .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?,
+        readiness
+            .embedding_dimension
+            .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?,
+    ))
 }
 
 /// Execute an exact current maintenance plan under settings and checkpoint guards.
@@ -521,175 +897,180 @@ pub(crate) async fn service_execute_vce_maintenance(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: api::VceMaintenanceExecutionRequest,
-) -> Result<api::VceProjectOverviewResponse, String> {
-    require_vce_configuration_ready(&state)?;
+) -> Result<api::VceMaintenanceExecutionResponse, String> {
+    // readiness validates live availability; the confirmed preview supplies the immutable execution target below.
+    // readiness 校验实时可用性；下方由已确认预览提供不可变执行目标。
+    let readiness = require_vce_configuration_ready(&state)?;
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
     validate_project_revision(&project, request.expected_settings_revision)?;
+    if !project.vce.enabled {
+        return Err(String::from("请先在项目设置中启用语义引擎。"));
+    }
     let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    let mode = parse_maintenance_mode(&request.mode)?;
+    // Exact action sets enter durable admission before current-plan reads, so completed retries can replay.
+    // 精确动作集合在读取当前计划前进入持久准入，使已完成请求能够重放。
+    let requested_ids = request.action_ids.into_iter().collect::<BTreeSet<_>>();
+    if matches!(
+        mode,
+        VceMaintenanceMode::Repair | VceMaintenanceMode::Rebuild
+    ) {
+        // executor retains the admitted task after this request or its page has returned.
+        // executor 在本请求或页面返回后继续持有已准入任务。
+        let executor = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .service_runtime
+            .clone()
+            .ok_or_else(|| String::from("VCE 后台执行器尚未就绪。"))?;
+        // fingerprint preserves the confirmed preview so exact completed submissions can replay before new admission.
+        // fingerprint 保留已确认预览，使精确已完成提交可在新准入前重放。
+        let fingerprint = request.expected_embedding_fingerprint;
+        // receipt acknowledges admission only; observers report actual indexing completion.
+        // receipt 仅确认准入；观察器报告实际索引完成。
+        let receipt = manager
+            .submit_project_rebuild(
+                super::VceRebuildProjectInput {
+                    project_id: project.id.clone(),
+                    project_root: std::path::PathBuf::from(&project.path),
+                    settings: project.vce.clone(),
+                    dimension: readiness
+                        .embedding_dimension
+                        .ok_or_else(|| String::from("VCE 缺少明确向量维度。"))?,
+                    fingerprint: readiness
+                        .embedding_physical_fingerprint
+                        .clone()
+                        .ok_or_else(|| String::from("VCE 缺少当前向量契约。"))?,
+                },
+                super::VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: vulcan_workspace_store::vce_data_plane::VceJobKind::Rebuild,
+                    idempotency_key: request.idempotency_key,
+                    expected_settings_revision: request.expected_settings_revision,
+                    expected_checkpoint_version: Some(request.expected_checkpoint_version),
+                    contract_fingerprint: fingerprint,
+                },
+                mode == VceMaintenanceMode::Repair,
+                requested_ids,
+                &executor,
+            )
+            .await?;
+        return Ok(api::VceMaintenanceExecutionResponse::Job {
+            job: Box::new(map_vce_job(receipt)),
+        });
+    }
+    // Cleanup has no indexing receipt; retain its explicit current-checkpoint and plan checks.
+    // 清理没有索引回执；保留其明确的当前检查点及计划校验。
+    if readiness.embedding_physical_fingerprint.as_deref()
+        != Some(request.expected_embedding_fingerprint.as_str())
+    {
+        return Err(String::from(
+            "VCE 向量配置已在维护预览后变化，请重新生成计划并确认。",
+        ));
+    }
     validate_checkpoint(
         &manager,
         &project.id,
         Some(request.expected_checkpoint_version),
     )
     .await?;
-    let mode = parse_maintenance_mode(&request.mode)?;
     let plan = load_maintenance_plan(&manager, &project.id, mode).await?;
     let planned_ids = plan
         .actions
         .iter()
         .map(|action| action.action_id.clone())
         .collect::<BTreeSet<_>>();
-    let requested_ids = request.action_ids.into_iter().collect::<BTreeSet<_>>();
-    if planned_ids.is_empty() {
-        return Err(String::from("当前 VCE 维护计划没有可执行操作。"));
-    }
-    if requested_ids != planned_ids {
+    if planned_ids.is_empty() || requested_ids != planned_ids {
         return Err(String::from("VCE 维护操作已经变化，请重新生成计划并确认。"));
     }
-    let execution = match mode {
-        VceMaintenanceMode::Repair => {
-            manager.cleanup_staging(&project.id).await?;
-            manager
-                .rebuild_full(&project.id, RefreshReason::Recovery)
-                .await
-                .map(|_| ())
-        }
-        VceMaintenanceMode::Rebuild => manager
-            .rebuild_full(&project.id, RefreshReason::Manual)
-            .await
-            .map(|_| ()),
-        VceMaintenanceMode::CleanupStaging => manager.cleanup_staging(&project.id).await,
-    };
+    manager.cleanup_staging(&project.id).await?;
     emit_vce_project_changed(&app, &state, &project.id).await;
-    execution?;
-    service_get_vce_project_overview(
+    // overview describes cleanup only, which never scans files or invokes a model.
+    // overview 只描述清理；清理绝不扫描文件或调用模型。
+    let overview = service_get_vce_project_overview(
         state,
         api::VceProjectRequest {
             project_id: project.id,
         },
     )
-    .await
-}
-
-/// Retry one visible failed operation as a complete recovery refresh.
-/// 将一项可见失败操作重试为一次完整恢复刷新。
-pub(crate) async fn service_retry_vce_operation(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: api::VceOperationMutationRequest,
-) -> Result<api::VceProjectOverviewResponse, String> {
-    require_vce_configuration_ready(&state)?;
-    let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
-    validate_project_revision(&project, request.expected_settings_revision)?;
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
-    validate_checkpoint(&manager, &project.id, request.expected_checkpoint_version).await?;
-    validate_retryable_operation(&manager, &project.id, &request.operation_id).await?;
-    let retry_result = manager
-        .refresh_full(&project.id, RefreshReason::Recovery)
-        .await;
-    emit_vce_project_changed(&app, &state, &project.id).await;
-    retry_result?;
-    service_get_vce_project_overview(
-        state,
-        api::VceProjectRequest {
-            project_id: project.id,
-        },
-    )
-    .await
-}
-
-/// Request cancellation of the currently active refresh under an operation guard.
-/// 在操作身份保护下请求取消当前活动刷新。
-pub(crate) async fn service_cancel_vce_operation(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: api::VceOperationMutationRequest,
-) -> Result<api::VceProjectOverviewResponse, String> {
-    require_vce_configuration_ready(&state)?;
-    let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
-    validate_project_revision(&project, request.expected_settings_revision)?;
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
-    validate_checkpoint(&manager, &project.id, request.expected_checkpoint_version).await?;
-    manager
-        .cancel_refresh(&project.id, Some(&request.operation_id))
-        .await?;
-    emit_vce_project_changed(&app, &state, &project.id).await;
-    service_get_vce_project_overview(
-        state,
-        api::VceProjectRequest {
-            project_id: project.id,
-        },
-    )
-    .await
+    .await?;
+    Ok(api::VceMaintenanceExecutionResponse::Cleaned {
+        overview: Box::new(overview),
+    })
 }
 
 /// Reconcile one project against its current settings and watcher handles.
 /// 根据当前设置与监听句柄协调单个项目。
+/// `state` provides live authority; `manager` and `watcher` are optional startup handles.
+/// `state` 提供实时权威；`manager` 与 `watcher` 是可选启动句柄。
+/// `project` and `readiness` are the captured decision inputs; returns success or an explicit stale/lifecycle error.
+/// `project` 与 `readiness` 是已捕获决策输入；返回成功或明确的过期／生命周期错误。
 async fn reconcile_vce_project_handles(
+    state: &SharedServiceBridgeState,
     manager: Option<&VceRuntimeManager>,
     watcher: Option<&VceWatcherService>,
     project: &TaskProjectSummary,
     readiness: &VceConfigurationReadiness,
 ) -> Result<(), String> {
-    if !project.vce.enabled || !readiness.status.ready {
-        if let Some(watcher) = watcher {
-            watcher.unwatch_project(&project.id).await;
-        }
-        if let Some(manager) = manager {
-            manager.disable_project(&project.id).await?;
-        }
-        return Ok(());
+    // Validate inside the manager's existing lifecycle gate, after every lock acquisition that can suspend.
+    // 在管理器既有生命周期闸门内校验，位于所有可能挂起的取锁操作之后。
+    let validate_current =
+        || validate_vce_reconciliation_snapshot(state, manager, project, readiness);
+    if let Some(manager) = manager {
+        return manager
+            .reconcile_project_configuration(project, readiness, watcher, validate_current)
+            .await;
     }
-    let expected_fingerprint = readiness
-        .embedding_physical_fingerprint
-        .as_deref()
-        .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?;
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时不可用。"))?;
-    let current_status = manager.project_status(&project.id).await;
-    if runtime_status_matches_configuration(
-        current_status.as_ref(),
-        project.vce.revision,
-        expected_fingerprint,
-    ) {
-        return Ok(());
+    // Bootstrap only creates a watcher with a manager; an absent manager cannot own an asynchronous mutation.
+    // 启动只在存在管理器时创建监听器；缺失管理器不能持有异步变更。
+    validate_current()?;
+    if watcher.is_some() || (project.vce.enabled && readiness.status.ready) {
+        return Err(String::from("VCE 运行时不可用。"));
     }
-    let project_root = PathBuf::from(&project.path);
-    // watcher is the required host-owned observation boundary for every enabled project.
-    // watcher 是每个已启用项目必需的宿主持有观察边界。
-    let watcher = watcher.ok_or_else(|| String::from("VCE 文件监听服务不可用。"))?;
-    // Arm the filesystem watch before the authoritative full scan. Every write after the scan
-    // boundary is then queued for a serialized path refresh instead of falling into an unobserved
-    // activation window.
-    // 在权威全量扫描前建立文件监听，使扫描边界之后的每次写入都进入串行路径刷新队列，避免落入
-    // 无监听的激活窗口。
-    watcher.watch_project(&project.id, &project_root)?;
-    match manager
-        .enable_project(&project.id, &project_root, project.vce.clone())
-        .await
+    Ok(())
+}
+
+/// Validate `project`, `readiness`, and optional `manager` against the live host `state` without mutating it.
+/// 对照实时宿主 `state` 校验 `project`、`readiness` 及可选 `manager`，不修改宿主。
+/// The caller holds the project lifecycle gate whenever a manager exists; errors reject retired callbacks.
+/// 存在管理器时调用方持有项目生命周期闸门；错误用于拒绝已退役回调。
+fn validate_vce_reconciliation_snapshot(
+    state: &SharedServiceBridgeState,
+    manager: Option<&VceRuntimeManager>,
+    project: &TaskProjectSummary,
+    readiness: &VceConfigurationReadiness,
+) -> Result<(), String> {
+    // Re-read the sole project authority and installed runtime generation, not a fallback configuration source.
+    // 重读唯一项目权威和已安装运行时代际，不读取备用配置来源。
+    let (current_project, current_manager, _) = vce_project_runtime_inputs(state, &project.id)?;
+    if current_project.path != project.path || current_project.vce != project.vce {
+        return Err(String::from("VCE project reconciliation snapshot is stale"));
+    }
+    // Optional managers represent startup availability; two present handles must share the exact lifecycle.
+    // 可选管理器表示启动可用性；两个存在的句柄必须共享精确生命周期。
+    let same_manager = match (manager, current_manager.as_ref()) {
+        (Some(expected), Some(current)) => expected.shares_lifecycle_with(current),
+        (None, None) => true,
+        _ => false,
+    };
+    if !same_manager {
+        return Err(String::from(
+            "VCE reconciliation runtime generation is stale",
+        ));
+    }
+    // Compare all decision-bearing readiness facts, including an old unavailable snapshot at the same project revision.
+    // 比较所有参与决策的就绪事实，包括同一项目修订下的旧不可用快照。
+    let current_readiness = vce_configuration_readiness(state);
+    if current_readiness.status.ready != readiness.status.ready
+        || current_readiness.embedding_physical_fingerprint
+            != readiness.embedding_physical_fingerprint
+        || current_readiness.embedding_dimension != readiness.embedding_dimension
     {
-        Ok(_) => {
-            let status = manager.project_status(&project.id).await;
-            if !runtime_status_matches_configuration(
-                status.as_ref(),
-                project.vce.revision,
-                expected_fingerprint,
-            ) {
-                return Ok(());
-            }
-            Ok(())
-        }
-        Err(error) => {
-            let status = manager.project_status(&project.id).await;
-            if status
-                .as_ref()
-                .is_some_and(|status| status.config_revision != project.vce.revision)
-            {
-                return Ok(());
-            }
-            watcher.unwatch_project(&project.id).await;
-            Err(error)
-        }
+        return Err(String::from(
+            "VCE configuration reconciliation snapshot is stale",
+        ));
     }
+    Ok(())
 }
 
 /// Return whether a runtime status represents the requested settings and embedding contract.
@@ -742,7 +1123,9 @@ fn runtime_status_can_serve_requests(
         && status.is_some_and(|status| {
             matches!(
                 status.lifecycle,
-                VceProjectLifecycle::Ready | VceProjectLifecycle::Refreshing
+                VceProjectLifecycle::Ready
+                    | VceProjectLifecycle::Refreshing
+                    | VceProjectLifecycle::Failed
             ) && status
                 .engine
                 .as_ref()
@@ -810,10 +1193,15 @@ fn vce_manager_for_project(
 
 /// Execute one typed management request with a unique operation identity.
 /// 使用唯一操作身份执行一项类型化管理请求。
+/// `manager` and `project_id` select the runtime; `query` and its optional read identity bind the result.
+/// `manager` 与 `project_id` 选择运行时；`query` 及其可选读取身份绑定结果。
+/// Returns a validated result or an explicit stale-publication error without retrying another version.
+/// 返回已验证结果或明确过期发布错误，不重试其他版本。
 async fn execute_management_query(
     manager: &VceRuntimeManager,
     project_id: &str,
     query: VceManagementQuery,
+    expected_read_identity: Option<&str>,
 ) -> Result<VceManagementQueryResult, String> {
     let response = manager
         .management_query(
@@ -822,6 +1210,7 @@ async fn execute_management_query(
                 operation_id: format!("vce:{project_id}:management:{}", Uuid::new_v4()),
                 query,
             },
+            expected_read_identity,
         )
         .await?;
     Ok(response.result)
@@ -834,17 +1223,21 @@ async fn load_maintenance_plan(
     project_id: &str,
     mode: VceMaintenanceMode,
 ) -> Result<VceMaintenancePlan, String> {
-    let query = VceManagementQuery::MaintenancePlan { mode };
-    match execute_management_query(manager, project_id, query).await? {
-        VceManagementQueryResult::MaintenancePlan(plan) => Ok(plan),
-        _ => Err(String::from("VCE 维护计划查询返回了不匹配的结果类型。")),
-    }
+    manager.stored_maintenance_plan(project_id, mode).await
 }
 
 /// Project one core maintenance plan into its public service representation.
 /// 将一份内核维护计划投影为公共服务表示。
-fn map_maintenance_plan(plan: VceMaintenancePlan) -> api::VceMaintenancePlanResponse {
+/// `plan` owns stored actions; fingerprint/dimension freeze the preview target. Returns the confirmation payload.
+/// `plan` 持有存储动作；指纹／维度固定预览目标。返回确认载荷。
+fn map_maintenance_plan(
+    plan: VceMaintenancePlan,
+    embedding_fingerprint: String,
+    embedding_dimension: u32,
+) -> api::VceMaintenancePlanResponse {
     api::VceMaintenancePlanResponse {
+        embedding_fingerprint,
+        embedding_dimension,
         mode: maintenance_mode_text(plan.mode).to_owned(),
         actions: plan
             .actions
@@ -897,37 +1290,6 @@ async fn validate_checkpoint(
         return Err(format!(
             "VCE 检查点冲突：期望 {expected_checkpoint}，当前 {actual_checkpoint:?}。"
         ));
-    }
-    Ok(())
-}
-
-/// Validate that a visible operation exists and ended in a retryable phase.
-/// 校验一项可见操作存在且结束于可重试阶段。
-async fn validate_retryable_operation(
-    manager: &VceRuntimeManager,
-    project_id: &str,
-    operation_id: &str,
-) -> Result<(), String> {
-    if operation_id.trim().is_empty() {
-        return Err(String::from("VCE operation_id 不能为空。"));
-    }
-    let query = VceManagementQuery::Operations(
-        CoreVcePageRequest::new(None, 500).map_err(|error| error.to_string())?,
-    );
-    let page = match execute_management_query(manager, project_id, query).await? {
-        VceManagementQueryResult::Operations(page) => page,
-        _ => return Err(String::from("VCE 作业查询返回了不匹配的结果类型。")),
-    };
-    let operation = page
-        .items
-        .into_iter()
-        .find(|operation| operation.operation_id == operation_id)
-        .ok_or_else(|| format!("VCE 操作 `{operation_id}` 不存在或已超出历史窗口。"))?;
-    if !matches!(
-        operation.phase,
-        VceOperationPhase::Failed | VceOperationPhase::Cancelled
-    ) {
-        return Err(format!("VCE 操作 `{operation_id}` 当前阶段不可重试。"));
     }
     Ok(())
 }
@@ -1022,6 +1384,7 @@ fn vce_retrieval_response(
                 path: hit.path,
                 start_line: hit.range.start_line,
                 end_line: hit.range.end_line,
+                start_char_offset: hit.start_char_offset,
                 content: hit.content,
                 score: hit.score,
                 source: search_source_text(hit.source).to_owned(),
@@ -1092,9 +1455,17 @@ fn vce_overview_from_runtime(
             orphan_blob_count: index.integrity.orphan_blob_count,
             detail: index.integrity.detail.clone(),
         });
-    let checkpoint_blobs = counts.as_ref().map_or(0, |counts| counts.blobs);
-    let workspace = status.workspace.as_ref();
+    // Index counts and engine metadata must come from the same pinned management read when present.
+    // 存在管理快照时，索引数量与引擎元数据必须来自同一次固定读取。
+    let (engine, workspace) = match snapshot.as_ref() {
+        Some(snapshot) => (Some(&snapshot.engine), Some(&snapshot.workspace)),
+        None => (status.engine.as_ref(), status.workspace.as_ref()),
+    };
+    // Checkpoint membership comes from the committed core projection, not total stored blobs.
+    // 检查点成员来自已提交核心投影，而非全部存储块对象数量。
+    let checkpoint_blobs = workspace.map_or(0, |workspace| workspace.checkpoint_blobs);
     api::VceProjectOverviewResponse {
+        read_identity: None,
         configuration,
         settings,
         status: api::VceProjectStatusSummary {
@@ -1102,18 +1473,9 @@ fn vce_overview_from_runtime(
             enabled: true,
             settings_revision: status.config_revision,
             lifecycle,
-            engine_state: status
-                .engine
-                .as_ref()
-                .map(|engine| engine_state(engine.state)),
-            workspace_generation: status
-                .engine
-                .as_ref()
-                .map(|engine| engine.workspace_generation),
-            checkpoint_version: status
-                .engine
-                .as_ref()
-                .and_then(|engine| engine.checkpoint_version),
+            engine_state: engine.map(|engine| engine_state(engine.state)),
+            workspace_generation: engine.map(|engine| engine.workspace_generation),
+            checkpoint_version: engine.and_then(|engine| engine.checkpoint_version),
             present_files: workspace.map_or(0, |workspace| workspace.present_files),
             checkpoint_blobs,
             last_error: status.last_error,
@@ -1164,11 +1526,38 @@ fn disabled_status(project: &TaskProjectSummary) -> api::VceProjectStatusSummary
     }
 }
 
+/// Project the confirmed absence of an initialized index without inventing a runtime failure.
+/// 投影已确认不存在初始化索引的状态，不虚构运行时失败。
+///
+/// `project` owns the saved enablement and revision. Returns a metadata-only status.
+/// `project` 持有保存的启用状态和修订号。返回仅含元数据的状态。
+fn uninitialized_status(project: &TaskProjectSummary) -> api::VceProjectStatusSummary {
+    api::VceProjectStatusSummary {
+        project_id: project.id.clone(),
+        enabled: project.vce.enabled,
+        settings_revision: project.vce.revision,
+        lifecycle: api::VceProjectLifecycleState::Uninitialized,
+        engine_state: None,
+        workspace_generation: None,
+        checkpoint_version: None,
+        present_files: 0,
+        checkpoint_blobs: 0,
+        last_error: None,
+    }
+}
+
 /// Convert persisted settings into the public service summary.
 /// 将持久化设置转换为公共服务摘要。
 fn vce_settings_summary(settings: &ProjectVceSettings) -> api::VceProjectSettingsSummary {
     api::VceProjectSettingsSummary {
         enabled: settings.enabled,
+        update_mode: match settings.update_mode {
+            vulcan_workbench_model::ProjectVceUpdateMode::Manual => api::VceIndexUpdateMode::Manual,
+            vulcan_workbench_model::ProjectVceUpdateMode::Automatic => {
+                api::VceIndexUpdateMode::Automatic
+            }
+        },
+        auto_update_min_interval_seconds: settings.auto_update_min_interval_seconds,
         revision: settings.revision,
         migrated_from_codebase_memory: settings.migrated_from_codebase_memory,
         max_file_bytes: settings.max_file_bytes,
@@ -1191,6 +1580,13 @@ fn project_vce_settings_from_input(
 ) -> ProjectVceSettings {
     ProjectVceSettings {
         enabled: input.enabled,
+        update_mode: match input.update_mode {
+            api::VceIndexUpdateMode::Manual => vulcan_workbench_model::ProjectVceUpdateMode::Manual,
+            api::VceIndexUpdateMode::Automatic => {
+                vulcan_workbench_model::ProjectVceUpdateMode::Automatic
+            }
+        },
+        auto_update_min_interval_seconds: input.auto_update_min_interval_seconds,
         revision,
         migrated_from_codebase_memory,
         max_file_bytes: input.max_file_bytes,
@@ -1202,15 +1598,6 @@ fn project_vce_settings_from_input(
         max_results: input.max_results,
         max_context_chars: input.max_context_chars,
     }
-}
-
-/// Validate project settings and checkpoint preconditions for a mutation.
-/// 校验项目设置与检查点修改前置条件。
-fn validate_mutation_revision(
-    project: &TaskProjectSummary,
-    request: &api::VceProjectMutationRequest,
-) -> Result<(), String> {
-    validate_project_revision(project, request.expected_settings_revision)
 }
 
 /// Convert one core file page to the public generic page.
@@ -1377,8 +1764,7 @@ fn parse_maintenance_mode(value: &str) -> Result<VceMaintenanceMode, String> {
 /// 返回稳定公共生命周期状态。
 fn lifecycle_state(value: VceProjectLifecycle) -> api::VceProjectLifecycleState {
     match value {
-        VceProjectLifecycle::Activating => api::VceProjectLifecycleState::Starting,
-        VceProjectLifecycle::Restoring => api::VceProjectLifecycleState::Restoring,
+        VceProjectLifecycle::Uninitialized => api::VceProjectLifecycleState::Uninitialized,
         VceProjectLifecycle::Ready => api::VceProjectLifecycleState::Ready,
         VceProjectLifecycle::Refreshing => api::VceProjectLifecycleState::Indexing,
         VceProjectLifecycle::BlockedConfiguration => {
@@ -1476,6 +1862,7 @@ fn operation_kind_text(value: VceOperationKind) -> &'static str {
     match value {
         VceOperationKind::InitialBuild => "initial_build",
         VceOperationKind::IncrementalRefresh => "incremental_refresh",
+        VceOperationKind::StorageMutation => "storage_mutation",
         VceOperationKind::VerifyIntegrity => "verify_integrity",
         VceOperationKind::Repair => "repair",
         VceOperationKind::Rebuild => "rebuild",
@@ -1543,9 +1930,327 @@ fn maintenance_mode_text(value: VceMaintenanceMode) -> &'static str {
     }
 }
 
+/// Replay a captured obsolete reconciliation against a currently initialized private fixture.
+/// 对当前已初始化私有夹具重放已捕获的过期协调。
+/// `state` supplies live authority; `retired_project` and `retired_readiness` are earlier snapshots.
+/// `state` 提供实时权威；`retired_project` 与 `retired_readiness` 为较早快照。
+/// Returns boxed assertions requiring unchanged admission and explicit rejection of obsolete work.
+/// 返回装箱断言，要求准入不变并明确拒绝过期工作。
+#[cfg(test)]
+pub(crate) fn verify_retired_reconciliation_preserves_runtime(
+    state: &SharedServiceBridgeState,
+    retired_project: TaskProjectSummary,
+    retired_readiness: VceConfigurationReadiness,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    Box::pin(async move {
+        // Capture current ownership before invoking the same production function used by scheduled callbacks.
+        // 调用计划回调使用的同一生产函数前捕获当前归属。
+        let (project, manager, watcher) = vce_project_runtime_inputs(state, &retired_project.id)
+            .expect("current fixture project");
+        // This manager is the fixture's actual host, not a mock of lifecycle removal.
+        // 此管理器为夹具实际宿主，不是生命周期移除模拟。
+        let manager = manager.expect("active fixture manager");
+        // Keep exact checkpoint and policy facts to detect removal or rollback by the obsolete callback.
+        // 保留精确检查点与策略事实，以检测过期回调引起的移除或回滚。
+        let before = manager
+            .project_status(&project.id)
+            .await
+            .expect("current initialized runtime");
+        // The current model contract must remain usable across either retired configuration branch.
+        // 当前模型契约必须跨两种过期配置分支保持可用。
+        let readiness = vce_configuration_readiness(state);
+        manager
+            .verify_reconciliation_validation_waits_for_lifecycle(&project, &readiness)
+            .await;
+        // Invoke the actual obsolete decision before asserting, so the red test proves its destructive effect.
+        // 在断言前执行实际过期决策，使红色测试证明其破坏性影响。
+        let result = reconcile_vce_project_handles(
+            state,
+            Some(&manager),
+            watcher.as_ref(),
+            &retired_project,
+            &retired_readiness,
+        )
+        .await;
+        // Current runtime identity may not disappear just because an old callback arrives later.
+        // 当前运行时身份不能仅因为旧回调晚到就消失。
+        let after = manager
+            .project_status(&project.id)
+            .await
+            .expect("retired reconciliation must not remove the current runtime");
+        assert_eq!(after.config_revision, before.config_revision);
+        assert_eq!(after.lifecycle, before.lifecycle);
+        assert_eq!(
+            after.engine.and_then(|engine| engine.checkpoint_version),
+            before.engine.and_then(|engine| engine.checkpoint_version)
+        );
+        assert!(
+            manager.project_can_serve_now(
+                &project.id,
+                project.vce.revision,
+                readiness
+                    .embedding_physical_fingerprint
+                    .as_deref()
+                    .expect("current fixture fingerprint")
+            )
+        );
+        assert!(
+            result.is_err(),
+            "obsolete reconciliation must be rejected explicitly"
+        );
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Preserve exact Unicode character coordinates when projecting core hits to the model-facing wire.
+    /// 将核心命中投影为模型侧线协议时保留精确 Unicode 字符坐标。
+    /// No inputs or external calls; asserts zero and nonzero offsets with immutable publication identity.
+    /// 无输入或外部调用；断言零与非零偏移以及不可变发布身份。
+    #[test]
+    fn retrieval_projection_preserves_character_offsets() {
+        // Both fragments belong to one source line, so line numbers alone cannot distinguish their positions.
+        // 两个片段属于同一源码行，因此仅凭行号无法区分位置。
+        let blob = vulcan_context_engine::blob_name(
+            "src/语义.rs",
+            "\n\n\n\n\n\n函数检索与字符定位及重复函数",
+        )
+        .expect("source identity");
+        // Offsets are Unicode scalar counts supplied by the core, never inferred from UTF-8 byte lengths.
+        // 偏移为核心提供的 Unicode 标量数，绝不从 UTF-8 字节数推算。
+        let hits: Vec<_> = [0, 12]
+            .into_iter()
+            .map(|offset| {
+                // The existing chunk constructor owns occurrence identity and source coordinate validation.
+                // 现有代码块构造器负责出现位置身份及源码坐标校验。
+                let chunk = vulcan_context_engine::Chunk::new_with_start_char_offset(
+                    &blob,
+                    offset,
+                    "src/语义.rs",
+                    "函数",
+                    7,
+                    7,
+                    ChunkKind::Recursive,
+                )
+                .expect("valid long-line fragment");
+                vulcan_context_engine::SearchHit::from_chunk(
+                    &chunk,
+                    0.9,
+                    SearchSource::Dense,
+                    HitKind::Content,
+                )
+            })
+            .collect();
+        // Planning and formatting use the actual core implementations without registering model services.
+        // 规划与格式化使用实际核心实现，不注册模型服务。
+        let plan = vulcan_context_engine::QueryPlanner::new(Default::default())
+            .expect("planner config")
+            .plan("semantic source fragments")
+            .expect("query plan");
+        // The summary belongs to the same selected hits and request as the projected response.
+        // 摘要与投影响应属于相同选中命中及请求。
+        let summary = vulcan_context_engine::VceRetrievalSummary {
+            request_id: String::from("coordinate-query"),
+            intent: plan.intent,
+            query_count: plan.queries.len(),
+            dense_hit_count: hits.len(),
+            path_hit_count: 0,
+            exact_hit_count: 0,
+            candidate_count: hits.len(),
+            selected_hit_count: hits.len(),
+            degraded_features: Vec::new(),
+            degradations: Vec::new(),
+        };
+        // Capture the authoritative rendering before the response consumes its selected source hits.
+        // 在响应消耗选中源码命中前保存权威渲染结果。
+        let formatted_context = vulcan_context_engine::render_context(&hits);
+        // This is the production projection used by the native retrieval callback, not a separate wire fixture.
+        // 此处使用原生检索回调的生产投影，而非单独构造线协议夹具。
+        let response = vce_retrieval_response(
+            String::from("coordinate-project"),
+            VceRuntimeRetrieveResult {
+                settings_revision: 3,
+                checkpoint_version: 7,
+                result: vulcan_context_engine::RetrieveResult {
+                    request_id: summary.request_id.clone(),
+                    query_plan: plan,
+                    scope: BTreeSet::from([blob]),
+                    hits,
+                    formatted_context: formatted_context.clone(),
+                    degraded_features: Vec::new(),
+                    degradations: Vec::new(),
+                    summary,
+                },
+            },
+        );
+        // Serialize through the same contract as the model callback to detect omitted public fields.
+        // 通过与模型回调相同的契约序列化，以检测遗漏的公开字段。
+        let wire = to_value(response).expect("serialize retrieval response");
+        assert_eq!(wire["projectId"], "coordinate-project");
+        assert_eq!(wire["settingsRevision"], 3);
+        assert_eq!(wire["checkpointVersion"], 7);
+        assert_eq!(wire["hits"][0]["startCharOffset"], 0);
+        assert_eq!(wire["hits"][1]["startCharOffset"], 12);
+        assert_eq!(wire["hits"][1]["startLine"], 7);
+        assert_eq!(wire["hits"][1]["endLine"], 7);
+        assert_eq!(wire["hits"][1]["content"], "函数");
+        assert_eq!(wire["formattedContext"], formatted_context);
+    }
+
+    /// Keep checkpoint metadata paired with the management read instead of an earlier status sample.
+    /// 将检查点元数据与管理读取配套，不能使用较早采样的状态。
+    /// No inputs or outputs; asserts both heavy-snapshot and lightweight-only projection paths.
+    /// 无输入输出；断言管理快照与仅轻量状态两条投影路径。
+    #[test]
+    fn overview_uses_management_checkpoint_and_workspace_together() {
+        // All model routes are available; this fixture performs no model or storage calls.
+        // 所有模型路由均可用；本夹具不执行模型或存储调用。
+        let route = api::VceConfigurationCapabilityStatus {
+            configured: true,
+            available: true,
+            issue: None,
+        };
+        let configuration = api::VceGlobalConfigurationStatus {
+            ready: true,
+            consumer_profile_id: String::from("vce"),
+            query_rewrite_purpose_id: String::from("rewrite"),
+            reasoning_policy: api::VceReasoningPolicy::FixedOff,
+            embedding: route.clone(),
+            query_rewrite: route.clone(),
+            rerank: route,
+            issues: Vec::new(),
+        };
+        // Status was sampled before a publication completed.
+        // 状态采样发生在一次发布完成之前。
+        let status = VceRuntimeProjectStatus {
+            project_id: String::from("project-a"),
+            lifecycle: VceProjectLifecycle::Refreshing,
+            config_revision: 1,
+            embedding_physical_fingerprint: Some(String::from("fixture-space")),
+            engine: Some(vulcan_context_engine::VceEngineSnapshot {
+                state: VceEngineState::Ready,
+                workspace_generation: 1,
+                checkpoint_version: Some(1),
+                last_refresh: None,
+                last_retrieval: None,
+                last_error: None,
+            }),
+            workspace: Some(vulcan_context_engine::VceWorkspaceStatistics {
+                present_files: 2,
+                checkpoint_blobs: 2,
+                ..Default::default()
+            }),
+            last_error: None,
+        };
+        // The management operation subsequently pinned checkpoint two and its one surviving file.
+        // 随后的管理操作固定了检查点二及其唯一保留文件。
+        let snapshot = vulcan_context_engine::VceManagementSnapshot {
+            engine: vulcan_context_engine::VceEngineSnapshot {
+                checkpoint_version: Some(2),
+                workspace_generation: 2,
+                ..status.engine.clone().expect("fixture engine")
+            },
+            workspace: vulcan_context_engine::VceWorkspaceStatistics {
+                present_files: 1,
+                checkpoint_blobs: 1,
+                ..Default::default()
+            },
+            query_statistics: Default::default(),
+            ai: vulcan_context_engine::VceAiCapabilitySnapshot {
+                registration_id: String::from("fixture-registration"),
+                consumer_profile_id: String::from("vce"),
+                vector_space_id: String::from("fixture-space"),
+                registered: true,
+                embedding_available: true,
+                query_rewrite_available: true,
+                rerank_available: true,
+            },
+            index: None,
+        };
+        // Lightweight activity still uses its own status and never requires a management scan.
+        // 轻量活动仍使用自己的状态，绝不要求管理扫描。
+        let settings = vce_settings_summary(&ProjectVceSettings::default());
+        let light = vce_overview_from_runtime(
+            configuration.clone(),
+            settings.clone(),
+            status.clone(),
+            None,
+        );
+        assert_eq!(light.status.checkpoint_version, Some(1));
+        assert_eq!(light.status.present_files, 2);
+        // Heavy overview must project the same checkpoint and counters as its pinned snapshot.
+        // 完整概览必须投影与固定快照相同的检查点及计数。
+        let overview = vce_overview_from_runtime(configuration, settings, status, Some(snapshot));
+        assert_eq!(overview.status.checkpoint_version, Some(2));
+        assert_eq!(overview.status.workspace_generation, Some(2));
+        assert_eq!(overview.status.present_files, 1);
+        assert_eq!(overview.status.checkpoint_blobs, 1);
+        assert_eq!(
+            overview.status.lifecycle,
+            api::VceProjectLifecycleState::Indexing
+        );
+    }
+
+    /// A delayed full refresh cannot restore revoked project intent or replace unrelated project metadata.
+    /// 延迟完整刷新不能恢复已撤销项目意图，也不能替换无关项目元数据。
+    /// No inputs or outputs; validates monotonic policy preservation and equal-revision conflict rejection.
+    /// 无输入输出；验证单调策略保留及相同修订冲突拒绝。
+    #[test]
+    fn delayed_workbench_refresh_preserves_newer_vce_authority_only() {
+        // The loaded path/title remain the authoritative disk values even when their VCE policy is stale.
+        // 即使向量策略已过期，加载的路径及标题仍保持权威磁盘值。
+        let mut loaded = vec![TaskProjectSummary::new(
+            "project-a",
+            "disk title",
+            "disk-path",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )];
+        loaded[0].vce.revision = 4;
+        loaded[0].vce.enabled = true;
+        let mut retained = loaded.clone();
+        retained[0].title = String::from("old title");
+        retained[0].path = String::from("old-path");
+        retained[0].vce.revision = 5;
+        retained[0].vce.enabled = false;
+        retained[0].vce.extra_ignore_patterns = vec![String::from("secret/")];
+        let mut projected = vec![api::ProjectSummary {
+            id: String::from("project-a"),
+            name: String::from("disk title"),
+            path: String::from("disk-path"),
+            pinned: false,
+            icon_pack: None,
+            icon_key: None,
+            vce_enabled: true,
+            vce_settings_revision: 4,
+        }];
+        preserve_newer_vce_project_settings(&mut loaded, &retained, &mut projected).unwrap();
+        assert_eq!(loaded[0].vce, retained[0].vce);
+        assert_eq!(loaded[0].path, "disk-path");
+        assert_eq!(loaded[0].title, "disk title");
+        assert!(!projected[0].vce_enabled);
+        assert_eq!(projected[0].vce_settings_revision, 5);
+        loaded[0].vce.revision = 6;
+        loaded[0].vce.enabled = true;
+        preserve_newer_vce_project_settings(&mut loaded, &retained, &mut projected).unwrap();
+        assert!(projected[0].vce_enabled);
+        assert_eq!(projected[0].vce_settings_revision, 6);
+        retained[0].vce.revision = 6;
+        assert!(
+            preserve_newer_vce_project_settings(&mut loaded, &retained, &mut projected).is_err()
+        );
+        retained[0].id = String::from("unrelated-project");
+        preserve_newer_vce_project_settings(&mut loaded, &retained, &mut projected).unwrap();
+        assert!(
+            loaded[0].vce.enabled,
+            "matching titles cannot transfer policy between project IDs"
+        );
+    }
 
     /// Verifies every public maintenance mode is parsed without aliases or fallback.
     /// 验证每个公共维护模式均在无别名或回退的情况下解析。
@@ -1564,6 +2269,8 @@ mod tests {
     fn settings_input_preserves_host_owned_fields() {
         let input = api::VceProjectSettingsInput {
             enabled: true,
+            update_mode: api::VceIndexUpdateMode::Automatic,
+            auto_update_min_interval_seconds: 600,
             max_file_bytes: 1_048_576,
             extra_ignore_patterns: Vec::new(),
             allow_query_rewrite: false,
@@ -1578,6 +2285,11 @@ mod tests {
         assert_eq!(settings.revision, 8);
         assert!(settings.migrated_from_codebase_memory);
         assert!(settings.enabled);
+        assert_eq!(
+            settings.update_mode,
+            vulcan_workbench_model::ProjectVceUpdateMode::Automatic
+        );
+        assert_eq!(settings.auto_update_min_interval_seconds, 600);
     }
 
     /// Verifies stale reconciliation completions cannot claim a different runtime contract.
@@ -1658,6 +2370,18 @@ mod tests {
             .expect("engine exists")
             .checkpoint_version = Some(3);
         status.lifecycle = VceProjectLifecycle::Failed;
+        assert!(runtime_status_can_serve_requests(
+            Some(&status),
+            7,
+            "sha256:embedding-a"
+        ));
+        // The same failure during initial creation cannot expose a missing checkpoint.
+        // 首次创建期间相同的失败不能暴露不存在的检查点。
+        status
+            .engine
+            .as_mut()
+            .expect("engine exists")
+            .checkpoint_version = None;
         assert!(!runtime_status_can_serve_requests(
             Some(&status),
             7,

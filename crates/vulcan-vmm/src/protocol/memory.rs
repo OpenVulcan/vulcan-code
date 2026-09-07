@@ -121,8 +121,11 @@ pub struct ContextItem {
 
 /// Response body for VMM PreCheck.
 /// VMM PreCheck 响应体。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreCheckResponse {
+    /// Exact source frozen by the executing client, including native linked scopes; not a remote wire field.
+    /// 执行客户端冻结的准确来源，包含原生连带范围；不是远端传输字段。
+    pub read_source: crate::VmmMemoryReadSource,
     /// Whether the caller should inject returned context items.
     /// 调用方是否应注入返回的上下文项。
     #[serde(default)]
@@ -186,6 +189,12 @@ pub struct PostActionTimelineItem {
 /// VMM PostAction 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostActionRequest {
+    /// Optional local admission guard frozen by asynchronous host delivery; never sent over gRPC.
+    /// 异步宿主投递冻结的可选本地准入守卫；绝不发送到 gRPC。
+    /// Direct synchronous callers may omit it; queued host deliveries must retain the exact source.
+    /// 直接同步调用方可省略；排队的宿主投递必须保留准确来源。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_source: Option<crate::VmmMemorySource>,
     /// Stable host turn identity used by native Core intake and analysis retries.
     /// 原生 Core 登记与分析重试使用的稳定宿主回合标识。
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -282,6 +291,12 @@ pub struct ChatCompactResponse {
 /// VMM SearchMemoryEvents 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchMemoryEventsRequest {
+    /// Identifies the invoking native runtime session; None explicitly denotes a management query.
+    /// 标识发起调用的原生运行时会话；None 明确表示管理查询。
+    /// External gRPC does not transmit this host-owned field.
+    /// 外置 gRPC 不传输该宿主字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_session_id: Option<String>,
     /// Numeric VMM user identifier.
     /// VMM 数字用户标识。
     pub user_id: u64,
@@ -303,7 +318,7 @@ pub struct SearchMemoryEventsRequest {
 
 /// One AI-facing memory search hit returned by VMM.
 /// VMM 返回的一条面向 AI 的记忆检索命中。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemorySearchHit {
     /// Durable memory identifier.
     /// 长期记忆标识。
@@ -327,11 +342,57 @@ pub struct MemorySearchHit {
     /// VMM 返回的人类可读创建时间。
     #[serde(default)]
     pub created_datetime: String,
+    /// Native observed retrieval facts; absent when the connected service does not supply them.
+    /// 原生已观察检索事实；连接服务未提供时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<MemorySearchRetrieval>,
+}
+
+/// Separates memory creation provenance from observed query stages and context evidence.
+/// 区分记忆创建来源、已观察查询阶段及情境证据。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemorySearchRetrieval {
+    /// Canonical creation source, independent of the retrieval path.
+    /// 独立于检索路径的规范创建来源。
+    pub source_kind: String,
+    /// Stable token describing only observed retrieval stages.
+    /// 只描述已观察检索阶段的稳定标记。
+    pub origin: String,
+    /// Human-readable name of the observed retrieval path.
+    /// 已观察检索路径的可读名称。
+    pub origin_label: String,
+    /// Model-facing explanation of recorded channel and ranking participation.
+    /// 面向模型说明已记录通道及排序参与情况。
+    pub origin_explanation: String,
+    /// Final bounded decision score, not a raw vector or lexical producer score.
+    /// 最终有界决策分值，而非向量或全文生产者原始分数。
+    pub final_score: f64,
+    /// True only when Core actually evaluated context evidence; false does not mean no stored evidence.
+    /// 仅在 Core 实际评估情境证据时为真；为假不代表没有已存证据。
+    pub context_observed: bool,
+    /// Total recorded support observations across contexts.
+    /// 跨情境记录的支持观测总数。
+    pub support_count: u32,
+    /// Total recorded rebuttal observations across contexts.
+    /// 跨情境记录的反驳观测总数。
+    pub rebuttal_count: u32,
+    /// Exact normalized context labels matched by this query.
+    /// 当前查询匹配的准确规范化情境标签。
+    pub matched_context_values: Vec<String>,
+    /// Support observations belonging only to matched context values.
+    /// 仅属于匹配情境值的支持观测数。
+    pub matched_context_support_count: u32,
+    /// Rebuttal observations belonging only to matched context values.
+    /// 仅属于匹配情境值的反驳观测数。
+    pub matched_context_rebuttal_count: u32,
+    /// Bounded net context adjustment when that stage actually ran.
+    /// 情境阶段实际运行时产生的有界净调整。
+    pub matched_context_score_delta: Option<f64>,
 }
 
 /// One grouped memory search result for a single query.
 /// 单条查询对应的一组记忆检索结果。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemorySearchGroupResult {
     /// Query index echoed from the request order.
     /// 按请求顺序回显的查询索引。
@@ -348,7 +409,7 @@ pub struct MemorySearchGroupResult {
 
 /// Response body for VMM SearchMemoryEvents.
 /// VMM SearchMemoryEvents 响应体。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchMemoryEventsResponse {
     /// Grouped results for every accepted query.
     /// 每条有效查询对应的分组结果。
@@ -364,6 +425,12 @@ pub struct SearchMemoryEventsResponse {
 /// VMM GetTurnDetails 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTurnDetailsRequest {
+    /// Identifies the invoking native runtime session; None explicitly denotes management inspection.
+    /// 标识发起调用的原生运行时会话；None 明确表示管理查看。
+    /// External gRPC does not transmit this host-owned field.
+    /// 外置 gRPC 不传输该宿主字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_session_id: Option<String>,
     /// Numeric VMM user identifier required by the native authorization path.
     /// 原生授权路径要求的 VMM 数字用户标识。
     #[serde(default)]
@@ -508,6 +575,12 @@ pub struct WriteMemoriesResponse {
 /// VMM DeleteMemories 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeleteMemoriesRequest {
+    /// Identifies the invoking native runtime session; None explicitly denotes management deletion.
+    /// 标识发起调用的原生运行时会话；None 明确表示管理删除。
+    /// External gRPC does not transmit this host-owned field.
+    /// 外置 gRPC 不传输该宿主字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_session_id: Option<String>,
     /// Numeric VMM user identifier used to scope the delete.
     /// 用于限定删除范围的 VMM 数字用户标识。
     pub user_id: u64,

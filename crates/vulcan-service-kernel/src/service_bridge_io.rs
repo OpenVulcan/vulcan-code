@@ -17,6 +17,21 @@ const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
 /// 为 WebUI 桥接运行时中的深层智能体流轮询显式预留的工作线程栈容量。
 const WEBUI_SERVICE_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 
+/// Build the host's HTTP execution configuration without starting threads or publishing discovery.
+/// 构建宿主 HTTP 执行配置，不启动线程或发布服务发现。
+/// No parameters; returns the same builder used by production dispatch and isolated integration tests.
+/// 无参数；返回生产派发与隔离集成测试共用的构造器。
+pub(crate) fn webui_service_runtime_builder() -> tokio::runtime::Builder {
+    // Keep stack ownership at the actual chat entrypoint instead of duplicating it in callers.
+    // 将栈配置归属于实际聊天入口，而不在调用方重复定义。
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder
+        .thread_name("vulcan-webui-bridge-runtime")
+        .thread_stack_size(WEBUI_SERVICE_WORKER_STACK_BYTES)
+        .enable_all();
+    builder
+}
+
 /// Opens a trusted external URL with the system default browser.
 /// 使用系统默认浏览器打开可信外部链接。
 pub(crate) fn service_open_external_url(
@@ -188,14 +203,7 @@ pub fn spawn_webui_service_http_bridge(
     std::thread::Builder::new()
         .name(String::from("vulcan-webui-http-bridge"))
         .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                // A distinct name separates bridge failures from the application service runtime.
-                // 独立名称用于区分桥接故障和应用 Service Runtime 故障。
-                .thread_name("vulcan-webui-bridge-runtime")
-                .thread_stack_size(WEBUI_SERVICE_WORKER_STACK_BYTES)
-                .enable_all()
-                .build()
-            {
+            let runtime = match webui_service_runtime_builder().build() {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     eprintln!(

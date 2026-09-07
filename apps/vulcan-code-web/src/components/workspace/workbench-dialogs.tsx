@@ -84,6 +84,9 @@ export interface WorkbenchDialogsProps {
   // Closes the project settings dialog.
   // 关闭项目设置对话框。
   onCancelProjectSettings: () => void;
+  // Navigate from project configuration to the fixed semantic model settings node.
+  // 从项目配置导航到固定语义模型设置节点。
+  onOpenEngineSettings: React.ComponentProps<typeof ProjectSettingsDialog>["onOpenEngineSettings"];
   // Current workbench snapshot used by settings and counters.
   // 设置与计数使用的当前工作台快照。
   workbench: WorkbenchSnapshot;
@@ -180,6 +183,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
         settingsRevision={props.projectSettingsRevision}
         workbench={props.workbench}
         onCancel={props.onCancelProjectSettings}
+        onOpenEngineSettings={props.onOpenEngineSettings}
         onExecuteAttachmentCleanup={props.onExecuteAttachmentCleanup}
         onLoadAgentSkillOverrides={props.onLoadAgentSkillOverrides}
         onLoadVmmDraft={props.onLoadVmmDraft}

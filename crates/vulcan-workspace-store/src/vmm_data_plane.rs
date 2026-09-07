@@ -17,6 +17,9 @@ use vldb_controller_client::{
     ControllerSqliteEnableRequest, ControllerSqliteValue, SpaceKind, SpaceRegistration,
 };
 
+mod lexical;
+pub use lexical::{VmmLexicalDocument, VmmLexicalHit, VmmLexicalIndexCounts};
+
 /// Stable controller space identifier reserved for native VMM data.
 /// 为原生 VMM 数据保留的稳定控制器空间标识符。
 pub const VMM_SPACE_ID: &str = "vmm";
@@ -1695,17 +1698,23 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
     /// `snapshot_json` 是已校验且仅含关系数据的操作后快照。
     /// `pending_turn_id` atomically binds a host analysis job when this is an intake mutation.
     /// `pending_turn_id` 在当前变更属于登记操作时原子绑定宿主分析作业。
+    /// `removed_turn_ids` is the exact before/after loss set, including recoverable trash records.
+    /// `removed_turn_ids` 是事务前后的准确消失集合，计算时包含可恢复回收记录。
     ///
     /// # Returns
     /// 返回值
-    /// Success after both SQLite changes commit in one transaction.
-    /// 两项 SQLite 变更在同一事务提交后返回成功。
+    /// Success after snapshot, journal and related queue changes commit in one transaction.
+    /// 快照、账本及关联队列变更在同一事务提交后返回成功。
     pub async fn commit_core_mutation(
         &self,
         operation_id: &str,
         snapshot_json: &str,
         pending_turn_id: Option<&str>,
+        removed_turn_ids: &[String],
     ) -> Result<(), String> {
+        if pending_turn_id.is_some_and(|id| removed_turn_ids.iter().any(|removed| removed == id)) {
+            return Err("原生 VMM 不能在同一次提交中登记并永久移除同一回合。".to_owned());
+        }
         let operation_id = sqlite_string_literal(operation_id);
         let snapshot_json = sqlite_string_literal(snapshot_json);
         let now = current_unix_epoch_millis_i64()?;
@@ -1715,6 +1724,21 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
                 "UPDATE vmm_pending_analysis_jobs SET turn_id = '{turn_id}', state = 'ready', next_attempt_at_unix_ms = 0, last_error = NULL, updated_at_unix_ms = {now} WHERE intake_mutation_operation_id = '{operation_id}' AND state = 'intaking';\n"
             )
         });
+        // Only proven permanent removals discard queue rows; recycle/restore has an empty loss set.
+        // 只有已证实的永久移除才丢弃队列行；回收/恢复的消失集合为空。
+        let mut removed_turn_updates = String::new();
+        for chunk in removed_turn_ids.chunks(256) {
+            // Bound individual statements without splitting the enclosing atomic transaction.
+            // 限制单条语句大小，但不拆分外层原子事务。
+            let identities = chunk
+                .iter()
+                .map(|id| format!("'{}'", sqlite_string_literal(id)))
+                .collect::<Vec<_>>()
+                .join(",");
+            removed_turn_updates.push_str(&format!(
+                "DELETE FROM vmm_pending_analysis_jobs WHERE turn_id IN ({identities});\n"
+            ));
+        }
         let script = format!(
             r#"BEGIN IMMEDIATE;
 INSERT INTO vmm_core_snapshots(snapshot_key, snapshot_json, updated_at_unix_ms)
@@ -1725,7 +1749,7 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
 UPDATE vmm_core_mutations
 SET state = '{committed}', updated_at_unix_ms = {now}
 WHERE operation_id = '{operation_id}' AND state = '{prepared}';
-{pending_turn_update}COMMIT;"#,
+{pending_turn_update}{removed_turn_updates}COMMIT;"#,
             snapshot_key = VMM_CORE_SNAPSHOT_KEY,
             committed = VMM_CORE_MUTATION_COMMITTED,
             prepared = VMM_CORE_MUTATION_PREPARED,
@@ -1949,13 +1973,16 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     ///
     /// # Returns
     /// 返回值
-    /// Success after all bounded delete chunks complete, or a controller error.
-    /// 全部有界删除分块完成后返回成功，否则返回控制器错误。
+    /// The actual deleted row total after all bounded chunks complete, or a controller/count error.
+    /// 全部有界分块完成后返回实际删除行数总计，否则返回控制器或计数错误。
     pub async fn delete_vectors(
         &self,
         binding: &VmmVectorSpaceBinding,
         memory_ids: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
+        // Count controller receipts, not requested identities, since rows may already be absent.
+        // 统计控制器回执而非请求身份数，因为记录可能已经不存在。
+        let mut deleted_rows = 0_u64;
         for chunk in memory_ids.chunks(200) {
             if chunk.is_empty() {
                 continue;
@@ -1965,7 +1992,10 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 .map(|identity| format!("'{}'", lance_string_literal(identity)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            self.client
+            // Each successful chunk reports its own physical table mutation.
+            // 每个成功分块报告自身的物理表变更。
+            let deletion = self
+                .client
                 .delete_lancedb_typed(
                     VMM_SPACE_ID,
                     self.lancedb_binding_id.as_str(),
@@ -1974,8 +2004,11 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 )
                 .await
                 .map_err(|error| format!("删除 VMM LanceDB 向量失败：{error}"))?;
+            deleted_rows = deleted_rows
+                .checked_add(deletion.deleted_rows)
+                .ok_or_else(|| String::from("VMM 物理向量删除计数溢出"))?;
         }
-        Ok(())
+        Ok(deleted_rows)
     }
 
     /// Loads every requested vector by exact memory identity for Core restart hydration.
@@ -2420,14 +2453,18 @@ pub async fn bootstrap_vmm_data_plane(
         ));
     }
 
-    Ok(VmmDataPlaneHandle {
+    // handle owns the VMM-only bindings; initialize its lexical index before publishing readiness.
+    // handle 持有 VMM 专属绑定；在发布就绪状态前初始化其全文索引。
+    let handle = VmmDataPlaneHandle {
         client,
         data_root,
         sqlite_path,
         lancedb_path,
         sqlite_binding_id,
         lancedb_binding_id,
-    })
+    };
+    handle.ensure_lexical_index().await?;
+    Ok(handle)
 }
 
 /// Builds the complete first-install schema for native VMM state.

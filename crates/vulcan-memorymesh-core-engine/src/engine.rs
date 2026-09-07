@@ -2067,6 +2067,7 @@ fn validate_commit_receipt_against_pending_mutation(
             | Mutation::PutChatCompactBoundary(_)
             | Mutation::DeleteMemory { .. }
             | Mutation::PutAnalysisAttempt(_)
+            | Mutation::AdvanceSessionExtraction { .. }
             | Mutation::PutNoisePrototypeBundle { .. }
             | Mutation::PurgeMemory { .. } => {}
         }
@@ -5144,11 +5145,8 @@ fn advance_analyze_load_turn(
         &recent_direct_writes,
         record.snapshot.memory_policy.postaction_history_turn_limit,
     )?;
-    let reference_turns = trim_postaction_history(
-        &loaded,
-        reference_turns,
-        record.snapshot.memory_policy.postaction_max_input_tokens,
-    );
+    // The native adapter owns the serialized business shape; budget there, not against internal timeline text.
+    // 原生适配器负责序列化业务形状；在该处计算预算，而非对内部时间线正文估算。
     // Load the authoritative L1 analysis prompt and emit the analysis effect.
     // 加载权威 L1 分析 Prompt 并发出分析 Effect。
     let prompt = record.snapshot.prompt("postaction_l1_main.md")?.to_owned();
@@ -5161,6 +5159,7 @@ fn advance_analyze_load_turn(
         LlmPurpose::PostActionAnalysis,
         prompt,
         LlmInput::PostActionAnalysis {
+            max_input_tokens: record.snapshot.memory_policy.postaction_max_input_tokens,
             current_timestamp_ns: command.analysis_cutoff_ns,
             reference_turns,
             target_turn: Box::new(loaded.clone()),
@@ -5248,96 +5247,10 @@ fn validate_postaction_context(
     Ok(())
 }
 
-/// Trims refined history with the VMM-compatible target-first heuristic token budget.
-/// 使用与 VMM 兼容的目标优先启发式 Token 预算裁剪已提炼历史。
-fn trim_postaction_history(
-    target: &Turn,
-    references: Vec<PostActionReferenceTurn>,
-    max_tokens: u32,
-) -> Vec<PostActionReferenceTurn> {
-    if max_tokens == 0 {
-        return references;
-    }
-    let target_budget = target
-        .timeline
-        .iter()
-        .map(|item| estimate_postaction_tokens(&item.content))
-        .sum::<u32>();
-    let mut remaining = max_tokens.saturating_sub(target_budget);
-    let mut selected = Vec::new();
-    for reference in references.into_iter().rev() {
-        let budget = estimate_postaction_tokens(&reference.details);
-        if !selected.is_empty() && budget > remaining {
-            break;
-        }
-        remaining = remaining.saturating_sub(budget);
-        selected.push(reference);
-    }
-    selected.reverse();
-    selected
-}
-
 /// Estimates text tokens with the frozen VMM domestic-language coefficient profile.
 /// 使用冻结的 VMM 国内语言系数配置估算文本 Token 数。
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn estimate_postaction_tokens(text: &str) -> u32 {
-    let mut total = 0.0_f64;
-    let mut latin_len = 0_u32;
-    let mut latin_transitions = 0_u32;
-    let mut previous_latin: Option<char> = None;
-    let flush_latin = |total: &mut f64,
-                       latin_len: &mut u32,
-                       latin_transitions: &mut u32,
-                       previous_latin: &mut Option<char>| {
-        if *latin_len > 0 {
-            *total += 0.88;
-            if *latin_len > 5 {
-                *total += f64::from(*latin_len - 5) / 4.5;
-            }
-            *total = f64::from(*latin_transitions).mul_add(0.10, *total);
-            *latin_len = 0;
-            *latin_transitions = 0;
-            *previous_latin = None;
-        }
-    };
-    for character in text.chars() {
-        if character.is_ascii_alphabetic() {
-            if previous_latin.is_some_and(char::is_lowercase) && character.is_uppercase() {
-                latin_transitions = latin_transitions.saturating_add(1);
-            }
-            latin_len = latin_len.saturating_add(1);
-            previous_latin = Some(character);
-            continue;
-        }
-        flush_latin(
-            &mut total,
-            &mut latin_len,
-            &mut latin_transitions,
-            &mut previous_latin,
-        );
-        total += if is_cjk_character(character) {
-            1.18
-        } else if character.is_numeric() {
-            0.50
-        } else if character.is_whitespace() {
-            0.08
-        } else if character.is_alphabetic() {
-            1.10
-        } else {
-            0.82
-        };
-    }
-    flush_latin(
-        &mut total,
-        &mut latin_len,
-        &mut latin_transitions,
-        &mut previous_latin,
-    );
-    if total == 0.0 {
-        0
-    } else {
-        (total * 1.06).ceil().min(f64::from(u32::MAX)) as u32
-    }
+    vulcan_memorymesh_core_config::estimate_memory_tokens(text)
 }
 
 /// Estimates one text fragment with the frozen VMM domestic-language token profile.
@@ -5355,19 +5268,6 @@ fn estimate_postaction_tokens(text: &str) -> u32 {
 #[must_use]
 pub fn estimate_text_tokens(text: &str) -> u32 {
     estimate_postaction_tokens(text)
-}
-
-/// Reports whether one Unicode scalar belongs to the CJK families used by VMM.
-/// 报告一个 Unicode 标量是否属于 VMM 使用的 CJK 字符族。
-const fn is_cjk_character(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0xF900..=0xFAFF
-            | 0x3040..=0x30FF
-            | 0xAC00..=0xD7AF
-    )
 }
 
 /// Continues analysis from L1 candidates into one embedding batch for similarity recall.
@@ -6167,6 +6067,7 @@ fn emit_analyze_derived(
             .map_err(|error| command_error(ErrorCode::Internal, error.to_string()))?;
         let node = build_analyze_profile_node(
             &pending,
+            &record.snapshot.memory_policy.profiles,
             accepted,
             &active_profile_by_id,
             ProfileNodeId::new(slot.as_str().to_owned())
@@ -6234,6 +6135,13 @@ fn emit_analyze_derived(
         user_input_kind: Some(pending.user_input_kind),
         analysis_details: Some(pending.analysis_details.clone()),
     });
+    // Successful empty extraction also consumes the observed direct-write window.
+    // 成功但没有候选的提取同样消费本次观察到的直写窗口。
+    mutations.push(Mutation::AdvanceSessionExtraction {
+        turn_id: pending.turn.id.clone(),
+        observed_after_ns: pending.command.direct_write_observed_after_ns,
+        observed_through_ns: pending.command.analysis_cutoff_ns,
+    });
     let batch = record.mutation_batch("derive", mutations)?;
     record.state = FlowState::AnalyzeDerived(Box::new(pending));
     emit_effect(record, HostEffect::StorageMutation(batch))
@@ -6243,6 +6151,7 @@ fn emit_analyze_derived(
 /// 为待提交变更及其已提交结果构造相同画像事实；输入续体、接纳项、既有画像、身份和版本，返回节点或明确校验错误。
 fn build_analyze_profile_node(
     pending: &PendingAnalyze,
+    policy: &vulcan_memorymesh_core_config::ProfilePolicy,
     accepted: &AcceptedProfileCandidate,
     active_profile_by_id: &BTreeMap<ProfileNodeId, &ProfileNode>,
     id: ProfileNodeId,
@@ -6274,6 +6183,7 @@ fn build_analyze_profile_node(
                 pending.turn.created_at_ns,
                 accepted.profile_level,
                 refresh_weight,
+                policy.for_role(candidate.section_role),
             )?,
         )
     };
@@ -6403,18 +6313,12 @@ fn profile_expiry_ns(
     base_ns: i64,
     level: ProfileLevel,
     refresh_weight: u32,
+    policy: &vulcan_memorymesh_core_config::ProfileLifetimePolicy,
 ) -> Result<Option<i64>, CoreError> {
-    const HOUR_MS: u64 = 3_600_000;
-    const DAY_MS: u64 = 24 * HOUR_MS;
-    let (base, step, maximum) = match level {
-        ProfileLevel::Transient => (72 * HOUR_MS, 48 * HOUR_MS, 14 * DAY_MS),
-        ProfileLevel::Situational => (14 * DAY_MS, 7 * DAY_MS, 90 * DAY_MS),
-        ProfileLevel::Stable => (90 * DAY_MS, 30 * DAY_MS, 365 * DAY_MS),
-        ProfileLevel::Persistent => return Ok(None),
-    };
-    let extension = step.saturating_mul(u64::from(refresh_weight));
-    let lifetime = base.saturating_add(extension).min(maximum);
-    checked_expiry_from_millis(base_ns, lifetime).map(Some)
+    policy
+        .lifetime_ms(level, refresh_weight)
+        .map(|lifetime| checked_expiry_from_millis(base_ns, lifetime))
+        .transpose()
 }
 
 /// Extracts dropped candidates from one review output.
@@ -6477,6 +6381,9 @@ fn advance_analyze_derived(
             .map_err(|error| command_error(ErrorCode::Internal, error.to_string()))?;
         expected_bindings.insert(slot, EntityKind::ProfileNode);
     }
+    // Keep the admitted rules independent of the mutable command record during receipt projection.
+    // 回执投影期间保持已准入规则独立于可变命令记录。
+    let profile_policy = record.snapshot.memory_policy.profiles.clone();
     advance_reconcilable_with_receipt(record, result, move |receipt| {
         validate_expected_bindings(&receipt, &expected_bindings)?;
         let bound = |slot: &str, expected_kind: EntityKind| -> Result<String, CoreError> {
@@ -6537,6 +6444,7 @@ fn advance_analyze_derived(
                     })?;
                 build_analyze_profile_node(
                     &pending,
+                    &profile_policy,
                     accepted,
                     &active_profile_by_id,
                     ProfileNodeId::new(domain_id)
@@ -7060,6 +6968,11 @@ fn select_hard_duplicate(
     embedding: &[f32],
     threshold: f64,
 ) -> Option<MemoryRecord> {
+    // The source VMM contract uses zero to disable hard dedupe, not to accept every nonnegative cosine.
+    // 来源 VMM 契约用零关闭硬去重，而不是接纳所有非负余弦值。
+    if threshold <= 0.0 {
+        return None;
+    }
     let mut best: Option<(f64, &MemoryRecord)> = None;
     for memory in pool {
         if memory.category != category || memory.state != MemoryState::Active {
@@ -7895,17 +7808,17 @@ fn render_profile_timeline(
     ))
 }
 
-/// Resolves one historical local date and explicitly rejects timestamps outside the date library range.
-/// 解析一个历史本地日期，并显式拒绝超出日期库范围的时间戳。
+/// Resolves a historical local date from the domain's exact Unix-nanosecond anchor.
+/// 从领域准确的 Unix 纳秒锚点解析历史本地日期。
 fn profile_timeline_day(
     node: &ProfileNode,
     timezone: chrono_tz::Tz,
 ) -> Result<chrono::NaiveDate, CoreError> {
     use chrono::Offset;
+    // Both domain anchors are nanoseconds; treating modern epoch values as milliseconds exceeds the calendar range.
+    // 两个领域锚点都是纳秒；将现代纪元值当作毫秒会超出日历范围。
     let anchor = node.effective_date_ns.unwrap_or(node.created_at_ns);
-    let utc = chrono::DateTime::from_timestamp_millis(anchor).ok_or_else(|| {
-        effect_type_error("profile timeline timestamp is outside the supported date range")
-    })?;
+    let utc = chrono::DateTime::from_timestamp_nanos(anchor);
     let local_offset = utc
         .with_timezone(&timezone)
         .offset()
@@ -8185,6 +8098,11 @@ fn advance_profile_instruction_llm(
                 command.occurred_at_ns,
                 profile_level,
                 refresh_weight,
+                record
+                    .snapshot
+                    .memory_policy
+                    .profiles
+                    .for_role(command.target_section.role),
             )?,
             status_reason,
             superseded_by: None,
@@ -8590,20 +8508,25 @@ fn advance_retention_query(
     // 第七阶段按完整过期回收批次清除，使关系回收站坐标保持原子性，而不退化成无关的逐记忆删除。
     let mut trash_batches = facts.trash_batches;
     trash_batches.sort_by(|left, right| {
-        left.recycled_at_ns
-            .cmp(&right.recycled_at_ns)
+        left.expires_at_ns
+            .cmp(&right.expires_at_ns)
             .then_with(|| left.batch_id.cmp(&right.batch_id))
     });
     let mut trash_ids = BTreeSet::new();
     for fact in trash_batches {
         validate_host_identifier_text(&fact.batch_id, "retention trash batch id")?;
-        if fact.recycled_at_ns > command.now_ns || !trash_ids.insert(fact.batch_id.clone()) {
+        if fact.recycled_at_ns < 0
+            || fact.recycled_at_ns > command.now_ns
+            || fact.expires_at_ns <= fact.recycled_at_ns
+            || !trash_ids.insert(fact.batch_id.clone())
+        {
             return Err(effect_type_error(
                 "Retention trash facts violate identity bounds",
             ));
         }
-        let retention_ns = checked_duration_ns(policy.trash_retention_ms, "trash retention")?;
-        if command.now_ns.saturating_sub(fact.recycled_at_ns) >= retention_ns {
+        // Existing batches retain their admitted deadline even after global defaults change.
+        // 即使全局默认值变化，已有批次仍保留已准入的截止时间。
+        if command.now_ns >= fact.expires_at_ns {
             plans.trash_purge.push(PlannedTrashBatchRef {
                 batch_id: fact.batch_id,
                 reason: RetentionReasonCode::TrashExpiryPurge,
@@ -11719,6 +11642,9 @@ mod lifecycle_time_tests {
     /// 接受可表示的精确边界，并在任何写入之前拒绝溢出。
     #[test]
     fn finite_expiry_never_saturates_or_becomes_permanent() -> Result<(), CoreError> {
+        // Default lifetime rules retain the source-compatible exact overflow boundary.
+        // 默认生命周期规则保留来源兼容的准确溢出边界。
+        let policy = vulcan_memorymesh_core_config::ProfileLifetimePolicy::default();
         const MILLIS_IN_NANOS: i64 = 1_000_000;
         const STABLE_NS: i64 = 90 * 24 * 3_600_000 * MILLIS_IN_NANOS;
         assert_eq!(
@@ -11728,16 +11654,18 @@ mod lifecycle_time_tests {
         assert!(checked_expiry_from_millis(i64::MAX, 1).is_err());
         assert!(checked_expiry_from_millis(0, u64::MAX).is_err());
         assert_eq!(
-            profile_expiry_ns(i64::MAX - STABLE_NS, ProfileLevel::Stable, 0)?,
+            profile_expiry_ns(i64::MAX - STABLE_NS, ProfileLevel::Stable, 0, &policy)?,
             Some(i64::MAX)
         );
-        assert!(profile_expiry_ns(i64::MAX - STABLE_NS + 1, ProfileLevel::Stable, 0).is_err());
+        assert!(
+            profile_expiry_ns(i64::MAX - STABLE_NS + 1, ProfileLevel::Stable, 0, &policy).is_err()
+        );
         assert_eq!(
-            profile_expiry_ns(i64::MAX, ProfileLevel::Persistent, u32::MAX)?,
+            profile_expiry_ns(i64::MAX, ProfileLevel::Persistent, u32::MAX, &policy)?,
             None
         );
         assert_eq!(
-            profile_expiry_ns(0, ProfileLevel::Stable, u32::MAX)?,
+            profile_expiry_ns(0, ProfileLevel::Stable, u32::MAX, &policy)?,
             Some(365 * 24 * 3_600_000 * MILLIS_IN_NANOS)
         );
         Ok(())

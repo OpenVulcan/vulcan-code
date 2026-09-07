@@ -29,6 +29,9 @@ use crate::ports::{
     VceSourceExpectation, VceSourcePort, VceSourceReadRequest, VceSourceReadResponse,
 };
 use crate::query::{QueryError, QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
+use crate::refresh_control::{
+    VceRefreshControl, VceRefreshPhase, VceRefreshProgress, VceRefreshUnit,
+};
 use crate::retrieval::{
     RankedHits, RerankCallback, RetrievalPipeline, merge_semantic_and_exact, reciprocal_rank_fusion,
 };
@@ -70,6 +73,9 @@ pub struct VceConfig {
     /// Logical and physical compatibility contract for all VCE vectors.
     /// VCE 所有向量使用的逻辑和物理兼容性契约。
     pub embedding_space: EmbeddingSpace,
+    /// Optional exact host grant for a different producer; never part of persisted origin identity.
+    /// 不同生产来源的可选精确宿主授权；绝不成为持久化原始身份的一部分。
+    pub embedding_execution: Option<crate::VceEmbeddingExecutionContract>,
     /// Maximum content candidates requested per query variant.
     /// 每个查询变体请求的最大内容候选数量。
     pub dense_candidate_limit: usize,
@@ -118,6 +124,7 @@ impl VceConfig {
             query: QueryPlannerConfig::default(),
             retrieval: RetrievalPipeline::default(),
             embedding_space,
+            embedding_execution: None,
             dense_candidate_limit: 64,
             path_candidate_limit: 32,
             exact_candidate_limit: 32,
@@ -141,6 +148,18 @@ impl VceConfig {
         }
         if !self.embedding_space.is_well_formed() {
             return Err(VceConfigError::InvalidEmbeddingSpace);
+        }
+        // An execution grant is valid for exactly this unchanged index, not another project or chain.
+        // 执行授权仅对当前不变索引有效，不适用于另一个项目或检查点链。
+        if let Some(grant) = &self.embedding_execution {
+            let original = grant.original();
+            if original.namespace_id != self.index_namespace_id
+                || original.checkpoint_chain_id != self.checkpoint_chain_id
+                || original.schema_version != self.index_schema_version
+                || original.embedding_space != self.embedding_space
+            {
+                return Err(VceConfigError::InvalidEmbeddingExecution);
+            }
         }
         if self.dense_candidate_limit == 0
             || self.path_candidate_limit == 0
@@ -191,6 +210,48 @@ impl VceConfig {
     }
 }
 
+/// Per-query execution limits independent of immutable index and checkpoint identity.
+/// 独立于不可变索引及检查点身份的单次查询执行限制。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VceRetrievalLimits {
+    /// Maximum concurrent query variants for this request.
+    /// 此请求的最大并发查询变体数量。
+    pub query_max_concurrency: usize,
+    /// Maximum selected code chunks for this request.
+    /// 此请求最多选择的代码块数量。
+    pub max_results: usize,
+    /// Aggregate selected-context character limit for this request.
+    /// 此请求所选上下文的总字符限制。
+    pub max_context_chars: usize,
+}
+
+impl VceRetrievalLimits {
+    /// Read the engine defaults without modifying index configuration or choosing host policy.
+    /// 读取引擎默认值，不修改索引配置或选择宿主策略。
+    /// `config` is validated engine configuration; returns the three independent query limits.
+    /// `config` 为已验证引擎配置；返回三个独立查询限制。
+    pub fn from_config(config: &VceConfig) -> Self {
+        Self {
+            query_max_concurrency: config.query_max_concurrency,
+            max_results: config.retrieval.coverage.max_results,
+            max_context_chars: config.retrieval.coverage.max_chars,
+        }
+    }
+
+    /// Reject zero budgets before any AI or storage call; returns no value on success.
+    /// 在任何模型或存储调用前拒绝零预算；成功时不返回值。
+    /// No additional inputs; host-specific upper bounds remain the host's explicit admission policy.
+    /// 无额外输入；宿主专属上限仍由宿主明确准入策略负责。
+    pub fn validate(&self) -> Result<(), VceError> {
+        if self.query_max_concurrency == 0 || self.max_results == 0 || self.max_context_chars == 0 {
+            return Err(VceError::InvalidRequest(String::from(
+                "retrieval execution limits must be positive",
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Configuration errors detected before the functional engine is created.
 /// 创建功能引擎前检测到的配置错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +262,9 @@ pub enum VceConfigError {
     /// The vector-space compatibility contract is incomplete or dimensionless.
     /// 向量空间兼容性契约不完整或维度为零。
     InvalidEmbeddingSpace,
+    /// The host execution authorization is malformed or attempts to override a hard storage guard.
+    /// 宿主执行授权格式错误，或试图覆盖硬性存储保护。
+    InvalidEmbeddingExecution,
     /// A host lookup budget is zero.
     /// 宿主检索预算为零。
     InvalidLookupBudget,
@@ -241,6 +305,9 @@ impl Display for VceConfigError {
             Self::InvalidEmbeddingSpace => {
                 formatter.write_str("VCE Embedding space is incomplete or has zero dimension")
             }
+            Self::InvalidEmbeddingExecution => formatter.write_str(
+                "VCE embedding execution authorization does not match the original index",
+            ),
             Self::InvalidLookupBudget => {
                 formatter.write_str("VCE lookup budgets must be greater than zero")
             }
@@ -567,6 +634,9 @@ pub struct RetrieveResult {
 /// VCE 直接功能入口产生的错误。
 #[derive(Debug)]
 pub enum VceError {
+    /// The host cancelled this exact refresh before its publication boundary.
+    /// 宿主在发布边界前取消了此精确刷新。
+    RefreshCancelled,
     /// A refresh or retrieval request is malformed.
     /// 刷新或检索请求格式无效。
     InvalidRequest(String),
@@ -684,6 +754,7 @@ impl Display for VceError {
     /// 将功能入口错误格式化为宿主诊断文本。
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RefreshCancelled => formatter.write_str("VCE refresh was cancelled by the host"),
             Self::InvalidRequest(message) => write!(formatter, "invalid VCE request: {message}"),
             Self::Workspace(error) => {
                 write!(formatter, "VCE workspace reconciliation failed: {error}")
@@ -886,6 +957,9 @@ struct QueryVariantRequest {
 /// Borrowed dependencies and stable identities shared by one refresh staging operation.
 /// 一次刷新暂存操作共享的借用依赖与稳定身份。
 struct RefreshStageContext<'a> {
+    /// Shared host job cancellation and observation, including the earlier source scan.
+    /// 共享宿主作业取消与观察，包括此前源码扫描。
+    control: &'a VceRefreshControl,
     /// Stable parent refresh identity used to derive child operation IDs.
     /// 用于派生子操作 ID 的稳定父刷新身份。
     refresh_id: &'a str,
@@ -1205,9 +1279,33 @@ impl VceEngine {
         ai: &dyn VceAiPort,
         source: &dyn VceSourcePort,
     ) -> Result<RefreshResult, VceError> {
+        self.refresh_observed(request, index, ai, source, &VceRefreshControl::default())
+            .await
+    }
+
+    /// Refresh with host-provided observation and cooperative cancellation, without host dependencies.
+    /// 使用宿主提供的观察与协作取消进行刷新，不引入宿主依赖。
+    ///
+    /// `request` owns the source observations; `index`, `ai`, and `source` are registered ports.
+    /// `control` belongs to this exact job and may already have been used during source scanning.
+    /// Returns the validated committed result or an explicit failure/cancellation after cleanup.
+    /// `request` 持有源码观察；`index`、`ai` 与 `source` 为已注册端口。
+    /// `control` 属于此精确作业，可能已用于源码扫描。
+    /// 返回已校验提交结果，或清理后的明确失败／取消。
+    pub async fn refresh_observed(
+        &mut self,
+        request: RefreshRequest,
+        index: &dyn VceIndexPort,
+        ai: &dyn VceAiPort,
+        source: &dyn VceSourcePort,
+        control: &VceRefreshControl,
+    ) -> Result<RefreshResult, VceError> {
         self.statistics.refresh_attempts = self.statistics.refresh_attempts.saturating_add(1);
         self.state = VceEngineState::Refreshing;
-        let result = self.refresh_inner(request, index, ai, source).await;
+        let result = self
+            .refresh_inner(request, index, ai, source, control)
+            .await;
+        control.finish();
         match result {
             Ok(result) => {
                 self.statistics.refresh_successes =
@@ -1232,7 +1330,11 @@ impl VceEngine {
         index: &dyn VceIndexPort,
         ai: &dyn VceAiPort,
         source: &dyn VceSourcePort,
+        // control spans the same host job rather than a separate core-only cancellation token.
+        // control 覆盖同一个宿主作业，而非单独的核心取消令牌。
+        control: &VceRefreshControl,
     ) -> Result<RefreshResult, VceError> {
+        control.check()?;
         validate_refresh_request(&request)?;
         self.validate_index_binding(index.binding())?;
         let capability = self.validate_ai_binding(ai, None)?;
@@ -1241,6 +1343,15 @@ impl VceEngine {
         let reason = request.reason;
         let force_reindex = request.force_reindex;
         let source_revision = request.source_revision;
+        control.observe(VceRefreshProgress {
+            phase: VceRefreshPhase::Reconciling,
+            operation_id: request_id.clone(),
+            unit: VceRefreshUnit::Files,
+            completed: 0,
+            total: Some(request.observations.len() as u64),
+            current_path: None,
+        });
+        control.check()?;
         let snapshot = match mode {
             RefreshMode::Full => self.workspace.reconcile(request.observations)?,
             RefreshMode::Paths => self
@@ -1283,6 +1394,7 @@ impl VceEngine {
             missing_blobs
         };
         let stage_context = RefreshStageContext {
+            control,
             refresh_id: &request_id,
             generation: snapshot.generation,
             index,
@@ -1357,9 +1469,22 @@ impl VceEngine {
                 checkpoint: checkpoint.clone(),
                 state_snapshot,
             };
-            let publication = match index.commit(commit.clone()).await {
-                Ok(receipt) => validate_commit_receipt(&commit, &receipt).map(|()| receipt),
-                Err(error) => Err(VceError::Port(error)),
+            let publication = match control.begin_commit() {
+                Ok(()) => {
+                    control.observe(VceRefreshProgress {
+                        phase: VceRefreshPhase::Committing,
+                        operation_id: request_id.clone(),
+                        unit: VceRefreshUnit::None,
+                        completed: 0,
+                        total: None,
+                        current_path: None,
+                    });
+                    match index.commit(commit.clone()).await {
+                        Ok(receipt) => validate_commit_receipt(&commit, &receipt).map(|()| receipt),
+                        Err(error) => Err(VceError::Port(error)),
+                    }
+                }
+                Err(error) => Err(error),
             };
             let receipt = match publication {
                 Ok(receipt) => receipt,
@@ -1379,6 +1504,9 @@ impl VceEngine {
             self.workspace = committed_workspace;
             (Some(checkpoint_version), Some(receipt), summary)
         } else {
+            // No-change success still races cancellation; atomically settle before changing local state.
+            // 无变化成功仍与取消竞争；改变本地状态之前必须原子结算。
+            control.finish_without_commit()?;
             self.workspace.release_committed_filesystem_content();
             let checkpoint_version = self
                 .workspace
@@ -1400,6 +1528,15 @@ impl VceEngine {
             (checkpoint_version, None, summary)
         };
         self.last_refresh = Some(summary);
+        control.finish();
+        control.observe(VceRefreshProgress {
+            phase: VceRefreshPhase::Complete,
+            operation_id: request_id.clone(),
+            unit: VceRefreshUnit::None,
+            completed: 0,
+            total: None,
+            current_path: None,
+        });
         Ok(RefreshResult {
             request_id,
             generation: snapshot.generation,
@@ -1424,7 +1561,7 @@ impl VceEngine {
     ) -> Result<RetrieveResult, VceError> {
         self.statistics.retrieval_attempts = self.statistics.retrieval_attempts.saturating_add(1);
         self.state = VceEngineState::Retrieving;
-        let result = self.retrieve_inner(request, index, ai).await;
+        let result = self.retrieve_read_view(request, index, ai).await;
         match result {
             Ok(result) => {
                 self.statistics.retrieval_successes =
@@ -1458,19 +1595,87 @@ impl VceEngine {
         }
     }
 
-    /// Execute the retrieval pipeline after the lifecycle wrapper has recorded its state.
-    /// 在生命周期包装器记录状态后执行检索流水线。
-    async fn retrieve_inner(
+    /// Execute retrieval from an immutable published engine without mutating shared lifecycle state.
+    /// 从不可变已发布引擎执行检索，不修改共享生命周期状态。
+    ///
+    /// `request` selects the query and scope. The host must pin `index` to this engine's checkpoint
+    /// and retain its storage lease throughout the call; `ai` is the admitted execution registration.
+    /// `request` 选择查询与范围。宿主必须将 `index` 固定到此引擎检查点，
+    /// 并在整个调用期间保留存储租约；`ai` 为已准入的执行注册。
+    /// Returns query results and their own summary, or an explicit failure. Concurrent callers
+    /// do not change another query's counters, error or state; the host owns aggregate observation.
+    /// 返回查询结果及其独立摘要，或明确失败。并发调用者不改变其他查询的计数、错误
+    /// 或状态；聚合观察由宿主持有。本入口本身不创建数据库快照或保证底层读取隔离。
+    pub async fn retrieve_read_view(
         &self,
         request: RetrieveRequest,
         index: &dyn VceIndexPort,
         ai: &dyn VceAiPort,
     ) -> Result<RetrieveResult, VceError> {
+        self.retrieve_read_view_with_limits(
+            request,
+            index,
+            ai,
+            VceRetrievalLimits::from_config(&self.config),
+        )
+        .await
+    }
+
+    /// Query one immutable checkpoint with a host-frozen request-local budget.
+    /// 使用宿主固定的请求本地预算查询一个不可变检查点。
+    /// `request` owns query intent, `index` owns the read lease, `ai` is the registered host, and `limits` owns budgets.
+    /// `request` 持有查询意图，`index` 持有读取租约，`ai` 为已注册宿主，`limits` 持有预算。
+    /// Returns independent results without changing this engine, another reader, or an active index writer.
+    /// 返回独立结果，不改变此引擎、其他读取方或活动索引写入者。
+    pub async fn retrieve_read_view_with_limits(
+        &self,
+        request: RetrieveRequest,
+        index: &dyn VceIndexPort,
+        ai: &dyn VceAiPort,
+        limits: VceRetrievalLimits,
+    ) -> Result<RetrieveResult, VceError> {
+        limits.validate()?;
+        // retrieval is a small value copy; no workspace, checkpoint or provider registration is cloned.
+        // retrieval 是小型值拷贝；不克隆工作区、检查点或供应商注册。
+        let mut retrieval = self.retrieval;
+        retrieval.coverage.max_results = limits.max_results;
+        retrieval.coverage.max_chars = limits.max_context_chars;
         validate_retrieve_request(&request)?;
         self.validate_index_binding(index.binding())?;
         let scope = self.resolve_scope(&request.scope)?;
         let capability = self.validate_ai_binding(ai, Some(VceAiPurpose::CodeQueryEmbedding))?;
         let mut query_plan = self.query_planner.plan(&request.information_request)?;
+        // A committed empty index is a successful empty search, not missing initialization.
+        // 已提交空索引代表成功的空检索，不代表缺少初始化。
+        // Skip all model and storage calls when the exact committed membership has no candidates.
+        // 精确已提交成员集合没有候选时，跳过全部模型和存储调用。
+        if scope.is_empty() {
+            let summary = VceRetrievalSummary {
+                request_id: request.request_id.clone(),
+                intent: query_plan.intent,
+                query_count: query_plan.queries.len(),
+                dense_hit_count: 0,
+                path_hit_count: 0,
+                exact_hit_count: 0,
+                candidate_count: 0,
+                selected_hit_count: 0,
+                degraded_features: Vec::new(),
+                degradations: Vec::new(),
+            };
+            return Ok(RetrieveResult {
+                request_id: request.request_id,
+                query_plan,
+                scope,
+                hits: Vec::new(),
+                formatted_context: crate::retrieval::render_selected_context(
+                    &[],
+                    limits.max_context_chars,
+                ),
+                degraded_features: Vec::new(),
+                degradations: Vec::new(),
+                summary,
+            });
+        }
         let mut degraded_features = Vec::new();
         let mut degradations = Vec::new();
 
@@ -1555,7 +1760,7 @@ impl VceEngine {
                     )
                 });
         let mut query_results = stream::iter(query_requests)
-            .buffer_unordered(self.config.query_max_concurrency)
+            .buffer_unordered(limits.query_max_concurrency)
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -1707,7 +1912,7 @@ impl VceEngine {
             .map(|order| Box::new(move |_: &[SearchHit]| order.clone()) as Box<RerankCallback>);
         let reranker_ref: Option<&RerankCallback> =
             reranker.as_ref().map(|callback| callback.as_ref());
-        let hits = self.retrieval.finalize_prepared_candidates(
+        let hits = retrieval.finalize_prepared_candidates(
             prepared_candidates,
             query_plan.intent,
             &query_plan.identifiers,
@@ -1730,7 +1935,10 @@ impl VceEngine {
             request_id: request.request_id,
             query_plan,
             scope,
-            formatted_context: crate::retrieval::render_context(&hits),
+            formatted_context: crate::retrieval::render_selected_context(
+                &hits,
+                limits.max_context_chars,
+            ),
             hits,
             degraded_features,
             degradations,
@@ -1862,8 +2070,15 @@ impl VceEngine {
         let mut record_batches = Vec::<Vec<FileRecord>>::new();
         let mut current_batch = Vec::new();
         let mut current_bytes = 0_u64;
-        for blob_name in blob_names {
-            let record = self.record_for_blob(blob_name)?.clone();
+        // Select borrowed records in the existing Blob order before forming bounded source batches.
+        // 在形成有界源码批次前，按既有块顺序选择借用记录。
+        let selected_records =
+            staging_records(self.workspace.records.values(), blob_names, context.control)?;
+        for record in selected_records {
+            context.control.check()?;
+            // The batch retains the same owned record as before; selection never clones source content.
+            // 批次仍保留与此前相同的自有记录；选择阶段不克隆源码正文。
+            let record = record.clone();
             // Over-limit records publish metadata only and therefore consume no source-read or
             // Embedding staging budget. They still consume one Blob slot in the bounded batch.
             // 超限记录只发布元数据，因此不占用源码读取或向量暂存字节预算，但仍占用有界批次中的一个 Blob 槽位。
@@ -1896,11 +2111,21 @@ impl VceEngine {
         }
         let mut staged = BTreeSet::new();
         for (batch_index, records) in record_batches.into_iter().enumerate() {
+            context.control.check()?;
             let loaded = self
                 .read_sources_for_records(context.refresh_id, batch_index, &records, context.source)
                 .await?;
             let mut blobs = Vec::with_capacity(records.len());
             for record in &records {
+                context.control.check()?;
+                context.control.observe(VceRefreshProgress {
+                    phase: VceRefreshPhase::Chunking,
+                    operation_id: format!("{}:prepare:{}", context.refresh_id, record.path),
+                    unit: VceRefreshUnit::Files,
+                    completed: 0,
+                    total: Some(1),
+                    current_path: Some(record.path.clone()),
+                });
                 if record.size > self.config.indexing.max_file_bytes {
                     blobs.push(self.prepare_over_limit_blob(record, context.generation)?);
                     continue;
@@ -1921,18 +2146,20 @@ impl VceEngine {
                 })?;
                 let blob_request_id = format!("{}:blob:{blob_name}", context.refresh_id);
                 blobs.push(
-                    self.prepare_blob(
-                        record,
-                        content,
-                        &blob_request_id,
-                        context.generation,
-                        context.ai,
-                        context.capability,
-                    )
-                    .await?,
+                    self.prepare_blob(record, content, &blob_request_id, &context)
+                        .await?,
                 );
             }
             let operation_id = format!("{}:stage:{batch_index}", context.refresh_id);
+            context.control.check()?;
+            context.control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Writing,
+                operation_id: context.refresh_id.to_owned(),
+                unit: VceRefreshUnit::Blobs,
+                completed: staged.len() as u64,
+                total: Some(blob_names.len() as u64),
+                current_path: None,
+            });
             let request = IndexStageBatch {
                 operation_id: operation_id.clone(),
                 refresh_id: context.refresh_id.to_owned(),
@@ -1942,6 +2169,14 @@ impl VceEngine {
             let receipt = context.index.stage(request.clone()).await?;
             validate_stage_receipt(&request, &receipt)?;
             staged.extend(receipt.staged_blob_names);
+            context.control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Writing,
+                operation_id: context.refresh_id.to_owned(),
+                unit: VceRefreshUnit::Blobs,
+                completed: staged.len() as u64,
+                total: Some(blob_names.len() as u64),
+                current_path: None,
+            });
         }
         Ok(staged)
     }
@@ -2027,15 +2262,35 @@ impl VceEngine {
         })
     }
 
+    /// Prepare one exact source and its content/path vectors under a shared refresh control.
+    /// 在共享刷新控制下准备一个精确源码及其内容／路径向量。
+    ///
+    /// `record` and `content` are verified source facts; `request_id` identifies this blob's operations.
+    /// `context` retains the admitted generation, frozen host inference, cancellation and progress.
+    /// Returns a validated indexed blob or an explicit error without publishing a checkpoint.
+    /// `record` 与 `content` 是已验证源码事实；`request_id` 标识此块的操作。
+    /// `context` 保留已准入代次、冻结宿主推理、取消及进度。
+    /// 返回已校验索引块对象或明确错误，不发布检查点。
     async fn prepare_blob(
         &self,
         record: &FileRecord,
         content: &str,
         request_id: &str,
-        generation: u64,
-        ai: &dyn VceAiPort,
-        capability: &VceAiCapabilitySnapshot,
+        context: &RefreshStageContext<'_>,
     ) -> Result<IndexedBlob, VceError> {
+        // Preserve one admitted staging context across content and path embedding without copying dependencies.
+        // 在内容及路径向量之间保留同一准入暂存上下文，不复制依赖。
+        let generation = context.generation;
+        // ai is the exact host port frozen for the refresh.
+        // ai 为此刷新冻结的精确宿主端口。
+        let ai = context.ai;
+        // capability must remain the same snapshot for every segment of this blob.
+        // capability 对此块的每个片段必须保持同一快照。
+        let capability = context.capability;
+        // control retains the parent job's cancellation and observations.
+        // control 保留父作业的取消与观察。
+        let control = context.control;
+        control.check()?;
         let expected_blob = record.blob_name.as_deref().ok_or_else(|| {
             VceError::InvalidRequest(format!(
                 "present source `{}` has no Blob identity",
@@ -2086,6 +2341,15 @@ impl VceEngine {
                 let prepared = self
                     .indexing
                     .prepare_with_chunks(pending, analysis.chunks)?;
+                control.check()?;
+                control.observe(VceRefreshProgress {
+                    phase: VceRefreshPhase::Chunking,
+                    operation_id: format!("{request_id}:chunking"),
+                    unit: VceRefreshUnit::Files,
+                    completed: 1,
+                    total: Some(1),
+                    current_path: Some(record.path.clone()),
+                });
                 let path_document = prepared.path_document.clone();
                 let content_segment_vectors = match prepared.embedding_plan.as_ref() {
                     Some(plan) => {
@@ -2095,6 +2359,7 @@ impl VceEngine {
                             VceAiPurpose::CodeDocumentEmbedding,
                             ai,
                             capability,
+                            Some(control),
                         )
                         .await?
                     }
@@ -2126,6 +2391,7 @@ impl VceEngine {
                                     VceAiPurpose::CodePathEmbedding,
                                     ai,
                                     capability,
+                                    Some(control),
                                 )
                                 .await?;
                             let mut vectors = plan.aggregate(segments)?;
@@ -2142,6 +2408,7 @@ impl VceEngine {
                     None => Ok(None),
                 };
                 let (path_embedding, path_status) = match path_result {
+                    Err(VceError::RefreshCancelled) => return Err(VceError::RefreshCancelled),
                     Ok(Some(vector)) => (Some(vector), AuxiliaryIndexStatus::Ready),
                     Ok(None) => (None, AuxiliaryIndexStatus::NotApplicable),
                     Err(error) => (
@@ -2185,6 +2452,9 @@ impl VceEngine {
         purpose: VceAiPurpose,
         ai: &dyn VceAiPort,
         capability: &VceAiCapabilitySnapshot,
+        // Query calls have no indexing control; refresh calls share their exact job control.
+        // 查询调用没有索引控制；刷新调用共享其精确作业控制。
+        control: Option<&VceRefreshControl>,
     ) -> Result<Vec<SegmentVector>, VceError> {
         if !capability.registered || !capability.embedding_available {
             return Err(VceError::AiCapabilityUnavailable { purpose });
@@ -2197,6 +2467,9 @@ impl VceEngine {
             .map(|(batch_index, batch)| {
                 let operation_id = format!("{request_id}:{}:{batch_index}", purpose.as_str());
                 async move {
+                    if let Some(control) = control {
+                        control.check()?;
+                    }
                     let response = ai
                         .embed(VceEmbeddingRequest {
                             context: VceAiRequestContext::new(
@@ -2207,23 +2480,49 @@ impl VceEngine {
                             batch: batch.clone(),
                         })
                         .await;
-                    (batch_index, operation_id, batch, response)
+                    Ok::<_, VceError>((batch_index, operation_id, batch, response))
                 }
             });
-        let mut responses = stream::iter(requests)
-            .buffer_unordered(self.config.embedding_max_concurrency)
-            .collect::<Vec<_>>()
-            .await;
-        responses.sort_by_key(|(batch_index, _, _, _)| *batch_index);
-
-        let mut vectors = Vec::new();
-        for (_, operation_id, batch, response) in responses {
+        // responses yields actual completions; progress cannot count merely scheduled requests.
+        // responses 产生实际完成结果；进度不能统计仅排队的请求。
+        let mut responses =
+            stream::iter(requests).buffer_unordered(self.config.embedding_max_concurrency);
+        // completed_batches preserves original order after validating out-of-order responses.
+        // completed_batches 在校验乱序响应后保留原始顺序。
+        let mut completed_batches = Vec::new();
+        if let Some(control) = control {
+            control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Embedding,
+                operation_id: format!("{request_id}:{}", purpose.as_str()),
+                unit: VceRefreshUnit::Batches,
+                completed: 0,
+                total: Some(plan.batches.len() as u64),
+                current_path: None,
+            });
+        }
+        while let Some(response) = responses.next().await {
+            let (batch_index, operation_id, batch, response) = response?;
             let response = response?;
             let response_vectors =
                 validate_embedding_response(self, &operation_id, response, &batch)?;
-            vectors.extend(response_vectors);
+            completed_batches.push((batch_index, response_vectors));
+            if let Some(control) = control {
+                control.check()?;
+                control.observe(VceRefreshProgress {
+                    phase: VceRefreshPhase::Embedding,
+                    operation_id: format!("{request_id}:{}", purpose.as_str()),
+                    unit: VceRefreshUnit::Batches,
+                    completed: completed_batches.len() as u64,
+                    total: Some(plan.batches.len() as u64),
+                    current_path: None,
+                });
+            }
         }
-        Ok(vectors)
+        completed_batches.sort_by_key(|(batch_index, _)| *batch_index);
+        Ok(completed_batches
+            .into_iter()
+            .flat_map(|(_, vectors)| vectors)
+            .collect())
     }
 
     /// Create and execute one logical query Embedding plan.
@@ -2251,27 +2550,13 @@ impl VceEngine {
         )?;
         let embedding_request_id = format!("{request_id}:query:{query_index}");
         let segments = self
-            .execute_embedding_plan(&plan, &embedding_request_id, purpose, ai, capability)
+            .execute_embedding_plan(&plan, &embedding_request_id, purpose, ai, capability, None)
             .await?;
         let mut vectors = plan.aggregate(segments)?;
         vectors.pop().ok_or_else(|| VceError::InvalidHostResponse {
             operation: VcePortOperation::Embedding,
             reason: "query Embedding returned no logical vector".to_owned(),
         })
-    }
-
-    /// Return the exact workspace record owning one Blob identity.
-    /// 返回拥有指定 Blob 身份的精确工作区记录。
-    fn record_for_blob(&self, blob_name: &str) -> Result<&FileRecord, VceError> {
-        self.workspace
-            .records
-            .values()
-            .find(|record| record.blob_name.as_deref() == Some(blob_name))
-            .ok_or_else(|| {
-                VceError::InvalidRequest(format!(
-                    "workspace has no present record for added Blob `{blob_name}`"
-                ))
-            })
     }
 
     /// Build the next checkpoint from the current present workspace records.
@@ -2306,7 +2591,9 @@ impl VceEngine {
             RetrievalScope::CurrentCheckpoint => match self.current_scope() {
                 ScopeResolution::Members(members) => members,
                 ScopeResolution::MissingCheckpoint => return Err(VceError::MissingCheckpoint),
-                ScopeResolution::Empty => return Err(VceError::EmptyScope),
+                // This branch already proved a committed checkpoint; explicit empty scopes still fail below.
+                // 此分支已证明存在已提交检查点；明确传入的空范围仍在下方失败。
+                ScopeResolution::Empty => return Ok(BTreeSet::new()),
             },
             RetrievalScope::Blobs(members) => members.clone(),
         };
@@ -2439,6 +2726,50 @@ impl VceEngine {
             last_error: self.last_error.clone(),
         }
     }
+}
+
+/// Resolve exact staging records without taking ownership of their source content.
+/// 解析精确暂存记录，不取得其源码正文所有权。
+/// `records` comes from the ownership-validated workspace; `blob_names` is the exact requested set.
+/// `records` 来自归属已校验的工作区；`blob_names` 是精确请求集合。
+/// `control` retains this refresh's cancellation; returns borrowed records in Blob order or an explicit error.
+/// `control` 保留本次刷新取消；按块顺序返回借用记录，或返回明确错误。
+fn staging_records<'a>(
+    records: impl Iterator<Item = &'a FileRecord>,
+    blob_names: &BTreeSet<String>,
+    control: &VceRefreshControl,
+) -> Result<Vec<&'a FileRecord>, VceError> {
+    control.check()?;
+    if blob_names.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Workspace reconciliation already proved unique ownership; retain only requested record references.
+    // 工作区协调已证明唯一归属；仅保留请求记录的引用。
+    let mut selected = BTreeMap::new();
+    for record in records {
+        control.check()?;
+        if let Some(blob_name) = record.blob_name.as_deref()
+            && blob_names.contains(blob_name)
+        {
+            selected.insert(blob_name, record);
+            if selected.len() == blob_names.len() {
+                break;
+            }
+        }
+    }
+    // Requested Blob order preserves batch and child-operation identities without another workspace scan.
+    // 请求块顺序保留批次和子操作身份，不再次扫描工作区。
+    blob_names
+        .iter()
+        .map(|blob_name| {
+            control.check()?;
+            selected.get(blob_name.as_str()).copied().ok_or_else(|| {
+                VceError::InvalidRequest(format!(
+                    "workspace has no present record for added Blob `{blob_name}`"
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Validate persisted namespace identity against the configuration selected by the host.
@@ -3045,7 +3376,12 @@ fn validate_embedding_response(
 /// Validate returned vector-space compatibility against the engine namespace.
 /// 校验返回向量空间与引擎命名空间的兼容性。
 fn validate_embedding_space(engine: &VceEngine, space: &EmbeddingSpace) -> Result<(), VceError> {
-    let expected = &engine.config.embedding_space;
+    // A validated grant changes only the expected live producer, never the stored-state identity.
+    // 已验证授权仅改变预期实时生产来源，绝不改变已存状态身份。
+    let expected = match &engine.config.embedding_execution {
+        Some(grant) => grant.execution(),
+        None => &engine.config.embedding_space,
+    };
     if !space.is_well_formed()
         || space.vector_space_id != expected.vector_space_id
         || space.dimension != expected.dimension
@@ -3295,6 +3631,7 @@ mod tests {
         CommitReceipt, FindMissingResponse, VceAiBinding, VceIndexCounts, VceIndexIntegrity,
         VceIndexJobSummary, VceIndexStoreStatus, VceRerankResponse, VceSearchResponse,
     };
+    use crate::workspace::FileObservation;
     use futures::executor::block_on;
     use std::sync::{Arc, Mutex};
 
@@ -3897,6 +4234,188 @@ mod tests {
         )
     }
 
+    /// Build a valid multi-file workspace for staging-selection tests without model or storage access.
+    /// 为暂存选择测试构建有效多文件工作区，不访问模型或存储。
+    /// No parameters; returns an engine whose unique Blob ownership was checked by normal observation.
+    /// 无参数；返回通过普通观察校验唯一块归属的引擎。
+    fn staging_selection_engine() -> VceEngine {
+        // Each observation exercises the real path and Blob identity rules.
+        // 每次观察执行真实路径及块身份规则。
+        let mut engine = test_engine();
+        // Distinct paths make a full selection expose repeated scans of the same record table.
+        // 不同路径使完整选择能够暴露对同一记录表的重复扫描。
+        for index in 0..32 {
+            engine
+                .observe(format!("src/module_{index:02}.rs"), "fn entry() {}")
+                .expect("valid staging source");
+        }
+        engine
+    }
+
+    /// Require one record traversal for full staging while preserving exact Blob order and borrowed ownership.
+    /// 要求全量暂存只遍历一次记录，同时保留精确块顺序及借用归属。
+    /// No parameters or return value; visit counts detect quadratic selection without timing assumptions.
+    /// 无参数及返回值；访问计数检测平方级选择，不依赖计时假设。
+    #[test]
+    fn staging_record_selection_visits_each_record_once() {
+        // The engine supplies the same validated record iterator used by the production staging entry.
+        // 引擎提供与生产暂存入口相同的已校验记录迭代器。
+        let engine = staging_selection_engine();
+        // Only present records' actual identities are admitted, without invented scope.
+        // 仅准入存在记录的实际身份，不虚构范围。
+        let blob_names = engine
+            .workspace
+            .records
+            .values()
+            .map(|record| record.blob_name.clone().expect("present Blob"))
+            .collect::<BTreeSet<_>>();
+        // A cloned iterator shares this counter, so restarting traversal cannot hide duplicate visits.
+        // 克隆迭代器共享此计数，重启遍历不能隐藏重复访问。
+        let visits = std::cell::Cell::new(0_usize);
+        // Selection borrows source records and must never widen the requested set.
+        // 选择借用源码记录，绝不能扩大请求集合。
+        let selected = staging_records(
+            engine
+                .workspace
+                .records
+                .values()
+                .inspect(|_| visits.set(visits.get() + 1)),
+            &blob_names,
+            &VceRefreshControl::default(),
+        )
+        .expect("select all staging records");
+        assert_eq!(visits.get(), engine.workspace.records.len());
+        assert_eq!(
+            selected
+                .iter()
+                .map(|record| record.blob_name.as_ref().unwrap())
+                .collect::<Vec<_>>(),
+            blob_names.iter().collect::<Vec<_>>()
+        );
+        assert!(
+            selected
+                .iter()
+                .all(|record| std::ptr::eq(*record, &engine.workspace.records[&record.path]))
+        );
+    }
+
+    /// Preserve sparse selection and missing-identity errors while empty work performs no traversal.
+    /// 保留稀疏选择及缺失身份错误，同时空工作不执行遍历。
+    /// No parameters or return value; assertions use only real workspace identities and a proven absent identity.
+    /// 无参数及返回值；断言仅使用真实工作区身份及已证明缺失的身份。
+    #[test]
+    fn staging_record_selection_preserves_exact_scope_and_missing_error() {
+        // The source workspace contains more records than this incremental selection requests.
+        // 来源工作区包含的记录多于本次增量选择请求。
+        let engine = staging_selection_engine();
+        // Every seventh path forms a deterministic sparse selection.
+        // 每隔七个路径形成确定性的稀疏选择。
+        let blob_names = engine
+            .workspace
+            .records
+            .values()
+            .step_by(7)
+            .map(|record| record.blob_name.clone().expect("present Blob"))
+            .collect::<BTreeSet<_>>();
+        // The control is reusable here because selection does not publish or settle a refresh.
+        // 选择不发布或结算刷新，因此此处可以复用控制器。
+        let control = VceRefreshControl::default();
+        // Returned references must retain the exact admitted order and size.
+        // 返回引用必须保留精确准入顺序及数量。
+        let selected = staging_records(engine.workspace.records.values(), &blob_names, &control)
+            .expect("sparse staging selection");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|record| record.blob_name.as_ref().unwrap())
+                .collect::<Vec<_>>(),
+            blob_names.iter().collect::<Vec<_>>()
+        );
+        assert!(
+            staging_records(
+                engine
+                    .workspace
+                    .records
+                    .values()
+                    .inspect(|_| panic!("empty scope must not scan")),
+                &BTreeSet::new(),
+                &control,
+            )
+            .expect("empty selection")
+            .is_empty()
+        );
+        // Prove this identity is absent before checking the exact existing missing-record diagnostic.
+        // 检查精确既有缺失记录诊断前，先证明此身份不存在。
+        let absent = crate::identity::content_hash("absent staging record fixture");
+        assert!(
+            engine
+                .workspace
+                .records
+                .values()
+                .all(|record| record.blob_name.as_ref() != Some(&absent))
+        );
+        assert!(matches!(staging_records(engine.workspace.records.values(),
+            &BTreeSet::from([absent.clone()]), &control),
+            Err(VceError::InvalidRequest(message))
+                if message == format!("workspace has no present record for added Blob `{absent}`")));
+    }
+
+    /// Honor cancellation both before traversal and inside a sparse scan without returning partial selection.
+    /// 在遍历前及稀疏扫描中遵守取消，不返回局部选择结果。
+    /// No parameters or return value; iterator observation provides a deterministic in-scan cancellation point.
+    /// 无参数及返回值；迭代器观察提供确定性的扫描中取消点。
+    #[test]
+    fn staging_record_selection_cancels_before_and_during_scan() {
+        // Request the last path so earlier records must be examined before finding the requested identity.
+        // 请求最后一个路径，使查找请求身份之前必须检查更早的记录。
+        let engine = staging_selection_engine();
+        // The target comes from the authoritative path-ordered record table.
+        // 目标来自权威的路径有序记录表。
+        let blob_names = BTreeSet::from([engine
+            .workspace
+            .records
+            .values()
+            .next_back()
+            .expect("last source")
+            .blob_name
+            .clone()
+            .expect("present Blob")]);
+        // Pre-cancelled work may not read even one source record.
+        // 预先取消的工作不能读取哪怕一条源码记录。
+        let cancelled = VceRefreshControl::default();
+        assert_eq!(cancelled.cancel(), crate::VceCancelOutcome::Accepted);
+        assert!(matches!(
+            staging_records(
+                engine
+                    .workspace
+                    .records
+                    .values()
+                    .inspect(|_| panic!("cancelled selection must not scan")),
+                &blob_names,
+                &cancelled,
+            ),
+            Err(VceError::RefreshCancelled)
+        ));
+        // This independent job cancels immediately after the first record reaches selection.
+        // 此独立作业在第一条记录到达选择阶段后立即取消。
+        let during_scan = VceRefreshControl::default();
+        // Count exactly how far the input advanced before cancellation was returned.
+        // 精确统计返回取消之前输入推进了多远。
+        let visits = std::cell::Cell::new(0_usize);
+        assert!(matches!(
+            staging_records(
+                engine.workspace.records.values().inspect(|_| {
+                    visits.set(visits.get() + 1);
+                    during_scan.cancel();
+                }),
+                &blob_names,
+                &during_scan,
+            ),
+            Err(VceError::RefreshCancelled)
+        ));
+        assert_eq!(visits.get(), 1);
+    }
+
     /// Verify invalid Embedding planning budgets fail before the engine can call a host.
     /// 验证非法向量规划预算会在引擎调用宿主前失败。
     #[test]
@@ -3940,6 +4459,263 @@ mod tests {
         assert_eq!(committed.len(), 1);
         assert_eq!(committed[0].state_snapshot, engine.state_snapshot());
         assert_eq!(engine.status().state, VceEngineState::Ready);
+    }
+
+    /// Verify cancellation after acknowledged staging aborts unpublished work and never commits.
+    /// 验证暂存确认后的取消中止未发布工作且绝不提交。
+    ///
+    /// Takes no parameters and returns nothing; the observer deterministically cancels at a real phase.
+    /// 无参数、无返回值；观察器在真实阶段确定性取消。
+    #[test]
+    fn observed_refresh_cancels_after_staging_without_publication() {
+        // engine and host are isolated deterministic ports; no external model is called.
+        // engine 与 host 为隔离确定性端口；不调用外部模型。
+        let mut engine = test_engine();
+        let (ai, index, source, commits) = fake_host();
+        // cancellation shares state without retaining the observer, avoiding an ownership cycle.
+        // cancellation 共享状态但不持有观察器，避免归属循环。
+        let cancellation = VceRefreshControl::default();
+        // requested is the observer's exact cancellation handle.
+        // requested 是观察器的精确取消句柄。
+        let requested = cancellation.clone();
+        // control cancels only after a stage receipt has been validated.
+        // control 仅在暂存回执校验后取消。
+        let control = cancellation.with_observer(Arc::new(move |progress: VceRefreshProgress| {
+            if progress.phase == VceRefreshPhase::Writing && progress.completed > 0 {
+                assert_eq!(requested.cancel(), crate::VceCancelOutcome::Accepted);
+            }
+        }));
+        // result must classify cancellation separately from malformed provider results.
+        // result 必须将取消与错误供应商结果分开分类。
+        let result = block_on(engine.refresh_observed(
+            RefreshRequest::full(
+                "cancel-staged",
+                RefreshReason::Initial,
+                vec![FileObservation::present(
+                    "src/lib.rs",
+                    "fn main() {}",
+                    Some(1),
+                    crate::FileSource::Filesystem,
+                )],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+            &control,
+        ));
+        assert!(matches!(result, Err(VceError::RefreshCancelled)));
+        assert!(commits.lock().unwrap().is_empty());
+        assert_eq!(*index.abort_count.lock().unwrap(), 1);
+        assert!(engine.status().checkpoint_version.is_none());
+    }
+
+    /// Verify cancellation at both chunking boundaries prevents embedding, staging, and publication.
+    /// 验证在切块前后两个边界取消会阻止向量调用、暂存与发布。
+    /// Takes no parameters and returns nothing; each boundary uses a fresh engine and isolated ports.
+    /// 无参数、无返回值；每个边界使用全新引擎和隔离端口。
+    #[test]
+    fn observed_refresh_cancels_at_both_chunking_boundaries_without_embedding() {
+        // The real pipeline emits zero before preparing a file and one after preparing its chunks.
+        // 真实流水线在准备文件前报告零，在准备好切块后报告一。
+        for completed_boundary in [0_u64, 1_u64] {
+            // Each engine has no published checkpoint that could hide a cancelled initial build.
+            // 每个引擎均无已发布检查点，避免掩盖被取消的初始化构建。
+            let mut engine = test_engine();
+            // All ports record real calls made by this in-memory pipeline without external requests.
+            // 全部端口记录此内存流水线实际发出的调用，不发送外部请求。
+            let (ai, index, source, commits) = fake_host();
+            // Record the matched event so a missing chunking callback cannot pass accidentally.
+            // 记录匹配事件，避免缺失切块回调时测试意外通过。
+            let matched_events = Arc::new(Mutex::new(0_usize));
+            // The observer owns only a clone of the event counter and the observer-free control.
+            // 观察器仅持有事件计数器副本以及不含观察器的控制句柄。
+            let event_counter = Arc::clone(&matched_events);
+            // Cancellation state is shared with the exact refresh being exercised.
+            // 取消状态与被测试的精确刷新共享。
+            let cancellation = VceRefreshControl::default();
+            // The observer-free handle avoids an ownership cycle through its own callback.
+            // 不含观察器的句柄避免通过自身回调形成归属循环。
+            let requested = cancellation.clone();
+            // Cancel only at the requested real file boundary, checking its progress identity.
+            // 仅在指定的真实文件边界取消，同时核对进度身份。
+            let control =
+                cancellation.with_observer(Arc::new(move |progress: VceRefreshProgress| {
+                    if progress.phase == VceRefreshPhase::Chunking
+                        && progress.completed == completed_boundary
+                    {
+                        assert_eq!(progress.total, Some(1));
+                        assert_eq!(progress.current_path.as_deref(), Some("src/lib.rs"));
+                        *event_counter.lock().unwrap() += 1;
+                        assert_eq!(requested.cancel(), crate::VceCancelOutcome::Accepted);
+                    }
+                }));
+            // The nonempty source must normally require embedding after chunk preparation.
+            // 非空源码在正常完成切块准备后必须需要向量计算。
+            let result = block_on(engine.refresh_observed(
+                RefreshRequest::full(
+                    format!("cancel-chunking-{completed_boundary}"),
+                    RefreshReason::Initial,
+                    vec![FileObservation::present(
+                        "src/lib.rs",
+                        "fn main() {}",
+                        Some(1),
+                        crate::FileSource::Filesystem,
+                    )],
+                    None,
+                ),
+                &index,
+                &ai,
+                &source,
+                &control,
+            ));
+            assert_eq!(*matched_events.lock().unwrap(), 1);
+            assert!(matches!(result, Err(VceError::RefreshCancelled)));
+            assert!(ai.embedding_operation_ids.lock().unwrap().is_empty());
+            assert_eq!(*index.stage_call_count.lock().unwrap(), 0);
+            assert_eq!(*index.abort_count.lock().unwrap(), 1);
+            assert!(commits.lock().unwrap().is_empty());
+            assert!(engine.status().checkpoint_version.is_none());
+        }
+    }
+
+    /// Verify real embedding counters and cancellation refusal after the commit boundary wins.
+    /// 验证真实向量计数以及提交边界获胜后的取消拒绝。
+    ///
+    /// Takes no parameters and returns nothing; all observations are collected from real fake-port receipts.
+    /// 无参数、无返回值；全部观察来自模拟端口的实际回执。
+    #[test]
+    fn observed_refresh_reports_validated_progress_and_protects_commit() {
+        // engine and host execute an actual in-memory refresh pipeline.
+        // engine 与 host 执行实际内存刷新流水线。
+        let mut engine = test_engine();
+        let (ai, index, source, commits) = fake_host();
+        // events retains progress for assertions after the task has finished.
+        // events 保留进度以供任务结束后断言。
+        let events = Arc::new(Mutex::new(Vec::new()));
+        // sink and cancellation belong only to this test job.
+        // sink 与 cancellation 仅属于此测试作业。
+        let sink = Arc::clone(&events);
+        let cancellation = VceRefreshControl::default();
+        let requested = cancellation.clone();
+        let control = cancellation.with_observer(Arc::new(move |progress: VceRefreshProgress| {
+            if progress.phase == VceRefreshPhase::Committing {
+                assert_eq!(requested.cancel(), crate::VceCancelOutcome::Committing);
+            }
+            if progress.phase == VceRefreshPhase::Complete {
+                assert_eq!(requested.cancel(), crate::VceCancelOutcome::Finished);
+            }
+            sink.lock().unwrap().push(progress);
+        }));
+        block_on(engine.refresh_observed(
+            RefreshRequest::full(
+                "observe-success",
+                RefreshReason::Initial,
+                vec![FileObservation::present(
+                    "src/lib.rs",
+                    "fn main() {}",
+                    Some(1),
+                    crate::FileSource::Filesystem,
+                )],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+            &control,
+        ))
+        .expect("observed refresh");
+        assert_eq!(commits.lock().unwrap().len(), 1);
+        // observed snapshots must have honest denominators and acknowledged completion counters.
+        // observed 快照必须具有真实分母与已确认完成计数。
+        let observed = events.lock().unwrap();
+        assert!(
+            observed
+                .iter()
+                .any(|progress| progress.phase == VceRefreshPhase::Embedding
+                    && progress.completed > 0
+                    && progress.total == Some(progress.completed))
+        );
+        assert!(observed.iter().all(|progress| {
+            progress
+                .total
+                .is_none_or(|total| progress.completed <= total)
+        }));
+        assert_eq!(observed.last().unwrap().phase, VceRefreshPhase::Complete);
+    }
+
+    /// Verify no-change refresh keeps its checkpoint, honors cancellation, and reports settled success.
+    /// 验证无变化刷新保留检查点、遵守取消，并报告已结算成功。
+    /// Takes no parameters and returns nothing; uses isolated ports without external model requests.
+    /// 无参数、无返回值；使用隔离端口，不请求外部模型。
+    #[test]
+    fn no_change_refresh_preserves_checkpoint_and_settles_control() {
+        // engine and host initialize one empty checkpoint without embedding work.
+        // engine 与 host 初始化一个空检查点，不产生向量工作。
+        let mut engine = test_engine();
+        let (ai, index, source, commits) = fake_host();
+        block_on(engine.refresh(
+            RefreshRequest::full("empty-initial", RefreshReason::Initial, Vec::new(), None),
+            &index,
+            &ai,
+            &source,
+        ))
+        .expect("initial empty checkpoint");
+        // checkpoint is the immutable identity that both subsequent attempts must preserve.
+        // checkpoint 是后续两次尝试都必须保留的不可变身份。
+        let checkpoint = engine.status().checkpoint_version;
+
+        // cancellation is accepted before reconciliation and must prevent successful completion.
+        // cancellation 在核对前受理，必须阻止成功完成。
+        let cancellation = VceRefreshControl::default();
+        let requested = cancellation.clone();
+        let cancelled =
+            cancellation.with_observer(Arc::new(move |progress: VceRefreshProgress| {
+                if progress.phase == VceRefreshPhase::Reconciling {
+                    assert_eq!(requested.cancel(), crate::VceCancelOutcome::Accepted);
+                }
+            }));
+        assert!(matches!(
+            block_on(engine.refresh_observed(
+                RefreshRequest::full("empty-cancelled", RefreshReason::Manual, Vec::new(), None),
+                &index,
+                &ai,
+                &source,
+                &cancelled,
+            )),
+            Err(VceError::RefreshCancelled)
+        ));
+        assert_eq!(engine.status().checkpoint_version, checkpoint);
+
+        // success must already be terminal when its complete event becomes observable.
+        // success 在完成事件可观察时必须已经处于终态。
+        let success = VceRefreshControl::default();
+        let late_cancel = success.clone();
+        let control = success.with_observer(Arc::new(move |progress: VceRefreshProgress| {
+            if progress.phase == VceRefreshPhase::Complete {
+                assert_eq!(late_cancel.cancel(), crate::VceCancelOutcome::Finished);
+            }
+        }));
+        // result confirms no extra publication or model work is introduced by the atomic settlement.
+        // result 确认原子结算没有引入额外发布或模型工作。
+        let result = block_on(engine.refresh_observed(
+            RefreshRequest::full("empty-success", RefreshReason::Manual, Vec::new(), None),
+            &index,
+            &ai,
+            &source,
+            &control,
+        ))
+        .expect("successful no-change refresh");
+        assert!(result.commit_receipt.is_none());
+        assert!(result.indexed_blobs.is_empty());
+        assert_eq!(result.checkpoint_version, checkpoint);
+        assert_eq!(commits.lock().unwrap().len(), 1);
+        assert!(ai.embedding_operation_ids.lock().unwrap().is_empty());
+        assert_eq!(engine.status().state, VceEngineState::Ready);
+        engine
+            .state_snapshot()
+            .validate()
+            .expect("valid settled snapshot");
     }
 
     /// Measure a deterministic offline baseline without asserting machine-specific latency.
@@ -4179,6 +4955,95 @@ mod tests {
         assert_eq!(rebuilt.checkpoint_version, Some(2));
         assert_eq!(*stage_call_count.lock().unwrap(), 2);
         assert_eq!(commits.lock().unwrap().len(), 2);
+        // A permissive fake commit must not hide an invalid snapshot rejected by real storage.
+        // 宽松的模拟提交不能掩盖真实存储会拒绝的无效快照。
+        let state = engine.state_snapshot();
+        state
+            .validate()
+            .expect("unchanged full rebuild has valid state");
+        assert_eq!(
+            state
+                .last_refresh
+                .as_ref()
+                .expect("rebuild summary")
+                .added_blob_count,
+            0
+        );
+        assert_eq!(
+            VceStateSnapshot::from_json(&state.to_json().expect("encode rebuilt state"))
+                .expect("decode rebuilt state"),
+            state
+        );
+        for commit in commits.lock().unwrap().iter() {
+            commit
+                .state_snapshot
+                .validate()
+                .expect("prospective committed state validates");
+        }
+        // Bounds still reject fabricated work, and a path-only refresh cannot masquerade as a rebuild.
+        // 边界仍拒绝虚构工作量，且仅路径刷新不能冒充重建。
+        let mut excessive = state.clone();
+        excessive
+            .last_refresh
+            .as_mut()
+            .expect("rebuild summary")
+            .indexed_blob_count = 2;
+        assert!(excessive.validate().is_err());
+        let mut invalid_path = state;
+        invalid_path
+            .last_refresh
+            .as_mut()
+            .expect("rebuild summary")
+            .mode = RefreshMode::Paths;
+        assert!(invalid_path.validate().is_err());
+    }
+
+    /// Verify an empty committed index remains queryable without model calls or fabricated scope.
+    /// 验证已提交空索引仍可查询，不产生模型调用或虚构范围。
+    ///
+    /// Takes no parameters and returns nothing; distinguishes initialization from explicit invalid scope.
+    /// 无参数、无返回值；区分初始化与明确无效范围。
+    #[test]
+    fn initialized_empty_checkpoint_returns_without_model_calls() {
+        // The same ports serve initialization and retrieval so unexpected model activity is observable.
+        // 同一组端口服务初始化与检索，使非预期模型活动可被观察。
+        let mut engine = test_engine();
+        let (ai, index, source, _) = fake_host();
+        assert!(matches!(
+            block_on(engine.retrieve_read_view(
+                RetrieveRequest::current_checkpoint("before-initialization", "find code"),
+                &index,
+                &ai,
+            )),
+            Err(VceError::MissingCheckpoint)
+        ));
+        block_on(engine.refresh(
+            RefreshRequest::full("initialize-empty", RefreshReason::Initial, Vec::new(), None),
+            &index,
+            &ai,
+            &source,
+        ))
+        .expect("initialize empty checkpoint");
+        let result = block_on(engine.retrieve(
+            RetrieveRequest::current_checkpoint("query-empty", "find code"),
+            &index,
+            &ai,
+        ))
+        .expect("empty committed search succeeds");
+        assert!(result.hits.is_empty() && result.scope.is_empty());
+        assert!(ai.embedding_operation_ids.lock().unwrap().is_empty());
+        assert_eq!(*ai.rewrite_call_count.lock().unwrap(), 0);
+        assert!(ai.rerank_candidate_counts.lock().unwrap().is_empty());
+        engine
+            .state_snapshot()
+            .validate()
+            .expect("empty search statistics remain valid");
+        let mut invalid = RetrieveRequest::current_checkpoint("explicit-empty", "find code");
+        invalid.scope = RetrievalScope::Blobs(BTreeSet::new());
+        assert!(matches!(
+            block_on(engine.retrieve_read_view(invalid, &index, &ai)),
+            Err(VceError::EmptyScope)
+        ));
     }
 
     /// Verify editor overlay changes are visible as pending work before publication.
@@ -4245,6 +5110,164 @@ mod tests {
         assert!(!result.hits.is_empty());
         assert!(result.formatted_context.contains("Path:"));
         assert_eq!(engine.statistics().retrieval_successes, 1);
+    }
+
+    /// Verify two immutable query entries preserve the published engine and keep distinct summaries.
+    /// 验证两个不可变查询入口保留已发布引擎，并保持独立摘要。
+    ///
+    /// Uses isolated port substitutes. Returns no value; storage snapshot isolation is tested by the host.
+    /// 使用隔离端口替身。无返回值；存储快照隔离由宿主测试。
+    #[test]
+    fn immutable_read_views_preserve_published_state_and_query_identity() {
+        // engine is populated once before being shared immutably with both queries.
+        // engine 在被两个查询不可变共享之前仅填充一次。
+        let mut engine = test_engine();
+        // ai/index/source are existing deterministic ports, not a replacement pipeline.
+        // ai/index/source 为既有确定性端口，而非替代流水线。
+        let (ai, index, source, _) = fake_host();
+        block_on(engine.refresh(
+            RefreshRequest::full(
+                "read-view-initial",
+                RefreshReason::Initial,
+                vec![crate::workspace::FileObservation::present(
+                    "src/lib.rs",
+                    "fn main() {}",
+                    Some(1),
+                    crate::model::FileSource::Filesystem,
+                )],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+        // published includes counters and summaries, not merely a checkpoint number.
+        // published 包含计数与摘要，不仅仅是检查点编号。
+        let published = engine.state_snapshot();
+        // results borrow the same immutable engine for overlapping query lifetimes.
+        // results 在重叠查询生命周期内借用同一不可变引擎。
+        let (first, second) = block_on(futures::future::join(
+            engine.retrieve_read_view(
+                RetrieveRequest::current_checkpoint("view-query-1", "find main function"),
+                &index,
+                &ai,
+            ),
+            engine.retrieve_read_view(
+                RetrieveRequest::current_checkpoint("view-query-2", "find main function"),
+                &index,
+                &ai,
+            ),
+        ));
+        // first/second preserve their operation identities even when their selected content matches.
+        // first/second 即使所选内容相同也保留各自操作身份。
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.summary.request_id, "view-query-1");
+        assert_eq!(second.summary.request_id, "view-query-2");
+        assert!(!first.hits.is_empty());
+        assert_eq!(first.formatted_context, second.formatted_context);
+        assert_eq!(engine.state_snapshot(), published);
+
+        // A failed query does not poison a still-valid published checkpoint's lifecycle.
+        // 失败查询不会污染仍有效的已发布检查点生命周期。
+        assert!(
+            block_on(engine.retrieve_read_view(
+                RetrieveRequest::current_checkpoint("view-invalid", ""),
+                &index,
+                &ai,
+            ))
+            .is_err()
+        );
+        assert_eq!(engine.state_snapshot(), published);
+        assert_eq!(engine.status().state, VceEngineState::Ready);
+    }
+
+    /// Verify request-local budgets change real nonempty retrieval without mutating the shared checkpoint.
+    /// 验证请求本地预算改变真实非空检索结果，不修改共享检查点。
+    /// No parameters or output; existing deterministic ports provide source, embedding and candidate results.
+    /// 无参数及输出；既有确定性端口提供源码、向量及候选结果。
+    #[test]
+    fn immutable_queries_freeze_independent_execution_limits() {
+        // engine and ports establish an actual committed nonempty workspace before testing query policy.
+        // engine 与 ports 在测试查询策略前建立实际已提交的非空工作区。
+        let mut engine = test_engine();
+        let (ai, index, source, _) = fake_host();
+        block_on(engine.refresh(
+            RefreshRequest::full(
+                "limits-initial",
+                RefreshReason::Initial,
+                vec![crate::workspace::FileObservation::present(
+                    "src/lib.rs",
+                    "fn main() {}",
+                    Some(1),
+                    crate::model::FileSource::Filesystem,
+                )],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .expect("initialize limit fixture");
+        // published and defaults must survive both concurrent policies and invalid requests unchanged.
+        // published 与 defaults 必须在两种并发策略及无效请求后保持不变。
+        let published = engine.state_snapshot();
+        let defaults = VceRetrievalLimits::from_config(engine.config());
+        let narrow = VceRetrievalLimits {
+            query_max_concurrency: 1,
+            max_results: 1,
+            max_context_chars: 1,
+        };
+        let (wide_result, narrow_result) = block_on(futures::future::join(
+            engine.retrieve_read_view_with_limits(
+                RetrieveRequest::current_checkpoint("limits-wide", "find main function"),
+                &index,
+                &ai,
+                defaults,
+            ),
+            engine.retrieve_read_view_with_limits(
+                RetrieveRequest::current_checkpoint("limits-narrow", "find main function"),
+                &index,
+                &ai,
+                narrow,
+            ),
+        ));
+        // Results retain independently frozen budgets, including all final formatting overhead.
+        // 结果保持独立冻结的预算，包含最终格式化的全部开销。
+        let wide_result = wide_result.expect("wide result");
+        let narrow_result = narrow_result.expect("narrow result");
+        assert!(!wide_result.hits.is_empty());
+        assert!(wide_result.formatted_context.chars().count() <= defaults.max_context_chars);
+        assert!(narrow_result.hits.is_empty());
+        assert!(narrow_result.formatted_context.chars().count() <= narrow.max_context_chars);
+        assert_eq!(engine.state_snapshot(), published);
+        assert_eq!(VceRetrievalLimits::from_config(engine.config()), defaults);
+        for invalid in [
+            VceRetrievalLimits {
+                query_max_concurrency: 0,
+                ..defaults
+            },
+            VceRetrievalLimits {
+                max_results: 0,
+                ..defaults
+            },
+            VceRetrievalLimits {
+                max_context_chars: 0,
+                ..defaults
+            },
+        ] {
+            assert!(matches!(
+                block_on(engine.retrieve_read_view_with_limits(
+                    RetrieveRequest::current_checkpoint("limits-invalid", "find main function"),
+                    &index,
+                    &ai,
+                    invalid,
+                )),
+                Err(VceError::InvalidRequest(_))
+            ));
+        }
+        assert_eq!(engine.state_snapshot(), published);
     }
 
     /// Verify explicit retrieval scopes reject invalid Blob identities before host search.
@@ -4848,6 +5871,65 @@ mod tests {
             validate_embedding_space(&engine, &actual),
             Err(VceError::EmbeddingSpaceMismatch { .. })
         ));
+    }
+
+    /// An exact host grant changes the live response contract but preserves original persisted identity.
+    /// 精确宿主授权改变实时响应契约，但保留原始持久身份。
+    /// No inputs or outputs; validates binding, snapshot restoration, strict target checks and scope rejection.
+    /// 无输入输出；验证绑定、快照恢复、严格目标检查及作用域拒绝。
+    #[test]
+    fn approved_embedding_execution_preserves_original_identity() {
+        // Original storage remains bound to the old producer, even after approving a new provider.
+        // 即使批准新供应商，原始存储仍绑定旧生产来源。
+        let mut config = VceConfig::new("code-chain", test_space()).unwrap();
+        let original = VceIndexBinding::new(
+            config.index_namespace_id.clone(),
+            config.checkpoint_chain_id.clone(),
+            config.index_schema_version,
+            config.embedding_space.clone(),
+        )
+        .unwrap();
+        let mut target = test_space();
+        target.physical_fingerprint = Some(String::from("new-provider-same-model"));
+        let original_engine = VceEngine::new(config.clone()).unwrap();
+        let original_snapshot = original_engine.state_snapshot();
+        config.embedding_execution = Some(
+            crate::VceEmbeddingExecutionContract::new(
+                original.clone(),
+                target.clone(),
+                "host-checked-direct-project-approval",
+            )
+            .unwrap(),
+        );
+        let engine =
+            VceEngine::from_state_snapshot(config.clone(), original_snapshot.clone()).unwrap();
+        assert_eq!(engine.state_snapshot().identity, original_snapshot.identity);
+        assert!(engine.validate_index_binding(&original).is_ok());
+        assert!(validate_embedding_space(&engine, &target).is_ok());
+        assert!(validate_embedding_space(&engine, &test_space()).is_err());
+        let mut rewritten = original.clone();
+        rewritten.embedding_space = target.clone();
+        assert!(engine.validate_index_binding(&rewritten).is_err());
+        config.index_namespace_id.push_str("-other-project");
+        assert_eq!(
+            config.validate(),
+            Err(VceConfigError::InvalidEmbeddingExecution)
+        );
+        for mismatch in 0..5 {
+            let mut invalid = target.clone();
+            match mismatch {
+                0 => invalid.dimension += 1,
+                1 => invalid.vector_space_id.push_str("-other-root"),
+                2 => invalid.preprocessing_version.push_str("-changed"),
+                3 => invalid.chunker_version.push_str("-changed"),
+                _ => invalid.physical_fingerprint = None,
+            }
+            assert!(
+                crate::VceEmbeddingExecutionContract::new(original.clone(), invalid, "approval")
+                    .is_err()
+            );
+        }
+        assert!(crate::VceEmbeddingExecutionContract::new(original, target, "  ").is_err());
     }
 
     /// Verify the path channel can return only the canonical generated path document.

@@ -2188,6 +2188,125 @@ fn prompt_preparation_phase_commit_preserves_newer_transcript_ui_state() {
     );
 }
 
+/// Rejects final profile publication after a configured source change without mutating retained state.
+/// 配置来源变化后拒绝最终画像发布，且不改变保留状态。
+#[test]
+fn prompt_profile_phase_commit_revalidates_source_before_any_state_change() {
+    // Each case uses local synthetic transport identity; no gRPC request or paid inference is performed.
+    // 各场景使用本地合成传输身份，不执行 gRPC 请求或付费推理。
+    for mutation in [
+        "endpoint",
+        "credential",
+        "user",
+        "project",
+        "disabled",
+        "backend",
+        "timeout",
+    ] {
+        let session_id = SessionId::new_v4();
+        let mut service = test_service_state_with_parent_session(session_id);
+        insert_test_workbench_conversation(&mut service, session_id);
+        start_webui_session_kernel_user_turn(&mut service, session_id, "profile-source-commit")
+            .expect("start turn");
+        let generation = webui_session_kernel_generation(&service, session_id).expect("generation");
+        let bridge = test_agent_runtime_bridge();
+        let mut layer = vulcan_vmm::VmmConfigLayer {
+            enabled: Some(true),
+            backend_mode: Some(vulcan_vmm::VmmBackendMode::ExternalGrpc),
+            grpc_target: Some("127.0.0.1:50051".to_owned()),
+            user_id: Some(1),
+            project_id: Some(7),
+            ..Default::default()
+        };
+        bridge
+            .vmm_hook_runtime
+            .replace_global_projection(&layer)
+            .expect("initial policy");
+        let source = vulcan_vmm::VmmMemoryReadSource::new(
+            vulcan_vmm::VmmMemorySource::external(
+                &vulcan_vmm::VmmTransportConfig::from_effective(
+                    &vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None),
+                ),
+                1,
+                7,
+            )
+            .expect("expected owner"),
+            Vec::new(),
+        )
+        .expect("read source");
+        let mut candidate = service.workspace_snapshot.clone().expect("candidate");
+        candidate
+            .session_runtime_state
+            .get_mut(&session_id)
+            .expect("runtime")
+            .vmm_profile_sync = vulcan_workbench_model::VmmProfileSyncState {
+            read_source: Some(source),
+            base_profile_content: Some("prepared-profile-content".to_owned()),
+            ..Default::default()
+        };
+        match mutation {
+            "endpoint" => layer.grpc_target = Some("127.0.0.1:50052".to_owned()),
+            "credential" => layer.grpc_api_key = Some("synthetic-credential".to_owned()),
+            "user" => layer.user_id = Some(2),
+            "project" => layer.project_id = Some(8),
+            "disabled" => layer.enabled = Some(false),
+            "backend" => layer.backend_mode = Some(vulcan_vmm::VmmBackendMode::Native),
+            "timeout" => layer.handshake_timeout_ms = Some(45_000),
+            _ => unreachable!("closed test case list"),
+        }
+        bridge
+            .vmm_hook_runtime
+            .replace_global_projection(&layer)
+            .expect("policy changed before commit");
+        service.agent_runtime = Some(bridge);
+        let before_generation = service.workbench_generation;
+        let before_profile = service
+            .workspace_snapshot
+            .as_ref()
+            .expect("retained")
+            .session_runtime_state[&session_id]
+            .vmm_profile_sync
+            .clone();
+        let state: SharedServiceBridgeState = Arc::new(Mutex::new(service));
+        let app = ServiceEventEmitter::new(Vec::new());
+        let result = commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current(
+            &app,
+            &state,
+            candidate,
+            session_id,
+            SessionRunPhase::Preparing,
+            generation,
+            "profile-source-commit",
+        );
+        let retained = state.lock().expect("retained state");
+        if mutation == "timeout" {
+            assert!(result.expect("non-identity tuning can commit"));
+            assert_eq!(retained.workbench_generation, before_generation + 1);
+        } else {
+            assert!(
+                result
+                    .expect_err("source must reject before merge")
+                    .contains("profile source changed"),
+                "{mutation}"
+            );
+            assert_eq!(
+                retained.workbench_generation, before_generation,
+                "{mutation}"
+            );
+            assert_eq!(
+                retained
+                    .workspace_snapshot
+                    .as_ref()
+                    .expect("workspace")
+                    .session_runtime_state[&session_id]
+                    .vmm_profile_sync,
+                before_profile,
+                "{mutation}"
+            );
+        }
+    }
+}
+
 /// Verifies Stop's immediate phase mutation operates on the latest retained workspace instead of replacing it with a detached clone.
 /// 验证 Stop 的即时阶段变更作用于最新保留工作区，而不是使用分离克隆替换它。
 #[test]

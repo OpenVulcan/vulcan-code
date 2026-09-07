@@ -2,6 +2,10 @@
 //! 语义存储端口与确定性事务参考后端。
 
 use serde::{Deserialize, Serialize};
+mod manual_recycle;
+pub use manual_recycle::StorageManualRecycleSelection;
+mod session;
+pub use session::StorageSessionStatus;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use vulcan_memorymesh_core_contracts::{
     AnalysisAttemptIdentity, ChatCompactBoundary, ChatCompactMutationResult, CommitReceipt,
@@ -100,9 +104,15 @@ pub struct StorageRetentionTrashBatch {
     /// Carries the time when the records entered the recycle bin.
     /// 携带记录进入回收站的时间。
     pub recycled_at_ns: i64,
+    /// Freezes the expiry deadline selected when this batch was created.
+    /// 冻结创建该批次时选定的到期截止时间。
+    pub expires_at_ns: i64,
     /// Carries the stable retention reason for audit and restore presentation.
     /// 携带用于审计与恢复展示的稳定保留原因。
     pub reason: RetentionReasonCode,
+    /// Stores the exact manual selection and original session metadata; none means policy cleanup.
+    /// 保存准确人工选择及原会话元数据；空值表示策略清洗。
+    pub manual_selection: Option<StorageManualRecycleSelection>,
     /// Carries every domain record removed from active storage by this batch.
     /// 携带本批次从活动存储移除的全部领域记录。
     pub dataset: ExportDataset,
@@ -132,6 +142,30 @@ pub struct StorageRetentionColdTurnJob {
     pub next_run_at_ns: i64,
 }
 
+/// Stores one authoritative memory session independently of retained turn bodies.
+/// 独立于所保留回合正文存储一条权威记忆会话记录。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageMemorySession {
+    /// Stores management lifecycle independently of retained turns and extraction progress.
+    /// 独立于所保留回合及提炼进度保存管理生命周期。
+    pub status: StorageSessionStatus,
+    /// Identifies the exact subject; native mode uses the fixed local subject.
+    /// 标识精确主体；原生模式使用固定本地主体。
+    pub subject_id: SubjectId,
+    /// Identifies the unique writing project, not linked recall projects.
+    /// 标识唯一写入项目，而不是连带召回项目。
+    pub scope_id: vulcan_memorymesh_core_contracts::ScopeId,
+    /// Identifies the host session independently of its display title.
+    /// 独立于显示标题标识宿主会话。
+    pub session_source_id: SessionSourceId,
+    /// Stores the inclusive observation cutoff of the last successful extraction; new sessions use zero.
+    /// 保存上次成功提取的包含式观察截止时间；新会话使用零。
+    pub last_extraction_observed_at_ns: i64,
+    /// Stores the actual host commit time, absent until the first successful extraction.
+    /// 保存实际宿主提交时间，在首次成功提取之前为空。
+    pub last_extraction_completed_at_ns: Option<i64>,
+}
+
 /// Carries all reference-storage state required for durable host restart recovery.
 /// 携带宿主重启恢复所需的全部参考存储状态。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -151,6 +185,9 @@ pub struct StorageSnapshot {
     /// Carries persisted analysis attempt identities.
     /// 携带已持久化的分析尝试身份。
     pub analysis_attempts: Vec<AnalysisAttemptIdentity>,
+    /// Carries authoritative session records; attempts and compact boundaries are not substitutes.
+    /// 携带权威会话记录；分析尝试及压缩边界不能替代该记录。
+    pub memory_sessions: Vec<StorageMemorySession>,
     /// Carries persisted semantic-noise prototype bundles.
     /// 携带已持久化的语义 Noise 原型束。
     pub noise_prototypes: Vec<StorageNoisePrototypeEntry>,
@@ -215,6 +252,9 @@ fn validate_retention_trash_batch(batch: &StorageRetentionTrashBatch) -> Result<
     }
     if batch.recycled_at_ns < 0 {
         return Err("storage snapshot contains a negative retention recycle timestamp".to_owned());
+    }
+    if batch.expires_at_ns <= batch.recycled_at_ns {
+        return Err("storage retention trash expiry must follow its recycle timestamp".to_owned());
     }
     let mut turn_ids = BTreeSet::new();
     for turn in &batch.dataset.turns {
@@ -348,6 +388,16 @@ pub struct InMemoryStorage {
     /// Stores persisted analysis attempts keyed by exact turn and generation.
     /// 按精确轮次与代次存储已持久化分析尝试。
     analysis_attempts: HashMap<(TurnId, u64), AnalysisAttemptIdentity>,
+    /// Stores authoritative sessions by the exact subject/project/session tuple.
+    /// 按精确主体/项目/会话元组保存权威会话。
+    memory_sessions: BTreeMap<
+        (
+            SubjectId,
+            vulcan_memorymesh_core_contracts::ScopeId,
+            SessionSourceId,
+        ),
+        StorageMemorySession,
+    >,
     /// Stores persisted semantic noise prototype bundles by an unambiguous typed tuple.
     /// 按无歧义强类型元组存储已持久化语义 Noise 原型束。
     noise_prototypes: BTreeMap<NoiseCacheKey, Vec<NoisePrototype>>,
@@ -429,6 +479,13 @@ impl InMemoryStorage {
     /// 捕获重启恢复所需的参考后端全部持久状态。
     #[must_use]
     pub fn snapshot(&self) -> StorageSnapshot {
+        // Hash-map traversal changes after reconstruction; snapshots must preserve a canonical attempt order.
+        // 哈希表遍历顺序在重建后会变化；快照必须保持规范的提炼尝试顺序。
+        let mut analysis_attempts = self.analysis_attempts.values().cloned().collect::<Vec<_>>();
+        analysis_attempts.sort_by(|left, right| {
+            (&left.turn_id, left.analysis_generation)
+                .cmp(&(&right.turn_id, right.analysis_generation))
+        });
         StorageSnapshot {
             dataset: self.dataset(),
             storage_version: self.storage_version,
@@ -443,7 +500,8 @@ impl InMemoryStorage {
                     idempotency_key: idempotency_key.clone(),
                 })
                 .collect(),
-            analysis_attempts: self.analysis_attempts.values().cloned().collect(),
+            analysis_attempts,
+            memory_sessions: self.memory_sessions.values().cloned().collect(),
             noise_prototypes: self
                 .noise_prototypes
                 .iter()
@@ -479,6 +537,37 @@ impl InMemoryStorage {
         query: &StorageQuery,
         candidates: Vec<PhysicalCandidate>,
     ) -> Result<vulcan_memorymesh_core_contracts::CandidateChannelResult, CoreError> {
+        self.materialize_external_candidates(query, candidates, false)
+    }
+
+    /// Applies authoritative visibility to an externally scored lexical page without recomputing scores.
+    /// 对外部评分的词法页面应用权威可见性，不重新计算评分。
+    /// `query` selects the lexical contract; `candidates` preserves physical BM25 order and identity.
+    /// `query` 选择词法契约；`candidates` 保留物理 BM25 顺序和身份。
+    /// Returns retained records and original score facts, or an explicit query/contract/scope error.
+    /// 返回保留的记录及原始评分事实，或明确的查询、契约、作用域错误。
+    pub fn materialize_external_lexical_candidates(
+        &self,
+        query: &StorageQuery,
+        candidates: Vec<PhysicalCandidate>,
+    ) -> Result<vulcan_memorymesh_core_contracts::CandidateChannelResult, CoreError> {
+        self.materialize_external_candidates(query, candidates, true)
+    }
+
+    /// Shares relational eligibility for the two explicitly defined physical producer channels.
+    /// 为两种明确定义的物理生产者通道共享关系资格判断。
+    /// `lexical_channel` selects the declared query branch and contract, never a score-based guess.
+    /// `lexical_channel` 选择声明的查询分支及契约，绝不依据分数猜测。
+    /// Returns at most the query limit while preserving every retained producer score unchanged.
+    /// 最多返回查询上限条记录，并原样保留每个被保留的生产者评分。
+    fn materialize_external_candidates(
+        &self,
+        query: &StorageQuery,
+        candidates: Vec<PhysicalCandidate>,
+        lexical_channel: bool,
+    ) -> Result<vulcan_memorymesh_core_contracts::CandidateChannelResult, CoreError> {
+        // context and expected_contract come from the typed query's selected channel.
+        // context 和 expected_contract 来自强类型查询选定的通道。
         let (context, limit, expected_contract) = match query {
             StorageQuery::CandidateObservation(request) => (
                 MemorySearchContext {
@@ -490,7 +579,16 @@ impl InMemoryStorage {
                     session_recall_boundary: request.boundary.session_recall_boundary.as_ref(),
                 },
                 request.limit,
-                &request.vector_contract,
+                if lexical_channel {
+                    request.lexical_contract.as_ref().ok_or_else(|| {
+                        storage_error(
+                            ErrorCode::InvalidArgument,
+                            "external lexical materialization requires an enabled lexical channel",
+                        )
+                    })?
+                } else {
+                    &request.vector_contract
+                },
             ),
             StorageQuery::VectorCandidates {
                 subject_id,
@@ -501,7 +599,28 @@ impl InMemoryStorage {
                 expected_contract,
                 now_ns,
                 ..
-            } => (
+            } if !lexical_channel => (
+                MemorySearchContext {
+                    evaluated_at_ns: Some(*now_ns),
+                    candidate_scope: boundary.candidate_scope.as_ref(),
+                    subject_id,
+                    scope_access,
+                    vector_space_id,
+                    session_recall_boundary: boundary.session_recall_boundary.as_ref(),
+                },
+                *limit,
+                expected_contract,
+            ),
+            StorageQuery::LexicalCandidates {
+                subject_id,
+                scope_access,
+                vector_space_id,
+                boundary,
+                limit,
+                expected_contract,
+                now_ns,
+                ..
+            } if lexical_channel => (
                 MemorySearchContext {
                     evaluated_at_ns: Some(*now_ns),
                     candidate_scope: boundary.candidate_scope.as_ref(),
@@ -516,7 +635,7 @@ impl InMemoryStorage {
             _ => {
                 return Err(storage_error(
                     ErrorCode::InvalidArgument,
-                    "external vector materialization requires a vector-bearing storage query",
+                    "external materialization requires a storage query for the selected channel",
                 ));
             }
         };
@@ -534,7 +653,7 @@ impl InMemoryStorage {
         {
             return Err(storage_error(
                 ErrorCode::ScoreContractViolation,
-                "external vector candidates do not match the requested score contract",
+                "external candidates do not match the requested score contract",
             ));
         }
 
@@ -546,14 +665,14 @@ impl InMemoryStorage {
         let mut retained_candidates = Vec::new();
         let mut memories = Vec::new();
         for candidate in candidates {
+            if retained_candidates.len() >= limit as usize {
+                break;
+            }
             let Some(memory) = eligible.remove(&candidate.memory_id) else {
                 continue;
             };
             retained_candidates.push(candidate);
             memories.push(memory);
-            if retained_candidates.len() >= limit as usize {
-                break;
-            }
         }
 
         Ok(vulcan_memorymesh_core_contracts::CandidateChannelResult {
@@ -640,6 +759,30 @@ impl InMemoryStorage {
                 return Err("storage snapshot contains duplicate analysis attempt".to_owned());
             }
         }
+        for session in snapshot.memory_sessions {
+            if session.last_extraction_observed_at_ns < 0
+                || match session.last_extraction_completed_at_ns {
+                    None => session.last_extraction_observed_at_ns != 0,
+                    Some(completed) => completed < session.last_extraction_observed_at_ns,
+                }
+            {
+                return Err(
+                    "storage snapshot contains an invalid session extraction window".to_owned(),
+                );
+            }
+            // key preserves exact ownership even when projects use the same host-session string.
+            // key 即使面对不同项目下同名宿主会话，也保留精确归属。
+            let key = (
+                session.subject_id.clone(),
+                session.scope_id.clone(),
+                session.session_source_id.clone(),
+            );
+            if storage.memory_sessions.insert(key, session).is_some() {
+                return Err(
+                    "storage snapshot contains duplicate memory session ownership".to_owned(),
+                );
+            }
+        }
         for entry in snapshot.noise_prototypes {
             if entry
                 .prototypes
@@ -681,8 +824,12 @@ impl InMemoryStorage {
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
+        // A recycled session may have only one batch owning its original lifecycle and watermarks.
+        // 一个已回收会话只能由一个批次持有其原生命周期和水位。
+        let mut reserved_manual_sessions = BTreeSet::new();
         for batch in snapshot.retention_trash_batches {
             validate_retention_trash_batch(&batch)?;
+            manual_recycle::validate_selection(&batch, &storage, &mut reserved_manual_sessions)?;
             if batch
                 .dataset
                 .turns
@@ -795,6 +942,39 @@ impl InMemoryStorage {
     #[must_use]
     pub const fn storage_version(&self) -> u64 {
         self.storage_version
+    }
+
+    /// Borrows one active-store memory by exact identity without copying its embedding.
+    /// 按准确身份借用一条活动存储记忆，不复制嵌入。
+    /// Takes a canonical memory ID; returns no record for recycled or permanently removed content.
+    /// 接收规范记忆 ID；内容已回收或永久移除时不返回记录。
+    pub fn memory_record(&self, memory_id: &MemoryId) -> Option<&MemoryRecord> {
+        self.memories.get(memory_id)
+    }
+
+    /// Borrows one stored profile node by exact identity without scanning or copying the dataset.
+    /// 按准确身份借用一个已存储画像节点，不扫描或复制数据集。
+    /// Takes a canonical node ID; returns the stored node, whose state and visibility still require validation.
+    /// 接收规范节点 ID；返回存储节点，其状态及可见性仍需校验。
+    pub fn profile_node_record(&self, node_id: &ProfileNodeId) -> Option<&ProfileNode> {
+        self.profile_nodes.get(node_id)
+    }
+
+    /// Borrows authoritative session metadata by its complete ownership tuple.
+    /// 按完整归属元组借用权威会话元数据。
+    /// Takes subject, write scope and source session; absence means no registered metadata.
+    /// 接收主体、写入作用域及来源会话；缺失表示没有登记元数据。
+    pub fn memory_session(
+        &self,
+        subject_id: &SubjectId,
+        scope_id: &vulcan_memorymesh_core_contracts::ScopeId,
+        session_source_id: &SessionSourceId,
+    ) -> Option<&StorageMemorySession> {
+        self.memory_sessions.get(&(
+            subject_id.clone(),
+            scope_id.clone(),
+            session_source_id.clone(),
+        ))
     }
 
     /// Allocates a fresh identity without overwriting caller-assigned or imported opaque identities.
@@ -1145,6 +1325,7 @@ impl InMemoryStorage {
         mutation: &Mutation,
         slots: &mut BTreeMap<String, EntityBinding>,
         advanced: &mut Vec<VersionedEntity>,
+        committed_at_ns: Option<i64>,
     ) -> Result<(), String> {
         match mutation {
             Mutation::PutTurn { entity, turn } => {
@@ -1273,6 +1454,16 @@ impl InMemoryStorage {
                 advanced,
             ),
             Mutation::PutAnalysisAttempt(attempt) => self.put_analysis_attempt(attempt.clone()),
+            Mutation::AdvanceSessionExtraction {
+                turn_id,
+                observed_after_ns,
+                observed_through_ns,
+            } => self.advance_session_extraction(
+                turn_id,
+                *observed_after_ns,
+                *observed_through_ns,
+                committed_at_ns,
+            ),
             Mutation::PutNoisePrototypeBundle {
                 identity,
                 prototypes,
@@ -1339,6 +1530,29 @@ impl InMemoryStorage {
         advanced: &mut Vec<VersionedEntity>,
     ) -> Result<(), String> {
         validate_turn_analysis_state(&turn)?;
+        // Registration creates the session without claiming that extraction has succeeded.
+        // 登记仅创建会话，不宣称提取已成功。
+        let session_key = (
+            turn.subject_id.clone(),
+            turn.scope_id.clone(),
+            turn.session_source_id.clone(),
+        );
+        let stored_session =
+            self.memory_sessions
+                .entry(session_key)
+                .or_insert_with(|| StorageMemorySession {
+                    status: StorageSessionStatus::Active,
+                    subject_id: turn.subject_id.clone(),
+                    scope_id: turn.scope_id.clone(),
+                    session_source_id: turn.session_source_id.clone(),
+                    last_extraction_observed_at_ns: 0,
+                    last_extraction_completed_at_ns: None,
+                });
+        // Registration must not reactivate a recycled or forgotten session through ordinary intake.
+        // 普通入库登记不得重新激活已回收或已遗忘会话。
+        if !stored_session.status.allows_runtime_memory() {
+            return Err("memory session does not allow turn intake".to_owned());
+        }
         match entity {
             EntityRef::New(slot) => {
                 if slots.contains_key(slot.as_str()) {
@@ -2272,6 +2486,233 @@ impl InMemoryStorage {
     }
 }
 
+impl InMemoryStorage {
+    /// Applies a batch with the actual host commit time, returning its atomic outcome.
+    /// 使用实际宿主提交时间应用批次，返回原子结果。
+    /// `committed_at_ns` is Unix nanoseconds and is mandatory for extraction-window advancement.
+    /// `committed_at_ns` 是 Unix 纳秒时间，提取窗口推进必须提供该值。
+    pub fn mutate_at(
+        &mut self,
+        batch: &MutationBatch,
+        committed_at_ns: i64,
+    ) -> Result<MutationOutcome, CoreError> {
+        self.mutate_with_commit_time(batch, Some(committed_at_ns))
+    }
+
+    /// Advances a completed turn's owner session using compare-and-set on the observed start.
+    /// 对观察起点执行比较并交换，推进已完成回合的归属会话。
+    /// The turn, prior boundary, inclusive cutoff and host clock must all agree; otherwise reject.
+    /// 回合、前次边界、包含式截止及宿主时钟必须全部吻合，否则拒绝变更。
+    fn advance_session_extraction(
+        &mut self,
+        turn_id: &TurnId,
+        observed_after_ns: i64,
+        observed_through_ns: i64,
+        committed_at_ns: Option<i64>,
+    ) -> Result<(), String> {
+        // committed_at_ns is supplied by the host, not inferred from an old turn or analysis cutoff.
+        // committed_at_ns 由宿主提供，不能从旧回合或分析截止时间推断。
+        let committed_at_ns = committed_at_ns
+            .ok_or_else(|| "session extraction requires a host commit timestamp".to_owned())?;
+        // turn is the sole authority for subject/project/session ownership.
+        // turn 是主体/项目/会话归属的唯一权威来源。
+        let turn = self
+            .turns
+            .get(turn_id)
+            .ok_or_else(|| "session extraction turn is missing".to_owned())?;
+        if turn.status != TurnStatus::Completed
+            || observed_after_ns < 0
+            || observed_through_ns < observed_after_ns
+            || observed_through_ns < turn.created_at_ns
+            || committed_at_ns < observed_through_ns
+        {
+            return Err(
+                "session extraction requires a completed turn and a valid observation window"
+                    .to_owned(),
+            );
+        }
+        // key isolates identically named sessions across writing projects and subjects.
+        // key 隔离不同写入项目和主体下的同名会话。
+        let key = (
+            turn.subject_id.clone(),
+            turn.scope_id.clone(),
+            turn.session_source_id.clone(),
+        );
+        // session must have been registered with the turn; absent metadata is not a zero watermark.
+        // session 必须与回合一同登记；元数据缺失不能视为零水位。
+        let session = self
+            .memory_sessions
+            .get_mut(&key)
+            .ok_or_else(|| "session extraction owner record is missing".to_owned())?;
+        if session.last_extraction_observed_at_ns != observed_after_ns {
+            return Err("session extraction observation boundary changed".to_owned());
+        }
+        session.last_extraction_observed_at_ns = observed_through_ns;
+        session.last_extraction_completed_at_ns = Some(committed_at_ns);
+        Ok(())
+    }
+
+    /// Applies existing transactional semantics with an explicit optional host clock.
+    /// 使用明确的可选宿主时钟应用既有事务语义。
+    /// Clock-free callers retain deterministic behavior; extraction mutations reject missing time.
+    /// 无时钟调用方保持确定性行为；提取变更会拒绝缺失时间。
+    fn mutate_with_commit_time(
+        &mut self,
+        batch: &MutationBatch,
+        committed_at_ns: Option<i64>,
+    ) -> Result<MutationOutcome, CoreError> {
+        if batch.mutations.is_empty() {
+            return Err(storage_error(
+                ErrorCode::InvalidArgument,
+                "mutation batch must not be empty",
+            ));
+        }
+        batch.identity.validate()?;
+        let contains_import_restore = batch.mutations.iter().any(|mutation| {
+            matches!(
+                mutation,
+                Mutation::RestoreImportedMemory(_)
+                    | Mutation::RestoreImportedProfileNode(_)
+                    | Mutation::RestoreImportedContextEvidence(_)
+            )
+        });
+        if contains_import_restore && batch.identity.source_kind != MutationSourceKind::Import {
+            return Err(storage_error(
+                ErrorCode::InvalidArgument,
+                "exact import restore mutations require an import mutation identity",
+            ));
+        }
+        if let Some(entry) = self.outcomes.get(&batch.identity.idempotency_key) {
+            if entry.operation_id != batch.identity.operation_id
+                || entry.request_fingerprint != batch.identity.request_fingerprint
+            {
+                return Err(storage_error(
+                    ErrorCode::IdempotencyConflict,
+                    "durable idempotency key was reused with a different operation or request fingerprint",
+                ));
+            }
+            return Ok(entry.outcome.clone());
+        }
+        // Window advancement is inseparable from this batch's successful pending-turn transition.
+        // 窗口推进必须与本批次待处理回合的成功状态迁移不可分离。
+        for mutation in &batch.mutations {
+            if let Mutation::AdvanceSessionExtraction { turn_id, .. } = mutation
+                && !batch.mutations.iter().any(|mutation| matches!(mutation,
+                    Mutation::TransitionTurnStatus { turn_id: completed_id, from: TurnStatus::Pending, to: TurnStatus::Completed, .. }
+                    if completed_id == turn_id))
+            {
+                return Ok(MutationOutcome::Rejected { reason: "session extraction must share its completed-turn batch".to_owned() });
+            }
+        }
+        let is_advance_boundary = matches!(
+            &batch.mutations[..],
+            [Mutation::AdvanceChatCompactBoundary { .. }]
+        );
+        let mut transaction = self.clone();
+        let chat_compact = if is_advance_boundary {
+            if let [
+                Mutation::AdvanceChatCompactBoundary {
+                    subject_id,
+                    scope_id,
+                    session_source_id,
+                    compacted_at_ns,
+                },
+            ] = batch.mutations.as_slice()
+            {
+                let result = transaction.advance_chat_compact_boundary(
+                    subject_id,
+                    scope_id,
+                    session_source_id,
+                    *compacted_at_ns,
+                );
+                if result.updated {
+                    transaction.storage_version =
+                        transaction.storage_version.checked_add(1).ok_or_else(|| {
+                            storage_error(
+                                ErrorCode::StorageConflict,
+                                "storage version is exhausted",
+                            )
+                        })?;
+                }
+                Some(result)
+            } else {
+                return Err(storage_error(
+                    ErrorCode::InvalidArgument,
+                    "advance compact boundary batch shape is invalid",
+                ));
+            }
+        } else {
+            if batch
+                .mutations
+                .iter()
+                .any(|mutation| matches!(mutation, Mutation::AdvanceChatCompactBoundary { .. }))
+            {
+                return Err(storage_error(
+                    ErrorCode::InvalidArgument,
+                    "advance compact boundary must be the only mutation in its batch",
+                ));
+            }
+            let mut slots = BTreeMap::new();
+            let mut advanced = Vec::new();
+            for mutation in &batch.mutations {
+                if let Err(reason) =
+                    transaction.apply_mutation(mutation, &mut slots, &mut advanced, committed_at_ns)
+                {
+                    return Ok(MutationOutcome::Rejected { reason });
+                }
+            }
+            transaction.storage_version =
+                transaction.storage_version.checked_add(1).ok_or_else(|| {
+                    storage_error(ErrorCode::StorageConflict, "storage version is exhausted")
+                })?;
+            let outcome = MutationOutcome::Committed {
+                storage_version: transaction.storage_version,
+                chat_compact: None,
+                receipt: CommitReceipt {
+                    operation_id: batch.identity.operation_id.clone(),
+                    idempotency_key: batch.identity.idempotency_key.clone(),
+                    request_fingerprint: batch.identity.request_fingerprint.clone(),
+                    entity_bindings: slots.into_values().collect(),
+                    committed_versions: final_committed_versions(advanced),
+                    side_effect_summary: summarize_side_effects(&batch.mutations),
+                },
+            };
+            transaction.outcomes.insert(
+                batch.identity.idempotency_key.clone(),
+                LedgerEntry {
+                    operation_id: batch.identity.operation_id.clone(),
+                    request_fingerprint: batch.identity.request_fingerprint.clone(),
+                    outcome: outcome.clone(),
+                },
+            );
+            *self = transaction;
+            return Ok(outcome);
+        };
+        let outcome = MutationOutcome::Committed {
+            storage_version: transaction.storage_version,
+            chat_compact,
+            receipt: CommitReceipt {
+                operation_id: batch.identity.operation_id.clone(),
+                idempotency_key: batch.identity.idempotency_key.clone(),
+                request_fingerprint: batch.identity.request_fingerprint.clone(),
+                entity_bindings: Vec::new(),
+                committed_versions: Vec::new(),
+                side_effect_summary: summarize_side_effects(&batch.mutations),
+            },
+        };
+        transaction.outcomes.insert(
+            batch.identity.idempotency_key.clone(),
+            LedgerEntry {
+                operation_id: batch.identity.operation_id.clone(),
+                request_fingerprint: batch.identity.request_fingerprint.clone(),
+                outcome: outcome.clone(),
+            },
+        );
+        *self = transaction;
+        Ok(outcome)
+    }
+}
+
 impl StoragePort for InMemoryStorage {
     /// Executes one side-effect-free semantic query.
     /// 执行一次无副作用的语义查询。
@@ -2599,6 +3040,22 @@ impl StoragePort for InMemoryStorage {
                 // session_latest_activity_ns 通过组合回合创建、分析观察和压缩活动，
                 // 对齐外置 VMM 的 session 更新时间语义。
                 let mut session_latest_activity_ns = BTreeMap::<SessionSourceId, i64>::new();
+                // Successful extraction activity survives recycling of its old turn body.
+                // 成功提取活动在其旧回合正文被回收之后仍然保留。
+                for session in self.memory_sessions.values().filter(|session| {
+                    session.subject_id == *subject_id
+                        && session.scope_id == scope_access.write_scope
+                }) {
+                    if let Some(completed_at_ns) = session.last_extraction_completed_at_ns
+                        && completed_at_ns <= *now_ns
+                    {
+                        session_turns
+                            .entry(session.session_source_id.clone())
+                            .or_default();
+                        session_latest_activity_ns
+                            .insert(session.session_source_id.clone(), completed_at_ns);
+                    }
+                }
                 // turn_sessions resolves durable analysis attempts back to their owning session.
                 // turn_sessions 把耐久分析尝试解析回其所属会话。
                 let mut turn_sessions = BTreeMap::<TurnId, SessionSourceId>::new();
@@ -2811,15 +3268,17 @@ impl StoragePort for InMemoryStorage {
                     .filter(|batch| {
                         batch.subject_id == *subject_id
                             && batch.scope_id == scope_access.write_scope
+                            && batch.expires_at_ns <= *now_ns
                     })
                     .map(|batch| RetentionTrashBatchFact {
                         batch_id: batch.batch_id.clone(),
                         recycled_at_ns: batch.recycled_at_ns,
+                        expires_at_ns: batch.expires_at_ns,
                     })
                     .collect::<Vec<_>>();
                 trash_batches.sort_by(|left, right| {
-                    left.recycled_at_ns
-                        .cmp(&right.recycled_at_ns)
+                    left.expires_at_ns
+                        .cmp(&right.expires_at_ns)
                         .then_with(|| left.batch_id.cmp(&right.batch_id))
                 });
                 trash_batches.truncate(policy.trash_purge_limit as usize);
@@ -3000,143 +3459,7 @@ impl StoragePort for InMemoryStorage {
     /// 在其持久身份下原子且幂等地应用一个变更批次。
     #[allow(clippy::too_many_lines)]
     fn mutate(&mut self, batch: &MutationBatch) -> Result<MutationOutcome, CoreError> {
-        if batch.mutations.is_empty() {
-            return Err(storage_error(
-                ErrorCode::InvalidArgument,
-                "mutation batch must not be empty",
-            ));
-        }
-        batch.identity.validate()?;
-        let contains_import_restore = batch.mutations.iter().any(|mutation| {
-            matches!(
-                mutation,
-                Mutation::RestoreImportedMemory(_)
-                    | Mutation::RestoreImportedProfileNode(_)
-                    | Mutation::RestoreImportedContextEvidence(_)
-            )
-        });
-        if contains_import_restore && batch.identity.source_kind != MutationSourceKind::Import {
-            return Err(storage_error(
-                ErrorCode::InvalidArgument,
-                "exact import restore mutations require an import mutation identity",
-            ));
-        }
-        if let Some(entry) = self.outcomes.get(&batch.identity.idempotency_key) {
-            if entry.operation_id != batch.identity.operation_id
-                || entry.request_fingerprint != batch.identity.request_fingerprint
-            {
-                return Err(storage_error(
-                    ErrorCode::IdempotencyConflict,
-                    "durable idempotency key was reused with a different operation or request fingerprint",
-                ));
-            }
-            return Ok(entry.outcome.clone());
-        }
-        let is_advance_boundary = matches!(
-            &batch.mutations[..],
-            [Mutation::AdvanceChatCompactBoundary { .. }]
-        );
-        let mut transaction = self.clone();
-        let chat_compact = if is_advance_boundary {
-            if let [
-                Mutation::AdvanceChatCompactBoundary {
-                    subject_id,
-                    scope_id,
-                    session_source_id,
-                    compacted_at_ns,
-                },
-            ] = batch.mutations.as_slice()
-            {
-                let result = transaction.advance_chat_compact_boundary(
-                    subject_id,
-                    scope_id,
-                    session_source_id,
-                    *compacted_at_ns,
-                );
-                if result.updated {
-                    transaction.storage_version =
-                        transaction.storage_version.checked_add(1).ok_or_else(|| {
-                            storage_error(
-                                ErrorCode::StorageConflict,
-                                "storage version is exhausted",
-                            )
-                        })?;
-                }
-                Some(result)
-            } else {
-                return Err(storage_error(
-                    ErrorCode::InvalidArgument,
-                    "advance compact boundary batch shape is invalid",
-                ));
-            }
-        } else {
-            if batch
-                .mutations
-                .iter()
-                .any(|mutation| matches!(mutation, Mutation::AdvanceChatCompactBoundary { .. }))
-            {
-                return Err(storage_error(
-                    ErrorCode::InvalidArgument,
-                    "advance compact boundary must be the only mutation in its batch",
-                ));
-            }
-            let mut slots = BTreeMap::new();
-            let mut advanced = Vec::new();
-            for mutation in &batch.mutations {
-                if let Err(reason) = transaction.apply_mutation(mutation, &mut slots, &mut advanced)
-                {
-                    return Ok(MutationOutcome::Rejected { reason });
-                }
-            }
-            transaction.storage_version =
-                transaction.storage_version.checked_add(1).ok_or_else(|| {
-                    storage_error(ErrorCode::StorageConflict, "storage version is exhausted")
-                })?;
-            let outcome = MutationOutcome::Committed {
-                storage_version: transaction.storage_version,
-                chat_compact: None,
-                receipt: CommitReceipt {
-                    operation_id: batch.identity.operation_id.clone(),
-                    idempotency_key: batch.identity.idempotency_key.clone(),
-                    request_fingerprint: batch.identity.request_fingerprint.clone(),
-                    entity_bindings: slots.into_values().collect(),
-                    committed_versions: final_committed_versions(advanced),
-                    side_effect_summary: summarize_side_effects(&batch.mutations),
-                },
-            };
-            transaction.outcomes.insert(
-                batch.identity.idempotency_key.clone(),
-                LedgerEntry {
-                    operation_id: batch.identity.operation_id.clone(),
-                    request_fingerprint: batch.identity.request_fingerprint.clone(),
-                    outcome: outcome.clone(),
-                },
-            );
-            *self = transaction;
-            return Ok(outcome);
-        };
-        let outcome = MutationOutcome::Committed {
-            storage_version: transaction.storage_version,
-            chat_compact,
-            receipt: CommitReceipt {
-                operation_id: batch.identity.operation_id.clone(),
-                idempotency_key: batch.identity.idempotency_key.clone(),
-                request_fingerprint: batch.identity.request_fingerprint.clone(),
-                entity_bindings: Vec::new(),
-                committed_versions: Vec::new(),
-                side_effect_summary: summarize_side_effects(&batch.mutations),
-            },
-        };
-        transaction.outcomes.insert(
-            batch.identity.idempotency_key.clone(),
-            LedgerEntry {
-                operation_id: batch.identity.operation_id.clone(),
-                request_fingerprint: batch.identity.request_fingerprint.clone(),
-                outcome: outcome.clone(),
-            },
-        );
-        *self = transaction;
-        Ok(outcome)
+        self.mutate_with_commit_time(batch, None)
     }
 
     /// Reconciles a previous mutation by durable idempotency key.
@@ -3387,6 +3710,7 @@ fn summarize_side_effects(mutations: &[Mutation]) -> String {
             Mutation::PutProfileNode { .. } => "put-profile",
             Mutation::RetireProfileNode { .. } => "retire-profile",
             Mutation::PutAnalysisAttempt(_) => "analysis-attempt",
+            Mutation::AdvanceSessionExtraction { .. } => "session-extraction",
             Mutation::PutNoisePrototypeBundle { .. } => "noise-bundle",
             Mutation::RecycleMemory { .. } => "recycle",
             Mutation::RestoreMemory { .. } => "restore",
