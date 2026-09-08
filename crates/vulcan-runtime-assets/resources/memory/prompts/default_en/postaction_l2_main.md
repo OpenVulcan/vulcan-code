@@ -12,7 +12,7 @@ The input is a JSON object and may contain:
 - `memory`: new memory candidates and their highly similar historical memories.
 - `user` / `project`: active profile nodes and new profile candidates.
 
-If a block is absent, do not output that block.
+Output only input blocks, reviewing each independently: memory deduplication does not decide profile admission. Do not invent candidates or borrow facts, indexes, or old-node IDs across blocks. Preserve each block's input `candidate_index`; never number continuously across blocks.
 
 ## `memory`
 Each new candidate contains `candidate_index`, `candidate_datetime`, `category`, `abstract`, `details`, `evidence_source`, `admission_reason`, and `similar_memories`. A similar memory may contain `memory_id`, `source_turn_id`, `created_datetime`, `scope_level`, `category`, `score`, `origin`, `abstract`, and `details`.
@@ -48,17 +48,23 @@ Use `current_datetime` to interpret wording such as current, latest, now, today,
 If the input has `user` or `project`, output the corresponding result block. Every new profile candidate must appear exactly once, either in `accepted_candidates` or in `invalid_candidate_indexes`.
 
 ## Accept a profile candidate
-Accept only stable user or project profile facts that will remain useful across future sessions. Return `normalized_content`: dense, atomic, searchable, and non-redundant.
+Accept stable user or project facts useful across future sessions. One explicit general preference suffices; repetition or "remember this" is not required. An attached question, advice request, or generic assistant answer does not cancel a user assertion. Keep `normalized_content` dense, atomic, searchable, and non-redundant while preserving every item, negation, and scope: "likes bananas and oranges" cannot lose a fruit or become all fruit.
 
-If the candidate repeats or refreshes an active node, still accept it as a new node and put the old node ID in `supersede_node_ids`. If it conflicts with an old node, the new valid information wins.
+Accept active user reconfirmation or refresh as a new node and put the old ID in `supersede_node_ids`, even if the corresponding memory is dropped as a duplicate. An assistant echo is not user reconfirmation. New valid information wins over a conflicting old node.
 
 ## Reject a profile candidate
-Reject temporary tasks, one-off states, short-lived context, formatting instructions, general answers, meaningless profile echoes, and anything unsuitable as a long-term profile.
+Reject temporary tasks/wishes, one-off states, short-lived context, formatting instructions, general answers, meaningless profile echoes, and hypotheticals, quotations, or assistant guesses mistaken for user assertions. Do not accept an unsuitable profile just to assign a level.
 
 ## Profile domains
 Do not output the final profile blob. Each `normalized_content` should express one coherent domain. Do not merge unrelated domains such as food preference, lifestyle habit, communication style, programming preference, or project stack. Parallel facts in the same domain, direction, and lifetime may be merged. Split same-domain facts only when they differ in priority, lifetime, negation, or future replacement needs.
 
 `supersede_node_ids` and `retire_only_node_ids` may reference only `active_nodes.id`. Put an old node in `retire_only_node_ids` only when it should be retired without being replaced by a new node.
+
+## Profile levels
+For accepted candidates only, distinguish importance from lifetime:
+- `priority`: `P0` hard/non-negotiable rules; `P1` important preferences/work rules; `P2` ordinary reference information.
+- `level`: `L0` one-off short-lived context; `L1` phase-specific information; `L2` stable preferences/habits; `L3` enduring principles, identity traits, or strong constraints.
+A general food preference can be stable, but "like" does not imply maximum authority or an immutable constraint. Keep `reason` and `level_reason` to short conclusions, not analysis.
 
 # Output Contract
 Return only one valid JSON object. The first character must be `{` and the last character must be `}`. Do not output Markdown, explanation, prefix, suffix, or reasoning.

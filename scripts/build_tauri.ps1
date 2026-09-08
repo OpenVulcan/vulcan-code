@@ -33,6 +33,10 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 # ProjectDir 保存仓库根目录，确保子命令路径稳定。
 $ProjectDir = Split-Path $PSScriptRoot -Parent
 
+# Load the shared successful-build artifact tracker for both Cargo profiles.
+# 加载两个 Cargo 模式共用的成功构建制品跟踪器。
+. (Join-Path $PSScriptRoot 'cargo_artifact_cleanup.ps1')
+
 # ControllerProfileScriptPath points at the build-profile-aware generated Controller configuration updater.
 # ControllerProfileScriptPath 指向按构建模式更新 Controller 生成配置的脚本。
 $ControllerProfileScriptPath = Join-Path $PSScriptRoot "configure_controller_profile.ps1"
@@ -134,34 +138,16 @@ if ($Release) {
     }
 
     Write-Host "==> Building Tauri shell release..."
-    cargo build -p vulcan-code-tauri -p vulcan-terminal-host --release --features custom-protocol
+    # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
+    # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
+    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host', '--release', '--features', 'custom-protocol')
 }
 else {
     Write-Host "==> Building Tauri shell debug..."
-    cargo build -p vulcan-code-tauri -p vulcan-terminal-host
+    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host')
 }
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
-
-# ProfileName selects the Cargo profile directory that contains the built shell.
-# ProfileName 选择包含已构建桌面壳的 Cargo profile 目录。
-$ProfileName = if ($Release) { "release" } else { "debug" }
-
-# CargoMetadataJson captures Cargo's authoritative workspace paths after applying environment and configuration overrides.
-# CargoMetadataJson 捕获 Cargo 在应用环境与配置覆盖后的权威工作区路径。
-$CargoMetadataJson = cargo metadata --format-version 1 --no-deps
-if ($LASTEXITCODE -ne 0) {
-    throw "Cargo metadata failed while resolving the build artifact directory."
-}
-# CargoMetadata parses the authoritative target directory instead of assuming a repository-local target folder.
-# CargoMetadata 解析权威 target 目录，不再假定制品位于仓库内 target 目录。
-$CargoMetadata = $CargoMetadataJson | ConvertFrom-Json
-# CargoTargetDir stores the effective Cargo artifact root, including CARGO_TARGET_DIR overrides.
-# CargoTargetDir 保存实际 Cargo 制品根目录，包括 CARGO_TARGET_DIR 覆盖。
-$CargoTargetDir = [string]$CargoMetadata.target_directory
-if ([string]::IsNullOrWhiteSpace($CargoTargetDir)) {
-    throw "Cargo metadata did not return target_directory."
+if ($CargoBuildResult.ExitCode -ne 0) {
+    exit $CargoBuildResult.ExitCode
 }
 
 # BinaryFileName stores the platform-specific Tauri shell binary name.
@@ -171,9 +157,9 @@ if ($IsWindowsPlatform) {
     $BinaryFileName = "vulcan-code-tauri.exe"
 }
 
-# BuiltBinaryPath points at the shell artifact under Cargo's effective target directory.
-# BuiltBinaryPath 指向 Cargo 实际 target 目录下的桌面壳制品。
-$BuiltBinaryPath = Join-Path $CargoTargetDir "$ProfileName\$BinaryFileName"
+# BuiltBinaryPath uses Cargo's executable path, including configured target triples.
+# BuiltBinaryPath 使用 Cargo 的可执行文件路径，包括配置的目标三元组。
+$BuiltBinaryPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-code-tauri' -and $_.target.kind -contains 'bin' }).executable
 
 # TerminalHostFileName stores the platform-specific isolated terminal-host binary name.
 # TerminalHostFileName 保存平台相关的隔离终端宿主二进制名称。
@@ -184,7 +170,7 @@ if ($IsWindowsPlatform) {
 
 # BuiltTerminalHostPath stores the terminal host built for the shell's Cargo profile.
 # BuiltTerminalHostPath 保存与桌面壳 Cargo profile 一致的终端宿主制品路径。
-$BuiltTerminalHostPath = Join-Path $CargoTargetDir "$ProfileName\$TerminalHostFileName"
+$BuiltTerminalHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-terminal-host' -and $_.target.kind -contains 'bin' }).executable
 
 # OutputBinDir stores the stable runtime binary output directory used by make run.
 # OutputBinDir 保存 make run 使用的稳定运行时二进制输出目录。

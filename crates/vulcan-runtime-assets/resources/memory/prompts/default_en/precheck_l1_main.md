@@ -19,23 +19,12 @@ Do only two things:
 2. If yes, return 1 to `max_search_queries` complete natural-language search queries.
 
 # Decision Flow
-1. Start from `current_user_input`; do not let hints or recent context override its real intent.
-2. Check whether `recent_turns` already contain a direct answer. Mentioning a related topic is not enough.
-3. If recent context directly answers the current input, return `need_memory=false` and `queries=[]`.
-4. If the user refers to past facts, personal history, stable preferences, project rules, historical decisions, or something previously mentioned, and recent context has no direct answer, return `need_memory=true`.
-5. If the input is only an immediate follow-up such as “this”, “here”, “above”, “earlier”, or “just now”, and recent context is enough, do not search long-term memory.
-6. `current_context_hints` and `recent_context_hints` are only for disambiguation and query wording.
+Decide whether the answer lacks historical information, not whether current facts deserve storage; later extraction is independent.
 
-# When to Search
-Usually search long-term memory when:
-- The user says “I mentioned before”, “I said”, “I wrote”, “I bought”, “I did”, “what is my ...”, or similar retrospective wording.
-- The question involves personal history, stable preference, durable rule, project convention, historical decision, or past stated information.
-- Recent context is only loosely related and does not contain the specific answer.
-
-Usually do not search when:
-- Recent context already directly answers the input.
-- The question is an immediate local follow-up and the recent turn is sufficient.
-- The input is general knowledge, formatting, rewriting, translation, or ordinary code generation with no request to use personal or project history.
+1. Follow the real intent of `current_user_input`. Both hints only disambiguate and preserve anchors; they cannot override the user.
+2. If `recent_turns` directly answer the input, return `need_memory=false`, `queries=[]`. A related topic alone is not an answer. Immediate follow-ups such as "this", "here", "above", or "just now" also need no recall when recent context suffices.
+3. If the answer needs personal history, existing preferences, durable rules, project conventions, or historical decisions absent from recent context, return `need_memory=true`. Examples: "What did I mention/write/buy/do before?" or "What is my ...?"
+4. General knowledge, formatting, rewriting, translation, or ordinary code generation without personal/project-history requirements needs no recall. An already supplied preference is not missing history: "I like bananas and oranges. Thoughts?" needs no lookup for a general opinion; "How does that compare with my earlier preferences?" does if recent context has no answer.
 
 # Query Rules
 Generate queries only when `need_memory=true`; otherwise `queries=[]`.

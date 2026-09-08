@@ -53,7 +53,7 @@ fn authoritative_resource_manifest_is_exact() {
     // 加载并针对清单校验每个嵌入文件。
     let identity = embedded_resource_identity().expect("resource identity must validate");
     assert_eq!(identity.file_count, 49);
-    assert_eq!(identity.total_bytes, 89_818);
+    assert_eq!(identity.total_bytes, 93_246);
     assert_eq!(identity.manifest_version, 1);
 }
 

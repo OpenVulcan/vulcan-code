@@ -19,7 +19,7 @@ Return one JSON object that:
 5. Extracts `profile_nodes`: stable user or project profile candidates.
 6. Adds `evidence_source`, `admission`, and `admission_reason` to every candidate.
 
-If `target_turn` contains no meaningful candidate, return an empty `details`, `memory_nodes: []`, and `profile_nodes: []`. If the effective information is already covered by `recent_direct_memory_writes`, exclude only duplicate `memory_nodes`; do not exclude stable `profile_nodes` candidates that come from the user's active statement, confirmation, or correction.
+If `target_turn` contains no meaningful candidate, return an empty `details`, `memory_nodes: []`, and `profile_nodes: []`.
 
 # Language
 All free-text output must follow the dominant language of the QA inside `target_turn`. This includes `details`, `memory_nodes[].abstract`, `memory_nodes[].details`, `profile_nodes[].content`, and free-text values inside `context_edges`. Keep JSON keys, enum values, IDs, numbers, code identifiers, config keys, API names, and file paths unchanged.
@@ -27,14 +27,18 @@ All free-text output must follow the dominant language of the QA inside `target_
 If the turn is mixed-language, follow the dominant language of the user's latest natural-language sentence. If still unclear, follow the dominant language of the whole `target_turn`.
 
 # Decision Flow
-For each possible candidate, decide in this order:
+Judge individual facts, not whether the whole turn ends with a question mark. Apply these rules directly; do not output checks or an analysis transcript.
 
-1. Did it come from `target_turn`? If not, do not extract it.
-2. Is it already covered by `recent_direct_memory_writes`? If yes, do not generate duplicate `memory_nodes`; however, if the same fact is actively stated, confirmed, or corrected by the user inside `target_turn` and is suitable as a stable profile fact, still emit it as a `profile_nodes` candidate for downstream review.
-3. Is it only an echo of existing memory, an echo of an existing profile, or a general answer? Usually drop it.
-4. Will it still be useful across future sessions? Keep only durable facts, stable preferences, durable constraints, project rules, business rules, technical specs, historical decisions, or important context.
-5. Should it be represented as a `memory_node`, a `profile_node`, or both?
-6. If it looks like a candidate but should not be stored, prefer returning it with `admission="drop"` and the right reason instead of silently omitting it.
+1. **Source and owner**: extract only from `target_turn`. Distinguish user assertions/confirmations/corrections, assistant discoveries, and assistant echoes. Hypotheticals, translation material, quotations, role-play, and assistant guesses are not user assertions. Another person's preference is not the user's; a project convention is not a personal preference.
+2. **Durability**: apply the keep/drop rules below. One explicit general preference, dislike, or habit suffices for a stable-profile candidate; repetition, "long-term", and "remember this" are not required. Stable does not mean immutable. "I want this today" or "use it this time" does not establish a stable preference.
+3. **Independent admission**: check `memory_nodes` and `profile_nodes` separately; a fact may enter both. `recent_direct_memory_writes` excludes duplicate memories, not stable profiles actively asserted, confirmed, or corrected by the user in this turn.
+4. **Fact-level filtering**: apply `qa_answer_only`, general-knowledge, and echo exclusions only to the corresponding content. An assistant saying "Great" or offering advice does not cancel an independent user assertion. Prefer an explicit `drop` with the right reason for a plausible but inadmissible candidate.
+5. **Turn label**: `user_input_kind` describes input, not extraction eligibility. A statement with a question is `mixed`; neither `question` nor `mixed` automatically empties candidates.
+
+Boundary examples (decisions only; never copy facts):
+- "I like bananas and oranges" and "I like bananas and oranges. What do you think?" both retain both food preferences: `profile_type=0`, `user_asserted`, `keep`; the latter is `mixed`.
+- "This project will standardize on Rust. Thoughts?" retains a project convention (`profile_type=1`); "I prefer Rust. Any advice?" retains a personal programming preference.
+- "I only want a banana today", "Guess what I like", and "Translate: I like durian" do not establish stable self-reported profiles.
 
 # Keep / Drop
 ## Usually keep
@@ -56,6 +60,8 @@ For each possible candidate, decide in this order:
 - `memory_nodes[].abstract`: one dense sentence suitable for vector search.
 - `memory_nodes[].details`: supporting explanation; if there is nothing extra, it should still be at least as informative as the abstract.
 - `profile_nodes[].content`: a stable user or project profile fact. Do not store temporary tasks or short-lived context as profile.
+
+Preserve every explicit item, negation, and scope: do not omit bananas or oranges, generalize to all fruit, or turn a dislike into a like.
 
 Profile nodes must be split by domain. Do not merge unrelated domains such as food preference, lifestyle habit, communication style, programming preference, project stack, or engineering convention. Parallel facts in the same domain, direction, and lifetime may be merged. Split same-domain facts only when they differ in priority, lifetime, negation, or future replacement needs.
 

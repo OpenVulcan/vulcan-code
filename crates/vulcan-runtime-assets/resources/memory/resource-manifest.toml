@@ -226,18 +226,18 @@ sha256 = "0e4df56a192ccd50a18f4e8c578f14a75ed0240eba8d7440e09667840de8c18a"
 
 [[files]]
 path = "prompts/default_cn/postaction_l1_main.md"
-length = 9241
-sha256 = "960db1a3ee853601177625b44900a65dd7683860ca3f86a1a8d9486524b7c3e8"
+length = 10159
+sha256 = "577ebc1dcab0e28553cd7a674094cea0d1c91e7a7c13bcd78299d2d61d8b93f3"
 
 [[files]]
 path = "prompts/default_cn/postaction_l2_main.md"
-length = 5901
-sha256 = "8eb89c0d50c67843730c4e40c5fcabd427692eff42c2c8419bc7256905cb7e0a"
+length = 6976
+sha256 = "5ab57929b7f5edcdae0259ee49b1b63e1b8d1bcb39c66c1f7c402cbfb46aef6f"
 
 [[files]]
 path = "prompts/default_cn/precheck_l1_main.md"
-length = 4104
-sha256 = "ef8a45d817e266c4a69bbabd4437ae384082ee855a98e105b95f6c635b85ba01"
+length = 3673
+sha256 = "547c70b1077c6d8ad3542661e61592863de024bec2b9f906281136a466c2e9a4"
 
 [[files]]
 path = "prompts/default_cn/precheck_l2_main.md"
@@ -251,18 +251,18 @@ sha256 = "002abdf72660a1ba032571b941728fb826e3681dfdefe529d3e6d107a5726d3b"
 
 [[files]]
 path = "prompts/default_en/postaction_l1_main.md"
-length = 10238
-sha256 = "6e07c6a348a21dfa8d5adeb498d52ef5a8789fc211c699bf6552edee3a40a60d"
+length = 11286
+sha256 = "11fd5de8ee7192469b5e09ed0715958d54e1f93d0495b9eae97eca8a5cdca6c1"
 
 [[files]]
 path = "prompts/default_en/postaction_l2_main.md"
-length = 6218
-sha256 = "183d92826c4d07fb8afa681395b74aa30b2970ba2f59d8dadbc1c63294432f1c"
+length = 7460
+sha256 = "ee022fbb73eb52eeee26c378b64b88f009cfbb2e643bfd619fc50fdc5a32faf1"
 
 [[files]]
 path = "prompts/default_en/precheck_l1_main.md"
-length = 4241
-sha256 = "87bcb3f45b73d598b500c3a9e8aecb67df0460abd9fc50c1627fade68c3627cf"
+length = 3817
+sha256 = "74e0912df8a698e81ddac327cfcfbabdf269f119ff39075f8ae66afba85e130e"
 
 [[files]]
 path = "prompts/default_en/precheck_l2_main.md"
