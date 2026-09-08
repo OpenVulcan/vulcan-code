@@ -181,6 +181,9 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
   const [records, setRecords] = React.useState<VmmNativeMemoryRecordsSummary | null>(null)
   const [projectId, setProjectId] = React.useState("")
   const [sessionId, setSessionId] = React.useState(SESSION_OVERVIEW_VALUE)
+  // recordView separates raw turns from their generated memory and profile records.
+  // recordView 分离原始回合及其生成的记忆、画像记录。
+  const [recordView, setRecordView] = React.useState("turns")
   const [selectedTurn, setSelectedTurn] = React.useState<VmmNativeTurnRecordSummary | null>(null)
   const [selectedMemory, setSelectedMemory] = React.useState<VmmNativeMemoryRecordSummary | null>(null)
   const [selectedProfile, setSelectedProfile] = React.useState<VmmNativeProfileRecordSummary | null>(null)
@@ -378,13 +381,14 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
       <CardHeader className="gap-1">
         <CardTitle className="flex items-center gap-2 text-base">
           <Database className="size-4" aria-hidden="true" />
-          {t("memory.nativeRecords.title")}
+          {selectedSession ? nativeSessionLabel(selectedSession) : t("memory.nativeRecords.title")}
         </CardTitle>
         <CardDescription>{t("memory.nativeRecords.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {loadError ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionList.detailFailed")}</p> : null}
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+        <div className={initialSelection ? "flex justify-end" : "grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"}>
+          {!initialSelection ? <>
           <div className="space-y-2">
             <Label>{t("memory.nativeRecords.project")}</Label>
             <Select
@@ -424,6 +428,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               </SelectContent>
             </Select>
           </div>
+          </> : null}
           <Button
             disabled={effectiveBusy}
             onClick={() => {
@@ -518,7 +523,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
           </section>
         ) : null}
 
-        {records && selectedSession ? <NativeSessionSummary session={selectedSession} /> : null}
+        {records && selectedSession ? <details><summary className="cursor-pointer text-sm text-muted-foreground">{t("memory.workspace.recordInfo")}</summary><NativeSessionSummary session={selectedSession} /></details> : null}
         {records && selectedSession ? (
           <VmmNativeSessionArchive
             key={`${records.projectId}:${selectedSession.sessionSourceId}:${selectedSession.status}`}
@@ -536,7 +541,10 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
 
         {records ? (
           <>
-            <section className="space-y-3">
+            <div className="vmm-section-tabs">
+              {([['turns','memory.nativeRecords.turns',records.turns.length],['memories','memory.nativeRecords.memories',records.memories.length],['profiles','memory.nativeRecords.profileNodes',records.profileNodes.length]] as const).map(([id,label,count]) => <button key={id} type="button" aria-pressed={recordView === id} onClick={() => setRecordView(id)}>{t(label)} <span className="tabular-nums text-muted-foreground">{count}</span></button>)}
+            </div>
+            <section hidden={recordView !== "turns"} className="space-y-3">
               <h3 className="text-sm font-medium">
                 {t(projectOverview
                   ? "memory.nativeRecords.projectTurnRecords"
@@ -591,7 +599,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               )}
             </section>
 
-            <section className="space-y-3">
+            <section hidden={recordView !== "memories"} className="space-y-3">
               <h3 className="text-sm font-medium">
                 {t(projectOverview
                   ? "memory.nativeRecords.projectMemories"
@@ -636,7 +644,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               )}
             </section>
 
-            <section className="space-y-3">
+            <section hidden={recordView !== "profiles"} className="space-y-3">
               <h3 className="text-sm font-medium">{t("memory.nativeRecords.profileNodes")}</h3>
               {records.profileNodes.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noProfileNodes")}</p>

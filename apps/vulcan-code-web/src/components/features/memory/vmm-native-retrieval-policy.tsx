@@ -140,7 +140,7 @@ export function VmmNativeRetrievalPolicy({ settings, defaults, busy, onRunAction
   const parsed = parseRankingDraft(draft)
   const changed = parsed && (Object.keys(settings) as (keyof VmmNativeRetrievalPolicySummary)[]).some((key) => parsed[key] !== settings[key])
   const disabled = busy || pending
-  return <Card className="mx-auto mt-4 w-full max-w-5xl">
+  return <Card className="w-full min-w-0">
     <CardHeader><CardTitle>{t("memory.ranking.title")}</CardTitle><CardDescription>{t("memory.ranking.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}

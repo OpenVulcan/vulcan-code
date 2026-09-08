@@ -3,7 +3,6 @@ import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/feat
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
-import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu";
 
 // MemorySubAreaId identifies one service-projected VMM section.
 // MemorySubAreaId 标识一个由服务投影的 VMM 分区。
@@ -33,12 +32,19 @@ export function WorkspaceMemorySettings(props: {
   onSelectSubArea: (subArea: MemorySubAreaId) => void;
 }) {
   const {
-    activeSubArea,
     memoryActions,
     workbench,
   } = props;
+  // First-use content navigation exposes setup until a backend is configured.
+  // 首次使用时，在后端配置完成前将内容入口导向配置总览。
+  const activeSubArea = props.activeSubArea === "content" && workbench.vmmMemory.experienceState.deployment === "disabled" ? "overview" : props.activeSubArea;
 
   return (
+    <div className="vmm-workspace">
+      <div className="vmm-workspace-layout">
+      <MemoryWorkspaceNavigation activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
+      <div className="vmm-workspace-body">
+      <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
     <React.Suspense fallback={null}>
       <LazyMemoryArea
         activeSection={activeSubArea}
@@ -48,60 +54,75 @@ export function WorkspaceMemorySettings(props: {
         snapshot={workbench.vmmMemory}
       />
     </React.Suspense>
+      </div>
+      </div>
+    </div>
   );
 }
 
-// FloatingMemoryMenu renders the floating embedded memory selector.
-// FloatingMemoryMenu 渲染浮动内嵌记忆选择器。
-export function FloatingMemoryMenu(props: {
-  // Selected embedded memory sub page.
-  // 当前选中的内嵌记忆子页面。
+// MemoryNavigationProps binds stable section IDs to workspace selection.
+// MemoryNavigationProps 将稳定分区 ID 绑定到工作区选择。
+interface MemoryNavigationProps {
+  // Currently selected service section.
+  // 当前选中的服务分区。
   activeSubArea: MemorySubAreaId;
-  // Whether the menu is expanded.
-  // 菜单是否展开。
-  expanded: boolean;
-  // Updates the expanded menu state.
-  // 更新菜单展开状态。
-  onExpandedChange: (expanded: boolean) => void;
-  // Selects one embedded memory sub page.
-  // 选择一个内嵌记忆子页面。
+  // Receives a known service section ID.
+  // 接收已知的服务分区 ID。
   onSelectSubArea: (subArea: MemorySubAreaId) => void;
-  // Workbench snapshot containing VMM memory sections.
-  // 包含 VMM 记忆分区的工作台快照。
+  // Authoritative available sections and backend capabilities.
+  // 权威的可用分区与后端能力。
   workbench: WorkbenchSnapshot;
-}) {
-  const { t } = useI18n();
-  // rows stores the embedded memory menu rows.
-  // rows 保存内嵌记忆菜单行。
-  const rows = memoryMenuRows(props.workbench, t);
-  // activeMeta stores the selected menu label for the collapsed pill.
-  // activeMeta 保存收起胶囊展示的当前菜单标签。
-  const activeMeta = memorySubAreaMeta(props.activeSubArea, props.workbench, t);
+}
 
-  return (
-    <WorkspaceToolPanelMenu
-      activeLabel={activeMeta.label}
-      ariaLabel={t("workspaceToolPanel.memorySettingsMenu")}
-      collapseLabel={t("workspaceToolPanel.collapseToPill")}
-      expanded={props.expanded}
-      expandLabel={t("workspaceToolPanel.expandState")}
-      heading={t("workspaceToolPanel.menu")}
-      onExpandedChange={props.onExpandedChange}
-    >
-      {rows.map((row) => (
-        <button
-          className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
-          key={row.id}
-          onClick={() => props.onSelectSubArea(row.id)}
-          title={row.detail}
-          type="button"
-        >
-          {row.icon}
-          <span>{row.label}</span>
-        </button>
-      ))}
-    </WorkspaceToolPanelMenu>
-  );
+// serviceSections groups connection, runtime, and inference without changing backend IDs.
+// serviceSections 将连接、运行状态与推理归组，不改变后端 ID。
+const serviceSections = ["inference", "overview", "advanced"];
+
+// MemoryWorkspaceNavigation renders fixed task navigation. Props own selection; returns the navigation.
+// MemoryWorkspaceNavigation 渲染固定任务导航。props 持有选择状态；返回导航。
+function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
+  const { t } = useI18n();
+  // rows preserves capability filtering from the service snapshot.
+  // rows 保留服务快照的能力过滤。
+  const rows = memoryMenuRows(props.workbench, t);
+  // groups orders reading before management and configuration.
+  // groups 将阅读排在管理与配置之前。
+  const groups = [
+    { label: t("memory.workspace.read"), ids: ["content", "profile"] },
+    { label: t("memory.workspace.manage"), ids: ["identity_projects", "maintenance"] },
+    { label: t("memory.workspace.settings"), ids: ["rules", "service", "resource_rules"] },
+  ];
+  return <nav className="vmm-workspace-nav" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
+    {groups.map((group) => <div className="vmm-nav-group" key={group.label}>
+      <p className="vmm-nav-heading">{group.label}</p>
+      {group.ids.map((id) => {
+        // row resolves service navigation to the first supported destination.
+        // row 将服务导航解析到首个受支持的目标。
+        const row = id === "service"
+          ? rows.find((item) => item.id === "inference") ?? rows.find((item) => item.id === "overview")
+          : rows.find((item) => item.id === id);
+        if (!row) return null;
+        // active also highlights the parent when a service subpage is selected.
+        // active 在服务子页面被选中时也高亮其父入口。
+        const active = id === "service" ? serviceSections.includes(props.activeSubArea) : props.activeSubArea === id;
+        return <button key={id} type="button" className="vmm-nav-row" aria-current={active ? "page" : undefined}
+          onClick={() => props.onSelectSubArea(row.id)}>
+          {row.icon}<span>{id === "service" ? t("memory.workspace.service") : row.label}</span>
+        </button>;
+      })}
+    </div>)}
+  </nav>;
+}
+
+// MemoryServiceTabs exposes all supported service pages. Props own selection; returns tabs or null.
+// MemoryServiceTabs 暴露所有受支持的服务页面。props 持有选择状态；返回页签或空值。
+function MemoryServiceTabs(props: MemoryNavigationProps) {
+  const { t } = useI18n();
+  if (!serviceSections.includes(props.activeSubArea)) return null;
+  return <div className="vmm-section-tabs" aria-label={t("memory.workspace.service")}>
+    {memoryMenuRows(props.workbench, t).filter((row) => serviceSections.includes(row.id)).map((row) =>
+      <button key={row.id} type="button" aria-pressed={props.activeSubArea === row.id} onClick={() => props.onSelectSubArea(row.id)}>{row.label}</button>)}
+  </div>;
 }
 
 // memoryMenuRows builds embedded memory menu rows from the snapshot.

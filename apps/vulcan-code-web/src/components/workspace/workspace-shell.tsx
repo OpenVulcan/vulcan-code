@@ -23,7 +23,6 @@ import {
   WorkspaceSkillsSettings,
 } from "@/components/workspace/workspace-skills-settings";
 import {
-  FloatingMemoryMenu,
   memorySubAreaMeta,
   WorkspaceMemorySettings,
 } from "@/components/workspace/workspace-memory-settings";
@@ -194,9 +193,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // skillsMenuExpanded stores the shared adaptive menu state for the skills page.
   // skillsMenuExpanded 保存技能页共享自适应菜单展开状态。
   const [skillsMenuExpanded, setSkillsMenuExpanded] = React.useState(true);
-  // memoryMenuExpanded stores the shared adaptive menu state for the memory page.
-  // memoryMenuExpanded 保存记忆页共享自适应菜单展开状态。
-  const [memoryMenuExpanded, setMemoryMenuExpanded] = React.useState(true);
   // agentsMenuExpanded stores the shared adaptive menu state for the agents page.
   // agentsMenuExpanded 保存智能体页共享自适应菜单展开状态。
   const [agentsMenuExpanded, setAgentsMenuExpanded] = React.useState(true);
@@ -1342,23 +1338,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     detail: `${memoryHeaderMeta.label} · ${memoryHeaderMeta.detail}`,
     headerActions: null,
     title: t("workspaceShell.memoryTitle"),
-    toolPanels: [{
-      className: "workspace-tool-panel-page workspace-skills-settings workspace-memory-settings",
-      contentClassName: "workspace-skills-content workspace-memory-content",
-      contentShellClassName: "workspace-skills-content-shell",
-      expanded: memoryMenuExpanded,
-      onLayoutModeWillChange: notifyConversationLayoutWillChange,
-      panel: (
-        <FloatingMemoryMenu
-          activeSubArea={props.activeMemorySubArea}
-          expanded={memoryMenuExpanded}
-          onExpandedChange={setMemoryMenuExpanded}
-          onSelectSubArea={props.onSelectMemorySubArea}
-          workbench={props.workbench}
-        />
-      ),
-      side: "left",
-    }],
+
   } : props.mainView === "knowledge" ? {
     content: <React.Suspense fallback={null}><LazyKnowledgeBaseArea /></React.Suspense>,
     detail: t("area.knowledge.description"),
@@ -1487,7 +1467,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   };
 
   return (
-    <div className="workspace-panel-shell" ref={shellRef}>
+    <div className={`workspace-panel-shell${props.mainView === "memory" ? " vmm-workspace-host" : ""}`} ref={shellRef}>
       <ProjectSidebar
         activeProjectId={props.activeProjectId}
         projects={props.workbench.projects}

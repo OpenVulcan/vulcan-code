@@ -1,5 +1,7 @@
 import * as React from "react"
 import {
+  CircleAlert,
+  CircleCheck,
   Check,
   Cpu,
   Database,
@@ -16,10 +18,8 @@ import { PublicAiInternalOverridesDialog } from "@/components/features/settings/
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -297,27 +297,28 @@ export function VmmInferenceSettings({
       <div className="mb-3 flex items-start gap-2">
         <Database className="mt-0.5 shrink-0" size={17} />
         <div className="min-w-0">
-          <strong>{t("settings.inference.title")} · {t("settings.inference.profileVmm")}</strong>
+          <div className="flex items-center gap-2"><strong>{t("settings.inference.title")} · {t("settings.inference.profileVmm")}</strong><Tooltip><TooltipTrigger asChild><button type="button" aria-label={t("settings.inference.vmmReasoningNotice")} className="shrink-0 text-muted-foreground"><Info className="size-3.5" aria-hidden="true" /></button></TooltipTrigger><TooltipContent>{t("settings.inference.vmmReasoningNotice")}</TooltipContent></Tooltip></div>
           <p className="mt-0.5 text-xs text-muted-foreground">{t("settings.inference.subtitle")}</p>
         </div>
-      </div>
-      <div className="mb-3 flex items-start gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        <Info className="mt-0.5 size-3.5 shrink-0" />
-        <span>{t("settings.inference.vmmReasoningNotice")}</span>
       </div>
       {error ? <p className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
       {!snapshot ? (
         <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
       ) : (
         <>
-          <div className="grid gap-2 md:grid-cols-2">
+          <div className="vmm-inference-routes">
+            <div className="vmm-inference-columns text-xs text-muted-foreground" aria-hidden="true">
+              <span>{t("memory.workspace.purpose")}</span>
+              <div className="vmm-inference-controls"><span>{t("settings.inference.modelRegion")}</span><span>{t("settings.inference.accountRegion")}</span></div>
+              <span className="text-right">{t("memory.workspace.actions")}</span>
+            </div>
             {purposes.map((purpose) => (
               <InferenceRouteField
                 candidates={llmCandidates}
                 disabled={routesDisabled}
                 description={purpose.description}
                 key={purpose.id}
-                label={`${t("settings.inference.modelRegion")} · ${purpose.label}`}
+                label={purpose.label}
                 onConfigure={setEditingCandidate}
                 onChange={(route) => saveRoute(
                   "conversation_respond",
@@ -620,10 +621,10 @@ function InferenceRouteField(props: {
   ])
 
   return (
-    <div className="min-w-0 rounded-lg border p-2">
-      <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+    <div className="vmm-inference-route min-w-0">
+      <div className="vmm-inference-heading flex min-w-0 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1">
-          <label className="block truncate text-xs font-medium">{props.label}</label>
+          <label className="block text-sm font-medium">{props.label}</label>
           {props.description ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -655,14 +656,9 @@ function InferenceRouteField(props: {
           </label>
         ) : null}
       </div>
-      {props.showEnableToggle && !featureEnabled ? (
-        <p className="mb-1.5 text-[11px] text-muted-foreground">
-          {t("settings.inference.rerankDisabled")}
-        </p>
-      ) : null}
-      <div className="grid min-w-0 grid-cols-2 gap-1.5">
+      <div className="vmm-inference-controls">
         <div className="min-w-0">
-          <span className="mb-1 block text-[11px] text-muted-foreground">
+          <span className="vmm-inference-mobile-label mb-1 text-[11px] text-muted-foreground">
             {t("settings.inference.modelRegion")}
           </span>
           <InferencePickerControl
@@ -702,9 +698,10 @@ function InferenceRouteField(props: {
           />
         </div>
         <div className="min-w-0">
-          <span className="mb-1 block text-[11px] text-muted-foreground">
+          <span className="vmm-inference-mobile-label mb-1 text-[11px] text-muted-foreground">
             {t("settings.inference.accountRegion")}
           </span>
+          <div className="vmm-inference-account">
           <InferencePickerControl
             ariaLabel={`${props.label} · ${t("settings.inference.accountRegion")}`}
             disabled={props.disabled || !featureEnabled || selectedModelKey === null}
@@ -725,9 +722,17 @@ function InferenceRouteField(props: {
             showNoRoute={!props.showEnableToggle}
             value={selectedAccountKey}
           />
+          <InferenceRouteStatus
+            candidate={selectedCandidate}
+            enabled={featureEnabled}
+            routeConfigured={Boolean(props.route)}
+            testSummary={props.testSummary}
+            unavailableReason={props.unavailableReason}
+          />
+          </div>
         </div>
       </div>
-      <div className="mt-1.5 flex justify-end gap-1.5">
+      <div className="vmm-inference-actions flex justify-end gap-1.5">
         <Button
           aria-label={t("settings.inference.configureDefaults")}
           className="size-9 shrink-0"
@@ -763,29 +768,49 @@ function InferenceRouteField(props: {
           </Button>
         ) : null}
       </div>
-      {featureEnabled && selectedCandidate ? (
-        <div className="mt-1.5 space-y-0.5 break-words text-[11px] text-muted-foreground">
-          <p>
-            {selectedCandidate.serviceEntryDisplayName}
-            {" · "}
-            {t("settings.inference.credentialAvailable")}
-          </p>
-        </div>
-      ) : null}
-      {featureEnabled && props.unavailableReason ? (
-        <p className="mt-1.5 break-words text-xs text-destructive">
-          {formatSkillText(t("settings.inference.unavailableReason"), {
-            reason: props.unavailableReason,
-          })}
-        </p>
-      ) : null}
-      {props.testSummary ? (
-        <p className="mt-1.5 break-words text-xs text-emerald-600 dark:text-emerald-400">
-          {props.testSummary}
-        </p>
-      ) : null}
     </div>
   )
+}
+
+// InferenceRouteStatus renders a focusable status icon from authoritative route availability.
+// InferenceRouteStatus 根据权威路由可用性渲染可聚焦的状态图标。
+// Parameters identify the selected credential, enabled state, diagnostic and explicit test result.
+// 参数标识已选凭据、启用状态、诊断信息与明确的测试结果。
+// Returns a tooltip trigger; availability alone never claims a successful live connection test.
+// 返回提示触发器；仅凭可用性不会声称真实连接测试已经成功。
+function InferenceRouteStatus(props: {
+  // Exact selected credential, if it remains in the current catalog.
+  // 当前目录中仍然存在的精确已选凭据。
+  candidate: PublicAiInternalInferenceCandidate | undefined
+  // Whether the operation is enabled.
+  // 当前操作是否启用。
+  enabled: boolean
+  // Whether a route has been saved for this operation.
+  // 当前操作是否已保存路由。
+  routeConfigured: boolean
+  // Result of an explicitly requested live test.
+  // 明确请求的真实测试结果。
+  testSummary: string | undefined
+  // Authoritative diagnostic for this exact route.
+  // 此精确路由的权威诊断。
+  unavailableReason: string | undefined
+}) {
+  const { t } = useI18n()
+  // failed prioritizes diagnostics over a candidate that may still exist in the catalog.
+  // failed 优先采用诊断，避免目录中仍存在的候选遮蔽错误。
+  const failed = props.enabled && Boolean(props.unavailableReason || (props.routeConfigured && !props.candidate))
+  // available means the configured credential is selectable, not that a live test ran.
+  // available 表示配置凭据可选，不表示已经执行真实测试。
+  const available = props.enabled && !failed && Boolean(props.candidate)
+  // label uses the explicit backend diagnostic when available and distinguishes disabled routes.
+  // label 优先使用明确后端诊断，并区分未启用路由。
+  const label = !props.enabled ? t("settings.inference.rerankDisabled")
+    : props.unavailableReason ? formatSkillText(t("settings.inference.unavailableReason"), { reason: props.unavailableReason })
+    : failed ? t("settings.inference.unavailable")
+    : available ? t("settings.inference.credentialAvailable") : t("settings.inference.noRoute")
+  return <Tooltip><TooltipTrigger asChild><button type="button" aria-label={label} className={cn("vmm-inference-status", failed ? "text-destructive" : available ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
+    {failed ? <CircleAlert className="size-4" aria-hidden="true" /> : available ? <CircleCheck className="size-4" aria-hidden="true" /> : <Info className="size-4" aria-hidden="true" />}
+  </button></TooltipTrigger><TooltipContent><span>{label}{props.candidate ? <span className="mt-1 block">{props.candidate.serviceEntryDisplayName}</span> : null}{props.testSummary ? <span className="mt-1 block">{props.testSummary}</span> : null}</span></TooltipContent></Tooltip>
 }
 
 // InferencePickerControl renders the existing searchable model-picker visual language.
@@ -855,7 +880,7 @@ function InferencePickerControl(props: {
     ?? props.placeholder
 
   return (
-    <DropdownMenu
+    <Dialog
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen)
         if (!nextOpen) {
@@ -864,23 +889,20 @@ function InferencePickerControl(props: {
       }}
       open={open}
     >
-      <DropdownMenuTrigger asChild>
+      <DialogTrigger asChild>
         <Button
           aria-label={props.ariaLabel}
-          className="h-9 w-full min-w-0 justify-start gap-2 overflow-hidden px-3 font-normal"
+          className="h-auto min-h-10 w-full min-w-0 justify-start gap-2 px-3 py-2 font-normal"
           disabled={props.disabled}
           type="button"
           variant="outline"
         >
           <span className="shrink-0 text-muted-foreground">{props.icon}</span>
-          <span className="truncate">{triggerLabel}</span>
+          <span className="whitespace-normal break-words text-left">{triggerLabel}</span>
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        className="model-picker-content"
-        sideOffset={8}
-      >
+      </DialogTrigger>
+      <DialogContent className="vmm-model-dialog sm:max-w-2xl">
+        <DialogHeader><DialogTitle>{props.ariaLabel}</DialogTitle><DialogDescription>{props.filterPlaceholder}</DialogDescription></DialogHeader>
         <div className="model-picker-filter">
           <Search size={14} />
           <Input
@@ -894,14 +916,9 @@ function InferencePickerControl(props: {
         <ScrollArea className="model-picker-scroll">
           <div className="model-picker-list">
             {props.showNoRoute !== false ? (
-              <div
-                className={cn(
-                  "model-picker-group-row",
-                  props.value === null && "selected",
-                )}
-              >
                 <Button
-                  className="model-picker-group-main"
+                  className={cn("model-picker-row", props.value === null && "selected")}
+                  aria-pressed={props.value === null}
                   onClick={() => {
                     props.onValueChange(null)
                     setOpen(false)
@@ -918,7 +935,6 @@ function InferencePickerControl(props: {
                     </span>
                   </span>
                 </Button>
-              </div>
             ) : null}
             {filteredOptions.length === 0 ? (
               <div className="model-picker-empty">{props.emptyLabel}</div>
@@ -928,15 +944,10 @@ function InferencePickerControl(props: {
                 // selected 标记当前选择阶段的精确模型或账号身份。
                 const selected = option.key === props.value
                 return (
-                  <div
-                    className={cn(
-                      "model-picker-group-row",
-                      selected && "selected",
-                    )}
-                    key={option.key}
-                  >
                     <Button
-                      className="model-picker-group-main"
+                      key={option.key}
+                      className={cn("model-picker-row", selected && "selected")}
+                      aria-pressed={selected}
                       onClick={() => {
                         props.onValueChange(option.key)
                         setOpen(false)
@@ -951,16 +962,15 @@ function InferencePickerControl(props: {
                         <span className="model-picker-row-title">{option.title}</span>
                         <span className="model-picker-row-meta">{option.subtitle}</span>
                       </span>
-                    </Button>
                     <span className="model-picker-row-id">{option.trailing}</span>
-                  </div>
+                    </Button>
                 )
               })
             )}
           </div>
         </ScrollArea>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DialogContent>
+    </Dialog>
   )
 }
 

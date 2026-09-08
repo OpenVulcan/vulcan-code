@@ -325,9 +325,9 @@ export function WorkbenchLayout(props: {
   const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("catalog");
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
-  // activeWorkbenchMemorySubArea starts on the current product overview instead of a removed legacy id.
-  // activeWorkbenchMemorySubArea 从当前产品总览开始，而不是已移除的旧分区标识。
-  const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("overview");
+  // activeWorkbenchMemorySubArea starts with the memory reading workspace.
+  // activeWorkbenchMemorySubArea 从记忆阅读工作区开始。
+  const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("content");
   // initialDraftConversationRef computes the first-run draft once for local selection state.
   // initialDraftConversationRef 为本地选择状态只计算一次首次启动草稿。
   const initialDraftConversationRef = React.useRef<DraftConversationSelection | null | undefined>(undefined);

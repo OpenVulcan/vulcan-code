@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/empty"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type {
@@ -157,6 +158,9 @@ function VmmProfilePage({
   onRunAction,
 }: VmmProfilePageProps) {
   const { t } = useI18n()
+  // correctionOpen keeps correction separate from read-only profile browsing.
+  // correctionOpen 将修正操作与只读画像浏览分开。
+  const [correctionOpen, setCorrectionOpen] = React.useState(false)
   const isNative = vmmProfileUsesNativeProjectCatalog(snapshot.experienceState.deployment)
   const [target, setTarget] = React.useState<"user" | "project">("user")
   // selectedUserRef is the explicit VMM catalog user being inspected.
@@ -390,6 +394,7 @@ function VmmProfilePage({
       return
     }
     setInstruction("")
+    setCorrectionOpen(false)
     // A profile instruction returns only changed nodes; reload the complete active node list and preview.
     // 画像指令只返回发生变化的节点；随后重新加载完整活跃节点列表与预览。
     await refreshProfile()
@@ -406,7 +411,7 @@ function VmmProfilePage({
   ])
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("memory.profile.title")}</h2>
@@ -414,6 +419,8 @@ function VmmProfilePage({
             {profileDescription}
           </p>
         </div>
+        <div className="flex flex-wrap gap-2">
+        <Button disabled={busy || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)}>{t("memory.profile.instruction")}</Button>
         <Button
           disabled={busy}
           onClick={() => void refreshProfile()}
@@ -422,10 +429,10 @@ function VmmProfilePage({
         >
           <RefreshCw className="size-4" aria-hidden="true" />
           {t("memory.profile.refresh")}
-        </Button>
+        </Button></div>
       </div>
 
-      <Card>
+      <Card className="vmm-profile-target">
         <CardHeader>
           <CardTitle>{t("memory.profile.target")}</CardTitle>
           <CardDescription>
@@ -437,7 +444,7 @@ function VmmProfilePage({
         </CardHeader>
         <CardContent className="space-y-4">
           <RadioGroup
-            className="grid gap-3 sm:grid-cols-2"
+            className="flex flex-wrap gap-3"
             disabled={busy || !profileCatalogReady}
             onValueChange={(value) => {
               setTarget(value as "user" | "project")
@@ -505,7 +512,7 @@ function VmmProfilePage({
       </Card>
 
       {isNative && nativeStateCounts ? (
-        <Card>
+        <Card className="vmm-profile-counts">
           <CardHeader>
             <CardTitle>{t("memory.profile.stateSummary")}</CardTitle>
             <CardDescription>{t("memory.profile.stateSummaryDescription")}</CardDescription>
@@ -529,7 +536,7 @@ function VmmProfilePage({
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="vmm-profile-list">
           {nodes.map((node, index) => (
             <Card key={`${node.content}-${index}`}>
               <CardContent className="space-y-3 pt-5">
@@ -594,12 +601,13 @@ function VmmProfilePage({
         </div>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("memory.profile.instruction")}</CardTitle>
-          <CardDescription>{profileDescription}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <Dialog open={correctionOpen} onOpenChange={(open) => { if (!busy) setCorrectionOpen(open) }}>
+        <DialogContent className="sm:max-w-xl" onInteractOutside={(event) => { if (busy) event.preventDefault() }} onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
+        <DialogHeader>
+          <DialogTitle>{t("memory.profile.instruction")}</DialogTitle>
+          <DialogDescription>{t(effectiveTarget === "user" ? "memory.profile.user" : "memory.profile.project")} · {selectedTargetDescription}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
           <Label htmlFor="vmm-profile-instruction">{t("memory.profile.instruction")}</Label>
           <Textarea
             className="min-h-28"
@@ -624,8 +632,9 @@ function VmmProfilePage({
               {t("memory.profile.applyInstruction")}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+        </DialogContent>
+      </Dialog>
 
       {bundleModeError ? <p role="alert" className="text-sm text-destructive">{t("memory.profile.invalidBundleMode")}</p> : null}
       {bundlePreview ? (

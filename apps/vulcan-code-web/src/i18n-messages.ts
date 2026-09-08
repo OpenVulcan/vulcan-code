@@ -5,6 +5,27 @@ export type LocaleCode = "zh-CN" | "en-US"
 // TranslationKey describes text keys currently localized at the shell level.
 // TranslationKey 描述当前在外壳层支持本地化的文本键。
 export type TranslationKey =
+  | "memory.workspace.read"
+  | "memory.workspace.purpose"
+  | "memory.workspace.actions"
+  | "memory.workspace.manage"
+  | "memory.workspace.settings"
+  | "memory.workspace.service"
+  | "memory.workspace.browse"
+  | "memory.workspace.search"
+  | "memory.workspace.searchScope"
+  | "memory.workspace.filters"
+  | "memory.workspace.selectSession"
+  | "memory.workspace.editScope"
+  | "memory.workspace.basic"
+  | "memory.workspace.globalPolicy"
+  | "memory.workspace.scopeHint"
+  | "memory.workspace.recordInfo"
+  | "memory.workspace.projectRules"
+  | "memory.workspace.effectiveFiles"
+  | "memory.workspace.otherFiles"
+  | "memory.workspace.index"
+  | "memory.workspace.cleanup"
   | "app.subtitle"
   | "notifications.appTitle"
   | "notifications.completed.generic"
@@ -2014,6 +2035,7 @@ export type TranslationKey =
   | "memory.maintenance.reasonManualSession"
   | "memory.maintenance.reasonManualTurn"
   | "memory.maintenance.manualSources"
+  | "vmm.experience.deployment.native"
   | "vmm.experience.deployment.disabled"
   | "vmm.experience.deployment.external"
   | "vmm.experience.setup.notConfigured"
@@ -3327,6 +3349,27 @@ export type TranslationKey =
 // translations 保存外壳层本地化标签。
 export const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
   "zh-CN": {
+    "memory.workspace.read": "查看",
+    "memory.workspace.purpose": "用途",
+    "memory.workspace.actions": "操作",
+    "memory.workspace.manage": "管理",
+    "memory.workspace.settings": "设置",
+    "memory.workspace.service": "模型与服务",
+    "memory.workspace.browse": "会话与记忆",
+    "memory.workspace.search": "语义查询",
+    "memory.workspace.searchScope": "查询使用当前工作项目的召回范围，与会话浏览中选择的记忆项目独立。",
+    "memory.workspace.filters": "筛选条件",
+    "memory.workspace.selectSession": "选择会话查看原始对话、提炼结果与长期内容。",
+    "memory.workspace.editScope": "编辑范围",
+    "memory.workspace.basic": "启用与自动处理",
+    "memory.workspace.globalPolicy": "全局处理规则",
+    "memory.workspace.scopeHint": "先选择范围。全局默认不会覆盖项目已有的独立设置。",
+    "memory.workspace.recordInfo": "状态与记录信息",
+    "memory.workspace.projectRules": "项目独立规则",
+    "memory.workspace.effectiveFiles": "当前生效组合",
+    "memory.workspace.otherFiles": "其他资源文件",
+    "memory.workspace.index": "检索索引",
+    "memory.workspace.cleanup": "清洗运行状态",
     "app.subtitle": "Ai Coding",
     "notifications.appTitle": "Vulcan Code",
     "notifications.completed.generic": "会话已完成",
@@ -4241,7 +4284,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceToolPanel.status": "状态",
     "workspaceShell.skillsTitle": "插件",
     "workspaceShell.agentsTitle": "智能体设置",
-    "workspaceShell.memoryTitle": "记忆设置",
+    "workspaceShell.memoryTitle": "记忆工作区",
     "workspaceShell.version": "版本 {version}",
     "workspacePanel.resizeRight": "调整右侧面板宽度",
     "workspaceContext.switchTabs": "切换右侧页签",
@@ -4681,7 +4724,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.common.apply": "应用",
     "memory.common.loading": "处理中…",
     "memory.rules.title": "记忆规则",
-    "memory.rules.description": "先调整规则，再一次性应用到所有项目或一个指定项目。",
+    "memory.rules.description": "先选择编辑范围，再调整该范围的记忆规则。",
     "memory.rules.enable": "启用长期记忆",
     "memory.rules.enableDescription": "允许 Vulcan Code 为会话保存和召回长期记忆。",
     "memory.rules.recall": "自动召回",
@@ -4696,7 +4739,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.rules.applySettings": "应用设置",
     "memory.rules.applyTitle": "选择应用范围",
     "memory.rules.applyDescription": "这次修改只会写入一个明确范围，不会批量覆盖未选择的项目。",
-    "memory.rules.allProjects": "所有项目（全局默认）",
+    "memory.rules.allProjects": "全局默认",
     "memory.rules.oneProject": "一个指定项目",
     "memory.rules.selectProject": "选择项目",
     "memory.rules.searchProject": "搜索项目…",
@@ -4711,7 +4754,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.contextAdjustment": "情境净调整",
     "memory.content.contextNotObserved": "本次未评估情境证据，不代表没有已存证据。",
     "memory.content.description": "使用自然语言搜索、查看和维护当前用户与项目的长期记忆。",
-    "memory.content.nativeDescription": "使用自然语言搜索、查看和维护当前绑定原生记忆项目中的长期记忆。",
+    "memory.content.nativeDescription": "浏览记忆项目中的会话与长期内容，或按当前工作项目的召回范围进行语义查询。",
     "memory.content.sessionRequiredTitle": "新增记忆需要关联会话",
     "memory.content.sessionRequired": "请先在工作台打开一个具体会话，再返回此处新增记忆。检索和查看现有记忆不受影响。",
     "memory.content.search": "搜索记忆",
@@ -5018,7 +5061,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.save": "保存高级设置",
     "memory.advanced.backupRebuild": "备份并重建",
     "memory.resources.title": "原生资源与规则",
-    "memory.resources.description": "按提示词、PII 与噪音分页选择组合、验证规则并维护用户目录覆盖；编辑器只显示当前实际生效内容。",
+    "memory.resources.description": "按提示词、PII 与噪音管理规则组合和文件。浏览其他文件不会切换当前组合；PII 与噪音组合包含 common 通用规则。",
     "memory.resources.invalidResponse": "原生 VMM 资源接口返回了不匹配的结果。",
     "memory.policy.title": "原生默认策略 · 召回与提炼",
     "memory.textPolicy.title": "文本入库清洗",
@@ -5164,7 +5207,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.beginPromptEdit": "了解风险并准备编辑",
     "memory.resources.builtInSource": "内置原文（只读）",
     "memory.resources.effectiveEditor": "生效内容 / 用户覆盖",
-    "memory.resources.saveFile": "保存文件并立即应用",
+    "memory.resources.saveFile": "保存文件",
     "memory.resources.restoreBuiltIn": "恢复内置内容",
     "memory.resources.piiTester": "PII 规则测试器",
     "memory.resources.piiTesterDescription": "使用当前 common 与所选区域规则执行真实脱敏；规则中的 condition 公式由 Core 权威求值器执行，不调用 LLM。",
@@ -5204,7 +5247,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.unlocked": "已解锁",
     "memory.resources.locked": "禁止编辑",
     "memory.resources.guardedEdit": "受保护的规则修改",
-    "memory.resources.currentEffective": "当前生效内容",
+    "memory.resources.currentEffective": "所选文件内容",
     "memory.resources.composition": "当前规则组合",
     "memory.resources.compositionDescription": "只配置当前分页对应的语言、区域或策略；保存后立即校验并热更新。",
     "memory.resources.piiPurpose": "PII 规则在内容进入记忆处理前执行本地脱敏；正则、捕获组、condition 公式和 replacement 必须保持合法。",
@@ -5318,6 +5361,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.reasonManualSession": "人工回收会话",
     "memory.maintenance.reasonManualTurn": "人工回收回合",
     "memory.maintenance.manualSources": "查看原始人工选择",
+    "vmm.experience.deployment.native": "内置原生 VMM",
     "vmm.experience.deployment.disabled": "未启用",
     "vmm.experience.deployment.external": "外部服务",
     "vmm.experience.setup.notConfigured": "未配置",
@@ -6164,7 +6208,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.embedding": "向量",
     "settings.inference.rerank": "重排",
     "settings.inference.rerankEnabled": "启用 Rerank",
-    "settings.inference.rerankDisabled": "重排已关闭。勾选后选择模型；保存配置后需要重启 VMM。",
+    "settings.inference.rerankDisabled": "重排未启用（可选）。启用后选择模型和账号。",
     "settings.inference.noRoute": "未配置",
     "settings.inference.modelRegion": "模型",
     "settings.inference.accountRegion": "账号",
@@ -6646,6 +6690,27 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providers.savePriority": "保存",
   },
   "en-US": {
+    "memory.workspace.read": "Browse",
+    "memory.workspace.purpose": "Purpose",
+    "memory.workspace.actions": "Actions",
+    "memory.workspace.manage": "Manage",
+    "memory.workspace.settings": "Settings",
+    "memory.workspace.service": "Models and service",
+    "memory.workspace.browse": "Sessions and memories",
+    "memory.workspace.search": "Semantic search",
+    "memory.workspace.searchScope": "Search uses the current workspace project recall scope, independently of the memory project selected for browsing.",
+    "memory.workspace.filters": "Filters",
+    "memory.workspace.selectSession": "Select a session to read its conversation, extraction results, and retained content.",
+    "memory.workspace.editScope": "Editing scope",
+    "memory.workspace.basic": "Enablement and automation",
+    "memory.workspace.globalPolicy": "Global processing rules",
+    "memory.workspace.scopeHint": "Choose a scope first. Global defaults do not replace existing project overrides.",
+    "memory.workspace.recordInfo": "Status and record information",
+    "memory.workspace.projectRules": "Project overrides",
+    "memory.workspace.effectiveFiles": "Active composition",
+    "memory.workspace.otherFiles": "Other resource files",
+    "memory.workspace.index": "Search indexes",
+    "memory.workspace.cleanup": "Cleanup status",
     "app.subtitle": "Ai Coding",
     "notifications.appTitle": "Vulcan Code",
     "notifications.completed.generic": "Conversation completed",
@@ -7560,7 +7625,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceToolPanel.status": "Status",
     "workspaceShell.skillsTitle": "Plugins",
     "workspaceShell.agentsTitle": "Agent settings",
-    "workspaceShell.memoryTitle": "Memory settings",
+    "workspaceShell.memoryTitle": "Memory workspace",
     "workspaceShell.version": "Version {version}",
     "workspacePanel.resizeRight": "Resize right panel",
     "workspaceContext.switchTabs": "Switch right tabs",
@@ -8000,7 +8065,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.common.apply": "Apply",
     "memory.common.loading": "Working…",
     "memory.rules.title": "Memory rules",
-    "memory.rules.description": "Adjust the rules first, then apply them once to all projects or one selected project.",
+    "memory.rules.description": "Choose the editing scope, then adjust its memory rules.",
     "memory.rules.enable": "Enable durable memory",
     "memory.rules.enableDescription": "Allow Vulcan Code to save and recall durable memory for conversations.",
     "memory.rules.recall": "Automatic recall",
@@ -8015,7 +8080,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.rules.applySettings": "Apply settings",
     "memory.rules.applyTitle": "Choose where to apply",
     "memory.rules.applyDescription": "This change writes to one explicit scope and never overwrites unselected projects in bulk.",
-    "memory.rules.allProjects": "All projects (global default)",
+    "memory.rules.allProjects": "Global defaults",
     "memory.rules.oneProject": "One selected project",
     "memory.rules.selectProject": "Select a project",
     "memory.rules.searchProject": "Search projects…",
@@ -8030,7 +8095,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.contextAdjustment": "Net context adjustment",
     "memory.content.contextNotObserved": "Context evidence was not evaluated for this query; stored evidence may still exist.",
     "memory.content.description": "Use natural language to search, inspect, and maintain durable memory for the current user and project.",
-    "memory.content.nativeDescription": "Use natural language to search, inspect, and maintain durable memory in the currently bound native memory project.",
+    "memory.content.nativeDescription": "Browse sessions and durable content in memory projects, or search within the current work project's recall scope.",
     "memory.content.sessionRequiredTitle": "A conversation is required to add memory",
     "memory.content.sessionRequired": "Open a specific conversation in the workbench before adding memory here. Searching and inspecting existing memory remain available.",
     "memory.content.search": "Search memory",
@@ -8337,7 +8402,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.save": "Save advanced settings",
     "memory.advanced.backupRebuild": "Back up and rebuild",
     "memory.resources.title": "Native resources and rules",
-    "memory.resources.description": "Select, validate, and override Prompt, PII, and Noise resources by category. The editor shows only the currently effective content.",
+    "memory.resources.description": "Manage Prompt, PII, and Noise compositions and files. Browsing alternatives does not switch the active composition; PII and Noise include common rules.",
     "memory.resources.invalidResponse": "The native VMM resource API returned an unexpected result.",
     "memory.policy.title": "Native defaults · Recall and extraction",
     "memory.textPolicy.title": "Text intake cleanup",
@@ -8483,7 +8548,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.beginPromptEdit": "Understand risk and prepare editing",
     "memory.resources.builtInSource": "Built-in source (read-only)",
     "memory.resources.effectiveEditor": "Effective content / user override",
-    "memory.resources.saveFile": "Save file and apply now",
+    "memory.resources.saveFile": "Save file",
     "memory.resources.restoreBuiltIn": "Restore built-in content",
     "memory.resources.piiTester": "PII rule tester",
     "memory.resources.piiTesterDescription": "Runs the active common-plus-locale scrubber; Core's authoritative evaluator executes every condition formula without invoking an LLM.",
@@ -8523,7 +8588,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.unlocked": "Unlocked",
     "memory.resources.locked": "Editing locked",
     "memory.resources.guardedEdit": "Protected rule modification",
-    "memory.resources.currentEffective": "Current effective content",
+    "memory.resources.currentEffective": "Selected file content",
     "memory.resources.composition": "Active rule composition",
     "memory.resources.compositionDescription": "Configure only this category's language, locale, or policy. Saving validates and hot-reloads it immediately.",
     "memory.resources.piiPurpose": "PII rules scrub content locally before memory processing. Regex, captures, condition formulas, and replacements must remain valid.",
@@ -8637,6 +8702,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.reasonManualSession": "Manually recycled sessions",
     "memory.maintenance.reasonManualTurn": "Manually recycled turns",
     "memory.maintenance.manualSources": "Inspect original manual selection",
+    "vmm.experience.deployment.native": "Built-in VMM",
     "vmm.experience.deployment.disabled": "Disabled",
     "vmm.experience.deployment.external": "External service",
     "vmm.experience.setup.notConfigured": "Not configured",
@@ -9483,7 +9549,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.embedding": "Embeddings",
     "settings.inference.rerank": "Rerank",
     "settings.inference.rerankEnabled": "Enable rerank",
-    "settings.inference.rerankDisabled": "Rerank is off. Check the box and select a model; saving requires a VMM restart.",
+    "settings.inference.rerankDisabled": "Optional reranking is off. Enable it, then choose a model and account.",
     "settings.inference.noRoute": "Not configured",
     "settings.inference.modelRegion": "Model",
     "settings.inference.accountRegion": "Account",

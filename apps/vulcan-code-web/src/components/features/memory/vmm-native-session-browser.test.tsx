@@ -79,7 +79,7 @@ function button(container: ParentNode, label: string): HTMLButtonElement {
 it("loads only a bounded summary page and opens exact source identity without project-body prefetch", async () => {
   const view = await mount()
   try {
-    expect(view.onRunAction.mock.calls).toEqual([["native_project_catalog"], ["native_session_list", nativeSessionInitialQuery(7)]])
+    expect(view.onRunAction.mock.calls).toEqual([["native_project_catalog", undefined], ["native_session_list", nativeSessionInitialQuery(7)]])
     expect(view.container.textContent).toContain("共 21 个会话")
     await act(async () => button(view.container, "显示标题 0").click())
     expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_memory_records")).toEqual([["native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" }]])
@@ -87,13 +87,15 @@ it("loads only a bounded summary page and opens exact source identity without pr
   } finally { await view.dispose() }
 })
 
-it("keeps project-wide provenance explicit and returns to fresh lightweight browsing", async () => {
+it("keeps project-wide provenance explicit and preserves the retained list on return", async () => {
   const view = await mount()
   try {
     await act(async () => button(view.container, "查看项目全部来源").click())
     expect(view.onRunAction).toHaveBeenLastCalledWith("native_memory_records", { vmmProjectId: 7 })
     await act(async () => button(view.container, "返回会话列表").click())
-    expect(view.onRunAction).toHaveBeenLastCalledWith("native_session_list", nativeSessionInitialQuery(7))
+    expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_session_list")).toEqual([["native_session_list", nativeSessionInitialQuery(7)]])
+    expect(view.container.textContent).toContain("共 21 个会话")
+    expect(view.container.querySelector(".vmm-session-detail")).toBeNull()
   } finally { await view.dispose() }
 })
 
@@ -105,6 +107,11 @@ it("pages using the accepted version and clears selections that are no longer vi
     await act(async () => button(view.container, "下一页").click())
     expect(view.onRunAction).toHaveBeenLastCalledWith("native_session_list", { ...nativeSessionInitialQuery(7), offset: 20, expectedStorageVersion: 42 })
     expect(view.container.textContent).toContain("已选 0 个会话")
+    expect(view.container.textContent).toContain("显示标题 20")
+    expect(button(view.container, "下一页").disabled).toBe(true)
+    await act(async () => button(view.container, "显示标题 20").click())
+    await act(async () => button(view.container, "返回会话列表").click())
+    expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_session_list")).toHaveLength(2)
     expect(view.container.textContent).toContain("显示标题 20")
     expect(button(view.container, "下一页").disabled).toBe(true)
     await act(async () => button(view.container, "上一页").click())
@@ -172,6 +179,25 @@ it("previews all selected stable IDs and confirms only the server preview identi
   } finally { await view.dispose() }
 })
 
+it("refreshes the open detail after archiving from the retained list", async () => {
+  // view retains both the list and its selected source detail during the batch action.
+  // view 在批量操作期间同时保留列表及其已选来源详情。
+  const view = await mount()
+  try {
+    await act(async () => button(view.container, "显示标题 0").click())
+    // list isolates the batch action from the individual action in the reading pane.
+    // list 区分批量操作与阅读区中的单条操作。
+    const list = view.container.querySelector(".vmm-session-browser")!
+    await act(async () => list.querySelector<HTMLInputElement>('input[type="checkbox"][aria-label]')!.click())
+    await act(async () => button(list, "归档会话").click())
+    await act(async () => button(document.querySelector('[role="alertdialog"]')!, "确认变更").click())
+    expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_memory_records")).toEqual([
+      ["native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" }],
+      ["native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" }],
+    ])
+  } finally { await view.dispose() }
+})
+
 it("does not silently drop mixed-state rows from a bulk archive", async () => {
   const view = await mount({ mixed: true })
   try {
@@ -208,7 +234,10 @@ it("maps selected visible turns to canonical IDs and refreshes the exact source 
     await act(async () => button(view.container, "预览回收所选回合 (2)").click())
     expect(view.onRunAction).toHaveBeenLastCalledWith("native_removal_preview", { vmmProjectId: 7, selection: { kind: "turns", ids: ["vmm-turn-2", "vmm-turn-10"] } })
     await act(async () => button(document, "确认移入回收站").click())
-    expect(view.onRunAction).toHaveBeenLastCalledWith("native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" })
+    expect(view.onRunAction.mock.calls.slice(-2)).toEqual([
+      ["native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" }],
+      ["native_session_list", nativeSessionInitialQuery(7)],
+    ])
     expect(button(view.container, "预览回收所选回合 (0)").disabled).toBe(true)
   } finally { await view.dispose() }
 })
@@ -249,7 +278,7 @@ it("shows detail failure and retries the same exact session without a full-proje
     await act(async () => button(view.container, "显示标题 0").click())
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain("未能加载来源详情")
     expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_memory_records")).toHaveLength(1)
-    await act(async () => button(view.container, "刷新记录").click())
+    await act(async () => button(view.container.querySelector(".vmm-session-detail")!, "刷新记录").click())
     expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_memory_records")).toEqual([
       ["native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" }],
       ["native_memory_records", { vmmProjectId: 7, sessionSourceId: "source-0" }],

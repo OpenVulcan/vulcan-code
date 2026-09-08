@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useI18n } from "@/i18n"
 
 import type { VmmConfigDraftSummary, VmmMemorySnapshot } from "@/types"
 
@@ -141,9 +142,13 @@ export function MemoryArea(props: {
   // 从页面内部操作选择另一个 VMM 分区。
   onSelectSection: (section: MemorySubAreaId) => void
 }) {
+  const { t } = useI18n()
+  // rulesView separates enablement drafts from native runtime policies.
+  // rulesView 区分启用草稿与原生运行策略。
+  const [rulesView, setRulesView] = React.useState<"basic" | "runtime">("basic")
   // activeSection falls back to overview when stale navigation references an unavailable page.
   // activeSection 在旧导航引用不可用页面时回退到总览。
-  const activeSection = vmmVisibleSection(props.activeSection)
+  const activeSection = props.activeSection === "content" && props.snapshot.experienceState.deployment === "disabled" ? "overview" : vmmVisibleSection(props.activeSection)
   // controller owns exact draft routes and the exclusive asynchronous operation channel.
   // controller 持有准确草稿路由与独占异步操作通道。
   const controller = useMemoryAreaController({
@@ -163,6 +168,11 @@ export function MemoryArea(props: {
     saveDraft,
     setGlobalDraft,
   } = controller;
+  // Leaving project-rule editing restores the normal management action scope.
+  // 离开项目规则编辑时恢复普通管理动作范围。
+  React.useEffect(() => {
+    if (activeSection !== "rules" && !operationBusy) controller.selectScope("global")
+  }, [activeSection, operationBusy, controller.selectScope])
   // setupDialogOpen controls the first-time native or external VMM setup workflow.
   // setupDialogOpen 控制首次原生或外置 VMM 快速配置流程。
   const [setupDialogOpen, setSetupDialogOpen] = React.useState(false)
@@ -408,17 +418,30 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
+            {nativeDeployment ? <div className="vmm-section-tabs">
+              <button type="button" aria-pressed={rulesView === "basic"} onClick={() => setRulesView("basic")}>{t("memory.workspace.basic")}</button>
+              <button type="button" aria-pressed={rulesView === "runtime"} onClick={() => setRulesView("runtime")}>{t("memory.workspace.globalPolicy")}</button>
+            </div> : null}
+            <div hidden={nativeDeployment && rulesView !== "basic"}>
             <VmmRulesPage
               busy={operationBusy}
-              draft={globalDraft}
+              draft={controller.scope === "global" ? globalDraft : controller.projectDraft}
+              draftReady={controller.scope === "global" || controller.projectDraftReady}
+              scope={controller.scope}
+              projectId={controller.projectId}
+              onSelectScope={(scope, projectId) => {
+                controller.selectScope(scope)
+                if (scope === "project" && projectId) void controller.selectProject(projectId)
+              }}
               notice={notice}
               onApply={applyDraft}
-              onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
+              onChange={controller.setActiveDraft}
               projects={props.snapshot.projectScopes}
             />
-            {vmmUsesNativeMemoryMaintenance(props.snapshot.experienceState.deployment) ? (
+            </div>
+            {nativeDeployment ? <div hidden={rulesView !== "runtime"}>
               <VmmNativeRuntimePolicy busy={operationBusy} onRunAction={runAction} />
-            ) : null}
+            </div> : null}
           </main>
         </div>
       </section>

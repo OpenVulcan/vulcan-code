@@ -45,6 +45,9 @@ export function parseProjectRetention(draft: Draft): VmmNativeProjectRetentionRu
 // Props accept the already-loaded native catalog and the page's serialized action transport.
 // 属性接收已加载原生目录及页面串行化动作传输。
 interface Props {
+  // An explicit parent selection removes the duplicate picker without changing saved ownership.
+  // 父级显式选择用于移除重复选择器，不改变已保存归属。
+  selectedProjectId?: number
   projects: VmmNativeProjectSummary[]
   busy: boolean
   onRunAction: (action: string, payload?: Record<string, unknown>) => Promise<VmmMemoryActionResult | null>
@@ -52,18 +55,22 @@ interface Props {
 
 // Displays named project choices; the keyed editor prevents late responses from crossing project identity.
 // 显示项目名称选项；按身份挂载编辑器，防止迟到响应跨越项目身份。
-export function VmmNativeProjectRetention({ projects, busy, onRunAction }: Props) {
+export function VmmNativeProjectRetention({ projects, busy, onRunAction, selectedProjectId }: Props) {
   const { t } = useI18n()
   const [selectedId, setSelectedId] = React.useState("")
-  const selected = projects.find((project) => String(project.projectId) === selectedId)
+  // effectiveId belongs either to the explicit parent or this component's standalone picker.
+  // effectiveId 属于显式父级或本组件独立选择器。
+  const effectiveId = selectedProjectId === undefined ? selectedId : String(selectedProjectId)
+  const selected = projects.find((project) => String(project.projectId) === effectiveId)
   return <Card>
     <CardHeader><CardTitle>{t("memory.projectRetention.title")}</CardTitle><CardDescription>{t("memory.projectRetention.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
+      {selectedProjectId === undefined ? <>
       <Label htmlFor="retention-project">{t("memory.projectRetention.select")}</Label>
       <Select disabled={busy} value={selected ? selectedId : ""} onValueChange={setSelectedId}>
         <SelectTrigger id="retention-project" className="w-full"><SelectValue placeholder={t("memory.projectRetention.select")} /></SelectTrigger>
         <SelectContent>{projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent>
-      </Select>
+      </Select></> : null}
       {selected ? <ProjectRetentionEditor key={selected.projectId} projectId={selected.projectId} busy={busy} onRunAction={onRunAction} /> : null}
     </CardContent>
   </Card>

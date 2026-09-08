@@ -109,6 +109,9 @@ interface VmmNativeRuntimePolicyProps {
 // VmmNativeRuntimePolicy 渲染有效全局默认策略，并仅保存显式用户编辑。
 export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePolicyProps) {
   const { t } = useI18n()
+  // policyTab controls visibility only; all loaded drafts retain their ownership.
+  // policyTab 仅控制可见性；已加载草稿均保留其归属。
+  const [policyTab, setPolicyTab] = React.useState("recall")
   const [policy, setPolicy] = React.useState<VmmNativeRuntimePolicySummary | null>(null)
   const [draft, setDraft] = React.useState<RecallDraft | null>(null)
   const [pending, setPending] = React.useState(false)
@@ -172,7 +175,11 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePo
   const changed = parsed && policy && recallKeys.some((key) => parsed[key] !== policy.recall[key])
   const disabled = busy || pending
 
-  return <><Card className="mx-auto mt-4 w-full max-w-5xl">
+  return <>
+    <div className="vmm-section-tabs">
+      {([['recall', 'memory.policy.title'], ['text', 'memory.textPolicy.title'], ['profile', 'memory.profilePolicy.title'], ['retrieval', 'memory.ranking.title'], ['retention', 'memory.cleanup.title']] as const).map(([id, label]) => <button key={id} type="button" aria-pressed={policyTab === id} onClick={() => setPolicyTab(id)}>{t(label)}</button>)}
+    </div>
+    <div hidden={policyTab !== "recall"}><Card className="w-full min-w-0">
     <CardHeader>
       <CardTitle>{t("memory.policy.title")}</CardTitle>
       <CardDescription>{t("memory.policy.description")}</CardDescription>
@@ -215,14 +222,14 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePo
         </Button>
       </div>
     </CardContent>
-  </Card>
-    {policy ? <VmmNativeTextPolicy settings={policy.text} defaults={policy.textDefaults}
-      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /> : null}
-    {policy ? <VmmNativeProfilePolicy settings={policy.profiles} defaults={policy.profileDefaults}
-      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /> : null}
-    {policy ? <VmmNativeRetrievalPolicy settings={policy.retrieval} defaults={policy.retrievalDefaults}
-      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /> : null}
-    {policy ? <VmmNativeRetentionSettings settings={policy.retention} defaults={policy.retentionDefaults}
-      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /> : null}
+  </Card></div>
+    {policy ? <div hidden={policyTab !== "text"}><VmmNativeTextPolicy settings={policy.text} defaults={policy.textDefaults}
+      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /></div> : null}
+    {policy ? <div hidden={policyTab !== "profile"}><VmmNativeProfilePolicy settings={policy.profiles} defaults={policy.profileDefaults}
+      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /></div> : null}
+    {policy ? <div hidden={policyTab !== "retrieval"}><VmmNativeRetrievalPolicy settings={policy.retrieval} defaults={policy.retrievalDefaults}
+      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /></div> : null}
+    {policy ? <div hidden={policyTab !== "retention"}><VmmNativeRetentionSettings settings={policy.retention} defaults={policy.retentionDefaults}
+      busy={disabled} onRunAction={onRunAction} onSaved={setPolicy} /></div> : null}
   </>
 }

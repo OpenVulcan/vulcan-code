@@ -71,7 +71,7 @@ export function VmmNativeTextPolicy({ settings, defaults, busy, onRunAction, onS
       if (mounted.current) setPending(false)
     }
   }
-  return <Card className="mx-auto mt-4 w-full max-w-5xl">
+  return <Card className="w-full min-w-0">
     <CardHeader><CardTitle>{t("memory.textPolicy.title")}</CardTitle><CardDescription>{t("memory.textPolicy.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}

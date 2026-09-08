@@ -43,6 +43,9 @@ export function parseProjectProfileDraft(draft: Draft): VmmNativeProfileLifetime
 // Props carry the authoritative memory catalog and explicit read/save transport.
 // 属性携带权威记忆目录及显式读取/保存传输。
 interface Props {
+  // An explicit parent selection removes the duplicate picker without changing saved ownership.
+  // 父级显式选择用于移除重复选择器，不改变已保存归属。
+  selectedProjectId?: number
   // Only stable catalog identities are submitted; names remain presentation.
   // 仅提交稳定目录身份；名称仅用于展示。
   projects: VmmNativeProjectSummary[]
@@ -56,18 +59,22 @@ interface Props {
 
 // Selects an existing memory project by name while preserving stable ID ownership across renames.
 // 按名称选择已有记忆项目，同时在改名后保持稳定 ID 归属。
-export function VmmNativeProjectProfilePolicy({ projects, busy, onRunAction }: Props) {
+export function VmmNativeProjectProfilePolicy({ projects, busy, onRunAction, selectedProjectId }: Props) {
   const { t } = useI18n()
   const [selectedId, setSelectedId] = React.useState("")
-  const selected = projects.find((project) => String(project.projectId) === selectedId)
+  // effectiveId belongs either to the explicit parent or this component's standalone picker.
+  // effectiveId 属于显式父级或本组件独立选择器。
+  const effectiveId = selectedProjectId === undefined ? selectedId : String(selectedProjectId)
+  const selected = projects.find((project) => String(project.projectId) === effectiveId)
   return <Card>
     <CardHeader><CardTitle>{t("memory.projectProfile.title")}</CardTitle><CardDescription>{t("memory.projectProfile.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
+      {selectedProjectId === undefined ? <>
       <Label htmlFor="profile-policy-project">{t("memory.projectRetention.select")}</Label>
       <Select disabled={busy} value={selected ? selectedId : ""} onValueChange={setSelectedId}>
         <SelectTrigger id="profile-policy-project" className="w-full"><SelectValue placeholder={t("memory.projectRetention.select")} /></SelectTrigger>
         <SelectContent>{projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent>
-      </Select>
+      </Select></> : null}
       {selected ? <ProjectProfileEditor key={selected.projectId} projectId={selected.projectId} busy={busy} onRunAction={onRunAction} /> : null}
     </CardContent>
   </Card>

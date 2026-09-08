@@ -53,6 +53,9 @@ interface RecycleConfirmation {
 // VmmNativeMaintenancePage 渲染定期清洗状态与原生回收站。
 export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMaintenancePageProps) {
   const { t } = useI18n()
+  // maintenanceView makes recovery the first task while retaining all maintenance controls.
+  // maintenanceView 将恢复作为首要任务，同时保留全部维护控件。
+  const [maintenanceView, setMaintenanceView] = React.useState("recycle")
   const [status, setStatus] = React.useState<VmmNativeRetentionStatusSummary | null>(null)
   // Full-text state is independent of the embedding route and vector generation.
   // 全文状态独立于嵌入路由与向量代次。
@@ -230,21 +233,25 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
   ), [catalog])
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 className="text-lg font-semibold">{t("memory.maintenance.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.maintenance.description")}</p></div>
         <div className="flex flex-wrap gap-2"><Button disabled={busy || cleanupPending || status?.running} onClick={() => void previewCleanup()} type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button><Button disabled={busy || cleanupPending} onClick={() => void loadPage()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button></div>
       </div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
 
-      <Card>
+      <div className="vmm-section-tabs">
+        {([['recycle','memory.maintenance.recycleBin'],['cleanup','memory.workspace.cleanup'],['index','memory.workspace.index']] as const).map(([id,label]) => <button key={id} type="button" aria-pressed={maintenanceView === id} onClick={() => setMaintenanceView(id)}>{t(label)}</button>)}
+      </div>
+      <div hidden={maintenanceView !== "cleanup"}><Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" aria-hidden="true" />{t("memory.maintenance.status")}</CardTitle><CardDescription>{t("memory.maintenance.statusDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-4">
       {status ? <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Metric label={t("memory.maintenance.worker")} value={status.running ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.profileExpiryWorker")} value={status.profileExpiryRunning ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.interval")} value={`${status.intervalMinutes} min`} /><Metric label={t("memory.maintenance.profileExpiryInterval")} value={`${status.profileExpiryIntervalSeconds} s`} /><Metric label={t("memory.maintenance.pendingJobs")} value={String(status.pendingColdJobs)} /><Metric label={t("memory.maintenance.recycleBatches")} value={String(status.recycleBatchCount)} /></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={t("memory.maintenance.hotWindow")} value={String(status.policy.turnHotWindowSize)} /><Metric label={t("memory.maintenance.idleWindow")} value={formatDuration(status.policy.sessionIdleMs)} /><Metric label={t("memory.maintenance.trashWindow")} value={formatDuration(status.policy.trashRetentionMs)} /><Metric label={t("memory.maintenance.protectionFloor")} value={`${status.policy.protectedPriorityFloor} / L${status.policy.protectedMemoryLevelFloor}`} /></div><div className="space-y-2"><p className="text-sm font-medium">{t("memory.maintenance.limits")}</p><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Metric label={t("memory.maintenance.profileExpiryLimit")} value={String(status.policy.profileExpiryLimit)} /><Metric label={t("memory.maintenance.memoryRecycleLimit")} value={String(status.policy.memoryRecycleLimit)} /><Metric label={t("memory.maintenance.coldScanLimit")} value={String(status.policy.coldTurnScanLimit)} /><Metric label={t("memory.maintenance.coldJobLimit")} value={String(status.policy.coldTurnJobLimit)} /><Metric label={t("memory.maintenance.idleSessionLimit")} value={String(status.policy.idleSessionLimit)} /><Metric label={t("memory.maintenance.trashPurgeLimit")} value={String(status.policy.trashPurgeLimit)} /></div><p className="text-xs text-muted-foreground">{t("memory.maintenance.vectorConsistency")}</p></div><div className="grid gap-3 lg:grid-cols-2"><div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm"><p>{t("memory.maintenance.lastRun")}: {formatTimestamp(status.lastFinishedAtUnixMs, t("memory.maintenance.never"))}</p>{status.lastResult ? <p className="mt-1 text-muted-foreground">{t("memory.maintenance.lastResult").replace("{profiles}", String(status.lastResult.expiredProfileNodes)).replace("{memories}", String(status.lastResult.recycledMemories)).replace("{turns}", String(status.lastResult.recycledTurns)).replace("{enqueued}", String(status.lastResult.enqueuedColdJobs)).replace("{completed}", String(status.lastResult.completedColdJobs)).replace("{purged}", String(status.lastResult.purgedTrashBatches))}</p> : null}{status.lastError ? <p className="mt-1 text-destructive">{status.lastError}</p> : null}{status.lastResult?.projectFailures.length ? <ul className="mt-2 space-y-1 text-xs text-destructive">{status.lastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div><div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm"><p>{t("memory.maintenance.profileExpiryLastRun")}: {formatTimestamp(status.profileExpiryLastFinishedAtUnixMs, t("memory.maintenance.never"))}</p>{status.profileExpiryLastResult ? <p className="mt-1 text-muted-foreground">{t("memory.maintenance.profileExpiryLastResult").replace("{profiles}", String(status.profileExpiryLastResult.expiredProfileNodes))}</p> : null}{status.profileExpiryLastError ? <p className="mt-1 text-destructive">{status.profileExpiryLastError}</p> : null}{status.profileExpiryLastResult?.projectFailures.length ? <ul className="mt-2 space-y-1 text-xs text-destructive">{status.profileExpiryLastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
         </CardContent>
       </Card>
 
-      <Card>
+      </div>
+      <div hidden={maintenanceView !== "index"}><Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><DatabaseZap className="size-4" aria-hidden="true" />{t("memory.maintenance.vectorTitle")}</CardTitle>
           <CardDescription>{t("memory.maintenance.vectorDescription")}</CardDescription>
@@ -276,7 +283,9 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
         </CardContent>
       </Card>
 
-      <Card>
+      <VmmNativeLexicalIndex status={lexicalStatus} busy={busy || cleanupPending} onRunAction={onRunAction} onRefresh={loadLexicalStatus} />
+      </div>
+      <div hidden={maintenanceView !== "recycle"}><Card>
         <CardHeader><CardTitle>{t("memory.maintenance.recycleBin")}</CardTitle><CardDescription>{t("memory.maintenance.recycleDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           <div className="max-w-sm space-y-2"><Label>{t("memory.maintenance.projectFilter")}</Label><Select onValueChange={setProjectFilter} value={projectFilter}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("memory.maintenance.allProjects")}</SelectItem>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
@@ -284,8 +293,8 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
         </CardContent>
       </Card>
 
+      </div>
       <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeTitle") : t("memory.maintenance.confirmRestoreTitle")}</AlertDialogTitle><AlertDialogDescription>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeDescription") : t("memory.maintenance.confirmRestoreDescription")}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void applyRecycleAction()}>{confirmation?.action === "purge" ? t("memory.maintenance.purge") : t("memory.maintenance.restore")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
-      <VmmNativeLexicalIndex status={lexicalStatus} busy={busy || cleanupPending} onRunAction={onRunAction} onRefresh={loadLexicalStatus} />
       <VmmNativeCleanupPreview preview={cleanupPreview} busy={busy || cleanupPending} onClose={() => setCleanupPreview(null)} onConfirm={() => void runCleanup()} />
       <AlertDialog open={vectorPreview !== null} onOpenChange={(open) => !open && setVectorPreview(null)}>
         <AlertDialogContent>

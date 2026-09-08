@@ -75,7 +75,7 @@ function VmmOverviewPage({
 
   if (!configured) {
     return (
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+      <div className="flex w-full min-w-0 flex-col gap-4">
         <Card variant="outlined">
           <CardHeader className="items-start gap-3 sm:flex-row">
             <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
@@ -101,7 +101,7 @@ function VmmOverviewPage({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(18rem,0.7fr)]">
         <Card>
           <CardHeader>

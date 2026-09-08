@@ -14,6 +14,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -155,6 +156,21 @@ export function nativeProjectConfirmationRequest(
 // VmmNativeProjectPage 渲染原生一级项目、稳定绑定与受保护维护。
 function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNativeProjectPageProps) {
   const { t } = useI18n()
+  // projectView separates binding, storage, and lifecycle management.
+  // projectView 分离绑定、存储与生命周期管理。
+  const [projectView, setProjectView] = React.useState("bindings")
+  // memoryProjectId is the shared explicit target for storage management and both rule groups.
+  // memoryProjectId 是存储管理及两个规则组共享的显式目标。
+  const [memoryProjectId, setMemoryProjectId] = React.useState("")
+  // projectRuleGroup serializes initial rule reads through the shared action channel.
+  // projectRuleGroup 通过共享动作通道串行化规则首次读取。
+  const [projectRuleGroup, setProjectRuleGroup] = React.useState("retention")
+  // selectedHostId initially opens the first catalog-backed work project.
+  // selectedHostId 初始打开目录中的首个工作项目。
+  const [selectedHostId, setSelectedHostId] = React.useState(projects[0]?.projectId ?? "")
+  // createOpen moves occasional creation out of the primary binding workspace.
+  // createOpen 将低频创建移出主要绑定工作区。
+  const [createOpen, setCreateOpen] = React.useState(false)
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   const [createVulcanProjectId, setCreateVulcanProjectId] = React.useState("")
   const [createProjectName, setCreateProjectName] = React.useState("")
@@ -172,6 +188,9 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
   // acceptCatalog 根据一次权威原生目录响应更新全部绑定草稿。
   const acceptCatalog = React.useCallback((nextCatalog: VmmNativeProjectCatalogSummary) => {
     setCatalog(nextCatalog)
+    // Keep an existing stable selection; otherwise select the first available catalog record.
+    // 保留已有稳定选择；否则选择目录中首个可用记录。
+    setMemoryProjectId((current) => nextCatalog.projects.some((project) => String(project.projectId) === current) ? current : nextCatalog.projects.length ? String(nextCatalog.projects[0].projectId) : "")
     const nextOwners: Record<string, string> = {}
     const nextLinks: Record<string, number[]> = {}
     for (const binding of nextCatalog.bindings) {
@@ -281,7 +300,7 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
   }, [preview, runAction])
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("vmm.nativeProjects.title")}</h2>
@@ -296,24 +315,32 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
       {notice ? <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">{notice}</p> : null}
       {effectiveBusy ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("vmm.nativeProjects.running")}</p> : null}
 
-      <Card>
-        <CardHeader><CardTitle>{t("vmm.nativeProjects.createTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.createDescription")}</CardDescription></CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="vmm-section-tabs">
+          {([['bindings','vmm.nativeProjects.bindingsTitle'],['catalog','vmm.nativeProjects.catalogTitle'],['rules','memory.workspace.projectRules'],['migration','vmm.nativeProjects.migrateTitle']] as const).map(([id,label]) => <button type="button" key={id} aria-pressed={projectView === id} onClick={() => setProjectView(id)}>{t(label)}</button>)}
+        </div>
+        <Button disabled={effectiveBusy} onClick={() => setCreateOpen(true)}><Plus className="size-4" />{t("vmm.nativeProjects.createTitle")}</Button>
+      </div>
+      <Dialog open={createOpen} onOpenChange={(open) => { if (!effectiveBusy) setCreateOpen(open) }}><DialogContent>
+        <DialogHeader><DialogTitle>{t("vmm.nativeProjects.createTitle")}</DialogTitle><DialogDescription>{t("vmm.nativeProjects.createDescription")}</DialogDescription></DialogHeader>
+        <div className="grid gap-3">
           <Select onValueChange={(value) => { setCreateVulcanProjectId(value); setCreateProjectName(value) }} value={createVulcanProjectId}>
             <SelectTrigger><SelectValue placeholder={t("vmm.nativeProjects.selectVulcanProject")} /></SelectTrigger>
             <SelectContent>{unboundProjects.map((project) => <SelectItem key={project.projectId} value={project.projectId}>{project.name}</SelectItem>)}</SelectContent>
           </Select>
           <Input onChange={(event) => setCreateProjectName(event.target.value)} placeholder={t("vmm.nativeProjects.projectName")} value={createProjectName} />
-          <Button disabled={effectiveBusy || !createVulcanProjectId || !createProjectName.trim()} onClick={() => void runAction("native_project_create_and_bind", { vulcanProjectId: createVulcanProjectId, projectName: createProjectName.trim() })} type="button">
+          <Button disabled={effectiveBusy || !createVulcanProjectId || !createProjectName.trim()} onClick={async () => { const response = await runAction("native_project_create_and_bind", { vulcanProjectId: createVulcanProjectId, projectName: createProjectName.trim() }); if (response?.data.kind === "native_project_catalog") setCreateOpen(false) }} type="button">
             <Plus className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.create")}
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </DialogContent></Dialog>
 
+      <div hidden={projectView !== "bindings"}><div className="vmm-project-workspace">
+      <div className="vmm-project-list">{projects.map((project) => <button key={project.projectId} type="button" disabled={effectiveBusy} aria-pressed={selectedHostId === project.projectId} onClick={() => setSelectedHostId(project.projectId)}>{project.name}</button>)}</div>
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Link2 className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.bindingsTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.bindingsDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-3">
-          {projects.map((project) => {
+          {projects.filter((project) => project.projectId === selectedHostId).map((project) => {
             const ownerId = Number(ownerDrafts[project.projectId])
             return (
               <div className="space-y-3 rounded-lg border p-3" key={project.projectId}>
@@ -344,10 +371,13 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
         </CardContent>
       </Card>
 
+      </div></div>
+      <div hidden={projectView !== "catalog"}><div className="vmm-project-workspace">
+      <div className="vmm-project-list">{catalog?.projects.map((project) => <button type="button" disabled={effectiveBusy} key={project.projectId} aria-pressed={memoryProjectId === String(project.projectId)} onClick={() => setMemoryProjectId(String(project.projectId))}>{project.name}</button>)}</div>
       <Card>
         <CardHeader><CardTitle>{t("vmm.nativeProjects.catalogTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.catalogDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-3">
-          {(catalog?.projects ?? []).map((project) => (
+          {(catalog?.projects ?? []).filter((project) => String(project.projectId) === memoryProjectId).map((project) => (
             <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]" key={project.projectId}>
               <div className="space-y-1">
                 <div className="flex items-center gap-2"><Input onChange={(event) => setRenameDrafts((current) => ({ ...current, [project.projectId]: event.target.value }))} value={renameDrafts[project.projectId] ?? project.name} /><Button disabled={effectiveBusy || !(renameDrafts[project.projectId] ?? "").trim()} onClick={() => void runAction("native_project_rename", { vmmProjectId: project.projectId, name: renameDrafts[project.projectId]?.trim() })} size="icon" title={t("vmm.nativeProjects.rename")} type="button" variant="outline"><Pencil className="size-4" aria-hidden="true" /></Button></div>
@@ -360,7 +390,8 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
         </CardContent>
       </Card>
 
-      <Card>
+      </div></div>
+      <div hidden={projectView !== "migration"}><Card>
         <CardHeader><CardTitle>{t("vmm.nativeProjects.migrateTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.migrateDescription")}</CardDescription></CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
           <NativeProjectSelect catalog={catalog} onChange={setMigrationSourceId} placeholder={t("vmm.nativeProjects.source")} value={migrationSourceId} />
@@ -369,9 +400,22 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
         </CardContent>
       </Card>
 
-      {catalog ? <VmmNativeProjectRetention projects={catalog.projects} busy={effectiveBusy} onRunAction={runAction} /> : null}
-      {catalog ? <VmmNativeProjectProfilePolicy projects={catalog.projects} busy={effectiveBusy} onRunAction={runAction} /> : null}
+      </div>
+      <div hidden={projectView !== "rules"} className="space-y-4">
+      <Label>{t("memory.projectRetention.select")}</Label>
+      <NativeProjectSelect catalog={catalog} onChange={setMemoryProjectId} placeholder={t("memory.projectRetention.select")} value={memoryProjectId} />
+      <div className="vmm-section-tabs">
+        <button type="button" aria-pressed={projectRuleGroup === "retention"} onClick={() => setProjectRuleGroup("retention")}>{t("memory.projectRetention.title")}</button>
+        <button type="button" aria-pressed={projectRuleGroup === "profile"} onClick={() => setProjectRuleGroup("profile")}>{t("memory.projectProfile.title")}</button>
+      </div>
+      {catalog && memoryProjectId ? <>
+        <div hidden={projectRuleGroup !== "retention"}><VmmNativeProjectRetention selectedProjectId={Number(memoryProjectId)} projects={catalog.projects} busy={effectiveBusy || projectView !== "rules" || projectRuleGroup !== "retention"} onRunAction={runAction} /></div>
+        <div hidden={projectRuleGroup !== "profile"}><VmmNativeProjectProfilePolicy selectedProjectId={Number(memoryProjectId)} projects={catalog.projects} busy={effectiveBusy || projectView !== "rules" || projectRuleGroup !== "profile"} onRunAction={runAction} /></div>
+      </> : null}
+      </div>
+      <Dialog open={preview !== null} onOpenChange={(open) => { if (!open && !effectiveBusy) setPreview(null) }}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{t(preview?.kind === "delete" ? "vmm.nativeProjects.preview.delete" : preview?.kind === "clear" ? "vmm.nativeProjects.preview.clear" : "vmm.nativeProjects.preview.migration")}</DialogTitle><DialogDescription>{t("vmm.nativeProjects.description")}</DialogDescription></DialogHeader>
       {preview ? <NativePreviewCard busy={effectiveBusy} onCancel={() => setPreview(null)} onConfirm={() => void executePreview()} preview={preview} /> : null}
+      </DialogContent></Dialog>
     </div>
   )
 }

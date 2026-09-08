@@ -68,16 +68,38 @@ export function nativeSessionDateBound(value: string, exclusive: boolean): numbe
 export function VmmNativeSessionBrowser(props: BrowserProps) {
   const { t } = useI18n()
   const [selection, setSelection] = React.useState<RecordSelection | null>(null)
-  if (selection) return <div className="space-y-3">
-    <Button variant="outline" disabled={props.busy} onClick={() => setSelection(null)}>{t("memory.sessionList.back")}</Button>
-    <VmmNativeMemoryRecords {...props} initialSelection={selection} />
+  // revision tracks accepted source mutations that make the retained summary page stale.
+  // revision 跟踪会使保留摘要页过时的已接受来源修改。
+  const [revision, setRevision] = React.useState(0)
+  // detailRevision invalidates open records after a mutation initiated from the retained list.
+  // detailRevision 在保留列表发起修改后，使已打开记录失效。
+  const [detailRevision, setDetailRevision] = React.useState(0)
+  // runListAction preserves list refresh ownership while reloading any open detail after writes.
+  // runListAction 保留列表自身刷新职责，并在写入后重新加载已打开详情。
+  const runListAction = React.useCallback(async (action: string, payload?: Record<string, unknown>) => {
+    const reply = await props.onRunAction(action, payload)
+    if (reply && ["native_session_archive", "native_removal"].includes(reply.data.kind)) setDetailRevision((current) => current + 1)
+    return reply
+  }, [props.onRunAction])
+  // runDetailAction returns the original reply and invalidates only confirmed mutation kinds.
+  // runDetailAction 返回原始响应，仅对确认的修改类型失效列表。
+  const runDetailAction = React.useCallback(async (action: string, payload?: Record<string, unknown>) => {
+    const reply = await props.onRunAction(action, payload)
+    if (reply && ["native_session_archive", "native_session_restart", "native_removal"].includes(reply.data.kind)) setRevision((current) => current + 1)
+    return reply
+  }, [props.onRunAction])
+  return <div className={selection ? "vmm-session-workspace has-selection" : "vmm-session-workspace"}>
+    <div className="vmm-session-browser"><NativeSessionList {...props} onRunAction={runListAction} revision={revision} onOpen={setSelection} onScopeChange={() => setSelection(null)} selection={selection} /></div>
+    {selection ? <div className="vmm-session-detail space-y-3">
+      <Button variant="outline" disabled={props.busy} onClick={() => setSelection(null)}>{t("memory.sessionList.back")}</Button>
+      <VmmNativeMemoryRecords key={`${selection.projectId}:${selection.sessionSourceId}:${detailRevision}`} {...props} onRunAction={runDetailAction} initialSelection={selection} />
+    </div> : null}
   </div>
-  return <NativeSessionList {...props} onOpen={setSelection} />
 }
 
 // Loads one summary page at a time, clears hidden selections and delegates mutations to preview/confirm.
 // 每次加载一页摘要，清除不可见选择，并将修改委托给预览确认流程。
-function NativeSessionList({ busy, snapshot, onRunAction, onOpen }: BrowserProps & { onOpen: (selection: RecordSelection) => void }) {
+function NativeSessionList({ busy, snapshot, onRunAction, onOpen, onScopeChange, selection, revision }: BrowserProps & { revision: number; onOpen: (selection: RecordSelection) => void; onScopeChange: () => void; selection: RecordSelection | null }) {
   const { t } = useI18n()
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   const [query, setQuery] = React.useState<VmmNativeSessionListQuery | null>(null)
@@ -116,6 +138,15 @@ function NativeSessionList({ busy, snapshot, onRunAction, onOpen }: BrowserProps
       if (mountedRef.current) setLoading(false)
     }
   }, [onRunAction, t])
+
+  // refreshedRevision advances after a successful detail mutation, preserving the visible query.
+  // refreshedRevision 在详情修改成功后推进，并保留可见查询。
+  const refreshedRevision = React.useRef(revision)
+  React.useEffect(() => {
+    if (revision === refreshedRevision.current || occupied || !query) return
+    refreshedRevision.current = revision
+    void load({ ...query, expectedStorageVersion: null })
+  }, [revision, occupied, query, load])
 
   // Reads the catalog once before selecting the current binding; an explicit retry handles failure.
   // 选择当前绑定前读取一次目录；失败由显式重试处理。
@@ -171,18 +202,18 @@ function NativeSessionList({ busy, snapshot, onRunAction, onOpen }: BrowserProps
     <CardHeader><CardTitle>{t("memory.sessionList.title")}</CardTitle><CardDescription>{t("memory.sessionList.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="min-w-56 flex-1 space-y-1 text-sm">{t("memory.nativeRecords.project")}
-          <Select disabled={occupied || !catalog?.projects.length} value={query ? String(query.vmmProjectId) : ""} onValueChange={(value) => void load(nativeSessionInitialQuery(Number(value)))}>
+        <label className="min-w-0 flex-1 space-y-1 text-sm">{t("memory.nativeRecords.project")}
+          <Select disabled={occupied || !catalog?.projects.length} value={query ? String(query.vmmProjectId) : ""} onValueChange={(value) => { onScopeChange(); void load(nativeSessionInitialQuery(Number(value))) }}>
             <SelectTrigger aria-label={t("memory.nativeRecords.project")} className="w-full"><SelectValue placeholder={t("memory.nativeRecords.selectProject")} /></SelectTrigger>
-            <SelectContent>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent>
+            <SelectContent>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name}{project.name !== project.tag ? ` · ${project.tag}` : ""}</SelectItem>)}</SelectContent>
           </Select>
         </label>
         <Button variant="outline" disabled={occupied} onClick={() => { if (query) void load({ ...query, offset: 0, expectedStorageVersion: null }); else void initialize() }}>{t("memory.nativeRecords.refresh")}</Button>
         <Button variant="outline" disabled={occupied || !query} onClick={() => { if (query) onOpen({ projectId: query.vmmProjectId, sessionSourceId: null }) }}>{t("memory.sessionList.projectSources")}</Button>
       </div>
-      {query ? <form key={query.vmmProjectId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" onSubmit={applyFilters} onChange={() => setSelectedIds([])}>
+      {query ? <form key={query.vmmProjectId} className="vmm-session-filters" onSubmit={applyFilters} onChange={() => setSelectedIds([])}>
         <label className="space-y-1 text-sm">{t("memory.sessionList.search")}<Input name="search" maxLength={512} disabled={occupied} defaultValue="" /></label>
-        <label className="space-y-1 text-sm">{t("memory.sessionList.status")}<Select name="status" disabled={occupied} defaultValue="all" onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.status")} className="w-full"><SelectValue /></SelectTrigger><SelectContent>{lifecycleOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
+        <details className="vmm-session-filter-details"><summary>{t("memory.workspace.filters")}</summary><div className="vmm-filter-fields"><label className="space-y-1 text-sm">{t("memory.sessionList.status")}<Select name="status" disabled={occupied} defaultValue="all" onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.status")} className="w-full"><SelectValue /></SelectTrigger><SelectContent>{lifecycleOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
         <label className="space-y-1 text-sm">{t("memory.sessionList.extraction")}<Select name="extraction" disabled={occupied} defaultValue="all" onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.extraction")} className="w-full"><SelectValue /></SelectTrigger><SelectContent>{extractionOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
         <label className="space-y-1 text-sm">{t("memory.sessionList.from")}<Input name="from" type="date" disabled={occupied} /></label>
         <label className="space-y-1 text-sm">{t("memory.sessionList.before")}<Input name="before" type="date" disabled={occupied} /></label>
@@ -190,6 +221,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onOpen }: BrowserProps
           <SelectTrigger aria-label={t("memory.sessionList.sort")} className="w-full"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="last_activity_desc">{t("memory.sessionList.newest")}</SelectItem><SelectItem value="last_activity_asc">{t("memory.sessionList.oldest")}</SelectItem><SelectItem value="title_asc">{t("memory.sessionList.titleSort")}</SelectItem></SelectContent>
         </Select></label>
+        </div></details>
         <Button type="submit" variant="outline" disabled={occupied}>{t("memory.sessionList.apply")}</Button>
       </form> : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
@@ -204,11 +236,11 @@ function NativeSessionList({ busy, snapshot, onRunAction, onOpen }: BrowserProps
           {selectedSessions.length > 0 && !archiveEligible ? <span>{t("memory.sessionList.mixed")}</span> : null}
         </div>
         <div className="divide-y rounded-lg border">
-          {page.sessions.map((session) => <div key={session.sessionSourceId} className="flex items-start gap-3 p-3">
+          {page.sessions.map((session) => <div key={session.sessionSourceId} className={`vmm-session-row flex items-start gap-3 p-3 ${selection?.sessionSourceId === session.sessionSourceId ? "selected" : ""}`}>
             <input className="mt-1" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${session.displayTitle ?? session.sessionSourceId}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
             <div className="min-w-0 flex-1 space-y-2">
               <Button className="h-auto max-w-full whitespace-normal break-all p-0 text-left" variant="link" disabled={occupied} onClick={() => onOpen({ projectId: page.projectId, sessionSourceId: session.sessionSourceId })}>{session.displayTitle ?? session.sessionSourceId}</Button>
-              <p className="break-all font-mono text-xs text-muted-foreground">{session.sessionSourceId}</p>
+              <details className="text-xs text-muted-foreground"><summary>{t("memory.workspace.recordInfo")}</summary><p className="break-all font-mono">{session.sessionSourceId}</p></details>
               <NativeSessionStatus status={session.status} />
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span>{t("memory.nativeRecords.turns")} {session.turnCount}</span><span>{t("memory.nativeRecords.memories")} {session.memoryCount}</span><span>{t("memory.nativeRecords.profileNodes")} {session.profileNodeCount}</span>
@@ -216,7 +248,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onOpen }: BrowserProps
                   // API counters use camelCase keys; the query enum uses snake_case by contract.
                   // 按契约，接口计数使用驼峰键，查询枚举使用下划线名称。
                   const counts = { pending: session.turnStatuses.pending, completed: session.turnStatuses.completed, processed_unknown: session.turnStatuses.processedUnknown, analysis_bypassed: session.turnStatuses.analysisBypassed, corrupted: session.turnStatuses.corrupted, all: 0 }
-                  return <span key={value}>{t(label)} {counts[value]}</span>
+                  return counts[value] > 0 ? <span key={value}>{t(label)} {counts[value]}</span> : null
                 })}
               </div>
               {session.lastActivityAtUnixMs != null ? <p className="text-xs text-muted-foreground">{t("memory.nativeRecords.lastActivity")} {new Date(session.lastActivityAtUnixMs).toLocaleString()}</p> : null}

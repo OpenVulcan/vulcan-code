@@ -9,18 +9,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Combobox } from "@/components/ui/combobox"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
 import type { VmmConfigDraftSummary, VmmProjectScopeSummary } from "@/types"
@@ -29,6 +20,14 @@ import type { VmmConfigDraftSummary, VmmProjectScopeSummary } from "@/types"
 // VmmRulesPageProps 定义一份可编辑规则草稿与明确应用目标。
 interface VmmRulesPageProps {
   busy: boolean
+  // Scope and project identify the loaded draft before any editing.
+  // 范围与项目在任何编辑之前标识已加载草稿。
+  scope: "global" | "project"
+  projectId: string
+  draftReady: boolean
+  // Selects and loads the exact requested scope; does not copy another draft.
+  // 选择并加载准确请求范围，不复制其他草稿。
+  onSelectScope: (scope: "global" | "project", projectId: string | null) => void
   draft: VmmConfigDraftSummary
   projects: VmmProjectScopeSummary[]
   notice: string
@@ -40,10 +39,10 @@ interface VmmRulesPageProps {
   ) => Promise<boolean>
 }
 
-// VmmRulesPage renders task-oriented memory policies and a separate scope dialog.
-// VmmRulesPage 渲染任务导向的记忆策略与独立应用范围弹窗。
+// VmmRulesPage edits the loaded scope and saves that exact draft to its original target.
+// VmmRulesPage 编辑已加载范围，将准确草稿保存到原始目标。
 function VmmRulesPage({
-  busy,
+  busy, scope, projectId, draftReady, onSelectScope,
   draft,
   projects,
   notice,
@@ -51,31 +50,9 @@ function VmmRulesPage({
   onApply,
 }: VmmRulesPageProps) {
   const { t } = useI18n()
-  const [applyOpen, setApplyOpen] = React.useState(false)
-  const [targetScope, setTargetScope] = React.useState<"global" | "project">("global")
-  const [targetProjectId, setTargetProjectId] = React.useState("")
-
-  // submitApplication persists the exact visible draft to the selected target.
-  // submitApplication 将准确的可见草稿持久化到所选目标。
-  const submitApplication = React.useCallback(async () => {
-    const applied = await onApply(
-      targetScope,
-      targetScope === "project" ? targetProjectId : null,
-      draft,
-    )
-    if (applied) {
-      setApplyOpen(false)
-    }
-  }, [draft, onApply, targetProjectId, targetScope])
-
-  const projectOptions = projects.map((project) => ({
-    value: project.projectId,
-    label: project.name,
-    description: project.path,
-  }))
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("memory.rules.title")}</h2>
@@ -83,19 +60,27 @@ function VmmRulesPage({
             {t("memory.rules.description")}
           </p>
         </div>
-        <Button disabled={busy} onClick={() => setApplyOpen(true)} type="button">
+        <Button disabled={busy || !draftReady} onClick={() => void onApply(scope, scope === "project" ? projectId : null, draft)} type="button">
           <Save className="size-4" aria-hidden="true" />
           {t("memory.rules.applySettings")}
         </Button>
       </div>
 
+      <div className="space-y-2">
+        <Label>{t("memory.workspace.editScope")}</Label>
+        <Select disabled={busy} value={scope === "global" ? "global" : `project:${projectId}`} onValueChange={(value) => onSelectScope(value === "global" ? "global" : "project", value === "global" ? null : value.slice("project:".length))}>
+          <SelectTrigger className="w-full sm:w-80" aria-label={t("memory.workspace.editScope")}><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="global">{t("memory.rules.allProjects")}</SelectItem>{projects.map((project) => <SelectItem key={project.projectId} value={`project:${project.projectId}`}>{project.name}</SelectItem>)}</SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">{t("memory.workspace.scopeHint")}</p>
+      </div>
       {notice ? (
         <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
           {notice}
         </p>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <fieldset disabled={busy || !draftReady} className="grid min-w-0 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -163,60 +148,9 @@ function VmmRulesPage({
             />
           </CardContent>
         </Card>
-      </div>
+      </fieldset>
 
-      <Dialog
-        open={applyOpen}
-        onOpenChange={(open) => {
-          setApplyOpen(open)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("memory.rules.applyTitle")}</DialogTitle>
-            <DialogDescription>{t("memory.rules.applyDescription")}</DialogDescription>
-          </DialogHeader>
-          <RadioGroup
-            onValueChange={(value) => setTargetScope(value as "global" | "project")}
-            value={targetScope}
-          >
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
-              <RadioGroupItem value="global" />
-              <span className="text-sm font-medium">{t("memory.rules.allProjects")}</span>
-            </label>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
-              <RadioGroupItem value="project" />
-              <span className="text-sm font-medium">{t("memory.rules.oneProject")}</span>
-            </label>
-          </RadioGroup>
-          {targetScope === "project" ? (
-            <div className="space-y-2">
-              <Label>{t("memory.rules.selectProject")}</Label>
-              <Combobox
-                ariaLabel={t("memory.rules.selectProject")}
-                emptyText={t("memory.rules.noProject")}
-                onValueChange={setTargetProjectId}
-                options={projectOptions}
-                placeholder={t("memory.rules.selectProject")}
-                searchPlaceholder={t("memory.rules.searchProject")}
-                value={targetProjectId}
-              />
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button onClick={() => setApplyOpen(false)} type="button" variant="outline">
-              {t("memory.common.cancel")}
-            </Button>
-            <Button
-              disabled={busy || (targetScope === "project" && !targetProjectId)}
-              onClick={() => void submitApplication()}
-              type="button"
-            >
-              {busy ? t("memory.common.loading") : t("memory.common.apply")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+
     </div>
   )
 }

@@ -112,11 +112,18 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
     () => catalog?.files.filter((entry) => entry.group === activeGroup) ?? [],
     [activeGroup, catalog],
   )
+  // effectiveSelector reflects saved configuration, not the composition draft.
+  // effectiveSelector 反映已保存配置，而非组合草稿。
+  const effectiveSelector = activeGroup === "prompt" ? catalog?.settings.promptBundle : activeGroup === "pii" ? catalog?.settings.piiLanguage : catalog?.settings.noiseLanguage
 
   React.useEffect(() => {
     if (visibleFiles.some((entry) => entry.path === selectedPath)) return
-    setSelectedPath(visibleFiles[0]?.path ?? "")
-  }, [selectedPath, visibleFiles])
+    // selector comes from the saved catalog, independently of unsaved composition edits.
+    // selector 来自已保存目录，独立于尚未保存的组合编辑。
+    const selector = activeGroup === "prompt" ? catalog?.settings.promptBundle : activeGroup === "pii" ? catalog?.settings.piiLanguage : catalog?.settings.noiseLanguage
+    const activeFile = visibleFiles.find((entry) => entry.selector === selector)
+    setSelectedPath(activeFile?.path ?? visibleFiles[0]?.path ?? "")
+  }, [activeGroup, catalog, selectedPath, visibleFiles])
 
   React.useEffect(() => {
     if (!selectedPath) {
@@ -243,7 +250,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   const changed = Boolean(file && editorText !== file.effectiveText)
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 className="text-lg font-semibold">{t("memory.resources.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.resources.description")}</p></div>
         <Button disabled={busy} onClick={() => void loadCatalog()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
@@ -256,14 +263,16 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
         {(["prompt", "pii", "noise"] as const).map((group) => (
           <TabsContent className="space-y-4" key={group} value={group}>
             {catalog && settings ? <ResourceCompositionSettings busy={busy} catalog={catalog} group={group} onChange={setSettings} onSave={saveSettings} settings={settings} /> : null}
-            <Card>
+            <div className="vmm-resource-workspace">
+            <ResourceFileSelect effectiveSelector={effectiveSelector} files={visibleFiles} onChange={setSelectedPath} value={selectedPath} />
+            <Card className="vmm-resource-editor">
               <CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 className="size-4" aria-hidden="true" />{t("memory.resources.fileEditor")}</CardTitle><CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription></CardHeader>
               <CardContent className="space-y-4">
-                <ResourceFileSelect files={visibleFiles} onChange={setSelectedPath} value={selectedPath} />
                 {selectedSummary ? <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedSummary.selector}</Badge><Badge variant={selectedSummary.hasUserOverride ? "default" : "secondary"}>{selectedSummary.hasUserOverride ? t("memory.resources.userOverride") : t("memory.resources.builtIn")}</Badge><Badge variant="outline"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />{editUnlocked ? t("memory.resources.unlocked") : t("memory.resources.locked")}</Badge></div> : null}
                 {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p><p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p></div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={!editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
               </CardContent>
             </Card>
+            </div>
             {group === "pii" ? <PiiTesters busy={busy} input={piiInput} formulaCondition={piiFormulaCondition} formulaInput={piiFormulaInput} formulaPattern={piiFormulaPattern} formulaReplacement={piiFormulaReplacement} formulaResult={piiFormulaResult} onFormulaConditionChange={setPiiFormulaCondition} onFormulaInputChange={setPiiFormulaInput} onFormulaPatternChange={setPiiFormulaPattern} onFormulaReplacementChange={setPiiFormulaReplacement} onInputChange={setPiiInput} onTest={testPii} onTestFormula={testPiiFormula} result={piiResult} /> : null}
             {group === "noise" ? <NoiseTester busy={busy} input={noiseInput} onInputChange={setNoiseInput} onTest={testNoise} result={noiseResult} /> : null}
           </TabsContent>
@@ -284,10 +293,17 @@ function ResourceCompositionSettings({ busy, catalog, group, onChange, onSave, s
 
 // ResourceFileSelect renders file names for only the active resource category.
 // ResourceFileSelect 仅渲染当前资源分类中的文件名。
-function ResourceFileSelect({ files, onChange, value }: { files: VmmNativeResourceCatalogSummary["files"]; onChange: (value: string) => void; value: string }) {
+function ResourceFileSelect({ effectiveSelector, files, onChange, value }: { effectiveSelector: string | undefined; files: VmmNativeResourceCatalogSummary["files"]; onChange: (value: string) => void; value: string }) {
   const { t } = useI18n()
-  const inputId = React.useId()
-  return <div className="space-y-2"><Label htmlFor={inputId}>{t("memory.resources.file")}</Label><Select onValueChange={onChange} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent>{files.map((entry) => <SelectItem key={entry.path} value={entry.path}><span>{entry.fileName}</span><span className="ml-2 text-xs text-muted-foreground">{entry.selector}</span></SelectItem>)}</SelectContent></Select></div>
+  // PII and Noise compose common rules with the saved locale, as defined by native resources.rs.
+  // 按原生 resources.rs 契约，PII 与噪音将 common 规则与已保存区域组合。
+  // groups distinguish this complete composition from alternatives without hiding either.
+  // groups 区分这一完整组合与可选资源，同时保留两类文件入口。
+  const groups = [
+    { label: t("memory.workspace.effectiveFiles"), files: files.filter((entry) => entry.selector === effectiveSelector || (entry.group !== "prompt" && entry.selector === "common")) },
+    { label: t("memory.workspace.otherFiles"), files: files.filter((entry) => entry.selector !== effectiveSelector && (entry.group === "prompt" || entry.selector !== "common")) },
+  ]
+  return <div className="vmm-resource-file-groups space-y-4">{groups.filter((group) => group.files.length > 0).map((group) => <section key={group.label} aria-label={group.label}><p className="mb-2 text-xs text-muted-foreground">{group.label}</p><div className="vmm-resource-files">{group.files.map((entry) => <button key={entry.path} type="button" aria-pressed={entry.path === value} onClick={() => onChange(entry.path)}><span className="block">{entry.path.split("/").at(-1)}</span><span className="block text-xs text-muted-foreground">{entry.selector}</span></button>)}</div></section>)}</div>
 }
 
 // ResourceCodeEditorProps defines one syntax-rendered resource editor surface.

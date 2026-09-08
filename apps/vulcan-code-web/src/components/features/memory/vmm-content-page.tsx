@@ -38,13 +38,6 @@ import {
 } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type {
@@ -103,6 +96,9 @@ function VmmContentPage({
   onRunAction,
 }: VmmContentPageProps) {
   const { t } = useI18n()
+  // contentMode separates physical browsing from the host recall scope.
+  // contentMode 区分物理内容浏览与宿主召回范围。
+  const [contentMode, setContentMode] = React.useState<"browse" | "search">("browse")
   const [query, setQuery] = React.useState("")
   const [searchHits, setSearchHits] = React.useState<MemorySearchHitView[]>([])
   const [searchPerformed, setSearchPerformed] = React.useState(false)
@@ -120,9 +116,6 @@ function VmmContentPage({
       setSearchHits(projectSearchHits(result.data.value))
       setSearchPerformed(true)
     }
-    if (result?.data.kind === "get_turn_details") {
-      setTurnDetail(projectTurnDetail(result.data.value))
-    }
   }, [result])
 
   // submitSearch runs one natural-language query with a stable product limit.
@@ -132,18 +125,23 @@ function VmmContentPage({
     if (!normalizedQuery) {
       return
     }
+    setSelectedHit(null)
+    setTurnDetail(null)
     await onRunAction("search_memory_events", {
       queries: [normalizedQuery],
       topK: 20,
     })
   }, [onRunAction, query])
 
-  // openDetails resolves the hidden source turn and opens the user-facing detail sheet.
-  // openDetails 解析隐藏的来源回合并打开用户可见详情抽屉。
+  // openDetails resolves this hit's source turn into the adjacent reading pane.
+  // openDetails 将本条结果的来源回合加载到相邻阅读区。
   const openDetails = React.useCallback(async (hit: MemorySearchHitView) => {
     setSelectedHit(hit)
     setTurnDetail(null)
-    await onRunAction("get_turn_details", { turnIds: [hit.sourceTurnId] })
+    // response belongs to this request, independently of other page action results.
+    // response 属于本次请求，独立于页面上的其他操作结果。
+    const response = await onRunAction("get_turn_details", { turnIds: [hit.sourceTurnId] })
+    if (response?.data.kind === "get_turn_details") setTurnDetail(projectTurnDetail(response.data.value))
   }, [onRunAction])
 
   // confirmDelete removes one selected memory using its hidden stable key.
@@ -160,9 +158,13 @@ function VmmContentPage({
       return
     }
     setSearchHits((hits) => hits.filter((hit) => hit.memoryId !== deleteHit.memoryId))
+    if (selectedHit?.memoryId === deleteHit.memoryId) {
+      setSelectedHit(null)
+      setTurnDetail(null)
+    }
     setDeleteHit(null)
     setDeleteReason("")
-  }, [deleteHit, deleteReason, onRunAction])
+  }, [deleteHit, deleteReason, onRunAction, selectedHit])
 
   // submitWrite stores one natural-language memory with product-owned safe defaults.
   // submitWrite 使用产品持有的安全默认值保存一条自然语言记忆。
@@ -189,7 +191,7 @@ function VmmContentPage({
   }, [onRunAction, snapshot.selectedConversationId, writeDetails, writeSummary])
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("memory.content.title")}</h2>
@@ -211,7 +213,7 @@ function VmmContentPage({
         </Button>
       </div>
 
-      {!canWriteMemory ? (
+      {writeOpen && !canWriteMemory ? (
         <Alert>
           <CircleAlert aria-hidden="true" />
           <AlertTitle>{t("memory.content.sessionRequiredTitle")}</AlertTitle>
@@ -219,6 +221,11 @@ function VmmContentPage({
         </Alert>
       ) : null}
 
+      <div className="vmm-section-tabs">
+        <button type="button" aria-pressed={contentMode === "browse"} onClick={() => setContentMode("browse")}>{t("memory.workspace.browse")}</button>
+        <button type="button" aria-pressed={contentMode === "search"} onClick={() => setContentMode("search")}>{t("memory.workspace.search")}</button>
+      </div>
+      <div hidden={contentMode !== "browse"}>
       {snapshot.experienceState.deployment === "native" ? (
         <VmmNativeSessionBrowser
           key={snapshot.selectedProjectId ?? ""}
@@ -228,8 +235,11 @@ function VmmContentPage({
         />
       ) : null}
 
+      </div>
+      <div hidden={contentMode !== "search"} className="space-y-4">
+      <p className="text-sm text-muted-foreground">{t("memory.workspace.searchScope")}</p>
       <form
-        className="flex gap-2"
+        className="flex flex-wrap gap-2"
         onSubmit={(event) => {
           event.preventDefault()
           void submitSearch()
@@ -248,6 +258,8 @@ function VmmContentPage({
         </Button>
       </form>
 
+      <div className={selectedHit ? "vmm-search-workspace" : ""}>
+      <div>
       {searchHits.length === 0 ? (
         <Empty className="min-h-72" variant="outlined">
           <EmptyHeader>
@@ -261,7 +273,7 @@ function VmmContentPage({
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="flex flex-col gap-3">
           {searchHits.map((hit) => (
             <Card key={hit.memoryId}>
               <CardHeader className="gap-2">
@@ -275,7 +287,7 @@ function VmmContentPage({
                 <p className="line-clamp-4 text-sm text-muted-foreground">{hit.preview}</p>
                 {hit.retrieval ? <VmmSearchRetrieval retrieval={hit.retrieval} /> : null}
                 <div className="flex justify-end gap-2">
-                  <Button onClick={() => void openDetails(hit)} size="sm" type="button" variant="outline">
+                  <Button disabled={busy} onClick={() => void openDetails(hit)} size="sm" type="button" variant="outline">
                     <FileText className="size-4" />
                     {t("memory.content.details")}
                   </Button>
@@ -290,20 +302,9 @@ function VmmContentPage({
         </div>
       )}
 
-      <Sheet
-        open={selectedHit !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedHit(null)
-            setTurnDetail(null)
-          }
-        }}
-      >
-        <SheetContent className="overflow-y-auto" size="md">
-          <SheetHeader>
-            <SheetTitle>{selectedHit?.summary}</SheetTitle>
-            <SheetDescription>{selectedHit?.createdAt}</SheetDescription>
-          </SheetHeader>
+      </div>
+      {selectedHit ? <aside className="vmm-search-detail rounded-xl border p-4">
+        <div className="mb-4 flex items-start justify-between gap-3"><h3 className="text-base font-semibold">{selectedHit.summary}</h3><Button variant="ghost" size="sm" onClick={() => { setSelectedHit(null); setTurnDetail(null) }}>{t("memory.common.close")}</Button></div>
           <div className="space-y-4 px-4 pb-4">
             {busy && !turnDetail ? (
               <p className="text-sm text-muted-foreground">{t("memory.common.loading")}</p>
@@ -319,8 +320,9 @@ function VmmContentPage({
               value={turnDetail?.detail || selectedHit?.preview || ""}
             />
           </div>
-        </SheetContent>
-      </Sheet>
+      </aside> : null}
+      </div>
+      </div>
 
       <AlertDialog
         open={deleteHit !== null}
