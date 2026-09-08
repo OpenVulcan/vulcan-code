@@ -531,95 +531,6 @@ fn openrouter_rerank_capabilities(model: &OpenRouterModelEntry) -> ModelCapabili
     }
 }
 
-/// Builds one verified Alibaba Coding Plan static model catalog.
-/// 构建一个已验证的阿里云 Coding Plan 静态模型目录。
-///
-/// # Parameters
-/// 参数
-/// `connection_id` owns the in-memory catalog, `service_entry_id` selects the exact regional
-/// product, and `generation` is the process-local refresh generation.
-/// `connection_id` 拥有该内存目录，`service_entry_id` 选择精确区域产品，
-/// `generation` 是进程内刷新代次。
-///
-/// # Returns
-/// 返回值
-/// The exact reviewed catalog or an explicit unsupported-entry error.
-/// 返回精确的已审核目录，或明确的不支持入口错误。
-#[cfg(test)]
-pub fn build_alibaba_coding_plan_catalog(
-    connection_id: &str,
-    service_entry_id: &str,
-    generation: u64,
-) -> Result<ConnectionModelCatalog, String> {
-    let evidence_revision = match service_entry_id {
-        "coding-plan-cn" => "alibaba.coding-plan-cn.2026-07-23",
-        "coding-plan-global" => "alibaba.coding-plan-global.2026-07-23",
-        unsupported => {
-            return Err(format!(
-                "Alibaba static Coding Plan catalog is not registered for service entry `{unsupported}`."
-            ));
-        }
-    };
-    let definitions = [
-        ("MiniMax-M2.5", "MiniMax M2.5", 196_608, &[][..]),
-        ("glm-4.7", "GLM-4.7", 202_752, &[][..]),
-        ("glm-5", "GLM-5", 202_752, &[][..]),
-        (
-            "kimi-k2.5",
-            "Kimi K2.5",
-            262_144,
-            &[ResourceKind::Image, ResourceKind::Video][..],
-        ),
-        ("qwen3-coder-next", "Qwen3 Coder Next", 262_144, &[][..]),
-        ("qwen3-coder-plus", "Qwen3 Coder Plus", 1_000_000, &[][..]),
-        ("qwen3-max-2026-01-23", "Qwen3 Max 0123", 262_144, &[][..]),
-        (
-            "qwen3.5-plus",
-            "Qwen3.5 Plus",
-            1_000_000,
-            &[ResourceKind::Image, ResourceKind::Video][..],
-        ),
-        (
-            "qwen3.6-plus",
-            "Qwen3.6 Plus",
-            1_000_000,
-            &[ResourceKind::Image, ResourceKind::Video][..],
-        ),
-        ("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, &[][..]),
-    ];
-    let models = definitions
-        .into_iter()
-        .map(|(model_id, display_name, context_limit, input_resources)| {
-            let mut model = ConnectionModel {
-                id: model_id.to_string(),
-                display_name: display_name.to_string(),
-                capabilities: ModelCapabilities {
-                    operations: vec![AiOperation::ConversationRespond],
-                    context_limit: Some(context_limit),
-                    input_resources: input_resources.to_vec(),
-                    evidence_revision: evidence_revision.to_string(),
-                    ..ModelCapabilities::default()
-                },
-                capability_evidence: ModelCapabilityEvidence::default(),
-                protocol_variants: BTreeMap::new(),
-                resolved_protocol_binding: None,
-            };
-            // These Coding Plan identities fall outside the migrated model-studio rule scope, so
-            // the legacy reasoning table remains the live contract for this entry.
-            // 这些 Coding Plan 身份不在已迁移的 model-studio 规则作用域内，旧版思考表仍是该入口的现行契约。
-            enrich_alibaba_model(service_entry_id, &mut model);
-            model
-        })
-        .collect();
-    Ok(ConnectionModelCatalog {
-        connection_id: connection_id.to_string(),
-        models,
-        generation,
-        page_count: 1,
-        discovery_schema_revision: String::from("alibaba.static-models.v1"),
-    })
-}
-
 /// Describes one reviewed Alibaba conversation offering without provider discovery guesses.
 /// 描述一项不含供应商发现猜测的已审核阿里云会话产品。
 #[cfg(test)]
@@ -666,8 +577,16 @@ pub fn build_alibaba_token_plan_catalog(
 ) -> Result<ConnectionModelCatalog, String> {
     const PERSONAL_CN: &[AlibabaStaticConversationModel] = &[
         alibaba_static_model(
-            "qwen3.8-max-preview",
-            "Qwen3.8 Max Preview",
+            "qwen3.8-max",
+            "Qwen3.8 Max",
+            1_000_000,
+            Some(131_072),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.8-flash",
+            "Qwen3.8 Flash",
             1_000_000,
             Some(131_072),
             true,
@@ -681,29 +600,51 @@ pub fn build_alibaba_token_plan_catalog(
             1_000_000,
             None,
             true,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro-0813",
+            "DeepSeek V4 Pro 0813",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model_without_verified_context(
+            "deepseek-v4-flash-0731",
+            "DeepSeek V4 Flash 0731",
+            false,
             false,
         ),
         alibaba_static_model("glm-5.2", "GLM-5.2", 1_000_000, None, false, false),
-        alibaba_static_model(
-            "deepseek-v4-pro",
-            "DeepSeek V4 Pro",
-            1_000_000,
-            None,
-            false,
-            false,
-        ),
     ];
     const PERSONAL_GLOBAL: &[AlibabaStaticConversationModel] = &[
         alibaba_static_model(
-            "qwen3.8-max-preview",
-            "Qwen3.8 Max Preview",
+            "qwen3.8-max",
+            "Qwen3.8 Max",
             1_000_000,
             Some(131_072),
             true,
             true,
         ),
-        alibaba_static_model("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, None, true, true),
+        alibaba_static_model(
+            "qwen3.8-flash",
+            "Qwen3.8 Flash",
+            1_000_000,
+            Some(131_072),
+            true,
+            true,
+        ),
         alibaba_static_model("qwen3.7-max", "Qwen3.7 Max", 1_000_000, None, false, false),
+        alibaba_static_model("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, None, true, true),
         alibaba_static_model(
             "qwen3.6-flash",
             "Qwen3.6 Flash",
@@ -715,6 +656,14 @@ pub fn build_alibaba_token_plan_catalog(
         alibaba_static_model(
             "deepseek-v4-pro",
             "DeepSeek V4 Pro",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro-0813",
+            "DeepSeek V4 Pro 0813",
             1_000_000,
             None,
             false,
@@ -730,8 +679,8 @@ pub fn build_alibaba_token_plan_catalog(
     ];
     const TEAM_CN: &[AlibabaStaticConversationModel] = &[
         alibaba_static_model(
-            "qwen3.8-max-preview",
-            "Qwen3.8 Max Preview",
+            "qwen3.8-max",
+            "Qwen3.8 Max",
             1_000_000,
             Some(131_072),
             true,
@@ -1178,7 +1127,7 @@ fn build_alibaba_static_conversation_catalog(
             !responses_harness
                 || matches!(
                     definition.id,
-                    "qwen3.8-max-preview" | "qwen3.7-max" | "qwen3.7-plus"
+                    "qwen3.8-max" | "qwen3.8-flash" | "qwen3.7-max" | "qwen3.7-plus"
                 )
         })
         .map(|definition| {
@@ -2023,6 +1972,7 @@ fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
         | "xiaomi/mimo-v2.5-pro"
         | "stepfun/step-3.7-flash"
         | "deepseek-v4-pro"
+        | "deepseek-v4-pro-0813"
         | "deepseek-v4-flash"
         | "deepseek-v3.2"
         | "kimi-k2.5"
@@ -2030,7 +1980,8 @@ fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
             ReasoningControlMode::Toggle,
             vec![ReasoningEffort::None, ReasoningEffort::Adaptive],
         ),
-        "qwen3.8-max-preview"
+        "qwen3.8-max"
+        | "qwen3.8-flash"
         | "qwen3-max-2026-01-23"
         | "qwen3-coder-next"
         | "qwen3-coder-plus"
@@ -3330,28 +3281,6 @@ mod tests {
         }
     }
 
-    /// Verifies Alibaba Coding Plan static catalogs retain exact regional identity and limits.
-    /// 验证阿里云 Coding Plan 静态目录保留精确区域身份与限制。
-    #[test]
-    fn legacy_alibaba_coding_plan_catalog_is_region_scoped() {
-        let catalog = build_alibaba_coding_plan_catalog("connection", "coding-plan-cn", 7)
-            .expect("registered Coding Plan entry must build");
-        assert_eq!(catalog.connection_id, "connection");
-        assert_eq!(catalog.generation, 7);
-        assert_eq!(catalog.models.len(), 10);
-        let qwen = catalog
-            .models
-            .iter()
-            .find(|model| model.id == "qwen3.7-plus")
-            .expect("Qwen 3.7 Plus");
-        assert_eq!(qwen.capabilities.context_limit, Some(1_000_000));
-        assert_eq!(
-            qwen.capabilities.evidence_revision,
-            "model-core.alibaba.coding-plan-cn.2026-07-30"
-        );
-        assert!(build_alibaba_coding_plan_catalog("connection", "model-studio-cn", 8).is_err());
-    }
-
     /// Verifies the Personal International Token Plan keeps its exact published model identity.
     /// 验证个人国际版 Token Plan 保留其精确发布模型身份。
     #[test]
@@ -3363,7 +3292,7 @@ mod tests {
             8,
         )
         .expect("Personal International Token Plan must build");
-        assert_eq!(catalog.models.len(), 7);
+        assert_eq!(catalog.models.len(), 9);
         let flash = catalog
             .models
             .iter()
@@ -3375,6 +3304,10 @@ mod tests {
             "alibaba.token-plan.personal-global.2026-08-01"
         );
         assert!(catalog.models.iter().any(|model| model.id == "glm-5.2"));
+        assert!(catalog
+            .models
+            .iter()
+            .any(|model| model.id == "deepseek-v4-pro-0813"));
     }
 
     /// Verifies Alibaba Model Studio publishes only reviewed embedding and rerank contracts.
@@ -4556,9 +4489,6 @@ mod manifest_migration_tests {
         protocol_id: &str,
     ) -> ConnectionModelCatalog {
         match service_entry_id {
-            "coding-plan-cn" | "coding-plan-global" => {
-                build_alibaba_coding_plan_catalog("migration", service_entry_id, 1)
-            }
             "token-plan-personal-cn"
             | "token-plan-personal-global"
             | "token-plan-team-cn"
@@ -4593,7 +4523,6 @@ mod manifest_migration_tests {
         // credential_profile_id selects the exact product credential used by production discovery.
         // credential_profile_id 选择生产发现使用的精确产品凭据。
         let credential_profile_id = match service_entry_id {
-            "coding-plan-cn" | "coding-plan-global" => "coding-plan-api-key",
             "token-plan-personal-cn"
             | "token-plan-personal-global"
             | "token-plan-team-cn"
@@ -4655,8 +4584,8 @@ mod manifest_migration_tests {
         }
     }
 
-    /// Verifies all eight Alibaba static products moved their executable facts into Manifest.
-    /// 验证全部八个阿里静态产品已把可执行事实迁入 Manifest。
+    /// Verifies all six Alibaba static products moved their executable facts into Manifest.
+    /// 验证全部六个阿里静态产品已把可执行事实迁入 Manifest。
     #[test]
     fn alibaba_manifest_static_catalogs_equal_legacy_oracle() {
         // manifests provides the current fully compiled bundled authority.
@@ -4670,10 +4599,6 @@ mod manifest_migration_tests {
         // service_protocols enumerates every production static route.
         // service_protocols 枚举每条生产静态路由。
         let service_protocols = [
-            ("coding-plan-cn", OPENAI_CHAT_PROFILE_ID),
-            ("coding-plan-cn", ANTHROPIC_MESSAGES_PROFILE_ID),
-            ("coding-plan-global", OPENAI_CHAT_PROFILE_ID),
-            ("coding-plan-global", ANTHROPIC_MESSAGES_PROFILE_ID),
             ("token-plan-personal-cn", OPENAI_CHAT_PROFILE_ID),
             ("token-plan-personal-cn", OPENAI_RESPONSES_PROFILE_ID),
             ("token-plan-personal-cn", ANTHROPIC_MESSAGES_PROFILE_ID),

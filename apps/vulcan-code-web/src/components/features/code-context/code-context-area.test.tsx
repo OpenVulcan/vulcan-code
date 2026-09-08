@@ -129,6 +129,23 @@ describe("CodeContextArea", () => {
     expect(markup).not.toContain("文件与 Blob");
   });
 
+  // A failed first publication exposes recovery planning even without a published checkpoint.
+  // 首次发布失败时，即使没有已发布检查点，也要显示恢复计划入口。
+  it("exposes rebuild recovery for an uninitialized failed index", () => {
+    const overview = overviewFixture(true);
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "rebuild_required";
+    overview.status.lastError = "initial publication failed";
+    overview.counts = null;
+    overview.integrity = null;
+    const markup = renderArea(overview);
+    expect(markup).toContain("索引需要重建");
+    expect(markup).toContain("生成重建计划");
+    const createButton = markup.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find((button) => button.includes("创建语义索引"));
+    expect(createButton).toContain('disabled=""');
+    expect(markup).not.toContain("文件与 Blob");
+  });
+
   // Expanded management reads obtain a fresh host snapshot instead of reusing stale component props.
   // 展开的管理读取取得全新宿主快照，而不是复用陈旧组件属性。
   it("loads the authoritative project revision for management details", async () => {

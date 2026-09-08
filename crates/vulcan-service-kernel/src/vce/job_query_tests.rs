@@ -1,8 +1,11 @@
 //! Real VCE storage interleaving with a private, explicitly controlled HostAI test boundary.
 //! 使用私有、明确可控的 HostAI 测试边界验证真实 VCE 存储交错。
 
+use super::super::runtime_configuration;
 use super::tests::{await_test_job, job_test_capabilities};
-use super::{VceActiveRefresh, VceJobAdmission, VceJobWork, VceRuntimeManager};
+use super::{
+    VceActiveRefresh, VceJobAdmission, VceJobWork, VceRebuildProjectInput, VceRuntimeManager,
+};
 use crate::ServiceEventEmitter;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -315,14 +318,19 @@ pub(super) async fn verify_nonempty_query_interleaving(
     let fingerprint = crate::vce::vce_embedding_physical_fingerprint(&capabilities, 3)
         .expect("fixture fingerprint");
     let ai = Arc::new(ControlledHostAi::new(capabilities));
+    // Retain a storage factory handle for the cold-owner recovery checks below.
+    // 为下面的冷态所有者恢复检查保留一个存储工厂句柄。
+    let cold_factory = factory.clone();
     let expected_fingerprint = fingerprint.clone();
     let manager = VceRuntimeManager::new(
         ai.clone(),
         factory,
         ServiceEventEmitter::new(Vec::new()),
         Arc::new(move |contract| {
-            if contract.project_id == "nonempty-project"
-                && contract.dimension == 3
+            if matches!(
+                contract.project_id.as_str(),
+                "nonempty-project" | "cold-cancel-project"
+            ) && contract.dimension == 3
                 && contract.embedding_fingerprint == expected_fingerprint
             {
                 Ok(())
@@ -413,6 +421,76 @@ pub(super) async fn verify_nonempty_query_interleaving(
         "baseline: {:?}",
         baseline.result.degraded_features
     );
+    // A durable initialize receipt must not retire a binding after a checkpoint is published.
+    // 检查点发布后，持久化的初始化回执不得再退役绑定。
+    let published_runtime = manager
+        .require_project("nonempty-project")
+        .await
+        .expect("published project runtime");
+    let mut published_attempt = initialized.clone();
+    published_attempt.job_id = String::from("published-cancel-guard");
+    published_attempt.owner_run_id = String::from("published-cancel-guard-owner");
+    published_attempt.idempotency_key = String::from("published-cancel-guard-request");
+    // Durable admission always registers a fresh receipt as queued before advancing it.
+    // 持久准入始终先以排队状态注册新回执，再推进到运行状态。
+    published_attempt.state = VceJobState::Queued;
+    published_attempt.sequence = 1;
+    published_attempt.created_at_unix_ms = initialized.created_at_unix_ms.saturating_add(1);
+    published_attempt.updated_at_unix_ms = published_attempt.created_at_unix_ms;
+    published_attempt.source_checkpoint_version = None;
+    published_attempt.replacement = None;
+    published_attempt.result_checkpoint_version = None;
+    published_attempt.progress = None;
+    published_attempt.followup_requested = false;
+    published_attempt.completed_update = None;
+    published_attempt.error = None;
+    published_runtime
+        .index
+        .job_store()
+        .register(&published_attempt)
+        .await
+        .expect("register published checkpoint cancellation guard");
+    let published_queued = published_attempt.clone();
+    published_attempt.state = VceJobState::Running;
+    published_attempt.sequence = published_queued.sequence.saturating_add(1);
+    published_attempt.updated_at_unix_ms = published_queued.updated_at_unix_ms.saturating_add(1);
+    published_runtime
+        .index
+        .job_store()
+        .update(&published_queued, &published_attempt)
+        .await
+        .expect("start published checkpoint cancellation guard");
+    assert!(
+        manager
+            .cancel_job("nonempty-project", &published_attempt.job_id)
+            .await
+            .is_err()
+    );
+    // Cleanup follows the production state machine: running, cancelling, then cancelled.
+    // 清理遵循生产状态机：运行中、取消中、最终已取消。
+    let mut published_cancelling = published_attempt.clone();
+    published_cancelling.state = VceJobState::Cancelling;
+    published_cancelling.sequence = published_attempt.sequence.saturating_add(1);
+    published_cancelling.updated_at_unix_ms =
+        published_attempt.updated_at_unix_ms.saturating_add(1);
+    published_runtime
+        .index
+        .job_store()
+        .update(&published_attempt, &published_cancelling)
+        .await
+        .expect("mark published checkpoint guard cancellation");
+    let mut published_cleanup = published_cancelling.clone();
+    published_cleanup.state = VceJobState::Cancelled;
+    published_cleanup.sequence = published_cancelling.sequence.saturating_add(1);
+    published_cleanup.updated_at_unix_ms =
+        published_cancelling.updated_at_unix_ms.saturating_add(1);
+    published_cleanup.error = Some(String::from("published checkpoint guard test cleanup"));
+    published_runtime
+        .index
+        .job_store()
+        .update(&published_cancelling, &published_cleanup)
+        .await
+        .expect("clean up published checkpoint guard receipt");
     // A suspended old query already owns its revision, engine and read-generation lease.
     // 暂停的旧查询已持有自身修订、引擎及读取代次租约。
     let query_pause = ai.queries.arm();
@@ -646,6 +724,299 @@ pub(super) async fn verify_nonempty_query_interleaving(
             .contains("vce_cancelled_generation")
     );
     assert!(survived.result.degraded_features.is_empty());
+    // A host restart may leave an uninitialized receipt without an in-memory job owner.
+    // 宿主重启可能留下没有内存作业所有者的未初始化持久回执。
+    let cold_root = project_root
+        .parent()
+        .expect("nonempty fixture has a temporary parent")
+        .join("cold-cancel-source");
+    std::fs::create_dir_all(&cold_root).expect("create cold recovery source");
+    manager
+        .enable_project(
+            "cold-cancel-project",
+            &cold_root,
+            settings.clone(),
+            3,
+            &fingerprint,
+            true,
+        )
+        .await
+        .expect("prepare cold recovery project");
+    let previous_config = cold_factory
+        .load_active_project_config("cold-cancel-project")
+        .await
+        .expect("read cold active binding")
+        .expect("cold project binding exists");
+    let cold_runtime = manager
+        .require_project("cold-cancel-project")
+        .await
+        .expect("cold recovery runtime");
+    let mut first_receipt = vulcan_workspace_store::vce_data_plane::VceStoredJob {
+        schema_version: vulcan_workspace_store::vce_data_plane::VCE_JOB_RECEIPT_SCHEMA_VERSION,
+        project_id: String::from("cold-cancel-project"),
+        job_id: String::from("cold-cancel-first"),
+        owner_run_id: String::from("cold-recovery-owner"),
+        idempotency_key: String::from("cold-cancel-first-request"),
+        retry_of_job_id: None,
+        request_fingerprint: "a".repeat(64),
+        // Durable receipts store the raw indexing contract identity, not the tagged physical route fingerprint.
+        // 持久回执保存原始索引契约身份，而不是带类型前缀的物理路由指纹。
+        contract_fingerprint: super::job_index_contract_fingerprint(
+            &cold_runtime.config,
+            &cold_runtime.settings,
+        )
+        .expect("compute cold job contract fingerprint"),
+        kind: VceJobKind::Initialize,
+        // Registering through the durable admission contract requires a fresh queued receipt.
+        // 按持久准入契约注册时必须使用全新的排队回执。
+        state: VceJobState::Queued,
+        sequence: 1,
+        created_at_unix_ms: 1_000,
+        updated_at_unix_ms: 1_000,
+        admitted_settings_revision: settings.revision,
+        source_checkpoint_version: None,
+        replacement: None,
+        result_checkpoint_version: None,
+        progress: None,
+        followup_requested: false,
+        completed_update: None,
+        error: None,
+    };
+    cold_runtime
+        .index
+        .job_store()
+        .register(&first_receipt)
+        .await
+        .expect("register orphaned first initialization");
+    let first_queued = first_receipt.clone();
+    first_receipt.state = VceJobState::Running;
+    first_receipt.sequence = first_queued.sequence.saturating_add(1);
+    first_receipt.updated_at_unix_ms = first_queued.updated_at_unix_ms.saturating_add(1);
+    cold_runtime
+        .index
+        .job_store()
+        .update(&first_queued, &first_receipt)
+        .await
+        .expect("start orphaned first initialization");
+    // A competing writer must block recovery before any receipt transition or binding retirement.
+    // 竞争写者必须在任何回执转换或绑定退役之前阻止恢复。
+    let competing_writer = cold_factory
+        .try_acquire_project_writer("cold-cancel-project")
+        .expect("acquire competing cold writer")
+        .expect("cold writer is initially available");
+    assert!(
+        manager
+            .cancel_job("cold-cancel-project", &first_receipt.job_id)
+            .await
+            .is_err()
+    );
+    drop(competing_writer);
+    let first_cancelled = manager
+        .cancel_job("cold-cancel-project", &first_receipt.job_id)
+        .await
+        .expect("cancel orphaned first initialization");
+    assert_eq!(first_cancelled.state, VceJobState::Cancelled);
+    assert!(
+        cold_factory
+            .load_active_project_config("cold-cancel-project")
+            .await
+            .expect("read fenced cold binding")
+            .is_none()
+    );
+    assert_eq!(
+        cold_factory
+            .load_uninitialized_recovery_config("cold-cancel-project")
+            .await
+            .expect("read first cold recovery candidate")
+            .expect("first orphan remains recoverable")
+            .binding
+            .namespace_id,
+        previous_config.binding.namespace_id
+    );
+    // A second failed initialization must be independently cancellable and must use a fresh namespace.
+    // 第二次失败的初始化也必须可以独立取消，并且必须使用新的命名空间。
+    let mut same_physical_config = previous_config.clone();
+    same_physical_config.binding.namespace_id = String::from("cold-retry-same-physical");
+    same_physical_config.binding.checkpoint_chain_id = String::from("cold-retry-same-chain");
+    assert!(
+        cold_factory
+            .reinitialize_uninitialized_project_index(&previous_config, same_physical_config,)
+            .await
+            .is_err()
+    );
+    let second_job_id = "cold-cancel-second";
+    let replacement_config = runtime_configuration::prepare_runtime_configuration(
+        "cold-cancel-project",
+        &cold_root,
+        &settings,
+        3,
+        &fingerprint,
+        Some(second_job_id),
+    )
+    .expect("prepare fresh replacement configuration")
+    .index;
+    assert_ne!(
+        previous_config.vector_space_id,
+        replacement_config.vector_space_id,
+    );
+    let (replacement_index, replacement_writer) = cold_factory
+        .reinitialize_uninitialized_project_index(&previous_config, replacement_config.clone())
+        .await
+        .expect("reinitialize from first orphan");
+    let mut second_receipt = vulcan_workspace_store::vce_data_plane::VceStoredJob {
+        job_id: String::from(second_job_id),
+        owner_run_id: String::from("cold-recovery-owner-2"),
+        idempotency_key: String::from("cold-cancel-second-request"),
+        created_at_unix_ms: 2_000,
+        updated_at_unix_ms: 2_000,
+        ..first_receipt.clone()
+    };
+    second_receipt.state = VceJobState::Queued;
+    second_receipt.sequence = 1;
+    second_receipt.updated_at_unix_ms = second_receipt.created_at_unix_ms;
+    let second_queued = second_receipt.clone();
+    replacement_index
+        .job_store()
+        .register(&second_receipt)
+        .await
+        .expect("register orphaned second initialization");
+    second_receipt.state = VceJobState::Running;
+    second_receipt.sequence = second_queued.sequence.saturating_add(1);
+    second_receipt.updated_at_unix_ms = second_queued.updated_at_unix_ms.saturating_add(1);
+    replacement_index
+        .job_store()
+        .update(&second_queued, &second_receipt)
+        .await
+        .expect("start orphaned second initialization");
+    drop(replacement_writer);
+    let second_cancelled = manager
+        .cancel_job("cold-cancel-project", &second_receipt.job_id)
+        .await
+        .expect("cancel orphaned second initialization");
+    assert_eq!(second_cancelled.state, VceJobState::Cancelled);
+    assert!(
+        cold_factory
+            .load_active_project_config("cold-cancel-project")
+            .await
+            .expect("read second fenced cold binding")
+            .is_none()
+    );
+    assert_eq!(
+        cold_factory
+            .load_uninitialized_recovery_config("cold-cancel-project")
+            .await
+            .expect("read newest cold recovery candidate")
+            .expect("second orphan remains recoverable")
+            .binding
+            .namespace_id,
+        replacement_config.binding.namespace_id
+    );
+    std::fs::write(
+        cold_root.join("recovery.rs"),
+        "pub fn recovery_marker() -> &'static str { \"cold_recovery\" }\n",
+    )
+    .expect("write cold recovery source");
+    // A cold-cancelled orphan must expose the same explicit maintenance plan used by rebuild admission.
+    // 冷取消留下的孤立绑定必须暴露与重建准入相同的明确维护计划。
+    let recovery_plan = manager
+        .stored_maintenance_plan(
+            "cold-cancel-project",
+            vulcan_context_engine::VceMaintenanceMode::Rebuild,
+        )
+        .await
+        .expect("read orphaned recovery maintenance plan");
+    let recovery_actions = recovery_plan
+        .actions
+        .into_iter()
+        .map(|action| action.action_id)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !recovery_actions.is_empty(),
+        "orphaned uninitialized binding must keep an explicit rebuild entry"
+    );
+    let recovery_input = VceRebuildProjectInput {
+        project_id: String::from("cold-cancel-project"),
+        project_root: cold_root.clone(),
+        settings: settings.clone(),
+        dimension: 3,
+        fingerprint: fingerprint.clone(),
+    };
+    // Rebuild admission is recreated with identical fields for each idempotent replay.
+    // 重建准入在每次幂等重放时都用完全相同的字段重新构造。
+    let recovery_command = || VceJobAdmission {
+        retry_of_job_id: None,
+        kind: VceJobKind::Rebuild,
+        idempotency_key: String::from("cold-recovery-rebuild"),
+        expected_settings_revision: settings.revision,
+        expected_checkpoint_version: None,
+        contract_fingerprint: fingerprint.clone(),
+    };
+    // Hold one actual embedding call so the in-flight idempotency replay is exercised before completion.
+    // 暂停一次真实向量调用，确保在完成前验证进行中的幂等重放。
+    let recovery_pause = ai.documents.arm();
+    let recovery_job = manager
+        .submit_project_rebuild(
+            recovery_input.clone(),
+            recovery_command(),
+            false,
+            recovery_actions.clone(),
+            &executor,
+        )
+        .await
+        .expect("admit rebuild from orphaned uninitialized binding");
+    assert_eq!(recovery_job.kind, VceJobKind::Rebuild);
+    assert_eq!(recovery_job.source_checkpoint_version, None);
+    assert!(recovery_job.replacement.is_none());
+    ai.documents.wait_entered().await;
+    assert_eq!(
+        manager
+            .submit_project_rebuild(
+                recovery_input.clone(),
+                recovery_command(),
+                false,
+                recovery_actions.clone(),
+                &executor,
+            )
+            .await
+            .expect("replay active null-checkpoint rebuild")
+            .job_id,
+        recovery_job.job_id
+    );
+    drop(recovery_pause);
+    let recovered = await_test_job(&manager, "cold-cancel-project", &recovery_job.job_id).await;
+    assert_eq!(
+        recovered.state,
+        VceJobState::Succeeded,
+        "null-checkpoint recovery diagnostic: {recovered:?}"
+    );
+    assert!(
+        cold_factory
+            .load_active_project_config("cold-cancel-project")
+            .await
+            .expect("read rebuilt active binding")
+            .is_some()
+    );
+    assert!(manager.project_can_serve_now("cold-cancel-project", settings.revision, &fingerprint));
+    assert_eq!(
+        manager
+            .submit_project_rebuild(
+                recovery_input,
+                recovery_command(),
+                false,
+                recovery_actions,
+                &executor,
+            )
+            .await
+            .expect("replay completed null-checkpoint rebuild")
+            .job_id,
+        recovery_job.job_id
+    );
+    // Release test-only storage handles before shutdown so no external project lease survives the drain.
+    // 在关闭管理器前释放测试专用存储句柄，确保排空时不会残留外部项目租约。
+    drop(replacement_index);
+    drop(cold_runtime);
+    drop(published_runtime);
+    drop(cold_factory);
     // Keep the additional acceptance future boxed so its filesystem state does not enlarge this frame.
     // 将追加验收 Future 装箱，避免其文件系统状态扩大当前栈帧。
     Box::pin(verify_manual_admission_and_watcher_source_events(

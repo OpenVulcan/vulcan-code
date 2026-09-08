@@ -970,9 +970,9 @@ pub struct VceMaintenanceExecutionRequest {
     /// Exact settings revision required by this command.
     /// 此命令要求的精确设置修订号。
     pub expected_settings_revision: u64,
-    /// Exact published checkpoint required by this destructive command.
-    /// 此破坏性命令要求的精确已发布检查点。
-    pub expected_checkpoint_version: u64,
+    /// Exact published checkpoint required by this destructive command; null is valid only for an uninitialized rebuild.
+    /// 此破坏性命令要求的精确已发布检查点；仅未初始化重建允许为空。
+    pub expected_checkpoint_version: Option<u64>,
     /// Exact action identities copied from the current read-only plan.
     /// 从当前只读计划复制的精确操作身份。
     pub action_ids: Vec<String>,
@@ -1188,6 +1188,47 @@ mod tests {
         assert!(
             std::mem::size_of::<VceMaintenanceExecutionResponse>()
                 <= 3 * std::mem::size_of::<usize>()
+        );
+    }
+
+    /// Verifies maintenance confirmation preserves both published checkpoints and explicit null recovery.
+    /// 验证维护确认同时保留已发布检查点与明确的空值恢复协议。
+    /// No parameters or I/O; checks exact JSON round trips for the numeric and null forms.
+    /// 无参数和输入输出；检查数字与空值两种协议形态的精确 JSON 往返。
+    #[test]
+    fn maintenance_execution_request_preserves_nullable_checkpoint() {
+        let numeric_wire = json!({
+            "expectedEmbeddingFingerprint": "sha256:preview",
+            "idempotencyKey": "confirm-7",
+            "projectId": "project",
+            "mode": "rebuild",
+            "expectedSettingsRevision": 4,
+            "expectedCheckpointVersion": 7,
+            "actionIds": ["rebuild-index"]
+        });
+        let numeric: VceMaintenanceExecutionRequest =
+            serde_json::from_value(numeric_wire.clone()).expect("decode numeric checkpoint");
+        assert_eq!(numeric.expected_checkpoint_version, Some(7));
+        assert_eq!(
+            serde_json::to_value(numeric).expect("encode numeric checkpoint"),
+            numeric_wire
+        );
+
+        let null_wire = json!({
+            "expectedEmbeddingFingerprint": "sha256:preview",
+            "idempotencyKey": "confirm-recovery",
+            "projectId": "project",
+            "mode": "rebuild",
+            "expectedSettingsRevision": 4,
+            "expectedCheckpointVersion": null,
+            "actionIds": ["rebuild-index"]
+        });
+        let null_request: VceMaintenanceExecutionRequest =
+            serde_json::from_value(null_wire.clone()).expect("decode null checkpoint");
+        assert_eq!(null_request.expected_checkpoint_version, None);
+        assert_eq!(
+            serde_json::to_value(null_request).expect("encode null checkpoint"),
+            null_wire
         );
     }
 

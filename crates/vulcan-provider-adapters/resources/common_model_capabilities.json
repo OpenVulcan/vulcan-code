@@ -4259,6 +4259,22 @@
                                              ]
                    },
                    {
+                       "key":  "openai/gpt-6-astra",
+                       "aliases":  [
+                                       "gpt-6-astra",
+                                       "openai: gpt-6 astra"
+                                   ],
+                       "context_window":  1050000,
+                       "input_modalities":  [
+                                                "file",
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "openai/gpt-5.6-sol-pro",
                        "aliases":  [
                                        "gpt-5.6-sol-pro",

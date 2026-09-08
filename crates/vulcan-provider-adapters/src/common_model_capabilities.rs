@@ -730,6 +730,22 @@ mod tests {
         assert!(resolution.supports_text_output);
     }
 
+    /// Verifies GPT-6 Astra inherits the GPT-5.6 Sol default matching contract.
+    /// 验证 GPT-6 Astra 继承 GPT-5.6 Sol 的默认匹配能力契约。
+    #[test]
+    fn gpt_six_astra_clones_gpt_five_six_sol_capabilities() {
+        let astra = resolve_common_model_capabilities("gpt-6-astra");
+        let sol = resolve_common_model_capabilities("gpt-5.6-sol");
+
+        assert!(astra.matched);
+        assert!(sol.matched);
+        assert_eq!(astra.context_window, sol.context_window);
+        assert_eq!(astra.supports_text_input, sol.supports_text_input);
+        assert_eq!(astra.supports_text_output, sol.supports_text_output);
+        assert_eq!(astra.input_resources, sol.input_resources);
+        assert_eq!(astra.output_resources, sol.output_resources);
+    }
+
     /// Verifies partial and version-adjacent names never produce guesses.
     /// 验证部分名称和相邻版本名称绝不会产生猜测。
     #[test]

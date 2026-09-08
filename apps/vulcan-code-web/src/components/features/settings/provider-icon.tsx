@@ -1,6 +1,7 @@
 import type { ReactElement } from "react"
 
 import antigravityIcon from "@/assets/provider-icons/provider-antigravity.svg"
+import agentSpaceIcon from "@/assets/provider-icons/provider-agentspace.png"
 import apiKeyFunIcon from "@/assets/provider-icons/provider-apikeyfun.svg"
 import claudeIcon from "@/assets/provider-icons/provider-claude.svg"
 import claudeApiIcon from "@/assets/provider-icons/provider-claudeapi.svg"
@@ -32,6 +33,7 @@ import type { PublicAiProviderCategory } from "@/types"
 // ProviderIconKey 是由前端持有的供应商图标闭集。
 export type ProviderIconKey =
   | "antigravity"
+  | "agentspace"
   | "apikeyfun"
   | "claude"
   | "claudeapi"
@@ -78,6 +80,7 @@ interface ProviderIconAsset {
 // providerIconLibrary 是不可变的前端图标库。
 const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> = {
   antigravity: { light: antigravityIcon },
+  agentspace: { light: agentSpaceIcon, transparent: true },
   apikeyfun: { light: apiKeyFunIcon, transparent: true },
   claude: { light: claudeIcon },
   claudeapi: { light: claudeApiIcon, transparent: true },
@@ -116,6 +119,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   alibaba: "qwen",
   apikeyfun: "apikeyfun",
   anthropic: "claude",
+  agentspace: "agentspace",
   claude: "claude",
   claudeapi: "claudeapi",
   code0: "code0",

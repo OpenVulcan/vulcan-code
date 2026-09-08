@@ -835,7 +835,34 @@ impl VceRuntimeManager {
             .await?
             .is_none()
         {
-            return Ok(false);
+            let recovery = self
+                .data_plane
+                .load_uninitialized_recovery_config(project_id)
+                .await?;
+            let Some(recovery) = recovery else {
+                return Ok(false);
+            };
+            if self
+                .data_plane
+                .open_uninitialized_recovery_project_index(&recovery)
+                .await?
+                .is_none()
+            {
+                return Err(String::from(
+                    "VCE uninitialized recovery binding disappeared before restoration",
+                ));
+            }
+            // Preserve an explicit management state so the UI can offer rebuild after a cold cancellation or failed handoff.
+            // 保留明确的管理状态，使界面能在冷取消或交接失败后提供重建入口。
+            self.activation_failures.write().await.insert(
+                project_id.to_owned(),
+                VceActivationFailure {
+                    config_revision: settings.revision,
+                    lifecycle: VceProjectLifecycle::RebuildRequired,
+                    error: String::from("VCE uninitialized recovery requires an explicit rebuild"),
+                },
+            );
+            return Ok(true);
         }
         // Restoration is a status read: an explicitly classified compatibility denial is a readable state.
         // 恢复属于状态读取：明确分类的兼容拒绝属于可读取状态。
@@ -1419,20 +1446,34 @@ impl VceRuntimeManager {
                 "VCE maintenance planning is unavailable during shutdown",
             ));
         }
-        // original preserves stored dimensions even when current UI routes describe an incompatible model.
-        // original 保留存储维度，即使当前界面路由描述的是不兼容模型。
-        let original = self
+        // Prefer the active binding, then read the deterministic orphaned recovery binding without activating or scanning it.
+        // 优先使用活动绑定；否则读取确定性的孤立恢复绑定，不激活也不扫描。
+        let (original, index) = if let Some(config) = self
             .data_plane
             .load_active_project_config(project_id)
             .await?
-            .ok_or_else(|| String::from("VCE maintenance planning requires an existing index"))?;
-        // index opens only the existing binding and cannot implicitly initialize or replace it.
-        // index 仅打开现有绑定，不能隐式初始化或替换它。
-        let index = self
-            .data_plane
-            .open_existing_project_index(&original)
-            .await?
-            .ok_or_else(|| String::from("VCE maintenance index disappeared during planning"))?;
+        {
+            let index = self
+                .data_plane
+                .open_existing_project_index(&config)
+                .await?
+                .ok_or_else(|| String::from("VCE maintenance index disappeared during planning"))?;
+            (config, index)
+        } else {
+            let config = self
+                .data_plane
+                .load_uninitialized_recovery_config(project_id)
+                .await?
+                .ok_or_else(|| {
+                    String::from("VCE maintenance planning requires an active or recovery index")
+                })?;
+            let index = self
+                .data_plane
+                .open_uninitialized_recovery_project_index(&config)
+                .await?
+                .ok_or_else(|| String::from("VCE recovery index disappeared during planning"))?;
+            (config, index)
+        };
         // config creates only the core's validation context; no source scan or provider registration occurs.
         // config 仅创建核心校验上下文；不扫描源码，也不注册供应商。
         let mut config = vulcan_context_engine::VceConfig::new(

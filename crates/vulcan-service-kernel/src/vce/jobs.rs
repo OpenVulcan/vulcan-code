@@ -841,7 +841,20 @@ impl VceRuntimeManager {
             .load_active_project_config(project_id)
             .await?
         else {
-            return Ok(None);
+            let Some(recovery) = self
+                .data_plane
+                .load_uninitialized_recovery_config(project_id)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let index = self
+                .data_plane
+                .open_uninitialized_recovery_project_index(&recovery)
+                .await?
+                .ok_or_else(|| String::from("VCE recovery job storage disappeared during read"))?;
+            let store = index.job_store();
+            return selection.read(&store).await;
         };
         let index = self
             .data_plane
@@ -873,17 +886,17 @@ impl VceRuntimeManager {
         let job = match active {
             Some(job) if job.job_id == job_id => job,
             _ => {
-                let receipt = self
+                if let Some(receipt) = self
                     .read_job(project_id, VceJobSelection::Exact(job_id))
                     .await?
-                    .ok_or_else(|| String::from("VCE cancellation job does not exist"))?;
-                return if receipt.state.is_terminal() {
-                    Ok(receipt)
-                } else {
-                    Err(String::from(
-                        "VCE cancellation job has no matching active owner; explicit recovery is required",
-                    ))
-                };
+                {
+                    // Terminal replay stays read-only, even when a newer writer currently owns the project.
+                    // 终态回放保持只读，即使项目当前由更新的写入者持有也不能被阻塞。
+                    if receipt.state.is_terminal() {
+                        return Ok(receipt);
+                    }
+                }
+                return self.cancel_cold_uninitialized_job(project_id, job_id).await;
             }
         };
         match job.control.cancel() {
@@ -907,6 +920,82 @@ impl VceRuntimeManager {
                     .await
             }
         }
+    }
+
+    /// Cancel one durable uninitialized job after its in-memory owner has disappeared.
+    /// 在内存所有者消失后，取消一个持久化的未初始化作业。
+    ///
+    /// `project_id` and `job_id` select the exact cold receipt. The storage factory holds the
+    /// project writer while fencing the binding and while both receipt transitions are persisted.
+    /// `project_id` 与 `job_id` 选择精确的冷态回执。存储工厂在封锁绑定及持久化两次回执转换期间
+    /// 持有项目写入租约。
+    ///
+    /// Returns the terminal cancellation receipt; published checkpoints and incompatible job
+    /// kinds are rejected before any binding mutation.
+    /// 返回取消终态回执；已发布检查点与不兼容作业类型在修改绑定前被拒绝。
+    async fn cancel_cold_uninitialized_job(
+        &self,
+        project_id: &str,
+        job_id: &str,
+    ) -> Result<VceStoredJob, String> {
+        let Some((_project_writer, store, receipt)) = self
+            .data_plane
+            .prepare_uninitialized_job_cancellation(project_id, job_id)
+            .await?
+        else {
+            return Err(String::from("VCE cancellation job does not exist"));
+        };
+        if receipt.state.is_terminal() {
+            return Ok(receipt);
+        }
+        if !matches!(receipt.kind, VceJobKind::Initialize | VceJobKind::Rebuild)
+            || receipt.source_checkpoint_version.is_some()
+            || receipt.replacement.is_some()
+        {
+            return Err(String::from(
+                "VCE cold cancellation requires an uninitialized initialize or rebuild job",
+            ));
+        }
+        let cancelling = if receipt.state == VceJobState::Cancelling {
+            receipt
+        } else {
+            self.persist_cold_cancel_state(&store, &receipt, VceJobState::Cancelling)
+                .await?
+        };
+        self.persist_cold_cancel_state(&store, &cancelling, VceJobState::Cancelled)
+            .await
+    }
+
+    /// Persist one cold cancellation state with the same compare-and-swap contract as active jobs.
+    /// 使用与活动作业相同的比较交换契约，持久化一次冷取消状态。
+    ///
+    /// `store` owns the fenced project binding and `previous` is the last exact receipt snapshot.
+    /// `store` 持有已封锁的项目绑定，`previous` 是最近一次精确回执快照。
+    /// `next_state` must be a permitted cancellation transition; returns the acknowledged receipt.
+    /// `next_state` 必须是允许的取消状态转换；返回已确认的持久化回执。
+    async fn persist_cold_cancel_state(
+        &self,
+        store: &VceProjectJobStore,
+        previous: &VceStoredJob,
+        next_state: VceJobState,
+    ) -> Result<VceStoredJob, String> {
+        let mut next = previous.clone();
+        next.state = next_state;
+        next.followup_requested = false;
+        if next_state == VceJobState::Cancelled {
+            next.error = Some(String::from(VCE_REFRESH_CANCELLED_ERROR));
+        }
+        next.sequence = previous
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| String::from("VCE job receipt sequence overflow"))?;
+        next.updated_at_unix_ms = job_time()?.max(previous.updated_at_unix_ms);
+        let persisted = store.update(previous, &next).await?;
+        self.event_emitter
+            .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                super::super::services::map_vce_job(persisted.clone()),
+            )));
+        Ok(persisted)
     }
 
     /// Run coalesced batches serially under one durable job, renewing one-shot controls between batches.
@@ -2248,6 +2337,12 @@ mod tests {
                 "queued cancellation cannot invent file scans"
             );
             assert!(cancelled.result_checkpoint_version.is_none());
+            // A newer writer must not turn replay of this terminal receipt into a busy error.
+            // 新写入者存在时，回放这个终态回执也不能变成忙碌错误。
+            let terminal_writer = factory
+                .try_acquire_project_writer("job-project")
+                .expect("terminal replay writer")
+                .expect("terminal replay can reserve the project");
             assert_eq!(
                 manager
                     .cancel_job("job-project", &cancelled.job_id)
@@ -2255,6 +2350,7 @@ mod tests {
                     .expect("terminal cancellation is idempotent"),
                 cancelled
             );
+            drop(terminal_writer);
             assert_eq!(
                 manager
                     .last_successful_update("job-project")

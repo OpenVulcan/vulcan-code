@@ -1,4 +1,45 @@
 {
+  "agentspace": {
+    "id": "agentspace",
+    "display_name": "AgentSpace",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "chatgpt-plan",
+        "display_name": "ChatGPT Plan",
+        "kind": "conversation",
+        "base_url": "https://api.agent.space/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-codex-responses.v1",
+            "endpoint_path": "/responses",
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent"
+        ]
+      }
+    ]
+  },
   "alibaba": {
     "id": "alibaba",
     "display_name": "Alibaba Cloud",
@@ -7,204 +48,6 @@
     "credential_directory_visibility": "configured_only",
     "credential_registration": "direct",
     "service_entries": [
-      {
-        "id": "coding-plan-cn",
-        "display_name": "Coding Plan China",
-        "kind": "conversation",
-        "base_url": "https://coding.dashscope.aliyuncs.com",
-        "credential_profiles": [
-          {
-            "id": "coding-plan-api-key",
-            "display_name": "Coding Plan API Key",
-            "credential_mode": "token",
-            "billing_kind": "token_plan",
-            "account_usage_query": "unsupported",
-            "key_prefix": "sk-sp-",
-            "default_usage_scopes": [
-              "interactive_agent"
-            ]
-          }
-        ],
-        "authentication": "bearer_authorization",
-        "model_discovery": "manifest_static",
-        "request_projector": "compatible",
-        "protocol_routes": [
-          {
-            "protocol_profile_id": "openai-chat-completions.v1",
-            "endpoint_path": "/v1/chat/completions",
-            "request_projection_profiles": [
-              {
-                "profile_id": "alibaba.chat.thinking.v1",
-                "revision": 1,
-                "steps": [
-                  {
-                    "op": "delete_json_pointer",
-                    "path": "/reasoning_effort"
-                  },
-                  {
-                    "op": "enum_map",
-                    "path": "/enable_thinking",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
-                    "mapping": {
-                      "adaptive": true,
-                      "none": false
-                    },
-                    "unmatched": "error"
-                  }
-                ]
-              }
-            ],
-            "verified": true
-          },
-          {
-            "protocol_profile_id": "anthropic-messages.v1",
-            "endpoint_path": "/v1/messages",
-            "base_url_override": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-            "request_headers": {
-              "anthropic-version": "2023-06-01"
-            },
-            "authentication": "x_api_key",
-            "request_projection_profiles": [
-              {
-                "profile_id": "alibaba.anthropic.thinking.v1",
-                "revision": 1,
-                "steps": [
-                  {
-                    "op": "enum_map",
-                    "path": "/thinking",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
-                    "mapping": {
-                      "adaptive": {
-                        "type": "enabled"
-                      },
-                      "none": {
-                        "type": "disabled"
-                      }
-                    },
-                    "unmatched": "error"
-                  },
-                  {
-                    "op": "delete_if_equals",
-                    "path": "/output_config/effort",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
-                    "equals": "none"
-                  },
-                  {
-                    "op": "remove_if_empty",
-                    "path": "/output_config"
-                  }
-                ]
-              }
-            ],
-            "verified": true
-          }
-        ],
-        "default_usage_scopes": [
-          "interactive_agent"
-        ]
-      },
-      {
-        "id": "coding-plan-global",
-        "display_name": "Coding Plan International",
-        "kind": "conversation",
-        "base_url": "https://coding-intl.dashscope.aliyuncs.com",
-        "credential_profiles": [
-          {
-            "id": "coding-plan-api-key",
-            "display_name": "Coding Plan API Key",
-            "credential_mode": "token",
-            "billing_kind": "token_plan",
-            "account_usage_query": "unsupported",
-            "key_prefix": "sk-sp-",
-            "default_usage_scopes": [
-              "interactive_agent"
-            ]
-          }
-        ],
-        "authentication": "bearer_authorization",
-        "model_discovery": "manifest_static",
-        "request_projector": "compatible",
-        "protocol_routes": [
-          {
-            "protocol_profile_id": "openai-chat-completions.v1",
-            "endpoint_path": "/v1/chat/completions",
-            "request_projection_profiles": [
-              {
-                "profile_id": "alibaba.chat.thinking.v1",
-                "revision": 1,
-                "steps": [
-                  {
-                    "op": "delete_json_pointer",
-                    "path": "/reasoning_effort"
-                  },
-                  {
-                    "op": "enum_map",
-                    "path": "/enable_thinking",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
-                    "mapping": {
-                      "adaptive": true,
-                      "none": false
-                    },
-                    "unmatched": "error"
-                  }
-                ]
-              }
-            ],
-            "verified": true
-          },
-          {
-            "protocol_profile_id": "anthropic-messages.v1",
-            "endpoint_path": "/v1/messages",
-            "base_url_override": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic",
-            "request_headers": {
-              "anthropic-version": "2023-06-01"
-            },
-            "authentication": "x_api_key",
-            "request_projection_profiles": [
-              {
-                "profile_id": "alibaba.anthropic.thinking.v1",
-                "revision": 1,
-                "steps": [
-                  {
-                    "op": "enum_map",
-                    "path": "/thinking",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
-                    "mapping": {
-                      "adaptive": {
-                        "type": "enabled"
-                      },
-                      "none": {
-                        "type": "disabled"
-                      }
-                    },
-                    "unmatched": "error"
-                  },
-                  {
-                    "op": "delete_if_equals",
-                    "path": "/output_config/effort",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
-                    "equals": "none"
-                  },
-                  {
-                    "op": "remove_if_empty",
-                    "path": "/output_config"
-                  }
-                ]
-              }
-            ],
-            "verified": true
-          }
-        ],
-        "default_usage_scopes": [
-          "interactive_agent"
-        ]
-      },
       {
         "id": "token-plan-personal-cn",
         "display_name": "Token Plan Personal China",

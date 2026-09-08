@@ -10,6 +10,7 @@ describe("provider icon library", () => {
   // 内置供应商解析到各自精确的系列图标。
   it("resolves every implemented provider family", () => {
     expect(resolveProviderIconKey({ providerId: "minimax" })).toBe("minimax")
+    expect(resolveProviderIconKey({ providerId: "agentspace" })).toBe("agentspace")
     expect(resolveProviderIconKey({ providerId: "openrouter" })).toBe("openrouter")
     expect(resolveProviderIconKey({ providerId: "openai" })).toBe("compatibility")
     expect(resolveProviderIconKey({ providerId: "anthropic" })).toBe("claude")

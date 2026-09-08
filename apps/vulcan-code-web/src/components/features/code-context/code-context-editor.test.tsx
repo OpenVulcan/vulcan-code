@@ -10,13 +10,13 @@ import { VCE_MANAGEMENT_PAGE_SIZE } from "./code-context-pagination";
 
 // Replace only IO; the real editor, native controls and job-observer ownership stay under test.
 // 仅替换输入输出；真实编辑器、原生控件和作业观察归属仍接受测试。
-const rpc = vi.hoisted(() => ({ overview: vi.fn(), files: vi.fn(), operations: vi.fn(), issues: vi.fn(), detail: vi.fn(), plan: vi.fn(), save: vi.fn(), reload: vi.fn(), jobs: vi.fn(), subscribeJobs: vi.fn() }));
+const rpc = vi.hoisted(() => ({ overview: vi.fn(), files: vi.fn(), operations: vi.fn(), issues: vi.fn(), detail: vi.fn(), plan: vi.fn(), execute: vi.fn(), save: vi.fn(), reload: vi.fn(), jobs: vi.fn(), subscribeJobs: vi.fn() }));
 vi.mock("@/service/vce-service", () => ({
   loadVceJob: rpc.jobs, subscribeVceJobChanged: rpc.subscribeJobs,
   cancelVceJob: async () => { throw new Error("unexpected job cancellation"); },
   loadVceProjectOverview: rpc.overview, listVceFiles: rpc.files, listVceOperations: rpc.operations,
   listVceIntegrityIssues: rpc.issues, loadVceBlobDetail: rpc.detail,
-  planVceMaintenance: rpc.plan,
+  planVceMaintenance: rpc.plan, executeVceMaintenance: rpc.execute,
 }));
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
 
@@ -55,6 +55,15 @@ async function click(label: string) {
   // button identifies the actual rendered user action instead of calling an internal callback.
   // button 标识实际渲染的用户操作，不直接调用内部回调。
   const button = Array.from(host.querySelectorAll("button")).find((candidate) => candidate.textContent?.trim() === label);
+  expect(button, label).toBeDefined();
+  await act(async () => button!.click());
+}
+
+// Clicks an exact action inside the shared AlertDialog portal.
+// 点击共享 AlertDialog 门户中的精确操作。
+async function clickDialog(label: string) {
+  const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]');
+  const button = Array.from(dialog?.querySelectorAll("button") ?? []).find((candidate) => candidate.textContent?.trim() === label);
   expect(button, label).toBeDefined();
   await act(async () => button!.click());
 }
@@ -204,6 +213,107 @@ describe("project semantic settings editor", () => {
     if (transition === "collapse") await click("查看索引详情与统计");
     expect(host.textContent).not.toContain("retired plan must not reappear");
     expect(host.textContent).not.toContain("确认并执行");
+  });
+
+  // An uninitialized failed publication can request a rebuild plan without opening management details.
+  // 尚未发布的失败索引可以直接请求重建计划，不需要展开管理详情。
+  it("plans recovery from the top-level failed-index action", async () => {
+    const overview = createVceActivityFixture();
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "rebuild_required";
+    overview.status.lastError = "initial publication failed";
+    rpc.plan.mockResolvedValue({ mode: "rebuild", affectedBlobCount: 0, embeddingDimension: 1024,
+      embeddingFingerprint: "current-model", actions: [{ actionId: "rebuild-action", description: "replace incomplete namespace", blobNames: [], destructive: true }] });
+    rpc.execute.mockResolvedValue({ kind: "job", job: { projectId: "project-a", jobId: "rebuild-job", kind: "initialize", state: "queued",
+      sequence: 1, createdAtUnixMs: 1_000, updatedAtUnixMs: 1_000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, progress: null, followupRequested: false, error: null } });
+    await renderEditor(overview);
+    await click("生成重建计划");
+    expect(rpc.plan).toHaveBeenCalledExactlyOnceWith("project-a", "rebuild");
+    expect(host.textContent).toContain("replace incomplete namespace");
+    expect(host.textContent).toContain("确认并执行");
+    expect(host.textContent).not.toContain("文件与 Blob");
+    await click("确认并执行");
+    expect(rpc.execute).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("目标向量维度");
+    await clickDialog("取消");
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    await click("确认并执行");
+    await clickDialog("确认并执行");
+    expect(rpc.execute).toHaveBeenCalledExactlyOnceWith("project-a", "rebuild", 4, null, ["rebuild-action"], expect.any(String), "current-model");
+  });
+
+  // A failed confirmation keeps the exact recovery entry visible and exposes the failure in the dialog.
+  // 确认执行失败后保留精确恢复入口，并在弹窗内显示失败原因。
+  it("keeps the rebuild confirmation recoverable after execution failure", async () => {
+    const overview = createVceActivityFixture();
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "rebuild_required";
+    rpc.plan.mockResolvedValue({ mode: "rebuild", affectedBlobCount: 0, embeddingDimension: 1024,
+      embeddingFingerprint: "current-model", actions: [{ actionId: "rebuild-action", description: "replace incomplete namespace", blobNames: [], destructive: true }] });
+    rpc.execute.mockRejectedValueOnce(new Error("current model unavailable"));
+    await renderEditor(overview);
+    await click("生成重建计划");
+    await click("确认并执行");
+    await clickDialog("确认并执行");
+    expect(rpc.execute).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("current model unavailable");
+    expect(host.textContent).toContain("replace incomplete namespace");
+    await clickDialog("取消");
+    await click("重新生成重建计划");
+    expect(rpc.plan).toHaveBeenCalledTimes(2);
+  });
+
+  // A live durable job keeps recovery planning disabled until its exact cancellation or terminal receipt arrives.
+  // 活跃持久作业在收到精确取消或终态回执前必须禁用恢复计划。
+  it("does not start a rebuild while an indexing job is active", async () => {
+    const overview = createVceActivityFixture();
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "rebuild_required";
+    rpc.jobs.mockResolvedValue({ projectId: "project-a", jobId: "active-initialize", kind: "initialize", state: "running",
+      sequence: 2, createdAtUnixMs: 2_000, updatedAtUnixMs: 2_000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, progress: { phase: "embedding", operationId: "active-initialize", unit: "batches", completed: 0, total: 1, currentPath: null },
+      followupRequested: false, error: null });
+    await renderEditor(overview);
+    const rebuildButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.trim() === "生成重建计划");
+    expect(rebuildButton).toBeDefined();
+    expect(rebuildButton?.hasAttribute("disabled")).toBe(true);
+    expect(host.textContent).toContain("请先取消遗留任务");
+    expect(rpc.plan).not.toHaveBeenCalled();
+    const cancelReceipt = { projectId: "project-a", jobId: "active-initialize", kind: "initialize" as const, state: "cancelled" as const,
+      sequence: 3, createdAtUnixMs: 2_000, updatedAtUnixMs: 3_000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, progress: null, followupRequested: false, error: "cancelled by user" };
+    await act(async () => rpc.subscribeJobs.mock.calls[0][0](cancelReceipt));
+    const recoveredButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.trim() === "生成重建计划");
+    expect(recoveredButton?.hasAttribute("disabled")).toBe(false);
+  });
+
+  // A terminal initialize/rebuild receipt is recovery evidence while the fresh namespace status catches up.
+  // 新命名空间状态尚未追上时，初始化／重建终态回执仍是恢复依据。
+  it.each([
+    { kind: "initialize" as const, state: "failed" as const },
+    { kind: "initialize" as const, state: "cancelled" as const },
+    { kind: "initialize" as const, state: "interrupted" as const },
+    { kind: "rebuild" as const, state: "failed" as const },
+    { kind: "rebuild" as const, state: "cancelled" as const },
+    { kind: "rebuild" as const, state: "interrupted" as const },
+  ])("keeps recovery available for a terminal $kind/$state job before status recovery", async ({ kind, state }) => {
+    const overview = createVceActivityFixture();
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "uninitialized";
+    rpc.jobs.mockResolvedValue({ projectId: "project-a", jobId: `${kind}-${state}`, kind, state,
+      sequence: 2, createdAtUnixMs: 2_000, updatedAtUnixMs: 2_000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, progress: null, followupRequested: false, error: "index did not publish" });
+    rpc.plan.mockResolvedValue({ mode: "rebuild", affectedBlobCount: 0, embeddingDimension: 1024,
+      embeddingFingerprint: "current-model", actions: [{ actionId: "rebuild-action", description: "recover fresh namespace", blobNames: [], destructive: true }] });
+    await renderEditor(overview);
+    const rebuildButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.trim() === "生成重建计划");
+    expect(rebuildButton).toBeDefined();
+    expect(rebuildButton?.hasAttribute("disabled")).toBe(false);
+    expect(host.textContent).toContain("现在可以生成并确认重建计划");
+    expect(host.textContent).not.toContain("请先取消遗留任务");
+    await click("生成重建计划");
+    expect(rpc.plan).toHaveBeenCalledExactlyOnceWith("project-a", "rebuild");
   });
 
   // Missing publication identity cannot be substituted with the visible numeric checkpoint.

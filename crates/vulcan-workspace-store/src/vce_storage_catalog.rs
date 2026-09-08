@@ -4,8 +4,9 @@
 use crate::data_plane::ControllerRuntimeHandle;
 use crate::runtime_assets;
 use crate::vce_data_plane::{
-    VCE_SPACE_ID, VceDataPlaneHandle, VceEmbeddingProvenance, VceProjectIndex,
-    VceProjectIndexConfig, VceRebuildCandidateBase, prepare_vce_storage_binding,
+    VCE_SPACE_ID, VceDataPlaneHandle, VceEmbeddingProvenance, VceJobKind, VceProjectIndex,
+    VceProjectIndexConfig, VceProjectJobStore, VceRebuildCandidateBase, VceStoredJob,
+    prepare_vce_storage_binding,
 };
 use crate::vce_storage_paths::{VceProjectStoragePaths, VceProjectWriterLease, VceStoragePaths};
 use serde::Deserialize;
@@ -92,6 +93,18 @@ impl VceDataPlaneFactory {
         }
     }
 
+    /// Read the sole explicit orphaned uninitialized binding without creating storage.
+    /// 读取唯一明确孤立的未初始化绑定，不创建存储。
+    pub async fn load_uninitialized_recovery_config(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<VceProjectIndexConfig>, String> {
+        match self.existing_store(project_id).await? {
+            Some(store) => store.load_uninitialized_recovery_config(project_id).await,
+            None => Ok(None),
+        }
+    }
+
     /// Restore a compatible existing handle at the exact published location without mutation.
     /// 在精确已发布位置恢复兼容现有句柄，不执行修改。
     ///
@@ -105,6 +118,206 @@ impl VceDataPlaneFactory {
             Some(store) => store.open_existing_project_index(config).await,
             None => Ok(None),
         }
+    }
+
+    /// Open one explicit orphaned uninitialized binding without activating it.
+    /// 打开一个明确孤立的未初始化绑定，但不激活它。
+    pub async fn open_uninitialized_recovery_project_index(
+        &self,
+        config: &VceProjectIndexConfig,
+    ) -> Result<Option<VceProjectIndex>, String> {
+        match self.existing_store(&config.project_id).await? {
+            Some(store) => {
+                store
+                    .open_uninitialized_recovery_project_index(config)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Acquire the project writer, fence an uninitialized binding, and return its exact job store.
+    /// 获取项目写入租约、封锁未初始化绑定，并返回其精确作业存储。
+    ///
+    /// `project_id` and `job_id` identify one durable owner; the returned writer must remain held
+    /// until the caller persists the terminal cancellation transition.
+    /// `project_id` 与 `job_id` 标识一个持久所有者；调用方必须一直持有返回的写入租约，直到
+    /// 持久化取消终态。
+    ///
+    /// Returns `None` when the exact receipt or its confirmed storage is absent. A published
+    /// checkpoint, a competing writer, or an identity mismatch returns an explicit error.
+    /// 精确回执或其已确认存储不存在时返回 `None`；已发布检查点、竞争写入者或身份不匹配返回明确错误。
+    pub async fn prepare_uninitialized_job_cancellation(
+        &self,
+        project_id: &str,
+        job_id: &str,
+    ) -> Result<Option<(VceProjectWriterLease, VceProjectJobStore, VceStoredJob)>, String> {
+        let writer = self
+            .try_acquire_project_writer(project_id)?
+            .ok_or_else(|| String::from("VCE project already has an active host writer"))?;
+        let Some(store) = self.existing_store(project_id).await? else {
+            return Ok(None);
+        };
+        let (index, active_config) = if let Some(config) =
+            store.load_active_project_config(project_id).await?
+        {
+            let index = store
+                .open_existing_project_index(&config)
+                .await?
+                .ok_or_else(|| {
+                    String::from("VCE cancellation storage disappeared during recovery")
+                })?;
+            (index, Some(config))
+        } else {
+            let Some(config) = store.load_uninitialized_recovery_config(project_id).await? else {
+                return Ok(None);
+            };
+            let index = store
+                .open_uninitialized_recovery_project_index(&config)
+                .await?
+                .ok_or_else(|| {
+                    String::from("VCE orphaned cancellation storage disappeared during recovery")
+                })?;
+            (index, None)
+        };
+        let job_store = index.job_store();
+        let Some(receipt) = job_store.get(job_id).await? else {
+            return Ok(None);
+        };
+        if receipt.project_id != project_id || receipt.job_id != job_id {
+            return Err(String::from(
+                "VCE cold cancellation receipt identity does not match its project",
+            ));
+        }
+        if receipt.state.is_terminal() {
+            return Ok(Some((writer, job_store, receipt)));
+        }
+        if !matches!(receipt.kind, VceJobKind::Initialize | VceJobKind::Rebuild)
+            || receipt.source_checkpoint_version.is_some()
+            || receipt.replacement.is_some()
+        {
+            return Err(String::from(
+                "VCE cold cancellation requires an uninitialized initialize or rebuild job",
+            ));
+        }
+        let Some(unfinished) = job_store.unfinished().await? else {
+            return Err(String::from(
+                "VCE cold cancellation found no unfinished owner for its receipt",
+            ));
+        };
+        if unfinished != receipt || unfinished.job_id != job_id {
+            return Err(String::from(
+                "VCE cold cancellation receipt is not the unfinished owner of this binding",
+            ));
+        }
+        let provenance = if active_config.is_some() {
+            index.embedding_provenance().await?
+        } else {
+            index.uninitialized_recovery_provenance().await?
+        };
+        if provenance.checkpoint_version.is_some() {
+            return Err(String::from(
+                "VCE cold cancellation cannot retire a published checkpoint",
+            ));
+        }
+        if let Some(config) = active_config {
+            store.retire_uninitialized_active_binding(&config).await?;
+        }
+        Ok(Some((writer, job_store, receipt)))
+    }
+
+    /// Replace one uninitialized binding with a fresh current-contract namespace under one writer lease.
+    /// 在一个写者租约下，用新的当前契约命名空间替换一个未初始化绑定。
+    ///
+    /// `previous` is the exact active or explicitly orphaned identity; `replacement` must use a
+    /// distinct namespace so stale controller requests cannot write the new binding.
+    /// 必须使用不同的命名空间，避免旧控制器请求写入新绑定。
+    /// The returned lease remains held so the caller can start the replacement job without a race.
+    /// 返回的租约会继续持有，使调用方可以无竞态地启动替换作业。
+    pub async fn reinitialize_uninitialized_project_index(
+        &self,
+        previous: &VceProjectIndexConfig,
+        replacement: VceProjectIndexConfig,
+    ) -> Result<(VceProjectIndex, VceProjectWriterLease), String> {
+        previous.validate()?;
+        replacement.validate()?;
+        if previous.project_id != replacement.project_id {
+            return Err(String::from(
+                "VCE uninitialized replacement changed its project identity",
+            ));
+        }
+        if previous.binding.namespace_id == replacement.binding.namespace_id {
+            return Err(String::from(
+                "VCE uninitialized replacement requires a distinct namespace",
+            ));
+        }
+        // A replacement must also receive a distinct physical vector-table identity.
+        // 替换还必须获得不同的物理向量表身份。
+        if previous.vector_space_id == replacement.vector_space_id
+            && previous.physical_fingerprint == replacement.physical_fingerprint
+            && previous.preprocessing_version == replacement.preprocessing_version
+            && previous.chunker_version == replacement.chunker_version
+            && previous.dimension == replacement.dimension
+        {
+            return Err(String::from(
+                "VCE uninitialized replacement requires distinct physical vector tables",
+            ));
+        }
+        let writer = self
+            .catalog
+            .paths
+            .try_acquire_writer(&previous.project_id, false)?
+            .ok_or_else(|| String::from("VCE project already has an active host writer"))?;
+        let store = self
+            .existing_store(&previous.project_id)
+            .await?
+            .ok_or_else(|| {
+                String::from("VCE uninitialized replacement requires published project storage")
+            })?;
+        let active = store
+            .load_active_project_config(&previous.project_id)
+            .await?;
+        match active {
+            Some(current) if current == *previous => {
+                let index = store
+                    .open_existing_project_index(&current)
+                    .await?
+                    .ok_or_else(|| String::from("VCE uninitialized predecessor disappeared"))?;
+                if index
+                    .embedding_provenance()
+                    .await?
+                    .checkpoint_version
+                    .is_some()
+                {
+                    return Err(String::from(
+                        "VCE uninitialized replacement cannot retire a published checkpoint",
+                    ));
+                }
+                store.retire_uninitialized_active_binding(previous).await?;
+            }
+            Some(_) => {
+                return Err(String::from(
+                    "VCE uninitialized replacement predecessor changed before fencing",
+                ));
+            }
+            None => {
+                let recovery = store
+                    .load_uninitialized_recovery_config(&previous.project_id)
+                    .await?
+                    .ok_or_else(|| {
+                        String::from("VCE uninitialized replacement predecessor is missing")
+                    })?;
+                if recovery != *previous {
+                    return Err(String::from(
+                        "VCE uninitialized replacement recovery identity changed",
+                    ));
+                }
+            }
+        }
+        // open_project_index allocates a fresh initial binding while the same writer lease remains held.
+        // open_project_index 在同一写者租约保持时分配新的初始化绑定。
+        let index = store.open_project_index(replacement).await?;
+        Ok((index, writer))
     }
 
     /// Try to exclude competing host mutations in one existing project without opening its databases.

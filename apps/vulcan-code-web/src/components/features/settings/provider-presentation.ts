@@ -34,6 +34,7 @@ const providerDescriptionKeys: Readonly<Record<string, TranslationKey>> = {
   openai: "settings.providerDescription.openai",
   anthropic: "settings.providerDescription.anthropic",
   google: "settings.providerDescription.google",
+  agentspace: "settings.providerDescription.agentspace",
   tokenrhythm: "settings.providerDescription.tokenrhythm",
 }
 
@@ -49,14 +50,6 @@ const alibabaServiceEntryKeys: Readonly<Record<string, {
   title: TranslationKey
   tags: TranslationKey[]
 }>> = {
-  "coding-plan-cn": {
-    title: "settings.serviceEntry.title.codingPlan",
-    tags: ["settings.serviceEntry.tag.china"],
-  },
-  "coding-plan-global": {
-    title: "settings.serviceEntry.title.codingPlan",
-    tags: ["settings.serviceEntry.tag.international"],
-  },
   "token-plan-personal-cn": {
     title: "settings.serviceEntry.title.tokenPlan",
     tags: ["settings.serviceEntry.tag.personal", "settings.serviceEntry.tag.china"],

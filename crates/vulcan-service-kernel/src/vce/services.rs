@@ -908,6 +908,7 @@ pub(crate) async fn service_execute_vce_maintenance(
     }
     let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
     let mode = parse_maintenance_mode(&request.mode)?;
+    validate_maintenance_checkpoint_requirement(mode, request.expected_checkpoint_version)?;
     // Exact action sets enter durable admission before current-plan reads, so completed retries can replay.
     // 精确动作集合在读取当前计划前进入持久准入，使已完成请求能够重放。
     let requested_ids = request.action_ids.into_iter().collect::<BTreeSet<_>>();
@@ -947,7 +948,7 @@ pub(crate) async fn service_execute_vce_maintenance(
                     kind: vulcan_workspace_store::vce_data_plane::VceJobKind::Rebuild,
                     idempotency_key: request.idempotency_key,
                     expected_settings_revision: request.expected_settings_revision,
-                    expected_checkpoint_version: Some(request.expected_checkpoint_version),
+                    expected_checkpoint_version: request.expected_checkpoint_version,
                     contract_fingerprint: fingerprint,
                 },
                 mode == VceMaintenanceMode::Repair,
@@ -968,12 +969,10 @@ pub(crate) async fn service_execute_vce_maintenance(
             "VCE 向量配置已在维护预览后变化，请重新生成计划并确认。",
         ));
     }
-    validate_checkpoint(
-        &manager,
-        &project.id,
-        Some(request.expected_checkpoint_version),
-    )
-    .await?;
+    let expected_checkpoint_version = request
+        .expected_checkpoint_version
+        .ok_or_else(|| String::from("修复或暂存清理要求一个已发布检查点。"))?;
+    validate_checkpoint(&manager, &project.id, Some(expected_checkpoint_version)).await?;
     let plan = load_maintenance_plan(&manager, &project.id, mode).await?;
     let planned_ids = plan
         .actions
@@ -1760,6 +1759,22 @@ fn parse_maintenance_mode(value: &str) -> Result<VceMaintenanceMode, String> {
     }
 }
 
+/// Require a published checkpoint for maintenance modes that do not create a replacement index.
+/// 对于不创建替代索引的维护模式，要求调用方提供已发布检查点。
+/// `mode` selects whether this execution creates a replacement index; `expected_checkpoint` is the confirmed published version.
+/// `mode` 选择本次执行是否创建替代索引；`expected_checkpoint` 是确认时记录的已发布版本。
+/// Returns an error before any executor admission or storage mutation when a non-rebuild mode lacks its checkpoint.
+/// 当非重建模式缺少检查点时，在任何执行器准入或存储变更前返回错误。
+fn validate_maintenance_checkpoint_requirement(
+    mode: VceMaintenanceMode,
+    expected_checkpoint: Option<u64>,
+) -> Result<(), String> {
+    if expected_checkpoint.is_none() && mode != VceMaintenanceMode::Rebuild {
+        return Err(String::from("修复或暂存清理要求一个已发布检查点。"));
+    }
+    Ok(())
+}
+
 /// Return the stable public lifecycle state.
 /// 返回稳定公共生命周期状态。
 fn lifecycle_state(value: VceProjectLifecycle) -> api::VceProjectLifecycleState {
@@ -2261,6 +2276,34 @@ mod tests {
             Ok(VceMaintenanceMode::CleanupStaging)
         );
         assert!(parse_maintenance_mode("cleanup").is_err());
+    }
+
+    /// Verifies that an absent checkpoint is reserved for explicit rebuild recovery.
+    /// 验证空检查点仅用于明确的重建恢复流程。
+    #[test]
+    fn maintenance_checkpoint_requirement_is_explicit() {
+        assert!(validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Rebuild, None).is_ok());
+        assert!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Rebuild, Some(7))
+                .is_ok()
+        );
+        assert!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Repair, Some(7))
+                .is_ok()
+        );
+        assert!(validate_maintenance_checkpoint_requirement(
+            VceMaintenanceMode::CleanupStaging,
+            Some(7),
+        )
+        .is_ok());
+        assert_eq!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Repair, None),
+            Err(String::from("修复或暂存清理要求一个已发布检查点。"))
+        );
+        assert_eq!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::CleanupStaging, None),
+            Err(String::from("修复或暂存清理要求一个已发布检查点。"))
+        );
     }
 
     /// Verifies VCE settings input preserves host-owned migration state.

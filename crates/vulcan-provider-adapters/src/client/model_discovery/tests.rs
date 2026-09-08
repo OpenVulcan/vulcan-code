@@ -1114,14 +1114,14 @@ fn authoritative_manifest_inventory_replaces_static_catalog_membership() {
         .as_ref()
         .clone();
     manifest.catalog_models.insert(
-        String::from("coding-plan-cn"),
+        String::from("token-plan-personal-cn"),
         vec![crate::provider_manifest::ManifestCatalogModel {
             model_id: String::from("future-model-from-json"),
             display_name: String::from("Future Model From JSON"),
         }],
     );
     let static_catalog =
-        build_manifest_static_catalog(Some(&manifest), "connection", "coding-plan-cn", 7)
+        build_manifest_static_catalog(Some(&manifest), "connection", "token-plan-personal-cn", 7)
             .expect("manifest static catalog must build");
 
     assert_eq!(static_catalog.models.len(), 1);
@@ -1148,7 +1148,7 @@ fn manifest_static_catalog_requires_snapshot_and_service_inventory() {
     // missing_manifest_error proves a system static route cannot silently use binary defaults.
     // missing_manifest_error 证明系统静态路由不能静默使用二进制默认值。
     let missing_manifest_error =
-        build_manifest_static_catalog(None, "connection", "coding-plan-cn", 7)
+        build_manifest_static_catalog(None, "connection", "token-plan-personal-cn", 7)
             .expect_err("missing manifest must fail closed");
     assert_eq!(
         missing_manifest_error.kind,
@@ -1165,13 +1165,13 @@ fn manifest_static_catalog_requires_snapshot_and_service_inventory() {
         .clone();
     manifest_without_inventory
         .catalog_models
-        .remove("coding-plan-cn");
+        .remove("token-plan-personal-cn");
     // missing_inventory_error proves another entry cannot supply guessed identities.
     // missing_inventory_error 证明其他入口不能提供猜测身份。
     let missing_inventory_error = build_manifest_static_catalog(
         Some(&manifest_without_inventory),
         "connection",
-        "coding-plan-cn",
+        "token-plan-personal-cn",
         7,
     )
     .expect_err("missing exact service inventory must fail closed");

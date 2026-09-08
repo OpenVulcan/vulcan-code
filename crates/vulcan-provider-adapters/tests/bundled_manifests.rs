@@ -204,7 +204,148 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     // 源资源代际后才会返回。
     let provider_count = vulcan_provider_adapters::verify_source_bundled_manifest_integrity_index()
         .expect("source bundled integrity generation should verify");
-    assert_eq!(provider_count, 17);
+    assert_eq!(provider_count, 18);
+}
+
+/// Verifies the native Codex entries expose the reviewed multimodal and reasoning contract.
+/// 验证原生 Codex 条目公开已审核的多模态与思考能力契约。
+#[test]
+fn openai_codex_model_rules_keep_multimodal_effort_contract() {
+    let text = load_bundled_manifests()
+        .remove("openai")
+        .expect("openai bundled manifest should exist");
+    let document: Value = serde_json::from_str(&text).expect("openai manifest should parse");
+    let model_rules = document["model_rules"]
+        .as_array()
+        .expect("openai model_rules should be an array");
+    let expected_efforts = serde_json::json!(["low", "medium", "high", "xhigh", "max"]);
+
+    for model_id in [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-6-astra",
+    ] {
+        let rule = model_rules
+            .iter()
+            .find(|rule| rule["matcher"]["value"] == model_id)
+            .unwrap_or_else(|| panic!("OpenAI Codex model rule should exist for `{model_id}`"));
+        assert_eq!(rule["matcher"]["kind"], "exact");
+        assert_eq!(rule["selected_protocol"], "openai-codex-responses.v1");
+        assert_eq!(
+            rule["scope"]["service_entry_ids"],
+            serde_json::json!(["codex-subscription"])
+        );
+        assert_eq!(
+            rule["capabilities"]["operations"],
+            serde_json::json!(["conversation_respond"])
+        );
+        assert_eq!(
+            rule["capabilities"]["input_resources"],
+            serde_json::json!(["file", "image"])
+        );
+        assert_eq!(
+            rule["capabilities"]["output_resources"],
+            serde_json::json!([])
+        );
+        assert_eq!(rule["capabilities"]["reasoning"], "native");
+        assert_eq!(
+            rule["capabilities"]["reasoning_control"],
+            "effort_selection"
+        );
+        assert_eq!(rule["capabilities"]["reasoning_efforts"], expected_efforts);
+        assert_eq!(rule["capabilities"]["context_limit"], 272000);
+    }
+
+    let sol_rule = model_rules
+        .iter()
+        .find(|rule| rule["matcher"]["value"] == "gpt-5.6-sol")
+        .expect("GPT-5.6 Sol Codex rule should exist");
+    let astra_rule = model_rules
+        .iter()
+        .find(|rule| rule["matcher"]["value"] == "gpt-6-astra")
+        .expect("GPT-6 Astra Codex rule should exist");
+    assert_eq!(astra_rule["capabilities"], sol_rule["capabilities"]);
+}
+
+/// Verifies AgentSpace keeps its ChatGPT Plan Responses route separate from Codex image generation.
+/// 验证 AgentSpace 将 ChatGPT Plan 的 Responses 路由与 Codex 图片生成调用分离。
+#[test]
+fn agentspace_chatgpt_plan_keeps_codex_image_contract() {
+    let text = load_bundled_manifests()
+        .remove("agentspace")
+        .expect("agentspace bundled manifest should exist");
+    let document: Value = serde_json::from_str(&text).expect("agentspace manifest should parse");
+    let service = &document["services"][0];
+
+    assert_eq!(service["service_entry_id"], "chatgpt-plan");
+    assert_eq!(service["display_name"], "ChatGPT Plan");
+    assert_eq!(service["base_url"], "https://api.agent.space/v1");
+    assert_eq!(
+        service["protocol_routes"][0]["protocol_profile_id"],
+        "openai-codex-responses.v1"
+    );
+    assert_eq!(service["protocol_routes"][0]["endpoint_path"], "/responses");
+
+    let model_ids = service["model_catalog"]["models"]
+        .as_array()
+        .expect("AgentSpace model catalog should be an array")
+        .iter()
+        .map(|model| {
+            model["model_id"]
+                .as_str()
+                .expect("AgentSpace catalog model should have an id")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        model_ids,
+        BTreeSet::from([
+            String::from("gpt-5.6-luna"),
+            String::from("gpt-5.6-terra"),
+            String::from("gpt-5.6-sol"),
+            String::from("gpt-6-astra"),
+            String::from("gpt-image-2"),
+        ])
+    );
+
+    let image_target = document["tool_targets"]
+        .as_array()
+        .expect("AgentSpace tool_targets should be an array")
+        .iter()
+        .find(|target| target["target_id"] == "chatgpt-plan.gpt-image-2.generate")
+        .expect("AgentSpace GPT Image 2 target should exist");
+    assert_eq!(
+        image_target["execution"]["endpoint_path"],
+        "/images/generations"
+    );
+    assert_eq!(
+        image_target["execution"]["execution_kind"],
+        "http_json_sync"
+    );
+    assert_eq!(
+        image_target["input_schema"]["properties"]
+            .as_object()
+            .map(|properties| { properties.keys().cloned().collect::<BTreeSet<_>>() }),
+        Some(BTreeSet::from([
+            String::from("background"),
+            String::from("model"),
+            String::from("n"),
+            String::from("prompt"),
+            String::from("quality"),
+            String::from("size"),
+        ]))
+    );
+    assert!(
+        image_target["input_schema"]["properties"]
+            .get("stream")
+            .is_none()
+    );
+    assert!(
+        image_target["input_schema"]["properties"]
+            .get("response_format")
+            .is_none()
+    );
 }
 
 /// Verifies only Gemini model rules opt into strict tool-schema projection in system manifests.
@@ -2120,7 +2261,7 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
     let directory = bundled_manifests_directory();
     for (provider_id, target_count) in [
         ("tavily", 2_usize),
-        ("alibaba", 55_usize),
+        ("alibaba", 57_usize),
         ("minimax", 24_usize),
     ] {
         let path = directory.join(format!("{provider_id}.json"));
@@ -2187,7 +2328,7 @@ fn bundled_system_tool_targets_use_only_generic_execution() {
         }
     }
     assert_eq!(
-        target_count, 91,
+        target_count, 93,
         "the complete production target inventory must remain covered"
     );
 }

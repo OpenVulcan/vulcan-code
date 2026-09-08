@@ -5779,6 +5779,32 @@ impl VceDataPlaneHandle {
             .transpose()
     }
 
+    /// Read the newest explicitly orphaned binding that has never published a checkpoint.
+    /// 读取最新明确弃用且从未发布检查点的绑定。
+    ///
+    /// This recovery-only view never activates, repairs or scans storage; callers must choose an
+    /// explicit rebuild operation before using the returned identity.
+    /// The newest fenced orphan is selected because every eligible row is checkpoint-free and remains immutable.
+    /// 选择最新封锁的孤立绑定，因为所有候选都没有检查点且保持不可变。
+    pub async fn load_uninitialized_recovery_config(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<VceProjectIndexConfig>, String> {
+        self.validate_project_owner(project_id)?;
+        if project_id.trim().is_empty() {
+            return Err(String::from("VCE project identity must not be empty"));
+        }
+        let rows: Vec<ProjectBindingRow> = self
+            .query_rows(
+                "SELECT project_id, root_path, root_hash, namespace_id, checkpoint_chain_id, schema_version, vector_space_id, physical_fingerprint, preprocessing_version, chunker_version, dimension, content_table, path_table, config_revision, active FROM vce_project_bindings WHERE project_id = ? AND active = 0 AND lifecycle_state = 'orphaned' AND NOT EXISTS(SELECT 1 FROM vce_active_checkpoints WHERE namespace_id = vce_project_bindings.namespace_id) ORDER BY updated_at_unix_ms DESC, namespace_id DESC LIMIT 1;",
+                vec![sqlite_text(project_id)],
+            )
+            .await?;
+        rows.first()
+            .map(|row| row.config_for_active_state(false))
+            .transpose()
+    }
+
     /// Restore an exact existing index handle without changing bindings, tables or checkpoints.
     /// 恢复一个精确的现有索引句柄，不修改绑定、表或检查点。
     ///
@@ -5847,6 +5873,111 @@ impl VceDataPlaneHandle {
             path_table,
             mutation_lock: Arc::new(Mutex::new(())),
         }))
+    }
+
+    /// Open one explicitly orphaned uninitialized binding without activating or mutating it.
+    /// 打开一个明确孤立的未初始化绑定，不激活也不修改它。
+    ///
+    /// `config` is the recovery identity selected by an explicit rebuild workflow.
+    /// `config` 是显式重建流程选出的恢复身份。
+    pub async fn open_uninitialized_recovery_project_index(
+        &self,
+        config: &VceProjectIndexConfig,
+    ) -> Result<Option<VceProjectIndex>, String> {
+        config.validate()?;
+        let rows: Vec<ProjectBindingRow> = self
+            .query_rows(
+                "SELECT project_id, root_path, root_hash, namespace_id, checkpoint_chain_id, schema_version, vector_space_id, physical_fingerprint, preprocessing_version, chunker_version, dimension, content_table, path_table, config_revision, active FROM vce_project_bindings WHERE project_id = ? AND namespace_id = ? AND active = 0 AND lifecycle_state = 'orphaned' AND NOT EXISTS(SELECT 1 FROM vce_active_checkpoints WHERE namespace_id = vce_project_bindings.namespace_id) LIMIT 1;",
+                vec![
+                    sqlite_text(&config.project_id),
+                    sqlite_text(&config.binding.namespace_id),
+                ],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        row.validate_identity(config)?;
+        let content_table = vector_table_name(
+            "content",
+            &config.vector_space_id,
+            &config.physical_fingerprint,
+            &config.preprocessing_version,
+            &config.chunker_version,
+            config.dimension,
+        );
+        let path_table = vector_table_name(
+            "path",
+            &config.vector_space_id,
+            &config.physical_fingerprint,
+            &config.preprocessing_version,
+            &config.chunker_version,
+            config.dimension,
+        );
+        Ok(Some(VceProjectIndex {
+            data_plane: self.clone(),
+            project_id: config.project_id.clone(),
+            root_path: config.root_path.clone(),
+            root_hash: config.root_hash.clone(),
+            binding: config.binding.clone(),
+            vector_space_id: config.vector_space_id.clone(),
+            physical_fingerprint: config.physical_fingerprint.clone(),
+            embedding_execution: None,
+            read_view: None,
+            management_active_refresh: None,
+            rebuild_candidate: None,
+            preprocessing_version: config.preprocessing_version.clone(),
+            chunker_version: config.chunker_version.clone(),
+            dimension: config.dimension,
+            config_revision: config.config_revision,
+            content_table,
+            path_table,
+            mutation_lock: Arc::new(Mutex::new(())),
+        }))
+    }
+
+    /// Atomically fence one active uninitialized binding before explicit recovery or replacement.
+    /// 在显式恢复或替换前，原子封锁一个活动的未初始化绑定。
+    ///
+    /// config is the exact active identity; no checkpoint may exist and no data is deleted.
+    /// config 是精确的活动身份；不得存在检查点，也不会删除数据。
+    pub(crate) async fn retire_uninitialized_active_binding(
+        &self,
+        config: &VceProjectIndexConfig,
+    ) -> Result<(), String> {
+        config.validate()?;
+        let now = current_unix_epoch_millis_i64()?;
+        let project_id = sqlite_string_literal(&config.project_id);
+        let namespace_id = sqlite_string_literal(&config.binding.namespace_id);
+        let root_path = sqlite_string_literal(&config.root_path);
+        let root_hash = sqlite_string_literal(&config.root_hash);
+        let fingerprint = sqlite_string_literal(&config.physical_fingerprint);
+        let content_table = sqlite_string_literal(&vector_table_name(
+            "content",
+            &config.vector_space_id,
+            &config.physical_fingerprint,
+            &config.preprocessing_version,
+            &config.chunker_version,
+            config.dimension,
+        ));
+        let path_table = sqlite_string_literal(&vector_table_name(
+            "path",
+            &config.vector_space_id,
+            &config.physical_fingerprint,
+            &config.preprocessing_version,
+            &config.chunker_version,
+            config.dimension,
+        ));
+        // The guard is deliberately checked inside BEGIN IMMEDIATE so late stage/commit requests
+        // 该检查刻意放在 BEGIN IMMEDIATE 内执行，以使迟到的 stage/commit 请求被数据库拒绝。
+        let condition = format!(
+            "EXISTS(SELECT 1 FROM vce_project_bindings WHERE project_id = '{project_id}' AND namespace_id = '{namespace_id}' AND root_path = '{root_path}' AND root_hash = '{root_hash}' AND physical_fingerprint = '{fingerprint}' AND content_table = '{content_table}' AND path_table = '{path_table}' AND active = 1) AND NOT EXISTS(SELECT 1 FROM vce_active_checkpoints WHERE namespace_id = '{namespace_id}')",
+        );
+        let script = format!(
+            "BEGIN IMMEDIATE;\nINSERT OR ROLLBACK INTO vce_commit_guards(namespace_id, valid) VALUES ('{namespace_id}', CASE WHEN {condition} THEN 1 ELSE 0 END);\nUPDATE vce_project_bindings SET active = 0, lifecycle_state = 'orphaned', updated_at_unix_ms = {now} WHERE project_id = '{project_id}' AND namespace_id = '{namespace_id}' AND active = 1;\nDELETE FROM vce_commit_guards WHERE namespace_id = '{namespace_id}';\nCOMMIT;"
+        );
+        self.execute(&script, Vec::new(), "Retire uninitialized VCE binding")
+            .await
     }
 
     /// Opens or validates one project-specific VCE index binding.
@@ -6827,6 +6958,67 @@ impl VceProjectIndex {
             ));
         }
         Ok(provenance)
+    }
+
+    /// Read the exact provenance of an orphaned uninitialized recovery binding.
+    /// 读取孤立未初始化恢复绑定的精确来源。
+    ///
+    /// This path is read-only and never substitutes for active-binding provenance.
+    /// 此路径只读，绝不替代活动绑定来源。
+    pub async fn uninitialized_recovery_provenance(
+        &self,
+    ) -> Result<VceEmbeddingProvenance, String> {
+        if self.read_view.is_some() {
+            return Err(String::from(
+                "VCE recovery provenance cannot be read from a pinned view",
+            ));
+        }
+        let rows: Vec<ProjectBindingRow> = self
+            .data_plane
+            .query_rows(
+                "SELECT project_id, root_path, root_hash, namespace_id, checkpoint_chain_id, schema_version, vector_space_id, physical_fingerprint, preprocessing_version, chunker_version, dimension, content_table, path_table, config_revision, active FROM vce_project_bindings WHERE project_id = ? AND namespace_id = ? AND active = 0 AND lifecycle_state = 'orphaned' AND NOT EXISTS(SELECT 1 FROM vce_active_checkpoints WHERE namespace_id = vce_project_bindings.namespace_id);",
+                vec![
+                    sqlite_text(&self.project_id),
+                    sqlite_text(&self.binding.namespace_id),
+                ],
+            )
+            .await?;
+        let [row] = rows.as_slice() else {
+            return Err(String::from(
+                "VCE uninitialized recovery binding is missing",
+            ));
+        };
+        let original = row.config_for_active_state(false)?;
+        if original.project_id != self.project_id
+            || original.root_path != self.root_path
+            || original.root_hash != self.root_hash
+            || original.binding != self.binding
+            || original.vector_space_id != self.vector_space_id
+            || original.physical_fingerprint != self.physical_fingerprint
+            || original.preprocessing_version != self.preprocessing_version
+            || original.chunker_version != self.chunker_version
+            || original.dimension != self.dimension
+            || original.config_revision != self.config_revision
+        {
+            return Err(String::from(
+                "VCE uninitialized recovery provenance changed during inspection",
+            ));
+        }
+        if self
+            .current_checkpoint_row()
+            .await
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err(String::from(
+                "VCE uninitialized recovery binding already has a checkpoint",
+            ));
+        }
+        Ok(VceEmbeddingProvenance {
+            source_fingerprints: BTreeSet::from([original.physical_fingerprint.clone()]),
+            original,
+            checkpoint_version: None,
+        })
     }
 
     /// Return a counted project-job repository without reading or mutating its database.
@@ -9074,9 +9266,9 @@ COMMIT;"#,
         };
         let action_required = match mode {
             VceMaintenanceMode::Repair => !issues.is_empty(),
-            // An initialized empty checkpoint can still require explicit re-indexing of newly added files.
-            // 已初始化空检查点仍可能需要明确重索引新加入的文件。
-            VceMaintenanceMode::Rebuild => self.current_checkpoint_row().await?.is_some(),
+            // Rebuild is always an explicit destructive action, including an empty binding that needs initialization.
+            // 重建总是明确的破坏性操作，包括需要初始化的空绑定。
+            VceMaintenanceMode::Rebuild => true,
             VceMaintenanceMode::CleanupStaging => issues
                 .iter()
                 .any(|issue| issue.kind == VceIntegrityIssueKind::OrphanedStaging),

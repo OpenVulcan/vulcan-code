@@ -296,7 +296,7 @@ export async function executeVceMaintenance(
   projectId: string,
   mode: string,
   expectedSettingsRevision: number,
-  expectedCheckpointVersion: number,
+  expectedCheckpointVersion: number | null,
   actionIds: string[],
   idempotencyKey: string,
   // The confirmed preview owns this value, not the current model picker.
@@ -305,6 +305,11 @@ export async function executeVceMaintenance(
 ): Promise<VceMaintenanceExecutionResponse> {
   if (!hasServiceRuntime()) {
     throw new Error("代码语义维护只能在桌面服务连接后执行。");
+  }
+  // An absent checkpoint is a recovery contract reserved for rebuild admission.
+  // 缺失检查点仅属于重建准入恢复契约。
+  if (expectedCheckpointVersion === null && mode !== "rebuild") {
+    throw new Error("修复或暂存清理要求一个已发布检查点。");
   }
   return serviceClient.request<VceMaintenanceExecutionResponse>("service_execute_vce_maintenance", {
     request: {

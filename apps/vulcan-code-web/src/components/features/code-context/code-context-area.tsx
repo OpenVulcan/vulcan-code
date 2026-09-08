@@ -1,5 +1,15 @@
 import * as React from "react";
 import { Database, FileCode2, LoaderCircle, RefreshCw, Save, SearchCheck } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -64,6 +74,32 @@ export async function loadAuthoritativeVceOverview(
     throw new Error("VCE overview recovery returned a mismatched project identity.");
   }
   return overview;
+}
+
+// VceMaintenanceConfirmation freezes the exact plan authority at dialog-open time.
+// VceMaintenanceConfirmation 在对话框打开时冻结计划的精确权威。
+interface VceMaintenanceConfirmation {
+  // Exact mounted project identity used for admission.
+  // 准入使用的精确已挂载项目身份。
+  projectId: string;
+  // Exact settings revision used for optimistic admission.
+  // 乐观准入使用的精确设置修订。
+  settingsRevision: number;
+  // Exact checkpoint visible when the plan was confirmed.
+  // 确认计划时可见的精确检查点。
+  checkpointVersion: number | null;
+  // Exact maintenance mode returned by the plan.
+  // 计划返回的精确维护模式。
+  mode: string;
+  // Exact action identities returned by the plan.
+  // 计划返回的精确动作身份。
+  actionIds: string[];
+  // Exact model fingerprint frozen by the read-only preview.
+  // 只读预览冻结的精确模型指纹。
+  embeddingFingerprint: string;
+  // Stable replay identity for this one human confirmation.
+  // 本次人为确认使用的稳定重放身份。
+  idempotencyKey: string;
 }
 
 // CodeContextArea renders project settings and paged VCE management data.
@@ -387,6 +423,18 @@ export function CodeContextArea(props: {
   // loadMaintenancePlan 获取只读计划且不执行修改。
   const loadMaintenancePlan = async (mode: "repair" | "rebuild" | "cleanup_staging") => {
     const projectId = props.projectId;
+    // A live durable job owns the project's write path until it reaches a terminal state.
+    // 活跃持久作业在进入终态前持有项目写入路径。
+    if (indexing.active) {
+      setManagementError(copy("当前索引任务仍在运行，请先取消或等待它结束。", "The current index job is still active. Cancel it or wait for it to finish first."));
+      return;
+    }
+    // Only rebuild can recover an uninitialized or failed first publication.
+    // 只有重建可以恢复尚未初始化或首次发布失败的项目。
+    if (mode !== "rebuild" && props.overview?.status.checkpointVersion == null) {
+      setManagementError(copy("该项目尚无已发布检查点，只能生成重建计划。", "This project has no published checkpoint; only a rebuild plan is available."));
+      return;
+    }
     // A preview is retired by the same publication, collapse and reload boundary as its displayed data.
     // 预览与其显示数据共享发布、折叠及重载退役边界。
     const requestVersion = ++managementRequestVersion.current;
@@ -465,9 +513,9 @@ export function CodeContextArea(props: {
     }
   };
 
-  // executeMaintenance confirms and executes only the exact current read-only plan.
-  // executeMaintenance 仅确认并执行精确的当前只读计划。
-  const executeMaintenance = async () => {
+  // executeMaintenance executes only a dialog-frozen current read-only plan.
+  // executeMaintenance 仅执行由对话框冻结且仍然有效的当前只读计划。
+  const executeMaintenance = async (confirmation: VceMaintenanceConfirmation) => {
     const overview = props.overview;
     if (maintenanceMutationInFlightRef.current) {
       return;
@@ -476,17 +524,27 @@ export function CodeContextArea(props: {
       setManagementError(copy("当前计划没有可执行操作。", "The current plan has no executable actions."));
       return;
     }
-    const projectId = props.projectId;
-    const checkpoint = overview.status.checkpointVersion;
-    if (checkpoint === null || checkpoint === undefined) {
-      setManagementError(copy("维护操作要求一个已发布检查点。", "Maintenance requires a published checkpoint."));
+    if (indexing.active) {
+      setManagementError(copy("当前索引任务仍在运行，请先取消或等待它结束。", "The current index job is still active. Cancel it or wait for it to finish first."));
       return;
     }
-    const confirmed = window.confirm(copy(
-      `确认执行 ${maintenancePlan.mode} 维护？该操作将影响 ${maintenancePlan.affectedBlobCount} 个 Blob，目标向量维度为 ${maintenancePlan.embeddingDimension}。`,
-      `Execute ${maintenancePlan.mode} maintenance affecting ${maintenancePlan.affectedBlobCount} Blobs with target dimension ${maintenancePlan.embeddingDimension}?`,
-    ));
-    if (!confirmed) {
+    const projectId = props.projectId;
+    const checkpoint = overview.status.checkpointVersion ?? null;
+    const actionIds = maintenancePlan.actions.map((action) => action.actionId);
+    const planStillCurrent = confirmation.projectId === projectId
+      && confirmation.settingsRevision === overview.settings.revision
+      && confirmation.checkpointVersion === checkpoint
+      && confirmation.mode === maintenancePlan.mode
+      && confirmation.embeddingFingerprint === maintenancePlan.embeddingFingerprint
+      && confirmation.actionIds.length === actionIds.length
+      && confirmation.actionIds.every((actionId, index) => actionId === actionIds[index]);
+    if (!planStillCurrent) {
+      setMaintenancePlan(null);
+      setManagementError(copy("维护计划已失效，请重新生成计划后再确认。", "The maintenance plan is stale. Generate a new plan before confirming it."));
+      return;
+    }
+    if (checkpoint === null && maintenancePlan.mode !== "rebuild") {
+      setManagementError(copy("维护操作要求一个已发布检查点。", "Maintenance requires a published checkpoint."));
       return;
     }
     maintenanceMutationInFlightRef.current = true;
@@ -500,8 +558,8 @@ export function CodeContextArea(props: {
         maintenancePlan.mode,
         overview.settings.revision,
         checkpoint,
-        maintenancePlan.actions.map((action) => action.actionId),
-        crypto.randomUUID(),
+        actionIds,
+        confirmation.idempotencyKey,
         maintenancePlan.embeddingFingerprint,
       );
       if (!isCurrentAction()) {
@@ -609,6 +667,11 @@ export function CodeContextArea(props: {
   // status exposes lifecycle and checkpoint state without provider implementation details.
   // status 暴露生命周期与检查点状态且不包含 Provider 实现细节。
   const status = props.overview.status;
+  // rebuildRecoveryRequired keeps an unsuccessful first publication on an explicit recovery path.
+  // rebuildRecoveryRequired 将首次发布失败保持在明确的恢复路径上。
+  const rebuildRecoveryRequired = status.lifecycle === "rebuild_required"
+    || (status.lifecycle === "failed" && status.checkpointVersion == null)
+    || (status.checkpointVersion == null && isUnpublishedVceRecoveryJob(indexing.job));
   // counts supplies aggregate storage statistics when the runtime is active.
   // counts 在运行时活动时提供存储聚合统计。
   const counts = managementOverview?.status.projectId === props.projectId
@@ -674,12 +737,47 @@ export function CodeContextArea(props: {
               <strong>{status.checkpointVersion == null ? copy("创建项目索引", "Create project index") : copy("更新项目索引", "Update project index")}</strong>
               <p className="mt-1 text-sm text-muted-foreground">{status.checkpointVersion == null ? copy("只有点击创建，才会扫描此项目并调用向量模型。", "Files are scanned and embedded only after you choose to create this project's index.") : copy("手动同步立即受理，不受自动更新间隔限制。", "Manual synchronization bypasses the automatic update interval.")}</p>
             </div>
-            <Button type="button" disabled={props.busy || synchronization.disabled || !props.overview.configuration.ready || !props.overview.settings.enabled || status.lifecycle === "rebuild_required"} onClick={() => void refreshIndex()}>
+            <Button type="button" disabled={props.busy || synchronization.disabled || !props.overview.configuration.ready || !props.overview.settings.enabled || rebuildRecoveryRequired} onClick={() => void refreshIndex()}>
               <Database size={15} />{status.checkpointVersion == null ? copy("创建语义索引", "Create semantic index") : synchronization.label}
             </Button>
           </div>
+          {rebuildRecoveryRequired ? (
+            <section className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <strong>{copy("索引需要重建", "The index needs to be rebuilt")}</strong>
+                  <p className="mt-1 text-sm text-muted-foreground">{status.checkpointVersion == null
+                    ? indexing.active
+                      ? copy("上次索引创建没有发布可用结果。请先取消遗留任务，再生成并确认一份重建计划。", "The previous index creation did not publish a usable result. Cancel the stale job, then generate and confirm a rebuild plan.")
+                      : copy("上次索引创建没有发布可用结果。现在可以生成并确认重建计划，使用当前模型设置重新创建索引。", "The previous index creation did not publish a usable result. You can now generate and confirm a rebuild plan to recreate the index with the current model settings.")
+                    : copy("当前索引需要按新的模型契约重建。请生成并确认一份重建计划；当前运行中的任务必须先取消或等待结束。", "The current index must be rebuilt for the new model contract. Generate and confirm a rebuild plan; an active job must be cancelled or allowed to finish first.")}</p>
+                </div>
+                <Button
+                  disabled={props.busy || managementBusy || indexing.active || !props.overview.configuration.ready || !props.overview.settings.enabled}
+                  onClick={() => void loadMaintenancePlan("rebuild")}
+                  type="button"
+                  variant="outline"
+                >
+                  <RefreshCw size={15} />{maintenancePlan?.mode === "rebuild" ? copy("重新生成重建计划", "Regenerate rebuild plan") : copy("生成重建计划", "Generate rebuild plan")}
+                </Button>
+              </div>
+              {maintenancePlan?.mode === "rebuild" ? (
+                <MaintenancePlanPreview
+                  active={indexing.active}
+                  busy={managementBusy}
+                  copy={copy}
+                  checkpointVersion={status.checkpointVersion ?? null}
+                  error={managementError}
+                  onExecute={(confirmation) => void executeMaintenance(confirmation)}
+                  plan={maintenancePlan}
+                  projectId={props.projectId}
+                  settingsRevision={props.overview.settings.revision}
+                />
+              ) : null}
+            </section>
+          ) : null}
           {indexing.job ? <VceJobProgress job={indexing.job} chinese={locale === "zh-CN"} onCancel={() => void indexing.cancel()} cancelPending={indexing.cancelPending}
-            onRetry={indexing.job.kind !== "rebuild" && !managementBusy && props.overview?.configuration.ready === true && draft.enabled && props.overview.status.lifecycle !== "rebuild_required"
+            onRetry={indexing.job.kind !== "rebuild" && !rebuildRecoveryRequired && !managementBusy && props.overview?.configuration.ready === true && draft.enabled
               ? () => void retryOperation(indexing.job!.jobId) : undefined} /> : null}
           {indexing.error ? <p role="alert" className="text-sm text-destructive">{copy("索引状态暂不可用：", "Index status unavailable: ")}{indexing.error}</p> : null}
           <fieldset className="space-y-2" disabled={props.busy}>
@@ -809,16 +907,22 @@ export function CodeContextArea(props: {
             <strong>{copy("完整性与维护", "Integrity and maintenance")}</strong>
             {issuePage.items.length === 0 ? <p className="project-settings-muted"><SearchCheck className="mr-2 inline" size={14} />{copy("未发现完整性问题。", "No integrity issues found.")}</p> : issuePage.items.map((issue) => <p className="text-sm text-destructive" key={issue.issueId}>{issue.kind}: {issue.message}</p>)}
             <div className="flex flex-wrap gap-2">
-              <Button disabled={managementBusy} onClick={() => void loadMaintenancePlan("repair")} size="sm" type="button" variant="outline">{copy("生成修复计划", "Plan repair")}</Button>
-              <Button disabled={managementBusy} onClick={() => void loadMaintenancePlan("rebuild")} size="sm" type="button" variant="outline">{copy("生成重建计划", "Plan rebuild")}</Button>
-              <Button disabled={managementBusy} onClick={() => void loadMaintenancePlan("cleanup_staging")} size="sm" type="button" variant="outline">{copy("生成暂存清理计划", "Plan staging cleanup")}</Button>
+              <Button disabled={managementBusy || indexing.active} onClick={() => void loadMaintenancePlan("repair")} size="sm" type="button" variant="outline">{copy("生成修复计划", "Plan repair")}</Button>
+              <Button disabled={managementBusy || indexing.active} onClick={() => void loadMaintenancePlan("rebuild")} size="sm" type="button" variant="outline">{copy("生成重建计划", "Plan rebuild")}</Button>
+              <Button disabled={managementBusy || indexing.active} onClick={() => void loadMaintenancePlan("cleanup_staging")} size="sm" type="button" variant="outline">{copy("生成暂存清理计划", "Plan staging cleanup")}</Button>
             </div>
-            {maintenancePlan ? (
-              <div className="space-y-2">
-                <p className="text-sm">{copy("计划动作", "Planned actions")}: {maintenancePlan.actions.length} · {copy("影响 Blob", "Affected Blobs")}: {maintenancePlan.affectedBlobCount}</p>
-                {maintenancePlan.actions.map((action) => <p className="text-sm" key={action.actionId}>{action.description}</p>)}
-                <Button disabled={managementBusy || maintenancePlan.actions.length === 0} onClick={() => void executeMaintenance()} size="sm" type="button">{copy("确认并执行", "Confirm and execute")}</Button>
-              </div>
+            {maintenancePlan && (!rebuildRecoveryRequired || maintenancePlan.mode !== "rebuild") ? (
+              <MaintenancePlanPreview
+                active={indexing.active}
+                busy={managementBusy}
+                copy={copy}
+                checkpointVersion={status.checkpointVersion ?? null}
+                error={managementError}
+                onExecute={(confirmation) => void executeMaintenance(confirmation)}
+                plan={maintenancePlan}
+                projectId={props.projectId}
+                settingsRevision={props.overview.settings.revision}
+              />
             ) : null}
             <ManagementPagination
               busy={managementBusy}
@@ -843,6 +947,126 @@ export function CodeContextArea(props: {
       {managementError ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{managementError}</p> : null}
     </div>
   );
+}
+
+// MaintenancePlanPreview renders one exact read-only plan and its explicit confirmation action.
+// MaintenancePlanPreview 渲染一份精确的只读计划及其明确确认操作。
+function MaintenancePlanPreview(props: {
+  // Whether a live indexing job still owns the project's write path.
+  // 是否仍有活跃索引作业持有项目写入路径。
+  active: boolean;
+  // Whether the parent is waiting for a plan or execution response.
+  // 父级是否正在等待计划或执行回执。
+  busy: boolean;
+  // Exact checkpoint visible when this plan was presented.
+  // 此计划展示时可见的精确检查点。
+  checkpointVersion: number | null;
+  // Current maintenance error remains visible inside the open confirmation dialog.
+  // 当前维护错误保留在打开的确认弹窗内可见。
+  error: string | null;
+  // Localized copy selector owned by the settings surface.
+  // 设置界面持有的本地化文案选择器。
+  copy: (zh: string, en: string) => string;
+  // Executes only the currently rendered plan after human confirmation.
+  // 仅在人为确认后执行当前渲染的计划。
+  onExecute: (confirmation: VceMaintenanceConfirmation) => void;
+  // Read-only plan returned by the host for the exact current project state.
+  // 宿主为当前项目精确状态返回的只读计划。
+  plan: VceMaintenancePlanResponse;
+  // Exact mounted project identity used to freeze the confirmation.
+  // 用于冻结确认的精确已挂载项目身份。
+  projectId: string;
+  // Exact settings revision used to freeze the confirmation.
+  // 用于冻结确认的精确设置修订。
+  settingsRevision: number;
+}) {
+  // An uninitialized rebuild scans the project even when no existing Blob is affected.
+  // 未初始化重建即使没有现有 Blob 受影响，也会扫描整个项目。
+  const unpublishedRebuild = props.checkpointVersion === null && props.plan.mode === "rebuild";
+  // confirmation retains the exact plan authority while the modal is open.
+  // confirmation 在弹窗打开期间保留计划的精确权威。
+  const [confirmation, setConfirmation] = React.useState<VceMaintenanceConfirmation | null>(null);
+  const actionIds = React.useMemo(() => props.plan.actions.map((action) => action.actionId), [props.plan.actions]);
+  const confirmationIsCurrent = confirmation !== null
+    && confirmation.projectId === props.projectId
+    && confirmation.settingsRevision === props.settingsRevision
+    && confirmation.checkpointVersion === props.checkpointVersion
+    && confirmation.mode === props.plan.mode
+    && confirmation.embeddingFingerprint === props.plan.embeddingFingerprint
+    && confirmation.actionIds.length === actionIds.length
+    && confirmation.actionIds.every((actionId, index) => actionId === actionIds[index]);
+
+  React.useEffect(() => {
+    // A changed plan or authority closes the old confirmation and requires a fresh preview.
+    // 计划或权威变化时关闭旧确认，并要求重新预览。
+    if (confirmation !== null && !confirmationIsCurrent) {
+      setConfirmation(null);
+    }
+  }, [confirmation, confirmationIsCurrent]);
+
+  // openConfirmation freezes all admission fields and creates one replay identity.
+  // openConfirmation 冻结全部准入字段并创建一个重放身份。
+  const openConfirmation = () => {
+    if (props.busy || props.active || actionIds.length === 0) return;
+    setConfirmation({
+      projectId: props.projectId,
+      settingsRevision: props.settingsRevision,
+      checkpointVersion: props.checkpointVersion,
+      mode: props.plan.mode,
+      actionIds: [...actionIds],
+      embeddingFingerprint: props.plan.embeddingFingerprint,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  };
+  // submitConfirmation prevents a stale or busy dialog from dispatching a command.
+  // submitConfirmation 防止过期或忙碌弹窗派发命令。
+  const submitConfirmation = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    if (confirmation === null || !confirmationIsCurrent || props.busy || props.active) return;
+    props.onExecute(confirmation);
+  };
+  // scopeLabel describes the real work for both existing-index and first-build recovery plans.
+  // scopeLabel 为已有索引及首次恢复计划描述真实工作范围。
+  const scopeLabel = unpublishedRebuild
+    ? props.copy("重新扫描当前项目并创建索引（当前没有已发布的索引）", "Rescan the current project and create an index (no published index exists)")
+    : `${props.plan.affectedBlobCount} ${props.copy("个 Blob", "Blobs")}`;
+  return (
+    <div className="space-y-2 rounded-md border bg-background/60 p-3">
+      <p className="text-sm">{props.copy("计划动作", "Planned actions")}: {props.plan.actions.length} · {props.copy("范围", "Scope")}: {scopeLabel}</p>
+      {props.plan.actions.map((action) => <p className="text-sm" key={action.actionId}>{action.description}</p>)}
+      <Button disabled={props.busy || props.active || props.plan.actions.length === 0} onClick={openConfirmation} size="sm" type="button">{props.copy("确认并执行", "Confirm and execute")}</Button>
+      <AlertDialog open={confirmation !== null && confirmationIsCurrent} onOpenChange={(open) => { if (!open && !props.busy) setConfirmation(null); }}>
+        <AlertDialogContent className="max-h-[85vh] overflow-y-auto" size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{unpublishedRebuild ? props.copy("确认重新创建语义索引", "Confirm semantic index creation") : props.copy("确认执行索引维护", "Confirm index maintenance")}</AlertDialogTitle>
+            <AlertDialogDescription>{unpublishedRebuild
+              ? props.copy("本次操作会重新扫描当前项目并创建索引。当前没有已发布的索引，计划将按生成计划时的模型配置执行。", "This will rescan the current project and create an index. No published index exists; the plan will use the model configuration from plan generation time.")
+              : props.copy("请核对计划动作与影响范围。计划将按生成计划时的模型配置执行。", "Review the planned actions and scope. The plan will use the model configuration from plan generation time.")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <dl className="grid gap-3 rounded-md border p-3 text-sm sm:grid-cols-2">
+            <div><dt className="text-muted-foreground">{props.copy("计划动作", "Planned actions")}</dt><dd>{props.plan.actions.length}</dd></div>
+            <div><dt className="text-muted-foreground">{props.copy("目标向量维度", "Target vector dimension")}</dt><dd>{props.plan.embeddingDimension}</dd></div>
+            <div className="sm:col-span-2"><dt className="text-muted-foreground">{props.copy("影响范围", "Scope")}</dt><dd>{scopeLabel}</dd></div>
+          </dl>
+          <div className="space-y-1">
+            {props.plan.actions.map((action) => <p className="text-sm" key={action.actionId}>{action.description}</p>)}
+          </div>
+          {props.error ? <p className="break-words text-sm text-destructive" role="alert">{props.error}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={props.busy}>{props.copy("取消", "Cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={props.busy || props.active || !confirmationIsCurrent} onClick={submitConfirmation}>{props.copy("确认并执行", "Confirm and execute")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// isUnpublishedVceRecoveryJob recognizes only terminal initialize/rebuild receipts with no checkpoint.
+// isUnpublishedVceRecoveryJob 只识别无检查点的初始化／重建终态回执。
+function isUnpublishedVceRecoveryJob(job: VceJobSummary | null): boolean {
+  if (job === null || (job.kind !== "initialize" && job.kind !== "rebuild")) return false;
+  return job.state === "failed" || job.state === "cancelled" || job.state === "interrupted";
 }
 
 // ManagementPagination renders cursor-safe previous and next controls for one bounded list.

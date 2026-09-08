@@ -63,6 +63,8 @@ describe("localizedProviderDescription", () => {
       .toBe("settings.providerDescription.alibaba")
     expect(localizedProviderDescription("commandcode", translationFixture))
       .toBe("settings.providerDescription.commandcode")
+    expect(localizedProviderDescription("agentspace", translationFixture))
+      .toBe("settings.providerDescription.agentspace")
     expect(localizedProviderDescription("tokenrhythm", translationFixture))
       .toBe("settings.providerDescription.tokenrhythm")
     expect(localizedProviderDescription("future-provider", translationFixture))

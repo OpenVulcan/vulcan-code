@@ -485,9 +485,9 @@ export interface VceMaintenanceExecutionRequest {
   // Exact settings revision required by execution.
   // 执行要求的精确设置修订。
   expectedSettingsRevision: number;
-  // Exact checkpoint visible when the plan was confirmed.
-  // 确认计划时可见的精确检查点。
-  expectedCheckpointVersion: number;
+  // Exact checkpoint visible when the plan was confirmed; null is valid only for an uninitialized rebuild.
+  // 确认计划时可见的精确检查点；未初始化项目的重建可以使用空值。
+  expectedCheckpointVersion: number | null;
   // Exact action identities copied from the plan.
   // 从计划复制的精确操作身份。
   actionIds: string[];

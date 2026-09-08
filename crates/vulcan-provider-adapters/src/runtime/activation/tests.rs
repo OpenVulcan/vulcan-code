@@ -594,8 +594,8 @@ async fn staged_manifest_catalogs_publish_only_through_activation_batch() {
             CredentialConnection {
                 id: connection_id.clone(),
                 provider_id: String::from("alibaba"),
-                service_entry_id: String::from("coding-plan-cn"),
-                credential_profile_id: String::from("coding-plan-api-key"),
+                service_entry_id: String::from("token-plan-personal-cn"),
+                credential_profile_id: String::from("token-plan-api-key"),
                 credential_mode: CredentialMode::Token,
                 credential_id: String::from("credential-alibaba-activation"),
                 display_name: String::from("Alibaba Activation Account"),
@@ -634,11 +634,11 @@ async fn staged_manifest_catalogs_publish_only_through_activation_batch() {
     let services = document["services"]
         .as_array_mut()
         .expect("Alibaba services must be an array");
-    let coding_plan = services
+    let token_plan = services
         .iter_mut()
-        .find(|service| service["service_entry_id"] == "coding-plan-cn")
-        .expect("Alibaba coding plan entry must exist");
-    coding_plan["model_catalog"]["models"]
+        .find(|service| service["service_entry_id"] == "token-plan-personal-cn")
+        .expect("Alibaba Token Plan entry must exist");
+    token_plan["model_catalog"]["models"]
         .as_array_mut()
         .expect("Alibaba static models must be an array")
         .push(serde_json::json!({
@@ -656,11 +656,13 @@ async fn staged_manifest_catalogs_publish_only_through_activation_batch() {
                 && rule["scope"]["service_entry_ids"]
                     .as_array()
                     .is_some_and(|services| {
-                        services.iter().any(|service| service == "coding-plan-cn")
+                        services
+                            .iter()
+                            .any(|service| service == "token-plan-personal-cn")
                     })
         })
         .cloned()
-        .expect("Alibaba Coding Plan Qwen rule must exist");
+        .expect("Alibaba Token Plan Qwen rule must exist");
     // future_rule changes only bounded identity facts and retains the pre-authorized contract.
     // future_rule 仅修改有界身份事实并保留预授权契约。
     let mut future_rule = base_rule;

@@ -53,6 +53,31 @@ describe("confirmed VCE maintenance admission", () => {
     });
   });
 
+  // An uninitialized rebuild carries no checkpoint and must preserve that explicit null in the RPC.
+  // 未初始化重建没有检查点，必须在 RPC 中保留这个明确的空值。
+  it("admits a rebuild without a published checkpoint", async () => {
+    const job: VceJobSummary = {
+      projectId: "project-a", jobId: "rebuild-uninitialized", kind: "initialize", state: "queued", sequence: 1,
+      createdAtUnixMs: 1000, updatedAtUnixMs: 1000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, progress: null, followupRequested: false, error: null,
+    };
+    transport.request.mockResolvedValue({ kind: "job", job });
+    await expect(executeVceMaintenance("project-a", "rebuild", 4, null, ["recovery-action"], "click-rebuild", "sha256:current-model"))
+      .resolves.toEqual({ kind: "job", job });
+    expect(transport.request).toHaveBeenCalledExactlyOnceWith("service_execute_vce_maintenance", {
+      request: { projectId: "project-a", mode: "rebuild", expectedSettingsRevision: 4,
+        expectedCheckpointVersion: null, actionIds: ["recovery-action"], idempotencyKey: "click-rebuild", expectedEmbeddingFingerprint: "sha256:current-model" },
+    });
+  });
+
+  // Repair and staging cleanup remain tied to an existing published checkpoint.
+  // 修复和暂存清理仍然要求已有的已发布检查点。
+  it("rejects checkpoint-less non-rebuild maintenance before transport", async () => {
+    await expect(executeVceMaintenance("project-a", "repair", 4, null, ["repair-action"], "click-repair", "sha256:current-model"))
+      .rejects.toThrow("要求一个已发布检查点");
+    expect(transport.request).not.toHaveBeenCalled();
+  });
+
   // Preserve explicit host rejection so failed admission cannot look like a started or completed job.
   // 保留明确宿主拒绝，避免准入失败伪装为已开始或已完成作业。
   it("propagates an obsolete-plan rejection without inventing a receipt", async () => {

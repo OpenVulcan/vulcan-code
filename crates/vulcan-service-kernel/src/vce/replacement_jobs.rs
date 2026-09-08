@@ -2,6 +2,7 @@
 //! 独立于兼容查询运行时准入的明确物理替换作业。
 
 use super::*;
+use vulcan_context_engine::VceIndexPort;
 use vulcan_workspace_store::vce_data_plane::{VceJobReplacement, VceRebuildCandidateBase};
 
 /// Current host facts required to build a new index; these never authorize reading the predecessor.
@@ -45,7 +46,11 @@ impl VceRuntimeManager {
         let Some(state) = state else { return false };
         let job = state.active.lock().await.clone();
         let Some(job) = job else { return false };
-        job.receipt.lock().await.replacement.is_some()
+        let receipt = job.receipt.lock().await;
+        let uninitialized_rebuild = receipt.kind == VceJobKind::Rebuild
+            && receipt.source_checkpoint_version.is_none()
+            && receipt.replacement.is_none();
+        uninitialized_rebuild || receipt.replacement.is_some()
     }
 
     /// Preserve new saved policy while a replacement owns a project without a query runtime.
@@ -82,9 +87,12 @@ impl VceRuntimeManager {
         // receipt supplies the immutable physical target, not the mutable policy revision.
         // receipt 提供不可变物理目标，而不是可变策略修订。
         let receipt = job.receipt.lock().await.clone();
-        let Some(replacement) = receipt.replacement else {
+        let uninitialized_rebuild = receipt.kind == VceJobKind::Rebuild
+            && receipt.source_checkpoint_version.is_none()
+            && receipt.replacement.is_none();
+        if receipt.replacement.is_none() && !uninitialized_rebuild {
             return Ok(None);
-        };
+        }
         // policy exists only for the explicit replacement variant proved by the receipt above.
         // policy 仅存在于上方回执已证明的明确替换分支。
         let policy = job
@@ -110,11 +118,36 @@ impl VceRuntimeManager {
                 return Err(format!("Resolve VCE replacement policy root: {error}"));
             }
         };
-        if !replacement_policy_matches(&latest, settings)
-            || replacement.target.physical_fingerprint != fingerprint
-            || replacement.target.root_path
-                != crate::normalized_workspace_path_text_from_path(&root)
-        {
+        let target_matches = match receipt.replacement.as_ref() {
+            Some(replacement) => {
+                replacement.target.physical_fingerprint == fingerprint
+                    && replacement.target.root_path
+                        == crate::normalized_workspace_path_text_from_path(&root)
+            }
+            // A null-checkpoint rebuild has no initialized predecessor target; validate the fresh
+            // active binding itself so a live provider or root change revokes this attempt.
+            // 空检查点重建没有已初始化前驱目标；直接校验全新的活动绑定，确保实时供应商或根目录变化会撤销本次尝试。
+            None => {
+                let current = self
+                    .data_plane
+                    .load_active_project_config(project_id)
+                    .await?;
+                let Some(current) = current else {
+                    job.cancel_for_shutdown();
+                    return Err(String::from(
+                        "VCE null-checkpoint rebuild active binding disappeared during policy reconciliation",
+                    ));
+                };
+                current.root_path == crate::normalized_workspace_path_text_from_path(&root)
+                    && current
+                        .binding
+                        .embedding_space
+                        .physical_fingerprint
+                        .as_deref()
+                        == Some(fingerprint)
+            }
+        };
+        if !replacement_policy_matches(&latest, settings) || !target_matches {
             // Index-affecting changes revoke this exact attempt, even when no query runtime exists to disable.
             // 影响索引的变化撤销此精确尝试，即使没有可禁用的查询运行时。
             job.cancel_for_shutdown();
@@ -148,6 +181,13 @@ impl VceRuntimeManager {
             .map_err(|error| format!("Resolve VCE rebuild project root: {error}"))?;
         // A compatible registered engine preserves its concurrent readers through the existing path.
         // 兼容的已注册引擎通过既有路径保留并发读取方。
+        // A null checkpoint is the explicit first-build recovery branch and never enters the initialized candidate path.
+        // 空检查点明确表示首次构建恢复分支，绝不进入已初始化候选路径。
+        if command.expected_checkpoint_version.is_none() {
+            return self
+                .submit_uninitialized_rebuild_job(input, command, repair, action_ids, executor)
+                .await;
+        }
         let runtime = self.projects.read().await.get(&input.project_id).cloned();
         if let Some(runtime) = runtime
             && runtime.ai.embedding_space().dimension == input.dimension as usize
@@ -162,6 +202,234 @@ impl VceRuntimeManager {
         }
         self.submit_replacement_job(input, command, repair, action_ids, executor)
             .await
+    }
+
+    /// Admit a null-checkpoint rebuild against an active or explicitly orphaned uninitialized binding.
+    /// 为活动或明确孤立的未初始化绑定准入空检查点重建。
+    ///
+    /// `input` carries current host facts, `command` carries the null-checkpoint preview,
+    /// `repair` and `action_ids` preserve the exact maintenance intent, and `executor` owns
+    /// execution after the durable receipt is acknowledged. Returns the queued receipt.
+    /// `input` 携带当前宿主事实，`command` 携带空检查点预览，`repair` 与 `action_ids` 保留精确维护意图，
+    /// `executor` 在持久回执确认后负责执行。返回排队回执。
+    ///
+    /// The storage factory returns the fresh index and the same writer lease together, so no
+    /// competing host can enter between retirement, fresh binding creation and receipt admission.
+    /// 存储工厂同时返回新索引与同一写入租约，避免退役、新绑定创建和回执准入之间出现竞争宿主。
+    async fn submit_uninitialized_rebuild_job(
+        &self,
+        input: VceRebuildProjectInput,
+        command: VceJobAdmission,
+        repair: bool,
+        action_ids: BTreeSet<String>,
+        executor: &tokio::runtime::Runtime,
+    ) -> Result<VceStoredJob, String> {
+        input.settings.validate()?;
+        validate_uninitialized_rebuild_admission(
+            &command,
+            input.settings.revision,
+            &input.fingerprint,
+        )?;
+        if repair {
+            return Err(String::from(
+                "VCE repair requires a published checkpoint and cannot use null recovery",
+            ));
+        }
+        if !input.settings.enabled {
+            return Err(String::from("VCE rebuilding requires an enabled project"));
+        }
+        if command.idempotency_key.trim().is_empty() || command.idempotency_key.len() > 512 {
+            return Err(String::from(
+                "VCE job idempotency key must contain 1..512 bytes",
+            ));
+        }
+        let work = VceJobWork::Rebuild { repair, action_ids };
+        let job_id = Uuid::new_v4().to_string();
+        let prepared = runtime_configuration::prepare_runtime_configuration(
+            &input.project_id,
+            &input.project_root,
+            &input.settings,
+            input.dimension,
+            &input.fingerprint,
+            Some(&job_id),
+        )?;
+        let request_fingerprint = job_request_fingerprint(
+            &input.project_id,
+            prepared.source.project_root(),
+            &command,
+            &work,
+        )?;
+        let _lifecycle = self.lifecycle_gate.read().await;
+        let project_gate = self.project_lifecycle_gate(&input.project_id).await;
+        let _project_gate = project_gate.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(String::from("VCE job manager is shutting down"));
+        }
+        let state = self.project_job_state(&input.project_id).await;
+        let admission = state.admission.lock().await;
+        // An active job store is authoritative for an in-flight replay and must be checked before active-job rejection.
+        // 活动作业存储是进行中重放的权威来源，必须先于活动作业拒绝进行查询。
+        if let Some(active_job) = state.active.lock().await.clone() {
+            if let Some(receipt) = active_job
+                .store
+                .find_submission(&command.idempotency_key, &request_fingerprint)
+                .await?
+            {
+                return Ok(receipt);
+            }
+            return Err(String::from(
+                "VCE project already has an admitted or stopping index job",
+            ));
+        }
+        let (previous, predecessor, predecessor_is_active) = if let Some(config) = self
+            .data_plane
+            .load_active_project_config(&input.project_id)
+            .await?
+        {
+            let index = self
+                .data_plane
+                .open_existing_project_index(&config)
+                .await?
+                .ok_or_else(|| String::from("VCE uninitialized predecessor disappeared"))?;
+            (config, index, true)
+        } else {
+            let config = self
+                .data_plane
+                .load_uninitialized_recovery_config(&input.project_id)
+                .await?
+                .ok_or_else(|| {
+                    String::from("VCE uninitialized rebuild requires an active or orphaned binding")
+                })?;
+            let index = self
+                .data_plane
+                .open_uninitialized_recovery_project_index(&config)
+                .await?
+                .ok_or_else(|| String::from("VCE uninitialized recovery index disappeared"))?;
+            (config, index, false)
+        };
+        let store = predecessor.job_store();
+        // The project job store is checked before predecessor checkpoint and plan guards, so completed null recovery can replay after namespace replacement.
+        // 在检查前驱检查点与计划保护前先查询项目作业存储，使命名空间替换后的已完成空值恢复仍可重放。
+        if let Some(receipt) = store
+            .find_submission(&command.idempotency_key, &request_fingerprint)
+            .await?
+        {
+            return Ok(receipt);
+        }
+        if state.stop_requested.load(Ordering::Acquire) {
+            return Err(String::from(
+                "VCE project is stopping and requires explicit recovery",
+            ));
+        }
+        predecessor.require_write_access()?;
+        let provenance = if predecessor_is_active {
+            predecessor.embedding_provenance().await?
+        } else {
+            predecessor.uninitialized_recovery_provenance().await?
+        };
+        if provenance.checkpoint_version.is_some() {
+            return Err(String::from(
+                "VCE null-checkpoint rebuild requires an uninitialized predecessor",
+            ));
+        }
+        validate_stored_rebuild_confirmation(&predecessor, &previous, &work).await?;
+        if store.unfinished().await?.is_some() {
+            return Err(String::from(
+                "VCE unfinished job requires explicit cancellation or recovery before rebuilding",
+            ));
+        }
+        let preview_contract = uninitialized_publication_contract(&input, &prepared, None);
+        {
+            let _configuration = crate::begin_public_ai_configuration_transaction().await;
+            (self.publication_authority)(&preview_contract)?;
+        }
+        // Runtime teardown must happen before storage fencing, while the project gate still excludes successors.
+        // 存储封锁前必须先拆卸运行时，项目闸门仍会排斥后继准入。
+        drop(admission);
+        let previous_runtime = self.projects.write().await.remove(&input.project_id);
+        if let Some(previous_runtime) = previous_runtime {
+            self.stop_runtime(&previous_runtime).await?;
+        }
+        let _admission = state.admission.lock().await;
+        if state.stop_requested.load(Ordering::Acquire)
+            || self.shutting_down.load(Ordering::Acquire)
+            || state.active.lock().await.is_some()
+        {
+            return Err(String::from(
+                "VCE project stopped before uninitialized rebuild admission",
+            ));
+        }
+        let (index, writer) = self
+            .data_plane
+            .reinitialize_uninitialized_project_index(&previous, prepared.index.clone())
+            .await?;
+        index.require_write_access()?;
+        let project_writer = Arc::new(writer);
+        let store = index.job_store();
+        let previous_time = store
+            .latest()
+            .await?
+            .map(|job| job.created_at_unix_ms)
+            .unwrap_or(0);
+        let timestamp = job_time()?.max(
+            previous_time
+                .checked_add(1)
+                .ok_or_else(|| String::from("VCE job admission timestamp overflow"))?,
+        );
+        let queued = VceStoredJob {
+            schema_version: vulcan_workspace_store::vce_data_plane::VCE_JOB_RECEIPT_SCHEMA_VERSION,
+            project_id: input.project_id.clone(),
+            job_id: job_id.clone(),
+            owner_run_id: self.job_owner_run_id.clone(),
+            idempotency_key: command.idempotency_key,
+            retry_of_job_id: None,
+            request_fingerprint,
+            contract_fingerprint: job_index_contract_fingerprint(
+                &prepared.engine,
+                &input.settings,
+            )?,
+            kind: VceJobKind::Rebuild,
+            state: VceJobState::Queued,
+            sequence: 1,
+            created_at_unix_ms: timestamp,
+            updated_at_unix_ms: timestamp,
+            admitted_settings_revision: input.settings.revision,
+            source_checkpoint_version: None,
+            replacement: None,
+            result_checkpoint_version: None,
+            progress: None,
+            followup_requested: false,
+            completed_update: None,
+            error: None,
+        };
+        let receipt = store.register(&queued).await?;
+        let execution = Arc::clone(&state.execution).read_owned().await;
+        let job = Arc::new(VceManagedJob {
+            job_id: receipt.job_id.clone(),
+            replacement_settings: Some(Mutex::new(input.settings.clone())),
+            project_writer,
+            store: store.clone(),
+            event_emitter: self.event_emitter.clone(),
+            receipt: Mutex::new(receipt.clone()),
+            persistence_gate: Mutex::new(()),
+            control: VceRefreshControl::default(),
+            cancel_wake: Notify::new(),
+            persistence_error: Mutex::new(None),
+        });
+        *state.active.lock().await = Some(Arc::clone(&job));
+        self.event_emitter
+            .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                super::super::super::services::map_vce_job(receipt.clone()),
+            )));
+        let manager = self.clone();
+        let worker_state = Arc::clone(&state);
+        executor.spawn(async move {
+            let _execution = execution;
+            manager
+                .run_uninitialized_rebuild_job(input, prepared, index, worker_state, job, work)
+                .await;
+        });
+        Ok(receipt)
     }
 
     /// Persist a confirmed new-space target before any model registration, source scan or table allocation.
@@ -363,6 +631,194 @@ impl VceRuntimeManager {
                 .await;
         });
         Ok(receipt)
+    }
+
+    /// Run a fresh initial binding and restore its published target without using the project lifecycle gate.
+    /// 执行全新的初始绑定，并在不使用项目生命周期闸门的情况下恢复已发布目标。
+    ///
+    /// `input`, `prepared` and `index` are the exact admitted target; `state` and `job` retain
+    /// cancellation, receipt and writer ownership. Returns no value because terminal state is
+    /// persisted through the shared managed-job boundary.
+    /// `input`、`prepared` 与 `index` 是精确准入目标；`state` 与 `job` 保留取消、回执及写入归属。
+    /// 无返回值，因为终态通过共享托管作业边界持久化。
+    async fn run_uninitialized_rebuild_job(
+        &self,
+        input: VceRebuildProjectInput,
+        prepared: runtime_configuration::VcePreparedRuntimeConfiguration,
+        index: VceProjectIndex,
+        state: Arc<VceProjectJobState>,
+        job: Arc<VceManagedJob>,
+        work: VceJobWork,
+    ) {
+        let mut runtime: Option<Arc<VceProjectRuntime>> = None;
+        let attempted = AssertUnwindSafe(async {
+            let notified = job.cancel_wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            job.control.check().map_err(|error| error.to_string())?;
+            let budget = tokio::select! {
+                permit = Arc::clone(&self.job_writer_budget).acquire_owned() => permit.map_err(|_| String::from("VCE writer budget was closed"))?,
+                _ = notified => return Err(String::from(VCE_REFRESH_CANCELLED_ERROR)),
+            };
+            job.control.check().map_err(|error| error.to_string())?;
+            let running = job
+                .persist(&job.store, |receipt| {
+                    if receipt.state == VceJobState::Queued {
+                        receipt.state = VceJobState::Running;
+                    }
+                })
+                .await?;
+            let provenance = index.embedding_provenance().await?;
+            if provenance.checkpoint_version.is_some() {
+                return Err(String::from(
+                    "VCE null-checkpoint rebuild target was initialized before execution",
+                ));
+            }
+            let contract = uninitialized_publication_contract(
+                &input,
+                &prepared,
+                Some(provenance),
+            );
+            {
+                let _configuration = crate::begin_public_ai_configuration_transaction().await;
+                (self.publication_authority)(&contract)?;
+            }
+            if matches!(&work, VceJobWork::Rebuild { repair: true, .. }) {
+                index.retry_pending_cleanup().await?;
+                if index.has_unresolved_staging().await? {
+                    return Err(String::from(
+                        "VCE repair requires confirmed ownership of unresolved staging",
+                    ));
+                }
+            }
+            let active = self
+                .activate_uninitialized_writer(&input, prepared, index)
+                .await?;
+            runtime = Some(Arc::clone(&active));
+            let _writer = active.refresh_gate.lock().await;
+            self.run_managed_job(
+                &active,
+                &job,
+                &job.store,
+                VceJobWork::Manual,
+                running.job_id,
+                Some(budget),
+            )
+            .await
+        })
+        .catch_unwind()
+        .await;
+        let mut outcome = match attempted {
+            Ok(result) => result,
+            Err(_) => Err(String::from(
+                "VCE initial rebuild worker panicked; explicit recovery may be required",
+            )),
+        };
+        let published_checkpoint = outcome.as_ref().ok().copied();
+        if let Some(active) = &runtime {
+            // A failed initial job leaves the active fresh namespace uninitialized so the next
+            // explicit rebuild can fence it with another fresh namespace.
+            // 初始作业失败时保留全新的活动命名空间为未初始化状态，下一次显式重建可再次以新命名空间封锁它。
+            if let Err(execution_error) = &outcome {
+                if let Ok(provenance) = active.index.embedding_provenance().await {
+                    if provenance.checkpoint_version.is_some() {
+                        outcome = Err(format!(
+                            "{execution_error}; initial rebuild unexpectedly published a checkpoint"
+                        ));
+                    }
+                }
+            }
+            if let Err(error) = active.ai.deactivate() {
+                outcome = Err(format!(
+                    "VCE initial rebuild model registration cleanup failed: {error}; publication result: {outcome:?}"
+                ));
+            }
+        }
+        let _admission = state.admission.lock().await;
+        if let Some(checkpoint) = published_checkpoint {
+            let accounting = async {
+                let now = job_time()?;
+                job.persist(&job.store, |receipt| {
+                    receipt.completed_update = Some(VceCompletedJobUpdate {
+                        checkpoint_version: checkpoint,
+                        at_unix_ms: now.max(receipt.updated_at_unix_ms),
+                    });
+                })
+                .await?;
+                Ok::<(), String>(())
+            }
+            .await;
+            if let Err(error) = accounting {
+                outcome = Err(format!(
+                    "VCE initial rebuild committed but completion accounting failed: {error}"
+                ));
+            }
+        }
+        let mut restored = None;
+        if outcome.is_ok()
+            && !state.stop_requested.load(Ordering::Acquire)
+            && !self.shutting_down.load(Ordering::Acquire)
+        {
+            match self.restore_replacement_runtime(&input, &job).await {
+                Ok(restored_runtime) => {
+                    self.projects
+                        .write()
+                        .await
+                        .insert(input.project_id.clone(), Arc::clone(&restored_runtime));
+                    let checkpoint = restored_runtime
+                        .committed_projection
+                        .read()
+                        .await
+                        .engine
+                        .checkpoint_version;
+                    match self
+                        .publish_query_admission(&restored_runtime, checkpoint)
+                        .await
+                    {
+                        Ok(()) => {
+                            self.activation_failures
+                                .write()
+                                .await
+                                .remove(&input.project_id);
+                            restored = Some(restored_runtime);
+                        }
+                        Err(error) => {
+                            self.projects.write().await.remove(&input.project_id);
+                            let cleanup = restored_runtime.ai.deactivate();
+                            outcome = Err(format!(
+                                "VCE initial rebuild published but query admission failed: {error}; registration cleanup: {cleanup:?}"
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    outcome = Err(format!(
+                        "VCE initial rebuild published but runtime restoration failed: {error}"
+                    ));
+                }
+            }
+        }
+        if let Err(error) = &outcome {
+            // Keep failed or cancelled fresh bindings visibly recoverable after the worker releases its active slot.
+            // 工作线程释放活动槽位后，仍将失败或取消的全新绑定明确保留为可恢复状态。
+            self.activation_failures.write().await.insert(
+                input.project_id.clone(),
+                VceActivationFailure {
+                    config_revision: input.settings.revision,
+                    lifecycle: VceProjectLifecycle::RebuildRequired,
+                    error: bounded_error(error.clone()),
+                },
+            );
+        }
+        self.finish_managed_job(None, &job, &job.store, outcome)
+            .await;
+        if job.persistence_error.lock().await.is_none() {
+            *state.active.lock().await = None;
+        }
+        drop(_admission);
+        if let Some(restored) = restored {
+            self.reconcile_runtime_watcher(&restored).await;
+        }
     }
 
     /// Run the owned replacement and restore its published target without using the project lifecycle gate.
@@ -568,6 +1024,85 @@ impl VceRuntimeManager {
         .map_err(|error| error.error)
     }
 
+    /// Register current models and activate the fresh namespace already fenced by the durable job.
+    /// 注册当前模型，并激活持久作业已经封锁的全新命名空间。
+    ///
+    /// `input` and `prepared` carry the admitted execution contract and `index` is the exact
+    /// active storage handle returned together with the writer lease. Returns a private runtime.
+    /// `input` 与 `prepared` 携带已准入执行契约，`index` 是与写入租约一同返回的精确活动存储句柄。
+    /// 返回私有运行时。
+    async fn activate_uninitialized_writer(
+        &self,
+        input: &VceRebuildProjectInput,
+        prepared: runtime_configuration::VcePreparedRuntimeConfiguration,
+        index: VceProjectIndex,
+    ) -> Result<Arc<VceProjectRuntime>, String> {
+        if index.binding() != &prepared.index.binding {
+            return Err(String::from(
+                "VCE initial rebuild runtime differs from its durable target",
+            ));
+        }
+        let engine = VceEngine::new(prepared.engine.clone()).map_err(|error| error.to_string())?;
+        let ai = Arc::new(VceHostAiAdapter::activate(
+            Arc::clone(&self.ai_port),
+            VceHostAiRegistrationConfig {
+                runtime_instance_id: Uuid::new_v4(),
+                project_id: input.project_id.clone(),
+                consumer_profile_id: String::from(VCE_CONSUMER_PROFILE_ID),
+                vector_space_id: prepared.index.vector_space_id.clone(),
+                dimension: Some(input.dimension),
+                preprocessing_version: String::from(VCE_PREPROCESSING_VERSION),
+                chunker_version: String::from(VCE_CHUNKER_VERSION),
+            },
+        )?);
+        let activation = async {
+            if ai.embedding_space() != &prepared.engine.embedding_space {
+                return Err(String::from(
+                    "VCE initial rebuild model registration changed its admitted physical space",
+                ));
+            }
+            let projection = VceCommittedProjection {
+                engine: engine.status(),
+                workspace: engine.workspace_statistics(),
+            };
+            Ok(Arc::new(VceProjectRuntime {
+                project_id: input.project_id.clone(),
+                config: prepared.engine,
+                config_revision: AtomicU64::new(input.settings.revision),
+                settings: input.settings.clone(),
+                latest_settings: std::sync::RwLock::new(input.settings.clone()),
+                ai: Arc::clone(&ai),
+                index: Arc::new(index),
+                source: prepared.source,
+                current_engine: RwLock::new(Arc::new(VcePublishedEngine {
+                    engine,
+                    read_index: None,
+                })),
+                committed_projection: RwLock::new(projection),
+                refresh_gate: Arc::new(Mutex::new(())),
+                job_state: self.project_job_state(&input.project_id).await,
+                job_schedule: std::sync::Mutex::new(VceJobSchedule::new(&input.settings)),
+                host_status: RwLock::new(VceHostStatus {
+                    lifecycle: VceProjectLifecycle::RebuildRequired,
+                    last_error: None,
+                }),
+                active_refresh: Mutex::new(None),
+                refresh_observation_revision: AtomicU64::new(0),
+                operation_admission: VceOperationAdmission::accepting(),
+            }))
+        }
+        .await;
+        match activation {
+            Ok(runtime) => Ok(runtime),
+            Err(error) => match ai.deactivate() {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(format!(
+                    "{error}; cleanup failed VCE HostAI activation: {cleanup_error}"
+                )),
+            },
+        }
+    }
+
     /// Register current models and allocate only the target already named in the durable running receipt.
     /// 注册当前模型并仅分配持久运行回执已经指定的目标。
     /// `input`, `prepared` and `receipt` are frozen admission facts; returns a private, uninitialized writer.
@@ -677,6 +1212,63 @@ impl VceRuntimeManager {
                 }
             }
         }
+    }
+}
+
+/// Validate the null-checkpoint admission boundary without weakening initialized-job guards.
+/// 校验空检查点准入边界，同时不削弱已初始化作业的保护。
+///
+/// `command` is the user-confirmed admission, `settings_revision` is the current saved revision,
+/// and `fingerprint` is the current physical producer. Returns an explicit stale-contract error.
+/// `command` 是用户确认的准入，`settings_revision` 是当前保存修订，`fingerprint` 是当前物理生产者。
+/// 返回明确的过期契约错误。
+fn validate_uninitialized_rebuild_admission(
+    command: &VceJobAdmission,
+    settings_revision: u64,
+    fingerprint: &str,
+) -> Result<(), String> {
+    if command.kind != VceJobKind::Rebuild
+        || command.retry_of_job_id.is_some()
+        || command.expected_checkpoint_version.is_some()
+    {
+        return Err(String::from(
+            "VCE uninitialized rebuild requires a Rebuild command with a null checkpoint",
+        ));
+    }
+    if command.expected_settings_revision != settings_revision {
+        return Err(String::from(
+            "VCE uninitialized rebuild settings revision changed after preview",
+        ));
+    }
+    if command.contract_fingerprint != fingerprint {
+        return Err(String::from(
+            "VCE uninitialized rebuild embedding contract changed after preview",
+        ));
+    }
+    Ok(())
+}
+
+/// Build the publication contract for a fresh initial namespace.
+/// 为全新初始命名空间构建发布契约。
+///
+/// `input` and `prepared` provide current host facts; `provenance` is absent before storage
+/// fencing and present after opening the fresh binding. Returns a contract with no predecessor.
+/// `input` 与 `prepared` 提供当前宿主事实；封锁存储前 `provenance` 为空，打开新绑定后提供它。
+/// 返回不含前驱的契约。
+fn uninitialized_publication_contract(
+    input: &VceRebuildProjectInput,
+    prepared: &runtime_configuration::VcePreparedRuntimeConfiguration,
+    provenance: Option<vulcan_workspace_store::vce_data_plane::VceEmbeddingProvenance>,
+) -> VcePublicationContract {
+    VcePublicationContract {
+        project_id: input.project_id.clone(),
+        canonical_root: prepared.index.root_path.clone(),
+        embedding_fingerprint: input.fingerprint.clone(),
+        dimension: input.dimension,
+        max_file_bytes: input.settings.max_file_bytes,
+        extra_ignore_patterns: input.settings.extra_ignore_patterns.clone(),
+        provenance,
+        replacement_admission: None,
     }
 }
 

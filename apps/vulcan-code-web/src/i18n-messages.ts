@@ -2329,6 +2329,7 @@ export type TranslationKey =
   | "settings.providerDescription.openai"
   | "settings.providerDescription.anthropic"
   | "settings.providerDescription.google"
+  | "settings.providerDescription.agentspace"
   | "settings.providerDescription.tokenrhythm"
   | "settings.providerName.tokenrhythm"
   | "settings.providerSummary.serviceEntries"
@@ -5643,7 +5644,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.minimax": "MiniMax 官方模型、开放平台与 Token Plan 服务。",
     "settings.providerDescription.kimi": "月之暗面开放平台与 Kimi Coding Plan 服务。",
     "settings.providerDescription.deepseek": "DeepSeek 官方模型 API 与账号服务。",
-    "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio、Coding Plan 与 Token Plan 服务。",
+    "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio 与 Token Plan 服务。",
     "settings.providerDescription.openrouter": "聚合多个模型与上游节点的统一模型路由平台。",
     "settings.providerDescription.apikeyfun": "提供多种兼容协议的第三方模型中转服务。",
     "settings.providerDescription.claudeapi": "提供 Anthropic 兼容协议的第三方模型中转服务。",
@@ -5655,6 +5656,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.openai": "OpenAI 官方模型与 Codex 账号服务。",
     "settings.providerDescription.anthropic": "Anthropic 官方 Claude 模型与 Claude Code 账号服务。",
     "settings.providerDescription.google": "Google 官方 Gemini API 与 Code Assist 服务。",
+    "settings.providerDescription.agentspace": "AgentSpace OpenAI Responses/Codex 兼容模型与 GPT Image 2 图片生成服务。",
     "settings.providerDescription.tokenrhythm": "提供静态模型目录、OpenAI Chat 兼容推理与图片生成能力的第三方模型中转服务。",
     "settings.providerName.tokenrhythm": "基元律动",
     "settings.providerSummary.serviceEntries": "{count} 个接入点",
@@ -8984,7 +8986,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.minimax": "Official MiniMax models, API platform, and Token Plan services.",
     "settings.providerDescription.kimi": "Moonshot AI platform and Kimi Coding Plan services.",
     "settings.providerDescription.deepseek": "Official DeepSeek model API and account services.",
-    "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio, Coding Plan, and Token Plan services.",
+    "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio and Token Plan services.",
     "settings.providerDescription.openrouter": "A unified model routing platform spanning multiple models and upstream endpoints.",
     "settings.providerDescription.apikeyfun": "A third-party model relay supporting multiple compatible protocols.",
     "settings.providerDescription.claudeapi": "A third-party model relay providing Anthropic-compatible access.",
@@ -8996,6 +8998,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.openai": "Official OpenAI models and Codex account services.",
     "settings.providerDescription.anthropic": "Official Anthropic Claude models and Claude Code account services.",
     "settings.providerDescription.google": "Official Google Gemini API and Code Assist services.",
+    "settings.providerDescription.agentspace": "AgentSpace OpenAI Responses/Codex-compatible models with GPT Image 2 image generation.",
     "settings.providerDescription.tokenrhythm": "A third-party model relay with a static catalog, OpenAI Chat-compatible inference, and image generation.",
     "settings.providerName.tokenrhythm": "Token Rhythm",
     "settings.providerSummary.serviceEntries": "{count} endpoints",
