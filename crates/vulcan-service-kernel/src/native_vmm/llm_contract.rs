@@ -26,8 +26,8 @@ where
     Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
-/// Projects a contract into strict host Schema; all keys are required and source-optional values are nullable.
-/// 将契约投影为严格提供方Schema；全部键必填，来源可选值允许空值，业务约束仍由Core强制校验。
+/// Projects a contract into a strict Host Schema while preserving omission semantics from Core.
+/// 将契约投影为严格提供方Schema；Optional字段允许省略，Nullable字段允许显式null，业务约束仍由Core强制校验。
 ///
 /// # Errors
 /// Returns a stable contract error if the AST contains a mixed or empty closed enumeration.
@@ -178,8 +178,13 @@ fn project_schema(schema: &SchemaAst) -> Result<HostJsonSchema, CoreError> {
                 ..HostJsonSchema::default()
             };
             for field in fields {
+                // `Optional` changes object-key presence; it must not become JSON nullability.
+                // `Optional` 改变的是对象键是否存在，不应误转成 JSON null 允许。
+                let is_optional = matches!(&field.value, SchemaAst::Optional { .. });
                 let value = project_schema(&field.value)?;
-                projected.required.push(field.name.clone());
+                if !is_optional {
+                    projected.required.push(field.name.clone());
+                }
                 if projected
                     .properties
                     .insert(field.name.clone(), value)
@@ -1254,4 +1259,38 @@ struct ProfileNodeReason {
     /// 携带显式原因。
     #[serde(default, deserialize_with = "deserialize_optional_default")]
     reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_json_schema;
+    use serde_json::json;
+    use vulcan_memorymesh_core::StructuredOutputContractId;
+
+    /// Verifies that Core-optional fields may be omitted from provider JSON.
+    /// 验证 Core 标记为 Optional 的字段可以从 Provider JSON 中省略。
+    #[test]
+    fn host_schema_allows_omitted_optional_postaction_fields() {
+        let schema_bytes = host_json_schema(StructuredOutputContractId::PostActionAnalysis)
+            .expect("PostAction schema projection should succeed");
+        let schema: serde_json::Value =
+            serde_json::from_slice(&schema_bytes).expect("projected schema must be JSON");
+        let validator = jsonschema::draft202012::new(&schema)
+            .expect("projected schema must be accepted by the JSON Schema validator");
+        let response = json!({
+            "user_input_kind": "statement",
+            "turn_id": "turn-optional-fields",
+            "memory_nodes": [{
+                "category": 4,
+                "abstract": "A requirement extracted from the turn",
+                "evidence_source": "user_asserted",
+                "admission": "keep",
+                "admission_reason": "directly stated"
+            }]
+        });
+
+        validator
+            .validate(&response)
+            .expect("omitted Optional fields must remain valid under the Host schema");
+    }
 }

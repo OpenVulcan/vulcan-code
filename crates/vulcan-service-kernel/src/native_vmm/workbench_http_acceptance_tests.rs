@@ -323,6 +323,7 @@ pub(in crate::native_vmm) async fn verify(
         before
     );
     acknowledge(root, "browser-restored");
+    lifecycle::verify_selection_matrix(&test, root, &before).await;
     lifecycle::verify(&test, root, &before).await;
     // The completed lifecycle deliberately purges only the selected synthetic session's sources.
     // 完成的生命周期刻意只永久清除所选合成会话的来源。

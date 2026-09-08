@@ -36,7 +36,11 @@ impl NativeProfileBundleFormat {
 
     /// Builds the Core view from authorized ordered sections using the frozen format.
     /// 使用冻结格式及已授权的有序分区构建 Core 视图。
-    pub(super) fn view(&self, sections: Vec<ProfileViewSection>) -> ProfileView {
+    pub(super) fn view(
+        &self,
+        sections: Vec<ProfileViewSection>,
+        display_timezone: String,
+    ) -> ProfileView {
         ProfileView {
             mode: self.mode,
             sections: sections
@@ -54,7 +58,7 @@ impl NativeProfileBundleFormat {
                 })
                 .collect(),
             include_explanations: self.include_explanations,
-            display_timezone: String::from("UTC"),
+            display_timezone,
         }
     }
 
@@ -127,7 +131,7 @@ mod tests {
         // view is the exact structure sent by the client to Core.
         // view 是客户端发送给 Core 的准确结构。
         let view = NativeProfileBundleFormat::new(ProfileBundleMode::ProfileBundleModeFull, None)
-            .view(sections);
+            .view(sections, String::from("UTC"));
         assert_eq!(view.sections[0].scope_id.as_str(), "project-1");
         assert_eq!(view.sections[1].scope_id.as_str(), "project-2");
         assert_eq!(view.sections[0].display_label, "Project (project-1)");
@@ -192,9 +196,14 @@ mod tests {
                     // format controls both the Core request and its public projection.
                     // format 同时控制 Core 请求及其公开投影。
                     let format = NativeProfileBundleFormat::new(mode, explanation);
-                    assert_eq!(format.view(Vec::new()).mode, ProfileViewMode::Full);
                     assert_eq!(
-                        format.view(Vec::new()).include_explanations,
+                        format.view(Vec::new(), String::from("UTC")).mode,
+                        ProfileViewMode::Full
+                    );
+                    assert_eq!(
+                        format
+                            .view(Vec::new(), String::from("UTC"))
+                            .include_explanations,
                         explanation.unwrap_or(false)
                     );
                     // response must never invite consumers to concatenate content twice.
@@ -229,8 +238,15 @@ mod tests {
                     ProfileBundleMode::ProfileBundleModeSplit,
                     explanation,
                 );
-                assert_eq!(format.view(Vec::new()).mode, ProfileViewMode::Split);
-                assert!(!format.view(Vec::new()).include_explanations);
+                assert_eq!(
+                    format.view(Vec::new(), String::from("UTC")).mode,
+                    ProfileViewMode::Split
+                );
+                assert!(
+                    !format
+                        .view(Vec::new(), String::from("UTC"))
+                        .include_explanations
+                );
                 // response intentionally receives a merged fixture to verify output suppression.
                 // response 有意接收带组合文本的样本，以验证输出抑制。
                 let response = format.response(bundle(project, user), String::from("trace"));
@@ -256,5 +272,15 @@ mod tests {
                 assert_eq!(response.trace_id, "trace");
             }
         }
+    }
+
+    /// Verifies the host-provided IANA timezone is preserved for Core timeline rendering.
+    /// 验证宿主提供的 IANA 时区会原样保留并用于 Core 时间线渲染。
+    #[test]
+    fn view_preserves_host_display_timezone() {
+        let view = NativeProfileBundleFormat::new(ProfileBundleMode::ProfileBundleModeFull, None)
+            .view(Vec::new(), String::from("Asia/Shanghai"));
+
+        assert_eq!(view.display_timezone, "Asia/Shanghai");
     }
 }

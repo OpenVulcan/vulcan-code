@@ -11,9 +11,11 @@ use vulcan_vmm::{ApplyProfileInstructionRequest, PostActionRequest, ProfileTarge
 /// The exact synthetic source selected by every browser management operation.
 /// 每次浏览器管理操作选择的准确合成来源。
 const SESSION: &str = "browser-native-parity-seed";
+const BATCH_SESSION: &str = "browser-native-parity-batch";
+const PRESERVED_SESSION: &str = "browser-unselected";
 
-/// Creates seven real pending turns, one independent session and two real profile nodes.
-/// 创建七个真实待提炼回合、一个独立会话和两个真实画像节点。
+/// Creates seven primary turns, two batch-session turns, one preserved turn, and two profiles.
+/// 创建七个主会话回合、两个批量会话回合、一个保留回合和两个画像。
 /// Takes the private acceptance and stable project ID; returns after normal public writes complete.
 /// 接收私有验收及稳定项目身份；普通公开写入完成后返回。
 pub(super) async fn prepare(test: &Acceptance, project: u64) {
@@ -33,13 +35,13 @@ pub(super) async fn prepare(test: &Acceptance, project: u64) {
         .update_resource_settings(settings)
         .await
         .expect("browser seed semantic isolation");
-    for index in 1..=8 {
-        // Only the eighth source belongs to the independent session that must survive all management.
-        // 仅第八个来源属于必须在全部管理操作中保持的独立会话。
-        let session = if index == 8 {
-            "browser-unselected"
-        } else {
-            SESSION
+    for index in 1..=10 {
+        // The eighth and ninth sources form the second exact batch-selection target.
+        // 第八和第九个来源组成第二个准确批量选择目标。
+        let session = match index {
+            8 | 9 => BATCH_SESSION,
+            10 => PRESERVED_SESSION,
+            _ => SESSION,
         };
         // Every operation has a distinct durable queue identity, independent of generated turn IDs.
         // 每个操作具有不同持久队列身份，独立于生成回合身份。
@@ -84,22 +86,55 @@ pub(super) async fn prepare(test: &Acceptance, project: u64) {
         .expect("browser restore resource settings");
 }
 
-/// Selects the sole known synthetic source metadata without guessing project or subject ownership.
-/// 选择唯一已知合成来源元数据，不猜测项目或主体归属。
+/// Selects one known synthetic source metadata row without guessing project ownership.
+/// 选择一个已知合成来源元数据行，不猜测项目归属。
 /// Takes a snapshot; returns its exact source metadata index, asserting uniqueness.
 /// 接收快照；返回准确来源元数据下标，并断言唯一性。
-fn session_index(snapshot: &StorageSnapshot) -> usize {
-    // This fixture creates exactly one session with this source identity across all projects.
-    // 本夹具在全部项目中只创建一个具有此来源身份的会话。
+fn session_index_for(snapshot: &StorageSnapshot, source_id: &str) -> usize {
+    // This fixture creates exactly one session with each source identity across all projects.
+    // 本夹具在全部项目中为每个来源身份只创建一个会话。
     let indices = snapshot
         .memory_sessions
         .iter()
         .enumerate()
-        .filter(|(_, session)| session.session_source_id.as_str() == SESSION)
+        .filter(|(_, session)| session.session_source_id.as_str() == source_id)
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     assert_eq!(indices.len(), 1);
     indices[0]
+}
+
+/// Selects the primary session row used by the existing lifecycle matrix.
+/// 选择既有生命周期矩阵使用的主会话行。
+fn session_index(snapshot: &StorageSnapshot) -> usize {
+    session_index_for(snapshot, SESSION)
+}
+
+/// Returns one canonical numeric turn identity from a known session and position.
+/// 从已知会话及位置返回一个规范数字回合身份。
+fn turn_id_for(snapshot: &StorageSnapshot, source_id: &str, position: usize) -> String {
+    // The browser project overview orders these Core numeric turn identities chronologically;
+    // the durable snapshot itself is not the UI ordering contract.
+    // 浏览器项目总览按 Core 数字回合身份按时间顺序展示；持久快照本身不是 UI 排序契约。
+    let mut turn_ids = snapshot
+        .dataset
+        .turns
+        .iter()
+        .filter(|turn| turn.session_source_id.as_str() == source_id)
+        .map(|turn| {
+            (
+                crate::native_vmm::client::parse_core_numeric_id(&turn.id, "vmm-turn-")
+                    .expect("numeric browser turn"),
+                turn.id.to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    turn_ids.sort_by_key(|(numeric_id, _)| *numeric_id);
+    turn_ids
+        .into_iter()
+        .nth(position)
+        .map(|(_, turn_id)| turn_id)
+        .expect("known browser turn")
 }
 
 /// Confirms both relational durability and the absence of unsolicited model or embedding work.
@@ -164,7 +199,29 @@ fn recycled(
     // Compare the sole new batch separately before accepting its generated identity and timestamp.
     // 接受生成身份和时间戳前，独立比较唯一新增批次。
     assert!(before.retention_trash_batches.is_empty());
-    assert_eq!(actual.retention_trash_batches.len(), 1);
+    assert_eq!(
+        actual.retention_trash_batches.len(),
+        1,
+        "browser session recycle snapshot: version={}, sessions={:?}, active_turns={}, active_memories={}, batches={:?}",
+        actual.storage_version,
+        actual
+            .memory_sessions
+            .iter()
+            .map(|session| (session.session_source_id.as_str(), session.status))
+            .collect::<Vec<_>>(),
+        actual.dataset.turns.len(),
+        actual.dataset.memories.len(),
+        actual
+            .retention_trash_batches
+            .iter()
+            .map(|batch| (
+                batch.batch_id.as_str(),
+                batch.reason,
+                batch.dataset.turns.len(),
+                batch.dataset.memories.len()
+            ))
+            .collect::<Vec<_>>(),
+    );
     let batch = &actual.retention_trash_batches[0];
     assert!(batch.batch_id.starts_with("manual:"));
     assert_eq!(batch.subject_id, before.memory_sessions[index].subject_id);
@@ -213,6 +270,207 @@ fn recycled(
     actual
 }
 
+/// Verifies real workbench selection of multiple sessions and turns before the single-session matrix.
+/// 在单会话矩阵前验证真实工作台的多会话及多回合选择。
+/// Takes the baseline snapshot and requires every browser phase to return to that exact baseline.
+/// 接收基线快照，并要求每个浏览器阶段都恢复到该准确基线。
+pub(super) async fn verify_selection_matrix(
+    test: &Acceptance,
+    root: &Path,
+    before: &StorageSnapshot,
+) {
+    // Three independent source sessions make cross-session selection observable.
+    // 三个独立来源会话使跨会话选择可被准确观察。
+    assert_eq!(before.memory_sessions.len(), 3);
+    assert_eq!(before.dataset.turns.len(), 10);
+    assert_eq!(before.dataset.memories.len(), 3);
+    assert!(before.retention_trash_batches.is_empty());
+    let jobs = test
+        .data_plane
+        .list_active_pending_analysis_jobs()
+        .await
+        .expect("browser selection baseline queue");
+    assert_eq!(jobs.len(), 10);
+    let inference = (
+        test.port
+            .requests
+            .lock()
+            .expect("browser selection inference baseline")
+            .len(),
+        test.port
+            .embedding_requests
+            .lock()
+            .expect("browser selection embedding baseline")
+            .len(),
+    );
+
+    browser_phase(root, "browser-batch-recycled").await;
+    let batch_recycled = test
+        .runtime
+        .storage_snapshot()
+        .expect("browser batch recycled");
+    assert_eq!(batch_recycled.storage_version, before.storage_version + 1);
+    assert_eq!(batch_recycled.retention_trash_batches.len(), 1);
+    let batch = &batch_recycled.retention_trash_batches[0];
+    assert_eq!(
+        batch.reason,
+        vulcan_memorymesh_core::RetentionReasonCode::ManualSessionRecycle
+    );
+    let selected_session_rows = before
+        .memory_sessions
+        .iter()
+        .filter(|session| [SESSION, BATCH_SESSION].contains(&session.session_source_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        batch.manual_selection,
+        Some(StorageManualRecycleSelection::Sessions {
+            sessions: selected_session_rows,
+        })
+    );
+    let selected_turn_ids = before
+        .dataset
+        .turns
+        .iter()
+        .filter(|turn| [SESSION, BATCH_SESSION].contains(&turn.session_source_id.as_str()))
+        .map(|turn| turn.id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        batch
+            .dataset
+            .turns
+            .iter()
+            .map(|turn| turn.id.clone())
+            .collect::<BTreeSet<_>>(),
+        selected_turn_ids
+    );
+    assert_eq!(batch.dataset.memories.len(), 3);
+    assert_eq!(batch_recycled.dataset.turns.len(), 1);
+    assert!(batch_recycled.dataset.memories.is_empty());
+    for source_id in [SESSION, BATCH_SESSION] {
+        assert_eq!(
+            batch_recycled.memory_sessions[session_index_for(before, source_id)].status,
+            StorageSessionStatus::Recycled
+        );
+    }
+    assert_eq!(
+        batch_recycled.memory_sessions[session_index_for(before, PRESERVED_SESSION)].status,
+        StorageSessionStatus::Active
+    );
+    assert_eq!(
+        test.data_plane
+            .list_active_pending_analysis_jobs()
+            .await
+            .expect("browser batch queue"),
+        jobs
+    );
+    assert_eq!(
+        (
+            test.port.requests.lock().expect("batch LLM count").len(),
+            test.port
+                .embedding_requests
+                .lock()
+                .expect("batch embedding count")
+                .len(),
+        ),
+        inference
+    );
+    acknowledge(root, "browser-batch-recycled");
+
+    browser_phase(root, "browser-batch-restored").await;
+    let mut expected = before.clone();
+    expected.storage_version += 2;
+    assert_eq!(
+        test.runtime
+            .storage_snapshot()
+            .expect("browser batch restored"),
+        expected
+    );
+    assert_eq!(
+        test.data_plane
+            .list_active_pending_analysis_jobs()
+            .await
+            .expect("browser restored batch queue"),
+        jobs
+    );
+    acknowledge(root, "browser-batch-restored");
+
+    let mut selected_turn_ids = vec![
+        turn_id_for(before, SESSION, 0),
+        turn_id_for(before, BATCH_SESSION, 0),
+    ];
+    selected_turn_ids.sort();
+    let selected_turn_id_values = selected_turn_ids
+        .iter()
+        .cloned()
+        .map(|id| vulcan_memorymesh_core::TurnId::new(id).expect("browser selected turn"))
+        .collect::<Vec<_>>();
+    browser_phase(root, "browser-turns-recycled").await;
+    let turns_recycled = test
+        .runtime
+        .storage_snapshot()
+        .expect("browser turns recycled");
+    // The batch recycle/restore pair already committed two versions before this turn recycle.
+    // 批量回收/恢复已经在本回合回收前提交两个版本。
+    assert_eq!(turns_recycled.storage_version, before.storage_version + 3);
+    assert_eq!(turns_recycled.retention_trash_batches.len(), 1);
+    let turn_batch = &turns_recycled.retention_trash_batches[0];
+    assert_eq!(
+        turn_batch.reason,
+        vulcan_memorymesh_core::RetentionReasonCode::ManualTurnRecycle
+    );
+    assert_eq!(
+        turn_batch.manual_selection,
+        Some(StorageManualRecycleSelection::Turns {
+            turn_ids: selected_turn_id_values,
+        })
+    );
+    assert_eq!(
+        turn_batch
+            .dataset
+            .turns
+            .iter()
+            .map(|turn| turn.id.to_string())
+            .collect::<Vec<_>>(),
+        selected_turn_ids
+    );
+    assert!(turn_batch.dataset.memories.is_empty());
+    assert_eq!(turns_recycled.dataset.turns.len(), 8);
+    assert_eq!(turns_recycled.dataset.memories.len(), 3);
+    assert!(
+        turns_recycled
+            .memory_sessions
+            .iter()
+            .all(|session| session.status == StorageSessionStatus::Active)
+    );
+    assert_eq!(
+        test.data_plane
+            .list_active_pending_analysis_jobs()
+            .await
+            .expect("browser turn queue"),
+        jobs
+    );
+    acknowledge(root, "browser-turns-recycled");
+
+    browser_phase(root, "browser-turns-restored").await;
+    expected = before.clone();
+    expected.storage_version += 4;
+    assert_eq!(
+        test.runtime
+            .storage_snapshot()
+            .expect("browser turns restored"),
+        expected
+    );
+    assert_eq!(
+        test.data_plane
+            .list_active_pending_analysis_jobs()
+            .await
+            .expect("browser restored turn queue"),
+        jobs
+    );
+    acknowledge(root, "browser-turns-restored");
+}
+
 /// Verifies browser-driven archive, unarchive, recycle, restore, purge and explicit restart.
 /// 验证浏览器驱动的归档、取消归档、回收、恢复、永久清除及明确重新启用。
 /// Takes private state and the prepared baseline; every phase checks durable whole-state changes and queues.
@@ -221,8 +479,8 @@ pub(super) async fn verify(test: &Acceptance, root: &Path, before: &StorageSnaps
     // Both profile roles must be nonempty before source removal begins.
     // 来源移除开始前，两类画像必须非空。
     assert_eq!(before.dataset.profile_nodes.len(), 2);
-    assert_eq!(before.dataset.turns.len(), 8);
-    assert_eq!(before.memory_sessions.len(), 2);
+    assert_eq!(before.dataset.turns.len(), 10);
+    assert_eq!(before.memory_sessions.len(), 3);
     assert!(before.dataset.context_evidence.is_empty());
     assert!(before.analysis_attempts.is_empty());
     // Resolve the actual physical vector owner and retain exact values before any source move.
@@ -253,14 +511,14 @@ pub(super) async fn verify(test: &Acceptance, root: &Path, before: &StorageSnaps
         .await
         .expect("browser original physical vectors");
     assert_eq!(vectors.len(), 3);
-    // All eight operations came from real intake, and management may not replay their content.
-    // 八个操作均来自真实入库，管理不得重放其正文。
+    // All ten operations came from real intake, and management may not replay their content.
+    // 十个操作均来自真实入库，管理不得重放其正文。
     let jobs = test
         .data_plane
         .list_active_pending_analysis_jobs()
         .await
         .expect("browser prepared queue");
-    assert_eq!(jobs.len(), 8);
+    assert_eq!(jobs.len(), 10);
     // Release capture locks before any browser wait or asynchronous storage call.
     // 在任何浏览器等待或异步存储调用前释放捕获锁。
     let inference = (
@@ -277,7 +535,10 @@ pub(super) async fn verify(test: &Acceptance, root: &Path, before: &StorageSnaps
     );
     // Lifecycle classification changes only status and the committed transform version.
     // 生命周期分类只改变状态及已提交转换版本。
+    // The selection matrix has already completed two recycle/restore round trips before this lifecycle begins.
+    // 前面的选择矩阵已经完成两次回收/恢复往返，因此本生命周期必须从累计版本基线开始。
     let mut expected = before.clone();
+    expected.storage_version += 4;
     let index = session_index(before);
     for (phase, status) in [
         ("browser-archived", StorageSessionStatus::Archived),
@@ -390,7 +651,9 @@ pub(super) async fn verify(test: &Acceptance, root: &Path, before: &StorageSnaps
                 .iter()
                 .any(|version| purged_ids.contains(&version.domain_id))
     });
-    assert_eq!(expected.outcomes.len(), 3);
+    // The seven seed-turn receipts are removed, while the two profile instruction receipts remain because profile nodes are retained.
+    // 七条种子回合回执会被移除，但两条画像指令回执因画像节点保留而继续存在。
+    assert_eq!(expected.outcomes.len(), 5);
     expected.retention_trash_batches.clear();
     expected.memory_sessions[index].status = StorageSessionStatus::Forgotten;
     persisted(test, &expected, inference).await;
@@ -414,15 +677,27 @@ pub(super) async fn verify(test: &Acceptance, root: &Path, before: &StorageSnaps
             "VMM LanceDB 缺少 Core 快照引用的记忆向量"
         );
     }
-    // The single unselected queue row remains exact, while restart must create no replacement jobs.
-    // 唯一未选择队列行保持准确，而重新启用不得创建替代作业。
+    // The three unselected queue rows remain exact, while restart must create no replacement jobs.
+    // 三个未选择队列行保持准确，而重新启用不得创建替代作业。
     let remaining = test
         .data_plane
         .list_active_pending_analysis_jobs()
         .await
         .expect("browser remaining queue");
-    assert_eq!(remaining.len(), 1);
-    assert!(jobs.contains(&remaining[0]));
+    assert_eq!(
+        remaining.len(),
+        3,
+        "browser remaining queue ids: {:?}",
+        remaining
+            .iter()
+            .map(|job| (
+                job.operation_id.as_str(),
+                job.turn_id.as_deref(),
+                job.state.as_str()
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert!(remaining.iter().all(|job| jobs.contains(job)));
     acknowledge(root, "browser-purged");
     browser_phase(root, "browser-restarted").await;
     expected.storage_version += 1;

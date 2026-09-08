@@ -6978,6 +6978,7 @@ name = "vulcan-memorymesh-core"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "chrono",
  "serde",
  "serde_json",
  "vulcan-memorymesh-core-config",
@@ -7201,6 +7202,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "hex",
+ "iana-time-zone",
  "ignore",
  "jsonschema",
  "keyring",

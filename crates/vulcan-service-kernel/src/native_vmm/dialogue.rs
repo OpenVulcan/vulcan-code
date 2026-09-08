@@ -73,6 +73,25 @@ pub(super) fn native_turn_dialogue(turn: &Turn) -> Result<NativeTurnDialogue, Co
     })
 }
 
+/// Applies Go encoding/json's five additional string escapes to already valid serialized JSON.
+/// 对已合法序列化的 JSON 应用 Go encoding/json 的五种额外字符串转义。
+pub(super) fn escape_business_json(serialized: String) -> String {
+    // These characters cannot form JSON structural syntax; literal backslash escapes remain untouched.
+    // 这些字符不构成 JSON 结构语法；字面反斜杠转义保持不变。
+    let mut escaped = String::with_capacity(serialized.len());
+    for character in serialized.chars() {
+        match character {
+            '<' => escaped.push_str("\\u003c"),
+            '>' => escaped.push_str("\\u003e"),
+            '&' => escaped.push_str("\\u0026"),
+            '\u{2028}' => escaped.push_str("\\u2028"),
+            '\u{2029}' => escaped.push_str("\\u2029"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 /// Creates a stable model-facing diagnostic without echoing private conversation text.
 /// 构造稳定的面向模型诊断，不回显私有对话文本。
 fn invalid_timeline() -> CoreError {

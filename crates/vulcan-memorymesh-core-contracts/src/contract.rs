@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Versions the strict provider projection rules included in every output-contract digest.
+/// Version 2 preserves `SchemaAst::Optional` as object-key omission instead of `required`.
 /// 为纳入每个输出契约摘要的严格提供方投影规则标记版本。
-pub const PROVIDER_SCHEMA_PROJECTION_VERSION: u32 = 1;
+pub const PROVIDER_SCHEMA_PROJECTION_VERSION: u32 = 2;
 
 /// Identifies one closed structured-output contract owned by Core.
 /// 标识一个由 Core 拥有的封闭结构化输出契约。

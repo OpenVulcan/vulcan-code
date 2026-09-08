@@ -1,0 +1,227 @@
+[
+  {
+    "timezone": "UTC",
+    "nodes": [],
+    "rendered": ""
+  },
+  {
+    "timezone": "UTC",
+    "nodes": [
+      {
+        "content": "ordinary 中文事实",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 2,
+        "level": 0,
+        "weight": 0
+      },
+      {
+        "content": "冬季事实",
+        "anchor": "2026-01-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 1,
+        "weight": 0
+      },
+      {
+        "content": "confirmed",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 3
+      },
+      {
+        "content": "hard later",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-02T00:00:00Z",
+        "priority": 0,
+        "level": 3,
+        "weight": 1
+      },
+      {
+        "content": "hard first",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 0,
+        "level": 3,
+        "weight": 1
+      },
+      {
+        "content": "before midnight",
+        "anchor": "2026-09-06T15:59:59.999999999Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      },
+      {
+        "content": "after midnight",
+        "anchor": "2026-09-06T16:00:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      },
+      {
+        "content": "creation anchor",
+        "anchor": "",
+        "created": "2026-09-06T16:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      }
+    ],
+    "rendered": "2026-01-15:\n[P1][L1][W0] 冬季事实\n\n2026-07-15:\n[P0][L3][W1] hard first\n[P0][L3][W1] hard later\n[P1][L2][W3] confirmed\n[P2][L0][W0] ordinary 中文事实\n\n2026-09-06:\n[P1][L2][W0] after midnight\n[P1][L2][W0] before midnight\n[P1][L2][W0] creation anchor"
+  },
+  {
+    "timezone": "Asia/Shanghai",
+    "nodes": [],
+    "rendered": ""
+  },
+  {
+    "timezone": "Asia/Shanghai",
+    "nodes": [
+      {
+        "content": "ordinary 中文事实",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 2,
+        "level": 0,
+        "weight": 0
+      },
+      {
+        "content": "冬季事实",
+        "anchor": "2026-01-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 1,
+        "weight": 0
+      },
+      {
+        "content": "confirmed",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 3
+      },
+      {
+        "content": "hard later",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-02T00:00:00Z",
+        "priority": 0,
+        "level": 3,
+        "weight": 1
+      },
+      {
+        "content": "hard first",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 0,
+        "level": 3,
+        "weight": 1
+      },
+      {
+        "content": "before midnight",
+        "anchor": "2026-09-06T15:59:59.999999999Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      },
+      {
+        "content": "after midnight",
+        "anchor": "2026-09-06T16:00:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      },
+      {
+        "content": "creation anchor",
+        "anchor": "",
+        "created": "2026-09-06T16:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      }
+    ],
+    "rendered": "2026-01-15:\n[P1][L1][W0] 冬季事实\n\n2026-07-15:\n[P0][L3][W1] hard first\n[P0][L3][W1] hard later\n[P1][L2][W3] confirmed\n[P2][L0][W0] ordinary 中文事实\n\n2026-09-06:\n[P1][L2][W0] before midnight\n\n2026-09-07:\n[P1][L2][W0] after midnight\n[P1][L2][W0] creation anchor"
+  },
+  {
+    "timezone": "America/New_York",
+    "nodes": [],
+    "rendered": ""
+  },
+  {
+    "timezone": "America/New_York",
+    "nodes": [
+      {
+        "content": "ordinary 中文事实",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 2,
+        "level": 0,
+        "weight": 0
+      },
+      {
+        "content": "冬季事实",
+        "anchor": "2026-01-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 1,
+        "weight": 0
+      },
+      {
+        "content": "confirmed",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 3
+      },
+      {
+        "content": "hard later",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-02T00:00:00Z",
+        "priority": 0,
+        "level": 3,
+        "weight": 1
+      },
+      {
+        "content": "hard first",
+        "anchor": "2026-07-15T04:30:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 0,
+        "level": 3,
+        "weight": 1
+      },
+      {
+        "content": "before midnight",
+        "anchor": "2026-09-06T15:59:59.999999999Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      },
+      {
+        "content": "after midnight",
+        "anchor": "2026-09-06T16:00:00Z",
+        "created": "2026-01-01T00:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      },
+      {
+        "content": "creation anchor",
+        "anchor": "",
+        "created": "2026-09-06T16:00:00Z",
+        "priority": 1,
+        "level": 2,
+        "weight": 0
+      }
+    ],
+    "rendered": "2026-01-14:\n[P1][L1][W0] 冬季事实\n\n2026-07-15:\n[P0][L3][W1] hard first\n[P0][L3][W1] hard later\n[P1][L2][W3] confirmed\n[P2][L0][W0] ordinary 中文事实\n\n2026-09-06:\n[P1][L2][W0] after midnight\n[P1][L2][W0] before midnight\n[P1][L2][W0] creation anchor"
+  }
+]

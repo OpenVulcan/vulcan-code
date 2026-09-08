@@ -39,6 +39,11 @@ use vulcan_memorymesh_core::{
 #[path = "support/review_context.rs"]
 mod review_context;
 
+// Runs external-generated profile timeline evidence through the existing public query fixture.
+// 通过既有公共查询夹具执行外置生成的画像时间线证据。
+#[path = "support/profile_timeline_parity.rs"]
+mod profile_timeline_parity;
+
 /// Preserves the existing fixture's readable scopes while explicitly allowing replacement only in its primary write scope.
 /// 保留既有用例的可读范围，同时仅显式允许替代其主要写作用域。
 fn fixture_replacement_scope(

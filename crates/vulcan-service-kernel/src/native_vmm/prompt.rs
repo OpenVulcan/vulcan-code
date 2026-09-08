@@ -123,7 +123,7 @@ pub(super) fn render_llm_input_at(
                     .map_err(prompt_serialization_error)?;
             // Estimate the compact emitted object, including keys, quoting, escapes, and middle-item wrappers.
             // 估算实际输出的紧凑对象，包含键、引号、转义及中间条目包装。
-            let target_json = escape_postaction_json(
+            let target_json = super::dialogue::escape_business_json(
                 serde_json::to_string(&raw_turn).map_err(prompt_serialization_error)?,
             );
             let references =
@@ -207,31 +207,10 @@ pub(super) fn render_llm_input_at(
     // Keep emitted bytes and budget bytes aligned without changing other prompt contracts.
     // 保持输出字节与预算字节一致，不改变其他提示词契约。
     if matches!(input, LlmInput::PostActionAnalysis { .. }) {
-        Ok(escape_postaction_json(serialized))
+        Ok(super::dialogue::escape_business_json(serialized))
     } else {
         Ok(serialized)
     }
-}
-
-/// Applies Go encoding/json's five additional string escapes to already valid serialized JSON.
-/// 对已合法序列化的 JSON 应用 Go encoding/json 的五种额外字符串转义。
-/// Accepts encoded JSON and returns semantically identical JSON with external-compatible token costs.
-/// 接收已编码 JSON，返回语义相同且 Token 成本与外置兼容的 JSON。
-fn escape_postaction_json(serialized: String) -> String {
-    // These characters cannot form JSON structural syntax; literal backslash escapes remain untouched.
-    // 这些字符不构成 JSON 结构语法；字面反斜杠转义保持不变。
-    let mut escaped = String::with_capacity(serialized.len());
-    for character in serialized.chars() {
-        match character {
-            '<' => escaped.push_str("\\u003c"),
-            '>' => escaped.push_str("\\u003e"),
-            '&' => escaped.push_str("\\u0026"),
-            '\u{2028}' => escaped.push_str("\\u2028"),
-            '\u{2029}' => escaped.push_str("\\u2029"),
-            _ => escaped.push(character),
-        }
-    }
-    escaped
 }
 
 /// Projects serialization failures into a stable effect error without exposing source dialogue.

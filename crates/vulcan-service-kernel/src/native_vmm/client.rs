@@ -7,6 +7,9 @@ use super::NativeVmmCoreRuntime;
 pub(super) mod pending_analysis_acceptance_tests;
 #[path = "post_action.rs"]
 mod post_action;
+#[cfg(test)]
+#[path = "real_model_acceptance_tests.rs"]
+mod real_model_acceptance_tests;
 #[path = "session_admission.rs"]
 mod session_admission;
 use super::analysis_queue::{recycled_analysis_turn, select_ordered_due_analysis_jobs};
@@ -985,6 +988,7 @@ impl VmmClient for NativeVmmClient {
         memory_read_source_from_access(&access)?
             .verify_expected(request.expected_read_source.as_ref())?;
         let sections = profile_sections(request.target, &access, request.user_id)?;
+        let display_timezone = native_profile_display_timezone()?;
         let bundle = self
             .query_profile(
                 request.user_id,
@@ -992,7 +996,7 @@ impl VmmClient for NativeVmmClient {
                     ProfileBundleMode::ProfileBundleModeFull,
                     Some(false),
                 )
-                .view(sections),
+                .view(sections, display_timezone),
             )
             .await?;
         let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
@@ -1020,17 +1024,17 @@ impl VmmClient for NativeVmmClient {
         // format freezes mutually exclusive output and explanation semantics before Core dispatch.
         // format 在派发 Core 前冻结互斥输出及说明语义。
         let format = NativeProfileBundleFormat::new(request.mode, request.include_explanation);
+        let display_timezone = native_profile_display_timezone()?;
         let access = self
             .project_access(request.host_project_id.as_str(), request.project_id)
             .await?;
         let bundle = self
             .query_profile(
                 request.user_id,
-                format.view(profile_sections(
-                    ProfileTarget::ProfileTargetAll,
-                    &access,
-                    request.user_id,
-                )?),
+                format.view(
+                    profile_sections(ProfileTarget::ProfileTargetAll, &access, request.user_id)?,
+                    display_timezone,
+                ),
             )
             .await?;
         Ok(format.response(bundle, native_trace_id("profile-bundle")))
@@ -2010,6 +2014,17 @@ fn now_ns() -> Result<i64, VmmClientError> {
     })
 }
 
+/// Resolves the process-local IANA timezone used by the external profile renderer.
+/// 解析外置画像渲染器使用的进程本地 IANA 时区。
+fn native_profile_display_timezone() -> Result<String, VmmClientError> {
+    iana_time_zone::get_timezone().map_err(|error| {
+        VmmClientError::new(
+            "native_profile_timezone",
+            format!("failed to resolve the local IANA timezone: {error}"),
+        )
+    })
+}
+
 /// Formats one Unix nanosecond timestamp as RFC 3339 for the legacy display projection.
 /// 将一个 Unix 纳秒时间戳格式化为旧展示投影使用的 RFC 3339 文本。
 fn format_unix_ns(value: i64) -> String {
@@ -2430,7 +2445,7 @@ fn precheck_turn_context(turn: Turn) -> Result<PreCheckTurnContext, VmmClientErr
     Ok(PreCheckTurnContext {
         turn_id,
         content_type: PreCheckTurnContentType::RawTurn,
-        content,
+        content: super::dialogue::escape_business_json(content),
     })
 }
 
@@ -2592,6 +2607,18 @@ fn memory_level(value: i32) -> Result<Option<MemoryLevel>, VmmClientError> {
 mod tests {
     use super::*;
     use vulcan_vmm::PostActionRequest;
+
+    /// Verifies profile queries use the operating system's IANA timezone provider without fallback.
+    /// 验证画像查询使用操作系统的 IANA 时区提供器，且不会静默回退。
+    #[test]
+    fn native_profile_display_timezone_matches_iana_provider() {
+        let expected = iana_time_zone::get_timezone().expect("local IANA timezone");
+
+        assert_eq!(
+            native_profile_display_timezone().expect("native profile timezone"),
+            expected
+        );
+    }
 
     /// Verifies the process-local client cannot open a second native user namespace.
     /// 验证进程内客户端不能打开第二个原生用户命名空间。

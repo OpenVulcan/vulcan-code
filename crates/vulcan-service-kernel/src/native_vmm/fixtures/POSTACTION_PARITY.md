@@ -1,5 +1,16 @@
 # 外置业务载荷与历史预算对照
 
+## PreCheck 混合历史
+
+- 生成入口：`precheck_oracle_test.go`，在同一只读覆盖层中映射为外置 `internal/app/usecase/native_precheck_oracle_test.go`，同时保留 PostAction 映射以共享测试预算类型。
+- 通过外置真实清洗、业务序列化、历史预算及上下文方法生成 `precheck_history.json`：四个混合状态上下文、十个正数预算边界。存储行交付使用外置既有测试桩，不代表外置物理存储验收。
+- 在外置仓库执行 `rtk proxy go test -overlay <覆盖层文件> -p 4 -parallel 1 -count 1 ./internal/app/usecase -run '^TestNativeParityPrecheckOracle$' -v`，环境变量 `VULCAN_PRECHECK_ORACLE_OUTPUT` 指定输出。独立再生成使用私有临时文件，不覆盖编译输入。
+- 原生入口：`real_controller_precheck_history_policy_preserves_mixed_turns` 经真实客户端入库、后台队列、公开策略保存与实际 L1 捕获，前两条完成提炼、后两条保留待提炼；完整正文字节及历史身份均比较。仅将样本来源序号映射为实际接纳的 Turn ID，不归一掉转义差异。
+- 首轮真实对照失败：两个 RAW_TURN 正文不一致，预算 244、289、334 各多选一条历史。共享业务 JSON 转义修复后，完整目标 1 项通过（17.86 秒）；DETAILS、字面反斜杠、原始持久回合、待分析队列、调用方隔离与准入冻结均保留。
+- 2026-09-07 独立再生成 1 项通过（外置包 0.040 秒），两份 SHA256 均为 `824729a3c3f10f762d42063d505b826bc935da7a8135b7ebff6da30d780592b0`。这不是全部 PreCheck 阶段、完整宿主启动或真实模型质量验收。
+
+## PostAction 业务载荷
+
 - 基线：外置仓库 `D:/openvulcan/VulcanMemoryMesh`，提交 `82f05fa5e3c7657e770fefd84e220fba5654ce07`。
 - 生成入口：同目录 `postaction_oracle_test.go`，通过 Go 的只读覆盖层作为外置 `internal/app/usecase/native_parity_oracle_test.go` 编译。直接调用外置真实包中的 `buildPostActionTurnPayload`、`estimatePostActionTextBudget`、`trimHistoryTurnsByBudget`，没有复制或改写算法。目标优先分支按已核对的 `buildTurnAnalysisInputWithResolvedTime` 执行。
 - 覆盖层把上述虚拟路径映射到本目录测试文件；生成命令在外置仓库执行：`rtk proxy go test -overlay <覆盖层文件> -p 4 -parallel 1 -count 1 ./internal/app/usecase -run '^TestNativeParityPostActionOracle$' -v`。环境变量 `VULCAN_PARITY_ORACLE_OUTPUT` 指定本目录 `postaction_payload.json` 的绝对路径。

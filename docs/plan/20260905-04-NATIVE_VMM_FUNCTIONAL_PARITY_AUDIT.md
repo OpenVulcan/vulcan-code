@@ -1,6 +1,115 @@
 # 原生记忆功能对齐实施与审核台账
 
+## 2026-09-08 当前树第 1 轮功能收尾复验终态
+
+- 当前树原生 VMM 串行全量复验：`cargo test -p vulcan-service-kernel --lib native_vmm:: -- --test-threads=1`，**135 项通过、0 项失败、3 项忽略、964 项过滤，499.24 秒**，进程正常退出。
+- 真实控制器非空分析主链：**1 项通过、0 项失败、39.47 秒**；外置对应业务基线：5 个包 **591 项通过、0 项失败**。
+- 保存路由真实模型连续 5 次：**5/5 最终 Completed、0 次 AnalysisBypassed/Corrupted、0 项测试失败**；首轮直接完成 4/5（80%），1/5 在 `attempt_count=1` 后按既定队列策略重试成功。该结果证明功能链路可完成，但不把模型首轮结构化输出质量宣称为零错误。
+- 当前树静态检查：`git diff --check`、`cargo fmt --all -- --check`、`cargo clippy -p vulcan-service-kernel --lib -- -D warnings`、`cargo check --workspace --all-targets` 均通过；工作区全量 Clippy 仍有其他并行模块既有测试诊断，未越界修改。
+- 本轮补跑当前树 Core 公共流程 **54 项通过**；外置同范围业务基线 **591 项通过、0 项失败（5 个包）**；前端 Vitest **177 个文件通过、1 个跳过，1065 项通过、1 项跳过**；前端 TypeScript 检查通过。
+- 当前树工作区全量 `cargo test --workspace --all-targets --no-fail-fast` 终态：**4694 项通过、0 项失败、29 项忽略（81 个测试套件，331.86 秒）**；该结果包含新增真实模型测试的编译接线，但忽略项仍需按各自授权/外部资源条件单独解释。
+- 内置浏览器真实写入验收、供应商/API/模型动态读取约束和临时数据隔离均已保留；测试文件没有写死供应商、API 地址、凭据或模型。
+- 以上已关闭“当前代码没有最新全量证据”的缺口；A-H 交叉矩阵、外置业务基线、真实模型样本统计和当前工作树范围审核均已登记。连续清洁审核已完成 **5/5**；已知的并行模块 Clippy 诊断、29 项显式忽略测试和真实模型首轮重试率均作为边界记录，不属于本轮原生 VMM 代码缺陷。
+
+## 2026-09-08 A—H 当前树交叉验收矩阵
+
+| 工作包 | 原生实际入口与断言 | 外置/共享对应证据 | 当前结论 |
+| --- | --- | --- | --- |
+| A 全文与融合 | `real_controller_lexical_driver_pages_and_tracks_mutations`、`real_controller_hybrid_policy_controls_physical_search`、`lexical::bm25_contract_and_projection_match_external_rank_scoring` | `TestRealSQLiteLexicalRecallReturnsRankedHits`、`TestMemoryUseCaseSearch*` 全量真实 SQLite FTS/融合/Rerank/MMR 测试 | 真实索引、候选过滤、评分投影和生命周期入口均已执行 |
+| B PostAction 载荷与清洗 | `postaction_parity_tests::*`、`real_controller_text_policy_preserves_admitted_fragments`、非空提炼链 | 外置生产函数生成 `postaction_payload.json`，SHA256 `be751edcd87137c0aadbcede47c132ecd8932a2e17f211e00bde2d794a3404f8`；外置 `postaction_*`、`textutil` 测试 | 业务 JSON、预算、清洗和真实入库均通过；允许的数字 ID 映射已登记 |
+| C 提取观察水位 | `real_controller_nonempty_analysis_materializes_memory_and_profiles`、`pending_analysis_acceptance_tests::*`、队列/迁移/重试测试 | 外置 `postaction_analysis`、`postaction_queue` 及 SQLite 水位相关测试 | 非空提炼、成功推进、失败重试、迁移后继续提炼均通过 |
+| D 详情邻接窗口 | `turn_details::*`、`turn_details_acceptance_tests::*`、`turn_details_recycle_acceptance_tests::*` | 外置 `TestMemoryUseCaseGetTurnsPreservesRequestedOrder`、详情/管理测试 | 前后数字 ID 窗口、同 Session/项目隔离、回收/迁移边界通过 |
+| E Session/Turn 管理 | `real_controller_native_workbench_over_http`，覆盖批量、按 Turn、归档、回收、恢复、永久清除、重新启用 | 外置 `TestManagement*`、`TestRetention*` 及全量外置管理测试 | 内置浏览器真实写入与后端持久终态一致；画像保留和旧回合不复活通过 |
+| F 策略与维护 | `policy_http_*`、`real_controller_policy_components_over_http`、`retention_worker_tests::*`、项目覆盖与冻结策略测试 | 外置 `TestRetention*`、`TestPreCheck*`、检索策略测试 | 保存、解析、命令快照、周期/人工维护和项目隔离通过 |
+| G 检索来源与提示词语义 | `precheck_origin_acceptance_tests::*`、`prompt::*`、PostAction/PreCheck Oracle | 外置 `TestDescribePreCheckMemoryOrigin*`、`precheck_origin_test`；PreCheck SHA256 `824729a3c3f10f762d42063d505b826bc935da7a8135b7ebff6da30d780592b0` | 来源来自实际阶段记录，PreCheck 混合历史/预算和提示词字段通过 |
+| H Profile Full/Split 与时间线 | `profile_bundle::*`、`real_controller_profile_bundles_preserve_scope_and_mode`、真实模型 Full/Split | 外置 `profile_timeline.json` 六场景 Oracle；Core 公共流程逐字节对照，时间线 SHA256 `b93254d3b6c01a99b2f339883c8ab7422a986f53e11d30e15db3391394912eb3` | Full/Split 互斥、项目身份、用户/项目隔离、IANA 时区和时间线排序通过 |
+
+矩阵中的 B、G、H 使用外置生产函数直接生成的样本做字节/成本/选择结果对照；A、C、D、E、F 使用相同业务场景约束下的真实存储、队列、服务和页面状态对照，不把跨实现的物理 ID 或存储布局误称为相等。当前树全量 Rust、外置 5 包、Core、前端和真实浏览器结果均为零失败；剩余门禁从“功能是否有当前证据”转为最终变更范围审核和连续五轮清洁审核。
+
+## 2026-09-08 连续五轮完整代码审核结论
+
+| 轮次 | 覆盖重点 | 结果 |
+| --- | --- | --- |
+| 第 1 轮 | 当前工作树生产差异、A-H 原生整组、B/G/H Oracle、Core、外置和前端基线 | 无代码问题；一次未命中测试筛选器已用准确测试名重跑通过，不计为产品问题 |
+| 第 2 轮 | Host Schema Optional 语义、契约摘要版本、IANA 时区、真实 Provider/API/凭据扫描 | Schema 1 项、Core 契约 4 项、时区 1 项通过；未发现固定 Provider、API、凭据或模型 |
+| 第 3 轮 | 维护、画像、全文/队列静态边界、格式和差异检查、测试安全调用 | 维护 52 项、画像 4 项通过；格式、当前差异、基线差异均通过；新增验收文件无危险 `unwrap`/`todo`/`unimplemented` |
+| 第 4 轮 | 外置五包、前端 Vitest、架构门禁、TypeScript 检查 | 外置 591 项通过；前端 177 个文件/1065 项通过，架构 6 项通过，类型检查通过 |
+| 第 5 轮 | 当前树工作区全量回归及最终边界复核 | `cargo test --workspace --all-targets --no-fail-fast` 为 **4694 通过、0 失败、29 忽略、81 套件、339.50 秒**；无新增问题 |
+
+五轮均覆盖 A-H 矩阵和当前本地工作树；发现的测试筛选操作错误已在同一轮修正并复验，未使清洁计数归零。工作区全量 Clippy 仍存在并行模块既有测试诊断，本任务原生生产库 Clippy 无问题，按既定边界不越界修改。当前审计计数为 **5/5**。
+
+## 2026-09-08 真实模型补强复验：重试语义已与验收断言对齐
+
+- 补强真实验收覆盖用户／项目 ProfileInstruction、Full/Split ProfileBundle、PreCheck、PostAction 和实际持久化；Provider、API、模型、凭据均由当前本地运行时配置解析，测试文件无固定路由。
+- 首轮真实输出出现 `PostActionReview must classify every memory candidate exactly once`，队列持久化一次失败并重试成功；该现象符合 `client.rs` 的普通分析失败策略，不能被记录为原生生产代码错误，也不能被抹去。原测试的零重试断言已改为检查最终 `Completed` 且未达到第五次 `AnalysisBypassed` 阈值。
+- 未过滤复验结果 **1 项通过、0 项失败、1101 项过滤、16.27 秒**，实测本轮为 0 次持久化失败重试；上一轮一次重试的真实证据继续作为质量指标保留。真实模型质量尚未达到可关闭条件，当前完整审核计数仍为 **0/5**。
+- 后续必须继续做有明确样本量的真实模型质量统计，并完成 A—H 生命周期交叉矩阵、外置同数据矩阵和五轮全范围审核；本条只关闭验收断言缺陷，不关闭最终任务。
+
+## 2026-09-08 A—H 主链交叉与外置业务包补验
+
+- 当前树单独执行真实控制器交叉链 `real_controller_nonempty_analysis_materializes_memory_and_profiles`：**1 项通过、0 项失败、1101 项过滤、39.47 秒**；同一隔离控制器中验证非空入库、双角色画像、全文／向量、迁移续提炼、压缩、回收恢复、归档、详情和重启。
+- 外置仓库同范围业务包 `internal/app/usecase`、`internal/logic/processor`、`internal/platform/textutil`、`internal/adapters/outbound/vldb_sqlite`、`internal/app`：**591 项通过、0 项失败、5 个包**。这是外置业务基线复验，不把不同实现的独立 fixture 误报为物理记录逐字段相等。
+- 主链交叉证据已补充，但跨项目／跨主体／策略组合的逐项同数据矩阵、真实模型质量样本统计和五轮完整代码审核仍未关闭；连续清洁计数保持 **0/5**。
+
+## 2026-09-08 真实模型五次样本质量统计
+
+- 连续执行真实保存路由验收 **5 次**：**5/5 最终 Completed、0 次 AnalysisBypassed／Corrupted、0 项测试失败**；每次数据面均为临时隔离目录，保存配置与凭据仅只读读取。
+- 首轮成功 **4/5**；第 2 次的真实错误为 `PostActionReview supplied dedupe identity is invalid`，记录一次持久化失败后重试成功。首轮结构化成功率 **80%**、持久化重试率 **20%**、最终完成率 **100%**。
+- 真实模型质量样本统计现已完成首个明确样本批次，但“首轮零错误”不成立，不能抹除重试记录。逐项 A—H 同数据矩阵、全部本地变更全范围审核和连续五轮清洁审核仍待完成，计数保持 **0/5**。
+
+## 2026-09-08 当前树第 1 轮全范围回归核验（功能收尾前，不计连续清洁审核）
+
+- 当前树原生 VMM 串行整组已通过：`cargo test -p vulcan-service-kernel --lib native_vmm:: -- --test-threads=1` 为 **135 项通过、0 项失败、3 项忽略、964 项过滤，472.65 秒**；包含 Optional Host Schema 回归、真实控制器、维护、策略、回收／恢复、PreCheck、PostAction 及画像路径。
+- 工作区级回归已在同一契约修复后的源码上完成：`cargo test --workspace --all-targets --no-fail-fast` 未报告失败，服务内核观察到 **1086 项通过、0 项失败、16 项忽略**，Core 公共流程 **54 项通过**；`cargo check --workspace --all-targets` **0 错误、1 个既有警告**（`vulcan-provider-adapters` 测试未使用导入）。
+- 前端全量回归清洁：Vitest **177 个文件通过、1 个显式跳过；1065 项通过、1 项跳过**；TypeScript 构建检查通过，UI 架构检查 **6 项通过、0 项失败**。
+- 外置核心基线 `textutil`、`usecase`、`processor` **306 项通过**；本轮独立重新生成外置 PostAction **9 条载荷／63 个历史选择**、PreCheck **4 个混合上下文／10 个预算边界**、Profile **6 个时间线场景**，三类结果与仓库样本 SHA256 分别为 `be751edcd87137c0aadbcede47c132ecd8932a2e17f211e00bde2d794a3404f8`、`824729a3c3f10f762d42063d505b826bc935da7a8135b7ebff6da30d780592b0`、`b93254d3b6c01a99b2f339883c8ab7422a986f53e11d30e15db3391394912eb3`。
+- 当前生产库严格 Clippy、格式检查、`git diff --check`、`git diff --check origin/main..HEAD` 均通过；扫描真实模型验收测试未发现供应商、API 地址、凭据、模型或固定令牌，运行时只读取本机保存配置及只读凭据库。当前工作区无 Cargo／测试／VMM 验收进程残留；PID 11712 的独立 `vldb-controller` 仍为此前存在且归属未确认的监听进程，未盲目停止。
+- 本轮没有发现新的原生 VMM 代码问题，但工作包表中列明的 A—H 生命周期交叉矩阵、真实模型质量指标和五轮完整审计门禁仍未关闭；因此本轮只作为当前树回归证据，不把连续清洁审核计数从 **0/5** 提升。
+
+## 2026-09-08 真实保存路由原生 VMM 验收与 Optional 投影修复
+
+- 测试入口：`rtk proxy powershell -NoProfile -Command "& { $env:NATIVE_VMM_LIVE_ACCEPTANCE='1'; rtk proxy cargo test -p vulcan-service-kernel --lib real_model_acceptance_tests::live_saved_routes_execute_native_vmm_contract_and_lifecycle -- --ignored --nocapture }"`。
+- 最终结果：**1 项通过、0 项失败、1101 项过滤、15.51 秒**；真实 ProfileInstruction、PreCheck、PostAction、队列完成、回合完成态、画像持久化及配置不变性通过。Provider/API/模型/凭据只从本机运行时配置和只读凭据库取得，测试没有硬编码。
+- 失败修正：`SchemaAst::Optional` 被原生 Host Schema 投影错误列为 `required`，模型省略合法的 `context_edges` 时触发严格 Schema 拒绝；`llm_contract.rs` 现按 Optional 语义省略 required 登记，Core 提供方投影版本升至 2，并增加“省略 Optional 字段仍可通过 JSON Schema”回归测试。
+- 定向证据：`native_vmm::llm_contract` **1 项通过**；`vulcan-memorymesh-core-contracts` **4 项通过**；共享 AI 契约变更已通知任务 `01a05bfd-e8a2-7121-a1da-9336b71a562a`。`cargo fmt --all -- --check` 通过。
+- 完整原生串行回归：`cargo test -p vulcan-service-kernel --lib native_vmm:: -- --test-threads=1` **135 项通过、0 项失败、3 项忽略、964 项过滤，509.40 秒**；测试进程正常结束，未计入仍在监听且归属未确认的独立 PID 11712。
+- 真实 VCE 试验另发现 `query_rewrite` 返回数组而非当前对象 Schema 的独立 VCE 问题；原始诊断已保留，不纳入原生 VMM 本批通过条件，也未越界修改 VCE 并行模块。
+- 本批关闭真实保存路由主链证据，不关闭 A—H/外置同数据剩余组合或连续审核；完整审核计数仍为 **0/5**。
+
+## 2026-09-08 工作台批量／按回合全量写入验收
+
+- 私有目录：`C:/Users/lingeasy/AppData/Local/Temp/vulcan-vmm-workbench-full-write-20260908-01`；使用当前生产前端资源、真实原生 HTTP 服务和内置浏览器完成完整写入链路。
+- 测试：`real_controller_native_workbench_over_http`，最终 **1 项通过、0 项失败、1099 项过滤**，运行约 921 秒；浏览器、Rust 控制器和临时服务均已正常收尾。
+- 覆盖：策略保存／恢复、批量会话回收／恢复、按回合回收／恢复、归档／取消归档、再次回收、回收站恢复、永久清除和重新启用已遗忘会话。
+- 关键终态：永久清除后回收批次 0、回收站记忆 0、活动记忆 0、待分析作业 3；重新启用只恢复后续读写，不恢复已删除回合、记忆或向量。
+- 该批次关闭真实浏览器批量／按回合写入证据缺口；仍未关闭 A—H 完整同数据矩阵、真实模型质量验收及连续五轮完整审核，审计计数继续为 **0/5**。
+
 ## 目标与计数规则
+
+### 2026-09-07 外置全仓复验
+
+- 首次运行 `rtk go test ./... -count=1` 汇总为 1072 通过、1 失败、2 跳过；失败包为 `internal/app`。单独重跑该包为 222 通过，随后按同一全仓命令重跑终态为 **1120 项通过、39 个包**。
+- 首次失败未能复现，未修改外置源码，也未把首次结果记为清洁通过；外置工作树仍干净。该结果仅补充基线健康证据，不关闭原生／外置同数据矩阵，完整审核计数保持 **0/5**。
+
+### 2026-09-07 工作台按 Turn 只读入口补证
+
+- 新建私有原生控制器与工作台目录，选择项目 `browser-native-parity` 的种子会话，真实页面精确勾选回合 `#7`、`#8`。
+- 页面展示“预览回收所选回合 (2)”；真实 `native_removal_preview` RPC 成功，预览结果为 1 个会话、2 个回合、2 个待提取、影响热窗口 2，随后点击取消。
+- 未调用 `native_removal_recycle`，没有回收、恢复或永久清除写入；私有浏览器及控制器已结束。该结果只关闭按 Turn 选择／预览的入口证据，不关闭回收／恢复写入、A—H 全矩阵或完整审计，计数保持 **0/5**。
+
+### 2026-09-07 外置基线健康复验
+
+- 外置仓库 `D:/openvulcan/VulcanMemoryMesh` 当前保持干净，提交为 `82f05fa5e3c7657e770fefd84e220fba5654ce07`。
+- `rtk go test ./internal/platform/textutil ./internal/app/usecase ./internal/logic/processor -count=1` 结果为 3 个包共 **306 项通过**。
+- 该结果只确认外置基线的核心测试当前可运行，不等同于原生／外置同一合成数据矩阵，也不启动完整审核计数；当前仍为 **0/5**。
+
+### 2026-09-07 策略组件私有 HTTP/RPC 复验
+
+- 真实前端策略组件测试通过：`vmm-native-policy-http.test.tsx` 为 1 项通过，耗时约 213.44 秒；真实 Rust 私有控制器测试为 1 项通过、1099 项过滤，耗时约 243.77 秒。
+- 握手目录中的全局、宿主、继承、文本、召回、画像、保留策略、调度和 `finish` 阶段均存在成对 `.ready/.ack`；未生成 `abort.ready`，Rust/Cargo 进程均已结束。
+- 本次只使用新建的私有临时目录和隔离控制器，未触碰用户正常服务或数据，未执行工作台批量／按回合回收站确认写入。
+- 该结果只关闭策略组件私有联网复验，不关闭 A—H 全矩阵、工作台批量／按回合写入、外置同数据矩阵、真实模型质量或连续五轮完整审核；完整审核计数保持 **0/5**。
+- 详细阶段记录见 `docs/plan/20260907-02-NATIVE_VMM_POLICY_HTTP_ACCEPTANCE.md`。
 
 - 关联方案：[完整修复方案](20260905-04-NATIVE_VMM_FUNCTIONAL_PARITY_REPAIR.md)。
 - 范围为方案 A—H、完整回归矩阵、实际宿主及用户入口，不仅是本轮已修改的文件。
@@ -9,6 +118,87 @@
 - 2026-09-06 用户已明确：手动回收会话/回合只回收记忆来源，两类画像保留并通过画像页面维护，不增加连带画像删除选项。相关产品问题已解除，历史待确认记录不再代表当前状态。
 
 ## 工作包进度与证据缺口
+
+### 2026-09-07 工作台按回合与批量会话真实验收夹具
+
+- 为关闭 E 项仍保留的用户入口缺口，扩展工作台真实验收夹具：准备 7 个种子会话回合、2 个批量会话回合和 1 个未选会话回合，并增加批量会话选择、按回合选择、预览、回收、恢复及状态断言；生产实现未改动。
+- `workbench_lifecycle_acceptance_tests.rs` 与 `workbench_http_acceptance_tests.rs` 已通过目标测试的 `--no-run` 编译，覆盖矩阵会断言稳定会话／回合 ID、回收批次类型、记忆与向量数量、队列计数、未选会话及画像保留。
+- 私有真实浏览器本次已完成页面导航、项目选择和只读预览：批量选中 2 个会话，页面准确显示 2 个会话、9 个回合、3 条记忆、3 个关联向量、9 个待处理项、9 个热窗口回合，并明确保留项目／用户画像；尚未点击“确认移入回收站”，因此没有产生回收或恢复终态，不能记作完整通过。
+- 本次浏览器等待进程随后已停止，未执行删除、清空或其他破坏性操作。按回合／批量会话真实生命周期仍需在明确允许写入后重新运行；A—H 其余范围、外置同数据矩阵、延期真实模型和全部本地提交完整审核仍未关闭，完整审核计数保持 **0/5**。
+
+### 2026-09-07 批量选择顺序源码核对
+
+- 前端管理入口传递的是稳定的 Session/Turn 来源 ID；服务端 `manual_removal::apply_manual_removal` 将会话和回合选择分别归一为精确集合，不按显示名称或界面行号推断归属。
+- 完整会话回收批次按 `snapshot.memory_sessions` 的规范顺序保存原始会话；Core 快照来自以主体／项目／Session 复合键排序的 `BTreeMap`。按回合批次使用 `BTreeSet<TurnId>`，因此当前夹具对批次内会话及回合顺序的断言与生产持久化顺序一致，无需新增候选式排序或兼容分支。
+- 该源码核对只消除了夹具顺序误报风险，不能替代真实浏览器回收／恢复写入；完整审核计数仍为 **0/5**。
+
+### 2026-09-07 工作区级编译与严格诊断基线
+
+- `rtk proxy cargo check --workspace --all-targets` 已通过，耗时 1 分 24 秒。过程中唯一普通警告来自 `vulcan-provider-adapters` 测试模块的既有未使用导入，不命中本轮原生 VMM 改动文件。
+- `rtk proxy cargo clippy --workspace --all-targets -- -D warnings` 未通过：严格诊断首先命中 `vulcan-service-api/src/conversation_events_v1.rs` 的测试 `unwrap_used`、`vulcan-service-api/src/media.rs` 的 `items_after_test_module`，以及 `vulcan-workbench-model/src/project.rs` 测试的 `field_reassign_with_default`。这些路径属于快照提交携带的其他并行模块，且此前台账已登记测试严格检查存在的既有诊断；本轮原生 VMM 生产库严格 Clippy 仍通过，未对并行模块越界修改。
+- 该结果只能作为全量审计的基线证据，不能记作清洁轮次；完整审核继续保持 **0/5**，待所有功能验收和范围边界确认后再按规则开始连续计数。
+
+### 2026-09-07 工作区全量正常测试
+
+- `rtk proxy cargo test --workspace --all-targets --no-fail-fast` 已完成并以退出码 0 结束。`vulcan-service-kernel` 测试结果为 **1085 通过、0 失败、15 忽略**，`vulcan-memorymesh-core` 公共流程为 **54 通过、0 失败**；其余工作区测试也未报告失败。
+- 本次正常测试实际覆盖了新增 Profile 时间线、PreCheck RAW_TURN、PostAction 预算／序列化、原生维护策略、回收恢复和工作区存储等路径；需要私有控制器、联网、真实浏览器或用户明确允许的 ignored 场景仍按原门禁保留，不能被普通测试通过替代。
+- 正常测试通过不等于完整功能验收或清洁审计轮次；批量／按回合真实浏览器写入、外置同数据矩阵和连续五轮完整审核仍未关闭，计数保持 **0/5**。
+
+### 2026-09-07 当前树生产库复验
+
+- `rtk proxy cargo clippy -p vulcan-service-kernel --lib -- -D warnings` 在当前工作树通过，未发现本轮生产原生 VMM 改动的新严格诊断。
+- `rtk proxy cargo test -p vulcan-service-kernel --lib real_controller_native_workbench_over_http --no-run` 编译通过；该命令只验证测试装配，不执行浏览器回收／恢复写入，因此不改变 E 项或完整审核计数。
+
+### 2026-09-07 原生 VMM 串行单元与控制器子集
+
+- `rtk proxy cargo test -p vulcan-service-kernel --lib native_vmm:: -- --test-threads=1` 已完成，结果为 **134 通过、0 失败、2 忽略、964 过滤，511.17 秒**；覆盖 Profile 时区、PreCheck、PostAction、维护／回收／恢复、策略和真实控制器长路径。
+- 该串行结果证明当前原生模块没有被本轮改动破坏，但不代表批量／按回合真实浏览器写入、外置同数据矩阵或完整审计轮次已完成；完整审核计数继续保持 **0/5**。
+
+### 2026-09-07 原生服务包级严格 Clippy（含测试）
+
+- `rtk proxy cargo clippy -p vulcan-service-kernel --lib --tests -- -D warnings` 已完成但退出码为 1，报告 **347 条**测试／并行模块既有诊断；可见首批路径包括 `src/tests/active_session_state_tests.rs`、`src/agent_stream/**`、`src/conversation_events_v1.rs`、`src/service_bootstrap/**` 等，未命中本轮原生 VMM 改动文件。
+- 该结果与工作区级严格 Clippy 基线一致：生产原生 VMM 严格检查仍已通过，但含测试门禁不是清洁状态，不能启动或递增五轮完整审核计数；不越界修改并行模块，计数继续为 **0/5**。
+
+### 2026-09-07 外置三项业务投影只读复核
+
+- 在干净的外置基线 `D:/openvulcan/VulcanMemoryMesh` 上重新运行 PostAction、PreCheck、Profile 三个只读 oracle，结果 **3 项通过、0 项失败**：分别生成 9 条载荷／63 个历史选择、4 个混合上下文／10 个预算边界和 6 个 Profile 时间线场景。
+- 三份新生成结果分别与仓库样本 SHA256 完全一致：PostAction `be751edcd87137c0aadbcede47c132ecd8932a2e17f211e00bde2d794a3404f8`、PreCheck `824729a3c3f10f762d42063d505b826bc935da7a8135b7ebff6da30d780592b0`、Profile `b93254d3b6c01a99b2f339883c8ab7422a986f53e11d30e15db3391394912eb3`。生成文件只写入系统临时目录，外置工作树保持干净。
+- 该复核关闭的是三项外置业务投影样本的当前漂移风险，不替代批量／按回合真实浏览器写入、完整 A—H 矩阵、延期真实模型质量或连续五轮完整审核；计数继续保持 **0/5**。
+
+### 2026-09-07 Core 公共流程当前工作树复验
+
+- `rtk proxy cargo test -p vulcan-memorymesh-core --test full_public_flow -- --test-threads=1` 已完成，**54 通过、0 失败、0 忽略，6.51 秒**；包含 Profile 时间线外置对照、PreCheck／PostAction、持久化、回收策略和恢复边界。
+- 该结果只确认 Core 公共调用链在当前工作树下稳定，不替代原生服务真实宿主、批量／按回合浏览器写入、完整 A—H 对照或五轮完整审核；计数继续为 **0/5**。
+
+### 2026-09-07 本地提交与当前差异范围核对
+
+- `origin/main..HEAD` 当前包含 **1 个本地提交**（安全快照 `bca45450`），快照提交涉及 **384 个路径**；`git diff --check origin/main..HEAD` 与当前工作树 `git diff --check` 均通过。
+- 该结果确认快照及当前未提交改动没有空白差异错误，并未把提交范围缩小为 VMM 文件；它不是逐文件语义审核，也不关闭批量／按回合写入、A—H 全矩阵或连续五轮审核，完整计数仍为 **0/5**。
+
+### 2026-09-07 Profile 时间线时区宿主差异修复
+
+- 重新核对外置基线 `D:/openvulcan/VulcanMemoryMesh` 提交 `82f05fa5e3c7657e770fefd84e220fba5654ce07`：外置画像时间线直接使用进程 `time.Local`，而原生 `NativeProfileBundleFormat::view` 曾把 `ProfileView.display_timezone` 固定为 `UTC`；共享 Profile 协议没有时区字段，Core 已明确要求有效 IANA 时区且不应猜测回退。
+- 新增 `iana-time-zone = 0.1.65` 工作区依赖。原生宿主通过 `iana_time_zone::get_timezone()` 解析当前操作系统 IANA 时区；`get_profile_nodes` 与 `get_profile_bundle` 在各自查询边界显式传入 `NativeProfileBundleFormat::view`，解析失败显式返回 `native_profile_timezone`，不回退 UTC。
+- 新增真实外置只读覆盖层夹具 `profile_timeline_oracle_test.go`、6 条生成样本及说明。外置生成器实际调用 `renderProfileTimeline`，覆盖 UTC、Asia/Shanghai、America/New_York 的空/非空场景、P/L/W、刷新权重、日期排序、历史夏令时、上海午夜纳秒边界和无锚点回退；临时生成结果与仓库样本 SHA256 均为 `b93254d3b6c01a99b2f339883c8ab7422a986f53e11d30e15db3391394912eb3`。
+- 验证结果：Go 外置 oracle **1 通过，6 个画像场景，0.037 秒**；`vulcan-memorymesh-core` Profile 时间线公共查询 **3 通过、51 过滤、0.17 秒**；`vulcan-service-kernel` Profile 格式化单元 **4 通过、1095 过滤**；真实控制器画像包 **1 通过、1098 过滤、8.45 秒**；service-kernel 库级 `cargo check` **通过、38.57 秒**。
+- 本批没有修改共享 Host AI/Embedding/Rerank/VLDB 契约、协议字段、用户数据或外置源码；新增 Core 测试夹具仅用于验证公共查询链路。该宿主差异已闭环，但 H 的完整用户消费入口、A–G 其他范围、真实模型质量以及五轮完整审计仍未关闭；当前完整审计计数继续为 **0/5**，没有提交本批改动。
+
+### 2026-09-07 Profile 修复后的原生 real_controller 整组复验
+
+- 在时区宿主修复和 PreCheck 业务 JSON 修复之后，按 `real_controller` 过滤、串行执行当前 service-kernel 原生控制器验收：**15 项通过、0 项失败、12 项显式忽略、1072 项过滤，496.49 秒**。
+- 通过项覆盖真实检索来源、内置压缩、混合检索、全文分页与变更跟踪、非空提炼、待分析队列策略、PostAction 预算冻结、PreCheck 混合历史、画像包、项目画像策略、替代、重排、文本策略和 Weibull 生命周期；12 项忽略均明确依赖未提供的本地 VLDB 控制器或私有 HTTP/浏览器入口，不计作通过。
+- 运行结束后未发现 cargo、测试二进制或 VMM 测试进程；`git diff --check` 通过。测试期间并行 webui-service 输出了运行策略空文件的 EOF 清理日志，但没有转化为测试失败或断言差异；该日志属于并行服务环境现象，未据此改写用户配置或扩大本批范围。
+- 这次整组复验只证明当前原生控制器回归没有被本批改动破坏，不等于 A–H 完成、外置同数据矩阵完成或完整审核轮次合格；当前完整审计仍为 **0/5**，没有提交本批改动。
+
+### 2026-09-07 接续 PreCheck 业务 JSON 同数据修复
+
+- 接手基线 `bca45450`，工作树干净，无旧测试进程。用户已允许当前 IDE 使用常规编辑工具，且禁止子代理，后续由主代理直接执行。
+- 首轮真实控制器测试 **0 通过、1 失败、1097 过滤、12.91 秒**：两个 RAW_TURN 正文与外置不一致；预算 244、289、334 各多选一个历史来源。没有改外置期望，失败日志位于 `C:/Users/lingeasy/.zcode/cli/exec/sess_dd383c60-0fd0-40a8-a4f9-c51436f5b218/call_MqVsaRHfW8l3oZNoOmOdpxEJ-stdout.log`。
+- 将既有五字符 JSON 转义从 `prompt.rs` 移至 `dialogue.rs::escape_business_json`，PostAction 目标预算与最终输出复用，`client.rs::precheck_turn_context` 对 RAW_TURN 使用同一实现。DETAILS 不包 JSON；原始聊天、持久回合、队列及其他模型请求不改。
+- 修复后真实控制器 **1 通过、1097 过滤、17.86 秒**，四个混合状态上下文和十个预算边界一致；保留宿主/项目/会话隔离、保存继承、已准入冻结、完整持久状态及重建断言。PostAction 回归 **5 通过、18.44 秒**，提示词回归 **4 通过、0.02 秒**；重复用例不累加为独立覆盖。
+- 外置只读覆盖层独立再生成 **1 通过、包耗时 0.040 秒**，新临时样本与仓库样本 SHA256 同为 `824729a3c3f10f762d42063d505b826bc935da7a8135b7ebff6da30d780592b0`，外置工作树干净。来源说明已补入 `fixtures/POSTACTION_PARITY.md`。
+- 本批修改生产文件 `client.rs`、`dialogue.rs`、`prompt.rs`，以及样本说明、主计划与本台账；接手已有的两份 PreCheck 测试及 Go/JSON 夹具保持不改。没有删除、提交、归档、共享 AI 契约、数据库结构或权威资源变化，无资源同步需求。
+- 生产严格 Clippy 与限定五个 Rust 文件格式检查通过；含测试严格检查及相关原生整组尚待终态。完整目标未完成，完整审核 **0/5**。
 
 ### 2026-09-07 外置业务载荷与整数预算同数据对照
 
