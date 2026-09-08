@@ -1,5 +1,6 @@
+import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
-import { Copy, FolderOpen, Maximize2, Minimize2, Pencil, Plus, RefreshCw, RotateCcw, Search, Tags, Trash2 } from "lucide-react"
+import { Copy, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Search, Tags, Trash2 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -393,15 +394,9 @@ export function AgentSkillsArea(props: {
   )
 }
 
-// FloatingAgentSkillCategoryMenu renders the adaptive prompt-skill category directory.
-// FloatingAgentSkillCategoryMenu 渲染自适应提示词技能分类目录。
-export function FloatingAgentSkillCategoryMenu(props: {
-  // Whether the directory panel is expanded.
-  // 目录面板是否展开。
-  expanded: boolean
-  // Updates the expanded panel state.
-  // 更新面板展开状态。
-  onExpandedChange: (expanded: boolean) => void
+// AgentSkillCategoryMenu renders the fixed prompt-skill category directory.
+// AgentSkillCategoryMenu 渲染固定提示词技能分类目录。
+export function AgentSkillCategoryMenu(props: {
   // Currently selected logical category id, or empty for all categories.
   // 当前选中的逻辑分类标识；空字符串表示全部分类。
   selectedCategoryId: string
@@ -412,7 +407,7 @@ export function FloatingAgentSkillCategoryMenu(props: {
   // 包含完整 Agent Skills 领域的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  const { locale, t } = useI18n()
+  const { locale } = useI18n()
   // effectiveRecords keeps one runtime-effective source record per standard name.
   // effectiveRecords 为每个标准名称保留一条运行时有效来源记录。
   const effectiveRecords = React.useMemo(
@@ -426,50 +421,24 @@ export function FloatingAgentSkillCategoryMenu(props: {
     effectiveRecords.forEach((record) => counts.set(record.categoryId, (counts.get(record.categoryId) ?? 0) + 1))
     return counts
   }, [effectiveRecords])
-  // activeLabel stores the selected directory label for the collapsed pill.
-  // activeLabel 保存收起胶囊展示的当前目录标签。
-  const activeLabel = React.useMemo(() => {
-    if (!props.selectedCategoryId) {
-      return locale.startsWith("zh") ? "全部" : "All"
-    }
-    const selected = props.workbench.agentSkills.categories.find((category) => category.categoryId === props.selectedCategoryId)
-    return selected ? localizedAgentSkillCategory(selected, locale) : props.selectedCategoryId
-  }, [locale, props.selectedCategoryId, props.workbench.agentSkills.categories])
-
-  if (!props.expanded) {
-    return (
-      <button className="workspace-tool-panel-menu-collapsed" onClick={() => props.onExpandedChange(true)} title={t("workspaceToolPanel.expandState")} type="button">
-        <span>{activeLabel}</span>
-        <Maximize2 size={13} />
-      </button>
-    )
-  }
 
   return (
-      <aside className="workspace-tool-panel-menu agent-category-floating-menu" aria-label={locale.startsWith("zh") ? "技能分类" : "Skill categories"}>
-        <div className="workspace-tool-panel-menu-header">
-          <span>{locale.startsWith("zh") ? "分类" : "Categories"}</span>
-          <IconButton aria-label={t("workspaceToolPanel.collapseToPill")} onClick={() => props.onExpandedChange(false)} size="xs" type="button">
-            <Minimize2 size={13} />
-          </IconButton>
-        </div>
-        <div className="workspace-tool-panel-menu-list">
-          <button className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`} onClick={() => props.onSelectCategory("")} type="button">
-            <Tags size={15} />
-            <span>{locale.startsWith("zh") ? "全部" : "All"}</span>
-            <strong>{effectiveRecords.length}</strong>
+    <WorkspaceDirectoryMenu ariaLabel={locale.startsWith("zh") ? "技能分类" : "Skill categories"} heading={locale.startsWith("zh") ? "分类" : "Categories"}>
+      <button className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`} aria-current={props.selectedCategoryId === "" ? "page" : undefined} onClick={() => props.onSelectCategory("")} type="button">
+        <Tags size={15} />
+        <span>{locale.startsWith("zh") ? "全部" : "All"}</span>
+        <strong>{effectiveRecords.length}</strong>
+      </button>
+      {props.workbench.agentSkills.categories.map((category) => (
+        <div className={`workspace-tool-panel-menu-row agent-skill-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`} key={category.categoryId}>
+          <button className="agent-skill-category-floating-main" aria-current={props.selectedCategoryId === category.categoryId ? "page" : undefined} onClick={() => props.onSelectCategory(category.categoryId)} type="button">
+            <span className="agent-category-floating-icon" style={{ backgroundColor: category.color }}>{category.emoji}</span>
+            <span>{localizedAgentSkillCategory(category, locale)}</span>
+            <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
           </button>
-          {props.workbench.agentSkills.categories.map((category) => (
-            <div className={`workspace-tool-panel-menu-row agent-skill-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`} key={category.categoryId}>
-              <button className="agent-skill-category-floating-main" onClick={() => props.onSelectCategory(category.categoryId)} type="button">
-                <span className="agent-category-floating-icon" style={{ backgroundColor: category.color }}>{category.emoji}</span>
-                <span>{localizedAgentSkillCategory(category, locale)}</span>
-                <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
-              </button>
-            </div>
-          ))}
         </div>
-      </aside>
+      ))}
+    </WorkspaceDirectoryMenu>
   )
 }
 

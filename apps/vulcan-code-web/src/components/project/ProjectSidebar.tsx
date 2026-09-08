@@ -36,6 +36,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
+  useSidebarNavigation,
 } from "@/components/ui/sidebar";
 import {
   SidebarBrandMenu,
@@ -118,6 +119,9 @@ export function ProjectSidebar(props: {
   // sidebarState selects the expanded tree interaction or the collapsed project pop menu.
   // sidebarState 选择展开树交互或折叠项目弹出菜单交互。
   const { state: sidebarState } = useSidebar();
+  // navigate preserves each destination action and closes phone navigation.
+  // navigate 保留各导航动作并关闭手机导航。
+  const navigate = useSidebarNavigation();
   // openProjectIds stores the project folders currently expanded in the tree.
   // openProjectIds 保存当前在树中展开的项目文件夹。
   const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
@@ -271,10 +275,10 @@ export function ProjectSidebar(props: {
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
         key={project.id}
         onConversationMenuAction={props.onConversationMenuAction}
-        onCreateConversation={props.onCreateConversation}
+        onCreateConversation={navigate(props.onCreateConversation)}
         onProjectMenuAction={props.onProjectMenuAction}
         renderConversationRow={renderConversationRow}
-        onSelectConversation={props.onSelectConversation}
+        onSelectConversation={navigate(props.onSelectConversation)}
         onSelectProject={props.onSelectProject}
         onToggleConversationList={toggleProjectConversations}
         onToggleOpen={toggleProjectOpen}
@@ -311,18 +315,18 @@ export function ProjectSidebar(props: {
       locale={locale}
       nowMs={nowMs}
       onAction={props.onConversationMenuAction}
-      onSelectConversation={props.onSelectConversation}
+      onSelectConversation={navigate(props.onSelectConversation)}
       project={conversation.projectId ? projectsById.get(conversation.projectId) : undefined}
     />
   );
   // collapsedFeatureMenuItems groups the five feature shortcuts under one collapsed plugin icon.
   // collapsedFeatureMenuItems 将五个功能快捷入口归组到折叠后的单个插件图标下。
   const collapsedFeatureMenuItems = [
-    { id: "skills", label: t("area.skills"), icon: <Puzzle size={16} />, active: props.skillsActive, onSelect: props.onOpenSkills },
-    { id: "agent-skills", label: t("area.agentSkills"), icon: <Hammer size={16} />, active: props.agentSkillsActive, onSelect: props.onOpenAgentSkills },
-    { id: "agents", label: t("area.agents"), icon: <Bot size={16} />, active: props.agentsActive, onSelect: props.onOpenAgents },
-    { id: "memory", label: t("area.memory"), icon: <BrainCircuit size={16} />, active: props.memoryActive, onSelect: props.onOpenMemory },
-    { id: "knowledge", label: t("area.knowledge"), icon: <BookMarked size={16} />, active: props.knowledgeActive, onSelect: props.onOpenKnowledge },
+    { id: "skills", label: t("area.skills"), icon: <Puzzle size={16} />, active: props.skillsActive, onSelect: navigate(props.onOpenSkills) },
+    { id: "agent-skills", label: t("area.agentSkills"), icon: <Hammer size={16} />, active: props.agentSkillsActive, onSelect: navigate(props.onOpenAgentSkills) },
+    { id: "agents", label: t("area.agents"), icon: <Bot size={16} />, active: props.agentsActive, onSelect: navigate(props.onOpenAgents) },
+    { id: "memory", label: t("area.memory"), icon: <BrainCircuit size={16} />, active: props.memoryActive, onSelect: navigate(props.onOpenMemory) },
+    { id: "knowledge", label: t("area.knowledge"), icon: <BookMarked size={16} />, active: props.knowledgeActive, onSelect: navigate(props.onOpenKnowledge) },
   ];
 
   return (
@@ -331,7 +335,7 @@ export function ProjectSidebar(props: {
         <SidebarBrandMenu
           activeArea={props.agentSkillsActive ? "agent-skills" : props.agentsActive ? "agents" : props.skillsActive ? "skills" : props.memoryActive ? "memory" : props.knowledgeActive ? "knowledge" : "chat"}
           currentLabel={props.agentSkillsActive ? t("area.agentSkills") : props.agentsActive ? t("area.agents") : props.skillsActive ? t("area.skills") : props.memoryActive ? t("area.memory") : props.knowledgeActive ? t("area.knowledge") : t("sidebar.console")}
-          onSelectArea={props.onSelectArea}
+          onSelectArea={navigate(props.onSelectArea)}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
@@ -354,7 +358,7 @@ export function ProjectSidebar(props: {
             <SidebarMenuButton
               active={props.skillsActive}
               className="workspace-sidebar-feature-button"
-              onClick={props.onOpenSkills}
+              onClick={navigate(props.onOpenSkills)}
               tooltip={t("area.skills")}
             >
               <Puzzle size={16} />
@@ -365,7 +369,7 @@ export function ProjectSidebar(props: {
             <SidebarMenuButton
               active={props.agentSkillsActive}
               className="workspace-sidebar-feature-button"
-              onClick={props.onOpenAgentSkills}
+              onClick={navigate(props.onOpenAgentSkills)}
               tooltip={t("area.agentSkills")}
             >
               <Hammer size={16} />
@@ -376,7 +380,7 @@ export function ProjectSidebar(props: {
             <SidebarMenuButton
               active={props.agentsActive}
               className="workspace-sidebar-feature-button"
-              onClick={props.onOpenAgents}
+              onClick={navigate(props.onOpenAgents)}
               tooltip={t("area.agents")}
             >
               <Bot size={16} />
@@ -387,7 +391,7 @@ export function ProjectSidebar(props: {
             <SidebarMenuButton
               active={props.memoryActive}
               className="workspace-sidebar-feature-button"
-              onClick={props.onOpenMemory}
+              onClick={navigate(props.onOpenMemory)}
               tooltip={t("area.memory")}
             >
               <BrainCircuit size={16} />
@@ -398,7 +402,7 @@ export function ProjectSidebar(props: {
             <SidebarMenuButton
               active={props.knowledgeActive}
               className="workspace-sidebar-feature-button"
-              onClick={props.onOpenKnowledge}
+              onClick={navigate(props.onOpenKnowledge)}
               tooltip={t("area.knowledge")}
             >
               <BookMarked size={16} />
@@ -464,7 +468,7 @@ export function ProjectSidebar(props: {
               <SidebarMenuButton
                 aria-label={t("area.settings")}
                 className="workspace-sidebar-feature-button"
-                onClick={() => props.onSelectArea("settings")}
+                onClick={() => navigate(props.onSelectArea)("settings")}
                 tooltip={t("area.settings")}
               >
                 <Settings size={16} />
@@ -472,7 +476,7 @@ export function ProjectSidebar(props: {
             </SidebarMenuItem>
           </SidebarMenu>
         ) : null}
-        <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />
+        <SidebarUserMenu onOpenSettings={() => navigate(props.onSelectArea)("settings")} />
       </SidebarFooter>
     </Sidebar>
   );

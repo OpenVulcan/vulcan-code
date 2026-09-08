@@ -1,4 +1,5 @@
 import * as React from "react";
+import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { useI18n } from "@/i18n";
@@ -40,23 +41,20 @@ export function WorkspaceMemorySettings(props: {
   const activeSubArea = props.activeSubArea === "content" && workbench.vmmMemory.experienceState.deployment === "disabled" ? "overview" : props.activeSubArea;
 
   return (
-    <div className="vmm-workspace">
-      <div className="vmm-workspace-layout">
+    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body" navigation={
       <MemoryWorkspaceNavigation activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
-      <div className="vmm-workspace-body">
+    }>
       <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
-    <React.Suspense fallback={null}>
-      <LazyMemoryArea
-        activeSection={activeSubArea}
-        actions={memoryActions}
-        onOpenCredentialManagement={props.onOpenCredentialManagement}
-        onSelectSection={props.onSelectSubArea}
-        snapshot={workbench.vmmMemory}
-      />
-    </React.Suspense>
-      </div>
-      </div>
-    </div>
+      <React.Suspense fallback={null}>
+        <LazyMemoryArea
+          activeSection={activeSubArea}
+          actions={memoryActions}
+          onOpenCredentialManagement={props.onOpenCredentialManagement}
+          onSelectSection={props.onSelectSubArea}
+          snapshot={workbench.vmmMemory}
+        />
+      </React.Suspense>
+    </WorkspaceDirectoryLayout>
   );
 }
 

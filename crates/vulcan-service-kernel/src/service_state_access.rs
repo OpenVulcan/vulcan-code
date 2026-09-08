@@ -580,6 +580,22 @@ where
     mutate_public_ai_configuration_in_transaction(state, save_error_context, mutate)
 }
 
+/// Returns the application-data root used by public AI configuration persistence.
+/// 返回公共 AI 配置持久化使用的应用数据根目录。
+fn public_ai_configuration_app_data_root() -> PathBuf {
+    // Tests may explicitly own a private destination; production always uses the user path.
+    // 测试可以明确持有私有目标；生产环境始终使用用户路径。
+    #[cfg(test)]
+    {
+        return crate::tests::public_ai_persistence_scope::current_root()
+            .unwrap_or_else(vulcan_workspace_store::data_plane::application_data_root);
+    }
+    #[cfg(not(test))]
+    {
+        vulcan_workspace_store::data_plane::application_data_root()
+    }
+}
+
 /// Persists one public AI configuration while keeping standalone custom manifests in sync.
 /// 持久化一份公共 AI 配置，同时保持独立自定义清单同步。
 ///
@@ -600,13 +616,9 @@ fn persist_public_ai_configuration_with_custom_manifests(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     save_error_context: &str,
 ) -> Result<(), String> {
-    // Only an explicitly scoped kernel test replaces the root; production never compiles this seam.
-    // 仅明确设置作用域的内核测试替换根目录；生产构建不编译此接缝。
-    #[cfg(test)]
-    let app_data_root = crate::tests::public_ai_persistence_scope::current_root()
-        .unwrap_or_else(vulcan_workspace_store::data_plane::application_data_root);
-    #[cfg(not(test))]
-    let app_data_root = vulcan_workspace_store::data_plane::application_data_root();
+    // app_data_root is shared by the durable save operation and the immediate canonical reload.
+    // app_data_root 由持久化保存和随后的权威重载共同使用。
+    let app_data_root = public_ai_configuration_app_data_root();
     vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
         configuration,
         &app_data_root,
@@ -625,30 +637,50 @@ fn persist_public_ai_configuration_with_custom_manifests(
 ///
 /// # Parameters
 /// 参数
-/// `runtime` owns the currently visible snapshot, `configuration` is the complete candidate,
-/// and `persist` durably commits that exact candidate before installation.
-/// `runtime` 持有当前可见快照，`configuration` 是完整候选配置，`persist` 在安装前持久
-/// 提交该精确候选。
+/// `runtime` owns the currently visible snapshot, `configuration` is the candidate, `persist`
+/// durably commits it, and `hydrate` reloads the canonical persisted snapshot before installation.
+/// `runtime` 持有当前可见快照，`configuration` 是候选配置，`persist` 负责持久化，`hydrate`
+/// 在安装前重新加载持久化后的权威快照。
 ///
 /// # Returns
 /// 返回值
-/// The persisted and installed candidate, or the persistence/installation failure while the
-/// previous runtime snapshot remains visible on persistence failure.
-/// 返回已持久化并安装的候选配置；持久化失败时返回错误且先前运行时快照保持可见。
-fn persist_then_install_public_ai_configuration<Persist>(
+/// The persisted and installed canonical snapshot, or a failure while the previous runtime
+/// snapshot remains visible until the new snapshot is successfully installed.
+/// 返回已持久化并安装的权威快照；新快照成功安装前先前运行时快照保持可见。
+fn persist_then_install_public_ai_configuration<Persist, Hydrate>(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     configuration: vulcan_provider_adapters::PersistedAiConfiguration,
     mut persist: Persist,
+    mut hydrate: Hydrate,
 ) -> Result<vulcan_provider_adapters::PersistedAiConfiguration, String>
 where
     Persist: FnMut(&vulcan_provider_adapters::PersistedAiConfiguration) -> Result<(), String>,
+    Hydrate: FnMut() -> Result<vulcan_provider_adapters::PersistedAiConfiguration, String>,
 {
     // beforeImage is the exact durable/runtime configuration restored if activation rejects the candidate.
     // beforeImage 是激活拒绝候选时需要恢复的精确持久化/运行时配置。
     let before_image = runtime.configuration_snapshot()?;
     persist(&configuration)?;
-    match runtime.replace_configuration(configuration.clone()) {
-        Ok(()) => Ok(configuration),
+    // hydrated_configuration is the authoritative snapshot read back from the committed files.
+    // hydrated_configuration 是从已提交文件重新读取的权威快照。
+    let hydrated_configuration = match hydrate() {
+        Ok(configuration) => Ok(configuration),
+        Err(primary) => {
+            // A successful save followed by a failed reload must not leave disk ahead of runtime.
+            // 持久化成功但重新加载失败时，不能让磁盘状态领先于运行时状态。
+            let persistence_compensation = persist(&before_image);
+            match persistence_compensation {
+                Ok(()) => Err(format!(
+                    "Public AI configuration hydration failed and the durable before-image was restored: {primary}"
+                )),
+                Err(compensation) => Err(format!(
+                    "Public AI configuration hydration failed: {primary}; durable before-image restoration also failed: {compensation}"
+                )),
+            }
+        }
+    }?;
+    match runtime.replace_configuration(hydrated_configuration.clone()) {
+        Ok(()) => Ok(hydrated_configuration),
         Err(primary) => {
             // persistenceCompensation prevents a successfully written candidate from surviving
             // when its matching immutable runtime generation was never published.
@@ -716,9 +748,30 @@ where
     };
     let mut configuration = runtime.configuration_snapshot()?;
     mutate(&mut configuration)?;
-    persist_then_install_public_ai_configuration(runtime.as_ref(), configuration, |configuration| {
-        persist_public_ai_configuration_with_custom_manifests(configuration, save_error_context)
-    })
+    // app_data_root is the exact persistence root selected for this transaction.
+    // app_data_root 是本次事务选择的精确持久化根目录。
+    let app_data_root = public_ai_configuration_app_data_root();
+    // central_path is the central document whose parent owns the custom manifests.
+    // central_path 是持有自定义 Manifest 的中央文档路径。
+    let central_path = app_data_root.join("ai-connections.toml");
+    persist_then_install_public_ai_configuration(
+        runtime.as_ref(),
+        configuration,
+        |configuration| {
+            persist_public_ai_configuration_with_custom_manifests(configuration, save_error_context)
+        },
+        || {
+            vulcan_provider_config::config::load_public_ai_connections_file_at_path(&central_path)
+                .map(|file| file.configuration)
+                .map_err(|error| {
+                    if save_error_context.is_empty() {
+                        error
+                    } else {
+                        format!("{save_error_context}: {error}")
+                    }
+                })
+        },
+    )
 }
 
 #[cfg(test)]
@@ -738,11 +791,13 @@ mod tests {
         candidate.usage_refresh_interval_seconds =
             before.usage_refresh_interval_seconds.saturating_add(1);
 
-        let error =
-            persist_then_install_public_ai_configuration(&runtime, candidate, |_configuration| {
-                Err(String::from("injected durable write failure"))
-            })
-            .expect_err("injected persistence failure must surface");
+        let error = persist_then_install_public_ai_configuration(
+            &runtime,
+            candidate,
+            |_configuration| Err(String::from("injected durable write failure")),
+            || panic!("hydration must not run after a failed durable write"),
+        )
+        .expect_err("injected persistence failure must surface");
 
         assert_eq!(error, "injected durable write failure");
         assert_eq!(
@@ -750,6 +805,41 @@ mod tests {
                 .configuration_snapshot()
                 .expect("runtime configuration should remain readable"),
             before
+        );
+    }
+
+    /// Verifies the reloaded durable snapshot, rather than the pre-save candidate, is installed.
+    /// 验证安装的是重新加载的持久化快照，而不是保存前的候选配置。
+    #[test]
+    fn hydrated_public_ai_configuration_is_installed_after_durable_persistence() {
+        let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
+            .expect("public AI runtime should initialize");
+        let before = runtime
+            .configuration_snapshot()
+            .expect("before configuration should read");
+        let mut candidate = before.clone();
+        candidate.usage_refresh_interval_seconds =
+            before.usage_refresh_interval_seconds.saturating_add(1);
+        // hydrated is intentionally different so the test proves reload output wins installation.
+        // hydrated 刻意设置为不同值，用于证明安装结果以重载输出为准。
+        let mut hydrated = candidate.clone();
+        hydrated.usage_refresh_interval_seconds =
+            candidate.usage_refresh_interval_seconds.saturating_add(1);
+
+        let installed = persist_then_install_public_ai_configuration(
+            &runtime,
+            candidate,
+            |_configuration| Ok(()),
+            || Ok(hydrated.clone()),
+        )
+        .expect("hydrated configuration should install");
+
+        assert_eq!(installed, hydrated);
+        assert_eq!(
+            runtime
+                .configuration_snapshot()
+                .expect("runtime configuration should remain readable"),
+            hydrated
         );
     }
 

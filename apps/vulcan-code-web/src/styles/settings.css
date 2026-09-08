@@ -7,7 +7,7 @@
 .provider-management-surface {
   box-sizing: border-box;
   width: 100%;
-  max-width: 1120px;
+  max-width: none;
   margin-inline: auto;
 }
 
@@ -52,7 +52,7 @@
 
 .settings-inline-control {
   display: grid;
-  grid-template-columns: auto minmax(9rem, 13rem) minmax(16rem, 1fr);
+  grid-template-columns: auto minmax(0, 13rem) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
@@ -78,8 +78,7 @@
 
 .credential-management-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  content-start: normal;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   align-items: stretch;
   justify-content: start;
   gap: 8px;
@@ -1004,7 +1003,7 @@
 
 .user-prompt-expand-toggle:hover,
 .user-prompt-expand-toggle:focus-visible {
-  background: color-mix(in oklch, var(--background) 64%, transparent);
+  background: color-mix(in srgb, var(--background) 64%, transparent);
   color: var(--foreground);
   outline: none;
 }
@@ -1086,7 +1085,7 @@
 
 .assistant-final-meta-button:hover,
 .assistant-final-meta-button:focus-visible {
-  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
   color: var(--foreground);
   outline: none;
 }

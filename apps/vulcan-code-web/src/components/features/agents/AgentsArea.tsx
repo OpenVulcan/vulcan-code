@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { StatusPill } from "@/components/shared/status"
-import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu"
+import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { useI18n } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
@@ -410,15 +410,9 @@ export function AgentsArea(props: {
   )
 }
 
-// FloatingAgentCategoryMenu renders the adaptive agent category selector.
-// FloatingAgentCategoryMenu 渲染自适应智能体分类选择器。
-export function FloatingAgentCategoryMenu(props: {
-  // Whether the menu is expanded.
-  // 菜单是否展开。
-  expanded: boolean
-  // Updates the expanded menu state.
-  // 更新菜单展开状态。
-  onExpandedChange: (expanded: boolean) => void
+// AgentCategoryMenu renders the fixed agent category selector.
+// AgentCategoryMenu 渲染固定智能体分类选择器。
+export function AgentCategoryMenu(props: {
   // Currently selected category id, or empty for all categories.
   // 当前选中的分类标识；空字符串表示全部分类。
   selectedCategoryId: string
@@ -429,7 +423,7 @@ export function FloatingAgentCategoryMenu(props: {
   // 包含智能体目录的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  const { locale, t } = useI18n()
+  const { locale } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
   // categories stores sorted category rows for the menu.
   // categories 保存菜单使用的已排序分类行。
@@ -444,30 +438,12 @@ export function FloatingAgentCategoryMenu(props: {
     })
     return counts
   }, [props.workbench.subagentCatalog.definitions])
-  // activeLabel stores the selected menu label for the collapsed pill.
-  // activeLabel 保存收起胶囊展示的当前菜单标签。
-  const activeLabel = React.useMemo(() => {
-    if (!props.selectedCategoryId) {
-      return text("全部", "All")
-    }
-    const selected = categories.find((category) => category.categoryId === props.selectedCategoryId)
-    return selected ? localizedCategoryName(selected, locale) : props.selectedCategoryId
-  }, [categories, locale, props.selectedCategoryId, text])
 
   return (
-    <WorkspaceToolPanelMenu
-      activeLabel={activeLabel}
-      ariaLabel={text("智能体分类", "Agent categories")}
-      className="agent-category-floating-menu"
-      collapseLabel={t("workspaceToolPanel.collapseToPill")}
-      expanded={props.expanded}
-      expandLabel={t("workspaceToolPanel.expandState")}
-      heading={text("分类", "Categories")}
-      onExpandedChange={props.onExpandedChange}
-    >
+    <WorkspaceDirectoryMenu ariaLabel={text("智能体分类", "Agent categories")} heading={text("分类", "Categories")}>
       <button
         className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`}
-        onClick={() => props.onSelectCategory("")}
+        aria-current={props.selectedCategoryId === "" ? "page" : undefined} onClick={() => props.onSelectCategory("")}
         type="button"
       >
         <Bot size={15} />
@@ -478,7 +454,7 @@ export function FloatingAgentCategoryMenu(props: {
         <button
           className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`}
           key={category.categoryId}
-          onClick={() => props.onSelectCategory(category.categoryId)}
+          aria-current={props.selectedCategoryId === category.categoryId ? "page" : undefined} onClick={() => props.onSelectCategory(category.categoryId)}
           title={localizedCategoryDescription(category, locale) ?? category.categoryId}
           type="button"
         >
@@ -487,7 +463,7 @@ export function FloatingAgentCategoryMenu(props: {
           <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
         </button>
       ))}
-    </WorkspaceToolPanelMenu>
+    </WorkspaceDirectoryMenu>
   )
 }
 

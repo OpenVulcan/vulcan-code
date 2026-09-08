@@ -2,6 +2,7 @@ import * as React from "react"
 import { PanelLeftIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { navigationItemVariants } from "@/components/ui/navigation-item"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
@@ -10,6 +11,15 @@ import { cn } from "@/lib/utils"
 // SidebarContextValue stores the collapsible sidebar state for one inset shell.
 // SidebarContextValue 保存单个 inset 外壳内的可折叠侧栏状态。
 interface SidebarContextValue {
+  // Whether navigation uses a modal drawer instead of desktop width.
+  // 导航是否使用模态抽屉而非占用桌面宽度。
+  isMobile: boolean
+  // Dismisses mobile navigation without changing the desktop preference.
+  // 关闭手机导航且不修改桌面的展开偏好。
+  closeMobileSidebar: () => void
+  // Restores keyboard focus to the navigation trigger in the owning shell.
+  // 将键盘焦点恢复到所属外壳的导航触发器。
+  focusTrigger: () => void
   // Current visual state used by sidebar data attributes.
   // 当前用于侧栏 data 属性的视觉状态。
   state: "expanded" | "collapsed"
@@ -27,6 +37,19 @@ interface SidebarContextValue {
 // SidebarContext shares state between Sidebar, SidebarInset, and SidebarTrigger.
 // SidebarContext 在 Sidebar、SidebarInset 与 SidebarTrigger 之间共享状态。
 const SidebarContext = React.createContext<SidebarContextValue | null>(null)
+
+// subscribeSidebarViewport observes window resizing and returns its cleanup callback.
+// subscribeSidebarViewport 监听窗口尺寸变化，返回取消监听的回调。
+function subscribeSidebarViewport(listener: () => void): () => void {
+  window.addEventListener("resize", listener)
+  return () => window.removeEventListener("resize", listener)
+}
+
+// readMobileSidebarViewport returns whether the current viewport requires drawer navigation.
+// readMobileSidebarViewport 返回当前视口是否需要抽屉导航。
+function readMobileSidebarViewport(): boolean {
+  return window.innerWidth <= 720
+}
 
 // useSidebar returns the nearest sidebar context.
 // useSidebar 返回最近的侧栏上下文。
@@ -61,19 +84,48 @@ function SidebarProvider({
   // uncontrolledOpen preserves the original standalone provider behavior.
   // uncontrolledOpen 保留原始独立 Provider 行为。
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen)
+  // wrapperRef bounds focus restoration to this sidebar provider.
+  // wrapperRef 将焦点恢复范围限定为当前侧栏 Provider。
+  const wrapperRef = React.useRef<HTMLDivElement>(null)
+  // focusTrigger tolerates providers that intentionally render without a trigger.
+  // focusTrigger 允许调用方有意省略导航触发器。
+  const focusTrigger = React.useCallback(() => wrapperRef.current?.querySelector<HTMLButtonElement>(".vcn-sidebar-trigger")?.focus(), [])
+  // Mobile visibility is transient; resizing must never persist a desktop preference.
+  // 手机可见状态是临时状态，改变窗口尺寸不能回写桌面偏好。
+  const isMobile = React.useSyncExternalStore(subscribeSidebarViewport, readMobileSidebarViewport, () => false)
+  // mobileOpen starts closed so content receives the entire phone viewport.
+  // mobileOpen 默认关闭，使正文获得完整手机视口。
+  const [mobileOpen, setMobileOpen] = React.useState(false)
+  // closeMobileSidebar also serves explicit destination-selection callbacks.
+  // closeMobileSidebar 同时供明确的导航目标选择回调使用。
+  const closeMobileSidebar = React.useCallback(() => setMobileOpen(false), [])
+  React.useEffect(closeMobileSidebar, [isMobile, closeMobileSidebar])
+  // isControlled identifies the caller-owned desktop preference.
+  // isControlled 标识由调用方持有的桌面偏好。
   const isControlled = typeof open === "boolean"
-  const currentOpen = isControlled ? open : uncontrolledOpen
+  // desktopOpen retains its original owner while the phone drawer is visible.
+  // desktopOpen 在手机抽屉显示期间仍保留原来的状态归属。
+  const desktopOpen = isControlled ? open : uncontrolledOpen
+  // currentOpen selects the visibility state belonging to the current viewport.
+  // currentOpen 选择属于当前视口的可见状态。
+  const currentOpen = isMobile ? mobileOpen : desktopOpen
+  // setOpen routes the requested visibility to its owner and returns no value.
+  // setOpen 将请求的可见状态传给对应所有者，不返回值。
   const setOpen = React.useCallback((nextOpen: boolean) => {
+    if (isMobile) {
+      setMobileOpen(nextOpen)
+      return
+    }
     if (!isControlled) {
       setUncontrolledOpen(nextOpen)
     }
     onOpenChange?.(nextOpen)
-  }, [isControlled, onOpenChange])
+  }, [isControlled, isMobile, onOpenChange])
   const toggleSidebar = React.useCallback(() => setOpen(!currentOpen), [currentOpen, setOpen])
-  const state = currentOpen ? "expanded" : "collapsed"
+  const state = isMobile || currentOpen ? "expanded" : "collapsed"
   const value = React.useMemo<SidebarContextValue>(
-    () => ({ state, open: currentOpen, setOpen, toggleSidebar }),
-    [currentOpen, setOpen, state, toggleSidebar],
+    () => ({ state, open: currentOpen, setOpen, toggleSidebar, isMobile, closeMobileSidebar, focusTrigger }),
+    [currentOpen, setOpen, state, toggleSidebar, isMobile, closeMobileSidebar, focusTrigger],
   )
 
   return (
@@ -81,7 +133,9 @@ function SidebarProvider({
       <div
         className={cn("vcn-sidebar-wrapper group/sidebar-wrapper", className)}
         data-state={state}
+        data-mobile={isMobile}
         data-slot="sidebar-wrapper"
+        ref={wrapperRef}
         {...props}
       >
         {children}
@@ -106,7 +160,23 @@ function Sidebar({
   // 侧栏视觉变体。
   variant?: "sidebar" | "inset"
 }) {
-  const { state } = useSidebar()
+  const { state, isMobile, open, setOpen, focusTrigger } = useSidebar()
+  const { t } = useI18n()
+
+  // Render the same navigation children in a focus-trapped drawer on phones.
+  // 在手机上将相同的导航内容呈现于具有焦点约束的抽屉中。
+  if (isMobile && collapsible !== "none") {
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side="left" className="vcn-mobile-navigation" aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
+          <SheetTitle className="sr-only">{t("sidebar.console")}</SheetTitle>
+          <aside className={cn("vcn-sidebar", className)} data-slot="sidebar" data-state="expanded" data-side="left" data-variant={variant} {...props}>
+            {children}
+          </aside>
+        </SheetContent>
+      </Sheet>
+    )
+  }
 
   return (
     <aside
@@ -132,12 +202,13 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"section">) 
 // SidebarTrigger renders the button that toggles the sidebar state.
 // SidebarTrigger 渲染用于切换侧栏状态的按钮。
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  const { toggleSidebar, open } = useSidebar()
   const { t } = useI18n()
 
   return (
     <Button
       aria-label={t("sidebar.toggle")}
+      aria-expanded={open}
       className={cn("vcn-sidebar-trigger", className)}
       onClick={(event) => {
         onClick?.(event)
@@ -151,6 +222,18 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       <PanelLeftIcon size={16} />
     </Button>
   )
+}
+
+// useSidebarNavigation wraps a destination callback and dismisses only the mobile drawer.
+// useSidebarNavigation 包装导航目标回调，仅关闭手机抽屉。
+// Parameters: none. Returns a wrapper preserving the callback arguments and result.
+// 参数：无。返回保留原回调参数和结果的包装函数。
+function useSidebarNavigation() {
+  const { closeMobileSidebar } = useSidebar()
+  return React.useCallback(<Args extends unknown[], Result,>(action: (...args: Args) => Result) => (...args: Args): Result => {
+    closeMobileSidebar()
+    return action(...args)
+  }, [closeMobileSidebar])
 }
 
 // SidebarHeader renders the sidebar header strip.
@@ -280,4 +363,5 @@ export {
   SidebarProvider,
   SidebarTrigger,
   useSidebar,
+  useSidebarNavigation,
 }

@@ -138,7 +138,7 @@
 }
 
 .project-folder-picker-error {
-  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
   color: var(--destructive);
 }
 

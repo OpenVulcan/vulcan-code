@@ -31,7 +31,7 @@
 }
 
 .project-folder-button {
-  --project-folder-active-bg: color-mix(in oklch, var(--sidebar-accent) 54%, var(--foreground) 3%);
+  --project-folder-active-bg: color-mix(in srgb, var(--sidebar-accent) 54%, var(--foreground) 3%);
   position: relative;
   height: 30px;
   max-height: 30px;
@@ -269,7 +269,7 @@
 }
 
 .conversation-tree-button {
-  --conversation-tree-active-bg: color-mix(in oklch, var(--sidebar-accent) 68%, var(--foreground) 9%);
+  --conversation-tree-active-bg: color-mix(in srgb, var(--sidebar-accent) 68%, var(--foreground) 9%);
   --conversation-tree-fade-width: 25px;
   --conversation-tree-row-bg: var(--sidebar);
   box-sizing: border-box;
@@ -308,7 +308,7 @@
   height: 16px;
   align-items: center;
   justify-content: center;
-  color: color-mix(in oklch, var(--sidebar-foreground) 78%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 78%, transparent);
 }
 
 .conversation-tree-button:not(:hover):not(.active):not(:focus-visible) {
@@ -340,7 +340,7 @@
 .conversation-empty-row {
   overflow: hidden;
   padding: 7px 8px 7px 33px;
-  color: color-mix(in oklch, var(--sidebar-foreground) 34%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 34%, transparent);
   font-size: 13px;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -356,7 +356,7 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: color-mix(in oklch, var(--sidebar-foreground) 42%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 42%, transparent);
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
@@ -367,8 +367,8 @@
 
 .conversation-list-toggle:hover,
 .conversation-list-toggle:focus-visible {
-  background: color-mix(in oklch, var(--sidebar-accent) 70%, transparent);
-  color: color-mix(in oklch, var(--sidebar-foreground) 58%, transparent);
+  background: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 58%, transparent);
   outline: none;
 }
 
@@ -414,7 +414,7 @@
 }
 
 .conversation-tree-leading-status.running {
-  color: color-mix(in oklch, var(--sidebar-foreground) 72%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 72%, transparent);
 }
 
 .conversation-tree-leading-actions {
@@ -470,7 +470,7 @@
   min-height: 20px;
   align-items: center;
   justify-content: flex-end;
-  color: color-mix(in oklch, var(--sidebar-foreground) 46%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 46%, transparent);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -480,7 +480,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  color: color-mix(in oklch, var(--sidebar-foreground) 72%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 72%, transparent);
 }
 
 .conversation-tree-status-mark {
@@ -515,7 +515,7 @@
   height: 7px;
   border-radius: 999px;
   background: oklch(0.62 0.2 255);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--conversation-tree-row-bg) 75%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--conversation-tree-row-bg) 75%, transparent);
 }
 
 .conversation-tree-quick-actions {
@@ -555,13 +555,13 @@
   align-items: center;
   justify-content: center;
   border-radius: 5px;
-  color: color-mix(in oklch, var(--sidebar-foreground) 56%, transparent);
+  color: color-mix(in srgb, var(--sidebar-foreground) 56%, transparent);
   cursor: pointer;
 }
 
 .conversation-tree-quick-action:hover,
 .conversation-tree-quick-action:focus-visible {
-  background: color-mix(in oklch, var(--sidebar-accent) 86%, var(--foreground) 6%);
+  background: color-mix(in srgb, var(--sidebar-accent) 86%, var(--foreground) 6%);
   color: var(--sidebar-accent-foreground);
   outline: none;
 }
@@ -575,7 +575,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: color-mix(in oklch, oklch(0.72 0.18 24) 16%, transparent);
+  background: color-mix(in srgb, oklch(0.72 0.18 24) 16%, transparent);
   color: oklch(0.62 0.2 24);
   cursor: pointer;
   font-size: 12px;
@@ -585,7 +585,7 @@
 
 .conversation-tree-confirm-action:hover,
 .conversation-tree-confirm-action:focus-visible {
-  background: color-mix(in oklch, oklch(0.72 0.18 24) 24%, transparent);
+  background: color-mix(in srgb, oklch(0.72 0.18 24) 24%, transparent);
   outline: none;
 }
 
@@ -619,9 +619,9 @@
   align-items: stretch;
   margin: 0;
   border: 1px solid var(--border);
-  border-radius: 14px 0 0 14px;
+  border-radius: 12px 0 0 12px;
   background: var(--background);
-  box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 7%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 7%, transparent);
   overflow: hidden;
   transition: margin 180ms ease;
 }

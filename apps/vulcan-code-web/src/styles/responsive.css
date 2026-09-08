@@ -1,0 +1,510 @@
+/* Shared containment rules let each pane scroll without expanding the application viewport. */
+/* 共享容纳规则让各面板独立滚动，避免撑大应用视口。 */
+.workspace-main-shell,
+.feature-main-shell {
+  container: workspace-page / inline-size;
+}
+
+:where([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+:where([data-slot="dialog-header"]) {
+  padding-right: 28px;
+}
+
+:where([data-slot="dialog-description"], [data-slot="alert-dialog-description"]) {
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+:where([data-slot="popover-content"], [data-slot="select-content"]) {
+  max-width: calc(100vw - 16px);
+  overflow-wrap: anywhere;
+}
+
+.vcn-mobile-navigation[data-slot="sheet-content"] {
+  width: min(320px, calc(100vw - 40px));
+  max-width: none;
+  gap: 0;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  background: var(--sidebar);
+}
+
+.vcn-mobile-navigation > .vcn-sidebar {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+}
+
+.vcn-mobile-navigation .vcn-sidebar-header {
+  padding-top: 48px;
+}
+
+/* Form layouts respond to available content width, including a resized desktop side pane. */
+/* 表单根据内容可用宽度变化，同时兼顾桌面侧栏挤占空间的情况。 */
+@container workspace-page (max-width: 640px) {
+  .settings-inline-control,
+  .settings-form-grid.two,
+  .settings-form-grid.three,
+  .settings-split-layout,
+  .knowledge-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-split-layout,
+  .knowledge-layout {
+    grid-template-rows: minmax(100px, 30%) minmax(0, 1fr);
+  }
+
+  .knowledge-toolbar,
+  .knowledge-detail-header {
+    flex-wrap: wrap;
+  }
+
+  .knowledge-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .knowledge-create-row,
+  .knowledge-search {
+    grid-column: 1 / -1;
+    flex-basis: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .knowledge-actions {
+    flex-wrap: wrap;
+  }
+
+  /* Provider records retain all controls while changing from comparison columns to labeled rows. */
+  /* 供应商记录保留全部控件，从对比列切换为带标签的记录行。 */
+  .provider-responsive-table,
+  .provider-responsive-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .provider-responsive-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .provider-responsive-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+    gap: 10px;
+    background: var(--card);
+  }
+
+  .provider-responsive-table td {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    padding: 0;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .provider-responsive-table td:nth-child(n+3)::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 6px;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+
+  .provider-responsive-table td:last-child > div {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+/* Phones use one bounded application viewport and an accessible navigation drawer. */
+/* 手机使用单个受限应用视口，以及支持键盘访问的导航抽屉。 */
+@media (max-width: 720px) {
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .app-shell {
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .console-shell,
+  .workspace-panel-shell {
+    min-height: 0;
+    height: 100%;
+  }
+
+  .vcn-sidebar-inset {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    min-height: 0;
+    width: 100%;
+  }
+
+  .workspace {
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* Feature filters occupy their own bounded row instead of covering records and actions. */
+  /* 功能筛选占据独立且受限的一行，避免遮盖记录和操作。 */
+  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) > .adaptive-tool-panel-slot {
+    position: relative;
+    inset: auto;
+    width: 100% !important;
+    height: auto !important;
+    max-height: 140px;
+    padding: 10px 12px 0;
+    overflow: auto;
+    transition: none;
+  }
+
+  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .adaptive-tool-panel-slot-inner {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .workspace-tool-panel-menu {
+    width: 100%;
+    border-radius: 10px;
+    background: var(--card);
+  }
+
+  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .workspace-tool-panel-menu-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-catalog-toolbar-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .agent-catalog-toolbar {
+    position: static;
+    padding: 12px;
+  }
+
+  .agent-catalog-toolbar-heading,
+  .agent-catalog-filter-row,
+  .agent-skills-management-surface .agent-catalog-toolbar-heading,
+  .agent-skills-management-surface .agent-catalog-filter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-catalog-toolbar-heading p {
+    white-space: normal;
+  }
+
+  .agent-definition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .agent-definition-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .console-header {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .console-header-main {
+    gap: 6px;
+  }
+
+  .console-header .app-chrome-actions {
+    margin-right: -8px;
+  }
+
+  .workspace-custom-header-title small {
+    display: none;
+  }
+
+  .workspace-custom-header-title,
+  .workspace-header-title-text {
+    flex: 1 1 auto;
+  }
+
+  .workspace-custom-header-title h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-statusbar-host {
+    flex-basis: calc(28px + env(safe-area-inset-bottom));
+    min-height: calc(28px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .statusbar.workspace-statusbar {
+    height: 28px;
+    min-height: 0;
+    padding: 0 10px;
+  }
+
+  .conversation-panel {
+    padding: 20px 12px calc(var(--composer-dock-height, 160px) + 28px);
+    scrollbar-gutter: auto;
+  }
+
+  .composer-dock {
+    bottom: 10px;
+    max-width: calc(100% - 20px);
+  }
+
+  .composer-toolbar {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px;
+  }
+
+  .composer-toolbar-left {
+    display: contents;
+  }
+
+  .composer-select-trigger.model {
+    flex: 1 1 calc(100% - 144px);
+    width: auto;
+    max-width: none;
+  }
+
+  .composer-select-trigger.model-account {
+    flex: 0 0 88px;
+    width: 88px;
+  }
+
+  .composer-toolbar-right {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .composer-panel textarea {
+    font-size: 16px;
+    max-height: min(240px, 30dvh);
+  }
+
+  .composer-select-label {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .composer-select-trigger.model .composer-select-copy {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .composer-select-subtitle {
+    font-size: 11px;
+    line-height: 14px;
+  }
+
+  .empty-conversation-prompt h2 {
+    font-size: 22px;
+    max-width: 100%;
+  }
+
+  .settings-form-grid.two,
+  .settings-form-grid.three,
+  .settings-split-layout.modal,
+  .badge-editor,
+  .agent-skill-form-grid,
+  .agent-definition-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-split-layout.modal {
+    grid-template-rows: minmax(80px, 30%) minmax(0, 1fr);
+  }
+
+  .settings-provider-row header,
+  .settings-target-row,
+  .settings-model-row,
+  .knowledge-actions,
+  .knowledge-detail-header {
+    flex-wrap: wrap;
+  }
+
+  .knowledge-title-editor {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .knowledge-binding-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"] {
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .project-settings-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100dvh - 24px);
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .project-settings-layout {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .project-settings-nav {
+    height: auto;
+    max-height: 180px;
+  }
+
+  .project-settings-content {
+    max-height: none;
+  }
+
+  .model-picker-scroll {
+    height: min(310px, 48dvh);
+  }
+
+  .model-picker-group-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: 4px 8px 8px 0;
+  }
+
+  .model-picker-group-main {
+    min-height: 44px;
+    height: auto;
+    padding-block: 6px;
+  }
+
+  .model-picker-group-row .model-picker-row-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .model-picker-group-row .model-picker-row-side {
+    max-width: 100%;
+    padding-left: 40px;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .model-picker-group-row .model-picker-row-id {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .composer-capability-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100dvh - 24px);
+    padding: 16px;
+  }
+
+  .composer-capability-dialog-grid {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(80px, 32%) minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .composer-capability-dialog-left {
+    padding: 0 0 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .feature-header-actions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .feature-header-refresh {
+    width: 40px;
+    padding-inline: 0;
+  }
+
+  .feature-header-refresh > span {
+    display: none;
+  }
+
+  .feature-header-actions > button:not(.feature-header-refresh) {
+    padding-inline: 8px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  [data-slot="tabs-list"][data-orientation="horizontal"] {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    max-width: 100%;
+    height: auto;
+    gap: 6px;
+  }
+
+  [data-slot="tabs-list"][data-orientation="horizontal"] > [data-slot="tabs-trigger"] {
+    flex: 0 1 auto;
+    min-height: 36px;
+    height: auto;
+  }
+
+  /* Grow interactive targets without changing virtualized list row measurements. */
+  /* 扩大交互目标，同时不改变虚拟列表的行高测量契约。 */
+  [data-slot="button"],
+  [data-slot="input"],
+  [data-slot="select-trigger"] {
+    min-height: 40px;
+  }
+
+  [data-slot="button"][data-size^="icon"] {
+    min-width: 40px;
+  }
+
+  :is(.composer-toolbar, .console-header, .vcn-mobile-navigation) button,
+  .composer-toolbar [role="combobox"] {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  :is([data-slot="dialog-content"], .settings-form-field) :is([data-slot="input"], [data-slot="select-trigger"]),
+  [data-slot="dialog-footer"] button {
+    min-height: 40px;
+  }
+
+  :is([data-slot="dialog-content"], .settings-form-field) input {
+    font-size: 16px;
+  }
+}
+
+/* Motion preferences apply to shell transitions as well as component animations. */
+/* 动效偏好同时作用于外壳过渡与组件动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .vcn-sidebar, .vcn-sidebar-inset, .composer-dock, .conversation-scroll-content {
+    transition: none;
+  }
+}

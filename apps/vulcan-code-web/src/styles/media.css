@@ -16,7 +16,7 @@
   background: var(--card);
   color: var(--foreground);
   text-align: left;
-  box-shadow: 0 10px 28px color-mix(in oklch, var(--foreground) 6%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--foreground) 6%, transparent);
 }
 
 .generated-media-card.image {
@@ -66,9 +66,9 @@
   display: inline-grid;
   place-items: center;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--background) 88%, transparent);
+  background: color-mix(in srgb, var(--background) 88%, transparent);
   color: var(--foreground);
-  box-shadow: 0 8px 24px color-mix(in oklch, var(--foreground) 18%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--foreground) 18%, transparent);
 }
 
 .generated-media-card.audio {
@@ -190,7 +190,7 @@
   border-radius: 999px;
   background: var(--background);
   color: var(--foreground);
-  box-shadow: 0 10px 28px color-mix(in oklch, var(--foreground) 12%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--foreground) 12%, transparent);
 }
 
 .generated-media-open-player span:last-child {
@@ -282,8 +282,8 @@
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: color-mix(in oklch, var(--background) 86%, transparent);
-  box-shadow: 0 10px 28px color-mix(in oklch, var(--foreground) 10%, transparent);
+  background: color-mix(in srgb, var(--background) 86%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .generated-media-image-zoom-trigger {

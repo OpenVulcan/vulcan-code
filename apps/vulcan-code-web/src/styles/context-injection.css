@@ -86,7 +86,7 @@
 
 .vmm-static-profile-date-group {
   gap: 7px;
-  border-left: 2px solid color-mix(in oklab, var(--primary) 30%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
   padding-left: 8px;
 }
 
@@ -111,7 +111,7 @@
   gap: 5px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: color-mix(in oklch, var(--muted) 34%, transparent);
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
   padding: 8px 9px;
 }
 
@@ -178,7 +178,7 @@
   gap: 6px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: color-mix(in oklch, var(--muted) 42%, transparent);
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
   padding: 8px 9px;
 }
 
@@ -227,12 +227,12 @@
 }
 
 .context-injection-delete-button:hover {
-  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
   color: var(--destructive);
 }
 
 .context-injection-lookup-button:hover {
-  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
 }
 
@@ -263,7 +263,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 999px;
   background: var(--background);
   color: var(--muted-foreground);
@@ -279,15 +279,15 @@
 }
 
 .context-injection-pill.success {
-  border-color: color-mix(in oklab, #16a34a 42%, transparent);
-  background: color-mix(in oklab, #16a34a 13%, transparent);
-  color: color-mix(in oklab, #15803d 88%, var(--foreground));
+  border-color: color-mix(in srgb, #16a34a 42%, transparent);
+  background: color-mix(in srgb, #16a34a 13%, transparent);
+  color: color-mix(in srgb, #15803d 88%, var(--foreground));
 }
 
 .context-injection-pill.warning {
-  border-color: color-mix(in oklab, #d97706 42%, transparent);
-  background: color-mix(in oklab, #f59e0b 15%, transparent);
-  color: color-mix(in oklab, #b45309 88%, var(--foreground));
+  border-color: color-mix(in srgb, #d97706 42%, transparent);
+  background: color-mix(in srgb, #f59e0b 15%, transparent);
+  color: color-mix(in srgb, #b45309 88%, var(--foreground));
 }
 
 .context-injection-item pre,
@@ -383,7 +383,7 @@
 
 .context-injection-card-group.expired {
   margin-top: 4px;
-  border-top: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   padding-top: 10px;
 }
 
@@ -395,7 +395,7 @@
 }
 
 .context-injection-expired-header strong {
-  color: color-mix(in oklab, #b45309 82%, var(--foreground));
+  color: color-mix(in srgb, #b45309 82%, var(--foreground));
   font-size: 12px;
 }
 

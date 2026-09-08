@@ -6,7 +6,7 @@
   border: 1px solid var(--border);
   border-bottom: 0;
   border-radius: 14px 14px 0 0;
-  background: color-mix(in oklch, var(--card) 98%, var(--muted));
+  background: color-mix(in srgb, var(--card) 98%, var(--muted));
   box-shadow: none;
   pointer-events: auto;
 }
@@ -32,12 +32,12 @@
 }
 
 .pending-prompt-row + .pending-prompt-row {
-  border-top: 1px solid color-mix(in oklch, var(--border) 74%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
 }
 
 .pending-prompt-row:hover,
 .pending-prompt-row:focus-within {
-  background: color-mix(in oklch, var(--muted) 56%, transparent);
+  background: color-mix(in srgb, var(--muted) 56%, transparent);
 }
 
 .pending-prompt-row.dragging {
@@ -68,7 +68,7 @@
 }
 
 .pending-prompt-row-handle:hover {
-  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
   color: var(--foreground);
 }
 
@@ -121,14 +121,14 @@
 }
 
 .pending-prompt-guide-button:hover {
-  background: color-mix(in oklch, var(--muted) 78%, transparent);
+  background: color-mix(in srgb, var(--muted) 78%, transparent);
 }
 
 .pending-prompt-guide-button.inserted,
 .pending-prompt-guide-button.inserted:disabled {
   opacity: 1;
   color: var(--muted-foreground);
-  background: color-mix(in oklch, var(--muted) 64%, transparent);
+  background: color-mix(in srgb, var(--muted) 64%, transparent);
 }
 
 .composer-goal-strip {
@@ -144,7 +144,7 @@
   border: 1px solid var(--border);
   border-bottom: 0;
   border-radius: 14px 14px 0 0;
-  background: color-mix(in oklch, var(--card) 98%, var(--muted));
+  background: color-mix(in srgb, var(--card) 98%, var(--muted));
   color: var(--muted-foreground);
   pointer-events: auto;
 }
@@ -258,7 +258,7 @@
 
 .composer-goal-budget-input:focus-visible {
   border-color: var(--ring);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 20%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent);
 }
 
 .composer-attachment-input {
@@ -386,7 +386,7 @@
   place-items: center;
   transform: translate(-50%, -50%);
   border-radius: 999px;
-  background: color-mix(in oklch, var(--background) 86%, transparent);
+  background: color-mix(in srgb, var(--background) 86%, transparent);
   color: var(--foreground);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
@@ -408,7 +408,7 @@
 }
 
 .composer-attachment-progress-track {
-  stroke: color-mix(in oklch, var(--border) 75%, transparent);
+  stroke: color-mix(in srgb, var(--border) 75%, transparent);
 }
 
 .composer-attachment-progress-value {
@@ -423,7 +423,7 @@
   display: inline-flex;
   color: #d97706;
   cursor: help;
-  filter: drop-shadow(0 1px 1px color-mix(in oklch, var(--background) 80%, transparent));
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--background) 80%, transparent));
   pointer-events: auto;
   z-index: 4;
 }
@@ -437,7 +437,7 @@
   padding: 0;
   border: 0;
   border-radius: inherit;
-  background: color-mix(in oklch, var(--muted-foreground) 46%, transparent);
+  background: color-mix(in srgb, var(--muted-foreground) 46%, transparent);
   color: white;
   font-size: 12px;
   font-weight: 600;

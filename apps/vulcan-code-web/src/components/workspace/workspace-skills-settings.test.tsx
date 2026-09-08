@@ -4,13 +4,13 @@ import { describe, expect, it } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 
-import { FloatingSkillMenu } from "./workspace-skills-settings";
+import { PluginWorkspaceMenu } from "./workspace-skills-settings";
 
 // noop accepts menu callbacks without introducing test behavior.
 // noop 接收菜单回调且不引入测试行为。
 function noop(): void {}
 
-describe("FloatingSkillMenu", () => {
+describe("PluginWorkspaceMenu", () => {
   // The ContextEngine entry is a fixed peer of LuaSkills settings, not plugin-management content.
   // ContextEngine 入口是 LuaSkills 设置的固定同级节点，而非插件管理内容。
   it("renders the fixed ContextEngine node before plugin management", () => {
@@ -18,10 +18,8 @@ describe("FloatingSkillMenu", () => {
     // markup 捕获真实的中文展开插件功能区菜单。
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
-        <FloatingSkillMenu
+        <PluginWorkspaceMenu
           activeSubArea="context-engine"
-          expanded
-          onExpandedChange={noop}
           onSelectSubArea={noop}
           workbench={{ plugins: [] } as unknown as WorkbenchSnapshot}
         />

@@ -1,0 +1,84 @@
+/* Shared light and dark palette, loaded before the application shell. */
+/* 在应用外壳之前加载的统一明暗色板。 */
+:root {
+  color-scheme: light;
+  font-family: "Geist Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  --background: #f7f8fa;
+  --foreground: #242830;
+  --card: #ffffff;
+  --card-foreground: #242830;
+  --popover: #ffffff;
+  --popover-foreground: #242830;
+  --primary: #303a48;
+  --primary-foreground: #ffffff;
+  --secondary: #edf0f4;
+  --secondary-foreground: #354052;
+  --muted: #eef0f3;
+  --muted-foreground: #626b79;
+  --accent: #e7edf4;
+  --accent-foreground: #243b55;
+  --destructive: #c43542;
+  --border: #dfe3e9;
+  --input: #ced5de;
+  --ring: #708aa5;
+  --chart-1: #547cac;
+  --chart-2: #368b7c;
+  --chart-3: #9970b8;
+  --chart-4: #bc8838;
+  --chart-5: #c56870;
+  --diff-addition-base: #1f883d;
+  --diff-deletion-base: #cf222e;
+  --radius: 0.5rem;
+  --sidebar: #eef1f5;
+  --sidebar-foreground: #354052;
+  --sidebar-primary: #303a48;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dfe7f0;
+  --sidebar-accent-foreground: #243b55;
+  --sidebar-border: #dfe3e9;
+  --sidebar-ring: #708aa5;
+  --app-header-height: 30px;
+  --vcn-overlay: rgb(25 34 48 / 26%);
+  --vcn-shadow-floating: 0 8px 28px rgb(25 34 48 / 14%), 0 2px 6px rgb(25 34 48 / 6%);
+}
+
+.dark {
+  color-scheme: dark;
+  --vcn-overlay: rgb(5 9 16 / 58%);
+  --vcn-shadow-floating: 0 12px 36px rgb(0 0 0 / 32%), 0 2px 8px rgb(0 0 0 / 16%);
+  --background: #191c22;
+  --foreground: #e1e6ed;
+  --card: #21252d;
+  --card-foreground: #e1e6ed;
+  --popover: #292e38;
+  --popover-foreground: #edf0f5;
+  --primary: #d7e2ef;
+  --primary-foreground: #202a38;
+  --secondary: #2c323c;
+  --secondary-foreground: #dce3ec;
+  --muted: #282e37;
+  --muted-foreground: #a2adbb;
+  --accent: #303d4d;
+  --accent-foreground: #dfebfa;
+  --destructive: #f0838e;
+  --border: #353d49;
+  --input: #46515f;
+  --ring: #8faecf;
+  --chart-1: #85a9db;
+  --chart-2: #6ec4af;
+  --chart-3: #be9bdf;
+  --chart-4: #e1b66b;
+  --chart-5: #ed99a1;
+  --diff-addition-base: #2ea043;
+  --diff-deletion-base: #f85149;
+  --sidebar: #1d2129;
+  --sidebar-foreground: #ccd5e1;
+  --sidebar-primary: #d7e2ef;
+  --sidebar-primary-foreground: #202a38;
+  --sidebar-accent: #303d4d;
+  --sidebar-accent-foreground: #dfebfa;
+  --sidebar-border: #353d49;
+  --sidebar-ring: #8faecf;
+}

@@ -7,14 +7,14 @@ import { cn } from "@/lib/utils"
 // surfaceVariants defines the approved visual roles for ordinary content containers.
 // surfaceVariants 定义普通内容容器允许使用的统一视觉角色。
 const surfaceVariants = cva(
-  "rounded-lg text-foreground",
+  "rounded-xl text-foreground",
   {
     variants: {
       variant: {
-        default: "bg-card ring-1 ring-foreground/10",
+        default: "bg-card ring-1 ring-border",
         muted: "bg-muted/45",
         outlined: "border border-border bg-card",
-        interactive: "bg-card ring-1 ring-foreground/10 transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35",
+        interactive: "bg-card ring-1 ring-border transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35",
         selected: "bg-accent/55 ring-1 ring-ring/45",
       },
     },

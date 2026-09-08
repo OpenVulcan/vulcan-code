@@ -101,7 +101,7 @@
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--muted) 42%, transparent);
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .project-settings-nav-button {

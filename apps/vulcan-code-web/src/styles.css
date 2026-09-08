@@ -2,7 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
-@import "./ui/foundations/tokens.css";
 @import "./styles/shell.css";
 @import "./styles/sidebar-base.css";
 @import "./styles/sidebar-tree.css";
@@ -34,50 +33,13 @@
 @import "./styles/project-folder-picker.css";
 @import "./styles/plugin-host-components.css";
 @import "./styles/terminal.css";
+@import "./styles/responsive.css";
+@import "./styles/workspace-directory.css";
 
+/* Shared directory geometry follows the feature and responsive foundations. */
+/* 共享目录布局位于功能样式与响应式基础之后。 */
 @custom-variant dark (&:is(.dark *));
 
-:root {
-  color-scheme: light;
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
-  background: var(--background);
-  color: var(--foreground);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --diff-addition-base: #1f883d;
-  --diff-deletion-base: #cf222e;
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-  --app-header-height: 30px;
-}
 
 * {
   box-sizing: border-box;
@@ -149,56 +111,6 @@ button {
 }
 
 @media (max-width: 720px) {
-  body {
-    overflow: auto;
-  }
-
-  .app-shell {
-    height: auto;
-    min-height: 100vh;
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .main-menu,
-  .workspace {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .main-menu {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    padding: 0 10px;
-    overflow: visible;
-  }
-
-  .brand {
-    margin: 0;
-  }
-
-  .feature-nav {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-  }
-
-  .feature-button {
-    width: 40px;
-    flex: 0 0 40px;
-  }
-
-  .global-actions .status-pill {
-    display: none;
-  }
-
-  .console-shell {
-    min-height: 70vh;
-    flex-direction: column;
-  }
-
   .project-settings-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -235,49 +147,6 @@ button {
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
   }
 
-  .vcn-sidebar,
-  .vcn-sidebar[data-collapsible="icon"] {
-    width: 100%;
-    min-width: 0;
-    max-height: 32vh;
-  }
-
-  .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-label {
-    display: flex;
-    margin-top: 0;
-    opacity: 1;
-  }
-
-  .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .vcn-sidebar-inset,
-  .vcn-sidebar[data-collapsible="icon"] + .vcn-sidebar-inset {
-    margin: 0 10px 10px;
-    min-height: 70vh;
-  }
-
-  .workspace {
-    min-height: 70vh;
-    padding: 0;
-    overflow: visible;
-  }
-
-  .area-grid {
-    height: auto;
-    overflow: visible;
-  }
-
-  .topbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .statusbar {
-    padding: 8px 12px;
-  }
 }
 
 @keyframes spin {
@@ -288,7 +157,7 @@ button {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: "Geist Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -329,41 +198,6 @@ button {
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --diff-addition-base: #2ea043;
-  --diff-deletion-base: #f85149;
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
 
 @layer base {
   * {

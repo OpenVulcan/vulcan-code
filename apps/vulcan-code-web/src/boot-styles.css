@@ -1,26 +1,14 @@
-:root {
-  color-scheme: light;
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
-  background: var(--background);
-  color: var(--foreground);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-}
+@import "./ui/foundations/theme.css";
+@import "./ui/foundations/tokens.css";
 
 /* Knowledge-base management workspace. */
 /* 知识库管理工作区。 */
 .knowledge-page {
   height: 100%;
+  min-width: 0;
   min-height: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   padding: 16px;
@@ -37,6 +25,7 @@
 }
 
 .knowledge-toolbar {
+  min-width: 0;
   justify-content: space-between;
   flex-wrap: wrap;
 }
@@ -48,6 +37,7 @@
 }
 
 .knowledge-layout {
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
@@ -271,15 +261,15 @@
 }
 
 .knowledge-index-health-state.ready {
-  border-color: color-mix(in oklab, #2ea043 45%, var(--border));
-  background: color-mix(in oklab, #2ea043 10%, var(--background));
-  color: color-mix(in oklab, #2ea043 78%, var(--foreground));
+  border-color: color-mix(in srgb, #2ea043 45%, var(--border));
+  background: color-mix(in srgb, #2ea043 10%, var(--background));
+  color: color-mix(in srgb, #2ea043 78%, var(--foreground));
 }
 
 .knowledge-index-health-state.attention {
-  border-color: color-mix(in oklab, #d29922 45%, var(--border));
-  background: color-mix(in oklab, #d29922 10%, var(--background));
-  color: color-mix(in oklab, #d29922 78%, var(--foreground));
+  border-color: color-mix(in srgb, #d29922 45%, var(--border));
+  background: color-mix(in srgb, #d29922 10%, var(--background));
+  color: color-mix(in srgb, #d29922 78%, var(--foreground));
 }
 
 .knowledge-index-health-metrics {
@@ -456,7 +446,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  border: 1px solid color-mix(in oklab, var(--destructive) 45%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
   border-radius: 8px;
   padding: 10px;
   color: var(--destructive);
@@ -703,10 +693,21 @@
     grid-template-columns: 1fr;
   }
 
-  .knowledge-toolbar,
   .knowledge-detail-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .knowledge-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .knowledge-create-row,
+  .knowledge-search {
+    grid-column: 1 / -1;
+    max-width: none;
+    min-width: 0;
   }
 
   .knowledge-viewer-body {
@@ -767,10 +768,10 @@ textarea {
   justify-items: start;
   gap: 12px;
   padding: 20px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 30%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));
   border-radius: 14px;
-  background: color-mix(in oklch, var(--popover) 92%, transparent);
-  box-shadow: 0 18px 42px color-mix(in oklch, var(--foreground) 8%, transparent);
+  background: color-mix(in srgb, var(--popover) 92%, transparent);
+  box-shadow: 0 18px 42px color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
 .startup-error-content strong {
@@ -812,7 +813,7 @@ textarea {
   height: 144px;
   display: block;
   object-fit: contain;
-  filter: drop-shadow(0 18px 38px color-mix(in oklch, var(--foreground) 13%, transparent));
+  filter: drop-shadow(0 18px 38px color-mix(in srgb, var(--foreground) 13%, transparent));
 }
 
 .startup-logo-shine-canvas {
@@ -860,7 +861,7 @@ textarea {
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted) 76%, var(--background));
+  background: color-mix(in srgb, var(--muted) 76%, var(--background));
 }
 
 .conversation-loading-bar-value {
@@ -926,7 +927,7 @@ textarea {
 }
 
 .progress-ring-track {
-  stroke: color-mix(in oklch, currentColor 18%, transparent);
+  stroke: color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .progress-ring-value {
@@ -1210,7 +1211,7 @@ textarea {
 .knowledge-import-dialog-error {
   max-height: 120px;
   overflow: auto;
-  color: var(--danger);
+  color: var(--destructive);
   white-space: pre-wrap;
   user-select: text;
 }
@@ -1221,7 +1222,7 @@ textarea {
 }
 
 .knowledge-search-failures {
-  color: var(--danger);
+  color: var(--destructive);
   max-height: 8rem;
   overflow: auto;
   user-select: text;

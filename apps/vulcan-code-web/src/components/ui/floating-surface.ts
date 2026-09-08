@@ -5,7 +5,7 @@ export type FloatingContentWidth = "trigger" | "content" | "sm" | "md" | "lg"
 // FLOATING_SURFACE_CLASS_NAME provides one visual surface for every lightweight overlay.
 // FLOATING_SURFACE_CLASS_NAME 为所有轻量浮层提供统一的视觉表面。
 export const FLOATING_SURFACE_CLASS_NAME =
-  "rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden"
+  "rounded-lg bg-popover text-popover-foreground shadow-(--vcn-shadow-floating) ring-1 ring-border max-w-[calc(100vw-1rem)] outline-hidden"
 
 // FLOATING_MOTION_CLASS_NAME provides shared directional entry and exit motion.
 // FLOATING_MOTION_CLASS_NAME 提供统一的定向进入与退出动效。

@@ -1,3 +1,4 @@
+import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import React from "react";
 import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import { ChatArea } from "@/components/conversation/chat-area";
@@ -18,7 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  FloatingSkillMenu,
+  PluginWorkspaceMenu,
   skillSubAreaLabel,
   WorkspaceSkillsSettings,
 } from "@/components/workspace/workspace-skills-settings";
@@ -88,15 +89,15 @@ export type { WorkspaceMainView } from "@/components/workspace/workspace-shell/t
 // LazyAgentsArea keeps the independent agent editor outside the console-first chunk.
 // LazyAgentsArea 将独立智能体编辑器保留在控制台优先分块之外。
 const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentsArea })));
-// LazyFloatingAgentCategoryMenu defers agent-only floating controls with their owning feature.
-// LazyFloatingAgentCategoryMenu 将智能体专属浮动控件与其所属功能一同延迟。
-const LazyFloatingAgentCategoryMenu = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.FloatingAgentCategoryMenu })));
+// LazyAgentCategoryMenu defers agent directory navigation with its owning feature.
+// LazyAgentCategoryMenu 将智能体目录导航与其所属功能一同延迟。
+const LazyAgentCategoryMenu = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentCategoryMenu })));
 // LazyAgentSkillsArea keeps the prompt-skill editor outside the console-first chunk.
 // LazyAgentSkillsArea 将提示词技能编辑器保留在控制台优先分块之外。
 const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillsArea })));
-// LazyFloatingAgentSkillCategoryMenu defers prompt-skill-only floating controls.
-// LazyFloatingAgentSkillCategoryMenu 延迟提示词技能专属浮动控件。
-const LazyFloatingAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.FloatingAgentSkillCategoryMenu })));
+// LazyAgentSkillCategoryMenu defers prompt-skill directory navigation.
+// LazyAgentSkillCategoryMenu 延迟提示词技能目录导航。
+const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillCategoryMenu })));
 // LazyKnowledgeBaseArea keeps knowledge management outside the console-first chunk.
 // LazyKnowledgeBaseArea 将知识库管理保留在控制台优先分块之外。
 const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/KnowledgeBaseArea").then((module) => ({ default: module.KnowledgeBaseArea })));
@@ -190,15 +191,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
   // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
   const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
-  // skillsMenuExpanded stores the shared adaptive menu state for the skills page.
-  // skillsMenuExpanded 保存技能页共享自适应菜单展开状态。
-  const [skillsMenuExpanded, setSkillsMenuExpanded] = React.useState(true);
-  // agentsMenuExpanded stores the shared adaptive menu state for the agents page.
-  // agentsMenuExpanded 保存智能体页共享自适应菜单展开状态。
-  const [agentsMenuExpanded, setAgentsMenuExpanded] = React.useState(true);
-  // agentSkillsMenuExpanded stores the shared adaptive directory state for the Agent Skills page.
-  // agentSkillsMenuExpanded 保存提示词技能页共享自适应目录展开状态。
-  const [agentSkillsMenuExpanded, setAgentSkillsMenuExpanded] = React.useState(true);
   // selectedAgentCategoryId stores the active agents page category filter.
   // selectedAgentCategoryId 保存智能体页当前分类筛选。
   const [selectedAgentCategoryId, setSelectedAgentCategoryId] = React.useState("");
@@ -484,10 +476,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     const collapsedLeftWidth = 46;
     const preferredRightWidth = 480;
     const handleWidth = 9;
-    const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+    const leftWidth = sidebar.isMobile ? 0 : sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
     setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
     setRightPanelOpen(true);
-  }, [notifyConversationLayoutWillChange, sidebar.open]);
+  }, [notifyConversationLayoutWillChange, sidebar.isMobile, sidebar.open]);
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -1151,6 +1143,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       return (
         <div className="feature-header-actions workspace-skills-header-actions">
           <Button
+            aria-label={skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}
+            title={t("skills.action.refresh")}
+            className="feature-header-refresh"
             disabled={skillHeaderBusyAction !== null}
             onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
             size="sm"
@@ -1190,7 +1185,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       const collapsedLeftWidth = 46;
       const preferredRightWidth = 480;
       const handleWidth = 9;
-      const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+      const leftWidth = sidebar.isMobile ? 0 : sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
       const dockedPanelFits = width - leftWidth - preferredRightWidth - handleWidth >= 800;
       const shouldFloatRightPanel = effectiveRightPanelOpen && !dockedPanelFits;
       const dockedRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
@@ -1201,6 +1196,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           notifyConversationLayoutWillChange();
         }
         setRightPanelFloating(shouldFloatRightPanel);
+      }
+      // Phone navigation overlays the workspace; desktop auto-collapse must not dismiss it.
+      // 手机导航覆盖于工作区上方，桌面自动折叠不能将其关闭。
+      if (sidebar.isMobile) {
+        return;
       }
       if (mainWidth < 800 && sidebar.open) {
         notifyConversationLayoutWillChange();
@@ -1231,100 +1231,73 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
   const pageDescriptor: WorkspacePageDescriptor = props.mainView === "skills" ? {
     content: (
-      <WorkspaceSkillsSettings
-        activeSubArea={props.activeSkillSubArea}
-        luaInstallDialogOpen={luaInstallDialogOpen}
-        onLuaInstallDialogOpenChange={setLuaInstallDialogOpen}
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" navigation={
+        <PluginWorkspaceMenu
+          activeSubArea={props.activeSkillSubArea}
+          onSelectSubArea={props.onSelectSkillSubArea}
+          workbench={props.workbench}
+        />
+      }>
+        <WorkspaceSkillsSettings
+          activeSubArea={props.activeSkillSubArea}
+          luaInstallDialogOpen={luaInstallDialogOpen}
+          onLuaInstallDialogOpenChange={setLuaInstallDialogOpen}
           skillActions={props.luaSkillActions}
-        workbench={props.workbench}
-      />
+          workbench={props.workbench}
+        />
+      </WorkspaceDirectoryLayout>
     ),
     detail: `${skillSubAreaLabel(props.activeSkillSubArea, props.workbench, locale, t)} · ${skillHeaderSummary.detail}`,
     headerActions: skillHeaderActions,
     title: t("workspaceShell.skillsTitle"),
-    toolPanels: [{
-      className: "workspace-tool-panel-page workspace-skills-settings",
-      contentClassName: "workspace-skills-content",
-      contentShellClassName: "workspace-skills-content-shell",
-      expanded: skillsMenuExpanded,
-      onLayoutModeWillChange: notifyConversationLayoutWillChange,
-      panel: (
-        <FloatingSkillMenu
-          activeSubArea={props.activeSkillSubArea}
-          expanded={skillsMenuExpanded}
-          onExpandedChange={setSkillsMenuExpanded}
-          onSelectSubArea={props.onSelectSkillSubArea}
-          workbench={props.workbench}
-        />
-      ),
-      side: "left",
-    }],
   } : props.mainView === "agent-skills" ? {
     content: (
-      <React.Suspense fallback={null}>
-        <LazyAgentSkillsArea
-          actions={props.agentSkillActions}
-          selectedCategoryId={selectedAgentSkillCategoryId}
-          onSelectCategory={setSelectedAgentSkillCategoryId}
-          workbench={props.workbench}
-        />
-      </React.Suspense>
-    ),
-    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, t),
-    headerActions: null,
-    title: t("area.agentSkills"),
-    toolPanels: [{
-      className: "workspace-tool-panel-page workspace-skills-settings workspace-agent-settings",
-      contentClassName: "workspace-skills-content workspace-agent-content",
-      contentShellClassName: "workspace-skills-content-shell",
-      expanded: agentSkillsMenuExpanded,
-      onLayoutModeWillChange: notifyConversationLayoutWillChange,
-      panel: (
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" navigation={
         <React.Suspense fallback={null}>
-          <LazyFloatingAgentSkillCategoryMenu
-            expanded={agentSkillsMenuExpanded}
+          <LazyAgentSkillCategoryMenu
             selectedCategoryId={selectedAgentSkillCategoryId}
-            onExpandedChange={setAgentSkillsMenuExpanded}
             onSelectCategory={setSelectedAgentSkillCategoryId}
             workbench={props.workbench}
           />
         </React.Suspense>
-      ),
-      side: "left",
-    }],
+      }>
+        <React.Suspense fallback={null}>
+          <LazyAgentSkillsArea
+            actions={props.agentSkillActions}
+            selectedCategoryId={selectedAgentSkillCategoryId}
+            onSelectCategory={setSelectedAgentSkillCategoryId}
+            workbench={props.workbench}
+          />
+        </React.Suspense>
+      </WorkspaceDirectoryLayout>
+    ),
+    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, t),
+    headerActions: null,
+    title: t("area.agentSkills"),
   } : props.mainView === "agents" ? {
     content: (
-      <React.Suspense fallback={null}>
-        <LazyAgentsArea
-          actions={props.agentActions}
-          selectedCategoryId={selectedAgentCategoryId}
-          onSelectCategory={setSelectedAgentCategoryId}
-          workbench={props.workbench}
-        />
-      </React.Suspense>
-    ),
-    detail: agentsHeaderSummary.detail,
-    headerActions: agentsHeaderActions,
-    title: t("workspaceShell.agentsTitle"),
-    toolPanels: [{
-      className: "workspace-tool-panel-page workspace-skills-settings workspace-agent-settings",
-      contentClassName: "workspace-skills-content workspace-agent-content",
-      contentShellClassName: "workspace-skills-content-shell",
-      expanded: agentsMenuExpanded,
-      onLayoutModeWillChange: notifyConversationLayoutWillChange,
-      panel: (
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" navigation={
         <React.Suspense fallback={null}>
-          <LazyFloatingAgentCategoryMenu
-            expanded={agentsMenuExpanded}
+          <LazyAgentCategoryMenu
             selectedCategoryId={selectedAgentCategoryId}
-            onExpandedChange={setAgentsMenuExpanded}
             onSelectCategory={setSelectedAgentCategoryId}
             workbench={props.workbench}
           />
         </React.Suspense>
-      ),
-      side: "left",
-    }],
+      }>
+        <React.Suspense fallback={null}>
+          <LazyAgentsArea
+            actions={props.agentActions}
+            selectedCategoryId={selectedAgentCategoryId}
+            onSelectCategory={setSelectedAgentCategoryId}
+            workbench={props.workbench}
+          />
+        </React.Suspense>
+      </WorkspaceDirectoryLayout>
+    ),
+    detail: agentsHeaderSummary.detail,
+    headerActions: agentsHeaderActions,
+    title: t("workspaceShell.agentsTitle"),
   } : props.mainView === "memory" ? {
     content: (
       <WorkspaceMemorySettings

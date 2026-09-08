@@ -135,7 +135,7 @@
   border: 0;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
-  background: color-mix(in oklch, var(--background) 96%, var(--card));
+  background: color-mix(in srgb, var(--background) 96%, var(--card));
   padding: 14px 14px 12px;
 }
 
@@ -267,7 +267,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted) 82%, transparent);
+  background: color-mix(in srgb, var(--muted) 82%, transparent);
   color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 650;
@@ -682,10 +682,10 @@
   display: inline-flex;
   align-items: center;
   min-height: 28px;
-  border: 1px solid color-mix(in oklch, #d97706 44%, var(--border));
+  border: 1px solid color-mix(in srgb, #d97706 44%, var(--border));
   border-radius: 999px;
-  background: color-mix(in oklch, #d97706 12%, var(--card));
-  color: color-mix(in oklch, #d97706 74%, var(--foreground));
+  background: color-mix(in srgb, #d97706 12%, var(--card));
+  color: color-mix(in srgb, #d97706 74%, var(--foreground));
   padding: 0 10px;
   font-size: 12px;
   font-weight: 650;
@@ -847,19 +847,19 @@
 }
 
 .lua-settings-restart-note {
-  background: color-mix(in oklch, var(--muted) 70%, var(--card));
+  background: color-mix(in srgb, var(--muted) 70%, var(--card));
   color: var(--muted-foreground);
 }
 
 .lua-settings-feedback.error {
-  border-color: color-mix(in oklch, var(--destructive) 38%, var(--border));
-  background: color-mix(in oklch, var(--destructive) 9%, var(--card));
+  border-color: color-mix(in srgb, var(--destructive) 38%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 9%, var(--card));
   color: var(--destructive);
 }
 
 .lua-settings-feedback.success {
-  border-color: color-mix(in oklch, var(--primary) 34%, var(--border));
-  background: color-mix(in oklch, var(--primary) 8%, var(--card));
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
   color: var(--foreground);
 }
 
@@ -1324,9 +1324,9 @@
   display: grid;
   gap: 6px;
   margin: 10px 14px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 45%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
   border-radius: 8px;
-  background: color-mix(in oklch, var(--destructive) 6%, var(--background));
+  background: color-mix(in srgb, var(--destructive) 6%, var(--background));
   padding: 10px;
   color: var(--destructive);
   font-size: 12px;
@@ -1524,9 +1524,9 @@
 
 .agent-skill-form-error {
   margin: 10px 14px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 45%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
   border-radius: 7px;
-  background: color-mix(in oklch, var(--destructive) 6%, var(--background));
+  background: color-mix(in srgb, var(--destructive) 6%, var(--background));
   color: var(--destructive);
   padding: 8px 10px;
   font-size: 12px;
@@ -1648,7 +1648,7 @@
 }
 
 .skill-card-enabled-badge {
-  background: color-mix(in oklch, hsl(142 62% 34%) 12%, transparent);
+  background: color-mix(in srgb, hsl(142 62% 34%) 12%, transparent);
   color: hsl(142 62% 34%);
 }
 

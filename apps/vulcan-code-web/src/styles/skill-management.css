@@ -27,9 +27,9 @@
 }
 
 .workspace-skills-content {
-  min-width: 800px;
-  flex: 0 0 800px;
-  width: 800px;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
   min-height: 100%;
   height: auto;
 }
@@ -191,9 +191,9 @@
 .workspace-tool-panel-menu {
   width: var(--workspace-tool-panel-menu-width);
   padding: 9px;
-  border: 1px solid color-mix(in oklch, var(--border) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   border-radius: 14px;
-  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  background: color-mix(in srgb, var(--card) 94%, var(--muted));
   color: var(--foreground);
 }
 
@@ -204,7 +204,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 0 3px 7px;
-  border-bottom: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 650;
@@ -224,7 +224,7 @@
 }
 
 .workspace-tool-panel-menu-icon-button:hover {
-  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
   color: var(--foreground);
 }
 
@@ -254,7 +254,7 @@
 
 .workspace-tool-panel-menu-row:hover,
 .workspace-tool-panel-menu-row.active {
-  background: color-mix(in oklch, var(--muted) 76%, transparent);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
 .workspace-tool-panel-menu-row.conversation-session-terminal-row {
@@ -268,9 +268,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid color-mix(in oklch, var(--border) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   border-radius: 999px;
-  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  background: color-mix(in srgb, var(--card) 94%, var(--muted));
   color: var(--foreground);
   padding: 0 10px;
   cursor: pointer;
@@ -279,7 +279,7 @@
 }
 
 .workspace-tool-panel-menu-collapsed:hover {
-  background: color-mix(in oklch, var(--muted) 72%, var(--card));
+  background: color-mix(in srgb, var(--muted) 72%, var(--card));
 }
 
 .conversation-session-tool-collapsed.workspace-tool-panel-menu-collapsed {
@@ -347,7 +347,7 @@
 }
 
 .conversation-session-commit-trigger.workspace-tool-panel-menu-row:disabled {
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
   cursor: not-allowed;
 }
 
@@ -356,7 +356,7 @@
 }
 
 .conversation-session-commit-trigger.workspace-tool-panel-menu-row.active {
-  background: color-mix(in oklch, var(--muted) 76%, transparent);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
 .conversation-session-commit-dialog {
@@ -408,7 +408,7 @@
 
 .conversation-session-commit-target-button:hover,
 .conversation-session-commit-target-button[aria-expanded="true"] {
-  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
   color: var(--foreground);
 }
 
@@ -428,10 +428,10 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border: 1px solid color-mix(in oklch, var(--border) 75%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: 10px;
   background: var(--popover);
-  box-shadow: 0 12px 32px color-mix(in oklch, black 14%, transparent);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 14%, transparent);
   padding: 7px;
 }
 
@@ -460,7 +460,7 @@
 }
 
 .conversation-session-commit-branch-option:hover {
-  background: color-mix(in oklch, var(--muted) 76%, transparent);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
 .conversation-session-commit-branch-option span {
@@ -522,7 +522,7 @@
 
 .conversation-session-commit-branch-input::placeholder,
 .conversation-session-commit-message::placeholder {
-  color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 82%, transparent);
 }
 
 .conversation-session-commit-checkbox {
@@ -540,7 +540,7 @@
 }
 
 .conversation-session-commit-checkbox.disabled {
-  color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
   cursor: default;
 }
 
@@ -580,15 +580,15 @@
 
 .conversation-session-commit-action:hover:not(:disabled),
 .conversation-session-commit-action.locked:not(:disabled) {
-  background: color-mix(in oklch, var(--muted) 74%, transparent);
+  background: color-mix(in srgb, var(--muted) 74%, transparent);
 }
 
 .conversation-session-commit-action.locked:not(:disabled) {
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--foreground) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 16%, transparent);
 }
 
 .conversation-session-commit-action:disabled {
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
   cursor: not-allowed;
 }
 
@@ -604,7 +604,7 @@
   justify-self: end;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted-foreground) 18%, transparent);
+  background: color-mix(in srgb, var(--muted-foreground) 18%, transparent);
   color: var(--muted-foreground);
   padding: 1px 7px;
   font-family: inherit;

@@ -39,7 +39,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-(--vcn-overlay) duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -67,7 +67,7 @@ const dialogContentSizeClassNames: Record<DialogContentSize, string> = {
   md: "sm:max-w-xl",
   lg: "sm:max-w-2xl",
   xl: "sm:max-w-4xl",
-  viewer: "h-[min(860px,calc(100vh-2rem))] sm:max-w-[min(1180px,calc(100vw-2rem))]",
+  viewer: "h-[min(860px,calc(100dvh-2rem))] sm:max-w-[min(1180px,calc(100vw-2rem))]",
   fullscreen: "inset-4 h-auto max-w-none translate-x-0 translate-y-0",
 }
 
@@ -108,7 +108,7 @@ function DialogContent({
         data-scroll-mode={scrollMode}
         data-size={size}
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-popover text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-[layout=document]:gap-0 data-[layout=document]:p-0 data-[layout=form]:gap-4 data-[layout=form]:p-4 data-[layout=viewer]:gap-0 data-[layout=viewer]:p-0 data-[scroll-mode=body-scroll]:max-h-[calc(100vh-2rem)] data-[scroll-mode=body-scroll]:overflow-y-auto data-[scroll-mode=content-scroll]:max-h-[calc(100vh-2rem)] data-[scroll-mode=content-scroll]:overflow-hidden data-[scroll-mode=fixed-footer]:max-h-[calc(100vh-2rem)] data-[scroll-mode=fixed-footer]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid min-w-0 w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-popover text-sm text-popover-foreground ring-1 ring-border shadow-(--vcn-shadow-floating) duration-100 outline-none data-[layout=document]:gap-0 data-[layout=document]:p-0 data-[layout=form]:gap-4 data-[layout=form]:p-4 data-[layout=viewer]:gap-0 data-[layout=viewer]:p-0 data-[scroll-mode=body-scroll]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=body-scroll]:overflow-y-auto data-[scroll-mode=content-scroll]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=content-scroll]:overflow-hidden data-[scroll-mode=fixed-footer]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=fixed-footer]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           dialogContentSizeClassNames[size],
           className
         )}

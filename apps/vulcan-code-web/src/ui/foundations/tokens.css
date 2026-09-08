@@ -5,7 +5,7 @@
   --vcn-surface-panel: var(--card);
   --vcn-surface-subtle: var(--muted);
   --vcn-surface-floating: var(--popover);
-  --vcn-surface-toolbar: color-mix(in oklch, var(--muted) 34%, var(--background));
+  --vcn-surface-toolbar: color-mix(in srgb, var(--muted) 34%, var(--background));
   --vcn-content-primary: var(--foreground);
   --vcn-content-secondary: var(--muted-foreground);
   --vcn-content-danger: var(--destructive);
@@ -14,7 +14,7 @@
   --vcn-status-success-background: hsl(142 62% 34% / 0.1);
   --vcn-status-warning-background: hsl(38 72% 46% / 0.1);
   --vcn-border-default: var(--border);
-  --vcn-border-subtle: color-mix(in oklch, var(--border) 62%, transparent);
+  --vcn-border-subtle: color-mix(in srgb, var(--border) 62%, transparent);
   --vcn-focus-ring: var(--ring);
   --vcn-radius-sm: 6px;
   --vcn-radius-md: 8px;
@@ -28,7 +28,7 @@
   --vcn-space-3: 12px;
   --vcn-space-4: 16px;
   --vcn-space-5: 20px;
-  --vcn-shadow-floating: 0 12px 32px color-mix(in oklch, var(--foreground) 12%, transparent);
+  --vcn-page-gutter: clamp(12px, 1.6vw, 24px);
 }
 
 /* Keeps semantic status contrast readable on dark surfaces. */

@@ -46,7 +46,7 @@
 
 .plugin-metadata-link:hover,
 .plugin-metadata-link:focus-visible {
-  border-color: color-mix(in oklch, var(--foreground) 30%, var(--border));
+  border-color: color-mix(in srgb, var(--foreground) 30%, var(--border));
   color: var(--foreground);
   outline: none;
 }
@@ -98,7 +98,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: color-mix(in oklch, var(--card) 92%, var(--muted));
+  background: color-mix(in srgb, var(--card) 92%, var(--muted));
 }
 
 .plugin-metric-card-header {
@@ -180,13 +180,13 @@
   padding: 0;
   border: 0;
   border-radius: 3px;
-  background: color-mix(in oklch, var(--muted) 84%, var(--background));
+  background: color-mix(in srgb, var(--muted) 84%, var(--background));
 }
 
-.plugin-activity-cell[data-intensity="1"] { background: color-mix(in oklch, var(--chart-2) 24%, var(--muted)); }
-.plugin-activity-cell[data-intensity="2"] { background: color-mix(in oklch, var(--chart-2) 42%, var(--muted)); }
-.plugin-activity-cell[data-intensity="3"] { background: color-mix(in oklch, var(--chart-2) 60%, var(--muted)); }
-.plugin-activity-cell[data-intensity="4"] { background: color-mix(in oklch, var(--chart-2) 78%, var(--muted)); }
+.plugin-activity-cell[data-intensity="1"] { background: color-mix(in srgb, var(--chart-2) 24%, var(--muted)); }
+.plugin-activity-cell[data-intensity="2"] { background: color-mix(in srgb, var(--chart-2) 42%, var(--muted)); }
+.plugin-activity-cell[data-intensity="3"] { background: color-mix(in srgb, var(--chart-2) 60%, var(--muted)); }
+.plugin-activity-cell[data-intensity="4"] { background: color-mix(in srgb, var(--chart-2) 78%, var(--muted)); }
 .plugin-activity-cell[data-intensity="5"] { background: var(--chart-2); }
 
 .plugin-activity-legend {
@@ -218,7 +218,7 @@
   min-height: 220px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: color-mix(in oklch, var(--card) 96%, var(--muted));
+  background: color-mix(in srgb, var(--card) 96%, var(--muted));
 }
 
 .plugin-time-series-chart svg {
@@ -424,7 +424,7 @@
 
 .plugin-statistics-price-input:focus-visible {
   border-color: var(--ring);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 28%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 28%, transparent);
 }
 
 .plugin-statistics-price-input:disabled {
@@ -459,7 +459,7 @@
 
 .plugin-chart-point {
   cursor: default;
-  stroke: color-mix(in oklch, var(--background) 72%, transparent);
+  stroke: color-mix(in srgb, var(--background) 72%, transparent);
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }

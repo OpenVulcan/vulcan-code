@@ -13,7 +13,7 @@
   margin-top: 6px;
   border-left: 3px solid #ef4444;
   padding: 5px 8px;
-  background: color-mix(in oklch, #ef4444 10%, transparent);
+  background: color-mix(in srgb, #ef4444 10%, transparent);
   color: #dc2626;
   font-size: 12px;
   line-height: 1.45;

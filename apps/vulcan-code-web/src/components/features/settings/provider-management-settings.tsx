@@ -317,7 +317,7 @@ export function ProviderManagementArea() {
     : []
 
   return (
-    <div className="settings-direct-content provider-management-surface space-y-6 px-4 lg:px-6">
+    <div className="settings-direct-content provider-management-surface space-y-6">
       <div>
         <h2 className="text-xl font-semibold">{t("settings.providers.managementTitle")}</h2>
         <p className="text-sm text-muted-foreground">
@@ -577,7 +577,7 @@ function CustomProviderTable(props: {
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border">
-          <Table>
+          <Table className="provider-responsive-table">
             <TableHeader className="bg-muted/40">
               <TableRow>
                 <TableHead className="w-[18rem]">{t("settings.providers.table.provider")}</TableHead>
@@ -603,7 +603,7 @@ function CustomProviderTable(props: {
                 const protocolNames = uniqueProtocolNames(provider)
                 return (
                   <TableRow key={provider.id}>
-                    <TableCell className="whitespace-normal py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.provider")} className="whitespace-normal py-3 align-top">
                       <div className="flex items-center gap-3">
                         <ProviderIcon category={provider.category} className="size-[26px]" providerId={provider.id} />
                         <div className="min-w-0">
@@ -614,7 +614,7 @@ function CustomProviderTable(props: {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="whitespace-normal py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.endpoint")} className="whitespace-normal py-3 align-top">
                       <div className="font-medium">
                         {protocolNames.length > 0 ? protocolNames.join(" · ") : t("settings.providers.table.protocolUnavailable")}
                       </div>
@@ -626,23 +626,23 @@ function CustomProviderTable(props: {
                         ))}
                       </div>
                     </TableCell>
-                    <TableCell className="whitespace-normal py-3 align-top text-sm text-muted-foreground">
+                    <TableCell data-label={t("settings.providers.table.resources")} className="whitespace-normal py-3 align-top text-sm text-muted-foreground">
                       <div>{t("settings.customProviders.modelCount").replace("{count}", String(modelCount))}</div>
                         <div className="mt-1">{t("settings.providers.credentialCount").replace("{count}", String(credentialCount))}</div>
                     </TableCell>
-                    <TableCell className="py-3 text-center align-top">
+                    <TableCell data-label={t("settings.providers.table.status")} className="py-3 text-center align-top">
                       <Badge variant={credentialCount > 0 ? "default" : "secondary"}>
                         {credentialCount > 0 ? t("settings.providers.configured") : t("settings.providers.notConfigured")}
                       </Badge>
                     </TableCell>
-                    <TableCell className="py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.priority")} className="py-3 align-top">
                       <ProviderPriorityEditor
                         busy={props.busyProviderId === provider.id}
                         onSave={(priority) => props.onSavePriority(provider.id, priority)}
                         value={props.priorities[provider.id] ?? 0}
                       />
                     </TableCell>
-                    <TableCell className="py-3 text-right align-top">
+                    <TableCell data-label={t("settings.providers.table.actions")} className="py-3 text-right align-top">
                       <div className="flex justify-end gap-1">
                         <Button
                           aria-label={t("settings.providers.addCredentialFor").replace("{provider}", provider.display_name)}
@@ -738,7 +738,7 @@ function SystemProviderTable(props: {
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border">
-          <Table>
+          <Table className="provider-responsive-table">
             <TableHeader className="bg-muted/40">
               <TableRow>
                 <TableHead className="w-[18rem]">{t("settings.providers.table.provider")}</TableHead>
@@ -766,7 +766,7 @@ function SystemProviderTable(props: {
                 const providerName = localizedProviderName(provider.id, provider.display_name, t)
                 return (
                   <TableRow key={provider.id}>
-                    <TableCell className="whitespace-normal py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.provider")} className="whitespace-normal py-3 align-top">
                       <div className="flex items-center gap-3">
                         <ProviderIcon category={provider.category} className="size-[26px]" providerId={provider.id} />
                         <div className="min-w-0">
@@ -777,7 +777,7 @@ function SystemProviderTable(props: {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="whitespace-normal py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.details")} className="whitespace-normal py-3 align-top">
                       <div className="text-sm text-muted-foreground">
                         {providerDescription}
                       </div>
@@ -804,19 +804,19 @@ function SystemProviderTable(props: {
                         ) : null}
                       </div>
                     </TableCell>
-                    <TableCell className="py-3 text-right align-top">
+                    <TableCell data-label={t("settings.providers.table.configurationStatus")} className="py-3 text-right align-top">
                       <Badge variant={credentialCount > 0 ? "default" : "secondary"}>
                         {credentialCount > 0 ? t("settings.providers.credentialCount").replace("{count}", String(credentialCount)) : t("settings.providers.notConfigured")}
                       </Badge>
                     </TableCell>
-                    <TableCell className="py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.priority")} className="py-3 align-top">
                       <ProviderPriorityEditor
                         busy={props.busyProviderId === provider.id}
                         onSave={(priority) => props.onSavePriority(provider.id, priority)}
                         value={props.priorities[provider.id] ?? 0}
                       />
                     </TableCell>
-                    <TableCell className="py-3 text-right align-top">
+                    <TableCell data-label={t("settings.providers.table.operation")} className="py-3 text-right align-top">
                       <Button
                         disabled={props.busyProviderId !== null}
                         onClick={() => props.onAddCredential(provider.id)}

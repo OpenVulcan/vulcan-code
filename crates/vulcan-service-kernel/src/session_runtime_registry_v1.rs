@@ -5744,18 +5744,17 @@ mod tests {
                     panic!("target seq must remain a root user input");
                 };
                 assert_eq!(input.text, "after edit");
-                let pending = document
-                    .metadata
-                    .config
-                    .pending_request
-                    .as_ref()
-                    .expect("edited generation must retain its next-request selection");
-                assert_eq!(pending.provider.as_deref(), Some("minimax"));
+                assert!(document.metadata.config.pending_request.is_none());
+                // active is already frozen by the durable edit, before any physical dispatch.
+                // active 已由可靠编辑冻结，先于任何物理分发。
+                let active = &document.metadata.config.active_request;
+                assert_eq!(active.provider.as_deref(), Some("minimax"));
                 assert_eq!(
-                    pending.model.as_deref(),
+                    active.model.as_deref(),
                     Some("MiniMax-M2.7-highspeed")
                 );
-                assert_eq!(pending.thinking_level.as_deref(), Some("adaptive"));
+                assert_eq!(active.connection_id.as_deref(), Some("minimax-account"));
+                assert_eq!(active.thinking_level.as_deref(), Some("adaptive"));
             })
             .expect("inspect replaced resident generation");
         let durable = load_session_v1_full(&locator).expect("strict reload edited generation");
@@ -5769,9 +5768,9 @@ mod tests {
                 .document
                 .metadata
                 .config
-                .pending_request
-                .as_ref()
-                .and_then(|pending| pending.thinking_level.as_deref()),
+                .active_request
+                .thinking_level
+                .as_deref(),
             Some("adaptive")
         );
         let events = sink.events();

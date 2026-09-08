@@ -1,0 +1,111 @@
+/* Directory navigation shares one geometry while the content retains its feature-specific behavior. */
+/* 目录导航共用一套布局，正文保留各功能原有行为。 */
+.workspace-directory {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container: directory-workspace / inline-size;
+}
+.workspace-directory-layout {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.workspace-directory-navigation {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px 12px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 65%, var(--background));
+}
+.workspace-directory-heading,
+.vmm-nav-heading {
+  margin: 0;
+  padding: 4px 10px 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.vmm-nav-group + .vmm-nav-group { margin-top: 22px; }
+.workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  min-height: 40px;
+  margin: 2px 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+.workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: inset 2px 0 var(--ring);
+  font-weight: 600;
+}
+.workspace-directory-navigation button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.workspace-directory-navigation svg { width: 16px; height: 16px; flex-shrink: 0; }
+.workspace-directory-navigation .agent-category-floating-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+}
+.workspace-directory-navigation .agent-skill-category-floating-row { padding: 0; }
+.workspace-directory-navigation .agent-skill-category-floating-main { min-height: 40px; padding: 8px 10px; gap: 10px; }
+.workspace-directory-navigation strong {
+  min-width: 22px;
+  height: 20px;
+  border-radius: 5px;
+  background: transparent;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.workspace-directory-content {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 22px 24px;
+}
+.workspace-directory-catalog { container: workspace-page / inline-size; }
+.workspace-directory-catalog .skill-management-surface { overflow: visible; scrollbar-gutter: auto; }
+.workspace-directory-catalog .skill-page-body { width: 100%; max-width: none; }
+.workspace-directory-catalog .skill-card-list { width: 100%; padding-right: 0; }
+.workspace-directory-catalog :is(.lua-skill-page-body .skill-card-list, .agent-skill-card-list) { grid-template-columns: minmax(0, 1fr); }
+.workspace-directory-catalog .agent-catalog-toolbar { padding: 0 0 14px; }
+
+/* Narrow panes keep every category reachable in a bounded menu above the independently scrolling body. */
+/* 窄面板将完整分类放入限高顶部菜单，正文独立滚动。 */
+@container directory-workspace (max-width: 720px) {
+  .workspace-directory-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .workspace-directory-navigation { max-height: 156px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .workspace-directory-menu-list, .vmm-workspace-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 6px; }
+  .workspace-directory-heading, .vmm-nav-heading { display: none; }
+  .vmm-nav-group { display: contents; }
+  .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) { margin: 0; }
+  .workspace-directory-content { padding: 16px 12px; }
+}

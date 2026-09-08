@@ -534,8 +534,8 @@ fn minimax_manifest_excludes_music_capability() {
     );
 }
 
-/// Verifies DeepSeek exposes only the two current official identities with exact protocol scopes.
-/// 验证 DeepSeek 仅公开当前两款官方模型身份及其精确协议作用域。
+/// Verifies DeepSeek exposes only the current official identities with exact protocol scopes.
+/// 验证 DeepSeek 仅公开当前官方模型身份及其精确协议作用域。
 #[test]
 fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
     // path identifies the single authoritative DeepSeek bundled manifest.
@@ -571,6 +571,7 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
     assert_eq!(
         declared_model_ids,
         BTreeSet::from([
+            "deepseek-v4.1-flash-expires-on-0910",
             "deepseek-v4-flash",
             "deepseek-v4-flash-vision-exp",
             "deepseek-v4-pro",
@@ -629,6 +630,21 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         flash.selected_protocol.as_deref(),
         Some("openai-responses.v1")
     );
+    // expiringFlash is the temporary exact identity and must reuse the complete V4 Flash Vision contract.
+    // expiringFlash 是临时精确身份，必须复用完整的 V4 Flash Vision 契约。
+    let expiring_flash = compiled
+        .rule_for_model("official-api", None, "deepseek-v4.1-flash-expires-on-0910")
+        .expect("DeepSeek V4.1 Flash expiring rule must exist");
+    assert_eq!(
+        expiring_flash.supported_protocols,
+        flash.supported_protocols
+    );
+    assert_eq!(expiring_flash.selected_protocol, flash.selected_protocol);
+    assert_eq!(
+        expiring_flash.protocol_capabilities,
+        flash.protocol_capabilities
+    );
+    assert_eq!(expiring_flash.model_parameters, flash.model_parameters);
     assert_eq!(
         flash_capabilities.reasoning_efforts,
         vec![
@@ -756,6 +772,22 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             .provider_native_tools
             .is_empty(),
         "Vision Chat must not declare provider-native web search"
+    );
+    // expiringVision must match Vision Exp exactly for multimodal capability and execution policy.
+    // expiringVision 必须在多模态能力与执行策略上与 Vision Exp 完全一致。
+    assert_eq!(expiring_flash.capabilities, vision.capabilities);
+    assert_eq!(
+        expiring_flash.protocol_capabilities,
+        vision.protocol_capabilities
+    );
+    assert_eq!(
+        expiring_flash.input_resource_constraints,
+        vision.input_resource_constraints
+    );
+    assert_eq!(expiring_flash.model_parameters, vision.model_parameters);
+    assert_eq!(
+        expiring_flash.provenance.provenance_ref,
+        vision.provenance.provenance_ref
     );
     // pro owns the same protocol set and selected Responses route as flash.
     // pro 持有与 flash 相同的协议集合，并同样选定 Responses 路由。

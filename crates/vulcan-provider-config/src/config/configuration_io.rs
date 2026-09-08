@@ -227,7 +227,25 @@ pub fn public_ai_connections_file_path() -> PathBuf {
 /// 仅当精确路径缺失时返回空的第一版文件。
 pub fn load_public_ai_connections_file() -> Result<PublicAiConnectionsFile, String> {
     let path = public_ai_connections_file_path();
-    load_public_ai_connections_file_from_path(&path)
+    load_public_ai_connections_file_at_path(&path)
+}
+
+/// Loads one public AI connection file from an exact path and its co-owned manifest store.
+/// 从精确路径及其共同持有的 Manifest 存储加载公共 AI 连接文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is the central connection document whose parent owns the standalone manifest store.
+/// `path` 是中央连接文档，其父目录持有独立 Manifest 存储。
+///
+/// # Returns
+/// 返回值
+/// The hydrated current document, after any recoverable legacy migration has completed.
+/// 已完成可恢复旧版迁移后的补水当前文档。
+pub fn load_public_ai_connections_file_at_path(
+    path: &Path,
+) -> Result<PublicAiConnectionsFile, String> {
+    load_public_ai_connections_file_from_path(path)
 }
 
 /// Loads one public-AI connection file from an exact path and its co-owned manifest store.
@@ -646,8 +664,8 @@ mod public_ai_connections_tests {
     use super::{
         PERSISTED_CONFIGURATION_MAX_BYTES, ProviderConfigurationFile, PublicAiConnectionsFile,
         ReasoningEffortLevel, load_project_configuration_file,
-        load_public_ai_connections_file_from_path, parse_public_ai_connections_text,
-        save_public_ai_connections_at_path,
+        load_public_ai_connections_file_at_path, load_public_ai_connections_file_from_path,
+        parse_public_ai_connections_text, save_public_ai_connections_at_path,
     };
 
     /// Checked-in descriptor-only schema used to verify the real startup migration path.
@@ -765,7 +783,7 @@ mod public_ai_connections_tests {
 
         // loaded proves hydration used the exact store associated with central_path.
         // loaded 证明补水使用了与 central_path 关联的精确存储。
-        let loaded = load_public_ai_connections_file_from_path(&central_path)
+        let loaded = load_public_ai_connections_file_at_path(&central_path)
             .expect("startup hydration and migration should succeed");
         assert!(
             loaded

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
-  "revision": 8,
-  "published_at": "2026-08-21T00:00:00Z",
+  "revision": 10,
+  "published_at": "2026-09-08T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -54,6 +54,7 @@
         "discovery_kind": "manifest_static",
         "models": [
           { "model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
+          { "model_id": "deepseek-v4.1-flash-expires-on-0910", "display_name": "DeepSeek V4.1 Flash (expires on 09/10)" },
           { "model_id": "deepseek-v4-flash-vision-exp", "display_name": "DeepSeek-V4-Flash-Vision-Exp" },
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" }
         ]
@@ -200,6 +201,100 @@
           "evidence_revision": "deepseek.api-docs.temperature.2026-07-30"
         }
       ]
+    },
+    {
+      "rule_id": "v4-1-flash-expires-on-0910",
+      "display_name": "DeepSeek V4.1 Flash (expires on 09/10)",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4.1-flash-expires-on-0910"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image"],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": [
+          "none",
+          "high",
+          "low",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 393216,
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "deepseek.api-docs.vision.2026-08-21"
+      },
+      "protocol_capabilities": {
+        "anthropic-messages.v1": {
+          "provider_native_tools": [
+            "web_search"
+          ]
+        },
+        "openai-chat-completions.v1": {
+          "provider_native_tools": []
+        },
+        "openai-responses.v1": {
+          "provider_native_tools": [
+            "web_search"
+          ]
+        }
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "image",
+          "accepted_mime_types": [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp"
+          ],
+          "max_bytes": 33554432,
+          "max_count": 600,
+          "reference_policy": "local_only"
+        }
+      ],
+      "model_parameters": [
+        {
+          "id": "sampling.temperature",
+          "display_name": "Temperature",
+          "description": "Controls DeepSeek non-thinking sampling randomness from 0 through 2; provider default omits the field.",
+          "schema": {
+            "type": "decimal",
+            "minimum": "0",
+            "maximum": "2"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "openai-chat-completions.v1",
+            "anthropic-messages.v1"
+          ],
+          "model_ids": [],
+          "dependent_required": [],
+          "conflicts": [],
+          "evidence_revision": "deepseek.api-docs.temperature.2026-07-30"
+        }
+      ],
+      "provenance_ref": "https://api-docs.deepseek.com/zh-cn/guides/vision"
     },
     {
       "rule_id": "v4-flash-vision-exp",

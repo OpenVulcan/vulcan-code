@@ -248,7 +248,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  background: color-mix(in srgb, var(--card) 94%, var(--muted));
 }
 
 /* Without Git content, share the first section's title row instead of reserving an empty settings row. */
@@ -287,7 +287,7 @@
 
 .conversation-session-review-manager-trigger:hover {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
 }
 
 .conversation-session-review-manager-dialog {
@@ -385,12 +385,12 @@
 }
 
 .conversation-session-review-monitor-toggle.active {
-  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
   color: var(--primary);
 }
 
 .conversation-session-review-monitor-toggle:hover {
-  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
 }
 
 .conversation-session-review-monitor-toggle:disabled {

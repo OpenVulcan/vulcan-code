@@ -37,6 +37,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
+  useSidebarNavigation,
 } from "@/components/ui/sidebar"
 import {
   SidebarBrandMenu,
@@ -95,6 +96,9 @@ function FeatureSidebar(props: {
   // sidebarState places the collapsed settings return action directly above the user menu.
   // sidebarState 将折叠态设置返回动作放到用户菜单正上方。
   const { state: sidebarState } = useSidebar()
+  // navigate preserves each destination action and closes phone navigation.
+  // navigate 保留各导航动作并关闭手机导航。
+  const navigate = useSidebarNavigation();
   const feature = primaryFeatureAreas(t).find((area) => area.id === props.activeArea)
   const headerLabel = props.activeArea === "settings" ? t("settings.systemSettings") : feature?.label ?? t("sidebar.console")
 
@@ -104,7 +108,7 @@ function FeatureSidebar(props: {
         <SidebarBrandMenu
           activeArea={props.activeArea}
           currentLabel={headerLabel}
-          onSelectArea={props.onSelectArea}
+          onSelectArea={navigate(props.onSelectArea)}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
@@ -113,15 +117,15 @@ function FeatureSidebar(props: {
         {props.activeArea === "settings" ? (
           <SettingsSidebarMenu
             activeSettingsSubArea={props.activeSettingsSubArea}
-            onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+            onSelectSettingsSubArea={navigate(props.onSelectSettingsSubArea)}
           />
         ) : (
           <FeatureOverviewMenu
             activeArea={props.activeArea}
             activeMemorySubArea={props.activeMemorySubArea}
             activeSkillSubArea={props.activeSkillSubArea}
-            onSelectMemorySubArea={props.onSelectMemorySubArea}
-            onSelectSkillSubArea={props.onSelectSkillSubArea}
+            onSelectMemorySubArea={navigate(props.onSelectMemorySubArea)}
+            onSelectSkillSubArea={navigate(props.onSelectSkillSubArea)}
             workbench={props.workbench}
           />
         )}
@@ -135,7 +139,7 @@ function FeatureSidebar(props: {
               <SidebarMenuButton
                 aria-label={t("settings.backToWorkspace")}
                 className="workspace-sidebar-feature-button settings-back-menu-row"
-                onClick={() => props.onSelectArea("chat")}
+                onClick={() => navigate(props.onSelectArea)("chat")}
                 tooltip={t("settings.backToWorkspace")}
               >
                 <Undo2 size={16} />
@@ -143,7 +147,7 @@ function FeatureSidebar(props: {
             </SidebarMenuItem>
           </SidebarMenu>
         ) : null}
-        <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />
+        <SidebarUserMenu onOpenSettings={() => navigate(props.onSelectArea)("settings")} />
       </SidebarFooter>
     </Sidebar>
   )

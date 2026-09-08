@@ -4,7 +4,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: color-mix(in oklch, var(--muted) 38%, var(--background));
+  background: color-mix(in srgb, var(--muted) 38%, var(--background));
   color: var(--foreground);
 }
 
@@ -48,7 +48,7 @@
 }
 
 .plan-artifact-icon-button:hover {
-  background: color-mix(in oklch, var(--muted) 70%, transparent);
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
   color: var(--foreground);
 }
 
@@ -83,10 +83,10 @@
   pointer-events: none;
   background: linear-gradient(
     to bottom,
-    color-mix(in oklch, var(--muted) 0%, transparent) 0%,
-    color-mix(in oklch, var(--muted) 42%, transparent) 34%,
-    color-mix(in oklch, var(--muted) 78%, var(--background)) 72%,
-    color-mix(in oklch, var(--muted) 38%, var(--background)) 100%
+    color-mix(in srgb, var(--muted) 0%, transparent) 0%,
+    color-mix(in srgb, var(--muted) 42%, transparent) 34%,
+    color-mix(in srgb, var(--muted) 78%, var(--background)) 72%,
+    color-mix(in srgb, var(--muted) 38%, var(--background)) 100%
   );
 }
 
@@ -136,9 +136,9 @@
   gap: 6px;
   justify-content: center;
   padding: 0 12px;
-  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 9px;
-  background: color-mix(in oklch, var(--muted) 62%, var(--background));
+  background: color-mix(in srgb, var(--muted) 62%, var(--background));
   color: var(--foreground);
   font: inherit;
   font-size: 13px;
@@ -163,14 +163,14 @@
 }
 
 .plan-artifact-action-choice:hover:not(:disabled) {
-  border-color: color-mix(in oklch, var(--ring) 72%, var(--border));
-  background: color-mix(in oklch, var(--muted) 78%, var(--background));
+  border-color: color-mix(in srgb, var(--ring) 72%, var(--border));
+  background: color-mix(in srgb, var(--muted) 78%, var(--background));
   transform: translateY(-1px);
 }
 
 .plan-artifact-action-choice-primary:hover:not(:disabled) {
   border-color: var(--ring);
-  background: color-mix(in oklch, var(--foreground) 90%, var(--ring));
+  background: color-mix(in srgb, var(--foreground) 90%, var(--ring));
   color: var(--background);
 }
 

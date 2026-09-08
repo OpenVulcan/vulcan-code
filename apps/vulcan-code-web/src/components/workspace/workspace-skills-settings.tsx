@@ -1,15 +1,13 @@
+import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react";
 import {
   ChartNoAxesCombined,
   Hammer,
-  Maximize2,
-  Minimize2,
   Puzzle,
   Route,
   ScanSearch,
   Settings,
 } from "lucide-react";
-import { IconButton } from "@/components/ui/button";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skill-area-types";
 import {
   enabledPluginDetailMounts,
@@ -67,18 +65,12 @@ export function WorkspaceSkillsSettings(props: {
   );
 }
 
-// FloatingSkillMenu renders the floating embedded skills selector.
-// FloatingSkillMenu 渲染浮动内嵌技能选择器。
-export function FloatingSkillMenu(props: {
+// PluginWorkspaceMenu renders the fixed plugin workspace navigation.
+// PluginWorkspaceMenu 渲染固定插件工作区导航。
+export function PluginWorkspaceMenu(props: {
   // Selected embedded skills sub page.
   // 当前选中的内嵌技能子页面。
   activeSubArea: SkillSubAreaId;
-  // Whether the menu is expanded.
-  // 菜单是否展开。
-  expanded: boolean;
-  // Updates the expanded menu state.
-  // 更新菜单展开状态。
-  onExpandedChange: (expanded: boolean) => void;
   // Selects one embedded skills sub page.
   // 选择一个内嵌技能子页面。
   onSelectSubArea: (subArea: SkillSubAreaId) => void;
@@ -104,51 +96,22 @@ export function FloatingSkillMenu(props: {
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
     ...pluginRows,
   ];
-  // activeLabel stores the selected menu label for the collapsed pill.
-  // activeLabel 保存收起胶囊展示的当前菜单标签。
-  const activeLabel = skillSubAreaLabel(props.activeSubArea, props.workbench, locale, t);
-
-  if (!props.expanded) {
-    return (
-      <button
-        className="workspace-tool-panel-menu-collapsed"
-        onClick={() => props.onExpandedChange(true)}
-        title={t("workspaceToolPanel.expandState")}
-        type="button"
-      >
-        <span>{activeLabel}</span>
-        <Maximize2 size={13} />
-      </button>
-    );
-  }
 
   return (
-    <aside className="workspace-tool-panel-menu" aria-label={t("workspaceToolPanel.skillsSettingsMenu")}>
-      <div className="workspace-tool-panel-menu-header">
-        <span>{t("workspaceToolPanel.menu")}</span>
-        <IconButton
-          aria-label={t("workspaceToolPanel.collapseToPill")}
-          onClick={() => props.onExpandedChange(false)}
-          size="xs"
+    <WorkspaceDirectoryMenu ariaLabel={t("workspaceToolPanel.skillsSettingsMenu")} heading={t("workspaceToolPanel.menu")}>
+      {rows.map((row) => (
+        <button
+          className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
+          key={row.id}
+          aria-current={props.activeSubArea === row.id ? "page" : undefined}
+          onClick={() => props.onSelectSubArea(row.id)}
           type="button"
         >
-          <Minimize2 size={13} />
-        </IconButton>
-      </div>
-      <div className="workspace-tool-panel-menu-list">
-        {rows.map((row) => (
-          <button
-            className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
-            key={row.id}
-            onClick={() => props.onSelectSubArea(row.id)}
-            type="button"
-          >
-            {row.icon}
-            <span>{row.label}</span>
-          </button>
-        ))}
-      </div>
-    </aside>
+          {row.icon}
+          <span>{row.label}</span>
+        </button>
+      ))}
+    </WorkspaceDirectoryMenu>
   );
 }
 

@@ -159,12 +159,9 @@ impl SessionDocument {
             Some(input.target_seq),
             effective_now_ms,
         )?;
-        // A historical edit starts a new request generation at a safe root boundary. Preserve the
-        // exact pending user selection so the serialized Provider permit can promote it before the
-        // first physical request; clearing it would mix the previous active request with current
-        // model-capability normalization.
-        // 历史编辑会在安全根边界启动新的请求代际。保留精确的待生效用户选择，让串行 Provider
-        // 许可在首次物理请求前完成提升；若清除它，就会把旧活动请求与当前模型能力规范化结果混用。
+        // Carry the current picker intent into generation finalization, which activates it atomically
+        // with the replacement root. Physical dispatch must only consume the admitted active config.
+        // 将当前选择器意图带入代次收尾，与替换根输入原子激活。物理分发只消费已准入的活动配置。
         metadata.config.pending_request = self.metadata.config.pending_request.clone();
         self.finish_generation_build(metadata, retained, input.target_seq, effective_now_ms)
     }
@@ -421,6 +418,39 @@ impl SessionDocument {
             document.events.extend(staged_events);
             document.rebuild_derived_state()?;
         }
+        // Only edits retain a pending request; forks clear it and have no open root. Reuse the normal
+        // user-admission activation so route, account, reasoning and temperature switch together,
+        // without a second revision or a post-publication window that could capture a later choice.
+        // 只有编辑保留待生效请求；分叉会清空它且没有开放根输入。复用普通用户准入的激活逻辑，
+        // 一次切换路由、账号、推理和温度，避免额外修订或发布后误取后续选择的时间窗口。
+        if let Some(pending) = document.metadata.config.pending_request.as_ref() {
+            // next_active freezes the complete configuration selected at the edit boundary.
+            // next_active 冻结编辑边界选择的完整配置。
+            let next_active = super::selection::active_request_from_pending(pending);
+            // turn_id binds the switch notice to the exact rewritten root Turn.
+            // turn_id 将切换提示绑定到精确重写的根回合。
+            let turn_id = document.require_open_turn()?.turn_id;
+            // staged values keep the pure generation builder transactional on validation failure.
+            // 暂存值保证纯代次构建器在校验失败时仍保持事务性。
+            let mut staged_metadata = document.metadata.clone();
+            // staged_allocator allocates any switch notice after the preserved history prefix.
+            // staged_allocator 将切换提示分配在保留历史前缀之后。
+            let mut staged_allocator = document.id_allocator;
+            // staged_events contains only the optional request-switch notice.
+            // staged_events 仅包含可选的请求切换提示。
+            let mut staged_events = Vec::new();
+            document.stage_bound_request_activation(
+                &mut staged_metadata,
+                &mut staged_allocator,
+                &mut staged_events,
+                next_active,
+                Some(turn_id),
+                now_ms,
+            )?;
+            document.metadata = staged_metadata;
+            document.id_allocator = staged_allocator;
+            document.events.extend(staged_events);
+        }
         metadata.id_frontier = document.id_frontier();
         document.metadata.id_frontier = metadata.id_frontier;
 
@@ -623,15 +653,7 @@ mod tests {
         assert_eq!(output.history_target_seq, target_seq);
         assert!(!output.metadata.mode.plan.enabled);
         assert_eq!(output.metadata.input_state, InputState::default());
-        assert_eq!(
-            output
-                .metadata
-                .config
-                .pending_request
-                .as_ref()
-                .and_then(|request| request.thinking_level.as_deref()),
-            Some("adaptive")
-        );
+        assert!(output.metadata.config.pending_request.is_none());
         assert_eq!(
             output
                 .metadata
@@ -639,7 +661,7 @@ mod tests {
                 .active_request
                 .thinking_level
                 .as_deref(),
-            None
+            Some("adaptive")
         );
         assert_eq!(output.metadata.open_turn_start_seq, Some(target_seq));
         assert_eq!(
@@ -656,21 +678,21 @@ mod tests {
             panic!("target remains a user input")
         };
         assert_eq!(replaced.text, "replacement");
-        assert!(matches!(
-            output.events.last().map(|event| &event.event),
-            Some(EventBody::SystemContext(SystemContextEvent {
+        assert!(output.events.iter().any(|event| matches!(
+            &event.event,
+            EventBody::SystemContext(SystemContextEvent {
                 context_key,
                 operation: SystemContextOperation::Remove,
                 ..
-            })) if context_key == PLAN_MODE_CONTEXT_KEY
-        ));
+            }) if context_key == PLAN_MODE_CONTEXT_KEY
+        )));
         assert_eq!(
             output.metadata.id_frontier.next_seq,
             output.events.len() as u64 + 1
         );
-        // The first serialized Provider permit owns promotion for the edited root generation.
-        // 首个串行 Provider 许可持有编辑根代际的提升操作。
-        let mut dispatch_document = SessionDocument::from_parts(
+        // Strict reload already exposes the admitted route, without a dispatch-time promotion.
+        // 严格重载已暴露准入路由，无需在分发时提升。
+        let dispatch_document = SessionDocument::from_parts(
             output.metadata.clone(),
             output.runtime_lock.clone(),
             output.compactions.clone(),
@@ -678,13 +700,10 @@ mod tests {
             output.events.clone(),
         )
         .expect("edited generation should reconstruct for first dispatch");
-        let edited_turn_id = dispatch_document
-            .active_turn()
-            .expect("edited root should own an open Turn")
-            .turn_id;
-        dispatch_document
-            .promote_pending_request(Some(edited_turn_id), T0 + 11)
-            .expect("edited generation should promote its pending request");
+        assert_eq!(
+            dispatch_document.active_turn().unwrap().start_seq,
+            target_seq
+        );
         assert!(dispatch_document.metadata.config.pending_request.is_none());
         assert_eq!(
             dispatch_document
@@ -729,6 +748,129 @@ mod tests {
                 .as_deref(),
             Some("adaptive")
         );
+    }
+
+    /// Editing admits the current model, account and parameters while preserving earlier history.
+    /// 编辑会准入当前模型、账号和参数，并保留此前历史。
+    /// No parameters; verifies the first API and isolation from later picker changes; returns nothing.
+    /// 无参数；验证首次 API 及与后续选择的隔离，不返回值。
+    #[test]
+    fn edit_generation_admits_selected_model_before_first_api() {
+        // Cover provider, model and account-only switches, including Provider-default reasoning.
+        // 覆盖供应商、模型和仅账号切换，同时覆盖供应商默认推理。
+        for (provider, model, thinking_level) in [
+            ("deepseek", "deepseek-v4-flash", Some("high")),
+            ("deepseek", "deepseek-v4-pro", Some("off")),
+            ("opencode-go", "deepseek-v4-flash", None),
+        ] {
+            // source represents a completed conversation with an expired old-provider account.
+            // source 表示旧供应商账号已过期的已完成会话。
+            let mut source = durable_edit_source();
+            source.metadata.config.active_request = ActiveRequestConfig {
+                provider: Some("opencode-go".into()),
+                connection_id: Some("expired-account".into()),
+                model: Some("deepseek-v4-flash".into()),
+                thinking_level: Some("low".into()),
+                temperature: Some(0.2),
+            };
+            // selected captures every current session picker setting, even when the model ID matches.
+            // selected 捕获当前会话选择器的全部设置，即使模型 ID 相同。
+            let selected = ActiveRequestConfig {
+                provider: Some(provider.into()),
+                connection_id: Some("current-account".into()),
+                model: Some(model.into()),
+                thinking_level: thinking_level.map(str::to_owned),
+                temperature: Some(0.7),
+            };
+            source.metadata.config.pending_request = Some(PendingRequestConfig {
+                provider: selected.provider.clone(),
+                connection_id: selected.connection_id.clone(),
+                model: selected.model.clone(),
+                thinking_level: selected.thinking_level.clone(),
+                temperature: selected.temperature,
+                set_at_ms: T0 + 6,
+            });
+            // target_seq identifies the second root, leaving earlier events untouched.
+            // target_seq 标识第二个根输入，此前事件保持不变。
+            let target_seq = source
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    EventBody::UserInput(input) if input.text == "second" => Some(event.seq),
+                    _ => None,
+                })
+                .unwrap();
+            // before proves that the pure builder does not mutate its source.
+            // before 用于证明纯构建器不修改源文档。
+            let before = source.clone();
+            // output atomically publishes the new text and admitted request configuration.
+            // output 原子发布新正文和准入的请求配置。
+            let output = source
+                .build_edited_generation(EditGenerationInput {
+                    target_seq,
+                    replacement: RootInputReplacement::new("new user prompt", Vec::new()),
+                    now_ms: T0 + 10,
+                })
+                .unwrap();
+            assert_eq!(source, before);
+            assert_eq!(
+                output.metadata.document_revision,
+                before.metadata.document_revision + 1
+            );
+            assert_eq!(output.metadata.config.active_request, selected);
+            assert!(output.metadata.config.pending_request.is_none());
+            assert_eq!(
+                &output.events[..target_seq.value() as usize - 1],
+                &before.events()[..target_seq.value() as usize - 1]
+            );
+            assert!(
+                matches!(&output.events[target_seq.value() as usize - 1].event,
+                EventBody::UserInput(input) if input.text == "new user prompt")
+            );
+            assert!(output.events.iter().any(|event| matches!(&event.event,
+                EventBody::RequestConfigChanged(change) if change.previous == before.metadata.config.active_request && change.current == selected)));
+            // dispatch reloads the published facts, without a separate pending promotion.
+            // dispatch 重载已发布事实，不单独执行待生效配置提升。
+            let mut dispatch = SessionDocument::from_parts(
+                output.metadata,
+                output.runtime_lock,
+                output.compactions,
+                Vec::new(),
+                output.events,
+            )
+            .unwrap();
+            // later is selected after edit admission and must wait for another user boundary.
+            // later 在编辑准入后选择，必须等待另一个用户边界。
+            let later = PendingRequestConfig {
+                provider: Some("another-provider".into()),
+                connection_id: Some("later-account".into()),
+                model: Some("later-model".into()),
+                thinking_level: None,
+                temperature: None,
+                set_at_ms: T0 + 11,
+            };
+            dispatch
+                .set_pending_request(later.clone(), T0 + 11)
+                .unwrap();
+            // request follows the service contract by consuming only the admitted active fields.
+            // request 按服务契约仅消费已准入的活动字段。
+            let mut request = crate::v1::event::ApiRequestSnapshot::new(
+                selected.provider.clone().unwrap(),
+                selected.model.clone().unwrap(),
+            );
+            request.connection_id = selected.connection_id.clone();
+            request.thinking_level = selected.thinking_level.clone();
+            request.temperature = selected.temperature;
+            dispatch
+                .start_api(
+                    crate::v1::event::ApiPurposeKind::MainGeneration,
+                    request,
+                    T0 + 12,
+                )
+                .unwrap();
+            assert_eq!(dispatch.metadata.config.active_request, selected);
+            assert_eq!(dispatch.metadata.config.pending_request, Some(later));
+        }
     }
 
     /// Edited generation duration starts at the replacement revision rather than original history time.

@@ -66,7 +66,7 @@
   display: inline-flex;
   align-items: center;
   overflow: hidden;
-  color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 82%, transparent);
   font-family: var(--font-mono);
   white-space: nowrap;
 }
@@ -89,10 +89,10 @@
 
 .tool-presentation-route-badge {
   min-width: 0;
-  border: 1px solid color-mix(in oklch, var(--primary) 34%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 34%, transparent);
   border-radius: 999px;
-  background: color-mix(in oklch, var(--primary) 10%, transparent);
-  color: color-mix(in oklch, var(--primary) 82%, var(--foreground));
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: color-mix(in srgb, var(--primary) 82%, var(--foreground));
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0;
@@ -124,9 +124,9 @@
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 86%, transparent);
+  background: color-mix(in srgb, var(--card) 86%, transparent);
 }
 
 .tool-presentation-output-scroll {
@@ -261,7 +261,7 @@
 }
 
 .markdown-tool-icon {
-  color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
+  color: color-mix(in srgb, var(--primary) 78%, var(--foreground));
 }
 
 .markdown-tool-block {
@@ -293,7 +293,7 @@
   place-items: center;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
   color: var(--muted-foreground);
   transition: background-color 120ms ease, color 120ms ease;
 }
@@ -318,7 +318,7 @@
 }
 
 .file-access-operation-icon {
-  color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
+  color: color-mix(in srgb, var(--primary) 78%, var(--foreground));
 }
 
 .file-access-detail {
@@ -332,9 +332,9 @@
 .file-access-item {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 86%, transparent);
+  background: color-mix(in srgb, var(--card) 86%, transparent);
 }
 
 .file-access-item-heading {
@@ -344,7 +344,7 @@
   gap: 6px;
   overflow: hidden;
   padding: 8px 12px;
-  border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   color: var(--foreground);
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -413,7 +413,7 @@
   display: grid;
   gap: 0;
   border: 0;
-  border-left: 2px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: 0;
   background: transparent;
 }
@@ -490,7 +490,7 @@
 
 .terminal-session-icon.terminal-state-lost,
 .terminal-session-icon.terminal-state-unknown {
-  color: color-mix(in oklch, var(--muted-foreground) 72%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 72%, transparent);
 }
 
 .tool-presentation-terminal-meta {
@@ -507,7 +507,7 @@
   margin: 0 12px 10px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
   color: var(--destructive);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -521,8 +521,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 7px 12px;
-  border-top: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
-  background: color-mix(in oklch, var(--card) 92%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.2;
@@ -533,7 +533,7 @@
 }
 
 .tool-presentation-exit-code.success {
-  color: color-mix(in oklch, var(--success) 78%, var(--muted-foreground));
+  color: color-mix(in srgb, var(--vcn-content-success) 78%, var(--muted-foreground));
 }
 
 .tool-presentation-exit-code.failed {
@@ -541,7 +541,7 @@
 }
 
 .ask-question-icon {
-  color: color-mix(in oklch, var(--primary) 74%, var(--muted-foreground));
+  color: color-mix(in srgb, var(--primary) 74%, var(--muted-foreground));
 }
 
 .ask-question-detail {
@@ -551,16 +551,16 @@
   display: grid;
   gap: 8px;
   padding: 8px 0 0 23px;
-  border-left: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
 }
 
 .ask-question-item {
   display: grid;
   gap: 4px;
   padding: 8px 10px;
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--muted) 24%, transparent);
+  background: color-mix(in srgb, var(--muted) 24%, transparent);
 }
 
 .ask-question-row {
@@ -583,7 +583,7 @@
 }
 
 .ask-question-row.ignored .ask-question-text {
-  color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 82%, transparent);
 }
 
 .tool-presentation-card.file-change {
@@ -614,7 +614,7 @@
   gap: 10px;
   margin-left: 8px;
   padding: 10px 0 2px 18px;
-  border-left: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
 }
 
 .subagent-orchestration-meta {
@@ -724,9 +724,9 @@
   margin: 0;
   overflow: auto;
   padding: 8px 10px;
-  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 6px;
-  background: color-mix(in oklch, var(--card) 86%, transparent);
+  background: color-mix(in srgb, var(--card) 86%, transparent);
   color: var(--foreground);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -780,9 +780,9 @@
 .file-change-fallback-icon {
   min-width: 16px;
   padding: 0 2px;
-  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 3px;
-  color: color-mix(in oklch, var(--muted-foreground) 86%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 86%, transparent);
   font-family: var(--font-mono);
   font-size: 8px;
   font-weight: 700;
@@ -869,7 +869,7 @@
   gap: 6px;
   margin-left: 8px;
   padding-left: 12px;
-  border-left: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
 }
 
 .file-change-tree-item {
@@ -881,9 +881,9 @@
 .file-change-detail {
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 86%, transparent);
+  background: color-mix(in srgb, var(--card) 86%, transparent);
 }
 
 .file-change-detail.review {

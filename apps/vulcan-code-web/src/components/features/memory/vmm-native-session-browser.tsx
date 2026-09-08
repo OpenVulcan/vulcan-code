@@ -201,7 +201,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onOpen, onScopeChange,
   return <Card>
     <CardHeader><CardTitle>{t("memory.sessionList.title")}</CardTitle><CardDescription>{t("memory.sessionList.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="vmm-session-scope flex flex-wrap items-end gap-3">
         <label className="min-w-0 flex-1 space-y-1 text-sm">{t("memory.nativeRecords.project")}
           <Select disabled={occupied || !catalog?.projects.length} value={query ? String(query.vmmProjectId) : ""} onValueChange={(value) => { onScopeChange(); void load(nativeSessionInitialQuery(Number(value))) }}>
             <SelectTrigger aria-label={t("memory.nativeRecords.project")} className="w-full"><SelectValue placeholder={t("memory.nativeRecords.selectProject")} /></SelectTrigger>

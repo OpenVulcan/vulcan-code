@@ -68,7 +68,7 @@
 .workspace-statusbar-runtime-status .composer-session-progress-capsule:hover,
 .workspace-statusbar-runtime-status .composer-session-progress-capsule:focus-visible {
   border: 0;
-  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
 }
 
 .workspace-resizable-body-shell {
@@ -216,7 +216,7 @@
   pointer-events: none;
   background: linear-gradient(
     to left,
-    color-mix(in oklch, var(--foreground) 8%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent),
     transparent
   );
 }

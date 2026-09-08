@@ -164,7 +164,7 @@
 }
 
 .workspace-sidebar-feature-button {
-  --workspace-sidebar-feature-active-bg: color-mix(in oklch, var(--sidebar-accent) 68%, var(--foreground) 9%);
+  --workspace-sidebar-feature-active-bg: color-mix(in srgb, var(--sidebar-accent) 68%, var(--foreground) 9%);
   height: 30px;
   max-height: 30px;
   min-height: 30px;
@@ -249,7 +249,7 @@
 }
 
 .sidebar-user-avatar {
-  background: color-mix(in oklch, var(--sidebar-accent) 82%, var(--foreground) 12%);
+  background: color-mix(in srgb, var(--sidebar-accent) 82%, var(--foreground) 12%);
   color: var(--sidebar-accent-foreground);
 }
 
@@ -380,10 +380,10 @@
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active {
-  background: color-mix(in oklch, var(--sidebar-accent) 72%, var(--foreground) 8%);
+  background: color-mix(in srgb, var(--sidebar-accent) 72%, var(--foreground) 8%);
   box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--sidebar-accent-foreground) 18%, transparent),
-    0 0 10px color-mix(in oklch, var(--sidebar-accent) 44%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--sidebar-accent-foreground) 18%, transparent),
+    0 0 10px color-mix(in srgb, var(--sidebar-accent) 44%, transparent);
   color: var(--sidebar-accent-foreground);
 }
 
@@ -391,10 +391,10 @@
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active:focus-visible,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active:hover,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active:focus-visible {
-  background: color-mix(in oklch, var(--sidebar-accent) 72%, var(--foreground) 8%);
+  background: color-mix(in srgb, var(--sidebar-accent) 72%, var(--foreground) 8%);
   box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--sidebar-accent-foreground) 18%, transparent),
-    0 0 10px color-mix(in oklch, var(--sidebar-accent) 44%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--sidebar-accent-foreground) 18%, transparent),
+    0 0 10px color-mix(in srgb, var(--sidebar-accent) 44%, transparent);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button.active,

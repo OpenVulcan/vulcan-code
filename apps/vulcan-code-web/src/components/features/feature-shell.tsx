@@ -159,6 +159,9 @@ function FeatureShell(props: {
   const skillHeaderAction = props.activeArea === "skills" && activeSkillSubArea === "catalog" ? (
     <div className="feature-header-actions">
       <Button
+        aria-label={skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}
+        title={t("skills.action.refresh")}
+        className="feature-header-refresh"
         disabled={skillHeaderBusyAction !== null}
         onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
         size="sm"

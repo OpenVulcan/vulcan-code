@@ -1,8 +1,8 @@
 .markdown-message {
   min-width: 0;
   color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.62;
+  font-size: 14px;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
 
@@ -160,9 +160,9 @@
 .markdown-code-block {
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  background: color-mix(in srgb, var(--card) 94%, var(--muted));
   color: var(--foreground);
 }
 
@@ -219,7 +219,7 @@
 
 .markdown-code-action:hover,
 .markdown-code-action:focus-visible {
-  background: color-mix(in oklch, var(--muted) 80%, transparent);
+  background: color-mix(in srgb, var(--muted) 80%, transparent);
   color: var(--foreground);
   outline: none;
 }
@@ -273,9 +273,9 @@
 .markdown-diagram-block {
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 96%, var(--muted));
+  background: color-mix(in srgb, var(--card) 96%, var(--muted));
 }
 
 .markdown-message .markdown-diagram-block {
@@ -309,7 +309,7 @@
   width: min(180px, 45%);
   height: 5px;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+  background: color-mix(in srgb, var(--muted-foreground) 28%, transparent);
 }
 
 .markdown-table-wrap {
