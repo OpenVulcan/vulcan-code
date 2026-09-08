@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceJobSummary } from "@/types";
 import { EMPTY_VCE_OBSERVED_JOB, VceJobObserverStore, type VceJobObserverTransport } from "./vce-job-observer-store";
+import {
+  VCE_OBSERVER_READ_DEADLINE_MS,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+} from "./vce-observer-timeouts";
 
 // Represent an explicitly controlled promise without timers or real service calls.
 // 表示明确受控的承诺，不使用计时器或真实服务调用。
@@ -27,6 +31,25 @@ function deferred<T>(): Deferred<T> {
   // promise 捕获完成句柄，不启动异步外部工作。
   const promise = new Promise<T>((accept, fail) => { resolve = accept; reject = fail; });
   return { promise, resolve, reject };
+}
+
+// abortAwareRead models fetch rejecting as soon as the caller aborts the transport.
+// abortAwareRead 模拟调用方中止传输后 fetch 立即拒绝请求。
+// Parameters: signal is the caller-owned abort signal observed by the fixture.
+// 参数：signal 是测试替身监听的调用方中止信号。
+// Returns: a promise rejected with AbortError on abort and otherwise left pending.
+// 返回值：信号中止时以 AbortError 拒绝、否则保持 pending 的承诺。
+function abortAwareRead<T>(signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return Promise.reject(new Error("missing abort signal"));
+  return new Promise<T>((_resolve, reject) => {
+    const onAbort = () => {
+      const error = new Error("request aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 // Build a complete running receipt for projectId; overrides select exact test state.
@@ -164,6 +187,41 @@ describe("workbench-owned VCE job observation", () => {
   it("does not register an event stream for an already retired observer", async () => {
     observe("project-a")(); await vi.advanceTimersByTimeAsync(0);
     expect(rpc.subscribe).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Retiring a read aborts only the observer transport; deadlines remain retryable and never issue cancellation.
+  // 观察退役只中止观察传输；期限错误可重试，且绝不发出作业取消。
+  it("aborts retired reads, reports deadline reads, and never cancels the host job", async () => {
+    let retiredSignal: AbortSignal | undefined;
+    rpc.load.mockImplementationOnce((_projectId, options) => {
+      retiredSignal = options?.signal;
+      return abortAwareRead(options?.signal);
+    });
+    const closeRetired = observe("project-a");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retiredSignal?.aborted).toBe(false);
+    closeRetired();
+    expect(retiredSignal?.aborted).toBe(true);
+    expect(rpc.cancel).not.toHaveBeenCalled();
+
+    let deadlineSignal: AbortSignal | undefined;
+    rpc.load.mockImplementationOnce((_projectId, options) => {
+      deadlineSignal = options?.signal;
+      return abortAwareRead(options?.signal);
+    });
+    const reopened = observe("project-a");
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(VCE_OBSERVER_READ_DEADLINE_MS);
+    expect(deadlineSignal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot("project-a").error).toBe(VCE_OBSERVER_READ_TIMEOUT_MESSAGE);
+
+    rpc.load.mockResolvedValueOnce(null);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(store.snapshot("project-a").error).toBeNull();
+    expect(rpc.cancel).not.toHaveBeenCalled();
+    reopened();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   // Stream failures cannot be hidden by healthy polling and are retried at a bounded cadence.

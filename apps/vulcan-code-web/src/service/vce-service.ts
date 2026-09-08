@@ -1,4 +1,5 @@
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
+import type { ServiceRequestOptions } from "@/service/protocol";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import type {
   VceBlobDetailResponse,
@@ -101,20 +102,30 @@ export async function loadVceConfigurationStatus(): Promise<VceGlobalConfigurati
 
 // loadVceProjectOverview loads current settings and provider-independent runtime diagnostics.
 // loadVceProjectOverview 加载当前设置与不依赖 Provider 的运行诊断。
-export async function loadVceProjectOverview(projectId: string): Promise<VceProjectOverviewResponse> {
+// options optionally carries the caller-owned transport abort signal.
+// options 可选携带调用方持有的传输中止信号。
+export async function loadVceProjectOverview(
+  projectId: string,
+  options?: ServiceRequestOptions,
+): Promise<VceProjectOverviewResponse> {
   if (!hasServiceRuntime()) {
     return browserVceOverview(projectId);
   }
   return serviceClient.request<VceProjectOverviewResponse>("service_get_vce_project_overview", {
     request: { projectId },
-  });
+  }, options);
 }
 
 // Read one project's lightweight activity for shared composer and status surfaces.
 // 读取一个项目的轻量活动，供共享输入区与状态界面使用。
 // projectId selects authoritative ownership. Returns no synthetic initialization or progress.
 // projectId 选择权威归属。不返回虚构初始化或进度。
-export async function loadVceProjectActivity(projectId: string): Promise<VceProjectActivityResponse> {
+// options optionally carries the caller-owned transport abort signal.
+// options 可选携带调用方持有的传输中止信号。
+export async function loadVceProjectActivity(
+  projectId: string,
+  options?: ServiceRequestOptions,
+): Promise<VceProjectActivityResponse> {
   if (!hasServiceRuntime()) {
     const overview = browserVceOverview(projectId);
     return { configuration: overview.configuration, settings: overview.settings, status: overview.status,
@@ -123,7 +134,7 @@ export async function loadVceProjectActivity(projectId: string): Promise<VceProj
   }
   return serviceClient.request<VceProjectActivityResponse>("service_get_vce_project_activity", {
     request: { projectId },
-  });
+  }, options);
 }
 
 // updateVceProjectSettings saves one complete settings document under optimistic revision control.
@@ -156,9 +167,15 @@ export async function submitVceJob(request: VceJobSubmitRequest): Promise<VceJob
 // 读取最近作业或精确稳定编号，不启动索引或调用模型。
 // projectId owns the receipt; jobId selects exact history when provided. Returns absence for no jobs.
 // projectId 持有回执；提供 jobId 时选择精确历史。没有作业时返回空值。
-export async function loadVceJob(projectId: string, jobId: string | null = null): Promise<VceJobSummary | null> {
+// options optionally carries the caller-owned transport abort signal.
+// options 可选携带调用方持有的传输中止信号。
+export async function loadVceJob(
+  projectId: string,
+  jobId: string | null = null,
+  options?: ServiceRequestOptions,
+): Promise<VceJobSummary | null> {
   if (!hasServiceRuntime()) return null;
-  return serviceClient.request<VceJobSummary | null>("service_get_vce_job", { request: { projectId, jobId } });
+  return serviceClient.request<VceJobSummary | null>("service_get_vce_job", { request: { projectId, jobId } }, options);
 }
 
 // Cancel the exact displayed host job; this never shares conversation cancellation.

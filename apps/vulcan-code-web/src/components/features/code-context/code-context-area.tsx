@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n";
+import type { ServiceRequestOptions } from "@/service/protocol";
 import {
   cancelVceOperation,
   executeVceMaintenance,
@@ -39,19 +40,26 @@ import {
 import { useVceProjectJob } from "./use-vce-project-job";
 import { useVceActionScope } from "./use-vce-action-scope";
 import { VceJobProgress, vceSynchronizationControl } from "./vce-job-progress";
+import {
+  VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS,
+  VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
+} from "./vce-observer-timeouts";
 
 // loadAuthoritativeVceOverview reads and validates the current host-owned project snapshot.
 // loadAuthoritativeVceOverview 读取并校验当前由宿主持有的项目快照。
 //
 // Parameters: projectId is the exact mounted project and loader performs the service read.
 // 参数：projectId 是精确的已挂载项目，loader 执行服务读取。
+// options optionally carries the caller-owned abort signal for this read.
+// 参数：options 可选携带调用方持有的本次读取中止信号。
 // Returns: the validated current overview for the requested project.
 // 返回值：请求项目经过校验的当前概览。
 export async function loadAuthoritativeVceOverview(
   projectId: string,
-  loader: (projectId: string) => Promise<VceProjectOverviewResponse> = loadVceProjectOverview,
+  loader: (projectId: string, options?: ServiceRequestOptions) => Promise<VceProjectOverviewResponse> = loadVceProjectOverview,
+  options?: ServiceRequestOptions,
 ): Promise<VceProjectOverviewResponse> {
-  const overview = await loader(projectId);
+  const overview = options ? await loader(projectId, options) : await loader(projectId);
   if (overview.status.projectId !== projectId) {
     throw new Error("VCE overview recovery returned a mismatched project identity.");
   }
@@ -151,6 +159,12 @@ export function CodeContextArea(props: {
   // managementRequestVersion invalidates stale asynchronous responses after project or page changes.
   // managementRequestVersion 在项目或分页变化后使陈旧异步响应失效。
   const managementRequestVersion = React.useRef(0);
+  // managementOverviewReadAbortController owns the optional management overview transport.
+  // managementOverviewReadAbortController 持有可选管理概览读取的传输中止控制器。
+  const managementOverviewReadAbortController = React.useRef<AbortController | null>(null);
+  // managementOverviewReadDeadlineTimer bounds the optional overview request by its generation.
+  // managementOverviewReadDeadlineTimer 按请求代次限制可选概览请求的最长等待时间。
+  const managementOverviewReadDeadlineTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Actions retain the admitted project and service lifetime, not merely a reusable project ID.
   // 操作保留准入项目和服务生命周期，而不只是可重复使用的项目编号。
   const isCurrentAction = useVceActionScope(props.projectId);
@@ -166,6 +180,14 @@ export function CodeContextArea(props: {
     setManagementError(null);
     return () => {
       managementRequestVersion.current += 1;
+      // Retiring this panel aborts only its browser read; it never cancels a host operation.
+      // 此面板退役时仅中止浏览器读取，绝不取消宿主作业。
+      if (managementOverviewReadDeadlineTimer.current !== null) {
+        clearTimeout(managementOverviewReadDeadlineTimer.current);
+        managementOverviewReadDeadlineTimer.current = null;
+      }
+      managementOverviewReadAbortController.current?.abort();
+      managementOverviewReadAbortController.current = null;
     };
   }, [isCurrentAction]);
 
@@ -194,6 +216,13 @@ export function CodeContextArea(props: {
   const reloadManagement = React.useCallback(async () => {
     const requestVersion = managementRequestVersion.current + 1;
     managementRequestVersion.current = requestVersion;
+    // A new management request retires the previous overview read before starting another one.
+    // 新的管理请求会先退役上一次概览读取，再开始新的读取。
+    managementOverviewReadAbortController.current?.abort();
+    if (managementOverviewReadDeadlineTimer.current !== null) {
+      clearTimeout(managementOverviewReadDeadlineTimer.current);
+      managementOverviewReadDeadlineTimer.current = null;
+    }
     // Retired details and lists cannot remain beside a newly published overview, even on read failure.
     // 即使读取失败，退役详情和列表也不能继续与新发布概览并列显示。
     setManagementOverview(null);
@@ -210,12 +239,41 @@ export function CodeContextArea(props: {
       setManagementBusy(false);
       return;
     }
+    // controller owns this overview read and its browser abort signal.
+    // controller 持有本次概览读取及其浏览器中止信号。
+    const controller = new AbortController();
+    // timedOut distinguishes a retryable deadline from a silent lifecycle abort.
+    // timedOut 区分可重试的期限超时与静默生命周期中止。
+    let timedOut = false;
+    // deadline bounds this request and is cleared by completion or retirement.
+    // deadline 限制本次请求，并在完成或退役时清理。
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS);
+    managementOverviewReadAbortController.current = controller;
+    managementOverviewReadDeadlineTimer.current = deadline;
     setManagementBusy(true);
     setManagementError(null);
     try {
       // Pin the host-issued identity before requesting lists; never infer it from a numeric checkpoint.
       // 请求列表之前固定宿主签发身份；绝不从数字检查点推断身份。
-      const overview = await loadAuthoritativeVceOverview(props.projectId);
+      const overview = await loadAuthoritativeVceOverview(props.projectId, loadVceProjectOverview, {
+        signal: controller.signal,
+      });
+      clearTimeout(deadline);
+      if (managementOverviewReadDeadlineTimer.current === deadline) {
+        managementOverviewReadDeadlineTimer.current = null;
+      }
+      if (managementOverviewReadAbortController.current === controller) {
+        managementOverviewReadAbortController.current = null;
+      }
+      if (controller.signal.aborted) {
+        if (timedOut && managementRequestVersion.current === requestVersion) {
+          setManagementError(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+        }
+        return;
+      }
       if (managementRequestVersion.current !== requestVersion) return;
       if (!overview.readIdentity) throw new Error(copy("索引尚无可读取的已发布版本。", "No published index is available for management reads."));
       const [filePage, operationPage, issuePage] = await Promise.all([
@@ -232,10 +290,21 @@ export function CodeContextArea(props: {
       setOperationPage(materializeVceManagementPage(operationPage, firstPageRequest));
       setIssuePage(materializeVceManagementPage(issuePage, firstPageRequest));
     } catch (error) {
-      if (managementRequestVersion.current === requestVersion) {
+      if (controller.signal.aborted) {
+        if (timedOut && managementRequestVersion.current === requestVersion) {
+          setManagementError(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+        }
+      } else if (managementRequestVersion.current === requestVersion) {
         setManagementError(error instanceof Error ? error.message : String(error));
       }
     } finally {
+      clearTimeout(deadline);
+      if (managementOverviewReadDeadlineTimer.current === deadline) {
+        managementOverviewReadDeadlineTimer.current = null;
+      }
+      if (managementOverviewReadAbortController.current === controller) {
+        managementOverviewReadAbortController.current = null;
+      }
       if (managementRequestVersion.current === requestVersion) {
         setManagementBusy(false);
       }

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceProjectActivityResponse, VceProjectChangedEvent } from "@/types";
-import { VceActivityObserverStore } from "./vce-activity-observer-store";
+import { VceActivityObserverStore, type VceActivityObserverTransport } from "./vce-activity-observer-store";
 import { createVceActivityFixture } from "./vce-activity-test-fixture";
+import {
+  VCE_OBSERVER_READ_DEADLINE_MS,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+} from "./vce-observer-timeouts";
 
 // Create a manually settled promise of T; returns the promise plus exact resolve/reject controls.
 // 创建手动完成的 T 类型承诺；返回承诺及精确完成、拒绝控制。
@@ -16,6 +20,25 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// abortAwareRead models fetch rejecting as soon as the caller aborts the transport.
+// abortAwareRead 模拟调用方中止传输后 fetch 立即拒绝请求。
+// Parameters: signal is the caller-owned abort signal observed by the fixture.
+// 参数：signal 是测试替身监听的调用方中止信号。
+// Returns: a promise rejected with AbortError on abort and otherwise left pending.
+// 返回值：信号中止时以 AbortError 拒绝、否则保持 pending 的承诺。
+function abortAwareRead<T>(signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return Promise.reject(new Error("missing abort signal"));
+  return new Promise<T>((_resolve, reject) => {
+    const onAbort = () => {
+      const error = new Error("request aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 // Build read-only transport mocks and a real store; returns observed calls and its event delivery path.
 // 构建只读传输替身及真实仓库；返回可观察调用及其事件投递路径。
 function fixture() {
@@ -24,7 +47,7 @@ function fixture() {
   let listener!: (event: VceProjectChangedEvent) => void;
   // load produces full activity for each exact requested owner.
   // load 为每个精确请求的所有者生成完整活动。
-  const load = vi.fn(async (projectId: string) => createVceActivityFixture(projectId));
+  const load = vi.fn<VceActivityObserverTransport["load"]>(async (projectId) => createVceActivityFixture(projectId));
   // stop tracks release of the one workbench event subscription.
   // stop 跟踪唯一工作台事件订阅的释放。
   const stop = vi.fn();
@@ -121,7 +144,7 @@ describe("workbench activity observation", () => {
     expect(f.subscribe).toHaveBeenCalledTimes(1);
     f.load.mockClear();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(f.load.mock.calls).toEqual([["project-a"], ["project-b"]]);
+    expect(f.load.mock.calls.map(([projectId]) => projectId)).toEqual(["project-a", "project-b"]);
     a(); expect(f.stop).not.toHaveBeenCalled();
     otherA(); expect(f.stop).not.toHaveBeenCalled();
     b(); expect(f.stop).toHaveBeenCalledTimes(1);
@@ -157,7 +180,7 @@ describe("workbench activity observation", () => {
     const delayed = deferred<VceProjectActivityResponse>();
     f.load.mockClear().mockImplementationOnce(() => delayed.promise);
     const reading = f.store.refresh("project-a");
-    await vi.advanceTimersByTimeAsync(50000);
+    await vi.advanceTimersByTimeAsync(VCE_OBSERVER_READ_DEADLINE_MS - 1);
     expect(f.load).toHaveBeenCalledTimes(1);
     delayed.resolve(createVceActivityFixture("project-a", 7));
     await reading;
@@ -182,6 +205,46 @@ describe("workbench activity observation", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(f.store.snapshot("project-a").activity?.settings.revision).toBe(8);
     current();
+  });
+
+  // Retiring a read aborts its browser transport, while a deadline exposes a retryable read diagnostic.
+  // 观察退役会中止浏览器传输，而期限结束会暴露可重试的读取诊断。
+  it("aborts retired reads, reports deadline reads, and accepts the reopened generation", async () => {
+    const f = fixture();
+    let retiredSignal: AbortSignal | undefined;
+    f.load.mockImplementationOnce((_projectId, options) => {
+      retiredSignal = options?.signal;
+      return abortAwareRead(options?.signal);
+    });
+    const closeRetired = f.store.subscribe("project-a", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retiredSignal?.aborted).toBe(false);
+    closeRetired();
+    expect(retiredSignal?.aborted).toBe(true);
+
+    let deadlineSignal: AbortSignal | undefined;
+    const registration = deferred<() => void>();
+    f.subscribe.mockImplementationOnce(() => registration.promise);
+    f.load.mockImplementationOnce((_projectId, options) => {
+      deadlineSignal = options?.signal;
+      return abortAwareRead(options?.signal);
+    });
+    const reopened = f.store.subscribe("project-a", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(VCE_OBSERVER_READ_DEADLINE_MS);
+    expect(deadlineSignal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.snapshot("project-a").activity).toBeNull();
+    expect(f.store.snapshot("project-a").error).toBe(VCE_OBSERVER_READ_TIMEOUT_MESSAGE);
+
+    f.load.mockResolvedValueOnce(createVceActivityFixture("project-a", 2));
+    await f.store.refresh("project-a");
+    expect(f.store.snapshot("project-a").activity?.settings.revision).toBe(2);
+    expect(f.store.snapshot("project-a").error).toBeNull();
+    reopened();
+    registration.resolve(vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   // Invalid cross-project reads expose an error while preserving the prior verified owner.

@@ -141,6 +141,24 @@ describe("CodeContextArea", () => {
     expect(loader).toHaveBeenCalledExactlyOnceWith("project-a");
   });
 
+  // Management overview reads receive the caller-owned abort signal used by the panel lifetime.
+  // 管理概览读取必须接收面板生命周期持有的中止信号。
+  it("forwards the management overview abort signal to its loader", async () => {
+    const authoritative = overviewFixture(true);
+    // controller supplies the caller-owned signal expected to reach the loader.
+    // controller 提供预期传递给加载器的调用方中止信号。
+    const controller = new AbortController();
+    // loader captures the exact project/options contract while returning an authoritative response.
+    // loader 在返回权威响应的同时捕获精确的项目与选项契约。
+    const loader = vi.fn(async (_projectId: string, options?: { signal?: AbortSignal }) => {
+      expect(options?.signal).toBe(controller.signal);
+      return authoritative;
+    });
+
+    await expect(loadAuthoritativeVceOverview("project-a", loader, { signal: controller.signal }))
+      .resolves.toBe(authoritative);
+  });
+
   // Recovery rejects a cross-project response before it can replace the mounted project's draft.
   // 恢复流程会在跨项目响应替换当前项目草稿前拒绝该响应。
   it("rejects a mismatched project during authoritative recovery", async () => {

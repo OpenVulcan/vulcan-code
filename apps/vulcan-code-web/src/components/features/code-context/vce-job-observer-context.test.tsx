@@ -4,7 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceJobSummary } from "@/types";
-import { VceJobObserverProvider } from "./vce-job-observer-context";
+import {
+  VceJobObserverContext as ContextFromProviderModule,
+  VceJobObserverProvider,
+} from "./vce-job-observer-context";
+import { VceJobObserverContext as ContextFromStableModule } from "./vce-job-observer-context-state";
 import { useVceProjectJob } from "./use-vce-project-job";
 import { useVceActionScope } from "./use-vce-action-scope";
 
@@ -75,6 +79,12 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("VCE workbench observer composition", () => {
+  // Provider and hook modules must resolve the same context object after a module update.
+  // Provider 与 Hook 模块更新后必须解析到同一个 Context 对象。
+  it("keeps the provider context identity stable across module imports", () => {
+    expect(ContextFromProviderModule).toBe(ContextFromStableModule);
+  });
+
   // Real React views share active polling and cancellation state without resetting the chat.
   // 真实 React 视图共享活动轮询和取消状态，不重置聊天。
   it("shares one observation between floating and project-setting views", async () => {

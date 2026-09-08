@@ -190,6 +190,9 @@ impl VceJobSelection<'_> {
 /// One active job with durable receipt ownership and an independent cancellation channel.
 /// 一个具有持久回执归属和独立取消通道的活动作业。
 pub(super) struct VceManagedJob {
+    /// Immutable durable identity used to match cancellation without reading mutable receipt state.
+    /// 用于匹配取消请求的不可变持久身份，不读取可变回执状态。
+    job_id: String,
     /// Latest saved non-index policy for replacement handoff; ordinary jobs have no separate handoff.
     /// 替换交接使用的最新已保存非索引策略；普通作业没有独立交接。
     replacement_settings: Option<Mutex<ProjectVceSettings>>,
@@ -205,6 +208,9 @@ pub(super) struct VceManagedJob {
     /// Only acknowledged persisted receipts enter this projection.
     /// 仅确认已持久化的回执可以进入此投影。
     receipt: Mutex<VceStoredJob>,
+    /// Serialize durable receipt transitions without holding the receipt snapshot lock over I/O.
+    /// 串行化持久回执转换，但不在 I/O 期间持有回执快照锁。
+    persistence_gate: Mutex<()>,
     /// Shared atomic boundary used by both scanning and core publication.
     /// 扫描与核心发布共同使用的共享原子边界。
     control: VceRefreshControl,
@@ -293,12 +299,13 @@ impl VceManagedJob {
         store: &VceProjectJobStore,
         change: impl FnOnce(&mut VceStoredJob),
     ) -> Result<VceStoredJob, String> {
-        // previous serializes cancellation, progress, and terminal receipt updates.
-        // previous 串行化取消、进度与终态回执更新。
-        let mut previous = self.receipt.lock().await;
+        // The gate serializes compare-and-swap transitions while the receipt lock remains short-lived.
+        // 闸门串行化比较交换转换，同时让回执锁只覆盖短暂的内存快照。
+        let _persistence = self.persistence_gate.lock().await;
+        let previous = self.receipt.lock().await.clone();
         let mut next = previous.clone();
         change(&mut next);
-        if next == *previous {
+        if next == previous {
             return Ok(next);
         }
         next.sequence = previous
@@ -307,7 +314,9 @@ impl VceManagedJob {
             .ok_or_else(|| String::from("VCE job receipt sequence overflow"))?;
         next.updated_at_unix_ms = job_time()?.max(previous.updated_at_unix_ms);
         let persisted = store.update(&previous, &next).await?;
-        *previous = persisted.clone();
+        // No other receipt transition can pass the gate while this compare-and-swap is in flight.
+        // 此比较交换进行期间没有其他回执转换可以通过闸门。
+        *self.receipt.lock().await = persisted.clone();
         self.event_emitter
             .emit(crate::ServiceEvent::VceJobChanged(Box::new(
                 super::super::services::map_vce_job(persisted.clone()),
@@ -550,33 +559,37 @@ impl VceRuntimeManager {
                     .checkpoint_version,
                 runtime.ai.embedding_space().physical_fingerprint.as_deref(),
             )?;
-            // receipt serialization also excludes phase updates while the replay mapping is committed.
-            // 回执串行化也在提交重放映射期间排斥阶段更新。
-            let mut receipt = current_job.receipt.lock().await;
-            if receipt.kind != command.kind
-                || receipt.contract_fingerprint
-                    != job_index_contract_fingerprint(&runtime.config, &runtime.settings)?
-            {
-                return Err(String::from(
-                    "VCE active job has a different admitted operation or index contract",
-                ));
-            }
-            // Only running synchronization needs another scan; a queued scan already includes later clicks.
-            // 仅运行中的同步需要另一轮扫描；排队扫描已包含后续点击时的变化。
-            let followup =
-                receipt.kind == VceJobKind::Synchronize && receipt.state == VceJobState::Running;
-            // Acknowledge only after both the replay alias and pending state are durable.
-            // 仅在重放别名与待处理状态均持久化后确认。
-            let accepted = store
-                .coalesce(
-                    &receipt,
-                    &command.idempotency_key,
-                    &request_fingerprint,
-                    job_time()?,
-                    followup,
-                )
-                .await?;
-            *receipt = accepted.clone();
+            // Serialize the replay mapping with progress and terminal receipt transitions.
+            // 将重放映射与进度及终态回执转换串行化。
+            let (accepted, followup) = {
+                let _persistence = current_job.persistence_gate.lock().await;
+                let previous = current_job.receipt.lock().await.clone();
+                if previous.kind != command.kind
+                    || previous.contract_fingerprint
+                        != job_index_contract_fingerprint(&runtime.config, &runtime.settings)?
+                {
+                    return Err(String::from(
+                        "VCE active job has a different admitted operation or index contract",
+                    ));
+                }
+                // Only running synchronization needs another scan; a queued scan already includes later clicks.
+                // 仅运行中的同步需要另一轮扫描；排队扫描已包含后续点击时的变化。
+                let followup = previous.kind == VceJobKind::Synchronize
+                    && previous.state == VceJobState::Running;
+                // Acknowledge only after both the replay alias and pending state are durable.
+                // 仅在重放别名与待处理状态均持久化后确认。
+                let accepted = store
+                    .coalesce(
+                        &previous,
+                        &command.idempotency_key,
+                        &request_fingerprint,
+                        job_time()?,
+                        followup,
+                    )
+                    .await?;
+                *current_job.receipt.lock().await = accepted.clone();
+                (accepted, followup)
+            };
             if followup {
                 runtime
                     .job_schedule
@@ -717,11 +730,13 @@ impl VceRuntimeManager {
             .map_err(|_| String::from("VCE job scheduling lock is poisoned"))?
             .last_admitted = Some(tokio::time::Instant::now());
         let job = Arc::new(VceManagedJob {
+            job_id: receipt.job_id.clone(),
             replacement_settings: None,
             project_writer,
             store: store.clone(),
             event_emitter: self.event_emitter.clone(),
             receipt: Mutex::new(receipt.clone()),
+            persistence_gate: Mutex::new(()),
             control: VceRefreshControl::default(),
             cancel_wake: Notify::new(),
             persistence_error: Mutex::new(None),
@@ -856,7 +871,7 @@ impl VceRuntimeManager {
         // A late cancellation of a terminal receipt is idempotent and must not touch a newer job.
         // 针对终态回执的迟到取消具有幂等性，不能触碰较新作业。
         let job = match active {
-            Some(job) if job.receipt.lock().await.job_id == job_id => job,
+            Some(job) if job.job_id == job_id => job,
             _ => {
                 let receipt = self
                     .read_job(project_id, VceJobSelection::Exact(job_id))
@@ -998,11 +1013,13 @@ impl VceRuntimeManager {
                             Ok(next) => {
                                 operation_id = format!("{}:batch:{}", next.job_id, Uuid::new_v4());
                                 job = Arc::new(VceManagedJob {
+                                    job_id: next.job_id.clone(),
                                     replacement_settings: None,
                                     project_writer: Arc::clone(&job.project_writer),
                                     store: store.clone(),
                                     event_emitter: self.event_emitter.clone(),
                                     receipt: Mutex::new(next),
+                                    persistence_gate: Mutex::new(()),
                                     control: VceRefreshControl::default(),
                                     cancel_wake: Notify::new(),
                                     persistence_error: Mutex::new(None),
@@ -1102,77 +1119,152 @@ impl VceRuntimeManager {
             job.control.check().map_err(|error| error.to_string())?;
             // Watch retains one latest observation, so huge projects cannot grow a progress queue.
             // 观察通道仅保留最近一份观察，大型项目不会使进度队列增长。
-            let (progress_sender, mut progress_receiver) = watch::channel(None::<VceRefreshProgress>);
+            let (progress_sender, progress_receiver) = watch::channel(None::<VceRefreshProgress>);
             let control = job.control.clone().with_observer(Arc::new(move |progress| {
                 progress_sender.send_replace(Some(progress));
             }));
-            let execution = self.execute_job_refresh(runtime, operation_id, control, work);
-            tokio::pin!(execution);
-            let mut tick = tokio::time::interval(Duration::from_millis(250));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut progress_error = None;
-            // Phase changes bypass counter throttling; identical-phase counters remain sampled.
-            // 阶段变化绕过计数节流；同阶段计数仍采用采样。
-            let mut published_phase = None;
-            // Closed observers must not create a permanently ready selector branch.
-            // 已关闭观察器不能产生永久就绪的选择器分支。
-            let mut observing = true;
-            let result = loop {
-                tokio::select! {
-                    biased;
-                    result = &mut execution => break result,
-                    // A continuously ready observer must not starve the counter sampling deadline.
-                    // 持续就绪的观察器不能饿死计数采样期限。
-                    _ = tick.tick(), if progress_error.is_none() => {
-                        let progress = progress_receiver.borrow_and_update().clone();
-                        if let Some(progress) = progress {
-                            let phase = (progress.operation_id.clone(), progress.phase);
-                            if let Err(error) = job.persist(store, |receipt| receipt.progress = Some(progress)).await {
-                                job.control.cancel();
+            // The manager and runtime clones give the structured execution task owned lifetimes.
+            // 管理器与运行时克隆为结构化执行任务提供独立所有权生命周期。
+            let manager = self.clone();
+            let refresh_runtime = Arc::clone(runtime);
+            let execution = async move {
+                manager
+                    .execute_job_refresh(&refresh_runtime, operation_id, control, work)
+                    .await
+            };
+            // The callback retains the exact job store for each bounded progress write.
+            // 回调为每次有界进度写入保留精确作业存储。
+            let progress_job = Arc::clone(job);
+            let progress_store = store.clone();
+            let persist_progress = move |
+                progress: VceRefreshProgress,
+            | -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+                let job = Arc::clone(&progress_job);
+                let store = progress_store.clone();
+                Box::pin(async move {
+                    job.persist(&store, |receipt| receipt.progress = Some(progress))
+                        .await
+                        .map(|_| ())
+                })
+            };
+            Self::supervise_job_execution(
+                job.control.clone(),
+                progress_receiver,
+                execution,
+                persist_progress,
+            )
+            .await
+        }.await
+    }
+
+    /// Keep execution polling independent from progress persistence while preserving structured cleanup.
+    /// 让执行轮询独立于进度持久化，同时保留结构化清理。
+    ///
+    /// `execution` is the real admitted refresh future; `persist_progress` performs its durable receipt update.
+    /// `execution` 是真实准入刷新 future；`persist_progress` 执行其持久回执更新。
+    /// `control` owns cancellation; `progress_receiver` contains only the latest observation.
+    /// `control` 持有取消权；`progress_receiver` 仅包含最新观察值。
+    /// Returns the execution result or an explicit progress-persistence failure.
+    /// 返回执行结果或明确的进度持久化失败。
+    async fn supervise_job_execution<F, P>(
+        control: VceRefreshControl,
+        mut progress_receiver: watch::Receiver<Option<VceRefreshProgress>>,
+        execution: F,
+        persist_progress: P,
+    ) -> Result<u64, String>
+    where
+        F: std::future::Future<Output = Result<u64, String>> + Send + 'static,
+        P: Fn(VceRefreshProgress) -> futures_util::future::BoxFuture<'static, Result<(), String>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        // JoinSet owns the execution task and joins it before this supervisor returns.
+        // JoinSet 持有执行任务，并在此监管器返回前完成连接。
+        let mut execution_tasks = tokio::task::JoinSet::new();
+        execution_tasks.spawn(execution);
+        let execution = execution_tasks.join_next();
+        tokio::pin!(execution);
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut progress_error = None;
+        // Phase changes bypass counter throttling; identical-phase counters remain sampled.
+        // 阶段变化绕过计数节流；同阶段计数仍采用采样。
+        let mut published_phase = None;
+        // Closed observers must not create a permanently ready selector branch.
+        // 已关闭观察器不能产生永久就绪的选择器分支。
+        let mut observing = true;
+        let result = loop {
+            tokio::select! {
+                biased;
+                // The supervised execution task keeps progressing while persistence awaits storage.
+                // 受监管的执行任务在持久化等待存储时仍持续推进。
+                joined = &mut execution => break match joined {
+                    Some(Ok(result)) => result,
+                    Some(Err(error)) if error.is_panic() => {
+                        // Re-raise worker panics so the outer boundary performs exact staging cleanup.
+                        // 重新抛出工作任务恐慌，使外层边界执行精确暂存清理。
+                        std::panic::resume_unwind(error.into_panic())
+                    }
+                    Some(Err(error)) => Err(format!("VCE indexing worker task was cancelled: {error}")),
+                    None => Err(String::from("VCE indexing worker task ended without a result")),
+                },
+                // A continuously ready observer must not starve the counter sampling deadline.
+                // 持续就绪的观察器不能饿死计数采样期限。
+                _ = tick.tick(), if progress_error.is_none() => {
+                    let progress = progress_receiver.borrow_and_update().clone();
+                    if let Some(progress) = progress {
+                        let phase = (progress.operation_id.clone(), progress.phase);
+                        if let Err(error) = persist_progress(progress).await {
+                            control.cancel();
+                            progress_error = Some(error);
+                        } else {
+                            published_phase = Some(phase);
+                        }
+                    }
+                }
+                changed = progress_receiver.changed(), if progress_error.is_none() && observing => {
+                    if changed.is_err() {
+                        observing = false;
+                        continue;
+                    }
+                    let progress = progress_receiver.borrow_and_update().clone();
+                    if let Some(progress) = progress {
+                        let phase = (progress.operation_id.clone(), progress.phase);
+                        if published_phase.as_ref() != Some(&phase) {
+                            if let Err(error) = persist_progress(progress).await {
+                                control.cancel();
                                 progress_error = Some(error);
                             } else {
                                 published_phase = Some(phase);
                             }
                         }
                     }
-                    changed = progress_receiver.changed(), if progress_error.is_none() && observing => {
-                        if changed.is_err() {
-                            observing = false;
-                            continue;
-                        }
-                        let progress = progress_receiver.borrow_and_update().clone();
-                        if let Some(progress) = progress {
-                            let phase = (progress.operation_id.clone(), progress.phase);
-                            if published_phase.as_ref() != Some(&phase) {
-                                if let Err(error) = job.persist(store, |receipt| receipt.progress = Some(progress)).await {
-                                    job.control.cancel();
-                                    progress_error = Some(error);
-                                } else {
-                                    published_phase = Some(phase);
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-            // Preserve the final actual observation even when execution ends between sampling ticks.
-            // 即使执行在采样时钟之间结束，也保留最终实际观察。
-            if progress_error.is_none() {
-                let final_progress = progress_receiver.borrow().clone();
-                if let Some(progress) = final_progress
-                    && let Err(error) = job.persist(store, |receipt| receipt.progress = Some(progress)).await {
-                        progress_error = Some(error);
                 }
             }
-            // Always await execution/cleanup after a persistence failure; never drop an in-flight commit.
-            // 持久化失败后始终等待执行与清理；绝不丢弃正在执行的提交。
-            match (result, progress_error) {
-                (Ok(checkpoint), None) => Ok(checkpoint),
-                (Err(error), None) => Err(error),
-                (Ok(_), Some(error)) => Err(format!("VCE checkpoint completed but progress persistence failed: {error}")),
-                (Err(execution), Some(error)) => Err(format!("{execution}; persist VCE job progress: {error}")),
+        };
+        // Preserve the final actual observation even when execution ends between sampling ticks.
+        // 即使执行在采样时钟之间结束，也保留最终实际观察。
+        if progress_error.is_none() {
+            let final_progress = progress_receiver.borrow().clone();
+            if let Some(progress) = final_progress
+                && let Err(error) = persist_progress(progress).await
+            {
+                progress_error = Some(error);
             }
-        }.await
+        }
+        // Always await execution/cleanup after a persistence failure; never drop an in-flight commit.
+        // 持久化失败后始终等待执行与清理；绝不丢弃正在执行的提交。
+        match (result, progress_error) {
+            (Ok(checkpoint), None) => Ok(checkpoint),
+            (Err(error), None) => Err(error),
+            (Ok(_), Some(error)) => Err(format!(
+                "VCE checkpoint completed but progress persistence failed: {error}"
+            )),
+            (Err(execution), Some(error)) => {
+                Err(format!("{execution}; persist VCE job progress: {error}"))
+            }
+        }
     }
 
     /// Execute an admitted full synchronization without reacquiring its already-owned writer gate.
@@ -1574,6 +1666,117 @@ mod tests {
     use super::*;
     use vulcan_context_engine::VceIndexPort;
 
+    /// Prove the real supervisor keeps execution polling while progress persistence waits on shared storage.
+    /// 证明真实监管器在进度持久化等待共享存储时仍持续轮询执行任务。
+    /// The execution holds the gate until the test releases it; an inline future would deadlock forever.
+    /// 执行任务持有闸门直到测试释放；若执行 future 内联轮询，此场景将永久死锁。
+    #[test]
+    fn supervised_execution_keeps_polling_during_progress_persistence() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build deterministic supervisor runtime");
+        runtime.block_on(async {
+            // These signals make the shared-lock interleaving deterministic and bounded.
+            // 这些信号让共享锁交错过程具备确定性并且有界。
+            let shared_gate = Arc::new(tokio::sync::Mutex::new(()));
+            let execution_started = Arc::new(Notify::new());
+            let persistence_started = Arc::new(Notify::new());
+            let release_execution = Arc::new(Notify::new());
+            let (progress_sender, progress_receiver) = watch::channel(None);
+            let control = VceRefreshControl::default();
+            let observed_control = control.clone().with_observer(Arc::new(move |progress| {
+                progress_sender.send_replace(Some(progress));
+            }));
+
+            let execution_gate = Arc::clone(&shared_gate);
+            let execution_started_signal = Arc::clone(&execution_started);
+            let release_signal = Arc::clone(&release_execution);
+            let execution = async move {
+                let _gate = execution_gate.lock().await;
+                execution_started_signal.notify_one();
+                release_signal.notified().await;
+                Ok::<u64, String>(7)
+            };
+
+            let persistence_gate = Arc::clone(&shared_gate);
+            let persistence_started_signal = Arc::clone(&persistence_started);
+            let persist_progress = move |
+                _progress: VceRefreshProgress,
+            | -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+                persistence_started_signal.notify_one();
+                let persistence_gate = Arc::clone(&persistence_gate);
+                Box::pin(async move {
+                    let _gate = persistence_gate.lock().await;
+                    Ok::<(), String>(())
+                })
+            };
+            let supervisor = tokio::spawn(VceRuntimeManager::supervise_job_execution(
+                control,
+                progress_receiver,
+                execution,
+                persist_progress,
+            ));
+
+            tokio::time::timeout(Duration::from_secs(1), execution_started.notified())
+                .await
+                .expect("execution must start while supervised");
+            observed_control.observe(VceRefreshProgress {
+                phase: vulcan_context_engine::VceRefreshPhase::Scanning,
+                operation_id: String::from("shared-gate-test"),
+                unit: vulcan_context_engine::VceRefreshUnit::Files,
+                completed: 0,
+                total: Some(1),
+                current_path: None,
+            });
+            tokio::time::timeout(Duration::from_secs(1), persistence_started.notified())
+                .await
+                .expect("progress persistence must reach the shared gate");
+            release_execution.notify_one();
+            let result = tokio::time::timeout(Duration::from_secs(1), supervisor)
+                .await
+                .expect("supervisor must not deadlock behind progress persistence")
+                .expect("supervisor task must finish");
+            assert_eq!(result.expect("execution must complete"), 7);
+        });
+    }
+
+    /// Verify a worker panic is re-raised so the outer job boundary can perform staging cleanup.
+    /// 验证工作任务恐慌会重新抛出，使外层作业边界能够执行暂存清理。
+    /// This exercises the production supervisor path rather than calling the cleanup helper directly.
+    /// 此测试走生产监管器路径，而不是直接调用清理辅助函数。
+    #[test]
+    fn supervised_execution_rethrows_worker_panics() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build panic supervisor runtime");
+        runtime.block_on(async {
+            // The closed progress channel leaves only the real worker result for the supervisor to join.
+            // 已关闭的进度通道让监管器只需连接真实工作任务结果。
+            let (_progress_sender, progress_receiver) = watch::channel(None);
+            let persist_progress = move |
+                _progress: VceRefreshProgress,
+            | -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+                Box::pin(async { Ok(()) })
+            };
+            let panic = AssertUnwindSafe(VceRuntimeManager::supervise_job_execution(
+                VceRefreshControl::default(),
+                progress_receiver,
+                async move {
+                    std::panic::panic_any("fixture worker panic");
+                    #[allow(unreachable_code)]
+                    Ok::<u64, String>(0)
+                },
+                persist_progress,
+            ))
+            .catch_unwind()
+            .await
+            .expect_err("worker panic must cross the supervisor boundary");
+            assert_eq!(panic.downcast_ref::<&str>(), Some(&"fixture worker panic"));
+        });
+    }
+
     /// Verify restart preserves recent admission cooldown and treats clock rollback conservatively.
     /// 验证重启保留最近准入冷却，并保守处理时钟回退。
     /// Takes no parameters. Asserts no startup scheduling, bounded elapsed time, and exact remaining delay.
@@ -1751,6 +1954,7 @@ mod tests {
     /// 无参数。使用独立临时存储与无计费请求的本地模拟人工智能。
     #[test]
     #[ignore = "requires the bundled local VLDB controller executable"]
+    #[rustfmt::skip]
     fn real_controller_human_jobs_are_durable_cancellable_and_nonblocking() {
         use vldb_controller_client::{
             ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
@@ -1766,7 +1970,14 @@ mod tests {
                 .build()
                 .expect("build isolated job runtime"),
         );
-        executor.block_on(async {
+        // Run the large end-to-end fixture on a production-sized caller stack.
+        // 在与生产相当的调用线程栈上运行大型端到端夹具。
+        std::thread::Builder::new()
+            .name(String::from("vce-job-integration"))
+            .stack_size(8 * 1024 * 1024)
+            .spawn({
+                let executor = Arc::clone(&executor);
+                move || executor.block_on(async {
             let temporary = tempfile::tempdir().expect("create isolated job fixture");
             let project_root = temporary.path().join("source");
             let data_root = temporary.path().join("data");
@@ -3077,7 +3288,11 @@ mod tests {
                 .await
                 .expect("close exact fixture bindings");
             client.shutdown().await.expect("stop isolated controller");
-        });
+                })
+            })
+            .expect("spawn isolated job fixture thread")
+            .join()
+            .expect("isolated job fixture thread completed");
     }
 
     /// Exercise incompatible-dimension rebuilding through the same functional queue used by the service.

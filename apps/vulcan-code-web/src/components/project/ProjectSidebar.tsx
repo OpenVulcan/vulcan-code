@@ -127,6 +127,9 @@ export function ProjectSidebar(props: {
   const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
     () => initialExpandedProjectIdSet(props.projects, props.expandedProjectIds),
   );
+  // openProjectIdsRef lets event handlers serialize rapid toggles without reading state during an updater.
+  // openProjectIdsRef 让事件处理器在不于 updater 中读取状态的情况下串行化快速切换。
+  const openProjectIdsRef = React.useRef(openProjectIds);
   // activeProjectDragId records when project sorting is active so hover-only UI can pause.
   // activeProjectDragId 记录项目排序激活状态，以便暂停仅悬停显示的界面。
   const [activeProjectDragId, setActiveProjectDragId] = React.useState<string | null>(null);
@@ -200,7 +203,11 @@ export function ProjectSidebar(props: {
     return () => window.clearInterval(intervalId);
   }, []);
   React.useEffect(() => {
-    setOpenProjectIds(initialExpandedProjectIdSet(props.projects, props.expandedProjectIds));
+    // next is the externally authoritative expansion projection for this render.
+    // next 是本次渲染对应的外部权威展开投影。
+    const next = initialExpandedProjectIdSet(props.projects, props.expandedProjectIds);
+    openProjectIdsRef.current = next;
+    setOpenProjectIds(next);
   }, [props.expandedProjectIds, props.projects]);
   React.useEffect(() => {
     const visibleProjectIds = new Set(props.projects.map((project) => project.id));
@@ -227,17 +234,20 @@ export function ProjectSidebar(props: {
   // toggleProjectOpen toggles one project folder without changing the selected conversation.
   // toggleProjectOpen 切换单个项目文件夹展开状态且不改变当前会话选择。
   const toggleProjectOpen = React.useCallback((projectId: string) => {
-    setOpenProjectIds((current) => {
-      const next = new Set(current);
-      if (next.has(projectId)) {
-        next.delete(projectId);
-      } else {
-        next.add(projectId);
-      }
-      props.onExpandedProjectIdsChange(expandedProjectIdsInProjectOrder(props.projects, next));
-      return next;
-    });
-  }, [props]);
+    // next is the event-ordered expansion result used for both local state and persistence.
+    // next 是按事件顺序得到的展开结果，同时用于本地状态和持久化。
+    const next = new Set(openProjectIdsRef.current);
+    if (next.has(projectId)) {
+      next.delete(projectId);
+    } else {
+      next.add(projectId);
+    }
+    // Keep the state updater pure; parent notification belongs to this user event boundary.
+    // 保持状态 updater 纯净；父组件通知属于当前用户事件边界。
+    openProjectIdsRef.current = next;
+    setOpenProjectIds(next);
+    props.onExpandedProjectIdsChange(expandedProjectIdsInProjectOrder(props.projects, next));
+  }, [props.onExpandedProjectIdsChange, props.projects]);
   // toggleProjectConversations toggles whether one project shows every conversation row.
   // toggleProjectConversations 切换单个项目是否显示全部会话行。
   const toggleProjectConversations = React.useCallback((projectId: string) => {

@@ -1,4 +1,9 @@
 import type { VceProjectActivityResponse, VceProjectChangedEvent } from "@/types";
+import type { ServiceRequestOptions } from "@/service/protocol";
+import {
+  VCE_OBSERVER_READ_DEADLINE_MS,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+} from "./vce-observer-timeouts";
 
 // Immutable lightweight metadata shared by the visible surfaces of one project.
 // 同一项目可见界面共享的不可变轻量元数据。
@@ -16,7 +21,7 @@ export interface VceObservedActivity {
 export interface VceActivityObserverTransport {
   // Read projectId's lightweight activity; resolves to its authoritative metadata.
   // 读取 projectId 的轻量活动；完成时返回其权威元数据。
-  load(projectId: string): Promise<VceProjectActivityResponse>;
+  load(projectId: string, options?: ServiceRequestOptions): Promise<VceProjectActivityResponse>;
   // Subscribe to invalidations through listener; resolves to the exact unsubscribe function.
   // 通过 listener 订阅失效通知；完成时返回精确退订函数。
   subscribe(listener: (event: VceProjectChangedEvent) => void): Promise<() => void>;
@@ -44,6 +49,12 @@ interface ActivityObservation {
   // Active read chain, shared by simultaneous refresh requests.
   // 活动读取链，由同时刷新的请求共享。
   reading: Promise<void> | null;
+  // readAbortController owns the current read and is aborted when the observation retires.
+  // readAbortController 持有当前读取，并在观察生命周期退役时中止读取。
+  readAbortController: AbortController | null;
+  // readDeadlineTimer is cleared when an observer retires before its read settles.
+  // readDeadlineTimer 在观察者于读取完成前退役时被清理。
+  readDeadlineTimer: ReturnType<typeof setTimeout> | null;
   // A later invalidation requires one follow-up read before publishing a response.
   // 后续失效要求发布响应前再读取一次。
   dirty: boolean;
@@ -93,7 +104,8 @@ export class VceActivityObserverStore {
     // entry is also the ownership fence for close/reopen and A-to-B-to-A navigation.
     // entry 同时隔离关闭重开及甲到乙再到甲的导航归属。
     const entry: ActivityObservation = existing ?? {
-      projectId, snapshot: EMPTY_VCE_ACTIVITY, listeners: new Set(), reading: null, dirty: false, readError: null,
+      projectId, snapshot: EMPTY_VCE_ACTIVITY, listeners: new Set(), reading: null,
+      readAbortController: null, readDeadlineTimer: null, dirty: false, readError: null,
       timer: setInterval(() => {
         if (!this.owns(entry)) return;
         this.ensureRegistration();
@@ -115,6 +127,13 @@ export class VceActivityObserverStore {
       entry.listeners.delete(listener);
       if (!this.owns(entry) || entry.listeners.size !== 0) return;
       clearInterval(entry.timer);
+      // Retiring an observer releases the browser request without cancelling the host job.
+      // 观察退役时释放浏览器请求，但不取消宿主作业。
+      if (entry.readDeadlineTimer !== null) {
+        clearTimeout(entry.readDeadlineTimer);
+        entry.readDeadlineTimer = null;
+      }
+      entry.readAbortController?.abort();
       this.projects.delete(projectId);
       if (this.projects.size !== 0) return;
       // retired is detached before invoking user code in the unsubscribe callback.
@@ -141,10 +160,31 @@ export class VceActivityObserverStore {
       try {
         while (this.owns(entry) && entry.dirty) {
           entry.dirty = false;
+          // controller owns this read's abort signal and never controls host indexing.
+          // controller 持有本次读取的中止信号，绝不控制宿主索引。
+          const controller = new AbortController();
+          // timedOut distinguishes a user-visible deadline from a silent unmount abort.
+          // timedOut 区分用户可见的期限超时与静默卸载中止。
+          let timedOut = false;
+          entry.readAbortController = controller;
+          // deadline bounds this read and is cleared after completion or retirement.
+          // deadline 限制本次读取，并在完成或退役后清理。
+          const deadline = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+          }, VCE_OBSERVER_READ_DEADLINE_MS);
+          entry.readDeadlineTimer = deadline;
           try {
             // activity is discarded if an event invalidated this read or its owner was released.
             // activity 在事件使此读取失效或所有者被释放时丢弃。
-            const activity = await this.transport.load(entry.projectId);
+            const activity = await this.transport.load(entry.projectId, { signal: controller.signal });
+            if (controller.signal.aborted) {
+              if (timedOut && this.owns(entry) && !entry.dirty) {
+                entry.readError = VCE_OBSERVER_READ_TIMEOUT_MESSAGE;
+                this.publish(entry);
+              }
+              continue;
+            }
             if (!this.owns(entry)) return;
             if (activity.status.projectId !== entry.projectId) throw new Error("语义状态返回了其他项目的数据。");
             if (!entry.dirty) {
@@ -152,10 +192,23 @@ export class VceActivityObserverStore {
               this.publish(entry, activity);
             }
           } catch (error) {
+            // An unmount is silent transport control; a deadline publishes a retryable diagnostic.
+            // 卸载属于静默传输控制；达到期限时发布可重试诊断。
+            if (controller.signal.aborted) {
+              if (timedOut && this.owns(entry) && !entry.dirty) {
+                entry.readError = VCE_OBSERVER_READ_TIMEOUT_MESSAGE;
+                this.publish(entry);
+              }
+              continue;
+            }
             if (this.owns(entry) && !entry.dirty) {
               entry.readError = error instanceof Error ? error.message : String(error);
               this.publish(entry);
             }
+          } finally {
+            clearTimeout(deadline);
+            if (entry.readDeadlineTimer === deadline) entry.readDeadlineTimer = null;
+            if (entry.readAbortController === controller) entry.readAbortController = null;
           }
         }
       } finally { if (entry.reading === request) entry.reading = null; }

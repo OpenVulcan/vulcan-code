@@ -2,22 +2,28 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VceJobSummary, WorkbenchSnapshot } from "@/types";
+import type { VceJobSummary, VceProjectOverviewResponse, WorkbenchSnapshot } from "@/types";
 import { ProjectSettingsDialog } from "./project-settings-dialog";
 import type { ProjectSettingsDialogTarget } from "./project-settings-types";
 import { VceJobObserverProvider } from "@/components/features/code-context/vce-job-observer-context";
 import { createVceActivityFixture } from "@/components/features/code-context/vce-activity-test-fixture";
+import {
+  VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS,
+  VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
+} from "@/components/features/code-context/vce-observer-timeouts";
 
 // Mock transport and unrelated settings sections; retain the real dialog, semantic editor and observers.
 // 模拟传输及无关设置分区；保留真实弹窗、语义编辑器和观察器。
 const rpc = vi.hoisted(() => ({
   read: vi.fn(), jobs: vi.fn(), submit: vi.fn(), update: vi.fn(), overview: vi.fn(), cancel: vi.fn(),
   subscribe: vi.fn(), subscribeJobs: vi.fn(), engine: vi.fn(), close: vi.fn(),
+  files: vi.fn(), operations: vi.fn(), issues: vi.fn(),
   loadVmm: vi.fn(), loadSkills: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn(),
 }));
 vi.mock("@/service/vce-service", () => ({
   loadVceProjectActivity: rpc.read, loadVceJob: rpc.jobs, submitVceJob: rpc.submit,
   updateVceProjectSettings: rpc.update, loadVceProjectOverview: rpc.overview,
+  listVceFiles: rpc.files, listVceOperations: rpc.operations, listVceIntegrityIssues: rpc.issues,
   cancelVceJob: rpc.cancel,
   subscribeVceProjectChanged: rpc.subscribe, subscribeVceJobChanged: rpc.subscribeJobs,
 }));
@@ -77,6 +83,25 @@ function receipt(projectId: string): VceJobSummary {
     resultCheckpointVersion: null, followupRequested: false, error: null, progress: null };
 }
 
+// abortAwareRead models the browser transport rejecting immediately after a caller aborts.
+// abortAwareRead 模拟浏览器传输在调用方中止后立即拒绝请求。
+// Parameters: signal is the caller-owned abort signal observed by the fixture.
+// 参数：signal 是测试替身监听的调用方中止信号。
+// Returns: a promise rejected with AbortError on abort and otherwise left pending.
+// 返回值：信号中止时以 AbortError 拒绝、否则保持 pending 的承诺。
+function abortAwareRead<T>(signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return Promise.reject(new Error("missing abort signal"));
+  return new Promise<T>((_resolve, reject) => {
+    const onAbort = () => {
+      const error = new Error("request aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.resetAllMocks();
@@ -95,6 +120,9 @@ beforeEach(() => {
   rpc.jobs.mockResolvedValue(null);
   rpc.subscribe.mockResolvedValue(() => undefined);
   rpc.subscribeJobs.mockResolvedValue(() => undefined);
+  rpc.files.mockResolvedValue({ items: [] });
+  rpc.operations.mockResolvedValue({ items: [] });
+  rpc.issues.mockResolvedValue({ items: [] });
   rpc.loadVmm.mockResolvedValue(null);
   rpc.loadSkills.mockResolvedValue({});
   host = document.createElement("div");
@@ -116,11 +144,73 @@ describe("project settings semantic integration", () => {
     await act(async () => refresh.click());
     await renderDialog(null);
     await renderDialog(target("project-b"));
-    expect(rpc.read).toHaveBeenCalledWith("project-b");
+    // projectRead is the exact project-b activity read used to inspect transport options.
+    // projectRead 是用于检查传输选项的 project-b 精确活动读取。
+    const projectRead = rpc.read.mock.calls.find(([projectId]) => projectId === "project-b");
+    expect(projectRead?.[0]).toBe("project-b");
+    expect(projectRead?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(projectRead?.[1]?.signal.aborted).toBe(false);
     expect(button("创建语义索引").disabled).toBe(false);
     expect(rpc.submit).not.toHaveBeenCalled();
     expect(rpc.update).not.toHaveBeenCalled();
     expect(rpc.overview).not.toHaveBeenCalled();
+  });
+
+  // A hanging management overview is aborted at its deadline and can succeed after the dialog reopens.
+  // 挂起的管理概览会在期限到达时中止，弹窗重开后可以成功读取。
+  it("aborts a hanging management overview and succeeds after reopening", async () => {
+    vi.useFakeTimers();
+    // activity keeps the production dialog admitted while the management overview is tested.
+    // activity 让生产弹窗保持准入，以便测试管理概览。
+    const activity = createVceActivityFixture("project-a");
+    rpc.read.mockResolvedValue(activity);
+    // managementOverview is the successful full projection used after reopening.
+    // managementOverview 是重开后使用的成功完整投影。
+    const managementOverview: VceProjectOverviewResponse = {
+      ...activity,
+      readIdentity: "space-a:2",
+    };
+    // overviewSignal captures the exact signal given to the production overview loader.
+    // overviewSignal 捕获生产概览加载器收到的精确信号。
+    let overviewSignal: AbortSignal | undefined;
+    // This mock respects the production signal so deadline behavior is observable.
+    // 此 mock 遵循生产 signal，使期限行为可观测。
+    rpc.overview.mockImplementationOnce((_projectId: string, options?: { signal?: AbortSignal }) => {
+      overviewSignal = options?.signal;
+      return abortAwareRead<VceProjectOverviewResponse>(options?.signal);
+    });
+
+    try {
+      await renderDialog(target("project-a"));
+      await act(async () => {
+        button("查看索引详情与统计").click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(overviewSignal).toBeDefined();
+      expect(overviewSignal?.aborted).toBe(false);
+      expect(rpc.submit).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS);
+      });
+      expect(overviewSignal?.aborted).toBe(true);
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+      expect(rpc.submit).not.toHaveBeenCalled();
+
+      await renderDialog(null);
+      rpc.overview.mockResolvedValueOnce(managementOverview);
+      await renderDialog(target("project-a"));
+      await act(async () => {
+        button("查看索引详情与统计").click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(rpc.overview).toHaveBeenCalledTimes(2);
+      expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+      expect(rpc.submit).not.toHaveBeenCalled();
+    } finally {
+      await renderDialog(null);
+      vi.useRealTimers();
+    }
   });
 
   // Only a real human button event admits initialization and projects the receipt without awaiting completion.

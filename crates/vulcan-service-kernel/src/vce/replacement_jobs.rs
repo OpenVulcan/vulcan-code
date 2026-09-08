@@ -338,11 +338,13 @@ impl VceRuntimeManager {
         let execution = Arc::clone(&state.execution).read_owned().await;
         let receipt = store.register(&queued).await?;
         let job = Arc::new(VceManagedJob {
+            job_id: receipt.job_id.clone(),
             replacement_settings: Some(Mutex::new(input.settings.clone())),
             project_writer,
             store: store.clone(),
             event_emitter: self.event_emitter.clone(),
             receipt: Mutex::new(receipt.clone()),
+            persistence_gate: Mutex::new(()),
             control: VceRefreshControl::default(),
             cancel_wake: Notify::new(),
             persistence_error: Mutex::new(None),

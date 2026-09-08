@@ -2,13 +2,11 @@ import * as React from "react";
 import { cancelVceJob, loadVceJob, subscribeVceJobChanged, loadVceProjectActivity, subscribeVceProjectChanged } from "@/service/vce-service";
 import { VceJobObserverStore } from "./vce-job-observer-store";
 import { VceActivityObserverStore } from "./vce-activity-observer-store";
+import { VceActivityObserverContext, VceJobObserverContext } from "./vce-job-observer-context-state";
 
-// Scope job observations to one workbench service lifetime, never a process-wide singleton.
-// 将作业观察限定到一个工作台服务生命周期，绝不使用进程级单例。
-const VceJobObserverContext = React.createContext<VceJobObserverStore | null>(null);
-// Lightweight activity shares the same workbench/service lifetime as job observation.
-// 轻量活动与作业观察共享同一工作台及服务生命周期。
-const VceActivityObserverContext = React.createContext<VceActivityObserverStore | null>(null);
+// Re-export the stable context objects so identity can be checked without recreating them here.
+// 重新导出稳定 Context 对象，便于校验身份且不在此模块重新创建。
+export { VceActivityObserverContext, VceJobObserverContext } from "./vce-job-observer-context-state";
 
 // Share host job observation with all workspace surfaces without remounting their React children.
 // 与全部工作区视图共享宿主作业观察，不重新挂载其 React 子节点。
@@ -20,12 +18,14 @@ export function VceJobObserverProvider(props: { serviceEpoch: number; children: 
   // store is replaced on host restart, invalidating old receipts without resetting chat components.
   // store 在宿主重启时替换，使旧回执失效而不重置聊天组件。
   const store = React.useMemo(() => new VceJobObserverStore({
-    load: loadVceJob, cancel: cancelVceJob, subscribe: subscribeVceJobChanged,
+    load: (projectId, options) => loadVceJob(projectId, null, options),
+    cancel: cancelVceJob, subscribe: subscribeVceJobChanged,
   }), [props.serviceEpoch]);
   // activityStore is inert until a surface observes one exact project, not all historical projects.
   // activityStore 在界面观察一个精确项目之前保持静止，不观察全部历史项目。
   const activityStore = React.useMemo(() => new VceActivityObserverStore({
-    load: (projectId) => loadVceProjectActivity(projectId), subscribe: (listener) => subscribeVceProjectChanged(listener),
+    load: (projectId, options) => loadVceProjectActivity(projectId, options),
+    subscribe: (listener) => subscribeVceProjectChanged(listener),
   }), [props.serviceEpoch]);
   return <VceJobObserverContext.Provider value={store}><VceActivityObserverContext.Provider value={activityStore}>
     {props.children}
