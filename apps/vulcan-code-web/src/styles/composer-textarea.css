@@ -177,6 +177,29 @@
   align-items: start;
 }
 
+.project-settings-heading-with-action {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+}
+
+.project-settings-heading-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.project-settings-heading-status {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: right;
+}
+
 .project-settings-heading strong,
 .project-settings-summary strong {
   display: block;

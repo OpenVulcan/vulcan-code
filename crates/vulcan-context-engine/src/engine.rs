@@ -30,7 +30,7 @@ use crate::ports::{
 };
 use crate::query::{QueryError, QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 use crate::refresh_control::{
-    VceRefreshControl, VceRefreshPhase, VceRefreshProgress, VceRefreshUnit,
+    VceRefreshControl, VceRefreshFailure, VceRefreshPhase, VceRefreshProgress, VceRefreshUnit,
 };
 use crate::retrieval::{
     RankedHits, RerankCallback, RetrievalPipeline, merge_semantic_and_exact, reciprocal_rank_fusion,
@@ -2209,7 +2209,21 @@ impl VceEngine {
                         blob_slots.push(PreparedBlobSlot::Pending(owner));
                     }
                     Err(VceError::Structure(StructureError::AnalysisFailed { message })) => {
-                        let error = StructureError::AnalysisFailed { message };
+                        let error = StructureError::AnalysisFailed {
+                            message: message.clone(),
+                        };
+                        // Preserve the exact structural failure before isolating this blob so the host can diagnose it.
+                        // 在隔离当前 Blob 前保留精确结构分析错误，供宿主诊断具体失败原因。
+                        context.control.observe_failure(VceRefreshFailure {
+                            phase: VceRefreshPhase::Chunking,
+                            operation_id: format!(
+                                "{}:structure:{}",
+                                context.refresh_id, record.path
+                            ),
+                            path: Some(record.path.clone()),
+                            message: error.to_string(),
+                            api_request_reached: false,
+                        });
                         let blob =
                             self.prepare_structure_failure_blob(record, context.generation, error)?;
                         blob_slots.push(PreparedBlobSlot::Ready(blob));

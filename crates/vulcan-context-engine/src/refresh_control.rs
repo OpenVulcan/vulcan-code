@@ -85,6 +85,27 @@ pub struct VceRefreshProgress {
     pub current_path: Option<String>,
 }
 
+/// Immutable diagnostic emitted when one refresh unit fails before publication.
+/// 刷新单元在发布前失败时发出的不可变诊断信息。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VceRefreshFailure {
+    /// Actual refresh phase in which the failure was observed.
+    /// 观察到失败时实际所在的刷新阶段。
+    pub phase: VceRefreshPhase,
+    /// Stable operation identity associated with the failed refresh.
+    /// 与失败刷新关联的稳定操作身份。
+    pub operation_id: String,
+    /// Optional source-relative path that caused the failure.
+    /// 导致失败的可选源代码相对路径。
+    pub path: Option<String>,
+    /// Exact validation or provider error text, without source contents.
+    /// 精确的校验或供应商错误文本，不包含源代码正文。
+    pub message: String,
+    /// Whether an external API request had already been reached.
+    /// 是否已经到达外部 API 请求边界。
+    pub api_request_reached: bool,
+}
+
 /// Non-blocking host observer; implementations must enqueue or copy metadata, never perform I/O.
 /// 非阻塞宿主观察器；实现只能排队或复制元数据，绝不能执行输入输出。
 pub trait VceRefreshObserver: Send + Sync {
@@ -94,6 +115,32 @@ pub trait VceRefreshObserver: Send + Sync {
     /// `progress` is scoped to one operation and contains no code body. Returns no value.
     /// `progress` 以一个操作为作用域且不含代码正文。无返回值。
     fn observe(&self, progress: VceRefreshProgress);
+
+    /// Observe one failure without performing I/O in the engine thread.
+    /// 观察一次失败，且不在引擎线程中执行输入输出。
+    ///
+    /// `failure` is copied to a host-owned diagnostic sink when provided.
+    /// `failure` 会在提供时复制给宿主拥有的诊断接收器。
+    fn observe_failure(&self, _failure: VceRefreshFailure) {}
+}
+
+/// Non-blocking host sink dedicated to failure diagnostics.
+/// 专用于失败诊断的非阻塞宿主接收器。
+pub trait VceRefreshFailureObserver: Send + Sync {
+    /// Enqueue or copy one bounded failure record without performing blocking I/O.
+    /// 排队或复制一条有界失败记录，不执行阻塞输入输出。
+    fn observe_failure(&self, failure: VceRefreshFailure);
+}
+
+impl<F> VceRefreshFailureObserver for F
+where
+    F: Fn(VceRefreshFailure) + Send + Sync,
+{
+    /// Forward one immutable failure record to the host callback.
+    /// 将一条不可变失败记录转发给宿主回调。
+    fn observe_failure(&self, failure: VceRefreshFailure) {
+        self(failure);
+    }
 }
 
 impl<F> VceRefreshObserver for F
@@ -135,6 +182,9 @@ pub struct VceRefreshControl {
     /// Optional host observation is absent for legacy direct business calls.
     /// 旧直接业务调用可以不提供宿主观察器。
     observer: Option<Arc<dyn VceRefreshObserver>>,
+    /// Optional dedicated failure sink for durable diagnostics.
+    /// 用于持久诊断的可选专用失败接收器。
+    failure_observer: Option<Arc<dyn VceRefreshFailureObserver>>,
 }
 
 impl VceRefreshControl {
@@ -145,6 +195,13 @@ impl VceRefreshControl {
     /// `observer` 接收真实阶段元数据。返回带有提供观察器的此上下文。
     pub fn with_observer(mut self, observer: Arc<dyn VceRefreshObserver>) -> Self {
         self.observer = Some(observer);
+        self
+    }
+
+    /// Attach a dedicated failure observer while preserving this job's shared cancellation identity.
+    /// 在保留当前作业共享取消身份的同时附加专用失败观察器。
+    pub fn with_failure_observer(mut self, observer: Arc<dyn VceRefreshFailureObserver>) -> Self {
+        self.failure_observer = Some(observer);
         self
     }
 
@@ -187,6 +244,20 @@ impl VceRefreshControl {
     pub fn observe(&self, progress: VceRefreshProgress) {
         if let Some(observer) = &self.observer {
             observer.observe(progress);
+        }
+    }
+
+    /// Publish one failure to the optional host diagnostic sink.
+    /// 向可选的宿主诊断接收器发布一次失败信息。
+    ///
+    /// `failure` contains only bounded metadata and is never persisted by the engine itself.
+    /// `failure` 只包含有界元数据，引擎自身不会持久化它。
+    pub fn observe_failure(&self, failure: VceRefreshFailure) {
+        if let Some(observer) = &self.observer {
+            observer.observe_failure(failure.clone());
+        }
+        if let Some(observer) = &self.failure_observer {
+            observer.observe_failure(failure);
         }
     }
 

@@ -82,6 +82,52 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe("project semantic settings editor", () => {
+  // An expected replacement-read race is rendered as localized status, never as a red activity error.
+  // 预期的替换读取竞争显示为本地化状态，绝不显示为红色活动错误。
+  it("renders replacement progress as neutral localized status", async () => {
+    rpc.jobs.mockResolvedValue({
+      projectId: "project-a", jobId: "replacement-job", kind: "rebuild", state: "running",
+      sequence: 1, createdAtUnixMs: 1, updatedAtUnixMs: 1, sourceCheckpointVersion: 1,
+      resultCheckpointVersion: null, followupRequested: false, error: null,
+      progress: { phase: "embedding", operationId: "replacement-job", unit: "batches", completed: 1, total: 2, currentPath: null },
+    } satisfies VceJobSummary);
+    await renderEditor(createVceActivityFixture(), "VCE explicit replacement is in progress; observe its durable job");
+
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("projectSettings.codeContext.generating");
+    expect(host.textContent).not.toContain("VCE explicit replacement is in progress; observe its durable job");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // A fresh settings mount must rehydrate the server-owned running job even when overview restoration is temporarily blocked.
+  // 全新设置页面挂载时，即使概览恢复暂时被阻断，也必须重新载入服务端持有的运行中作业。
+  it("rehydrates an active job while activity is unavailable", async () => {
+    rpc.jobs.mockResolvedValue({
+      projectId: "project-a", jobId: "replacement-job", kind: "rebuild", state: "running",
+      sequence: 1, createdAtUnixMs: 1, updatedAtUnixMs: 1, sourceCheckpointVersion: 1,
+      resultCheckpointVersion: null, followupRequested: false, error: null,
+      progress: { phase: "embedding", operationId: "replacement-job", unit: "batches", completed: 1, total: 2, currentPath: null },
+    } satisfies VceJobSummary);
+    await renderEditor(null, "VCE explicit replacement is in progress; observe its durable job");
+
+    expect(host.textContent).toContain("正在重建语义索引");
+    expect(host.textContent).not.toContain("VCE explicit replacement is in progress; observe its durable job");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // The host lifecycle must block duplicate admission during the short gap before the receipt observer loads.
+  // 在回执观察器加载完成前的短暂间隙内，宿主生命周期也必须阻止重复准入。
+  it("does not offer a duplicate admission while the host reports indexing", async () => {
+    const activity = createVceActivityFixture();
+    activity.status.lifecycle = "indexing";
+    rpc.jobs.mockResolvedValue(null);
+    await renderEditor(activity);
+
+    const button = Array.from(host.querySelectorAll("button")).find((candidate) => candidate.textContent?.trim() === "索引任务进行中");
+    expect(button).toBeDefined();
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("projectSettings.codeContext.generating");
+  });
+
   // Replacing a physical namespace may reuse checkpoint one; durable job transitions must retire old content.
   // 替换物理命名空间可能复用检查点一；持久作业状态变化必须使旧内容退役。
   // state selects the durable terminal outcome; returns after reloading host identity without altering the settings draft.

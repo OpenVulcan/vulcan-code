@@ -857,6 +857,7 @@ export type TranslationKey =
   | "projectSettings.codeContext.title"
   | "projectSettings.codeContext.enabled"
   | "projectSettings.codeContext.disabled"
+  | "projectSettings.codeContext.generating"
   | "projectSettings.vmmDescription"
   | "projectSettings.vmmNativeDescription"
   | "projectSettings.vmmLoading"
@@ -4187,6 +4188,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.codeContext.title": "代码上下文",
     "projectSettings.codeContext.enabled": "已启用原生语义索引",
     "projectSettings.codeContext.disabled": "当前未启用",
+    "projectSettings.codeContext.generating": "索引任务进行中，状态请查看下方进度。",
     "projectSettings.vmmDescription": "覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。",
     "projectSettings.vmmNativeDescription": "覆盖当前项目的记忆开关、原生项目绑定与召回注入参数。",
     "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
@@ -7532,6 +7534,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.codeContext.title": "Code context",
     "projectSettings.codeContext.enabled": "Native semantic index enabled",
     "projectSettings.codeContext.disabled": "Currently disabled",
+    "projectSettings.codeContext.generating": "Index task in progress; follow the progress below.",
     "projectSettings.vmmDescription": "Override memory enablement, user/project mapping, and recall injection parameters for this project.",
     "projectSettings.vmmNativeDescription": "Override memory enablement, native project binding, and recall injection parameters for this project.",
     "projectSettings.vmmLoading": "Loading project VMM settings...",

@@ -975,6 +975,45 @@ pub fn sync_custom_provider_manifests(
     Ok(())
 }
 
+/// Synchronizes one custom provider's in-memory Manifest before runtime activation.
+/// 在运行时激活前同步一个自定义供应商的内存 Manifest。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns the candidate descriptor and receives the canonical standalone
+/// Manifest projection; `provider_id` identifies the exact provider being created or edited.
+/// `configuration` 持有候选描述符并接收规范的独立 Manifest 投影；`provider_id` 标识正在创建
+/// 或编辑的精确供应商。
+///
+/// # Returns
+/// 返回值
+/// Success after the candidate reference and Manifest map contain one matching descriptor-owned
+/// projection, or an explicit error when the provider is absent or its Manifest cannot be built.
+/// 候选引用与 Manifest 映射包含匹配的描述符投影后返回成功；供应商缺失或 Manifest 无法构建时
+/// 返回明确错误。
+pub fn synchronize_custom_provider_manifest(
+    configuration: &mut PersistedAiConfiguration,
+    provider_id: &str,
+) -> Result<(), String> {
+    let descriptor = configuration
+        .custom_providers
+        .get(provider_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Cannot synchronize custom provider Manifest `{provider_id}` without its descriptor."
+            )
+        })?;
+    let document = document_from_configuration(configuration, provider_id, &descriptor)?;
+    configuration
+        .custom_provider_file_refs
+        .insert(provider_id.to_string());
+    configuration
+        .custom_provider_manifests
+        .insert(provider_id.to_string(), document.provider_manifest);
+    Ok(())
+}
+
 /// Commits standalone custom manifests and the central reference document as one recoverable transaction.
 /// 把独立自定义清单与中央引用文档作为一个可恢复事务提交。
 ///
@@ -1957,6 +1996,50 @@ mod tests {
         assert!(
             document.provider_manifest.usage_profiles.len() > 1,
             "standard declarations remain available for later protocol additions"
+        );
+    }
+
+    /// Verifies a display-only custom-provider edit rewrites the standalone descriptor projection.
+    /// 验证仅修改自定义供应商名称时会重写独立描述符投影。
+    #[test]
+    fn descriptor_edit_rewrites_manifest_to_match_renamed_provider() {
+        let provider_id = "custom:rename-round-trip";
+        let original_descriptor = custom_descriptor(provider_id);
+        let mut renamed_descriptor = original_descriptor.clone();
+        renamed_descriptor.display_name = String::from("Renamed provider");
+        let existing_manifest =
+            vulcan_provider_adapters::project_custom_descriptor_manifest(&original_descriptor)
+                .expect("baseline custom manifest should build");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(provider_id.to_string(), renamed_descriptor.clone());
+        configuration
+            .custom_provider_manifests
+            .insert(provider_id.to_string(), existing_manifest);
+
+        synchronize_custom_provider_manifest(&mut configuration, provider_id)
+            .expect("renamed custom Manifest should synchronize");
+        assert!(
+            configuration
+                .custom_provider_file_refs
+                .contains(provider_id)
+        );
+        let manifest = configuration
+            .custom_provider_manifests
+            .get(provider_id)
+            .expect("synchronized custom Manifest should be present");
+        let compiled =
+            vulcan_provider_adapters::compile_manifest(manifest, ManifestOwnership::Custom)
+                .expect("renamed custom manifest should compile");
+
+        assert_eq!(manifest.display.name, "Renamed provider");
+        assert!(
+            vulcan_provider_adapters::custom_manifest_matches_activated_descriptor(
+                compiled.provider(),
+                &renamed_descriptor,
+            ),
+            "the persisted manifest must match the descriptor activated by the edit"
         );
     }
 

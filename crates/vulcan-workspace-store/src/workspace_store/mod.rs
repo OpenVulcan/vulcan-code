@@ -8,9 +8,11 @@ use crate::model::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vldb_controller_client::ControllerSqliteValue;
@@ -100,6 +102,18 @@ pub const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_MAX_BYTES: u64 = 16 * 1024
 /// 串行化已配置推理追踪槽位替换。
 static CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_WRITE_LOCK: OnceLock<Mutex<()>> =
     OnceLock::new();
+/// Application-level directory that owns VCE refresh and embedding diagnostics.
+/// 保存 VCE 刷新与向量诊断日志的应用级目录。
+const VCE_DIAGNOSTIC_DIRECTORY: &str = "vce";
+/// Number of rotating VCE diagnostic files retained per project.
+/// 每个项目保留的 VCE 诊断轮转文件数量。
+pub const VCE_DIAGNOSTIC_SLOT_COUNT: u64 = 8;
+/// Maximum encoded bytes retained in one VCE diagnostic slot.
+/// 单个 VCE 诊断槽位保留的最大编码字节数。
+pub const VCE_DIAGNOSTIC_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Monotonic process-local sequence used to select bounded diagnostic slots.
+/// 用于选择有界诊断槽位的进程内单调序列。
+static VCE_DIAGNOSTIC_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Persists one bounded configured-inference provider trace into an exact rotating slot.
 /// 将一份有界的已配置推理 Provider 追踪持久化到精确轮转槽位。
@@ -152,6 +166,67 @@ pub fn persist_configured_inference_provider_request_trace(
         "configured-inference provider request trace",
     )?;
     Ok(trace_path)
+}
+
+/// Persists one bounded VCE diagnostic document without exposing the project identifier in its path.
+/// 持久化一份有界 VCE 诊断文档，且不在路径中暴露项目标识。
+///
+/// `data_root` is the controller-managed data root, `project_id` scopes the rotating slots, and
+/// `trace` contains the complete secret-free failure or request evidence.
+/// `data_root` 是控制器管理的数据根目录，`project_id` 用于划分轮转槽位，`trace` 包含完整且脱敏的失败或请求证据。
+pub fn persist_vce_diagnostic(
+    data_root: &Path,
+    project_id: &str,
+    trace: &Value,
+) -> Result<PathBuf, String> {
+    if project_id.trim().is_empty() {
+        return Err(String::from("VCE diagnostic project id must not be empty."));
+    }
+    let slot_index =
+        VCE_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed) % VCE_DIAGNOSTIC_SLOT_COUNT;
+    let project_key = hex::encode(Sha256::digest(project_id.as_bytes()));
+    let encoded = encode_bounded_vce_diagnostic(trace)?;
+    let trace_path = data_root
+        .join("diagnostics")
+        .join(VCE_DIAGNOSTIC_DIRECTORY)
+        .join(project_key)
+        .join(format!("slot-{slot_index:02}.json"));
+    replace_exact_provider_request_trace_slot(&trace_path, &encoded, "VCE diagnostic")?;
+    Ok(trace_path)
+}
+
+/// Encodes a VCE diagnostic while retaining a small metadata summary if the full request is too large.
+/// 编码 VCE 诊断；完整请求过大时保留小型元数据摘要。
+fn encode_bounded_vce_diagnostic(trace: &Value) -> Result<Vec<u8>, String> {
+    let encoded = serde_json::to_vec(trace)
+        .map_err(|error| format!("VCE diagnostic JSON serialization failed: {error}"))?;
+    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) <= VCE_DIAGNOSTIC_MAX_BYTES {
+        return Ok(encoded);
+    }
+    let summary = serde_json::json!({
+        "schema_version": trace.get("schema_version"),
+        "captured_at_unix_ms": trace.get("captured_at_unix_ms"),
+        "capture_point": trace.get("capture_point"),
+        "project_id": trace.get("project_id"),
+        "job_id": trace.get("job_id"),
+        "operation_id": trace.get("operation_id"),
+        "failure": trace.get("failure"),
+        "request_stage": trace.get("request_stage"),
+        "trace_omission": {
+            "reason": "encoded_vce_diagnostic_exceeded_bounded_slot_capacity",
+            "encoded_bytes": encoded.len(),
+            "maximum_bytes": VCE_DIAGNOSTIC_MAX_BYTES,
+            "request_body_omitted": true,
+        },
+    });
+    let summary_bytes = serde_json::to_vec(&summary)
+        .map_err(|error| format!("Bounded VCE diagnostic summary serialization failed: {error}"))?;
+    if u64::try_from(summary_bytes.len()).unwrap_or(u64::MAX) > VCE_DIAGNOSTIC_MAX_BYTES {
+        return Err(String::from(
+            "Bounded VCE diagnostic metadata exceeds its slot capacity.",
+        ));
+    }
+    Ok(summary_bytes)
 }
 
 /// Encodes one compact trace and omits only the oversized request body before response evidence.

@@ -135,19 +135,30 @@ export function CodeContextArea(props: {
 }) {
   // locale selects local bilingual copy without exposing VCE implementation names to users.
   // locale 选择本地双语文案，且不向用户暴露 VCE 实现名称。
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   // indexing follows this project's independent durable job, not the conversation state.
   // indexing 跟随本项目独立持久作业，而非会话状态。
   const indexing = useVceProjectJob(props.projectId);
+  // projectReportsActiveJob is the host lifecycle projection available before the receipt observer finishes rehydrating.
+  // projectReportsActiveJob 是作业回执观察器完成恢复前，宿主已经提供的生命周期投影。
+  const projectReportsActiveJob = props.overview?.status.lifecycle === "indexing";
   // Use the acknowledged project job to offer at most one subsequent manual synchronization.
   // 使用已确认项目作业提供至多一次后续手动同步。
-  const synchronization = vceSynchronizationControl(indexing.job, locale === "zh-CN");
+  const synchronization = projectReportsActiveJob
+    ? { disabled: true, label: locale === "zh-CN" ? "索引任务进行中" : "Index job in progress" }
+    : vceSynchronizationControl(indexing.job, locale === "zh-CN");
   // zh returns Chinese copy for the active Chinese locale and English otherwise.
   // zh 为当前中文语言返回中文文案，否则返回英文文案。
   const copy = React.useCallback(
     (zh: string, en: string) => (locale === "zh-CN" ? zh : en),
     [locale],
   );
+  // replacementInProgressActivityError identifies the expected read race while a durable replacement owns the project.
+  // replacementInProgressActivityError 识别持久替换作业持有项目期间预期的读取竞争。
+  const replacementInProgressActivityError = props.activityError === "VCE explicit replacement is in progress; observe its durable job";
+  // indexingStatusVisible turns active work into a neutral localized status instead of an inline error.
+  // indexingStatusVisible 将活动作业转换为中性的本地化状态，而不是行内错误。
+  const indexingStatusVisible = indexing.active || projectReportsActiveJob || replacementInProgressActivityError;
   // draft holds only user-editable fields and never mirrors host-owned revision fields.
   // draft 只保存用户可编辑字段，绝不镜像宿主持有的修订字段。
   const [draft, setDraft] = React.useState<VceProjectSettingsInput | null>(() => (
@@ -653,10 +664,18 @@ export function CodeContextArea(props: {
   if (!props.overview || !draft) {
     return (
       <div className="project-settings-section">
-        {props.activityError ? <>
+        {props.activityError && !replacementInProgressActivityError ? <>
           <p role="alert" className="text-sm text-destructive">{props.activityError}</p>
           <Button type="button" onClick={() => void props.onReloadActivity()}>{copy("重新读取状态", "Reload status")}</Button>
-        </> : <>
+        </> : null}
+        {indexing.job ? <VceJobProgress
+          chinese={locale === "zh-CN"}
+          job={indexing.job}
+          onCancel={() => void indexing.cancel()}
+          cancelPending={indexing.cancelPending}
+        /> : indexingStatusVisible ? <p className="project-settings-muted" role="status" aria-live="polite">
+          <LoaderCircle className="mr-2 inline animate-spin" size={14} />{t("projectSettings.codeContext.generating")}
+        </p> : <>
           <LoaderCircle className="animate-spin" size={18} />
           <p className="project-settings-muted">{copy("正在加载代码语义索引…", "Loading code semantic index…")}</p>
         </>}
@@ -680,25 +699,30 @@ export function CodeContextArea(props: {
     ? managementOverview.counts : null;
   return (
     <div className="project-settings-section">
-      <header className="project-settings-heading">
+      <header className="project-settings-heading project-settings-heading-with-action">
         <Database size={18} />
         <div>
           <strong>{copy("代码语义索引", "Code semantic index")}</strong>
           <span>{copy("为 AI 提供当前项目的自然语言代码检索。", "Provides natural-language code retrieval for AI in this project.")}</span>
         </div>
-        <Button
-          aria-label={copy("刷新状态", "Refresh status")}
-          disabled={props.busy || !draft.enabled}
-          onClick={() => void refreshStatus()}
-          size="icon-sm"
-          type="button"
-          variant="outline"
-        >
-          <RefreshCw className={props.busy ? "animate-spin" : undefined} size={15} />
-        </Button>
+        <div className="project-settings-heading-actions">
+          {indexingStatusVisible ? <div className="project-settings-heading-status" role="status" aria-live="polite">
+            <LoaderCircle className="animate-spin" size={14} />{t("projectSettings.codeContext.generating")}
+          </div> : null}
+          <Button
+            aria-label={copy("刷新状态", "Refresh status")}
+            disabled={props.busy || !draft.enabled}
+            onClick={() => void refreshStatus()}
+            size="icon-sm"
+            type="button"
+            variant="outline"
+          >
+            <RefreshCw className={props.busy ? "animate-spin" : undefined} size={15} />
+          </Button>
+        </div>
       </header>
 
-      {props.activityError ? <p role="alert" className="text-sm text-destructive">{props.activityError}</p> : null}
+      {props.activityError && !replacementInProgressActivityError ? <p role="alert" className="text-sm text-destructive">{props.activityError}</p> : null}
       {draftConflict ? <div role="alert" className="rounded-lg border border-amber-500/30 p-3 text-sm">
         <p>{copy("项目设置已在其他位置更新。您的未保存修改已保留；请重新载入设置后再保存，避免覆盖新设置。", "Project settings changed elsewhere. Unsaved edits are preserved; reload before saving to avoid overwriting newer settings.")}</p>
         <Button type="button" variant="outline" size="sm" disabled={props.busy} onClick={() => {
@@ -737,7 +761,7 @@ export function CodeContextArea(props: {
               <strong>{status.checkpointVersion == null ? copy("创建项目索引", "Create project index") : copy("更新项目索引", "Update project index")}</strong>
               <p className="mt-1 text-sm text-muted-foreground">{status.checkpointVersion == null ? copy("只有点击创建，才会扫描此项目并调用向量模型。", "Files are scanned and embedded only after you choose to create this project's index.") : copy("手动同步立即受理，不受自动更新间隔限制。", "Manual synchronization bypasses the automatic update interval.")}</p>
             </div>
-            <Button type="button" disabled={props.busy || synchronization.disabled || !props.overview.configuration.ready || !props.overview.settings.enabled || rebuildRecoveryRequired} onClick={() => void refreshIndex()}>
+            <Button type="button" disabled={props.busy || synchronization.disabled || indexingStatusVisible || !props.overview.configuration.ready || !props.overview.settings.enabled || rebuildRecoveryRequired} onClick={() => void refreshIndex()}>
               <Database size={15} />{status.checkpointVersion == null ? copy("创建语义索引", "Create semantic index") : synchronization.label}
             </Button>
           </div>
@@ -804,7 +828,7 @@ export function CodeContextArea(props: {
         <div className="project-settings-panel"><strong>{copy("精确符号", "Exact symbols")}</strong><p>{counts?.symbols ?? "—"}</p></div>
       </div>
 
-      {status.lastError ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{status.lastError}</p> : null}
+      {status.lastError && !indexingStatusVisible ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{status.lastError}</p> : null}
 
       <section className="project-settings-panel space-y-3">
         <strong>{copy("高级设置", "Advanced settings")}</strong>

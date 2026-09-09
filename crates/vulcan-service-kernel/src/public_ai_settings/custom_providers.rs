@@ -1241,6 +1241,13 @@ pub(crate) async fn service_save_public_ai_custom_provider(
                 configuration
                     .custom_providers
                     .insert(provider_id.clone(), descriptor.clone());
+                // Synchronize the candidate Manifest before any catalog preview or activation
+                // can observe the newly created or edited custom-provider descriptor.
+                // 在任何目录预览或激活观察到新建/编辑的自定义供应商描述符前，先同步候选 Manifest。
+                vulcan_provider_config::custom_manifest::synchronize_custom_provider_manifest(
+                    configuration,
+                    provider_id.as_str(),
+                )?;
                 // effective_providers validates every connection against the newly declared provider contract.
                 // effective_providers 根据新声明的供应商契约校验每一条连接。
                 let effective_providers = runtime.effective_providers(configuration)?;

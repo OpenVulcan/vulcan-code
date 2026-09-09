@@ -76,6 +76,10 @@ pub const VCE_DATA_PLANE_SCHEMA_VERSION: i64 = 5;
 /// 一次物理向量检索允许的最大结果数量。
 const VCE_VECTOR_SEARCH_LIMIT: u32 = 10_000;
 
+/// Busy timeout used by the VCE SQLite resource as a final cross-process contention buffer.
+/// VCE SQLite 资源使用的忙等待超时，作为跨进程竞争的最后缓冲。
+const VCE_SQLITE_BUSY_TIMEOUT_MS: u64 = 15_000;
+
 /// Process-local sequence keeping repeated controller bindings distinct.
 /// 保证重复控制器绑定互不冲突的进程内序列。
 static VCE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -111,6 +115,9 @@ pub struct VceDataPlaneHandle {
     /// Bootstrap-scoped LanceDB binding identity.
     /// 单次引导作用域内的 LanceDB 绑定身份。
     pub lancedb_binding_id: String,
+    /// Shared process-local gate for every VCE SQLite mutation.
+    /// 串行化全部 VCE SQLite 变更的进程内共享闸门。
+    sqlite_write_gate: Arc<Mutex<()>>,
 }
 
 /// One persisted project-binding row used for compatibility validation.
@@ -5652,6 +5659,7 @@ pub(crate) fn prepare_vce_storage_binding(
         lancedb_path,
         sqlite_binding_id,
         lancedb_binding_id,
+        sqlite_write_gate: Arc::new(Mutex::new(())),
     })
 }
 
@@ -5672,6 +5680,7 @@ impl VceDataPlaneHandle {
                 db_path: runtime_assets::native_host_path_text_from_path(&self.sqlite_path),
                 read_only: false,
                 connection_pool_size: 2,
+                busy_timeout_ms: VCE_SQLITE_BUSY_TIMEOUT_MS,
                 cache_size_kib: 8_192,
                 mmap_size_bytes: 0,
                 ..ControllerSqliteEnableRequest::default()
@@ -5726,6 +5735,7 @@ impl VceDataPlaneHandle {
         if create {
             // schema_result confirms actual initialization, not merely a successful transport response.
             // schema_result 确认实际初始化，而不只是传输响应成功。
+            let _write_gate = self.sqlite_write_gate.lock().await;
             let schema_result = self
                 .client
                 .execute_sqlite_script_typed(
@@ -6443,6 +6453,7 @@ impl VceDataPlaneHandle {
         params: Vec<ControllerSqliteValue>,
         context: &str,
     ) -> Result<(), String> {
+        let _write_gate = self.sqlite_write_gate.lock().await;
         let result = self
             .client
             .execute_sqlite_script_typed(VCE_SPACE_ID, self.sqlite_binding_id.as_str(), sql, params)
@@ -6465,6 +6476,7 @@ impl VceDataPlaneHandle {
         if items.is_empty() {
             return Ok(());
         }
+        let _write_gate = self.sqlite_write_gate.lock().await;
         let result = self
             .client
             .execute_sqlite_batch_typed(VCE_SPACE_ID, self.sqlite_binding_id.as_str(), sql, items)

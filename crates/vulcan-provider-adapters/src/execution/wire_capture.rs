@@ -473,7 +473,7 @@ pub(super) async fn publish_wire_request_capture(
 /// 返回值
 /// A capture whose body is exact and whose credential-shaped header values are redacted.
 /// 返回正文精确且凭据形态请求头值均已脱敏的捕获结果。
-pub(super) fn provider_wire_request_capture(
+pub(crate) fn provider_wire_request_capture(
     transport: &str,
     method: &str,
     resolved_url: &str,

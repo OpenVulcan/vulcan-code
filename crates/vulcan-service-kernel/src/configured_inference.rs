@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use time::OffsetDateTime;
-use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, oneshot, watch};
 use uuid::Uuid;
 use vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_public_reasoning_effort;
 use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
@@ -62,6 +62,10 @@ const LLM_EVENT_BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// VMM 已配置推理传输请求追踪的版本化磁盘契约。
 const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
     "vulcan.configured-inference-provider-request-trace.v1";
+/// Versioned disk contract for VCE native embedding request diagnostics.
+/// VCE 原生向量请求诊断使用的版本化磁盘契约。
+const VCE_EMBEDDING_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
+    "vulcan.vce-embedding-provider-request-trace.v1";
 /// Process-local tie breaker for configured-inference traces captured in one millisecond.
 /// 同一毫秒内捕获的已配置推理追踪使用的进程内消歧序号。
 static CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2294,14 +2298,40 @@ impl ConfiguredInferenceService {
             request.dimensions.map(u64::from),
         );
         self.emit_internal_inference_started(&started_facts);
+        let captured_wire_request = Arc::new(Mutex::new(None::<ProviderWireRequestCapture>));
+        let captured_wire_request_for_attempt = Arc::clone(&captured_wire_request);
+        let runtime_for_attempt = Arc::clone(&self.runtime);
+        let selection_for_attempt = selection.clone();
+        let request_for_attempt = request.clone();
+        let usage_scope_for_attempt = caller.usage_scope;
         let (result, retry_count) = self
             .execute_non_streaming_provider_with_retry(caller, &started_facts, || {
-                self.runtime
-                    .execute_internal_embedding(&selection, &request, caller.usage_scope)
+                let captured_wire_request = Arc::clone(&captured_wire_request_for_attempt);
+                let runtime = Arc::clone(&runtime_for_attempt);
+                let selection = selection_for_attempt.clone();
+                let request = request_for_attempt.clone();
+                async move {
+                    let (capture_sender, capture_receiver) = oneshot::channel();
+                    let result = runtime
+                        .execute_internal_embedding_with_wire_request_capture(
+                            &selection,
+                            &request,
+                            usage_scope_for_attempt,
+                            Some(capture_sender),
+                        )
+                        .await;
+                    if let Ok(captured) = capture_receiver.await
+                        && let Ok(mut retained) = captured_wire_request.lock()
+                    {
+                        *retained = Some(captured);
+                    }
+                    result
+                }
             })
             .await;
         // result keeps malformed successful responses on the same terminal telemetry path as provider failures.
         // result 让格式错误的成功响应与 Provider 失败进入同一终态遥测路径。
+        let diagnostic_route = route_snapshot.clone();
         let result = result
             .and_then(|response| {
                 response.validate_for_request(&request).map_err(|message| {
@@ -2313,6 +2343,18 @@ impl ConfiguredInferenceService {
                 Ok(response)
             })
             .map_err(|error| error.with_route(route_snapshot));
+        if let Err(error) = &result
+            && let Ok(mut retained) = captured_wire_request.lock()
+            && let Some(captured) = retained.take()
+        {
+            Self::persist_vce_embedding_provider_request_trace(
+                &request,
+                &diagnostic_route,
+                error,
+                retry_count,
+                captured,
+            );
+        }
         match result {
             Ok(response) => {
                 let first_response_at_unix_ms = current_unix_millis();
@@ -3178,6 +3220,74 @@ impl ConfiguredInferenceService {
             }
         });
         Some(capture_sender)
+    }
+
+    /// Persists the exact native embedding request when its terminal attempt fails.
+    /// 原生向量终态尝试失败时持久化精确请求。
+    ///
+    /// `captured` is produced immediately before provider dispatch with credential-shaped header
+    /// values redacted; the logical request and normalized error remain alongside it.
+    /// `captured` 在供应商分派前立即生成且已脱敏凭据形态请求头；逻辑请求与规范化错误一并保存。
+    fn persist_vce_embedding_provider_request_trace(
+        request: &EmbeddingRequest,
+        route: &ExecutionRouteSnapshot,
+        error: &ConfiguredInferenceError,
+        retry_count: u32,
+        captured: ProviderWireRequestCapture,
+    ) {
+        let sequence = CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let slot_index = sequence.saturating_sub(1)
+            % vulcan_workspace_store::workspace_store::CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SLOT_COUNT;
+        let consumer_profile_id = request.consumer_profile_id.clone();
+        let trace = json!({
+            "schema_version": VCE_EMBEDDING_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
+            "captured_at_unix_ms": current_unix_millis(),
+            "process_sequence": sequence,
+            "request_stage": "embedding",
+            "request": request,
+            "route": route,
+            "retry_count": retry_count,
+            "error": error,
+            "api_request": {
+                "capture_point": "native_embedding_transport_dispatch",
+                "transport": captured.transport,
+                "method": captured.method,
+                "path": captured.path,
+                "resolved_url": captured.resolved_url,
+                "headers": captured.headers,
+                "credential_values_redacted": true,
+                "body": captured.body,
+            },
+        });
+        let data_root = vulcan_workspace_store::data_plane::application_data_root();
+        tokio::spawn(async move {
+            let persisted = tokio::task::spawn_blocking(move || {
+                vulcan_workspace_store::workspace_store::persist_configured_inference_provider_request_trace(
+                    &data_root,
+                    consumer_profile_id.as_str(),
+                    slot_index,
+                    &trace,
+                )
+            })
+            .await;
+            match persisted {
+                Ok(Ok(path)) => eprintln!(
+                    "[vce-embedding-provider-request-trace] sequence={} path={}",
+                    sequence,
+                    path.display()
+                ),
+                Ok(Err(error)) => eprintln!(
+                    "[vce-embedding-provider-request-trace] sequence={} persist_failed={}",
+                    sequence, error
+                ),
+                Err(error) => eprintln!(
+                    "[vce-embedding-provider-request-trace] sequence={} writer_failed={}",
+                    sequence, error
+                ),
+            }
+        });
     }
 
     /// Drives one provider stream into the shared restricted execution record.

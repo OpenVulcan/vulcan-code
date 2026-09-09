@@ -7,20 +7,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
 use vulcan_ai_contract::{
-    AiMessage, AiOperation, ContentItem, EmbeddingCapabilities, EmbeddingEncoding,
+    AiMessage, AiOperation, ContentItem, DispatchOutcome, EmbeddingCapabilities, EmbeddingEncoding,
     EmbeddingOutputKind, EmbeddingTask, ExecutionRouteSnapshot, HostAiCallContext,
     HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
-    HostAiCapabilityRequirement, HostAiError, HostAiErrorCode, HostAiExecutionHandle, HostAiPort,
-    HostAiRetryReason, INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
-    InferenceCapabilitySnapshot, InferencePermission, InferenceUsageScope, MessageRole,
-    ParallelToolCallPolicy, PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy,
-    RerankRequest, RerankText, RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
-    ToolChoicePolicy,
+    HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError, HostAiErrorCode,
+    HostAiExecutionHandle, HostAiPort, HostAiRetryReason, INFERENCE_CONTRACT_VERSION,
+    InferenceCallerBudget, InferenceCallerContext, InferenceCapabilitySnapshot,
+    InferencePermission, InferenceUsageScope, MessageRole, ParallelToolCallPolicy,
+    PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy, RerankRequest, RerankText,
+    RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
 };
 use vulcan_context_engine::host_adapter::{
     HostEmbeddingRequestConfig, create_embedding_batch_with_response, rerank_documents,
@@ -46,6 +46,10 @@ const VCE_QUERY_REWRITE_OUTPUT_TOKENS: u64 = 512;
 /// VCE 向量化供应商瞬时失败允许的额外尝试次数。
 const VCE_EMBEDDING_MAX_RETRIES: u32 = 3;
 
+/// Monotonic sequence used only to make embedding diagnostic records easy to correlate.
+/// 仅用于便于关联向量诊断记录的单调序列。
+static VCE_EMBEDDING_DIAGNOSTIC_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 /// Calculate a bounded fallback delay when the provider supplies no retry hint.
 /// 在供应商未提供重试提示时计算有界的退避延迟。
 fn embedding_retry_delay_ms(retry_count: u32) -> u64 {
@@ -68,6 +72,56 @@ fn should_retry_embedding(error: &HostAiError, retry_count: u32) -> bool {
                 | HostAiErrorCode::PermissionDenied
                 | HostAiErrorCode::Authentication
         )
+}
+
+/// Queue a complete typed HostAI embedding request and terminal error for durable diagnostics.
+/// 将完整类型化 HostAI 向量请求及终态错误排队持久化为诊断日志。
+///
+/// The provider-native wire body is intentionally marked unavailable here because this boundary
+/// owns the typed HostAI request; native transport capture belongs to the provider adapter layer.
+/// 这里明确标记供应商原生线缆请求不可用，因为当前边界持有类型化 HostAI 请求；原生传输捕获属于供应商适配器层。
+fn queue_vce_embedding_diagnostic(
+    adapter: &VceHostAiAdapter,
+    request: &HostAiEmbeddingRequest,
+    error: &HostAiError,
+    retry_count: u32,
+) {
+    let project_id = adapter.project_id.clone();
+    let data_root = vulcan_workspace_store::data_plane::application_data_root();
+    let operation_id = request.request.request_id.clone();
+    let sequence = VCE_EMBEDDING_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let trace = serde_json::json!({
+        "schema_version": 1,
+        "captured_at_unix_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default(),
+        "process_sequence": sequence,
+        "capture_point": "vce_host_ai_embedding_boundary",
+        "project_id": project_id,
+        "operation_id": operation_id,
+        "request_stage": "embedding",
+        "attempts": retry_count.saturating_add(1),
+        "route": adapter.embedding_contract.route,
+        "vector_space_id": adapter.embedding_space.vector_space_id,
+        "host_request": request,
+        "host_error": error,
+        "dispatch_outcome": error.dispatch_outcome,
+        "api_request_reached": !matches!(error.dispatch_outcome, DispatchOutcome::NotDispatched),
+        "api_request": {
+            "capture_point": "host_ai_port",
+            "transport": "provider_adapter_downstream",
+            "wire_request": null,
+            "wire_request_complete": false,
+        },
+    });
+    tokio::task::spawn_blocking(move || {
+        let _ = vulcan_workspace_store::workspace_store::persist_vce_diagnostic(
+            &data_root,
+            &project_id,
+            &trace,
+        );
+    });
 }
 
 /// Host-owned registration inputs for one project-scoped VCE runtime.
@@ -270,6 +324,9 @@ impl Drop for VceHostCallGuard {
 /// 共享 HostAI 端口之上的项目作用域 VCE 适配器。
 #[derive(Clone)]
 pub(crate) struct VceHostAiAdapter {
+    /// Stable project identity used to scope diagnostic records.
+    /// 用于划分诊断记录范围的稳定项目身份。
+    project_id: String,
     /// Shared process-wide HostAI boundary.
     /// 进程级共享 HostAI 边界。
     port: Arc<dyn HostAiPort>,
@@ -310,6 +367,7 @@ impl VceHostAiAdapter {
         config: VceHostAiRegistrationConfig,
     ) -> Result<Self, String> {
         config.validate()?;
+        let project_id = config.project_id.clone();
         let registration = vce_capability_registration(&config);
         // Scheduling ownership differs, but model selection, permissions and caller budget stay shared.
         // 调度所有权不同，但模型选择、权限及调用方预算保持共享。
@@ -372,6 +430,7 @@ impl VceHostAiAdapter {
             }
         };
         let adapter = Self {
+            project_id,
             port,
             handle: Arc::new(Mutex::new(handle)),
             query_handle: Arc::new(Mutex::new(query_handle)),
@@ -700,6 +759,9 @@ impl VceAiPort for VceHostAiAdapter {
                     Err(error) => break Err(error),
                 }
             };
+            if let Err(error) = &result {
+                queue_vce_embedding_diagnostic(&adapter, &host_request, error, retry_count);
+            }
             let result =
                 result.map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
             adapter.validate_embedding_response(&result)?;

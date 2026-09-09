@@ -6,11 +6,70 @@ use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, watch};
-use vulcan_context_engine::VceRefreshProgress;
+use vulcan_context_engine::{VceRefreshFailure, VceRefreshProgress};
 use vulcan_workspace_store::vce_data_plane::{
     VceCompletedJobUpdate, VceJobKind, VceJobState, VceProjectJobStore, VceProjectWriterLease,
     VceStoredJob,
 };
+
+/// Maximum number of additional attempts for transient progress-receipt contention.
+/// 瞬时进度回执竞争允许的最大额外重试次数。
+const VCE_PROGRESS_PERSIST_RETRIES: usize = 3;
+
+/// Base delay for the bounded progress-receipt retry backoff.
+/// 有界进度回执重试退避的基础延迟。
+const VCE_PROGRESS_PERSIST_RETRY_BASE_MS: u64 = 250;
+
+/// Identify storage failures that may clear without cancelling the admitted refresh.
+/// 识别可能自行消退、因此不应取消已准入刷新的存储失败。
+///
+/// `error` is the fully contextualized persistence error emitted by the job store.
+/// `error` 是作业存储发出的完整上下文持久化错误。
+/// Returns true only for the existing transient transport and SQLite-busy contracts.
+/// 仅当错误匹配现有瞬时传输或 SQLite 忙合约时返回 true。
+fn is_transient_progress_persistence_error(error: &str) -> bool {
+    error.contains("transport error") || error.contains("database is locked")
+}
+
+/// Retry one progress receipt update without blocking the indexing worker forever.
+/// 在不永久阻塞索引工作任务的前提下重试一次进度回执更新。
+///
+/// `persist_progress` performs one durable update and must be reusable for each attempt;
+/// `progress` is cloned because every retry submits the same latest observation.
+/// `persist_progress` 执行一次持久化更新且必须可重复调用；`progress` 会被克隆，
+/// 因为每次重试都提交同一份最新观察值。
+/// Returns after the first success, after the bounded retry budget, or immediately for a
+/// non-transient error.
+/// 首次成功、达到有界重试预算或遇到非瞬时错误时返回。
+async fn persist_progress_with_retry<P>(
+    persist_progress: &P,
+    progress: VceRefreshProgress,
+) -> Result<(), String>
+where
+    P: Fn(VceRefreshProgress) -> futures_util::future::BoxFuture<'static, Result<(), String>>
+        + Send
+        + Sync
+        + 'static,
+{
+    let mut last_error = None;
+    for attempt in 0..=VCE_PROGRESS_PERSIST_RETRIES {
+        match persist_progress(progress.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if is_transient_progress_persistence_error(&error)
+                    && attempt < VCE_PROGRESS_PERSIST_RETRIES =>
+            {
+                last_error = Some(error);
+                let delay_ms = VCE_PROGRESS_PERSIST_RETRY_BASE_MS * (attempt as u64 + 1);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        String::from("VCE progress persistence retry loop ended without an error")
+    }))
+}
 
 #[path = "replacement_jobs.rs"]
 mod replacement;
@@ -1320,9 +1379,46 @@ impl VceRuntimeManager {
             // Watch retains one latest observation, so huge projects cannot grow a progress queue.
             // 观察通道仅保留最近一份观察，大型项目不会使进度队列增长。
             let (progress_sender, progress_receiver) = watch::channel(None::<VceRefreshProgress>);
-            let control = job.control.clone().with_observer(Arc::new(move |progress| {
+            let failure_project_id = runtime.project_id.clone();
+            let failure_job_id = job.job_id.clone();
+            let failure_observer = Arc::new(move |failure: VceRefreshFailure| {
+                // Queue persistence outside the refresh callback so diagnostics cannot stall indexing.
+                // 将持久化排到刷新回调之外，避免诊断写入阻塞索引。
+                let project_id = failure_project_id.clone();
+                let job_id = failure_job_id.clone();
+                let trace_project_id = project_id.clone();
+                let trace = serde_json::json!({
+                    "schema_version": 1,
+                    "captured_at_unix_ms": SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_millis())
+                        .unwrap_or_default(),
+                    "capture_point": "vce_refresh_failure",
+                    "project_id": project_id,
+                    "job_id": job_id,
+                    "operation_id": failure.operation_id,
+                    "request_stage": "refresh",
+                    "api_request_reached": failure.api_request_reached,
+                    "failure": failure,
+                    "api_request": null,
+                });
+                let data_root = vulcan_workspace_store::data_plane::application_data_root();
+                tokio::task::spawn_blocking(move || {
+                    let _ = vulcan_workspace_store::workspace_store::persist_vce_diagnostic(
+                        &data_root,
+                        &trace_project_id,
+                        &trace,
+                    );
+                });
+            });
+            let progress_observer = Arc::new(move |progress| {
                 progress_sender.send_replace(Some(progress));
-            }));
+            });
+            let control = job
+                .control
+                .clone()
+                .with_observer(progress_observer)
+                .with_failure_observer(failure_observer);
             // The manager and runtime clones give the structured execution task owned lifetimes.
             // 管理器与运行时克隆为结构化执行任务提供独立所有权生命周期。
             let manager = self.clone();
@@ -1415,8 +1511,12 @@ impl VceRuntimeManager {
                     let progress = progress_receiver.borrow_and_update().clone();
                     if let Some(progress) = progress {
                         let phase = (progress.operation_id.clone(), progress.phase);
-                        if let Err(error) = persist_progress(progress).await {
-                            control.cancel();
+                        if let Err(error) =
+                            persist_progress_with_retry(&persist_progress, progress).await
+                        {
+                            if !is_transient_progress_persistence_error(&error) {
+                                control.cancel();
+                            }
                             progress_error = Some(error);
                         } else {
                             published_phase = Some(phase);
@@ -1432,8 +1532,12 @@ impl VceRuntimeManager {
                     if let Some(progress) = progress {
                         let phase = (progress.operation_id.clone(), progress.phase);
                         if published_phase.as_ref() != Some(&phase) {
-                            if let Err(error) = persist_progress(progress).await {
-                                control.cancel();
+                            if let Err(error) =
+                                persist_progress_with_retry(&persist_progress, progress).await
+                            {
+                                if !is_transient_progress_persistence_error(&error) {
+                                    control.cancel();
+                                }
                                 progress_error = Some(error);
                             } else {
                                 published_phase = Some(phase);
@@ -1448,7 +1552,7 @@ impl VceRuntimeManager {
         if progress_error.is_none() {
             let final_progress = progress_receiver.borrow().clone();
             if let Some(progress) = final_progress
-                && let Err(error) = persist_progress(progress).await
+                && let Err(error) = persist_progress_with_retry(&persist_progress, progress).await
             {
                 progress_error = Some(error);
             }
@@ -1458,9 +1562,15 @@ impl VceRuntimeManager {
         match (result, progress_error) {
             (Ok(checkpoint), None) => Ok(checkpoint),
             (Err(error), None) => Err(error),
+            (Ok(checkpoint), Some(error)) if is_transient_progress_persistence_error(&error) => {
+                Ok(checkpoint)
+            }
             (Ok(_), Some(error)) => Err(format!(
                 "VCE checkpoint completed but progress persistence failed: {error}"
             )),
+            (Err(execution), Some(error)) if is_transient_progress_persistence_error(&error) => {
+                Err(execution)
+            }
             (Err(execution), Some(error)) => {
                 Err(format!("{execution}; persist VCE job progress: {error}"))
             }
@@ -1940,6 +2050,54 @@ mod tests {
                 .expect("supervisor must not deadlock behind progress persistence")
                 .expect("supervisor task must finish");
             assert_eq!(result.expect("execution must complete"), 7);
+        });
+    }
+
+    /// Prove transient SQLite contention is retried without changing the latest progress payload.
+    /// 证明瞬时 SQLite 竞争会重试，且不会改变最新进度载荷。
+    /// The fixture fails once with the production lock text and succeeds on the next attempt.
+    /// 测试夹具先使用生产锁错误文本失败一次，再在下一次尝试成功。
+    #[test]
+    fn transient_progress_persistence_is_retried() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build progress retry runtime");
+        runtime.block_on(async {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let persist_progress = {
+                let attempts = Arc::clone(&attempts);
+                move |_progress: VceRefreshProgress|
+                    -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        if attempt == 0 {
+                            Err(String::from(
+                                "Update VCE job receipt: sqlite execute failed: database is locked",
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                }
+            };
+            let progress = VceRefreshProgress {
+                phase: vulcan_context_engine::VceRefreshPhase::Writing,
+                operation_id: String::from("progress-retry-test"),
+                unit: vulcan_context_engine::VceRefreshUnit::Blobs,
+                completed: 1,
+                total: Some(2),
+                overall_completed: 1,
+                overall_total: Some(2),
+                current_path: None,
+            };
+
+            persist_progress_with_retry(&persist_progress, progress)
+                .await
+                .expect("transient progress persistence should recover");
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
         });
     }
 

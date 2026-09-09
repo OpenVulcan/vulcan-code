@@ -16,10 +16,10 @@ pub const VCE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 2;
 /// 限制存储确认重试次数，避免短暂的控制器传输故障把活动作业所有权永久卡住。
 const VCE_RECEIPT_CONFIRM_RETRIES: usize = 3;
 
-/// Identify the exact controller failure that is safe to re-read after an ambiguous SQLite operation.
-/// 只识别已观测到的控制器传输错误，允许在结果不确定时重新读取而不是盲目重复写入。
+/// Identify controller failures that are safe to reconcile after an ambiguous receipt operation.
+/// 识别可以在回执操作结果不明确时收敛处理的控制器错误。
 fn is_retryable_receipt_transport_error(error: &str) -> bool {
-    error.contains("transport error")
+    error.contains("transport error") || error.contains("database is locked")
 }
 
 /// Immutable physical replacement target captured before candidate allocation starts.
@@ -932,6 +932,21 @@ pub(super) fn replacement_test_receipt(
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    // SQLite lock conflicts and transport failures both require receipt reconciliation, not blind duplicate writes.
+    // SQLite 锁冲突与传输失败都必须走回执收敛，而不是盲目重复写入。
+    #[test]
+    fn receipt_reconciliation_recognizes_sqlite_lock_conflicts() {
+        assert!(is_retryable_receipt_transport_error(
+            "Update VCE job receipt: sqlite execute failed: database is locked"
+        ));
+        assert!(is_retryable_receipt_transport_error(
+            "transport error: connection reset"
+        ));
+        assert!(!is_retryable_receipt_transport_error(
+            "VCE job receipt has invalid ownership"
+        ));
+    }
 
     /// Round-trip exact replacement identity and reject inconsistent or unsupported receipt facts.
     /// 往返保存精确替换身份，并拒绝不一致或不支持的回执事实。

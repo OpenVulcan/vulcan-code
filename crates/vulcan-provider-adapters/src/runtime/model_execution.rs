@@ -364,6 +364,27 @@ impl PublicAiRuntime {
         request: &EmbeddingRequest,
         usage_scope: InferenceUsageScope,
     ) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
+        self.execute_internal_embedding_with_wire_request_capture(
+            selection,
+            request,
+            usage_scope,
+            None,
+        )
+        .await
+    }
+
+    /// Executes one resolved embedding request while optionally capturing the exact secret-safe transport object.
+    /// 执行一项已解析向量请求，并可选捕获精确且不含秘密的传输对象。
+    ///
+    /// `wire_request_capture` receives the final native JSON request immediately before dispatch.
+    /// `wire_request_capture` 在真实分派前立即接收最终原生 JSON 请求。
+    pub async fn execute_internal_embedding_with_wire_request_capture(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: &EmbeddingRequest,
+        usage_scope: InferenceUsageScope,
+        wire_request_capture: Option<tokio::sync::oneshot::Sender<ProviderWireRequestCapture>>,
+    ) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
         let secret = self
             .resolve_fresh_execution_secret(
                 selection.route.connection.id.as_str(),
@@ -382,6 +403,7 @@ impl PublicAiRuntime {
                     route: selection.route_revision.as_str(),
                 },
                 &secret,
+                wire_request_capture,
             )
             .await
     }

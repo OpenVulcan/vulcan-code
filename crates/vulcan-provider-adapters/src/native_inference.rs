@@ -16,12 +16,14 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant, SystemTime},
 };
+use tokio::sync::oneshot;
 use vulcan_ai_contract::{
     AiOperation, EmbeddingEncoding, EmbeddingInputContent, EmbeddingOutputKind, EmbeddingPayload,
     EmbeddingRequest, EmbeddingResponse, EmbeddingResult, EmbeddingSpaceFingerprint, EmbeddingTask,
     ExecutionRouteSnapshot, InferenceUsageScope, RequestUsage, RerankProfileFingerprint,
     RerankRequest, RerankResponse, RerankResult, UsageUpdateKind, UsageValue, UsageValueSource,
 };
+use vulcan_llm_core::EncodedWireRequest;
 
 /// Maximum successful native inference response size retained in memory.
 /// 原生推理成功响应允许保留在内存中的最大字节数。
@@ -463,6 +465,7 @@ impl ProviderExecutionClient {
         usage_scope: InferenceUsageScope,
         revisions: ExecutionRevisionRefs<'_>,
         secret: &CredentialExecutionSecret,
+        wire_request_capture: Option<oneshot::Sender<crate::execution::ProviderWireRequestCapture>>,
     ) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
         let started_at = Instant::now();
         request.validate().map_err(pre_dispatch_failure)?;
@@ -484,7 +487,14 @@ impl ProviderExecutionClient {
             request,
         )?;
         let response = self
-            .send_native_json(native_route, route, endpoint, &wire_request, secret)
+            .send_native_json(
+                native_route,
+                route,
+                endpoint,
+                &wire_request,
+                secret,
+                wire_request_capture,
+            )
             .await?;
         let wire: WireEmbeddingResponse =
             serde_json::from_str(response.as_str()).map_err(|error| {
@@ -612,7 +622,7 @@ impl ProviderExecutionClient {
             request,
         )?;
         let response = self
-            .send_native_json(native_route, route, endpoint, &wire_request, secret)
+            .send_native_json(native_route, route, endpoint, &wire_request, secret, None)
             .await?;
         let (wire_results, wire_model, wire_usage) =
             parse_rerank_response(native_route, response.as_str())?;
@@ -692,6 +702,7 @@ impl ProviderExecutionClient {
         endpoint: &str,
         body: &T,
         secret: &CredentialExecutionSecret,
+        wire_request_capture: Option<oneshot::Sender<crate::execution::ProviderWireRequestCapture>>,
     ) -> Result<String, ProviderExecutionFailure> {
         let transport = self
             .protocols
@@ -713,6 +724,25 @@ impl ProviderExecutionClient {
             base_url.as_str(),
             endpoint,
         )?;
+        if let Some(sender) = wire_request_capture {
+            let encoded = EncodedWireRequest {
+                path: endpoint.to_string(),
+                headers: BTreeMap::new(),
+                body: serde_json::to_value(body).map_err(|error| {
+                    pre_dispatch_failure(format!(
+                        "Native inference request body could not be captured: {error}"
+                    ))
+                })?,
+            };
+            let capture = crate::execution::provider_wire_request_capture(
+                "http_json",
+                "POST",
+                url.as_str(),
+                &encoded,
+                &headers,
+            );
+            let _ = sender.send(capture);
+        }
         let response = tokio::time::timeout(
             Duration::from_millis(transport.response_headers_timeout_ms),
             self.http

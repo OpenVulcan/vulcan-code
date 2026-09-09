@@ -482,6 +482,15 @@ impl VceActivationError {
             error: error.to_string(),
         }
     }
+
+    // refreshing represents a transient replacement owner that status reads must expose without restoring the predecessor.
+    // refreshing 表示暂时持有替换权的作业；状态读取应暴露该状态，而不是恢复前驱运行时。
+    fn refreshing(error: impl ToString) -> Self {
+        Self {
+            lifecycle: VceProjectLifecycle::Refreshing,
+            error: error.to_string(),
+        }
+    }
 }
 
 impl From<String> for VceActivationError {
@@ -739,7 +748,7 @@ impl VceRuntimeManager {
         // Replacement workers restore the published target themselves; cold reads cannot resurrect its predecessor.
         // 替换工作任务自行恢复已发布目标；冷态读取不能复活其前驱。
         if self.project_has_replacement_job(project_id).await {
-            return Err(VceActivationError::runtime(
+            return Err(VceActivationError::refreshing(
                 "VCE explicit replacement is in progress; observe its durable job",
             ));
         }
@@ -866,6 +875,7 @@ impl VceRuntimeManager {
         }
         // Restoration is a status read: an explicitly classified compatibility denial is a readable state.
         // 恢复属于状态读取：明确分类的兼容拒绝属于可读取状态。
+        let config_revision = settings.revision;
         let restored = self
             .enable_project(
                 project_id,
@@ -879,8 +889,21 @@ impl VceRuntimeManager {
         if let Err(error) = restored {
             // Classify this call's own result, never another activation's concurrently retained status.
             // 分类本次调用自身结果，绝不使用其他激活并发保留的状态。
-            if error.lifecycle != VceProjectLifecycle::RebuildRequired {
-                return Err(error.into());
+            match error.lifecycle {
+                VceProjectLifecycle::RebuildRequired => {}
+                VceProjectLifecycle::Refreshing => {
+                    // Preserve a readable transient status while the replacement worker owns the target.
+                    // 替换工作任务持有目标期间保留可读取的暂时状态。
+                    self.activation_failures.write().await.insert(
+                        project_id.to_owned(),
+                        VceActivationFailure {
+                            config_revision,
+                            lifecycle: VceProjectLifecycle::Refreshing,
+                            error: error.error,
+                        },
+                    );
+                }
+                _ => return Err(error.into()),
             }
         }
         Ok(true)
@@ -2594,6 +2617,8 @@ mod tests {
         ));
         assert_eq!(rebuild.lifecycle, VceProjectLifecycle::RebuildRequired);
         assert_eq!(ordinary.lifecycle, VceProjectLifecycle::Failed);
+        let refreshing = VceActivationError::refreshing("replacement is active");
+        assert_eq!(refreshing.lifecycle, VceProjectLifecycle::Refreshing);
     }
 
     /// Verifies teardown rejects new work and cannot drain until every active lease ends.

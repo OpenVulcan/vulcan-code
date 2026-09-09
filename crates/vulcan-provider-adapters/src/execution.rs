@@ -59,6 +59,7 @@ pub use tool_output::{
     ProviderToolRerankOutput, ProviderToolRerankResult, ProviderToolSearchOutput,
     ProviderToolSearchResult,
 };
+pub(crate) use wire_capture::provider_wire_request_capture;
 use wire_capture::{ProviderWireCaptureTargets, ProviderWireRequestCaptureTarget};
 pub use wire_capture::{
     ProviderWireRequestCapture, ProviderWireRequestTraceDispatch, ProviderWireResponseCapture,

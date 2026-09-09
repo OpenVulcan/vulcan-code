@@ -77,8 +77,8 @@ pub use ports::{
 };
 pub use query::{QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 pub use refresh_control::{
-    VceCancelOutcome, VceRefreshControl, VceRefreshObserver, VceRefreshPhase, VceRefreshProgress,
-    VceRefreshUnit,
+    VceCancelOutcome, VceRefreshControl, VceRefreshFailure, VceRefreshFailureObserver,
+    VceRefreshObserver, VceRefreshPhase, VceRefreshProgress, VceRefreshUnit,
 };
 pub use retrieval::{
     CoverageConfig, RankedHits, RerankCallback, RetrievalPipeline, RrfConfig,

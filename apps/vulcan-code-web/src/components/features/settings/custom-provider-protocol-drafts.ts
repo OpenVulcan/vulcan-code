@@ -275,8 +275,8 @@ function protocolCollectionFingerprint(collection: CustomProviderProtocolCollect
     drafts: collection.drafts,
   }).map((route) => ({
     ...route,
-    requestHeaders: route.requestHeaders
-      ? Object.fromEntries(Object.entries(route.requestHeaders).sort(([left], [right]) => left.localeCompare(right)))
+    request_headers: route.request_headers
+      ? Object.fromEntries(Object.entries(route.request_headers).sort(([left], [right]) => left.localeCompare(right)))
       : undefined,
   }))
   return JSON.stringify({ protocols, routes })
@@ -297,25 +297,25 @@ export function protocolRoutesFromCollection(
     }
     const route: PublicAiCustomProviderProtocolRoute = { protocol }
     if (draft.baseUrlOverride.trim()) {
-      route.baseUrl = draft.baseUrlOverride.trim()
+      route.base_url = draft.baseUrlOverride.trim()
     }
     if (draft.endpointPath.trim()) {
-      route.endpointPath = draft.endpointPath.trim()
+      route.endpoint_path = draft.endpointPath.trim()
     }
     if (draft.authentication) {
       route.authentication = draft.authentication
     }
     if (draft.modelDiscoveryMode) {
-      route.modelDiscoveryMode = draft.modelDiscoveryMode
+      route.model_discovery_mode = draft.modelDiscoveryMode
     }
     if (draft.modelDiscoveryMode === "custom_path" && draft.modelDiscoveryPath.trim()) {
-      route.modelDiscoveryPath = draft.modelDiscoveryPath.trim()
+      route.model_discovery_path = draft.modelDiscoveryPath.trim()
     }
     const headers = Object.fromEntries(
       Object.entries(draft.requestHeaders).filter(([, value]) => value.trim().length > 0),
     )
     if (Object.keys(headers).length > 0) {
-      route.requestHeaders = headers
+      route.request_headers = headers
     }
     routes.push(route)
   }

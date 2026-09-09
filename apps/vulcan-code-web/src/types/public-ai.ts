@@ -211,14 +211,16 @@ export type PublicAiCustomModelProtocolPreference =
 // 覆盖一条协议路由。
 export interface PublicAiCustomProviderProtocolRoute {
   protocol: PublicAiCustomProviderProtocol;
-  baseUrl?: string;
-  endpointPath?: string;
+  // Nested route fields use the Rust RPC wire names; the outer save request remains camelCase.
+  // 嵌套路由字段使用 Rust RPC 线协议名称；外层保存请求仍保持 camelCase。
+  base_url?: string;
+  endpoint_path?: string;
   // Route-level API-key projection; omitted inherits the shared provider projection.
   // 路由级 API Key 投影；省略时继承供应商共享投影。
   authentication?: "bearer_authorization" | "google_api_key" | "x_api_key";
-  modelDiscoveryMode?: PublicAiCustomProviderModelDiscoveryMode;
-  modelDiscoveryPath?: string;
-  requestHeaders?: Record<string, string>;
+  model_discovery_mode?: PublicAiCustomProviderModelDiscoveryMode;
+  model_discovery_path?: string;
+  request_headers?: Record<string, string>;
 }
 
 // PublicAiCustomModelProtocolPreferenceRecord exposes one persisted choice without composite keys.
