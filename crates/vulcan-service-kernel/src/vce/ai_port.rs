@@ -9,13 +9,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::Notify;
 use vulcan_ai_contract::{
     AiMessage, AiOperation, ContentItem, EmbeddingCapabilities, EmbeddingEncoding,
     EmbeddingOutputKind, EmbeddingTask, ExecutionRouteSnapshot, HostAiCallContext,
     HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
     HostAiCapabilityRequirement, HostAiError, HostAiErrorCode, HostAiExecutionHandle, HostAiPort,
-    INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
+    HostAiRetryReason, INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
     InferenceCapabilitySnapshot, InferencePermission, InferenceUsageScope, MessageRole,
     ParallelToolCallPolicy, PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy,
     RerankRequest, RerankText, RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
@@ -40,6 +41,34 @@ pub(crate) const VCE_QUERY_REWRITE_PURPOSE_ID: &str = "code_retrieval.query_rewr
 /// Maximum output token count accepted from one query-rewrite request.
 /// 一次查询改写请求允许的最大输出 Token 数。
 const VCE_QUERY_REWRITE_OUTPUT_TOKENS: u64 = 512;
+
+/// Maximum additional attempts for transient VCE Embedding provider failures.
+/// VCE 向量化供应商瞬时失败允许的额外尝试次数。
+const VCE_EMBEDDING_MAX_RETRIES: u32 = 3;
+
+/// Calculate a bounded fallback delay when the provider supplies no retry hint.
+/// 在供应商未提供重试提示时计算有界的退避延迟。
+fn embedding_retry_delay_ms(retry_count: u32) -> u64 {
+    2_000u64
+        .saturating_mul(1u64 << retry_count.min(3))
+        .min(30_000)
+}
+
+/// Decide whether one HostAI failure is safe to retry for an Embedding batch.
+/// 判断一项 HostAI 失败是否适合对向量批次重试。
+fn should_retry_embedding(error: &HostAiError, retry_count: u32) -> bool {
+    error.retryable
+        && retry_count < VCE_EMBEDDING_MAX_RETRIES
+        && !matches!(
+            error.code,
+            HostAiErrorCode::PaymentRequired
+                | HostAiErrorCode::InvalidRequest
+                | HostAiErrorCode::LimitExceeded
+                | HostAiErrorCode::Contract
+                | HostAiErrorCode::PermissionDenied
+                | HostAiErrorCode::Authentication
+        )
+}
 
 /// Host-owned registration inputs for one project-scoped VCE runtime.
 /// 一个项目作用域 VCE 运行时使用的宿主持有注册输入。
@@ -571,6 +600,15 @@ impl VceAiPort for VceHostAiAdapter {
         }
     }
 
+    /// Returns the exact maximum item count declared by the frozen embedding model contract.
+    /// 返回冻结向量模型契约声明的精确最大输入条数。
+    fn embedding_max_inputs(&self) -> Option<usize> {
+        self.embedding_contract
+            .capabilities
+            .maximum_inputs
+            .and_then(|value| usize::try_from(value).ok())
+    }
+
     /// Executes document or query embedding through this project's VCE HostAI registration.
     /// 通过当前项目的 VCE HostAI 注册执行文档或查询向量化。
     fn embed(
@@ -626,18 +664,42 @@ impl VceAiPort for VceHostAiAdapter {
                 },
             )
             .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
-            let (host_context, mut call_guard) = VceHostCallGuard::new(
-                Arc::clone(&adapter.port),
-                request.context.operation_id.clone(),
-            );
-            let result = create_embedding_batch_with_response(
-                adapter.port.as_ref(),
-                &handle,
-                host_context,
-                host_request,
-            )
-            .await;
-            call_guard.disarm();
+            let mut retry_count = 0u32;
+            let result = loop {
+                let (host_context, mut call_guard) = VceHostCallGuard::new(
+                    Arc::clone(&adapter.port),
+                    request.context.operation_id.clone(),
+                );
+                let host_context = if retry_count == 0 {
+                    host_context
+                } else {
+                    host_context.with_attempt(
+                        retry_count.saturating_add(1),
+                        HostAiRetryReason::ProviderTransient,
+                    )
+                };
+                let result = create_embedding_batch_with_response(
+                    adapter.port.as_ref(),
+                    &handle,
+                    host_context,
+                    host_request.clone(),
+                )
+                .await;
+                call_guard.disarm();
+                match result {
+                    Ok(result) => break Ok(result),
+                    Err(error) if should_retry_embedding(&error, retry_count) => {
+                        let delay_ms = error
+                            .retry_after
+                            .as_ref()
+                            .map(|hint| hint.delay_milliseconds)
+                            .unwrap_or_else(|| embedding_retry_delay_ms(retry_count));
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        retry_count = retry_count.saturating_add(1);
+                    }
+                    Err(error) => break Err(error),
+                }
+            };
             let result =
                 result.map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
             adapter.validate_embedding_response(&result)?;
@@ -1228,6 +1290,16 @@ fn unavailable_snapshot(binding: &VceAiBinding) -> VceAiCapabilitySnapshot {
 /// Maps one common HostAI error into the precise VCE port operation.
 /// 将一个公共 HostAI 错误映射到精确 VCE 端口操作。
 fn map_host_error(operation: VcePortOperation, error: HostAiError) -> VcePortError {
+    if error.retryable {
+        return VcePortError::Retryable {
+            operation,
+            message: error.to_string(),
+            retry_after_ms: error
+                .retry_after
+                .as_ref()
+                .map(|hint| hint.delay_milliseconds),
+        };
+    }
     match error.code {
         HostAiErrorCode::CapabilityUnavailable | HostAiErrorCode::OperationNotFound => {
             VcePortError::Unavailable { operation }
@@ -1963,6 +2035,45 @@ mod tests {
             rate_limited,
             VcePortError::Failed {
                 operation: VcePortOperation::Rerank,
+                ..
+            }
+        ));
+    }
+
+    /// Verifies only host-approved transient errors retain retry metadata at the VCE boundary.
+    /// 验证只有宿主批准的瞬时错误才会在 VCE 边界保留重试元数据。
+    #[test]
+    fn retryable_host_error_preserves_retry_classification() {
+        let retryable = map_host_error(
+            VcePortOperation::Embedding,
+            HostAiError::new(HostAiErrorCode::ProviderOverloaded, "retry later")
+                .with_retryable(true),
+        );
+        assert!(matches!(
+            retryable,
+            VcePortError::Retryable {
+                operation: VcePortOperation::Embedding,
+                retry_after_ms: None,
+                ..
+            }
+        ));
+        assert_eq!(embedding_retry_delay_ms(0), 2_000);
+        assert_eq!(embedding_retry_delay_ms(3), 16_000);
+        assert_eq!(embedding_retry_delay_ms(99), 16_000);
+
+        let retryable_quota =
+            HostAiError::new(HostAiErrorCode::PaymentRequired, "insufficient quota")
+                .with_retryable(true);
+        assert!(!should_retry_embedding(&retryable_quota, 0));
+
+        let quota = map_host_error(
+            VcePortOperation::Embedding,
+            HostAiError::new(HostAiErrorCode::PaymentRequired, "insufficient quota"),
+        );
+        assert!(matches!(
+            quota,
+            VcePortError::Failed {
+                operation: VcePortOperation::Embedding,
                 ..
             }
         ));

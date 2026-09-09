@@ -244,6 +244,9 @@ export type TranslationKey =
   | "app.shutdown.persistFailed.title"
   | "app.shutdown.persistFailed.description"
   | "app.shutdown.persistFailed.forceConfirm"
+  | "app.shutdown.persistFailed.cancel"
+  | "app.shutdown.persistFailed.forceClose"
+  | "app.shutdown.persistFailed.forceClosing"
   | "appChrome.githubOpenFailed"
   | "appChrome.githubAria"
   | "sidebar.user.local"
@@ -3589,6 +3592,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.shutdown.persistFailed.title": "关闭前保存未完成",
     "app.shutdown.persistFailed.description": "无法确认最后一批会话记录已经耐久保存。取消后可保持窗口打开，再次关闭即可重试。",
     "app.shutdown.persistFailed.forceConfirm": "强制退出可能丢失最后一部分会话记录。是否仍要强制退出？",
+    "app.shutdown.persistFailed.cancel": "取消并保持窗口",
+    "app.shutdown.persistFailed.forceClose": "强制退出",
+    "app.shutdown.persistFailed.forceClosing": "正在强制退出…",
     "appChrome.githubOpenFailed": "打开 GitHub 失败：",
     "appChrome.githubAria": "打开 OpenVulcan/vulcan-code GitHub 仓库",
     "sidebar.user.local": "本地用户",
@@ -6931,6 +6937,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.shutdown.persistFailed.title": "Shutdown save did not finish",
     "app.shutdown.persistFailed.description": "The final conversation records could not be confirmed as durably saved. Cancel to keep the window open, then close it again to retry.",
     "app.shutdown.persistFailed.forceConfirm": "Forcing exit may lose the final conversation records. Force exit anyway?",
+    "app.shutdown.persistFailed.cancel": "Cancel and keep window open",
+    "app.shutdown.persistFailed.forceClose": "Force exit",
+    "app.shutdown.persistFailed.forceClosing": "Forcing exit…",
     "appChrome.githubOpenFailed": "Failed to open GitHub: ",
     "appChrome.githubAria": "Open the OpenVulcan/vulcan-code GitHub repository",
     "sidebar.user.local": "Local user",

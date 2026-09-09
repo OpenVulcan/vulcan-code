@@ -124,6 +124,36 @@ pub(super) fn custom_provider_system_baseline_for_protocol(
     baseline
 }
 
+/// Clamps one effective output ceiling to the model's effective context window.
+/// 将一个有效输出上限收敛到模型的有效上下文窗口。
+///
+/// Discovery metadata is retained separately, while executable capability projections must use
+/// a request-safe output ceiling when an upstream reports an inconsistent pair of limits.
+/// 发现元数据仍然单独保留；当上游报告不一致的限制组合时，可执行能力投影必须使用安全的输出上限。
+pub(super) fn clamp_output_limit_to_context_window(capabilities: &mut ModelCapabilities) {
+    if let (Some(context_limit), Some(output_limit)) =
+        (capabilities.context_limit, capabilities.output_limit)
+        && output_limit > context_limit
+    {
+        capabilities.output_limit = Some(context_limit);
+    }
+}
+
+/// Clamps every effective model and protocol variant in one projected catalog.
+/// 收敛一个有效投影目录中的所有模型及协议变体。
+///
+/// The source catalog remains untouched so provider-reported metadata stays available for
+/// diagnostics; only the post-policy executable projection is narrowed.
+/// 原始目录保持不变以保留供应商报告的元数据供诊断使用；仅收窄应用策略后的可执行投影。
+pub(super) fn clamp_catalog_output_limits_to_context_window(catalog: &mut ConnectionModelCatalog) {
+    for model in &mut catalog.models {
+        clamp_output_limit_to_context_window(&mut model.capabilities);
+        for variant in model.protocol_variants.values_mut() {
+            clamp_output_limit_to_context_window(&mut variant.capabilities);
+        }
+    }
+}
+
 /// Validates the final context and output limits resolved for one account model.
 /// 校验一个账号模型最终解析得到的上下文与输出限制。
 ///
@@ -136,8 +166,8 @@ pub(super) fn custom_provider_system_baseline_for_protocol(
 ///
 /// # Returns
 /// 返回值
-/// Success when every present limit is positive and output does not exceed context.
-/// 当所有已存在限制均为正数且输出不超过上下文时返回成功。
+/// Success when every present limit is positive; inconsistent pairs are normalized before use.
+/// 当所有已存在限制均为正数时返回成功；不一致组合会在使用前收窄。
 pub(in crate::runtime) fn validate_resolved_model_capability_limits(
     connection_id: &str,
     model_id: &str,
@@ -153,14 +183,6 @@ pub(in crate::runtime) fn validate_resolved_model_capability_limits(
             "Model `{model_id}` on connection `{connection_id}` has an effective output limit of zero."
         ));
     }
-    if let (Some(context_limit), Some(output_limit)) =
-        (capabilities.context_limit, capabilities.output_limit)
-        && output_limit > context_limit
-    {
-        return Err(format!(
-            "Model `{model_id}` on connection `{connection_id}` has an effective output limit that exceeds its context limit."
-        ));
-    }
     Ok(())
 }
 
@@ -174,8 +196,8 @@ pub(in crate::runtime) fn validate_resolved_model_capability_limits(
 ///
 /// # Returns
 /// 返回值
-/// Success only when every model has a coherent positive token budget.
-/// 仅当每个模型都具有一致且为正数的 Token 预算时返回成功。
+/// Success only when every model has positive declared limits.
+/// 仅当每个模型声明的限制均为正数时返回成功。
 pub(in crate::runtime) fn validate_resolved_catalog_limits(
     catalog: &ConnectionModelCatalog,
 ) -> Result<(), String> {

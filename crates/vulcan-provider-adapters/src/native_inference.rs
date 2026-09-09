@@ -39,15 +39,47 @@ const MAXIMUM_NATIVE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// 返回值
 /// The stable action binding when a native adapter exists; otherwise no binding.
 /// 原生适配器存在时返回稳定动作绑定，否则不返回绑定。
-pub fn registered_native_action_binding_id(
-    entry: &crate::ServiceEntry,
+pub fn registered_native_action_binding_id<'a>(
+    entry: &'a crate::ServiceEntry,
     operation: AiOperation,
-) -> Option<&str> {
-    entry
-        .native_inference_bindings
-        .iter()
-        .find(|binding| binding.operation == operation)
+    model_id: &str,
+) -> Option<&'a str> {
+    select_native_binding(&entry.native_inference_bindings, operation, model_id)
         .map(|binding| binding.binding_id.as_str())
+}
+
+/// Selects the most specific manifest binding for one operation and model.
+/// 为一个操作和模型选择 Manifest 中最精确的绑定。
+///
+/// # Parameters
+/// 参数
+/// `bindings` is the immutable binding list, `operation` is the provider-neutral action, and
+/// `model_id` is the exact public model identifier.
+/// `bindings` 是不可变绑定列表，`operation` 是供应商无关操作，`model_id` 是精确公开模型标识。
+///
+/// # Returns
+/// 返回值
+/// The model-specific binding when declared, otherwise the operation-wide binding.
+/// 已声明时返回模型专用绑定，否则返回操作通用绑定。
+fn select_native_binding<'a>(
+    bindings: &'a [crate::NativeInferenceBinding],
+    operation: AiOperation,
+    model_id: &str,
+) -> Option<&'a crate::NativeInferenceBinding> {
+    bindings
+        .iter()
+        .find(|binding| {
+            binding.operation == operation
+                && binding
+                    .model_ids
+                    .iter()
+                    .any(|candidate| candidate == model_id)
+        })
+        .or_else(|| {
+            bindings
+                .iter()
+                .find(|binding| binding.operation == operation && binding.model_ids.is_empty())
+        })
 }
 
 /// Validates a configured action binding against the exact native provider route.
@@ -55,8 +87,8 @@ pub fn registered_native_action_binding_id(
 ///
 /// # Parameters
 /// 参数
-/// `route`, `operation`, and `configured_binding_id` are persisted immutable-route facts.
-/// `route`、`operation` 与 `configured_binding_id` 是持久化不可变路由事实。
+/// `route`, `operation`, `model_id`, and `configured_binding_id` are persisted immutable-route facts.
+/// `route`、`operation`、`model_id` 与 `configured_binding_id` 是持久化不可变路由事实。
 ///
 /// # Returns
 /// 返回值
@@ -65,11 +97,12 @@ pub fn registered_native_action_binding_id(
 pub(crate) fn validate_native_action_binding(
     route: &ProviderExecutionRoute,
     operation: AiOperation,
+    model_id: &str,
     configured_binding_id: &str,
 ) -> Result<(), ProviderExecutionFailure> {
     let (_, _, expected_binding_id) = match operation {
-        AiOperation::EmbeddingCreate => NativeInferenceRoute::embedding(route)?,
-        AiOperation::RerankDocuments => NativeInferenceRoute::rerank(route)?,
+        AiOperation::EmbeddingCreate => NativeInferenceRoute::embedding(route, model_id)?,
+        AiOperation::RerankDocuments => NativeInferenceRoute::rerank(route, model_id)?,
         _ => {
             return Err(pre_dispatch_failure(format!(
                 "Operation `{}` is not a native inference action.",
@@ -100,8 +133,9 @@ impl<'a> NativeInferenceRoute<'a> {
     ///
     /// # Parameters
     /// 参数
-    /// `route` contains the exact provider and product selected before dispatch.
-    /// `route` 包含分派前选择的精确供应商与产品。
+    /// `route` contains the exact provider and product selected before dispatch, and `model_id`
+    /// selects a model-specific binding when the manifest declares one.
+    /// `route` 包含分派前选择的精确供应商与产品，`model_id` 在 Manifest 声明时选择模型专用绑定。
     ///
     /// # Returns
     /// 返回值
@@ -109,8 +143,9 @@ impl<'a> NativeInferenceRoute<'a> {
     /// 返回 Wire 路由、相对端点与稳定绑定标识。
     fn embedding(
         route: &'a ProviderExecutionRoute,
+        model_id: &str,
     ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
-        Self::for_operation(route, AiOperation::EmbeddingCreate)
+        Self::for_operation(route, AiOperation::EmbeddingCreate, model_id)
     }
 
     /// Resolves one rerank endpoint from an immutable provider route.
@@ -118,8 +153,9 @@ impl<'a> NativeInferenceRoute<'a> {
     ///
     /// # Parameters
     /// 参数
-    /// `route` contains the exact provider and product selected before dispatch.
-    /// `route` 包含分派前选择的精确供应商与产品。
+    /// `route` contains the exact provider and product selected before dispatch, and `model_id`
+    /// selects a model-specific binding when the manifest declares one.
+    /// `route` 包含分派前选择的精确供应商与产品，`model_id` 在 Manifest 声明时选择模型专用绑定。
     ///
     /// # Returns
     /// 返回值
@@ -127,8 +163,9 @@ impl<'a> NativeInferenceRoute<'a> {
     /// 返回 Wire 路由、相对端点与稳定绑定标识。
     fn rerank(
         route: &'a ProviderExecutionRoute,
+        model_id: &str,
     ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
-        Self::for_operation(route, AiOperation::RerankDocuments)
+        Self::for_operation(route, AiOperation::RerankDocuments, model_id)
     }
 
     /// Resolves one operation binding from the frozen service entry.
@@ -136,20 +173,18 @@ impl<'a> NativeInferenceRoute<'a> {
     fn for_operation(
         route: &'a ProviderExecutionRoute,
         operation: AiOperation,
+        model_id: &str,
     ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
-        let binding = route
-            .entry
-            .native_inference_bindings
-            .iter()
-            .find(|binding| binding.operation == operation)
-            .ok_or_else(|| {
-                pre_dispatch_failure(format!(
-                    "Provider route `{}/{}` does not register native operation `{}`.",
-                    route.provider.id,
-                    route.entry.id,
-                    operation.as_str()
-                ))
-            })?;
+        let binding =
+            select_native_binding(&route.entry.native_inference_bindings, operation, model_id)
+                .ok_or_else(|| {
+                    pre_dispatch_failure(format!(
+                        "Provider route `{}/{}` does not register native operation `{}`.",
+                        route.provider.id,
+                        route.entry.id,
+                        operation.as_str()
+                    ))
+                })?;
         Ok((
             Self { binding },
             binding.endpoint_path.as_str(),
@@ -221,6 +256,55 @@ struct WireRerankRequest {
     /// 可选 OpenRouter 供应商路由策略。
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<OpenRouterProviderPolicy>,
+}
+
+/// Carries Alibaba Model Studio's nested text-rerank request.
+/// 承载阿里云百炼嵌套格式的文本重排请求。
+#[derive(Debug, Serialize)]
+struct WireAlibabaTextRerankRequest {
+    /// Exact immutable model identifier.
+    /// 精确不可变模型标识。
+    model: String,
+    /// Nested query and candidate inputs required by Alibaba's native API.
+    /// 阿里云原生接口要求的嵌套查询与候选输入。
+    input: WireAlibabaTextRerankInput,
+    /// Native rerank controls accepted by the documented endpoint.
+    /// 文档端点接受的原生重排控制参数。
+    parameters: WireAlibabaTextRerankParameters,
+}
+
+/// Carries Alibaba's nested rerank input object.
+/// 承载阿里云嵌套格式的重排输入对象。
+#[derive(Debug, Serialize)]
+struct WireAlibabaTextRerankInput {
+    /// Exact text query.
+    /// 精确文本查询。
+    query: String,
+    /// Ordered candidate texts.
+    /// 有序候选文本。
+    documents: Vec<String>,
+}
+
+/// Carries Alibaba's documented rerank parameters.
+/// 承载阿里云文档规定的重排参数。
+#[derive(Debug, Serialize)]
+struct WireAlibabaTextRerankParameters {
+    /// Exact maximum result count.
+    /// 精确最大结果数量。
+    top_n: u32,
+}
+
+/// Selects the exact serialized wire body for one rerank binding.
+/// 为一条重排绑定选择精确的序列化 Wire 请求体。
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum WireRerankRequestBody {
+    /// OpenAI-compatible or routed-compatible request body.
+    /// OpenAI 兼容或带路由兼容请求体。
+    Compatible(WireRerankRequest),
+    /// Alibaba Model Studio native nested request body.
+    /// 阿里云百炼原生嵌套请求体。
+    AlibabaTextRerank(WireAlibabaTextRerankRequest),
 }
 
 /// Closed embedding value union returned by compatible providers.
@@ -322,6 +406,28 @@ struct WireRerankResponse {
     usage: WireUsage,
 }
 
+/// Carries Alibaba Model Studio's nested text-rerank response.
+/// 承载阿里云百炼嵌套格式的文本重排响应。
+#[derive(Debug, Deserialize)]
+struct WireAlibabaTextRerankResponse {
+    /// Nested provider-ranked results.
+    /// 嵌套的供应商排序结果。
+    output: WireAlibabaTextRerankOutput,
+    /// Optional provider usage.
+    /// 可选供应商用量。
+    #[serde(default)]
+    usage: WireUsage,
+}
+
+/// Carries Alibaba's nested result object.
+/// 承载阿里云嵌套格式的结果对象。
+#[derive(Debug, Deserialize)]
+struct WireAlibabaTextRerankOutput {
+    /// Provider-ranked results.
+    /// 供应商排序后的结果。
+    results: Vec<WireRerankItem>,
+}
+
 /// Borrows the two immutable revisions frozen for one provider execution.
 /// 借用一次供应商执行冻结的两个不可变修订号。
 #[derive(Debug, Clone, Copy)]
@@ -369,7 +475,8 @@ impl ProviderExecutionClient {
         capabilities
             .validate_request(request)
             .map_err(pre_dispatch_failure)?;
-        let (native_route, endpoint, binding_id) = NativeInferenceRoute::embedding(route)?;
+        let (native_route, endpoint, binding_id) =
+            NativeInferenceRoute::embedding(route, model.id.as_str())?;
         let wire_request = project_embedding_request(
             native_route,
             &route.secondary_route,
@@ -496,7 +603,8 @@ impl ProviderExecutionClient {
         capabilities
             .validate_request(request)
             .map_err(pre_dispatch_failure)?;
-        let (native_route, endpoint, binding_id) = NativeInferenceRoute::rerank(route)?;
+        let (native_route, endpoint, binding_id) =
+            NativeInferenceRoute::rerank(route, model.id.as_str())?;
         let wire_request = project_rerank_request(
             native_route,
             &route.secondary_route,
@@ -506,23 +614,19 @@ impl ProviderExecutionClient {
         let response = self
             .send_native_json(native_route, route, endpoint, &wire_request, secret)
             .await?;
-        let wire: WireRerankResponse =
-            serde_json::from_str(response.as_str()).map_err(|error| {
-                response_headers_protocol_failure(format!(
-                    "Native rerank response is invalid JSON: {error}"
-                ))
-            })?;
-        validate_response_model(native_route, model.id.as_str(), wire.model.as_deref())?;
-        if wire.results.is_empty() || wire.results.len() > request.top_n as usize {
+        let (wire_results, wire_model, wire_usage) =
+            parse_rerank_response(native_route, response.as_str())?;
+        validate_response_model(native_route, model.id.as_str(), wire_model.as_deref())?;
+        if wire_results.is_empty() || wire_results.len() > request.top_n as usize {
             return Err(response_headers_protocol_failure(format!(
                 "Rerank response returned {} results for top_n {}.",
-                wire.results.len(),
+                wire_results.len(),
                 request.top_n
             )));
         }
         let mut observed_indexes = BTreeSet::new();
-        let mut results = Vec::with_capacity(wire.results.len());
-        for (rank, item) in wire.results.into_iter().enumerate() {
+        let mut results = Vec::with_capacity(wire_results.len());
+        for (rank, item) in wire_results.into_iter().enumerate() {
             if item.index >= request.candidates.len() || !observed_indexes.insert(item.index) {
                 return Err(response_headers_protocol_failure(format!(
                     "Rerank response index {} is outside or duplicated in the candidate batch.",
@@ -564,7 +668,7 @@ impl ProviderExecutionClient {
                 score_semantics: capabilities.score_semantics,
             },
             results,
-            usage: normalized_usage(wire.usage),
+            usage: normalized_usage(wire_usage),
             duration_ms: elapsed_milliseconds(started_at),
         })
     }
@@ -810,7 +914,7 @@ fn project_rerank_request(
     secondary_route: &crate::SecondaryRouteSelection,
     model_id: &str,
     request: &RerankRequest,
-) -> Result<WireRerankRequest, ProviderExecutionFailure> {
+) -> Result<WireRerankRequestBody, ProviderExecutionFailure> {
     let expected_truncation = native_route.binding.rerank_truncation.ok_or_else(|| {
         pre_dispatch_failure(format!(
             "Native rerank action `{}` has no truncation contract.",
@@ -823,19 +927,75 @@ fn project_rerank_request(
             expected_truncation
         )));
     }
-    Ok(WireRerankRequest {
-        model: model_id.to_string(),
-        query: request.query.text.clone(),
-        documents: request
-            .candidates
-            .iter()
-            .map(|candidate| candidate.text.clone())
-            .collect(),
-        top_n: request.top_n,
-        provider: (native_route.binding.projection
-            == crate::NativeInferenceProjectionKind::RoutedCompatible)
-            .then(|| routed_provider_policy(secondary_route)),
-    })
+    let documents = request
+        .candidates
+        .iter()
+        .map(|candidate| candidate.text.clone())
+        .collect();
+    match native_route.binding.projection {
+        crate::NativeInferenceProjectionKind::AlibabaTextRerank => Ok(
+            WireRerankRequestBody::AlibabaTextRerank(WireAlibabaTextRerankRequest {
+                model: model_id.to_string(),
+                input: WireAlibabaTextRerankInput {
+                    query: request.query.text.clone(),
+                    documents,
+                },
+                parameters: WireAlibabaTextRerankParameters {
+                    top_n: request.top_n,
+                },
+            }),
+        ),
+        crate::NativeInferenceProjectionKind::Compatible
+        | crate::NativeInferenceProjectionKind::RoutedCompatible => {
+            Ok(WireRerankRequestBody::Compatible(WireRerankRequest {
+                model: model_id.to_string(),
+                query: request.query.text.clone(),
+                documents,
+                top_n: request.top_n,
+                provider: (native_route.binding.projection
+                    == crate::NativeInferenceProjectionKind::RoutedCompatible)
+                    .then(|| routed_provider_policy(secondary_route)),
+            }))
+        }
+    }
+}
+
+/// Parses one rerank response according to the binding's declared wire projection.
+/// 按绑定声明的 Wire 投影解析一份重排响应。
+///
+/// # Parameters
+/// 参数
+/// `native_route` selects the manifest-owned response shape and `response` is bounded JSON text.
+/// `native_route` 选择 Manifest 持有的响应结构，`response` 是有界 JSON 文本。
+///
+/// # Returns
+/// 返回值
+/// Normalized ranked items, optional provider model identity, and usage fields.
+/// 归一化排序结果、可选供应商模型身份与用量字段。
+fn parse_rerank_response(
+    native_route: NativeInferenceRoute<'_>,
+    response: &str,
+) -> Result<(Vec<WireRerankItem>, Option<String>, WireUsage), ProviderExecutionFailure> {
+    match native_route.binding.projection {
+        crate::NativeInferenceProjectionKind::AlibabaTextRerank => {
+            let wire: WireAlibabaTextRerankResponse =
+                serde_json::from_str(response).map_err(|error| {
+                    response_headers_protocol_failure(format!(
+                        "Alibaba text-rerank response is invalid JSON: {error}"
+                    ))
+                })?;
+            Ok((wire.output.results, None, wire.usage))
+        }
+        crate::NativeInferenceProjectionKind::Compatible
+        | crate::NativeInferenceProjectionKind::RoutedCompatible => {
+            let wire: WireRerankResponse = serde_json::from_str(response).map_err(|error| {
+                response_headers_protocol_failure(format!(
+                    "Native rerank response is invalid JSON: {error}"
+                ))
+            })?;
+            Ok((wire.results, wire.model, wire.usage))
+        }
+    }
 }
 
 /// Builds OpenRouter's exact provider policy from the frozen secondary-route selection.
@@ -1127,6 +1287,7 @@ mod tests {
         static BINDING: LazyLock<crate::NativeInferenceBinding> =
             LazyLock::new(|| crate::NativeInferenceBinding {
                 operation: AiOperation::RerankDocuments,
+                model_ids: Vec::new(),
                 binding_id: String::from("test.routed.v1"),
                 endpoint_path: String::from("/rerank"),
                 projection: crate::NativeInferenceProjectionKind::RoutedCompatible,
@@ -1153,11 +1314,30 @@ mod tests {
         static BINDING: LazyLock<crate::NativeInferenceBinding> =
             LazyLock::new(|| crate::NativeInferenceBinding {
                 operation: AiOperation::RerankDocuments,
+                model_ids: Vec::new(),
                 binding_id: String::from("test.compatible.v1"),
                 endpoint_path: String::from("/reranks"),
                 projection: crate::NativeInferenceProjectionKind::Compatible,
                 service_origin_base_path: None,
                 requires_service_origin_override: false,
+                rerank_truncation: Some(RerankTruncation::ProviderDefault),
+                response_model_aliases: BTreeMap::new(),
+            });
+        NativeInferenceRoute { binding: &BINDING }
+    }
+
+    /// Returns Alibaba Model Studio's model-specific nested text-rerank binding.
+    /// 返回阿里云百炼按模型选择的嵌套文本重排绑定。
+    fn alibaba_text_rerank_route() -> NativeInferenceRoute<'static> {
+        static BINDING: LazyLock<crate::NativeInferenceBinding> =
+            LazyLock::new(|| crate::NativeInferenceBinding {
+                operation: AiOperation::RerankDocuments,
+                model_ids: vec![String::from("qwen3.7-text-rerank")],
+                binding_id: String::from("alibaba.model_studio.qwen3_7_text_rerank.v1"),
+                endpoint_path: String::from("/services/rerank/text-rerank/text-rerank"),
+                projection: crate::NativeInferenceProjectionKind::AlibabaTextRerank,
+                service_origin_base_path: Some(String::from("/api/v1")),
+                requires_service_origin_override: true,
                 rerank_truncation: Some(RerankTruncation::ProviderDefault),
                 response_model_aliases: BTreeMap::new(),
             });
@@ -1170,6 +1350,7 @@ mod tests {
         static CHINA: LazyLock<crate::NativeInferenceBinding> =
             LazyLock::new(|| crate::NativeInferenceBinding {
                 operation: AiOperation::RerankDocuments,
+                model_ids: Vec::new(),
                 binding_id: String::from("test.origin.cn.v1"),
                 endpoint_path: String::from("/reranks"),
                 projection: crate::NativeInferenceProjectionKind::Compatible,
@@ -1181,6 +1362,7 @@ mod tests {
         static SINGAPORE: LazyLock<crate::NativeInferenceBinding> =
             LazyLock::new(|| crate::NativeInferenceBinding {
                 operation: AiOperation::RerankDocuments,
+                model_ids: Vec::new(),
                 binding_id: String::from("test.origin.sg.v1"),
                 endpoint_path: String::from("/reranks"),
                 projection: crate::NativeInferenceProjectionKind::Compatible,
@@ -1440,6 +1622,56 @@ mod tests {
         );
     }
 
+    /// Verifies Alibaba Qwen3.7 rerank uses the documented nested request and response.
+    /// 验证阿里云 Qwen3.7 重排使用文档规定的嵌套请求与响应。
+    #[test]
+    fn alibaba_qwen37_rerank_uses_nested_wire_contract() {
+        let request = RerankRequest {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("request-1"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("vmm"),
+            query: RerankText {
+                id: String::from("query"),
+                text: String::from("capital"),
+            },
+            candidates: vec![RerankText {
+                id: String::from("candidate"),
+                text: String::from("Paris"),
+            }],
+            top_n: 1,
+            truncation: RerankTruncation::ProviderDefault,
+            return_content: false,
+        };
+        let projected = project_rerank_request(
+            alibaba_text_rerank_route(),
+            &crate::SecondaryRouteSelection::Automatic,
+            "qwen3.7-text-rerank",
+            &request,
+        )
+        .expect("Alibaba Qwen3.7 rerank should use its native projection");
+        let encoded = serde_json::to_value(projected).expect("request should serialize");
+        assert_eq!(encoded["model"], "qwen3.7-text-rerank");
+        assert_eq!(encoded["input"]["query"], "capital");
+        assert_eq!(encoded["input"]["documents"], serde_json::json!(["Paris"]));
+        assert_eq!(encoded["parameters"]["top_n"], 1);
+        assert!(encoded.get("query").is_none());
+        assert!(encoded.get("provider").is_none());
+
+        let (results, model, usage) = parse_rerank_response(
+            alibaba_text_rerank_route(),
+            r#"{
+                "output": {"results": [{"index": 0, "relevance_score": 0.93}]},
+                "usage": {"total_tokens": 79}
+            }"#,
+        )
+        .expect("Alibaba Qwen3.7 response should deserialize");
+        assert_eq!(model, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].index, 0);
+        assert_eq!(usage.total_tokens, Some(79));
+    }
+
     /// Verifies Alibaba's product root is not duplicated by native inference endpoints.
     /// 验证阿里云产品根不会被原生推理端点重复拼接。
     #[test]
@@ -1473,6 +1705,16 @@ mod tests {
             )
             .expect("China rerank URL"),
             "https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
+        );
+        assert_eq!(
+            native_request_url(
+                alibaba_text_rerank_route(),
+                Some("https://ws-example.cn-beijing.maas.aliyuncs.com"),
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "/services/rerank/text-rerank/text-rerank",
+            )
+            .expect("Qwen3.7 rerank URL"),
+            "https://ws-example.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
         );
     }
 

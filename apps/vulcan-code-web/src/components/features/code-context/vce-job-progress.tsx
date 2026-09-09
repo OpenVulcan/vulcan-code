@@ -69,19 +69,36 @@ export function VceJobProgress(props: {
   };
   const unitLabels = { files: copy("文件", "files"), blobs: copy("代码单元", "blobs"), batches: copy("批次", "batches"), none: "" };
   const progress = job.progress;
+  // An active receipt error means terminal persistence needs explicit recovery, so cancellation stays available.
+  // 活动作业带有回执错误时表示终态持久化需要显式恢复，因此仍保持取消入口可用。
+  const recoveryRequired = active && job.error !== null;
   // measured requires a meaningful denominator; unknown and zero totals stay indeterminate.
   // measured 要求有意义的分母；未知与零总量保持不确定态。
   const measured = progress !== null && progress.total !== null && progress.total > 0 && progress.unit !== "none";
+  const overallMeasured = progress !== null
+    && progress.overallTotal !== undefined
+    && progress.overallTotal !== null
+    && progress.overallTotal > 0;
   return (
     <section className="space-y-2 rounded-lg border bg-muted/20 p-3" aria-label={copy("语义索引进度", "Semantic index progress")}>
       <div className="flex items-center justify-between gap-3">
         <strong className="text-sm">{stateLabels[job.state]}</strong>
-        {active && props.onCancel ? <Button type="button" size="sm" variant="ghost" disabled={props.cancelPending || job.state === "cancelling" || progress?.phase === "committing" || (progress?.phase === "complete" && !job.followupRequested)} onClick={props.onCancel}>{job.followupRequested ? copy("取消更新及后续同步", "Cancel update and follow-up") : copy("取消更新", "Cancel update")}</Button> : null}
+        {active && props.onCancel ? <Button type="button" size="sm" variant="ghost" disabled={props.cancelPending || job.state === "cancelling" || progress?.phase === "committing" || (progress?.phase === "complete" && !job.followupRequested && !recoveryRequired)} onClick={props.onCancel}>{recoveryRequired ? copy("恢复并取消", "Recover and cancel") : job.followupRequested ? copy("取消更新及后续同步", "Cancel update and follow-up") : copy("取消更新", "Cancel update")}</Button> : null}
       </div>
       {active ? (
         <>
           {job.followupRequested ? <p className="text-xs text-primary" role="status">{copy("已合并一次后续手动同步；本次结束后核对文件，不受自动间隔限制。", "One manual follow-up is scheduled to reconcile files after this update, without the automatic cooldown.")}</p> : null}
           <p className="text-xs text-muted-foreground">{progress ? phaseLabels[progress.phase] : copy("当前批次尚未开始扫描或调用模型", "This batch has not started file scans or model calls")}{progress && progress.unit !== "none" ? ` · ${progress.completed}${progress.total !== null ? ` / ${progress.total}` : ""} ${unitLabels[progress.unit]}` : ""}</p>
+          {overallMeasured ? (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{copy("整体进度", "Overall progress")}</span>
+                <span>{progress.overallCompleted ?? 0} / {progress.overallTotal}</span>
+              </div>
+              <progress className="h-1.5 w-full accent-primary" aria-label={copy("整体进度", "Overall progress")} value={progress.overallCompleted ?? 0} max={progress.overallTotal!} />
+            </div>
+          ) : null}
+          <div className="text-xs text-muted-foreground">{copy("当前执行范围", "Current execution scope")}</div>
           <progress className="h-1.5 w-full accent-primary" aria-label={copy("当前阶段进度", "Current phase progress")} value={measured ? progress.completed : undefined} max={measured ? progress.total! : undefined} />
           {progress?.currentPath ? <p className="truncate text-xs text-muted-foreground" title={progress.currentPath}>{progress.currentPath}</p> : null}
           <p className="text-xs text-muted-foreground">{props.queryAvailable === false

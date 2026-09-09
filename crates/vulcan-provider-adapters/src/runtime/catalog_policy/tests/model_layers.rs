@@ -52,6 +52,26 @@ fn custom_catalog_uses_two_hundred_thousand_and_thirty_two_thousand_defaults() {
     );
 }
 
+/// Verifies an upstream output ceiling above the custom default context is clamped effectively.
+/// 验证上游大于自定义默认上下文窗口的输出上限会在有效目录中收窄。
+#[test]
+fn custom_catalog_clamps_discovered_output_to_default_context_window() {
+    let configuration = PersistedAiConfiguration::default();
+    let mut catalog = crate::parse_openai_model_catalog(
+        "custom-account",
+        1,
+        r#"{"data":[{"id":"private/chat","max_output_tokens":300000}]}"#,
+    )
+    .expect("inconsistent provider metadata should still parse");
+
+    apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+        .expect("effective catalog projection should clamp the inconsistent pair");
+
+    let model = catalog.models.first().expect("model should remain visible");
+    assert_eq!(model.capabilities.context_limit, Some(200_000));
+    assert_eq!(model.capabilities.output_limit, Some(200_000));
+}
+
 /// Verifies a legacy Native-only declaration receives the same host default levels.
 /// 验证只有 Native 支持标记的旧声明也会获得相同的宿主默认档位。
 #[test]

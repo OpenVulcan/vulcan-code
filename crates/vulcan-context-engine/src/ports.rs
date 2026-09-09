@@ -999,6 +999,19 @@ pub enum VcePortError {
         /// 宿主提供的明确失败信息。
         message: String,
     },
+    /// The host operation failed transiently and may be retried after the supplied delay.
+    /// 宿主操作发生瞬时失败，可在给定延迟后重试。
+    Retryable {
+        /// Failed host operation.
+        /// 失败的宿主操作。
+        operation: VcePortOperation,
+        /// Explicit host failure message.
+        /// 宿主提供的明确失败信息。
+        message: String,
+        /// Optional provider- or host-supplied delay in milliseconds.
+        /// 可选的供应商或宿主指定毫秒延迟。
+        retry_after_ms: Option<u64>,
+    },
     /// The host returned data that violates the VCE contract.
     /// 宿主返回的数据违反 VCE 契约。
     InvalidResponse {
@@ -1033,6 +1046,22 @@ impl Display for VcePortError {
                 "VCE port operation `{}` failed: {message}",
                 operation.as_str()
             ),
+            Self::Retryable {
+                operation,
+                message,
+                retry_after_ms,
+            } => match retry_after_ms {
+                Some(delay) => write!(
+                    formatter,
+                    "VCE port operation `{}` failed transiently (retry after {delay} ms): {message}",
+                    operation.as_str()
+                ),
+                None => write!(
+                    formatter,
+                    "VCE port operation `{}` failed transiently: {message}",
+                    operation.as_str()
+                ),
+            },
             Self::InvalidResponse { operation, reason } => write!(
                 formatter,
                 "VCE port operation `{}` returned an invalid response: {reason}",
@@ -1266,6 +1295,12 @@ pub trait VceAiPort: Send + Sync {
     /// Return a management-safe capability snapshot.
     /// 返回可安全用于管理页面的能力快照。
     fn capability_snapshot(&self) -> VceAiCapabilitySnapshot;
+
+    /// Return the provider-declared maximum number of inputs per Embedding request when known.
+    /// 返回已知时供应商声明的单次向量请求最大输入数。
+    fn embedding_max_inputs(&self) -> Option<usize> {
+        None
+    }
 
     /// Execute one Embedding batch through the host-registered capability.
     /// 通过宿主注册能力执行一个向量化批次。

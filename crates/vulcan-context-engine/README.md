@@ -57,7 +57,7 @@ VCE 不创建 LLM 客户端、Embedding 客户端、LanceDB、SQLite、Milvus、
 - metadata-only 观察允许宿主先流式计算 Blob，VCE 只为实际缺失 Blob 拉取正文，并同时按 Blob 数量和源码总字节数分批；
 - 文件系统正文提交后从 VCE 内存释放，显式编辑器覆盖层继续保留；
 - 每批索引先 `stage`，再以 `expected_checkpoint_version` 原子 `commit`；回执必须精确匹配 operation、refresh、generation、chain、版本及 Blob 集合；
-- 准备、暂存或发布失败会中止未发布事务，本地 checkpoint 不前进；
+- 暂存或发布失败会中止未发布事务，本地 checkpoint 不前进；单个 Blob 的结构分析异常会保留为 `ReadyWithoutEmbedding` 元数据并继续处理其他批次，具体诊断随 Blob 状态持久化；
 - Embedding 批次和查询变体采用可配置有界并发，结果按原始顺序恢复；
 - path Embedding/path search、查询改写、exact 超限和 Rerank 属于可降级能力，原因与 operation ID 会保留；主要内容 Embedding 和 dense 召回失败则显式终止；
 - 搜索响应会校验 operation ID、范围、数量、规范路径、Blob/Chunk 身份、行号、内容 hash、分数和重复项。

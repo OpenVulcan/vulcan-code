@@ -72,6 +72,14 @@ pub struct VceRefreshProgress {
     /// Known denominator; absence is deliberately indeterminate.
     /// 已知分母；缺失明确表示不确定总量。
     pub total: Option<u64>,
+    /// Confirmed units across the whole refresh operation.
+    /// 整个刷新操作范围内已确认完成的单元数量。
+    #[serde(default)]
+    pub overall_completed: u64,
+    /// Known denominator across the whole refresh operation.
+    /// 整个刷新操作范围内已知的总单元数量。
+    #[serde(default)]
+    pub overall_total: Option<u64>,
     /// Optional validated source-relative path, never source content.
     /// 可选的已验证源码相对路径，绝不包含源码正文。
     pub current_path: Option<String>,

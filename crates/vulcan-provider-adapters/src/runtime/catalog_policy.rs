@@ -25,7 +25,8 @@ use bindings::{
 };
 use capabilities::{
     apply_custom_model_advanced_declaration, apply_custom_model_defaults,
-    custom_provider_system_baseline_for_protocol, manual_model_capability_evidence,
+    clamp_catalog_output_limits_to_context_window, custom_provider_system_baseline_for_protocol,
+    manual_model_capability_evidence,
 };
 pub use capabilities::{
     apply_host_default_reasoning_policy, model_supports_reasoning, model_supports_text_conversation,
@@ -692,6 +693,9 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             })?;
         freeze_system_provider_protocol_bindings(manifest, connection, &mut catalog.models)?;
     }
+    // Effective output ceilings must fit the effective context window after every policy layer.
+    // 所有策略层应用完成后，有效输出上限必须收敛到有效上下文窗口内。
+    clamp_catalog_output_limits_to_context_window(catalog);
     if custom_provider {
         // Custom providers are conversation-only adapters; the effective bound variant decides
         // support, never an arbitrary discovery route's compatibility fields. An unbound model

@@ -85,6 +85,14 @@ pub struct VceJobProgressSummary {
     /// Known total; absent means indeterminate, not zero.
     /// 已知总量；缺失表示未确定，而不是零。
     pub total: Option<u64>,
+    /// Confirmed units across the whole refresh operation.
+    /// 整个刷新操作范围内已确认完成的单元数量。
+    #[serde(default)]
+    pub overall_completed: u64,
+    /// Known denominator across the whole refresh operation.
+    /// 整个刷新操作范围内已知的总单元数量。
+    #[serde(default)]
+    pub overall_total: Option<u64>,
     /// Optional source-relative path, never source content or credentials.
     /// 可选源码相对路径，绝不含源码正文或凭据。
     pub current_path: Option<String>,

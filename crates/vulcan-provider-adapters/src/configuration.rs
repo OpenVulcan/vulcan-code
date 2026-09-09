@@ -113,13 +113,6 @@ impl ModelCapabilityOverrides {
                 "A direct model output limit must be greater than zero.",
             ));
         }
-        if let (Some(context_limit), Some(output_limit)) = (self.context_limit, self.output_limit)
-            && output_limit > context_limit
-        {
-            return Err(String::from(
-                "A direct model output limit cannot exceed its context limit.",
-            ));
-        }
         if self.output_resources.is_some() {
             return Err(String::from(
                 "Non-text model output cannot be configured through the generic provider settings contract.",

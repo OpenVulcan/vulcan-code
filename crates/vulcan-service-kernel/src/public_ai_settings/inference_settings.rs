@@ -750,9 +750,11 @@ pub(super) fn build_internal_inference_candidates(
                         }
                     }
                     AiOperation::EmbeddingCreate | AiOperation::RerankDocuments => {
-                        let Some(action_binding_id) =
-                            registered_native_action_binding_id(entry, operation)
-                        else {
+                        let Some(action_binding_id) = registered_native_action_binding_id(
+                            entry,
+                            operation,
+                            model.id.as_str(),
+                        ) else {
                             continue;
                         };
                         InferenceRouteBinding::Action {

@@ -1030,7 +1030,9 @@ fn validate_service_entry(
         }
     }
 
-    let mut native_operations = BTreeSet::new();
+    let mut generic_native_operations = BTreeSet::new();
+    let mut model_specific_native_ids: BTreeMap<vulcan_ai_contract::AiOperation, BTreeSet<String>> =
+        BTreeMap::new();
     let mut native_binding_ids = BTreeSet::new();
     for (binding_index, binding) in entry.native_inference_bindings.iter().enumerate() {
         let binding_path = path(&format!(".native_inference_bindings[{binding_index}]"));
@@ -1045,14 +1047,41 @@ fn validate_service_entry(
                 "native inference binding supports only embedding_create or rerank_documents",
             ));
         }
-        if !native_operations.insert(binding.operation) {
+        if binding.model_ids.is_empty() {
+            if !generic_native_operations.insert(binding.operation) {
+                errors.push(ManifestValidationError::new(
+                    "duplicate_native_inference_operation",
+                    format!("{binding_path}.operation"),
+                    format!(
+                        "operation `{}` has more than one operation-wide native binding",
+                        binding.operation.as_str()
+                    ),
+                ));
+            }
+        } else {
+            let known_model_ids = model_specific_native_ids
+                .entry(binding.operation)
+                .or_default();
+            for (model_index, model_id) in binding.model_ids.iter().enumerate() {
+                if model_id.trim().is_empty()
+                    || model_id.len() > 256
+                    || !known_model_ids.insert(model_id.clone())
+                {
+                    errors.push(ManifestValidationError::new(
+                        "invalid_native_inference_model_ids",
+                        format!("{binding_path}.model_ids[{model_index}]"),
+                        "model-specific native binding ids must be unique, non-empty, and at most 256 bytes",
+                    ));
+                }
+            }
+        }
+        if binding.projection == crate::NativeInferenceProjectionKind::AlibabaTextRerank
+            && binding.operation != vulcan_ai_contract::AiOperation::RerankDocuments
+        {
             errors.push(ManifestValidationError::new(
-                "duplicate_native_inference_operation",
-                format!("{binding_path}.operation"),
-                format!(
-                    "operation `{}` has more than one native binding",
-                    binding.operation.as_str()
-                ),
+                "invalid_native_inference_projection",
+                format!("{binding_path}.projection"),
+                "Alibaba text-rerank projection is valid only for rerank_documents",
             ));
         }
         if binding.binding_id.trim().is_empty()

@@ -128,11 +128,6 @@ impl CustomProviderModelDefaults {
                 "Custom provider default output limit must be greater than zero.",
             ));
         }
-        if self.output_limit > self.context_limit {
-            return Err(String::from(
-                "Custom provider default output limit must not exceed its context limit.",
-            ));
-        }
         if !self.output_resources.is_empty() {
             return Err(String::from(
                 "Non-text output cannot be configured for a custom conversation provider.",
@@ -594,15 +589,6 @@ impl CustomModelDefinition {
         if self.capabilities.output_limit == Some(0) {
             return Err(String::from(
                 "Custom model output limit must be greater than zero.",
-            ));
-        }
-        if let (Some(context_limit), Some(output_limit)) = (
-            self.capabilities.context_limit,
-            self.capabilities.output_limit,
-        ) && output_limit > context_limit
-        {
-            return Err(String::from(
-                "Custom model output limit must not exceed its context limit.",
             ));
         }
         if !self.capabilities.output_resources.is_empty() {
@@ -1076,10 +1062,10 @@ mod tests {
         assert!(error.contains("non-text output resources"));
     }
 
-    /// Verifies a manual model cannot declare an output budget larger than its context.
-    /// 验证手工模型不能声明大于其上下文窗口的输出预算。
+    /// Verifies a manual model may retain an oversized declaration for later effective clamping.
+    /// 验证手工模型可以保留超出上下文窗口的声明，并在有效投影阶段收窄。
     #[test]
-    fn custom_model_rejects_output_larger_than_context() {
+    fn custom_model_accepts_output_larger_than_context_for_effective_clamping() {
         let model = CustomModelDefinition {
             id: String::from("custom-model"),
             display_name: String::from("Custom Model"),
@@ -1093,11 +1079,9 @@ mod tests {
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
         };
 
-        let error = model
+        model
             .validate()
-            .expect_err("output larger than context must be rejected");
-
-        assert!(error.contains("must not exceed"));
+            .expect("output larger than context must be accepted before effective clamping");
     }
 
     /// Verifies manual model identity fields share the bounded runtime catalog contract.

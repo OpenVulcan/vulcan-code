@@ -11,7 +11,7 @@ use crate::chunking::ChunkerError;
 use crate::embedding::{
     EmbeddingError, EmbeddingInput, EmbeddingPlan, EmbeddingSpace, EmbeddingVector, SegmentVector,
 };
-use crate::indexing::{IndexingConfig, IndexingEngine, IndexingError, IngestResult};
+use crate::indexing::{IndexingConfig, IndexingEngine, IndexingError, IngestResult, PreparedIndex};
 use crate::management::{
     VceManagementQueryRequest, VceManagementQueryResponse, VceOperationPhase,
     validate_management_query, validate_management_response,
@@ -37,9 +37,10 @@ use crate::retrieval::{
 };
 use crate::state::{VceStateIdentity, VceStateSnapshot};
 use crate::structure::{
-    FallbackStructureAnalyzer, RecursiveStructureAnalyzer, StructureError, VceStructureAnalyzer,
-    validate_structure_analysis,
+    FallbackStructureAnalyzer, RecursiveStructureAnalyzer, StructureError, StructureMode,
+    VceStructureAnalyzer, validate_structure_analysis,
 };
+use crate::symbol::SymbolOccurrence;
 use crate::workspace::{
     Checkpoint, ScopeResolution, SyncPlan, WorkspaceError, WorkspaceSnapshot, WorkspaceState,
 };
@@ -980,6 +981,48 @@ struct RefreshStageContext<'a> {
     source: &'a dyn VceSourcePort,
 }
 
+/// Keep one prepared Blob's local metadata until shared content batching completes.
+/// 在共享内容批次完成前保留一个已准备 Blob 的局部元数据。
+struct PreparedBlobForEmbedding {
+    /// Deterministic chunking result whose vectors must be supplied to `complete`.
+    /// 必须接收向量后交给 `complete` 的确定性切块结果。
+    prepared: PreparedIndex,
+    /// Structure analyzer identity captured with the source snapshot.
+    /// 随源码快照捕获的结构分析器身份。
+    structure_analyzer_id: String,
+    /// Structure analysis mode used for this Blob.
+    /// 此 Blob 使用的结构分析模式。
+    structure_mode: StructureMode,
+    /// Optional deterministic fallback explanation.
+    /// 可选的确定性回退说明。
+    structure_fallback_reason: Option<String>,
+    /// Symbols produced by the same structure analysis.
+    /// 同一次结构分析产生的符号集合。
+    symbols: Vec<SymbolOccurrence>,
+}
+
+/// Separate metadata-only results from Blobs waiting for the shared Embedding plan.
+/// 将仅元数据结果与等待共享向量计划的 Blob 分开。
+enum PreparedBlobResult {
+    /// A binary or over-limit Blob that needs no Embedding call.
+    /// 无需调用向量模型的二进制或超限 Blob。
+    Ready(IndexedBlob),
+    /// A text Blob waiting for one plan shared by the current staging batch.
+    /// 等待当前暂存批次共享计划的文本 Blob。
+    Pending(PreparedBlobForEmbedding),
+}
+
+/// Preserve source order while deferred Embedding results are completed later.
+/// 在延迟完成向量后仍保持源码记录顺序。
+enum PreparedBlobSlot {
+    /// A Blob that is already ready for staging.
+    /// 已经可以暂存的 Blob。
+    Ready(IndexedBlob),
+    /// Index into the pending preparation vector.
+    /// 指向待处理准备向量的索引。
+    Pending(usize),
+}
+
 impl VceEngine {
     /// Construct an empty functional engine from validated configuration.
     /// 根据经过校验的配置构造空的功能引擎。
@@ -1349,6 +1392,8 @@ impl VceEngine {
             unit: VceRefreshUnit::Files,
             completed: 0,
             total: Some(request.observations.len() as u64),
+            overall_completed: 0,
+            overall_total: Some(request.observations.len() as u64),
             current_path: None,
         });
         control.check()?;
@@ -1477,6 +1522,8 @@ impl VceEngine {
                         unit: VceRefreshUnit::None,
                         completed: 0,
                         total: None,
+                        overall_completed: 0,
+                        overall_total: None,
                         current_path: None,
                     });
                     match index.commit(commit.clone()).await {
@@ -1535,6 +1582,8 @@ impl VceEngine {
             unit: VceRefreshUnit::None,
             completed: 0,
             total: None,
+            overall_completed: 0,
+            overall_total: None,
             current_path: None,
         });
         Ok(RefreshResult {
@@ -2115,7 +2164,8 @@ impl VceEngine {
             let loaded = self
                 .read_sources_for_records(context.refresh_id, batch_index, &records, context.source)
                 .await?;
-            let mut blobs = Vec::with_capacity(records.len());
+            let mut blob_slots = Vec::with_capacity(records.len());
+            let mut pending_blobs = Vec::new();
             for record in &records {
                 context.control.check()?;
                 context.control.observe(VceRefreshProgress {
@@ -2124,10 +2174,14 @@ impl VceEngine {
                     unit: VceRefreshUnit::Files,
                     completed: 0,
                     total: Some(1),
+                    overall_completed: staged.len() as u64,
+                    overall_total: Some(blob_names.len() as u64),
                     current_path: Some(record.path.clone()),
                 });
                 if record.size > self.config.indexing.max_file_bytes {
-                    blobs.push(self.prepare_over_limit_blob(record, context.generation)?);
+                    blob_slots.push(PreparedBlobSlot::Ready(
+                        self.prepare_over_limit_blob(record, context.generation)?,
+                    ));
                     continue;
                 }
                 let content = record
@@ -2145,10 +2199,219 @@ impl VceEngine {
                     ))
                 })?;
                 let blob_request_id = format!("{}:blob:{blob_name}", context.refresh_id);
-                blobs.push(
-                    self.prepare_blob(record, content, &blob_request_id, &context)
-                        .await?,
-                );
+                match self.prepare_blob(record, content, &blob_request_id, &context) {
+                    Ok(PreparedBlobResult::Ready(blob)) => {
+                        blob_slots.push(PreparedBlobSlot::Ready(blob))
+                    }
+                    Ok(PreparedBlobResult::Pending(prepared)) => {
+                        let owner = pending_blobs.len();
+                        pending_blobs.push(prepared);
+                        blob_slots.push(PreparedBlobSlot::Pending(owner));
+                    }
+                    Err(VceError::Structure(StructureError::AnalysisFailed { message })) => {
+                        let error = StructureError::AnalysisFailed { message };
+                        let blob =
+                            self.prepare_structure_failure_blob(record, context.generation, error)?;
+                        blob_slots.push(PreparedBlobSlot::Ready(blob));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+
+            // Build one content plan for every prepared Blob in this bounded staging batch.
+            // 为当前有界暂存批次内的所有已准备 Blob 构建一个共享内容计划。
+            let mut content_inputs = Vec::new();
+            let mut content_segment_owners = BTreeMap::new();
+            for (owner, prepared) in pending_blobs.iter().enumerate() {
+                if let Some(plan) = prepared.prepared.embedding_plan.as_ref() {
+                    content_inputs.extend(plan.inputs.iter().cloned());
+                    for batch in &plan.batches {
+                        for segment in &batch.segments {
+                            if content_segment_owners
+                                .insert(segment.request_input_id(), owner)
+                                .is_some()
+                            {
+                                return Err(VceError::InvalidRequest(
+                                    "content Embedding segment identity is shared by multiple Blobs"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut content_vectors_by_blob = vec![Vec::new(); pending_blobs.len()];
+            if !content_inputs.is_empty() {
+                let content_plan = EmbeddingPlan::new(
+                    content_inputs,
+                    self.config.indexing.embedding_max_inputs,
+                    self.config.indexing.embedding_max_chars,
+                    self.config.indexing.embedding_max_segment_chars,
+                    self.config.indexing.embedding_overlap_chars,
+                )?;
+                let content_segments = self
+                    .execute_embedding_plan(
+                        &content_plan,
+                        &format!("{}:stage:{batch_index}:content", context.refresh_id),
+                        VceAiPurpose::CodeDocumentEmbedding,
+                        context.ai,
+                        context.capability,
+                        Some(context.control),
+                        Some((staged.len() as u64, blob_names.len() as u64)),
+                    )
+                    .await?;
+                for segment in content_segments {
+                    let owner = content_segment_owners
+                        .get(&segment.input_id)
+                        .copied()
+                        .ok_or_else(|| VceError::InvalidHostResponse {
+                            operation: VcePortOperation::Embedding,
+                            reason: format!(
+                                "content Embedding returned an unknown segment `{}`",
+                                segment.input_id
+                            ),
+                        })?;
+                    content_vectors_by_blob[owner].push(segment);
+                }
+            }
+
+            // Complete each local index only after its vectors have been aligned by exact segment identity.
+            // 只有按精确片段身份对齐向量后，才完成每个局部索引。
+            let mut completed_pending = Vec::with_capacity(pending_blobs.len());
+            for (owner, prepared) in pending_blobs.into_iter().enumerate() {
+                let symbol_status = if prepared.symbols.is_empty() {
+                    AuxiliaryIndexStatus::NotApplicable
+                } else {
+                    AuxiliaryIndexStatus::Ready
+                };
+                let ready = self.indexing.complete(
+                    prepared.prepared,
+                    content_vectors_by_blob[owner].drain(..).collect(),
+                    self.config.embedding_space.dimension,
+                )?;
+                completed_pending.push(Some(IndexedBlob {
+                    blob_name: ready.blob_name,
+                    path: ready.path,
+                    generation: ready.generation,
+                    structure_analyzer_id: Some(prepared.structure_analyzer_id),
+                    structure_mode: Some(prepared.structure_mode),
+                    structure_fallback_reason: prepared.structure_fallback_reason,
+                    chunks: ready.chunks,
+                    embedding_vectors: ready.embedding_vectors,
+                    path_document: ready.path_document,
+                    path_embedding: None,
+                    symbols: prepared.symbols,
+                    path_status: AuxiliaryIndexStatus::NotApplicable,
+                    symbol_status,
+                    status: IndexedBlobStatus::Ready,
+                }));
+            }
+
+            let mut blobs = Vec::with_capacity(blob_slots.len());
+            for slot in blob_slots {
+                match slot {
+                    PreparedBlobSlot::Ready(blob) => blobs.push(blob),
+                    PreparedBlobSlot::Pending(owner) => blobs.push(
+                        completed_pending
+                            .get_mut(owner)
+                            .and_then(Option::take)
+                            .ok_or_else(|| {
+                                VceError::InvalidRequest(
+                                    "prepared Blob completion owner is missing".to_owned(),
+                                )
+                            })?,
+                    ),
+                }
+            }
+
+            // Path documents share a second plan; a path failure remains auxiliary to content indexing.
+            // 路径文档共享第二个计划；路径失败仍然只是内容索引的辅助失败。
+            let mut path_inputs = Vec::new();
+            let mut path_segment_owners = BTreeMap::new();
+            for (owner, blob) in blobs.iter().enumerate() {
+                if let Some(document) = blob.path_document.as_ref() {
+                    path_inputs.push(EmbeddingInput::new(
+                        document.path_id.clone(),
+                        document.document.clone(),
+                    )?);
+                }
+                if let Some(document) = blob.path_document.as_ref() {
+                    let owner_input =
+                        EmbeddingInput::new(document.path_id.clone(), document.document.clone())?;
+                    let local_plan = EmbeddingPlan::new(
+                        vec![owner_input],
+                        self.config.indexing.embedding_max_inputs,
+                        self.config.indexing.embedding_max_chars,
+                        self.config.indexing.embedding_max_segment_chars,
+                        self.config.indexing.embedding_overlap_chars,
+                    )?;
+                    for batch in &local_plan.batches {
+                        for segment in &batch.segments {
+                            if path_segment_owners
+                                .insert(segment.request_input_id(), owner)
+                                .is_some()
+                            {
+                                return Err(VceError::InvalidRequest(
+                                    "path Embedding segment identity is shared by multiple Blobs"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut path_vectors = BTreeMap::new();
+            let path_error = if path_inputs.is_empty() {
+                None
+            } else {
+                let path_plan = EmbeddingPlan::new(
+                    path_inputs,
+                    self.config.indexing.embedding_max_inputs,
+                    self.config.indexing.embedding_max_chars,
+                    self.config.indexing.embedding_max_segment_chars,
+                    self.config.indexing.embedding_overlap_chars,
+                )?;
+                match self
+                    .execute_embedding_plan(
+                        &path_plan,
+                        &format!("{}:stage:{batch_index}:path", context.refresh_id),
+                        VceAiPurpose::CodePathEmbedding,
+                        context.ai,
+                        context.capability,
+                        Some(context.control),
+                        Some((staged.len() as u64, blob_names.len() as u64)),
+                    )
+                    .await
+                {
+                    Ok(segments) => {
+                        for vector in path_plan.aggregate(segments)? {
+                            path_vectors.insert(vector.input_id.clone(), vector);
+                        }
+                        None
+                    }
+                    Err(VceError::RefreshCancelled) => return Err(VceError::RefreshCancelled),
+                    Err(error) => Some(error),
+                }
+            };
+            for blob in &mut blobs {
+                if let Some(document) = blob.path_document.as_ref() {
+                    if let Some(vector) = path_vectors.get(&document.path_id) {
+                        blob.path_embedding = Some(vector.clone());
+                        blob.path_status = AuxiliaryIndexStatus::Ready;
+                    } else if let Some(error) = path_error.as_ref() {
+                        blob.path_status = AuxiliaryIndexStatus::Failed {
+                            reason: error.to_string(),
+                        };
+                    } else {
+                        return Err(VceError::InvalidHostResponse {
+                            operation: VcePortOperation::Embedding,
+                            reason: format!(
+                                "path Embedding returned no logical vector for `{}`",
+                                document.path_id
+                            ),
+                        });
+                    }
+                }
             }
             let operation_id = format!("{}:stage:{batch_index}", context.refresh_id);
             context.control.check()?;
@@ -2158,6 +2421,8 @@ impl VceEngine {
                 unit: VceRefreshUnit::Blobs,
                 completed: staged.len() as u64,
                 total: Some(blob_names.len() as u64),
+                overall_completed: staged.len() as u64,
+                overall_total: Some(blob_names.len() as u64),
                 current_path: None,
             });
             let request = IndexStageBatch {
@@ -2175,6 +2440,8 @@ impl VceEngine {
                 unit: VceRefreshUnit::Blobs,
                 completed: staged.len() as u64,
                 total: Some(blob_names.len() as u64),
+                overall_completed: staged.len() as u64,
+                overall_total: Some(blob_names.len() as u64),
                 current_path: None,
             });
         }
@@ -2262,6 +2529,46 @@ impl VceEngine {
         })
     }
 
+    /// Preserve one source Blob as metadata when its structural symbols are invalid.
+    /// 当一个源码 Blob 的结构符号无效时，将其保留为元数据。
+    ///
+    /// Structural analysis is a per-Blob admission step. A malformed symbol occurrence must not
+    /// discard already staged sibling Blobs, while its exact diagnostic remains durable for repair.
+    /// 结构分析属于单 Blob 准入步骤。单个损坏的符号出现记录不能丢弃已暂存的其他 Blob，同时保留精确诊断供修复。
+    fn prepare_structure_failure_blob(
+        &self,
+        record: &FileRecord,
+        generation: u64,
+        error: StructureError,
+    ) -> Result<IndexedBlob, VceError> {
+        let blob_name = record.blob_name.clone().ok_or_else(|| {
+            VceError::InvalidRequest(format!(
+                "present source `{}` has no Blob identity",
+                record.path
+            ))
+        })?;
+        Ok(IndexedBlob {
+            blob_name,
+            path: record.path.clone(),
+            generation,
+            structure_analyzer_id: None,
+            structure_mode: None,
+            structure_fallback_reason: None,
+            chunks: Vec::new(),
+            embedding_vectors: Vec::new(),
+            path_document: None,
+            path_embedding: None,
+            symbols: Vec::new(),
+            path_status: AuxiliaryIndexStatus::NotApplicable,
+            symbol_status: AuxiliaryIndexStatus::Failed {
+                reason: error.to_string(),
+            },
+            status: IndexedBlobStatus::ReadyWithoutEmbedding {
+                reason: format!("structural analysis skipped: {error}"),
+            },
+        })
+    }
+
     /// Prepare one exact source and its content/path vectors under a shared refresh control.
     /// 在共享刷新控制下准备一个精确源码及其内容／路径向量。
     ///
@@ -2271,22 +2578,16 @@ impl VceEngine {
     /// `record` 与 `content` 是已验证源码事实；`request_id` 标识此块的操作。
     /// `context` 保留已准入代次、冻结宿主推理、取消及进度。
     /// 返回已校验索引块对象或明确错误，不发布检查点。
-    async fn prepare_blob(
+    fn prepare_blob(
         &self,
         record: &FileRecord,
         content: &str,
         request_id: &str,
         context: &RefreshStageContext<'_>,
-    ) -> Result<IndexedBlob, VceError> {
+    ) -> Result<PreparedBlobResult, VceError> {
         // Preserve one admitted staging context across content and path embedding without copying dependencies.
         // 在内容及路径向量之间保留同一准入暂存上下文，不复制依赖。
         let generation = context.generation;
-        // ai is the exact host port frozen for the refresh.
-        // ai 为此刷新冻结的精确宿主端口。
-        let ai = context.ai;
-        // capability must remain the same snapshot for every segment of this blob.
-        // capability 对此块的每个片段必须保持同一快照。
-        let capability = context.capability;
         // control retains the parent job's cancellation and observations.
         // control 保留父作业的取消与观察。
         let control = context.control;
@@ -2306,7 +2607,7 @@ impl VceEngine {
                 generation,
             } => {
                 validate_prepared_blob_identity(expected_blob, &blob_name, &record.path)?;
-                Ok(IndexedBlob {
+                Ok(PreparedBlobResult::Ready(IndexedBlob {
                     blob_name,
                     path,
                     generation,
@@ -2321,7 +2622,7 @@ impl VceEngine {
                     path_status: AuxiliaryIndexStatus::NotApplicable,
                     symbol_status: AuxiliaryIndexStatus::NotApplicable,
                     status: IndexedBlobStatus::ReadyWithoutEmbedding { reason },
-                })
+                }))
             }
             IngestResult::Pending(pending) => {
                 validate_prepared_blob_identity(expected_blob, &pending.blob_name, &record.path)?;
@@ -2348,97 +2649,17 @@ impl VceEngine {
                     unit: VceRefreshUnit::Files,
                     completed: 1,
                     total: Some(1),
+                    overall_completed: 0,
+                    overall_total: None,
                     current_path: Some(record.path.clone()),
                 });
-                let path_document = prepared.path_document.clone();
-                let content_segment_vectors = match prepared.embedding_plan.as_ref() {
-                    Some(plan) => {
-                        self.execute_embedding_plan(
-                            plan,
-                            request_id,
-                            VceAiPurpose::CodeDocumentEmbedding,
-                            ai,
-                            capability,
-                            Some(control),
-                        )
-                        .await?
-                    }
-                    None => Vec::new(),
-                };
-                let ready = self.indexing.complete(
+                Ok(PreparedBlobResult::Pending(PreparedBlobForEmbedding {
                     prepared,
-                    content_segment_vectors,
-                    self.config.embedding_space.dimension,
-                )?;
-                let path_result: Result<Option<EmbeddingVector>, VceError> = match path_document {
-                    Some(document) => {
-                        async {
-                            let input = EmbeddingInput::new(
-                                document.path_id.clone(),
-                                document.document.clone(),
-                            )?;
-                            let plan = EmbeddingPlan::new(
-                                vec![input],
-                                self.config.indexing.embedding_max_inputs,
-                                self.config.indexing.embedding_max_chars,
-                                self.config.indexing.embedding_max_segment_chars,
-                                self.config.indexing.embedding_overlap_chars,
-                            )?;
-                            let segments = self
-                                .execute_embedding_plan(
-                                    &plan,
-                                    request_id,
-                                    VceAiPurpose::CodePathEmbedding,
-                                    ai,
-                                    capability,
-                                    Some(control),
-                                )
-                                .await?;
-                            let mut vectors = plan.aggregate(segments)?;
-                            vectors
-                                .pop()
-                                .ok_or_else(|| VceError::InvalidHostResponse {
-                                    operation: VcePortOperation::Embedding,
-                                    reason: "path Embedding returned no logical vector".to_owned(),
-                                })
-                                .map(Some)
-                        }
-                        .await
-                    }
-                    None => Ok(None),
-                };
-                let (path_embedding, path_status) = match path_result {
-                    Err(VceError::RefreshCancelled) => return Err(VceError::RefreshCancelled),
-                    Ok(Some(vector)) => (Some(vector), AuxiliaryIndexStatus::Ready),
-                    Ok(None) => (None, AuxiliaryIndexStatus::NotApplicable),
-                    Err(error) => (
-                        None,
-                        AuxiliaryIndexStatus::Failed {
-                            reason: error.to_string(),
-                        },
-                    ),
-                };
-                let symbol_status = if symbols.is_empty() {
-                    AuxiliaryIndexStatus::NotApplicable
-                } else {
-                    AuxiliaryIndexStatus::Ready
-                };
-                Ok(IndexedBlob {
-                    blob_name: ready.blob_name,
-                    path: ready.path,
-                    generation: ready.generation,
-                    structure_analyzer_id: Some(structure_analyzer_id),
-                    structure_mode: Some(structure_mode),
+                    structure_analyzer_id,
+                    structure_mode,
                     structure_fallback_reason,
-                    chunks: ready.chunks,
-                    embedding_vectors: ready.embedding_vectors,
-                    path_document: ready.path_document,
-                    path_embedding,
                     symbols,
-                    path_status,
-                    symbol_status,
-                    status: IndexedBlobStatus::Ready,
-                })
+                }))
             }
         }
     }
@@ -2455,34 +2676,57 @@ impl VceEngine {
         // Query calls have no indexing control; refresh calls share their exact job control.
         // 查询调用没有索引控制；刷新调用共享其精确作业控制。
         control: Option<&VceRefreshControl>,
+        // Refresh calls may report their confirmed whole-operation scope alongside this plan.
+        // 刷新调用可在此计划之外报告整个操作范围内已确认的进度。
+        overall: Option<(u64, u64)>,
     ) -> Result<Vec<SegmentVector>, VceError> {
         if !capability.registered || !capability.embedding_available {
             return Err(VceError::AiCapabilityUnavailable { purpose });
         }
-        let requests = plan
-            .batches
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(batch_index, batch)| {
-                let operation_id = format!("{request_id}:{}:{batch_index}", purpose.as_str());
-                async move {
-                    if let Some(control) = control {
-                        control.check()?;
-                    }
-                    let response = ai
-                        .embed(VceEmbeddingRequest {
-                            context: VceAiRequestContext::new(
-                                operation_id.clone(),
-                                purpose,
-                                ai.binding(),
-                            ),
-                            batch: batch.clone(),
-                        })
-                        .await;
-                    Ok::<_, VceError>((batch_index, operation_id, batch, response))
-                }
+        // Never let a consumer budget exceed the exact model contract exposed by the host.
+        // 绝不允许调用方预算超过宿主暴露的精确模型契约。
+        let configured_max_inputs = self.config.indexing.embedding_max_inputs;
+        let effective_max_inputs = ai
+            .embedding_max_inputs()
+            .map_or(configured_max_inputs, |model_max_inputs| {
+                configured_max_inputs.min(model_max_inputs)
             });
+        let effective_plan = if effective_max_inputs == configured_max_inputs {
+            plan.clone()
+        } else {
+            EmbeddingPlan::new(
+                plan.inputs.clone(),
+                effective_max_inputs,
+                self.config.indexing.embedding_max_chars,
+                self.config.indexing.embedding_max_segment_chars,
+                self.config.indexing.embedding_overlap_chars,
+            )?
+        };
+        let requests =
+            effective_plan
+                .batches
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(batch_index, batch)| {
+                    let operation_id = format!("{request_id}:{}:{batch_index}", purpose.as_str());
+                    async move {
+                        if let Some(control) = control {
+                            control.check()?;
+                        }
+                        let response = ai
+                            .embed(VceEmbeddingRequest {
+                                context: VceAiRequestContext::new(
+                                    operation_id.clone(),
+                                    purpose,
+                                    ai.binding(),
+                                ),
+                                batch: batch.clone(),
+                            })
+                            .await;
+                        Ok::<_, VceError>((batch_index, operation_id, batch, response))
+                    }
+                });
         // responses yields actual completions; progress cannot count merely scheduled requests.
         // responses 产生实际完成结果；进度不能统计仅排队的请求。
         let mut responses =
@@ -2496,7 +2740,9 @@ impl VceEngine {
                 operation_id: format!("{request_id}:{}", purpose.as_str()),
                 unit: VceRefreshUnit::Batches,
                 completed: 0,
-                total: Some(plan.batches.len() as u64),
+                total: Some(effective_plan.batches.len() as u64),
+                overall_completed: overall.map_or(0, |(completed, _)| completed),
+                overall_total: overall.map(|(_, total)| total),
                 current_path: None,
             });
         }
@@ -2513,7 +2759,9 @@ impl VceEngine {
                     operation_id: format!("{request_id}:{}", purpose.as_str()),
                     unit: VceRefreshUnit::Batches,
                     completed: completed_batches.len() as u64,
-                    total: Some(plan.batches.len() as u64),
+                    total: Some(effective_plan.batches.len() as u64),
+                    overall_completed: overall.map_or(0, |(completed, _)| completed),
+                    overall_total: overall.map(|(_, total)| total),
                     current_path: None,
                 });
             }
@@ -2550,7 +2798,15 @@ impl VceEngine {
         )?;
         let embedding_request_id = format!("{request_id}:query:{query_index}");
         let segments = self
-            .execute_embedding_plan(&plan, &embedding_request_id, purpose, ai, capability, None)
+            .execute_embedding_plan(
+                &plan,
+                &embedding_request_id,
+                purpose,
+                ai,
+                capability,
+                None,
+                None,
+            )
             .await?;
         let mut vectors = plan.aggregate(segments)?;
         vectors.pop().ok_or_else(|| VceError::InvalidHostResponse {
@@ -3692,9 +3948,15 @@ mod tests {
         /// Whether the fake host reports Rerank as available.
         /// 伪宿主是否报告重排能力可用。
         rerank_available: bool,
+        /// Optional provider-declared maximum number of Embedding inputs per request.
+        /// 伪宿主声明的单次向量请求最大输入条数。
+        embedding_max_inputs: Option<usize>,
         /// Embedding operation identities retained for uniqueness assertions.
         /// 为唯一性断言保留的向量操作标识。
         embedding_operation_ids: Arc<Mutex<Vec<String>>>,
+        /// Input counts observed by each fake Embedding request.
+        /// 伪向量请求实际观察到的输入条数。
+        embedding_batch_sizes: Arc<Mutex<Vec<usize>>>,
         /// Number of optional query-rewrite calls retained for budget assertions.
         /// 为预算断言保留的可选查询改写调用次数。
         rewrite_call_count: Arc<Mutex<usize>>,
@@ -3728,12 +3990,22 @@ mod tests {
             }
         }
 
+        /// Return the optional provider-declared Embedding input bound.
+        /// 返回可选的供应商声明向量输入上限。
+        fn embedding_max_inputs(&self) -> Option<usize> {
+            self.embedding_max_inputs
+        }
+
         /// Return one deterministic vector for every requested segment.
         /// 为每个请求分段返回一个确定性向量。
         fn embed(
             &self,
             request: VceEmbeddingRequest,
         ) -> crate::ports::VceFuture<Result<VceEmbeddingResponse, VcePortError>> {
+            self.embedding_batch_sizes
+                .lock()
+                .unwrap()
+                .push(request.batch.segments.len());
             self.embedding_operation_ids
                 .lock()
                 .unwrap()
@@ -3805,6 +4077,64 @@ mod tests {
                 operation_id: request.context.operation_id,
                 ordered_candidate_indexes,
             }))
+        }
+    }
+
+    /// Test analyzer that returns one duplicate occurrence for a selected source path.
+    /// 为指定源码路径返回重复出现记录的测试分析器。
+    #[derive(Debug)]
+    struct DuplicateSymbolAnalyzer;
+
+    impl VceStructureAnalyzer for DuplicateSymbolAnalyzer {
+        /// Return the deterministic test analyzer identity.
+        /// 返回确定性的测试分析器身份。
+        fn analyzer_id(&self) -> &str {
+            "duplicate-symbol-test-analyzer"
+        }
+
+        /// Return the test vector-space structure version.
+        /// 返回测试向量空间使用的结构版本。
+        fn version(&self) -> &str {
+            "recursive-v1"
+        }
+
+        /// Build valid recursive output except for the selected duplicate-symbol path.
+        /// 除指定的重复符号路径外，构建有效的递归结构输出。
+        fn analyze(
+            &self,
+            blob_name: &str,
+            path: &str,
+            content: &str,
+        ) -> Result<crate::structure::StructureAnalysis, StructureError> {
+            let chunk = Chunk::new(
+                blob_name.to_owned(),
+                path,
+                content.to_owned(),
+                1,
+                1,
+                ChunkKind::Recursive,
+            )
+            .map_err(|error| StructureError::AnalysisFailed {
+                message: error.to_string(),
+            })?;
+            let symbol = SymbolOccurrence::from_chunk(
+                &chunk,
+                "broken_symbol",
+                crate::symbol::SymbolKind::Definition,
+            );
+            let symbols = if path.ends_with("bad.rs") {
+                vec![symbol.clone(), symbol]
+            } else {
+                Vec::new()
+            };
+            Ok(crate::structure::StructureAnalysis {
+                analyzer_id: self.analyzer_id().to_owned(),
+                version: self.version().to_owned(),
+                mode: StructureMode::RecursiveFallback,
+                fallback_reason: None,
+                chunks: vec![chunk],
+                symbols,
+            })
         }
     }
 
@@ -4209,7 +4539,9 @@ mod tests {
                 registered: true,
                 query_rewrite_available: true,
                 rerank_available: true,
+                embedding_max_inputs: None,
                 embedding_operation_ids: Arc::new(Mutex::new(Vec::new())),
+                embedding_batch_sizes: Arc::new(Mutex::new(Vec::new())),
                 rewrite_call_count: Arc::new(Mutex::new(0)),
                 rerank_candidate_counts: Arc::new(Mutex::new(Vec::new())),
                 capability_snapshot_call_count: Arc::new(Mutex::new(0)),
@@ -4459,6 +4791,55 @@ mod tests {
         assert_eq!(committed.len(), 1);
         assert_eq!(committed[0].state_snapshot, engine.state_snapshot());
         assert_eq!(engine.status().state, VceEngineState::Ready);
+    }
+
+    /// Verify one malformed structural Blob is recorded without aborting sibling batches.
+    /// 验证单个结构异常 Blob 会被记录且不会中止其他批次。
+    #[test]
+    fn structural_analysis_failure_isolated_to_one_blob() {
+        let mut engine = test_engine();
+        engine.config.index_stage_blob_limit = 1;
+        engine.structure_analyzer = Box::new(DuplicateSymbolAnalyzer);
+        let (ai, index, source, commits) = fake_host();
+        let result = block_on(engine.refresh(
+            RefreshRequest::full(
+                "refresh-structure-isolation",
+                RefreshReason::Initial,
+                vec![
+                    crate::workspace::FileObservation::present(
+                        "src/good.rs",
+                        "fn good() {}",
+                        Some(1),
+                        crate::model::FileSource::Filesystem,
+                    ),
+                    crate::workspace::FileObservation::present(
+                        "src/bad.rs",
+                        "fn bad() {}",
+                        Some(1),
+                        crate::model::FileSource::Filesystem,
+                    ),
+                ],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .expect("one structural failure must not fail the refresh");
+
+        assert_eq!(result.indexed_blobs.len(), 2);
+        assert_eq!(*index.abort_count.lock().unwrap(), 0);
+        assert_eq!(commits.lock().unwrap().len(), 1);
+        let staged = index.staged.lock().unwrap();
+        assert_eq!(staged.len(), 2);
+        assert!(staged.iter().any(|blob| {
+            blob.path == "src/bad.rs"
+                && matches!(blob.status, IndexedBlobStatus::ReadyWithoutEmbedding { .. })
+                && matches!(blob.symbol_status, AuxiliaryIndexStatus::Failed { .. })
+        }));
+        assert!(staged.iter().any(|blob| {
+            blob.path == "src/good.rs" && matches!(blob.status, IndexedBlobStatus::Ready)
+        }));
     }
 
     /// Verify cancellation after acknowledged staging aborts unpublished work and never commits.
@@ -4862,6 +5243,96 @@ mod tests {
         .unwrap();
 
         assert_eq!(*capability_snapshot_call_count.lock().unwrap(), 1);
+    }
+
+    /// Verify every Embedding request respects the lower of configuration and model limits.
+    /// 验证每个向量请求都遵守配置上限与模型上限中较小的值。
+    #[test]
+    fn embedding_batches_are_capped_by_model_contract() {
+        let mut engine = test_engine();
+        let (mut ai, index, source, _) = fake_host();
+        ai.embedding_max_inputs = Some(2);
+        let batch_sizes = ai.embedding_batch_sizes.clone();
+        let content = (0..128)
+            .map(|index| format!("fn function_{index:03}() -> usize {{ {index} }}\n"))
+            .collect::<String>();
+
+        block_on(engine.refresh(
+            RefreshRequest::full(
+                "refresh-model-batch-limit",
+                RefreshReason::Initial,
+                vec![crate::workspace::FileObservation::present(
+                    "src/batched.rs",
+                    content.clone(),
+                    Some(content.len() as u128),
+                    crate::model::FileSource::Filesystem,
+                )],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+
+        let observed = batch_sizes.lock().unwrap().clone();
+        assert!(
+            observed.len() > 1,
+            "the fixture must produce multiple requests"
+        );
+        assert!(observed.iter().all(|size| *size <= 2));
+    }
+
+    /// Verify separate source files share one provider batch within a bounded staging flush.
+    /// 验证同一有界暂存批次内的不同源码文件会共享一个供应商向量批次。
+    #[test]
+    fn embedding_requests_accumulate_across_files() {
+        let mut engine = test_engine();
+        let (ai, index, source, _) = fake_host();
+        let operation_ids = ai.embedding_operation_ids.clone();
+        let batch_sizes = ai.embedding_batch_sizes.clone();
+        let first = "fn first() -> usize { 1 }";
+        let second = "fn second() -> usize { 2 }";
+
+        block_on(engine.refresh(
+            RefreshRequest::full(
+                "refresh-cross-file-batch",
+                RefreshReason::Initial,
+                vec![
+                    crate::workspace::FileObservation::present(
+                        "src/first.rs",
+                        first,
+                        Some(first.len() as u128),
+                        crate::model::FileSource::Filesystem,
+                    ),
+                    crate::workspace::FileObservation::present(
+                        "src/second.rs",
+                        second,
+                        Some(second.len() as u128),
+                        crate::model::FileSource::Filesystem,
+                    ),
+                ],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+
+        let operations = operation_ids.lock().unwrap().clone();
+        let sizes = batch_sizes.lock().unwrap().clone();
+        let document_sizes = operations
+            .iter()
+            .zip(sizes.iter())
+            .filter_map(|(operation, size)| {
+                operation
+                    .contains("code_retrieval.document_embedding")
+                    .then_some(*size)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(document_sizes.len(), 1);
+        assert!(document_sizes[0] >= 2);
     }
 
     /// Verify a no-op filesystem refresh does not retain committed source text in memory.

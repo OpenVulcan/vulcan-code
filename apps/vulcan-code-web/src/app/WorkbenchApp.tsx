@@ -3,6 +3,16 @@ import {
   ErrorScreen,
   LoadingScreen,
 } from "@/components/shell/startup-screen";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -151,6 +161,12 @@ export function WorkbenchApp(props: {
   // appLocaleRef keeps provider-outside app toasts aligned with the latest service locale.
   // appLocaleRef 让 Provider 外部的应用提示对齐最近一次服务语言。
   const appLocaleRef = React.useRef<LocaleCode>(webuiAppLocale(props.initialStartup.uiLocale));
+  // shutdownFailure stores the latest durable-close diagnostic until the user chooses a recovery action.
+  // shutdownFailure 保存最近的耐久关闭诊断，直到用户选择恢复操作。
+  const [shutdownFailure, setShutdownFailure] = React.useState<string | null>(null);
+  // shutdownForceClosePending prevents duplicate force-close commands while the native window is closing.
+  // shutdownForceClosePending 防止原生窗口关闭期间重复发送强制关闭命令。
+  const [shutdownForceClosePending, setShutdownForceClosePending] = React.useState(false);
 
   React.useEffect(() => {
     appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
@@ -177,6 +193,24 @@ export function WorkbenchApp(props: {
     [conversationEventWindowRegistry],
   );
 
+  // forceCloseAfterShutdownFailure asks the native shell to admit the confirmed close exactly once.
+  // forceCloseAfterShutdownFailure 请求原生壳接受已经确认的单次强制关闭。
+  const forceCloseAfterShutdownFailure = React.useCallback(async () => {
+    setShutdownForceClosePending(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("force_close_window");
+      setShutdownForceClosePending(false);
+      setShutdownFailure(null);
+    } catch (closeError) {
+      setShutdownForceClosePending(false);
+      setShutdownFailure((current) => {
+        const diagnostic = closeError instanceof Error ? closeError.message : String(closeError);
+        return current ? `${current}\n\n${diagnostic}` : diagnostic;
+      });
+    }
+  }, []);
+
   React.useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) {
       return;
@@ -194,11 +228,10 @@ export function WorkbenchApp(props: {
     // subscribeShutdownFailure installs the user decision boundary for a failed durable writer drain.
     // subscribeShutdownFailure 为耐久写入器排空失败安装用户决策边界。
     async function subscribeShutdownFailure() {
-      // eventApi provides the native event subscription and windowApi provides force-destroy only after confirmation.
-      // eventApi 提供原生事件订阅，windowApi 仅在用户确认后提供强制销毁能力。
-      const [eventApi, windowApi] = await Promise.all([
+      // eventApi provides the native event subscription; the controlled AlertDialog owns the user decision.
+      // eventApi 提供原生事件订阅；受控 AlertDialog 负责用户决策。
+      const [eventApi] = await Promise.all([
         import("@tauri-apps/api/event"),
-        import("@tauri-apps/api/window"),
       ]);
       // nextUnlistenStarted publishes one localized progress notice for the bounded drain.
       // nextUnlistenStarted 为有界排空过程发布一条本地化进度提示。
@@ -220,26 +253,10 @@ export function WorkbenchApp(props: {
       // nextUnlistenFailed 仅在当前 WorkbenchApp 实例保持挂载时保留。
       const nextUnlistenFailed = await eventApi.listen<string>("vulcan://shutdown-persist-failed", (event) => {
         toast.dismiss(SHUTDOWN_PERSIST_TOAST_ID);
-        // locale captures the latest service-selected UI language at the decision boundary.
-        // locale 在决策边界捕获服务最近选择的界面语言。
-        const locale = appLocaleRef.current;
-        // prompt combines localized risk guidance with the exact technical failure for diagnosis.
-        // prompt 将本地化风险说明与用于诊断的精确技术失败组合起来。
-        const prompt = [
-          webuiAppTranslation(locale, "app.shutdown.persistFailed.title"),
-          webuiAppTranslation(locale, "app.shutdown.persistFailed.description"),
-          event.payload,
-          webuiAppTranslation(locale, "app.shutdown.persistFailed.forceConfirm"),
-        ].join("\n\n");
-        if (!window.confirm(prompt)) {
-          return;
-        }
-        // nativeWindow is destroyed only after the user explicitly accepts possible tail loss.
-        // nativeWindow 仅在用户明确接受可能的尾部丢失后被销毁。
-        const nativeWindow = windowApi.getCurrentWindow();
-        void nativeWindow.destroy().catch((destroyError) => {
-          console.error("Force-closing the desktop window failed.", destroyError);
-        });
+        // Keep the exact native diagnostic in the controlled dialog for retry and force-close decisions.
+        // 将原生精确诊断保留在受控弹窗中，供重试和强制关闭决策使用。
+        setShutdownForceClosePending(false);
+        setShutdownFailure(event.payload);
       });
       if (disposed) {
         nextUnlistenFailed();
@@ -746,6 +763,8 @@ export function WorkbenchApp(props: {
     );
   }
 
+  const shutdownLocale = webuiAppLocale(workbench.uiLocale ?? startup.uiLocale);
+
   return (
     <I18nProvider initialLocale={workbench.uiLocale ?? startup.uiLocale}>
       <TooltipProvider>
@@ -761,6 +780,52 @@ export function WorkbenchApp(props: {
             />
           </ConversationEventWindowExternalStoreProvider>
         </ConversationLiveStreamProvider>
+        <AlertDialog
+          open={shutdownFailure !== null}
+          onOpenChange={(open) => {
+            if (!open && !shutdownForceClosePending) {
+              setShutdownFailure(null);
+            }
+          }}
+        >
+          <AlertDialogContent size="md">
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {webuiAppTranslation(shutdownLocale, "app.shutdown.persistFailed.title")}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {webuiAppTranslation(shutdownLocale, "app.shutdown.persistFailed.description")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {shutdownFailure ? (
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-3 text-xs text-destructive">
+                {shutdownFailure}
+              </pre>
+            ) : null}
+            <AlertDialogDescription>
+              {webuiAppTranslation(shutdownLocale, "app.shutdown.persistFailed.forceConfirm")}
+            </AlertDialogDescription>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={shutdownForceClosePending}>
+                {webuiAppTranslation(shutdownLocale, "app.shutdown.persistFailed.cancel")}
+              </AlertDialogCancel>
+              <AlertDialogAction
+                disabled={shutdownForceClosePending}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void forceCloseAfterShutdownFailure();
+                }}
+              >
+                {webuiAppTranslation(
+                  shutdownLocale,
+                  shutdownForceClosePending
+                    ? "app.shutdown.persistFailed.forceClosing"
+                    : "app.shutdown.persistFailed.forceClose",
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <Toaster />
       </TooltipProvider>
     </I18nProvider>

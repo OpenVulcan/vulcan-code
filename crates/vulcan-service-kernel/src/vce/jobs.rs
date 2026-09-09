@@ -825,7 +825,19 @@ impl VceRuntimeManager {
             let active = job_state.active.lock().await.clone();
             if let Some(job) = active {
                 if let Some(error) = job.persistence_error.lock().await.as_ref() {
-                    return Err(error.clone());
+                    // Return the exact active receipt with an explicit projection diagnostic so the UI
+                    // can still expose the recovery cancellation action after terminal persistence fails.
+                    // 终态持久化失败后仍返回带明确投影诊断的精确活动回执，使界面能够继续显示恢复取消操作。
+                    let include_active = match &selection {
+                        VceJobSelection::Latest => true,
+                        VceJobSelection::Exact(job_id) => job.job_id == *job_id,
+                        VceJobSelection::LastSuccessfulUpdate => false,
+                    };
+                    if include_active {
+                        let mut receipt = job.receipt.lock().await.clone();
+                        receipt.error = Some(error.clone());
+                        return Ok(Some(receipt));
+                    }
                 }
                 return selection.read(&job.store).await;
             }
@@ -899,6 +911,12 @@ impl VceRuntimeManager {
                 return self.cancel_cold_uninitialized_job(project_id, job_id).await;
             }
         };
+        // A finished worker with an unacknowledged terminal receipt cannot accept another control signal;
+        // settle its durable owner explicitly so the project is no longer blocked by stale in-memory state.
+        // 工作线程已结束但终态回执未确认时不能再次发送控制信号；显式确定持久所有者，解除过期内存状态对项目的阻塞。
+        if job.persistence_error.lock().await.is_some() {
+            return self.recover_persistence_failed_job(&job_state, &job).await;
+        }
         match job.control.cancel() {
             VceCancelOutcome::Accepted => {
                 job.cancel_wake.notify_one();
@@ -964,6 +982,99 @@ impl VceRuntimeManager {
         };
         self.persist_cold_cancel_state(&store, &cancelling, VceJobState::Cancelled)
             .await
+    }
+
+    /// Recover an in-memory owner whose terminal receipt could not be persisted after its worker ended.
+    /// 恢复工作线程已经结束但终态回执持久化失败的内存所有者。
+    ///
+    /// `state` and `job` are the exact project owner and durable receipt selected by cancellation.
+    /// `state` 与 `job` 是取消操作选中的精确项目所有者与持久回执。
+    /// The method settles only the durable receipt; it never resumes indexing or fabricates success.
+    /// 此方法仅确定持久回执，不恢复索引执行，也不虚构成功结果。
+    async fn recover_persistence_failed_job(
+        &self,
+        state: &Arc<VceProjectJobState>,
+        job: &Arc<VceManagedJob>,
+    ) -> Result<VceStoredJob, String> {
+        // The worker calls finish before recording persistence_error, so this gate cannot race live work.
+        // 工作线程在记录 persistence_error 前已经调用 finish，因此此闸门不会与活动执行竞争。
+        let _persistence = job.persistence_gate.lock().await;
+        let current = job
+            .store
+            .get_after_transport_retry(&job.job_id)
+            .await?
+            .ok_or_else(|| String::from("VCE recovery job receipt does not exist"))?;
+        if current.state.is_terminal() {
+            // An ambiguous write may already have committed; adopt that authoritative terminal receipt.
+            // 结果不确定的写入可能已经提交；采用该权威终态回执。
+            *job.receipt.lock().await = current.clone();
+            *job.persistence_error.lock().await = None;
+            *state.active.lock().await = None;
+            self.event_emitter
+                .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                    super::super::services::map_vce_job(current.clone()),
+                )));
+            return Ok(current);
+        }
+
+        // A retained successful batch proves that some publication may already exist, so recovery is a
+        // failure with an explicit retry path; cancellation must not claim that publication was undone.
+        // 保留成功批次说明某次发布可能已经存在，因此恢复结果为明确失败并提供重试路径；取消不能声称已撤销该发布。
+        let diagnostic = job
+            .persistence_error
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| String::from("VCE terminal receipt requires explicit recovery"));
+        let mut next = current.clone();
+        next.followup_requested = false;
+        next.error = Some(bounded_error(diagnostic));
+        next.state = if current.completed_update.is_some() {
+            VceJobState::Failed
+        } else {
+            VceJobState::Cancelled
+        };
+        if next.state == VceJobState::Cancelled {
+            next.error = Some(String::from(VCE_REFRESH_CANCELLED_ERROR));
+        }
+
+        // Running -> Cancelled is intentionally two-step because the storage state machine requires
+        // cooperative cancellation acknowledgement before the terminal cleanup receipt.
+        // Running -> Cancelled 必须分两步，因为存储状态机要求先确认协作取消再写入终态清理回执。
+        let persisted =
+            if current.state == VceJobState::Running && next.state == VceJobState::Cancelled {
+                let mut cancelling = current.clone();
+                cancelling.state = VceJobState::Cancelling;
+                cancelling.followup_requested = false;
+                cancelling.error = None;
+                cancelling.sequence = current
+                    .sequence
+                    .checked_add(1)
+                    .ok_or_else(|| String::from("VCE job sequence overflow"))?;
+                cancelling.updated_at_unix_ms = job_time()?.max(current.updated_at_unix_ms);
+                let cancelling = job.store.update(&current, &cancelling).await?;
+                next.sequence = cancelling
+                    .sequence
+                    .checked_add(1)
+                    .ok_or_else(|| String::from("VCE job sequence overflow"))?;
+                next.updated_at_unix_ms = job_time()?.max(cancelling.updated_at_unix_ms);
+                job.store.update(&cancelling, &next).await?
+            } else {
+                next.sequence = current
+                    .sequence
+                    .checked_add(1)
+                    .ok_or_else(|| String::from("VCE job sequence overflow"))?;
+                next.updated_at_unix_ms = job_time()?.max(current.updated_at_unix_ms);
+                job.store.update(&current, &next).await?
+            };
+        *job.receipt.lock().await = persisted.clone();
+        *job.persistence_error.lock().await = None;
+        *state.active.lock().await = None;
+        self.event_emitter
+            .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                super::super::services::map_vce_job(persisted.clone()),
+            )));
+        Ok(persisted)
     }
 
     /// Persist one cold cancellation state with the same compare-and-swap contract as active jobs.
@@ -1816,6 +1927,8 @@ mod tests {
                 unit: vulcan_context_engine::VceRefreshUnit::Files,
                 completed: 0,
                 total: Some(1),
+                overall_completed: 0,
+                overall_total: Some(1),
                 current_path: None,
             });
             tokio::time::timeout(Duration::from_secs(1), persistence_started.notified())
@@ -2302,14 +2415,31 @@ mod tests {
                 .expect("project retains queued owner");
             *active_job.persistence_error.lock().await =
                 Some(String::from("fixture receipt failure"));
+            let observed_failed_receipt = manager
+                .get_job("job-project", Some(&queued.job_id))
+                .await
+                .expect("retained project owner remains queryable")
+                .expect("failed owner still has its receipt");
             assert_eq!(
-                manager
-                    .get_job("job-project", Some(&queued.job_id))
-                    .await
-                    .expect_err("retained project owner must expose its error"),
-                "fixture receipt failure"
+                observed_failed_receipt.error.as_deref(),
+                Some("fixture receipt failure")
             );
-            *active_job.persistence_error.lock().await = None;
+            // Cancellation must recover a finished owner instead of sending a no-op signal to its finished control.
+            // 取消必须恢复已结束的所有者，而不是向已结束的控制器发送无效信号。
+            let recovered_cancelled = manager
+                .cancel_job("job-project", &queued.job_id)
+                .await
+                .expect("recover and cancel persisted owner");
+            assert_eq!(recovered_cancelled.state, VceJobState::Cancelled);
+            assert!(
+                retained_runtime
+                    .job_state
+                    .active
+                    .lock()
+                    .await
+                    .is_none(),
+                "recovery cancellation must release the stale in-memory owner"
+            );
             drop(active_job);
             manager
                 .cancel_job("job-project", &queued.job_id)

@@ -32,6 +32,18 @@ describe("durable VCE job projections", () => {
     expect(vceSynchronizationControl({ ...running, state: "cancelling" }, false).disabled).toBe(true);
     expect(vceSynchronizationControl({ ...running, state: "succeeded" }, true).disabled).toBe(false);
   });
+
+  // A terminal persistence diagnostic keeps the recovery cancellation action enabled even after the last phase.
+  // 终态持久化诊断即使出现在最后阶段，也必须保持恢复取消入口可用。
+  it("keeps recovery cancellation available for an active receipt error", () => {
+    const job: VceJobSummary = {
+      ...receipt(), state: "running", error: "Persist VCE terminal job receipt failed: transport error",
+      progress: { phase: "complete", operationId: "job-a", unit: "batches", completed: 1, total: 1, currentPath: null },
+    };
+    const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese={false} onCancel={() => undefined} />);
+    expect(markup).toContain("Recover and cancel");
+    expect(markup).not.toContain('disabled=""');
+  });
   // Slow reads and reordered events cannot roll back a terminal result or erase an observed job.
   // 缓慢读取与乱序事件不能回退终态结果或擦除已观察作业。
   it("keeps the newest acknowledged sequence", () => {
@@ -69,12 +81,16 @@ describe("durable VCE job projections", () => {
   // 已知批次分母使用实际已完成响应数，同时保留旧查询可用提示。
   it("renders measured progress and preserves ongoing conversations", () => {
     const job: VceJobSummary = { ...receipt(), kind: "synchronize", state: "running", sourceCheckpointVersion: 2,
-      progress: { phase: "embedding", operationId: "job-a:document:1", unit: "batches", completed: 3, total: 7, currentPath: "src/main.rs" } };
+      progress: { phase: "embedding", operationId: "job-a:document:1", unit: "batches", completed: 3, total: 7, overallCompleted: 4, overallTotal: 12, currentPath: "src/main.rs" } };
     const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
     expect(markup).toContain('value="3"');
     expect(markup).toContain('max="7"');
+    expect(markup).toContain("整体进度");
+    expect(markup).toContain('value="4"');
+    expect(markup).toContain('max="12"');
     expect(markup).toContain("会话和已有索引查询仍可正常使用");
     job.progress!.total = null;
+    job.progress!.overallTotal = null;
     const unknown = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
     expect(unknown).not.toContain('value="');
   });

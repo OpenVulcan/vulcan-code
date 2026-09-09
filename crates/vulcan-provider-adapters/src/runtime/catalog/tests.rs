@@ -84,6 +84,50 @@ fn staged_connection_observation_batch_is_atomic_and_cas_guarded() {
     );
 }
 
+/// Verifies raw provider metadata with an oversized output ceiling does not block staging.
+/// 验证输出上限超过上下文窗口的原始供应商元数据不会阻塞暂存。
+#[test]
+fn staged_source_catalog_accepts_output_above_context_window() {
+    let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+    let before_image = runtime
+        .capture_activation_snapshot()
+        .expect("before image should capture");
+    let catalog = parse_openai_model_catalog(
+        "raw-account",
+        1,
+        r#"{"data":[{"id":"raw-model","max_output_tokens":300000}]}"#,
+    )
+    .expect("raw provider metadata should parse");
+    let status = CatalogDiscoveryStatus {
+        state: CatalogDiscoveryState::Ready,
+        failure_kind: None,
+        message: None,
+        model_count: 1,
+        generation: 1,
+        observed_at_ms: 1,
+    };
+
+    let after_image = runtime
+        .stage_connection_catalog_observations_if_current(
+            &before_image,
+            &[StagedConnectionCatalogObservation {
+                connection_id: String::from("raw-account"),
+                catalog: Some(catalog),
+                status,
+                refresh_error: None,
+            }],
+        )
+        .expect("raw metadata should not fail the staging boundary");
+
+    let staged_model = after_image
+        .source_catalogs
+        .get("raw-account")
+        .and_then(|catalog| catalog.models.first())
+        .expect("raw model should remain staged");
+    assert_eq!(staged_model.capabilities.context_limit, None);
+    assert_eq!(staged_model.capabilities.output_limit, Some(300_000));
+}
+
 /// Verifies every client-side failure category maps without message parsing.
 /// 验证每一种客户端失败分类都无需解析消息即可完成映射。
 #[test]

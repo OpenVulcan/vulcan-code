@@ -178,6 +178,12 @@ export interface VceJobSummary {
     // Unknown totals stay indeterminate.
     // 未知总量保持不确定态。
     total: number | null;
+    // Confirmed completions across the whole refresh operation.
+    // 整个刷新操作范围内已确认完成的数量。
+    overallCompleted?: number;
+    // Known total across the whole refresh operation.
+    // 整个刷新操作范围内已知的总数量。
+    overallTotal?: number | null;
     // Optional relative path, never source content.
     // 可选相对路径，绝不包含源码内容。
     currentPath: string | null;

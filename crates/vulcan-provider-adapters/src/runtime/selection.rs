@@ -298,6 +298,7 @@ impl PublicAiRuntime {
             ) => validate_native_action_binding(
                 &selection.route,
                 inference_route.operation,
+                inference_route.model_id.as_str(),
                 action_binding_id.as_str(),
             )
             .map_err(|failure| failure.error.message.clone())?,

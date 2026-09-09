@@ -12,6 +12,16 @@ use vulcan_context_engine::VceRefreshProgress;
 /// 唯一支持的回执格式；不执行历史回执迁移。
 pub const VCE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 2;
 
+/// Bound storage confirmation retries so a transient controller transport fault cannot strand a live owner.
+/// 限制存储确认重试次数，避免短暂的控制器传输故障把活动作业所有权永久卡住。
+const VCE_RECEIPT_CONFIRM_RETRIES: usize = 3;
+
+/// Identify the exact controller failure that is safe to re-read after an ambiguous SQLite operation.
+/// 只识别已观测到的控制器传输错误，允许在结果不确定时重新读取而不是盲目重复写入。
+fn is_retryable_receipt_transport_error(error: &str) -> bool {
+    error.contains("transport error")
+}
+
 /// Immutable physical replacement target captured before candidate allocation starts.
 /// 候选分配开始之前捕获的不可变物理替换目标。
 /// This is recovery identity, not permission to resume work or a provider configuration.
@@ -462,6 +472,33 @@ impl VceProjectJobStore {
         .await
     }
 
+    /// Re-read one receipt after a transport failure without repeating an ambiguous write.
+    /// 传输失败后重新读取一次回执，不重复执行结果未知的写入。
+    ///
+    /// `job_id` selects one project-owned receipt; returns the latest validated value or absence.
+    /// `job_id` 选择项目所有的一个回执；返回最新已校验值或明确不存在。
+    pub async fn get_after_transport_retry(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<VceStoredJob>, String> {
+        for attempt in 0..=VCE_RECEIPT_CONFIRM_RETRIES {
+            match self.get(job_id).await {
+                Ok(receipt) => return Ok(receipt),
+                Err(error)
+                    if is_retryable_receipt_transport_error(&error)
+                        && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        200 * (attempt as u64 + 1),
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded VCE receipt read retry exhausted without a result")
+    }
+
     /// Find a previously admitted request without rerunning its expensive work.
     /// 查找先前准入请求，不重新执行其高成本工作。
     ///
@@ -710,7 +747,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         // current guards against stale same-sequence receipts before the database compare-and-swap.
         // current 在数据库比较交换前防止相同序号的过期回执。
         let current = self
-            .get(&previous.job_id)
+            .get_after_transport_retry(&previous.job_id)
             .await?
             .ok_or_else(|| String::from("VCE job to update does not exist"))?;
         if current != *previous {
@@ -718,9 +755,51 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         }
         let serialized = serde_json::to_string(next)
             .map_err(|error| format!("Encode VCE job update: {error}"))?;
-        self.data_plane.execute("UPDATE vce_host_jobs SET sequence = ?, snapshot_json = ?, updated_at_unix_ms = ? WHERE project_id = ? AND job_id = ? AND sequence = ? AND owner_run_id = ?;", vec![ControllerSqliteValue::Int64(next.sequence as i64), sqlite_text(serialized), ControllerSqliteValue::Int64(next.updated_at_unix_ms as i64), sqlite_text(&self.project_id), sqlite_text(&previous.job_id), ControllerSqliteValue::Int64(previous.sequence as i64), sqlite_text(&previous.owner_run_id)], "Update VCE job receipt").await?;
+        let update_params = vec![
+            ControllerSqliteValue::Int64(next.sequence as i64),
+            sqlite_text(serialized),
+            ControllerSqliteValue::Int64(next.updated_at_unix_ms as i64),
+            sqlite_text(&self.project_id),
+            sqlite_text(&previous.job_id),
+            ControllerSqliteValue::Int64(previous.sequence as i64),
+            sqlite_text(&previous.owner_run_id),
+        ];
+        for attempt in 0..=VCE_RECEIPT_CONFIRM_RETRIES {
+            match self
+                .data_plane
+                .execute(
+                    "UPDATE vce_host_jobs SET sequence = ?, snapshot_json = ?, updated_at_unix_ms = ? WHERE project_id = ? AND job_id = ? AND sequence = ? AND owner_run_id = ?;",
+                    update_params.clone(),
+                    "Update VCE job receipt",
+                )
+                .await
+            {
+                Ok(()) => break,
+                Err(error) if is_retryable_receipt_transport_error(&error) => {
+                    // The write may already have committed; reconcile before attempting it again.
+                    // 写入可能已经提交，重试写入前先读取并收敛到已提交结果。
+                    match self.get_after_transport_retry(&next.job_id).await? {
+                        Some(receipt) if receipt == *next => return Ok(receipt),
+                        Some(receipt)
+                            if receipt == *previous && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
+                        {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                200 * (attempt as u64 + 1),
+                            ))
+                            .await;
+                        }
+                        Some(receipt) if receipt == *previous => return Err(error),
+                        Some(_) => {
+                            return Err(String::from("VCE job receipt changed during update"));
+                        }
+                        None => return Err(String::from("VCE job to update does not exist")),
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let persisted = self
-            .get(&next.job_id)
+            .get_after_transport_retry(&next.job_id)
             .await?
             .ok_or_else(|| String::from("VCE updated job receipt is missing"))?;
         if persisted != *next {

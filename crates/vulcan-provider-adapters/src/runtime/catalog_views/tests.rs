@@ -188,29 +188,13 @@ fn capability_override_candidate_validates_final_resolved_limits() {
         .expect("connection should register");
     install_source_catalog(&runtime, catalog("one"));
 
-    for (overrides, expected_error) in [
-        (
-            crate::ModelCapabilityOverrides {
-                output_limit: Some(0),
-                ..crate::ModelCapabilityOverrides::default()
-            },
-            "output limit must be greater than zero",
-        ),
-        (
-            crate::ModelCapabilityOverrides {
-                context_limit: Some(2_048),
-                ..crate::ModelCapabilityOverrides::default()
-            },
-            "effective output limit that exceeds its context limit",
-        ),
-        (
-            crate::ModelCapabilityOverrides {
-                output_limit: Some(9_000),
-                ..crate::ModelCapabilityOverrides::default()
-            },
-            "effective output limit that exceeds its context limit",
-        ),
-    ] {
+    for (overrides, expected_error) in [(
+        crate::ModelCapabilityOverrides {
+            output_limit: Some(0),
+            ..crate::ModelCapabilityOverrides::default()
+        },
+        "output limit must be greater than zero",
+    )] {
         let error = runtime
             .validate_model_capability_override_candidate(
                 &configuration,
@@ -237,6 +221,28 @@ fn capability_override_candidate_validates_final_resolved_limits() {
             }),
         )
         .expect("valid final limits should be accepted");
+    runtime
+        .validate_model_capability_override_candidate(
+            &configuration,
+            "openrouter",
+            "openai/gpt-5.6-sol",
+            Some(&crate::ModelCapabilityOverrides {
+                context_limit: Some(2_048),
+                ..crate::ModelCapabilityOverrides::default()
+            }),
+        )
+        .expect("an inherited output limit above the narrowed context should be clamped");
+    runtime
+        .validate_model_capability_override_candidate(
+            &configuration,
+            "openrouter",
+            "openai/gpt-5.6-sol",
+            Some(&crate::ModelCapabilityOverrides {
+                output_limit: Some(9_000),
+                ..crate::ModelCapabilityOverrides::default()
+            }),
+        )
+        .expect("an output limit above the context should be clamped");
 }
 
 /// Verifies provider-level model management ignores account visibility while preserving route validation.
@@ -337,10 +343,10 @@ fn credential_free_manual_model_accepts_direct_capability_settings() {
         .expect("manual provider-only validation should not require a credential");
 }
 
-/// Verifies a provider-wide difference must remain valid for every credential source.
-/// 验证供应商级差异必须对每个凭据源都保持有效。
+/// Verifies a provider-wide difference remains usable when one account has a smaller context window.
+/// 验证供应商级差异在账号上下文窗口较小时仍然可用。
 #[test]
-fn capability_override_candidate_validates_every_account() {
+fn capability_override_candidate_clamps_each_account_independently() {
     let (runtime, configuration) = two_account_runtime();
     install_source_catalog(&runtime, catalog("one"));
     install_source_catalog(
@@ -360,7 +366,7 @@ fn capability_override_candidate_validates_every_account() {
         ),
     );
 
-    let error = runtime
+    runtime
         .validate_model_capability_override_candidate(
             &configuration,
             "openrouter",
@@ -370,17 +376,13 @@ fn capability_override_candidate_validates_every_account() {
                 ..crate::ModelCapabilityOverrides::default()
             }),
         )
-        .expect_err("an override invalid for the second account must be rejected");
-    assert!(
-        error.contains("connection `two`"),
-        "unexpected error: {error}"
-    );
+        .expect("the smaller account context should clamp the effective output ceiling");
 }
 
-/// Verifies ordinary catalog rebuilds also refuse an already persisted invalid difference.
-/// 验证常规目录重建也会拒绝已经持久化的无效差异。
+/// Verifies ordinary catalog rebuilds clamp an already persisted output difference.
+/// 验证常规目录重建会收窄已经持久化的输出差异。
 #[test]
-fn model_overlay_rebuild_rejects_invalid_final_limits() {
+fn model_overlay_rebuild_clamps_invalid_final_limits() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -401,11 +403,19 @@ fn model_overlay_rebuild_rejects_invalid_final_limits() {
         },
     );
 
-    let error = runtime
+    runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect_err("invalid final limits must stop the rebuild");
+        .expect("invalid final limits must be narrowed instead of stopping the rebuild");
 
-    assert!(error.contains("exceeds its context limit"));
+    let effective_catalogs = runtime
+        .catalog_snapshot()
+        .expect("effective catalog should remain readable");
+    let model = effective_catalogs
+        .get("one")
+        .and_then(|catalog| catalog.models.first())
+        .expect("effective model should remain visible");
+    assert_eq!(model.capabilities.context_limit, Some(8_192));
+    assert_eq!(model.capabilities.output_limit, Some(8_192));
 }
 
 /// Verifies removing a manual-only definition removes the model from its exact connection.

@@ -773,6 +773,8 @@ pub(crate) fn map_vce_job(
             .to_owned(),
             completed: progress.completed,
             total: progress.total,
+            overall_completed: progress.overall_completed,
+            overall_total: progress.overall_total,
             current_path: progress.current_path,
         }),
         followup_requested: job.followup_requested,

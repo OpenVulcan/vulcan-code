@@ -31,6 +31,53 @@ struct TauriServiceEventSink {
     app: tauri::AppHandle,
 }
 
+/// ShutdownControl coordinates retryable persistence failures with one explicit force-close decision.
+/// ShutdownControl 协调可重试的持久化失败与一次明确的强制关闭决定。
+struct ShutdownControl {
+    /// shutdown_in_progress blocks duplicate close requests while the durable drain is running.
+    /// shutdown_in_progress 在耐久排空运行期间阻止重复关闭请求。
+    shutdown_in_progress: Arc<AtomicBool>,
+    /// shutdown_close_allowed admits exactly one close after the user accepts possible tail loss.
+    /// shutdown_close_allowed 仅在用户接受可能丢失尾部记录后允许关闭一次。
+    shutdown_close_allowed: Arc<AtomicBool>,
+    /// shutdown_force_available records that the latest drain failure awaits an explicit force-close decision.
+    /// shutdown_force_available 记录最近一次排空失败正在等待明确的强制关闭决定。
+    shutdown_force_available: Arc<AtomicBool>,
+}
+
+/// force_close_window admits the already-confirmed native close without restarting persistence.
+/// force_close_window 在用户已确认后允许原生关闭，避免再次启动持久化流程。
+#[tauri::command]
+fn force_close_window(
+    window: tauri::Window,
+    shutdown_control: tauri::State<'_, ShutdownControl>,
+) -> Result<(), String> {
+    if !shutdown_control
+        .shutdown_force_available
+        .swap(false, Ordering::AcqRel)
+    {
+        return Err(String::from(
+            "No failed shutdown is waiting for force-close confirmation",
+        ));
+    }
+    shutdown_control
+        .shutdown_close_allowed
+        .store(true, Ordering::Release);
+    shutdown_control
+        .shutdown_in_progress
+        .store(false, Ordering::Release);
+    if let Err(error) = window.destroy() {
+        shutdown_control
+            .shutdown_close_allowed
+            .store(false, Ordering::Release);
+        shutdown_control
+            .shutdown_force_available
+            .store(true, Ordering::Release);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 /// Desktop implementation of host shell capabilities.
 /// 宿主 shell 能力的桌面端实现。
 struct DesktopServiceShellHost;
@@ -103,9 +150,19 @@ pub fn run() {
     // shutdown_close_allowed lets only a successfully drained recursive close event proceed.
     // shutdown_close_allowed 仅允许已经成功排空后的递归关闭事件继续。
     let shutdown_close_allowed = Arc::new(AtomicBool::new(false));
+    // shutdown_force_available exposes only a failed drain to the explicit force-close command.
+    // shutdown_force_available 仅向明确的强制关闭命令暴露排空失败状态。
+    let shutdown_force_available = Arc::new(AtomicBool::new(false));
+    let shutdown_control = ShutdownControl {
+        shutdown_in_progress: Arc::clone(&shutdown_in_progress),
+        shutdown_close_allowed: Arc::clone(&shutdown_close_allowed),
+        shutdown_force_available: Arc::clone(&shutdown_force_available),
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(state)
+        .manage(shutdown_control)
+        .invoke_handler(tauri::generate_handler![force_close_window])
         .on_window_event(move |window, event| {
             let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                 return;
@@ -117,6 +174,7 @@ pub fn run() {
             if shutdown_in_progress.swap(true, Ordering::AcqRel) {
                 return;
             }
+            shutdown_force_available.store(false, Ordering::Release);
             // The start event makes the bounded durable drain visible before blocking work begins.
             // 开始事件在阻塞排空工作启动前，让有界耐久保存过程对用户可见。
             if let Err(error) = window.emit("vulcan://shutdown-persist-started", ()) {
@@ -133,6 +191,9 @@ pub fn run() {
             // shutdown_worker_close_allowed publishes the only normally closable state.
             // shutdown_worker_close_allowed 发布唯一允许正常关闭的状态。
             let shutdown_worker_close_allowed = Arc::clone(&shutdown_close_allowed);
+            // shutdown_worker_force_available publishes the explicit force-close recovery state.
+            // shutdown_worker_force_available 发布明确的强制关闭恢复状态。
+            let shutdown_worker_force_available = Arc::clone(&shutdown_force_available);
             // shutdown_window is the exact window that originated this close request.
             // shutdown_window 是发起当前关闭请求的精确窗口。
             let shutdown_window = window.clone();
@@ -143,6 +204,7 @@ pub fn run() {
                         if let Err(error) = shutdown_window.close() {
                             shutdown_worker_close_allowed.store(false, Ordering::Release);
                             shutdown_worker_in_progress.store(false, Ordering::Release);
+                            shutdown_worker_force_available.store(true, Ordering::Release);
                             eprintln!(
                                 "[vulcan-code-tauri] closing drained app window failed: {error}"
                             );
@@ -156,6 +218,7 @@ pub fn run() {
                         let recovery_failure =
                             service_resume_after_failed_app_shutdown(&shutdown_worker_state).err();
                         shutdown_worker_in_progress.store(false, Ordering::Release);
+                        shutdown_worker_force_available.store(true, Ordering::Release);
                         let failure = match recovery_failure {
                             Some(recovery_error) => format!(
                                 "{error} Shutdown admission recovery also failed: {recovery_error}"

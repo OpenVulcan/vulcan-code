@@ -341,6 +341,10 @@ pub struct NativeInferenceBinding {
     /// Provider-neutral operation owned by this binding.
     /// 此绑定持有的供应商无关操作。
     pub operation: AiOperation,
+    /// Exact public model identifiers selected by this binding; empty means operation-wide.
+    /// 此绑定选择的精确公开模型标识；为空表示覆盖该操作的通用绑定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_ids: Vec<String>,
     /// Stable action binding persisted in internal inference routes.
     /// 持久化到内部推理路由的稳定动作绑定标识。
     pub binding_id: String,
@@ -379,6 +383,9 @@ pub enum NativeInferenceProjectionKind {
     /// Compatible JSON with explicit no-fallback secondary routing.
     /// 携带显式禁止降级二级路由的兼容 JSON。
     RoutedCompatible,
+    /// Alibaba Model Studio's nested text-rerank wire format.
+    /// 阿里云百炼文本重排接口的嵌套 Wire 格式。
+    AlibabaTextRerank,
 }
 
 /// Identifies one closed provider request projector implementation.
