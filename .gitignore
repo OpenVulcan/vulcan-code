@@ -31,6 +31,10 @@ target
 /docs/plan/
 /docs/completed/
 /docs/reports/
+
+# Local review and audit artifacts.
+# 本地审核与审计产物。
+/docs/reviews/
 .codex_tmp*
 
 # Local task board state.
