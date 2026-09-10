@@ -10,8 +10,8 @@ use super::projection_profiles::{
     apply_response_projection_profiles, project_response_record_text,
 };
 use super::request_encoding::{
-    project_credential_request, project_provider_request, validate_request_policy,
-    validate_request_projection_guards_before_encoding,
+    project_credential_request, project_provider_request, request_with_codex_tool_input_contract,
+    validate_request_policy, validate_request_projection_guards_before_encoding,
 };
 use super::request_headers::execution_headers;
 use super::response_body::read_bounded_response_text;
@@ -97,6 +97,9 @@ impl ProviderExecutionClient {
                     "Standalone remote compaction requires the Codex Responses protocol.",
                 ));
             }
+            // request freezes the same route-owned tool input contract used by ordinary HTTP and WebSocket dispatch.
+            // request 冻结与普通 HTTP 和 WebSocket 分派相同的路由自有工具输入契约。
+            let request = request_with_codex_tool_input_contract(&route, &request);
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",

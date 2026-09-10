@@ -394,6 +394,10 @@ export type TranslationKey =
   | "conversation.systemError.resultConfirmation"
   | "conversation.systemError.usageConfirmation"
   | "conversation.systemError.unconfirmed"
+  | "conversation.systemError.requestIdentifier"
+  | "conversation.systemError.requestIdentifierSource"
+  | "conversation.systemError.upstreamErrorPayload"
+  | "conversation.systemError.identifierMissing"
   | "conversation.systemError.provider"
   | "conversation.systemError.category"
   | "conversation.systemError.stage"
@@ -3754,6 +3758,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.resultConfirmation": "结果状态",
     "conversation.systemError.usageConfirmation": "费用状态",
     "conversation.systemError.unconfirmed": "待确认",
+    "conversation.systemError.requestIdentifier": "请求标识",
+    "conversation.systemError.requestIdentifierSource": "标识来源",
+    "conversation.systemError.upstreamErrorPayload": "上游错误载荷",
+    "conversation.systemError.identifierMissing": "供应商未提供",
     "conversation.systemError.provider": "Provider",
     "conversation.systemError.category": "错误类别",
     "conversation.systemError.stage": "执行阶段",
@@ -7112,6 +7120,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.resultConfirmation": "Result status",
     "conversation.systemError.usageConfirmation": "Usage status",
     "conversation.systemError.unconfirmed": "Unconfirmed",
+    "conversation.systemError.requestIdentifier": "Request identifier",
+    "conversation.systemError.requestIdentifierSource": "Identifier source",
+    "conversation.systemError.upstreamErrorPayload": "Upstream error payload",
+    "conversation.systemError.identifierMissing": "Not provided by provider",
     "conversation.systemError.provider": "Provider",
     "conversation.systemError.category": "Category",
     "conversation.systemError.stage": "Stage",

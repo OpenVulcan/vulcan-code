@@ -160,9 +160,35 @@ describe("system provider error card", () => {
     );
     expect(markup).toContain("结果与费用待确认");
     expect(markup).toContain("系统不会自动重发");
+    expect(markup).toContain("请求标识");
+    expect(markup).toContain("request-1");
+    expect(markup).toContain("上游错误载荷");
     expect(markup).toContain("结果状态");
     expect(markup).toContain("费用状态");
     expect(markup).toContain("system-error-card-pending");
+  });
+
+  // Verifies a pending AgentSpace result keeps a missing upstream identifier explicit.
+  // 验证 AgentSpace 待确认结果会显式展示供应商未提供上游标识。
+  it("renders a missing AgentSpace request identifier explicitly", () => {
+    // body removes only the exact optional request identifier from the canonical fixture.
+    // body 只从规范夹具中移除精确的可选请求标识。
+    const body = AGENTSPACE_RECONCILIATION_BODY.replace('"request_id":"request-1",', "");
+    // error remains a valid pending classification because request identity is observable metadata.
+    // error 仍是有效待确认分类，因为请求标识属于可观察元数据。
+    const error = parseSystemProviderError(body);
+    expect(error).not.toBeNull();
+    expect(isProviderResultReconciliationPending(error!)).toBe(true);
+
+    // markup must not invent a response ID or another provider identifier.
+    // markup 不得虚构 response ID 或其他供应商标识。
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <SystemErrorCard error={error!} />
+      </I18nProvider>,
+    );
+    expect(markup).toContain("请求标识");
+    expect(markup).toContain("供应商未提供");
   });
 
   it("renders a compact summary with an expandable JSON detail block", () => {

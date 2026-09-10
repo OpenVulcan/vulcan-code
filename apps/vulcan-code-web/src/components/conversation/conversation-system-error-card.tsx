@@ -389,6 +389,16 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
   if (reconciliationPending) {
     fields.push(
       {
+        label: t("conversation.systemError.requestIdentifier"),
+        value: props.error.requestId ?? t("conversation.systemError.identifierMissing"),
+      },
+      {
+        label: t("conversation.systemError.requestIdentifierSource"),
+        value: props.error.requestId
+          ? t("conversation.systemError.upstreamErrorPayload")
+          : t("conversation.systemError.identifierMissing"),
+      },
+      {
         label: t("conversation.systemError.resultConfirmation"),
         value: t("conversation.systemError.unconfirmed"),
       },

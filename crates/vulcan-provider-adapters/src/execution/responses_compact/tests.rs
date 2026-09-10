@@ -1,8 +1,58 @@
 //! Regression coverage for compact request fields and replayable checkpoints.
 //! 压缩请求字段与可重放检查点的回归覆盖。
 
+use super::super::test_support::{bundled_manifest_route, minimal_request};
 use super::*;
 use serde_json::json;
+use vulcan_ai_contract::{APPLY_PATCH_TOOL_NAME, ToolDefinition};
+
+/// Verifies compact encoding consumes the same route-owned Apply Patch contract as live streaming.
+/// 验证 compact 编码与实时流请求消费同一份路由自有 Apply Patch 契约。
+#[test]
+fn codex_compact_projection_uses_route_owned_freeform_apply_patch_contract() {
+    // route mirrors one native Lite model whose Apply Patch input is provider-declared freeform text.
+    // route 模拟一个原生 Lite 模型，其 Apply Patch 输入由供应商声明为自由文本。
+    let mut route = bundled_manifest_route(
+        "openai",
+        "codex-subscription",
+        OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    );
+    route.codex_behavior = Some(crate::provider_manifest::CodexModelBehavior {
+        wire_dialect: crate::provider_manifest::CodexWireDialect::Lite,
+        apply_patch_tool_type: crate::provider_manifest::CodexApplyPatchToolType::Freeform,
+        ..Default::default()
+    });
+    // request starts from the canonical JSON-schema declaration used outside Codex Lite.
+    // request 从 Codex Lite 之外使用的规范 JSON Schema 声明开始。
+    let mut request = minimal_request();
+    request.cache_scope_id = Some(String::from("compact-session"));
+    request.tools.push(ToolDefinition {
+        name: String::from(APPLY_PATCH_TOOL_NAME),
+        description: String::from("Apply one patch"),
+        input_schema: json!({"type":"object","properties":{"patch":{"type":"string"}}}),
+        input_format: Default::default(),
+        strict: false,
+    });
+
+    // effectiveRequest is the exact immutable snapshot used by the production compact path.
+    // effectiveRequest 是生产 compact 路径使用的精确不可变快照。
+    let effective_request = request_with_codex_tool_input_contract(&route, &request);
+    // encoded follows the production order through native encoding and provider projection.
+    // encoded 按生产顺序经过原生编码和供应商投影。
+    let encoded = encode_codex_responses_request(&effective_request)
+        .expect("Codex compact request should encode");
+    let mut encoded = project_provider_request(&route, &effective_request, encoded)
+        .expect("Codex Lite compact request should project");
+    prepare_responses_compact_body(&mut encoded.body)
+        .expect("Codex Lite compact body should normalize");
+
+    // tool is the exact Apply Patch declaration retained inside the Lite namespace prefix.
+    // tool 是 Lite 命名空间前缀内保留的精确 Apply Patch 声明。
+    let tool = &encoded.body["input"][0]["tools"][0]["tools"][0];
+    assert_eq!(tool["type"], "custom");
+    assert_eq!(tool["name"], APPLY_PATCH_TOOL_NAME);
+    assert_eq!(tool["format"]["syntax"], "lark");
+}
 
 /// Verifies the compact request body follows the official Codex `CompactionInput` shape.
 /// 验证 compact 请求体遵循官方 Codex `CompactionInput` 结构。
