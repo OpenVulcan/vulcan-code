@@ -3354,9 +3354,13 @@ mod tests {
                 .expect("failed terminal boundary"),
             ProviderV1TerminalOutcome::Completed
         );
+        // durability is the first and only transfer of the persisted failed API terminal.
+        // durability 是已持久化失败 API 终态的首次且唯一一次转移。
         let durability = sink.take_finished_durability();
         assert!(durability.api_terminal.is_some());
         assert!(durability.api_terminal_failure_persisted);
+        // consumed proves a second transfer cannot repeat either the receipt or its failure marker.
+        // consumed 证明第二次转移不会重复回执或其失败标记。
         let consumed = sink.take_finished_durability();
         assert!(consumed.api_terminal.is_none());
         assert!(!consumed.api_terminal_failure_persisted);

@@ -385,8 +385,8 @@ impl VulcanCoreController {
             }
         }
 
-        // Completion events follow actual per-tool completion while result slots preserve the Provider-declared replay order.
-        // 完成事件遵循每个工具的实际完成时序，而结果槽位保留 Provider 声明的回放顺序。
+        // fatal_durability_error retains the first fatal result while every started sibling future settles.
+        // fatal_durability_error 在全部已启动兄弟 Future 完成结算期间保留首个致命结果。
         let mut fatal_durability_error = None;
         while let Some((request_index, result)) = pending_executions.next().await {
             if let Ok(completed_result) = &result {
