@@ -606,10 +606,35 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                 eprintln!("[webui-service] detached runtime event Hook dispatch failed: {error}");
             }
             if event.tool_execution_boundary.is_some() {
-                let outcome = provider_v1_sink
-                    .apply_tool_event(app, state, &event, current_v1_unix_millis()?)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                // tool_boundary_result retains the exact sink or timestamp failure before this
+                // detached listener can leave the mandatory runtime projection barrier pending.
+                // tool_boundary_result 在分离监听器可能遗留强制运行时投影屏障前，保留精确的
+                // sink 或时间戳失败。
+                let tool_boundary_result = match current_v1_unix_millis() {
+                    Ok(now_ms) => provider_v1_sink
+                        .apply_tool_event(app, state, &event, now_ms)
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error),
+                };
+                // outcome is released only after the same detached V1 owner accepted the boundary.
+                // outcome 仅在同一分离 V1 owner 接纳边界后释放。
+                let outcome = match tool_boundary_result {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        // rejection_result ensures the waiting executor receives the originating
+                        // failure immediately instead of losing it behind a later timeout.
+                        // rejection_result 确保等待中的执行器立即收到原始失败，而不是让其在
+                        // 后续超时中丢失。
+                        let rejection_result = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error);
+                        if let Err(rejection_error) = rejection_result {
+                            return Err(format!(
+                                "{error} Rejecting the detached tool projection barrier also failed: {rejection_error}"
+                            ));
+                        }
+                        return Err(error);
+                    }
+                };
                 match outcome {
                     ProviderV1ToolBoundaryOutcome::Applied => {
                         vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_runtime_event_projection_barrier_from_event(&event)?;

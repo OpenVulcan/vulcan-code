@@ -41,6 +41,7 @@ impl ProtocolProfile for CohereChatProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         crate::shared::require_no_native_tools(request, self.id())?;
+        crate::require_json_schema_tool_inputs(request, self.id())?;
         crate::require_no_route_bound_provider_context(request, self.id())?;
         if request.prompt_cache != PromptCachePolicy::ProviderDefault {
             return Err(ProtocolConversionError::new(
@@ -732,6 +733,7 @@ mod tests {
                     name: String::from("lookup"),
                     description: String::from("Lookup"),
                     input_schema: json!({"type":"object"}),
+                    input_format: Default::default(),
                     strict: false,
                 }],
                 native_tools: Vec::new(),

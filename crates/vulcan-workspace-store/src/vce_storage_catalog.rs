@@ -51,6 +51,100 @@ struct CachedVceStore {
 }
 
 impl VceDataPlaneFactory {
+    /// Reconcile a stopped project job while retaining exclusive cross-process writer ownership.
+    /// 保留跨进程独占写入归属期间，收敛已经停止的项目作业。
+    /// `project_id` selects existing storage and `job_id` selects the observed receipt.
+    /// `project_id` 选择已有存储，`job_id` 选择已观察回执。
+    /// Returns no change if a cooperating writer is alive or the selected job has ended.
+    /// 协作写入者仍活动或选定作业已结束时不返回变更。
+    pub async fn reconcile_ended_project_job(
+        &self,
+        project_id: &str,
+        job_id: &str,
+    ) -> Result<Option<VceStoredJob>, String> {
+        let Some(store) = self.existing_store(project_id).await? else {
+            return Ok(None);
+        };
+        // The OS lease, not elapsed time or a different host ID, proves the previous writer has ended.
+        // 操作系统租约而非经过的时间或不同宿主编号，证明先前写入者已经结束。
+        let Some(_writer) = self.try_acquire_project_writer(project_id)? else {
+            return Ok(None);
+        };
+        VceProjectJobStore::new(store, project_id.to_owned())
+            .reconcile_ended_job(job_id)
+            .await
+    }
+
+    /// Acquire an ended host's writer lease and reopen one unfinished physical compaction job.
+    /// 获取已结束宿主的写入租约，并重新打开一项未完成的物理整理作业。
+    ///
+    /// `project_id` and `job_id` identify the exact durable owner. Returns the active index,
+    /// job store, receipt, and retained writer lease without submitting or cancelling any work.
+    /// `project_id` 与 `job_id` 标识精确持久所有者。返回活动索引、作业存储、回执及保留的
+    /// 写入租约，不提交也不取消任何操作。
+    pub async fn prepare_cold_compaction_recovery(
+        &self,
+        project_id: &str,
+        job_id: &str,
+    ) -> Result<
+        Option<(
+            VceProjectWriterLease,
+            VceProjectIndex,
+            VceProjectJobStore,
+            VceStoredJob,
+        )>,
+        String,
+    > {
+        let Some(writer) = self.try_acquire_project_writer(project_id)? else {
+            return Ok(None);
+        };
+        let Some(store) = self.existing_store(project_id).await? else {
+            return Ok(None);
+        };
+        let Some(config) = store.load_active_project_config(project_id).await? else {
+            return Ok(None);
+        };
+        let index = store
+            .open_existing_project_index(&config)
+            .await?
+            .ok_or_else(|| String::from("VCE compaction recovery index disappeared"))?;
+        let job_store = index.job_store();
+        let Some(receipt) = job_store.get(job_id).await? else {
+            return Ok(None);
+        };
+        if receipt.project_id != project_id
+            || receipt.job_id != job_id
+            || receipt.kind != VceJobKind::Compact
+        {
+            return Err(String::from(
+                "VCE compaction recovery receipt identity does not match its project",
+            ));
+        }
+        if receipt.state.is_terminal() {
+            return Ok(Some((writer, index, job_store, receipt)));
+        }
+        let unfinished = job_store
+            .unfinished()
+            .await?
+            .ok_or_else(|| String::from("VCE compaction recovery has no unfinished owner"))?;
+        if unfinished != receipt {
+            return Err(String::from(
+                "VCE compaction recovery receipt is not the unfinished project owner",
+            ));
+        }
+        let provenance = index.embedding_provenance().await?;
+        // Policy revision is mutable admission metadata and is not part of the persisted physical binding.
+        // 策略修订是可变准入元数据，不属于持久化物理绑定。
+        if provenance.checkpoint_version != receipt.source_checkpoint_version
+            || config.physical_fingerprint != receipt.contract_fingerprint
+        {
+            return Err(String::from(
+                "VCE compaction recovery target changed after durable admission",
+            ));
+        }
+        Ok(Some((writer, index, job_store, receipt)))
+    }
+
     /// Read one project's original and retained vector origins without creating project storage.
     /// 读取一个项目的原始及保留向量来源，不创建项目存储。
     ///
@@ -144,10 +238,11 @@ impl VceDataPlaneFactory {
     /// `project_id` 与 `job_id` 标识一个持久所有者；调用方必须一直持有返回的写入租约，直到
     /// 持久化取消终态。
     ///
-    /// Returns `None` when the exact receipt or its confirmed storage is absent. A published
-    /// checkpoint, a competing writer, or an identity mismatch returns an explicit error.
-    /// 精确回执或其已确认存储不存在时返回 `None`；已发布检查点、竞争写入者或身份不匹配返回明确错误。
-    pub async fn prepare_uninitialized_job_cancellation(
+    /// Returns no value when storage or the receipt is absent; published attempts are reconciled
+    /// without retiring their binding. Competing writers and identity mismatches remain errors.
+    /// 存储或回执缺失时返回空值；已发布尝试只收敛回执、不退役绑定。
+    /// 竞争写入者与身份不匹配仍返回错误。
+    pub async fn prepare_cold_job_cancellation(
         &self,
         project_id: &str,
         job_id: &str,
@@ -192,14 +287,6 @@ impl VceDataPlaneFactory {
         if receipt.state.is_terminal() {
             return Ok(Some((writer, job_store, receipt)));
         }
-        if !matches!(receipt.kind, VceJobKind::Initialize | VceJobKind::Rebuild)
-            || receipt.source_checkpoint_version.is_some()
-            || receipt.replacement.is_some()
-        {
-            return Err(String::from(
-                "VCE cold cancellation requires an uninitialized initialize or rebuild job",
-            ));
-        }
         let Some(unfinished) = job_store.unfinished().await? else {
             return Err(String::from(
                 "VCE cold cancellation found no unfinished owner for its receipt",
@@ -215,10 +302,20 @@ impl VceDataPlaneFactory {
         } else {
             index.uninitialized_recovery_provenance().await?
         };
-        if provenance.checkpoint_version.is_some() {
-            return Err(String::from(
-                "VCE cold cancellation cannot retire a published checkpoint",
-            ));
+        if provenance.checkpoint_version.is_some()
+            || !matches!(receipt.kind, VceJobKind::Initialize | VceJobKind::Rebuild)
+            || receipt.source_checkpoint_version.is_some()
+            || receipt.replacement.is_some()
+        {
+            // Published or replacement attempts are settled without retiring any binding.
+            // 已发布或替换尝试只收敛回执，不退役任何绑定。
+            let settled = job_store
+                .reconcile_ended_job(job_id)
+                .await?
+                .ok_or_else(|| {
+                    String::from("VCE cold cancellation lost its exact unfinished receipt")
+                })?;
+            return Ok(Some((writer, job_store, settled)));
         }
         if let Some(config) = active_config {
             store.retire_uninitialized_active_binding(&config).await?;

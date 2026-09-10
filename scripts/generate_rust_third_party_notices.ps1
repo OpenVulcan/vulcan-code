@@ -244,9 +244,9 @@ function Invoke-GenerateRustThirdPartyNotices {
     # GeneratedMarkdown stores cargo-about output before repository newline normalization.
     # GeneratedMarkdown 保存仓库换行规范化前的 cargo-about 输出。
     $GeneratedMarkdown = [System.IO.File]::ReadAllText($GeneratedThirdPartyNoticesFile)
-    # NormalizedMarkdown makes the checked-in artifact byte-stable across Windows, Linux, and macOS.
-    # NormalizedMarkdown 使签入制品在 Windows、Linux 与 macOS 间保持字节稳定。
-    $NormalizedMarkdown = ($GeneratedMarkdown -replace "`r`n", "`n") -replace "`r", "`n"
+    # NormalizedMarkdown makes the checked-in artifact byte-stable and removes upstream trailing whitespace.
+    # NormalizedMarkdown 使签入制品保持字节稳定，并移除上游文本中的行尾空白。
+    $NormalizedMarkdown = (($GeneratedMarkdown -replace "`r`n", "`n") -replace "`r", "`n") -replace '(?m)[ \t]+$', ''
     [System.IO.File]::WriteAllText(
         $GeneratedThirdPartyNoticesFile,
         $NormalizedMarkdown,

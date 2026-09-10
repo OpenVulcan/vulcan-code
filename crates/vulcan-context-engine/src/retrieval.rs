@@ -840,6 +840,26 @@ mod tests {
         assert_eq!(result[1].score, 0.61);
     }
 
+    /// Verify equal scores use stable source identity instead of provider return order.
+    /// 验证相同分数按稳定源码身份排序，而不依赖供应商返回顺序。
+    #[test]
+    fn equal_scores_use_stable_source_identity() {
+        let mut hits = vec![
+            hit("src/z.rs", 9, 0.75, HitKind::Content),
+            hit("src/a.rs", 2, 0.75, HitKind::Content),
+            hit("src/a.rs", 1, 0.75, HitKind::Content),
+        ];
+
+        sort_hits(&mut hits);
+
+        assert_eq!(
+            hits.iter()
+                .map(|candidate| (candidate.path.as_str(), candidate.range.start_line))
+                .collect::<Vec<_>>(),
+            vec![("src/a.rs", 1), ("src/a.rs", 2), ("src/z.rs", 9)]
+        );
+    }
+
     /// Verify multi-query RRF scores remain normalized to a stable zero-to-one scale.
     /// 验证多查询 RRF 分数保持在稳定的零到一归一化尺度内。
     #[test]

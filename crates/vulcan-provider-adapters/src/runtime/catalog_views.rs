@@ -232,6 +232,11 @@ pub(super) fn resolve_model_catalog_overlays_from_inputs(
     // effective 仅累积可从显式输入集合重建的目录。
     let mut effective = RuntimeConnectionCatalogs::default();
     for connection in configuration.connection_graph.connections.values() {
+        // Disabled credentials retain persisted metadata but contribute no executable catalog.
+        // 已停用凭据保留持久化元数据，但不贡献任何可执行目录。
+        if !configuration.connection_is_enabled(connection.id.as_str()) {
+            continue;
+        }
         // An invalid standalone custom Manifest isolates only its provider. The persisted
         // connection remains available for repair, but it must never enter an executable catalog.
         // 无效的独立自定义 Manifest 只隔离其所属供应商。持久化连接仍保留供修复，但绝不能
@@ -370,7 +375,9 @@ fn provider_tool_template_models_in_generation(
     // declarations 对同一连接实例化多个已审核目标的模型进行去重。
     let mut declarations = BTreeMap::new();
     for connection in configuration.connection_graph.connections.values() {
-        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+        if !configuration.connection_is_enabled(connection.id.as_str())
+            || configuration.connection_is_pending_validation(connection.id.as_str())
+        {
             continue;
         }
         // manifest is the exact provider document frozen in the selected generation.
@@ -800,7 +807,8 @@ impl PublicAiRuntime {
             .values()
             .filter(|connection| connection.provider_id == provider_id)
             .filter(|connection| {
-                !configuration.connection_is_pending_validation(connection.id.as_str())
+                configuration.connection_is_enabled(connection.id.as_str())
+                    && !configuration.connection_is_pending_validation(connection.id.as_str())
             })
             .any(|connection| {
                 runtime_model_is_enabled_from_manifest(
@@ -843,7 +851,8 @@ impl PublicAiRuntime {
             .connections
             .values()
             .filter(|connection| {
-                !configuration.connection_is_pending_validation(connection.id.as_str())
+                configuration.connection_is_enabled(connection.id.as_str())
+                    && !configuration.connection_is_pending_validation(connection.id.as_str())
             })
             .filter_map(|connection| {
                 catalogs

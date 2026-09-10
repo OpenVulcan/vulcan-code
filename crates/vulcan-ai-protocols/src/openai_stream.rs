@@ -8,10 +8,10 @@ use crate::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    AiContinuationUpdate, AiErrorCategory, AiExecutionError, AiStreamEvent, ContentItem,
-    RequestUsage, ResourceKind, ResourceReference, ResourceTransferState, ToolCall,
-    ToolCallProgress, UsageValue, UsageValueSource, derive_uncached_input,
-    is_replayable_codex_responses_item,
+    AiContinuationUpdate, AiErrorCategory, AiExecutionError, AiMessagePhase, AiStreamEvent,
+    ContentItem, FreeformToolArgumentEncoding, RequestUsage, ResourceKind, ResourceReference,
+    ResourceTransferState, ToolCall, ToolCallProgress, ToolDefinition, ToolInputFormat, UsageValue,
+    UsageValueSource, derive_uncached_input, is_replayable_codex_responses_item,
 };
 
 /// Tracks one OpenAI-compatible streamed tool call.
@@ -33,15 +33,12 @@ struct OpenAiToolState {
     /// Accumulated raw argument JSON.
     /// 累积的原始参数 JSON。
     arguments: String,
-    /// Whether this Responses item carries raw custom-tool input instead of function JSON.
-    /// 当前 Responses 项是否携带原始自定义工具输入而不是函数 JSON。
-    custom_input: bool,
-    /// Accumulated raw custom-tool text before portable JSON wrapping.
-    /// 包装为可移植 JSON 前累积的原始自定义工具文本。
+    /// Frozen registered input format for this exact tool name.
+    /// 当前精确工具名称的冻结注册输入格式。
+    input_format: ToolInputFormat,
+    /// Accumulated exact custom-tool text.
+    /// 累积的精确自定义工具正文。
     custom_text: String,
-    /// Whether the synthetic JSON patch-string prefix was emitted.
-    /// 是否已发送合成 JSON patch 字符串前缀。
-    custom_json_started: bool,
     /// Whether the public start event was emitted.
     /// 是否已经发送公共开始事件。
     started: bool,
@@ -97,8 +94,8 @@ fn cumulative_suffix(previous: &mut String, current: String) -> Option<String> {
     Some(current)
 }
 
-/// Builds a replay-safe provider context item without transient reasoning fields.
-/// 构建不含瞬态推理字段且可安全重放的供应商上下文项目。
+/// Builds one exact replay-safe provider context item for private route-bound persistence.
+/// 构建一项用于私有路由绑定持久化的精确可安全重放供应商上下文项目。
 ///
 /// # Parameters
 /// 参数
@@ -107,27 +104,26 @@ fn cumulative_suffix(previous: &mut String, current: String) -> Option<String> {
 ///
 /// # Returns
 /// 返回值
-/// A cloned replay item, or `None` when the item contains only summary or encrypted reasoning.
-/// 返回克隆后的重放项目；项目仅含摘要或加密推理时返回 `None`。
+/// A cloned replay item, or `None` when a reasoning item carries no reconstructable context.
+/// 返回克隆后的重放项目；推理项不携带任何可重建上下文时返回 `None`。
 fn replayable_provider_context_item(item: &Value) -> Option<Value> {
     if item.get("type").and_then(Value::as_str) != Some("reasoning") {
         return Some(item.clone());
     }
-    // replay_item is scrubbed independently so the original diagnostic event remains intact.
-    // replay_item 独立清理，使原始诊断事件保持不变。
-    let mut replay_item = item.clone();
-    // object owns the only accepted Responses reasoning object shape.
-    // object 持有唯一接受的 Responses 推理对象结构。
-    let object = replay_item.as_object_mut()?;
-    object.remove("summary");
-    object.remove("encrypted_content");
-    // has_full_reasoning admits only provider content that can reconstruct durable reasoning.
-    // has_full_reasoning 只允许能够重建持久化完整思考的供应商正文。
-    let has_full_reasoning = object
+    // hasFullReasoning admits provider content that can reconstruct durable reasoning.
+    // hasFullReasoning 允许能够重建持久化完整思考的供应商正文。
+    let has_full_reasoning = item
         .get("content")
         .and_then(Value::as_array)
         .is_some_and(|content| !content.is_empty());
-    has_full_reasoning.then_some(replay_item)
+    // hasEncryptedContext retains the opaque continuation exactly; callers keep this item inside
+    // the versioned route-bound replay envelope and never project it to visible reasoning.
+    // hasEncryptedContext 精确保留不透明延续；调用方只把该项放入版本化路由绑定重放封套，绝不投影为可见思考。
+    let has_encrypted_context = item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .is_some_and(|encrypted_content| !encrypted_content.is_empty());
+    (has_full_reasoning || has_encrypted_context).then(|| item.clone())
 }
 
 /// Decodes OpenAI-compatible Chat Completions SSE chunks.
@@ -589,6 +585,9 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Tool calls keyed by output index.
     /// 按输出索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
+    /// Frozen input formats keyed by the exact model-visible tool name.
+    /// 按精确模型可见工具名称保存的冻结输入格式。
+    registered_tool_inputs: BTreeMap<String, ToolInputFormat>,
     /// Image-generation item identifiers keyed by output index.
     /// 按输出索引保存的图片生成项标识。
     image_items: BTreeMap<u32, String>,
@@ -613,7 +612,31 @@ impl OpenAiResponsesStreamDecoder {
     /// 返回值
     /// A fresh decoder.
     /// 返回新的解码器。
+    #[cfg(test)]
     pub(crate) fn new(execution_id: String) -> Self {
+        Self::with_registered_tools(execution_id, &[])
+    }
+
+    /// Creates one Responses decoder with the immutable request tool registry.
+    /// 使用不可变请求工具注册表创建一个 Responses 解码器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `execution_id` is the stable execution identifier and `tools` is the exact request-visible
+    /// tool set that owns custom-input interpretation.
+    /// `execution_id` 是稳定执行标识，`tools` 是拥有自定义输入解释权的精确请求可见工具集合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fresh decoder whose custom-tool events cannot change the registered input format.
+    /// 返回一个自定义工具事件不能修改注册输入格式的新解码器。
+    pub(crate) fn with_registered_tools(execution_id: String, tools: &[ToolDefinition]) -> Self {
+        // registeredToolInputs freezes name-to-format ownership before any provider bytes arrive.
+        // registeredToolInputs 在任何供应商字节到达前冻结名称到格式的归属。
+        let registered_tool_inputs = tools
+            .iter()
+            .map(|tool| (tool.name.clone(), tool.input_format.clone()))
+            .collect();
         Self {
             execution_id,
             started: false,
@@ -629,6 +652,7 @@ impl OpenAiResponsesStreamDecoder {
             reasoning_text: BTreeMap::new(),
             completed_reasoning_items: BTreeSet::new(),
             tools: BTreeMap::new(),
+            registered_tool_inputs,
             image_items: BTreeMap::new(),
             completed_images: BTreeSet::new(),
             captured_provider_context_scopes: BTreeSet::new(),
@@ -740,6 +764,23 @@ impl OpenAiResponsesStreamDecoder {
             .and_then(Value::as_str)
             .ok_or_else(|| ProtocolConversionError::new("OpenAI Responses tool name is missing."))?
             .to_string();
+        // inputFormat is owned by the frozen request registry, never inferred from provider syntax.
+        // inputFormat 由冻结请求注册表持有，绝不根据供应商语法推断。
+        let input_format = self
+            .registered_tool_inputs
+            .get(tool_name.as_str())
+            .cloned()
+            .unwrap_or_default();
+        if custom_input && matches!(input_format, ToolInputFormat::JsonSchema) {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses emitted custom input for JSON-schema tool `{tool_name}`."
+            )));
+        }
+        if !custom_input && matches!(input_format, ToolInputFormat::Freeform { .. }) {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses emitted function arguments for freeform tool `{tool_name}`."
+            )));
+        }
         let provider_item_id = item
             .get("id")
             .and_then(Value::as_str)
@@ -756,24 +797,19 @@ impl OpenAiResponsesStreamDecoder {
                 call_id: call_id.clone(),
                 tool_name: tool_name.clone(),
                 arguments: if custom_input {
-                    item.get("input")
-                        .and_then(Value::as_str)
-                        .map(custom_tool_arguments)
-                        .transpose()?
-                        .unwrap_or_default()
+                    String::new()
                 } else {
                     item.get("arguments")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string()
                 },
-                custom_input,
+                input_format,
                 custom_text: item
                     .get("input")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                custom_json_started: false,
                 started: true,
                 terminal: false,
                 arguments_done_seen: false,
@@ -871,8 +907,8 @@ impl OpenAiResponsesStreamDecoder {
         Ok(vec![tool_argument_delta(state, delta)?])
     }
 
-    /// Decodes one raw custom-tool input delta as a portable JSON patch argument stream.
-    /// 将一段原始自定义工具输入增量解码为可移植 JSON patch 参数流。
+    /// Decodes one raw custom-tool input delta without changing its registered representation.
+    /// 解码一段原始自定义工具输入增量，且不改变其注册表示。
     fn custom_tool_input_delta(
         &mut self,
         value: &Value,
@@ -886,7 +922,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses custom-tool delta references unopened index `{index}`."
             ))
         })?;
-        if !state.custom_input {
+        if !matches!(state.input_format, ToolInputFormat::Freeform { .. }) {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses emitted custom-tool input for a function tool.",
             ));
@@ -896,7 +932,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses custom-tool index `{index}` emitted input after completion."
             )));
         }
-        if !state.custom_text.is_empty() && !state.custom_json_started {
+        if !state.custom_text.is_empty() {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses custom-tool input delta followed a non-empty initial input snapshot.",
             ));
@@ -907,20 +943,7 @@ impl OpenAiResponsesStreamDecoder {
             delta,
             "OpenAI Responses custom tool",
         )?;
-        let encoded = serde_json::to_string(delta).map_err(|error| {
-            ProtocolConversionError::new(format!(
-                "OpenAI Responses custom-tool delta could not be JSON encoded: {error}"
-            ))
-        })?;
-        let escaped = &encoded[1..encoded.len().saturating_sub(1)];
-        let fragment = if state.custom_json_started {
-            escaped.to_string()
-        } else {
-            state.custom_json_started = true;
-            format!("{{\"patch\":\"{escaped}")
-        };
-        append_bounded_tool_arguments(&mut state.arguments, &fragment, "OpenAI Responses")?;
-        Ok(vec![tool_argument_delta(state, &fragment)?])
+        Ok(vec![tool_argument_delta(state, delta)?])
     }
 
     /// Records authoritative raw custom-tool input without terminating the tool early.
@@ -936,7 +959,7 @@ impl OpenAiResponsesStreamDecoder {
             ))
         })?;
         Self::validate_tool_identity(state, value)?;
-        if !state.custom_input {
+        if !matches!(state.input_format, ToolInputFormat::Freeform { .. }) {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses emitted custom-tool completion for a function tool.",
             ));
@@ -947,7 +970,6 @@ impl OpenAiResponsesStreamDecoder {
         if let Some(input) = value.get("input").and_then(Value::as_str) {
             state.custom_text = input.to_string();
         }
-        state.arguments = custom_tool_arguments(&state.custom_text)?;
         state.arguments_done_seen = true;
         Ok(Vec::new())
     }
@@ -1002,7 +1024,18 @@ impl OpenAiResponsesStreamDecoder {
     /// JSON 合法时返回已完成工具调用，否则返回不含正文的中止诊断。
     fn finalize_tool_state(state: &mut OpenAiToolState) -> AiStreamEvent {
         state.terminal = true;
-        match serde_json::from_str::<Value>(state.arguments.as_str()) {
+        let arguments = match &state.input_format {
+            ToolInputFormat::JsonSchema => serde_json::from_str::<Value>(state.arguments.as_str()),
+            ToolInputFormat::Freeform {
+                argument_encoding, ..
+            } => Ok(match argument_encoding {
+                FreeformToolArgumentEncoding::RawText => Value::String(state.custom_text.clone()),
+                FreeformToolArgumentEncoding::ApplyPatchObject => {
+                    serde_json::json!({"patch": state.custom_text})
+                }
+            }),
+        };
+        match arguments {
             Ok(arguments) => AiStreamEvent::ToolCallCompleted {
                 item_id: state.item_id.clone(),
                 call: ToolCall {
@@ -1037,7 +1070,7 @@ impl OpenAiResponsesStreamDecoder {
         if state.terminal {
             return Ok(Vec::new());
         }
-        if state.custom_input {
+        if matches!(state.input_format, ToolInputFormat::Freeform { .. }) {
             if let Some(input) = value
                 .pointer("/item/input")
                 .or_else(|| value.get("input"))
@@ -1045,7 +1078,6 @@ impl OpenAiResponsesStreamDecoder {
             {
                 state.custom_text = input.to_string();
             }
-            state.arguments = custom_tool_arguments(&state.custom_text)?;
         } else if let Some(arguments) = value
             .pointer("/item/arguments")
             .or_else(|| value.get("arguments"))
@@ -1135,6 +1167,26 @@ impl OpenAiResponsesStreamDecoder {
         let item = value
             .get("item")
             .ok_or_else(|| ProtocolConversionError::new("OpenAI Responses item is missing."))?;
+        // phase is closed by the Codex Responses contract; unknown strings must not silently
+        // become final answers in the host transcript.
+        // phase 由 Codex Responses 契约封闭；未知字符串不得在宿主转录中静默变成最终答复。
+        let phase = match item.get("phase") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) if value == "commentary" => Some(AiMessagePhase::Commentary),
+            Some(Value::String(value)) if value == "final_answer" => {
+                Some(AiMessagePhase::FinalAnswer)
+            }
+            Some(Value::String(value)) => {
+                return Err(ProtocolConversionError::new(format!(
+                    "OpenAI Responses message phase `{value}` is not registered."
+                )));
+            }
+            Some(_) => {
+                return Err(ProtocolConversionError::new(
+                    "OpenAI Responses message phase must be a string when present.",
+                ));
+            }
+        };
         // text preserves provider content order and mirrors the concatenation produced by deltas.
         // text 保留供应商内容顺序，并镜像增量交付产生的拼接结果。
         let text = item
@@ -1188,6 +1240,12 @@ impl OpenAiResponsesStreamDecoder {
                 item: ContentItem::Text {
                     text: String::new(),
                 },
+            });
+        }
+        if let Some(phase) = phase {
+            events.push(AiStreamEvent::ResponseMessagePhaseUpdated {
+                item_id: item_id.clone(),
+                phase,
             });
         }
         // suffix is the authoritative portion not delivered by earlier deltas.
@@ -1866,6 +1924,18 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                         usage: Box::new(openai_usage(usage)),
                     });
                 }
+                if let Some(end_turn) = value
+                    .pointer("/response/end_turn")
+                    .or_else(|| value.get("end_turn"))
+                    .filter(|value| !value.is_null())
+                {
+                    let end_turn = end_turn.as_bool().ok_or_else(|| {
+                        ProtocolConversionError::new(
+                            "OpenAI Responses end_turn must be a boolean when present.",
+                        )
+                    })?;
+                    events.push(AiStreamEvent::ResponseTurnBoundary { end_turn });
+                }
                 self.terminal = true;
                 events.push(AiStreamEvent::ResponseCompleted);
             }
@@ -2047,40 +2117,27 @@ fn tool_argument_delta(
     state: &OpenAiToolState,
     delta: &str,
 ) -> Result<AiStreamEvent, ProtocolConversionError> {
+    // receivedInput follows the frozen tool format so progress counts exact provider text without
+    // pretending that custom input is function-call JSON.
+    // receivedInput 遵循冻结工具格式，使进度精确统计供应商正文，且不把自定义输入伪装成函数 JSON。
+    let received_input = match state.input_format {
+        ToolInputFormat::JsonSchema => state.arguments.as_str(),
+        ToolInputFormat::Freeform { .. } => state.custom_text.as_str(),
+    };
     Ok(AiStreamEvent::ToolCallArgumentsDelta {
         item_id: state.item_id.clone(),
         delta: delta.to_string(),
         progress: ToolCallProgress {
             call_id: Some(state.call_id.clone()),
             tool_name: Some(state.tool_name.clone()),
-            bytes_received: u64::try_from(state.arguments.len()).map_err(|_| {
+            bytes_received: u64::try_from(received_input.len()).map_err(|_| {
                 ProtocolConversionError::new("OpenAI tool argument byte count overflowed.")
             })?,
-            characters_received: u64::try_from(state.arguments.chars().count()).map_err(|_| {
+            characters_received: u64::try_from(received_input.chars().count()).map_err(|_| {
                 ProtocolConversionError::new("OpenAI tool argument character count overflowed.")
             })?,
             complete: false,
         },
-    })
-}
-
-/// Wraps raw custom-tool input in the portable function-argument contract.
-/// 将原始自定义工具输入包装为可移植的函数参数契约。
-///
-/// # Parameters
-/// 参数
-/// `input` is the exact custom-tool text supplied by the Responses protocol.
-/// `input` 是 Responses 协议提供的精确自定义工具文本。
-///
-/// # Returns
-/// 返回值
-/// A JSON object string containing the text under the `patch` field.
-/// 返回将文本存放在 `patch` 字段中的 JSON 对象字符串。
-fn custom_tool_arguments(input: &str) -> Result<String, ProtocolConversionError> {
-    serde_json::to_string(&serde_json::json!({"patch": input})).map_err(|error| {
-        ProtocolConversionError::new(format!(
-            "OpenAI Responses custom-tool input could not be JSON encoded: {error}"
-        ))
     })
 }
 
@@ -2265,6 +2322,37 @@ mod tests {
     use super::*;
     use crate::shared::ProtocolStreamDecoder;
     use serde_json::json;
+
+    /// Builds one explicitly registered freeform tool for decoder tests.
+    /// 为解码器测试构建一个显式注册的自由文本工具。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `name` is the exact model-visible name and `argument_encoding` selects the host value.
+    /// `name` 是精确模型可见名称，`argument_encoding` 选择宿主值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A grammar-constrained freeform definition.
+    /// 返回受 grammar 约束的自由文本定义。
+    fn freeform_tool(
+        name: &str,
+        argument_encoding: FreeformToolArgumentEncoding,
+    ) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: String::from("Consumes exact freeform text."),
+            input_schema: json!({"type": "object"}),
+            input_format: ToolInputFormat::Freeform {
+                format: vulcan_ai_contract::FreeformToolFormat::Grammar {
+                    syntax: vulcan_ai_contract::FreeformToolSyntax::Lark,
+                    definition: String::from("start: /[\\s\\S]+/"),
+                },
+                argument_encoding,
+            },
+            strict: false,
+        }
+    }
 
     /// Verifies Chat tool arguments remain streaming until the finish signal.
     /// 验证 Chat 工具参数在结束信号前保持流式接收。
@@ -2824,7 +2912,16 @@ mod tests {
     /// 验证自定义 Apply Patch 文本通过可移植 JSON 流式传递并按权威值完成。
     #[test]
     fn responses_custom_tool_input_streams_and_completes_as_patch_argument() {
-        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // applyPatchTool owns the legacy object representation explicitly instead of relying on its name.
+        // applyPatchTool 显式持有既有对象表示，不依赖工具名称猜测。
+        let apply_patch_tool = freeform_tool(
+            "apply_patch",
+            FreeformToolArgumentEncoding::ApplyPatchObject,
+        );
+        let mut decoder = OpenAiResponsesStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            &[apply_patch_tool],
+        );
         decoder
             .push_sse(
                 Some("response.output_item.added"),
@@ -2840,7 +2937,8 @@ mod tests {
         assert!(first.iter().any(|event| matches!(
             event,
             AiStreamEvent::ToolCallArgumentsDelta { delta, progress, .. }
-                if delta.starts_with("{\"patch\":\"") && progress.characters_received > 0
+                if delta == "*** Begin Patch\n"
+                    && progress.characters_received == "*** Begin Patch\n".chars().count() as u64
         )));
 
         let complete_patch = "*** Begin Patch\n*** Add File: note.txt\n+done\n*** End Patch";
@@ -2926,7 +3024,16 @@ mod tests {
     #[test]
     fn responses_output_item_done_completes_buffered_custom_tool() {
         let patch = "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch";
-        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // applyPatchTool freezes the exact buffered custom-call representation.
+        // applyPatchTool 冻结精确的缓冲自定义调用表示。
+        let apply_patch_tool = freeform_tool(
+            "apply_patch",
+            FreeformToolArgumentEncoding::ApplyPatchObject,
+        );
+        let mut decoder = OpenAiResponsesStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            &[apply_patch_tool],
+        );
         let events = decoder
             .push_sse(
                 Some("response.output_item.done"),
@@ -2957,6 +3064,44 @@ mod tests {
         )));
     }
 
+    /// Verifies a non-patch custom tool retains exact text as a string argument.
+    /// 验证非补丁自定义工具将精确正文保留为字符串参数。
+    #[test]
+    fn responses_freeform_custom_tool_preserves_raw_text_argument() {
+        // execTool declares raw-string host representation independently from its tool name.
+        // execTool 独立于工具名称声明原始字符串宿主表示。
+        let exec_tool = freeform_tool("exec", FreeformToolArgumentEncoding::RawText);
+        let mut decoder = OpenAiResponsesStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            &[exec_tool],
+        );
+        let source = "const result = await tools.lookup({ id: 1 });\ntext(result);";
+        let events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                serde_json::to_string(&json!({
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "custom_tool_call",
+                        "id": "item",
+                        "call_id": "call",
+                        "name": "exec",
+                        "input": source,
+                    },
+                }))
+                .expect("raw custom item should serialize")
+                .as_str(),
+            )
+            .expect("raw custom item should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.name == "exec" && call.arguments == Value::String(source.to_string())
+        )));
+    }
+
     /// Verifies a buffered assistant message can complete without output_text.delta events.
     /// 验证缓冲助手消息可在没有 output_text.delta 事件时完成。
     #[test]
@@ -2978,6 +3123,54 @@ mod tests {
             event,
             AiStreamEvent::ResponseItemCompleted { item_id } if item_id == "message"
         )));
+    }
+
+    /// Verifies Codex message phase and logical-turn completion remain distinct typed events.
+    /// 验证 Codex 消息阶段与逻辑回合完成保持为两个独立的类型化事件。
+    #[test]
+    fn responses_preserves_message_phase_and_end_turn_false() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let message_events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"still working"}]}}"#,
+            )
+            .expect("phased assistant message should decode");
+        assert!(message_events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseMessagePhaseUpdated { item_id, phase }
+                if item_id == "message" && *phase == AiMessagePhase::Commentary
+        )));
+
+        let terminal_events = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"id":"response","end_turn":false,"usage":{}}}"#,
+            )
+            .expect("explicit continuation boundary should decode");
+        assert!(terminal_events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseTurnBoundary { end_turn: false }
+        )));
+        assert!(
+            terminal_events
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
+        );
+    }
+
+    /// Verifies unknown Codex message phases fail closed before host projection.
+    /// 验证未知 Codex 消息阶段在进入宿主投影前封闭失败。
+    #[test]
+    fn responses_rejects_unknown_message_phase() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let error = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"message","role":"assistant","phase":"background","content":[{"type":"output_text","text":"text"}]}}"#,
+            )
+            .expect_err("unknown message phase must fail closed");
+        assert!(error.to_string().contains("not registered"));
     }
 
     /// Verifies summary-only Responses reasoning stays transient and never enters replay.
@@ -3571,10 +3764,10 @@ mod tests {
         )));
     }
 
-    /// Verifies encrypted Responses reasoning never enters semantic or replay state.
-    /// 验证 Responses 加密推理绝不进入语义状态或重放状态。
+    /// Verifies encrypted Responses reasoning stays private while remaining replayable.
+    /// 验证 Responses 加密推理保持私有，同时仍可重放。
     #[test]
-    fn responses_discards_encrypted_reasoning_from_replay() {
+    fn responses_preserves_encrypted_reasoning_for_private_replay() {
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
         decoder
             .push_sse(
@@ -3582,12 +3775,17 @@ mod tests {
                 r#"{"type":"response.reasoning_summary_text.delta","summary_index":0,"delta":"summary"}"#,
             )
             .expect("reasoning summary should decode");
-        decoder
+        let captured = decoder
             .push_sse(
                 Some("response.output_item.done"),
                 r#"{"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"encrypted-replay"}}"#,
             )
             .expect("reasoning signature should decode");
+        assert!(captured.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ProviderContextItemCaptured { item }
+                if item.get("encrypted_content").and_then(Value::as_str) == Some("encrypted-replay")
+        )));
         let events = decoder
             .push_sse(
                 Some("response.completed"),
@@ -3599,7 +3797,7 @@ mod tests {
             AiStreamEvent::ReasoningCompleted {
                 signature: Some(_),
                 ..
-            } | AiStreamEvent::ProviderContextItemCaptured { .. }
+            }
         )));
     }
 
@@ -3627,8 +3825,8 @@ mod tests {
             AiStreamEvent::ReasoningDelta { item_id, delta }
                 if item_id == "responses:execution:reasoning:1" && delta == "raw"
         )));
-        // captured_context is the replay-safe full-reasoning item after transient fields are scrubbed.
-        // captured_context 是清除瞬态字段后的可安全重放完整思考项目。
+        // captured_context is the exact private replay item; public reasoning remains separately normalized.
+        // captured_context 是精确的私有重放项目；公共推理仍单独规范化。
         let captured_context = buffered.iter().find_map(|event| match event {
             AiStreamEvent::ProviderContextItemCaptured { item } => Some(item),
             _ => None,
@@ -3639,9 +3837,18 @@ mod tests {
                 .and_then(Value::as_str),
             Some("raw")
         );
-        assert!(captured_context.is_some_and(|item| {
-            item.get("summary").is_none() && item.get("encrypted_content").is_none()
-        }));
+        assert_eq!(
+            captured_context
+                .and_then(|item| item.get("encrypted_content"))
+                .and_then(Value::as_str),
+            Some("opaque-buffered")
+        );
+        assert_eq!(
+            captured_context
+                .and_then(|item| item.pointer("/summary/0/text"))
+                .and_then(Value::as_str),
+            Some("summary")
+        );
 
         // terminal completes only the full reasoning block without carrying encrypted payloads.
         // terminal 只完成完整思考块，且不会携带加密载荷。
@@ -3694,18 +3901,20 @@ mod tests {
         )));
     }
 
-    /// Verifies encrypted reasoning from multiple upstream items never enters replay.
-    /// 验证多个上游项目的加密推理绝不进入重放。
+    /// Verifies encrypted reasoning from multiple upstream items keeps exact private identity.
+    /// 验证多个上游项目的加密推理保持精确私有身份。
     #[test]
-    fn responses_encrypted_reasoning_items_stay_out_of_replay() {
+    fn responses_encrypted_reasoning_items_preserve_private_replay_order() {
         // decoder owns two upstream reasoning items whose local indexes intentionally collide.
         // decoder 持有两个局部索引刻意冲突的上游推理项目。
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let mut captured_items = Vec::new();
         for (item_id, output_index, delta, signature) in [
             ("rs_one", 0, "one", "opaque-one"),
             ("rs_two", 1, "two", "opaque-two"),
         ] {
-            decoder
+            captured_items.extend(
+                decoder
                 .push_sse(
                     Some("response.reasoning_summary_text.delta"),
                     format!(
@@ -3713,19 +3922,44 @@ mod tests {
                     )
                     .as_str(),
                 )
-                .expect("scoped reasoning delta should decode");
-            decoder
-                .push_sse(
-                    Some("response.output_item.done"),
-                    format!(
-                        r#"{{"type":"response.output_item.done","output_index":{output_index},"item":{{"id":"{item_id}","type":"reasoning","summary":[{{"type":"summary_text","text":"{delta}"}}],"encrypted_content":"{signature}"}}}}"#
+                .expect("scoped reasoning delta should decode"),
+            );
+            captured_items.extend(
+                decoder
+                    .push_sse(
+                        Some("response.output_item.done"),
+                        format!(
+                            r#"{{"type":"response.output_item.done","output_index":{output_index},"item":{{"id":"{item_id}","type":"reasoning","summary":[{{"type":"summary_text","text":"{delta}"}}],"encrypted_content":"{signature}"}}}}"#
+                        )
+                        .as_str(),
                     )
-                    .as_str(),
-                )
-                .expect("scoped reasoning completion should decode");
+                    .expect("scoped reasoning completion should decode"),
+            );
         }
-        // completed_by_item proves summary and encrypted payloads created no persistent blocks.
-        // completed_by_item 证明摘要与加密载荷没有创建持久化块。
+        let private_items = captured_items
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::ProviderContextItemCaptured { item } => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(private_items.len(), 2);
+        assert_eq!(
+            private_items[0].get("id").and_then(Value::as_str),
+            Some("rs_one")
+        );
+        assert_eq!(
+            private_items[1].get("id").and_then(Value::as_str),
+            Some("rs_two")
+        );
+        assert_eq!(
+            private_items[0]
+                .get("encrypted_content")
+                .and_then(Value::as_str),
+            Some("opaque-one")
+        );
+        // completedByItem proves private payloads never become visible reasoning completions.
+        // completedByItem 证明私有载荷绝不会成为可见推理完成事件。
         let completed_by_item = decoder
             .push_sse(
                 Some("response.completed"),

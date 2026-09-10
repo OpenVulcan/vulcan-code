@@ -16,7 +16,11 @@ use crate::management::{
     VceManagementQueryRequest, VceManagementQueryResponse, VceOperationPhase,
     validate_management_query, validate_management_response,
 };
-use crate::model::{FileRecord, FileStatus, SearchHit, SearchSource};
+use crate::manifest::{
+    VceCodeNodeSnapshot, VceEmbeddingBatchRecord, VceEmbeddingBatchResult, VceEmbeddingBatchState,
+    VceEmbeddingRunContract, VceEmbeddingRunManifest, VceEmbeddingRunState,
+};
+use crate::model::{FileRecord, FileSource, FileStatus, SearchHit, SearchSource};
 use crate::ports::{
     AuxiliaryIndexStatus, DenseSearchRequest, ExactSearchRequest, FindMissingRequest,
     IndexAbortRequest, IndexCommit, IndexStageBatch, IndexStageReceipt, IndexedBlob,
@@ -48,6 +52,7 @@ use futures::{StreamExt, stream};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Configuration for one provider- and storage-neutral VCE engine.
 /// 一个不绑定 Provider 和存储实现的 VCE 引擎配置。
@@ -964,6 +969,9 @@ struct RefreshStageContext<'a> {
     /// Stable parent refresh identity used to derive child operation IDs.
     /// 用于派生子操作 ID 的稳定父刷新身份。
     refresh_id: &'a str,
+    /// Optional source revision frozen with the refresh request.
+    /// 随刷新请求冻结的可选源码修订号。
+    source_revision: Option<&'a str>,
     /// Workspace generation published by this refresh.
     /// 本次刷新发布的工作区代次。
     generation: u64,
@@ -979,6 +987,26 @@ struct RefreshStageContext<'a> {
     /// Host-owned immutable source snapshot port.
     /// 宿主持有的不可变源码快照端口。
     source: &'a dyn VceSourcePort,
+}
+
+/// Group the stable identities and host capabilities shared by one Embedding plan execution.
+/// 聚合一次向量计划执行共享的稳定身份与宿主能力。
+struct EmbeddingExecutionContext<'a> {
+    /// Stable request prefix used to derive provider operation identities.
+    /// 用于派生供应商操作身份的稳定请求前缀。
+    request_id: &'a str,
+    /// Exact semantic purpose bound to every request in the plan.
+    /// 绑定到计划内每个请求的精确语义用途。
+    purpose: VceAiPurpose,
+    /// Host-owned AI execution port.
+    /// 宿主持有的 AI 执行端口。
+    ai: &'a dyn VceAiPort,
+    /// Frozen capability snapshot validated for this execution.
+    /// 为本次执行冻结并校验的能力快照。
+    capability: &'a VceAiCapabilitySnapshot,
+    /// Optional whole-refresh progress base and total.
+    /// 可选的完整刷新进度基数与总量。
+    overall: Option<(u64, u64)>,
 }
 
 /// Keep one prepared Blob's local metadata until shared content batching completes.
@@ -1017,10 +1045,24 @@ enum PreparedBlobResult {
 enum PreparedBlobSlot {
     /// A Blob that is already ready for staging.
     /// 已经可以暂存的 Blob。
-    Ready(IndexedBlob),
+    Ready(Box<IndexedBlob>),
     /// Index into the pending preparation vector.
     /// 指向待处理准备向量的索引。
     Pending(usize),
+}
+
+/// Keep all source batches prepared while one global provider plan is executed.
+/// 在执行一个全局供应商计划期间保留全部源码批次的准备结果。
+struct PreparedStageBatch {
+    /// Source-order batch number used in durable operation identities.
+    /// 用于持久化操作身份的源码批次编号。
+    batch_index: usize,
+    /// Ready and pending slots in the original source order.
+    /// 按原始源码顺序排列的就绪和待处理槽位。
+    blob_slots: Vec<PreparedBlobSlot>,
+    /// Pending preparation artifacts addressed by `PreparedBlobSlot::Pending`.
+    /// 由 `PreparedBlobSlot::Pending` 索引的待处理准备产物。
+    pending_blobs: Vec<PreparedBlobForEmbedding>,
 }
 
 impl VceEngine {
@@ -1386,6 +1428,14 @@ impl VceEngine {
         let reason = request.reason;
         let force_reindex = request.force_reindex;
         let source_revision = request.source_revision;
+        let durable_manifest = index
+            .load_embedding_manifest(request_id.clone())
+            .await
+            .map_err(VceError::Port)?;
+        let retry_generation = durable_manifest
+            .as_ref()
+            .filter(|manifest| manifest.state != VceEmbeddingRunState::Succeeded)
+            .map(|manifest| manifest.generation);
         control.observe(VceRefreshProgress {
             phase: VceRefreshPhase::Reconciling,
             operation_id: request_id.clone(),
@@ -1398,12 +1448,41 @@ impl VceEngine {
         });
         control.check()?;
         let snapshot = match mode {
-            RefreshMode::Full => self.workspace.reconcile(request.observations)?,
-            RefreshMode::Paths => self
-                .workspace
-                .reconcile_paths(request.observations, request.removed_paths)?,
+            RefreshMode::Full => match retry_generation {
+                Some(generation) => self.workspace.reconcile_for_existing_run(
+                    true,
+                    generation,
+                    request.observations,
+                    Vec::new(),
+                )?,
+                None => self.workspace.reconcile(request.observations)?,
+            },
+            RefreshMode::Paths => match retry_generation {
+                Some(generation) => self.workspace.reconcile_for_existing_run(
+                    false,
+                    generation,
+                    request.observations,
+                    request.removed_paths,
+                )?,
+                None => self
+                    .workspace
+                    .reconcile_paths(request.observations, request.removed_paths)?,
+            },
         };
         let sync_plan = self.workspace.sync_plan();
+        let recovered_candidate = if let Some(manifest) = durable_manifest {
+            self.reconcile_candidate_ready_manifest(
+                &request_id,
+                manifest,
+                &sync_plan,
+                force_reindex,
+                source_revision.as_deref(),
+                index,
+            )
+            .await?
+        } else {
+            false
+        };
         // candidate_blobs widens only an explicit full rebuild to every present content identity.
         // candidate_blobs 仅在显式完整重建时扩展为全部现存内容身份。
         let candidate_blobs = if force_reindex {
@@ -1441,6 +1520,7 @@ impl VceEngine {
         let stage_context = RefreshStageContext {
             control,
             refresh_id: &request_id,
+            source_revision: source_revision.as_deref(),
             generation: snapshot.generation,
             index,
             ai,
@@ -1462,10 +1542,28 @@ impl VceEngine {
             }
         };
 
-        let checkpoint_needed = force_reindex
-            || self.workspace.checkpoint.is_none()
-            || !sync_plan.added_blobs.is_empty()
-            || !sync_plan.deleted_blobs.is_empty();
+        // Finalize a candidate-ready manifest inside the same commit transaction as its checkpoint.
+        // 将候选就绪清单与检查点放入同一个提交事务中完成终态收口。
+        let finalize_embedding_manifest = index
+            .load_embedding_manifest(request_id.clone())
+            .await
+            .map_err(VceError::Port)?
+            .map(|manifest| {
+                if manifest.run_id != request_id || manifest.generation != snapshot.generation {
+                    return Err(VceError::InvalidRequest(
+                        "durable Embedding manifest does not match the refresh commit".to_owned(),
+                    ));
+                }
+                Ok(manifest.state == VceEmbeddingRunState::CandidateReady)
+            })
+            .transpose()?
+            .unwrap_or(false);
+
+        let checkpoint_needed = !recovered_candidate
+            && (force_reindex
+                || self.workspace.checkpoint.is_none()
+                || !sync_plan.added_blobs.is_empty()
+                || !sync_plan.deleted_blobs.is_empty());
         let (checkpoint_version, commit_receipt, summary) = if checkpoint_needed {
             let expected_checkpoint_version = self
                 .workspace
@@ -1513,6 +1611,7 @@ impl VceEngine {
                 expected_checkpoint_version,
                 checkpoint: checkpoint.clone(),
                 state_snapshot,
+                finalize_embedding_manifest,
             };
             let publication = match control.begin_commit() {
                 Ok(()) => {
@@ -1527,7 +1626,26 @@ impl VceEngine {
                         current_path: None,
                     });
                     match index.commit(commit.clone()).await {
-                        Ok(receipt) => validate_commit_receipt(&commit, &receipt).map(|()| receipt),
+                        Ok(receipt) => {
+                            let validated =
+                                validate_commit_receipt(&commit, &receipt).map(|()| receipt);
+                            if validated.is_ok() {
+                                // Commit is one atomic host operation; report its completed boundary
+                                // before the manifest transitions to published.
+                                // 提交是一次原子宿主操作；在清单转为已发布前报告其完成边界。
+                                control.observe(VceRefreshProgress {
+                                    phase: VceRefreshPhase::Committing,
+                                    operation_id: request_id.clone(),
+                                    unit: VceRefreshUnit::None,
+                                    completed: 1,
+                                    total: Some(1),
+                                    overall_completed: 1,
+                                    overall_total: Some(1),
+                                    current_path: None,
+                                });
+                            }
+                            validated
+                        }
                         Err(error) => Err(VceError::Port(error)),
                     }
                 }
@@ -1598,6 +1716,100 @@ impl VceEngine {
             checkpoint_version,
             commit_receipt,
         })
+    }
+
+    /// Reconcile a candidate-ready manifest after a process stopped at the publication boundary.
+    /// 在进程停在发布边界后收敛一份候选就绪清单。
+    ///
+    /// A candidate is considered published only when both the local workspace and host checkpoint
+    /// identify the target version. The base-version branch intentionally returns `false`, leaving
+    /// the normal atomic commit path to publish the still-unpublished candidate.
+    /// 只有本地工作区和宿主检查点同时指向目标版本时，候选才被视为已发布；基准版本分支返回 `false`，
+    /// 由正常原子提交路径发布仍未发布的候选。
+    async fn reconcile_candidate_ready_manifest(
+        &self,
+        request_id: &str,
+        manifest: VceEmbeddingRunManifest,
+        sync_plan: &SyncPlan,
+        force_reindex: bool,
+        source_revision: Option<&str>,
+        index: &dyn VceIndexPort,
+    ) -> Result<bool, VceError> {
+        if manifest.state != VceEmbeddingRunState::CandidateReady {
+            return Ok(false);
+        }
+        if manifest.source_revision.as_deref() != source_revision {
+            return Err(VceError::InvalidRequest(
+                "durable Embedding candidate source revision does not match the retry".to_owned(),
+            ));
+        }
+        let target_checkpoint_version = manifest
+            .base_checkpoint_version
+            .map(|version| {
+                version.checked_add(1).ok_or_else(|| {
+                    VceError::InvalidRequest(
+                        "durable Embedding target checkpoint version is exhausted".to_owned(),
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(1);
+        let operation_id = format!("{request_id}:reconcile-candidate");
+        let host_snapshot = index
+            .management_snapshot(VceManagementRequest {
+                request_id: operation_id.clone(),
+            })
+            .await
+            .map_err(VceError::Port)?;
+        if host_snapshot.operation_id != operation_id {
+            return Err(VceError::ResponseIdentity {
+                operation: VcePortOperation::ManagementSnapshot,
+                expected: operation_id,
+                actual: host_snapshot.operation_id,
+            });
+        }
+        validate_index_management_snapshot(&host_snapshot)?;
+        let local_checkpoint_version = self
+            .workspace
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.version);
+        if local_checkpoint_version == Some(target_checkpoint_version)
+            && host_snapshot.checkpoint_version == Some(target_checkpoint_version)
+        {
+            if force_reindex
+                || !sync_plan.added_blobs.is_empty()
+                || !sync_plan.deleted_blobs.is_empty()
+            {
+                return Err(VceError::InvalidRequest(
+                    "durable Embedding candidate is already published; start a new refresh"
+                        .to_owned(),
+                ));
+            }
+            if host_snapshot.generation != manifest.generation
+                || self.workspace.generation() != manifest.generation
+            {
+                return Err(VceError::InvalidRequest(
+                    "durable Embedding candidate publication generation is inconsistent".to_owned(),
+                ));
+            }
+            let mut published = manifest;
+            published
+                .mark_succeeded(current_unix_epoch_millis())
+                .map_err(VceError::InvalidRequest)?;
+            persist_manifest_run_state(index, &published).await?;
+            return Ok(true);
+        }
+
+        let base_checkpoint_version = manifest.base_checkpoint_version;
+        if local_checkpoint_version == base_checkpoint_version
+            && host_snapshot.checkpoint_version == base_checkpoint_version
+        {
+            return Ok(false);
+        }
+        Err(VceError::InvalidRequest(
+            "durable Embedding candidate and published checkpoint disagree".to_owned(),
+        ))
     }
 
     /// Retrieve semantic code context through dense, path, exact, fusion, Rerank, and coverage stages.
@@ -2116,6 +2328,18 @@ impl VceEngine {
         blob_names: &BTreeSet<String>,
         context: RefreshStageContext<'_>,
     ) -> Result<BTreeSet<String>, VceError> {
+        self.stage_blobs_global(blob_names, context).await
+    }
+
+    /// Keep the pre-manifest implementation test-only for historical fixture coverage.
+    /// 将清单方案前的实现限制为测试代码，仅保留历史夹具覆盖。
+    #[cfg(test)]
+    #[allow(dead_code)]
+    async fn stage_blobs_legacy(
+        &self,
+        blob_names: &BTreeSet<String>,
+        context: RefreshStageContext<'_>,
+    ) -> Result<BTreeSet<String>, VceError> {
         let mut record_batches = Vec::<Vec<FileRecord>>::new();
         let mut current_batch = Vec::new();
         let mut current_bytes = 0_u64;
@@ -2179,9 +2403,9 @@ impl VceEngine {
                     current_path: Some(record.path.clone()),
                 });
                 if record.size > self.config.indexing.max_file_bytes {
-                    blob_slots.push(PreparedBlobSlot::Ready(
+                    blob_slots.push(PreparedBlobSlot::Ready(Box::new(
                         self.prepare_over_limit_blob(record, context.generation)?,
-                    ));
+                    )));
                     continue;
                 }
                 let content = record
@@ -2201,7 +2425,7 @@ impl VceEngine {
                 let blob_request_id = format!("{}:blob:{blob_name}", context.refresh_id);
                 match self.prepare_blob(record, content, &blob_request_id, &context) {
                     Ok(PreparedBlobResult::Ready(blob)) => {
-                        blob_slots.push(PreparedBlobSlot::Ready(blob))
+                        blob_slots.push(PreparedBlobSlot::Ready(Box::new(blob)))
                     }
                     Ok(PreparedBlobResult::Pending(prepared)) => {
                         let owner = pending_blobs.len();
@@ -2226,7 +2450,7 @@ impl VceEngine {
                         });
                         let blob =
                             self.prepare_structure_failure_blob(record, context.generation, error)?;
-                        blob_slots.push(PreparedBlobSlot::Ready(blob));
+                        blob_slots.push(PreparedBlobSlot::Ready(Box::new(blob)));
                     }
                     Err(error) => return Err(error),
                 }
@@ -2266,12 +2490,17 @@ impl VceEngine {
                 let content_segments = self
                     .execute_embedding_plan(
                         &content_plan,
-                        &format!("{}:stage:{batch_index}:content", context.refresh_id),
-                        VceAiPurpose::CodeDocumentEmbedding,
-                        context.ai,
-                        context.capability,
+                        EmbeddingExecutionContext {
+                            request_id: &format!(
+                                "{}:stage:{batch_index}:content",
+                                context.refresh_id
+                            ),
+                            purpose: VceAiPurpose::CodeDocumentEmbedding,
+                            ai: context.ai,
+                            capability: context.capability,
+                            overall: Some((staged.len() as u64, blob_names.len() as u64)),
+                        },
                         Some(context.control),
-                        Some((staged.len() as u64, blob_names.len() as u64)),
                     )
                     .await?;
                 for segment in content_segments {
@@ -2324,7 +2553,7 @@ impl VceEngine {
             let mut blobs = Vec::with_capacity(blob_slots.len());
             for slot in blob_slots {
                 match slot {
-                    PreparedBlobSlot::Ready(blob) => blobs.push(blob),
+                    PreparedBlobSlot::Ready(blob) => blobs.push(*blob),
                     PreparedBlobSlot::Pending(owner) => blobs.push(
                         completed_pending
                             .get_mut(owner)
@@ -2388,12 +2617,14 @@ impl VceEngine {
                 match self
                     .execute_embedding_plan(
                         &path_plan,
-                        &format!("{}:stage:{batch_index}:path", context.refresh_id),
-                        VceAiPurpose::CodePathEmbedding,
-                        context.ai,
-                        context.capability,
+                        EmbeddingExecutionContext {
+                            request_id: &format!("{}:stage:{batch_index}:path", context.refresh_id),
+                            purpose: VceAiPurpose::CodePathEmbedding,
+                            ai: context.ai,
+                            capability: context.capability,
+                            overall: Some((staged.len() as u64, blob_names.len() as u64)),
+                        },
                         Some(context.control),
-                        Some((staged.len() as u64, blob_names.len() as u64)),
                     )
                     .await
                 {
@@ -2460,6 +2691,883 @@ impl VceEngine {
             });
         }
         Ok(staged)
+    }
+
+    /// Prepare one complete source snapshot, execute global provider-sized batches, and stage results.
+    /// 准备完整源码快照，执行全局供应商有界批次，并暂存结果。
+    async fn stage_blobs_global(
+        &self,
+        blob_names: &BTreeSet<String>,
+        context: RefreshStageContext<'_>,
+    ) -> Result<BTreeSet<String>, VceError> {
+        if blob_names.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let persisted_manifest = context
+            .index
+            .load_embedding_manifest(context.refresh_id.to_owned())
+            .await
+            .map_err(VceError::Port)?;
+        let persisted_nodes = persisted_manifest.as_ref().map(|manifest| {
+            manifest
+                .nodes
+                .iter()
+                .map(|node| (node.blob_name.clone(), node.clone()))
+                .collect::<BTreeMap<_, _>>()
+        });
+        let selected_records = if let Some(existing) = persisted_manifest.as_ref() {
+            let persisted_blob_names = existing
+                .nodes
+                .iter()
+                .map(|node| node.blob_name.clone())
+                .collect::<BTreeSet<_>>();
+            if persisted_blob_names != *blob_names {
+                return Err(VceError::InvalidRequest(
+                    "durable Embedding source snapshot does not match the requested Blob set"
+                        .to_owned(),
+                ));
+            }
+            blob_names
+                .iter()
+                .map(|blob_name| {
+                    let node = existing
+                        .nodes
+                        .iter()
+                        .find(|node| node.blob_name == *blob_name)
+                        .ok_or_else(|| {
+                            VceError::InvalidRequest(format!(
+                                "durable Embedding source snapshot is missing Blob `{blob_name}`"
+                            ))
+                        })?;
+                    if node.generation != context.generation {
+                        return Err(VceError::InvalidRequest(format!(
+                            "durable Embedding source snapshot generation changed for Blob `{blob_name}`"
+                        )));
+                    }
+                    let has_source_body = node.source_content.is_some()
+                        || node
+                            .prepared_index
+                            .as_ref()
+                            .is_some_and(|_| true);
+                    if node.source_size <= self.config.indexing.max_file_bytes && !has_source_body {
+                        return Err(VceError::InvalidRequest(format!(
+                            "durable Embedding source snapshot has no source body for Blob `{blob_name}`"
+                        )));
+                    }
+                    Ok(FileRecord {
+                        path: node.path.clone(),
+                        blob_name: Some(node.blob_name.clone()),
+                        committed_blob_name: None,
+                        status: FileStatus::Present,
+                        size: node.source_size,
+                        mtime_ns: node.mtime_ns,
+                        source: FileSource::Filesystem,
+                        content: node.source_content.clone().or_else(|| {
+                            node.prepared_index
+                                .as_ref()
+                                .map(|prepared| prepared.pending.content.clone())
+                        }),
+                        generation: node.generation,
+                        skip_reason: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, VceError>>()?
+        } else {
+            staging_records(self.workspace.records.values(), blob_names, context.control)?
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut source_metadata = BTreeMap::new();
+        let mut source_contents = BTreeMap::<String, String>::new();
+        let mut record_batches = Vec::<Vec<FileRecord>>::new();
+        let mut current_batch = Vec::new();
+        let mut current_bytes = 0_u64;
+        for record in &selected_records {
+            context.control.check()?;
+            let blob_name = record.blob_name.clone().ok_or_else(|| {
+                VceError::InvalidRequest(format!(
+                    "present source `{}` has no Blob identity",
+                    record.path
+                ))
+            })?;
+            if source_metadata
+                .insert(
+                    blob_name,
+                    (record.path.clone(), record.size, record.mtime_ns),
+                )
+                .is_some()
+            {
+                return Err(VceError::InvalidRequest(
+                    "workspace returned duplicate Blob metadata".to_owned(),
+                ));
+            }
+            let record = record.clone();
+            let staged_source_bytes = if record.size > self.config.indexing.max_file_bytes {
+                0
+            } else {
+                record.size
+            };
+            let next_bytes = current_bytes
+                .checked_add(staged_source_bytes)
+                .ok_or_else(|| {
+                    VceError::InvalidRequest("staging source byte count overflowed".to_owned())
+                })?;
+            if !current_batch.is_empty()
+                && (current_batch.len() >= self.config.index_stage_blob_limit
+                    || next_bytes > self.config.index_stage_max_bytes)
+            {
+                record_batches.push(std::mem::take(&mut current_batch));
+                current_bytes = 0;
+            }
+            current_bytes = current_bytes
+                .checked_add(staged_source_bytes)
+                .ok_or_else(|| {
+                    VceError::InvalidRequest("staging source byte count overflowed".to_owned())
+                })?;
+            current_batch.push(record);
+        }
+        if !current_batch.is_empty() {
+            record_batches.push(current_batch);
+        }
+
+        let mut prepared_batches = Vec::with_capacity(record_batches.len());
+        let mut content_inputs = Vec::new();
+        let mut content_segment_owners = BTreeMap::<String, (usize, usize)>::new();
+        for (batch_index, records) in record_batches.into_iter().enumerate() {
+            context.control.check()?;
+            let loaded = self
+                .read_sources_for_records(context.refresh_id, batch_index, &records, context.source)
+                .await?;
+            let mut blob_slots = Vec::with_capacity(records.len());
+            let mut pending_blobs = Vec::new();
+            for record in &records {
+                context.control.check()?;
+                context.control.observe(VceRefreshProgress {
+                    phase: VceRefreshPhase::Chunking,
+                    operation_id: format!("{}:prepare:{}", context.refresh_id, record.path),
+                    unit: VceRefreshUnit::Files,
+                    completed: 0,
+                    total: Some(1),
+                    overall_completed: 0,
+                    overall_total: Some(blob_names.len() as u64),
+                    current_path: Some(record.path.clone()),
+                });
+                if record.size > self.config.indexing.max_file_bytes {
+                    let blob_name = record.blob_name.as_deref().ok_or_else(|| {
+                        VceError::InvalidRequest(format!(
+                            "present source `{}` has no Blob identity",
+                            record.path
+                        ))
+                    })?;
+                    let restored = persisted_nodes
+                        .as_ref()
+                        .and_then(|nodes| nodes.get(blob_name))
+                        .map(|node| self.restore_prepared_blob(record, None, node, &context))
+                        .transpose()?
+                        .flatten();
+                    blob_slots.push(PreparedBlobSlot::Ready(Box::new(match restored {
+                        Some(PreparedBlobResult::Ready(blob)) => blob,
+                        Some(PreparedBlobResult::Pending(_)) => {
+                            return Err(VceError::InvalidRequest(format!(
+                                "durable Embedding snapshot unexpectedly prepares over-limit Blob `{blob_name}`"
+                            )));
+                        }
+                        None => self.prepare_over_limit_blob(record, context.generation)?,
+                    })));
+                    continue;
+                }
+                let content = record
+                    .content
+                    .as_deref()
+                    .or_else(|| loaded.get(&record.path).map(String::as_str))
+                    .ok_or_else(|| VceError::InvalidHostResponse {
+                        operation: VcePortOperation::SourceRead,
+                        reason: format!("source `{}` was not returned", record.path),
+                    })?;
+                let blob_name = record.blob_name.as_deref().ok_or_else(|| {
+                    VceError::InvalidRequest(format!(
+                        "present source `{}` has no Blob identity",
+                        record.path
+                    ))
+                })?;
+                source_contents.insert(blob_name.to_owned(), content.to_owned());
+                let blob_request_id = format!("{}:blob:{blob_name}", context.refresh_id);
+                let restored = persisted_nodes
+                    .as_ref()
+                    .and_then(|nodes| nodes.get(blob_name))
+                    .map(|node| self.restore_prepared_blob(record, Some(content), node, &context))
+                    .transpose()?
+                    .flatten();
+                let prepared_result = match restored {
+                    Some(result) => Ok(result),
+                    None => self.prepare_blob(record, content, &blob_request_id, &context),
+                };
+                match prepared_result {
+                    Ok(PreparedBlobResult::Ready(blob)) => {
+                        blob_slots.push(PreparedBlobSlot::Ready(Box::new(blob)));
+                    }
+                    Ok(PreparedBlobResult::Pending(prepared)) => {
+                        let owner = pending_blobs.len();
+                        if let Some(plan) = prepared.prepared.embedding_plan.as_ref() {
+                            content_inputs.extend(plan.inputs.iter().cloned());
+                            for batch in &plan.batches {
+                                for segment in &batch.segments {
+                                    if content_segment_owners
+                                        .insert(
+                                            segment.request_input_id(),
+                                            (prepared_batches.len(), owner),
+                                        )
+                                        .is_some()
+                                    {
+                                        return Err(VceError::InvalidRequest(
+                                            "content Embedding segment identity is shared by multiple Blobs"
+                                                .to_owned(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        pending_blobs.push(prepared);
+                        blob_slots.push(PreparedBlobSlot::Pending(owner));
+                    }
+                    Err(VceError::Structure(StructureError::AnalysisFailed { message })) => {
+                        let error = StructureError::AnalysisFailed {
+                            message: message.clone(),
+                        };
+                        context.control.observe_failure(VceRefreshFailure {
+                            phase: VceRefreshPhase::Chunking,
+                            operation_id: format!(
+                                "{}:structure:{}",
+                                context.refresh_id, record.path
+                            ),
+                            path: Some(record.path.clone()),
+                            message: error.to_string(),
+                            api_request_reached: false,
+                        });
+                        blob_slots.push(PreparedBlobSlot::Ready(Box::new(
+                            self.prepare_structure_failure_blob(record, context.generation, error)?,
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            prepared_batches.push(PreparedStageBatch {
+                batch_index,
+                blob_slots,
+                pending_blobs,
+            });
+        }
+
+        let configured_max_inputs = self.config.indexing.embedding_max_inputs;
+        let provider_max_inputs = context.ai.embedding_max_inputs();
+        let effective_max_inputs = provider_max_inputs.map_or(configured_max_inputs, |limit| {
+            configured_max_inputs.min(limit)
+        });
+        if effective_max_inputs == 0 {
+            return Err(VceError::InvalidRequest(
+                "effective Embedding batch input limit must be positive".to_owned(),
+            ));
+        }
+        let build_plan = |inputs: Vec<EmbeddingInput>| {
+            EmbeddingPlan::new(
+                inputs,
+                effective_max_inputs,
+                self.config.indexing.embedding_max_chars,
+                self.config.indexing.embedding_max_segment_chars,
+                self.config.indexing.embedding_overlap_chars,
+            )
+            .map_err(VceError::Embedding)
+        };
+
+        let mut path_inputs = Vec::new();
+        for prepared_batch in &prepared_batches {
+            for slot in &prepared_batch.blob_slots {
+                let document = match slot {
+                    PreparedBlobSlot::Ready(blob) => blob.path_document.as_ref(),
+                    PreparedBlobSlot::Pending(owner) => prepared_batch
+                        .pending_blobs
+                        .get(*owner)
+                        .and_then(|prepared| prepared.prepared.path_document.as_ref()),
+                };
+                if let Some(document) = document {
+                    path_inputs.push(EmbeddingInput::new(
+                        document.path_id.clone(),
+                        document.document.clone(),
+                    )?);
+                }
+            }
+        }
+        let content_plan = (!content_inputs.is_empty())
+            .then(|| build_plan(content_inputs))
+            .transpose()?;
+        let path_plan = (!path_inputs.is_empty())
+            .then(|| build_plan(path_inputs))
+            .transpose()?;
+
+        let mut purposes = Vec::new();
+        if content_plan.is_some() {
+            purposes.push(VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned());
+        }
+        if path_plan.is_some() {
+            purposes.push(VceAiPurpose::CodePathEmbedding.as_str().to_owned());
+        }
+        let contract = VceEmbeddingRunContract {
+            embedding_space: self.config.embedding_space.clone(),
+            configured_max_inputs,
+            provider_max_inputs,
+            effective_max_inputs,
+            max_chars: self.config.indexing.embedding_max_chars,
+            max_segment_chars: self.config.indexing.embedding_max_segment_chars,
+            overlap_chars: self.config.indexing.embedding_overlap_chars,
+            max_file_bytes: self.config.indexing.max_file_bytes,
+            purposes,
+        };
+        contract.validate().map_err(VceError::InvalidRequest)?;
+
+        let current_blob_names = self
+            .workspace
+            .records
+            .values()
+            .filter(|record| record.status == FileStatus::Present)
+            .filter_map(|record| record.blob_name.clone())
+            .collect::<BTreeSet<_>>();
+        let base_checkpoint_version = self
+            .workspace
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.version);
+        let reused_blob_names = self
+            .workspace
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| {
+                checkpoint
+                    .members
+                    .intersection(&current_blob_names)
+                    .filter(|blob_name| !blob_names.contains(*blob_name))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let mut nodes = Vec::new();
+        for prepared_batch in &prepared_batches {
+            for slot in &prepared_batch.blob_slots {
+                let (
+                    blob_name,
+                    path,
+                    chunks,
+                    content_input_ids,
+                    path_input_id,
+                    prepared_index,
+                    structure_analyzer_id,
+                    structure_mode,
+                    structure_fallback_reason,
+                    symbols,
+                    ready_without_embedding_reason,
+                ) = match slot {
+                    PreparedBlobSlot::Ready(blob) => {
+                        let ready_without_embedding_reason = match &blob.status {
+                            IndexedBlobStatus::ReadyWithoutEmbedding { reason } => {
+                                Some(reason.clone())
+                            }
+                            IndexedBlobStatus::Ready => None,
+                        };
+                        (
+                            blob.blob_name.clone(),
+                            blob.path.clone(),
+                            blob.chunks
+                                .iter()
+                                .map(|chunk| chunk.chunk_id.clone())
+                                .collect(),
+                            Vec::new(),
+                            blob.path_document
+                                .as_ref()
+                                .map(|document| document.path_id.clone()),
+                            None,
+                            blob.structure_analyzer_id.clone(),
+                            blob.structure_mode,
+                            blob.structure_fallback_reason.clone(),
+                            blob.symbols.clone(),
+                            ready_without_embedding_reason,
+                        )
+                    }
+                    PreparedBlobSlot::Pending(owner) => {
+                        let prepared =
+                            prepared_batch.pending_blobs.get(*owner).ok_or_else(|| {
+                                VceError::InvalidRequest(
+                                    "prepared Blob completion owner is missing".to_owned(),
+                                )
+                            })?;
+                        (
+                            prepared.prepared.pending.blob_name.clone(),
+                            prepared.prepared.pending.path.clone(),
+                            prepared
+                                .prepared
+                                .chunks
+                                .iter()
+                                .map(|chunk| chunk.chunk_id.clone())
+                                .collect(),
+                            prepared.prepared.embedding_plan.as_ref().map_or_else(
+                                Vec::new,
+                                |plan| {
+                                    plan.inputs
+                                        .iter()
+                                        .map(|input| input.input_id.clone())
+                                        .collect()
+                                },
+                            ),
+                            prepared
+                                .prepared
+                                .path_document
+                                .as_ref()
+                                .map(|document| document.path_id.clone()),
+                            Some(prepared.prepared.clone()),
+                            Some(prepared.structure_analyzer_id.clone()),
+                            Some(prepared.structure_mode),
+                            prepared.structure_fallback_reason.clone(),
+                            prepared.symbols.clone(),
+                            None,
+                        )
+                    }
+                };
+                let (metadata_path, source_size, mtime_ns) =
+                    source_metadata.get(&blob_name).cloned().ok_or_else(|| {
+                        VceError::InvalidRequest(format!(
+                            "source metadata is missing for Blob `{blob_name}`"
+                        ))
+                    })?;
+                if metadata_path != path {
+                    return Err(VceError::InvalidRequest(format!(
+                        "source metadata path changed for Blob `{blob_name}`"
+                    )));
+                }
+                let source_content = prepared_index
+                    .is_none()
+                    .then(|| source_contents.get(&blob_name).cloned())
+                    .flatten();
+                nodes.push(VceCodeNodeSnapshot {
+                    blob_name,
+                    path,
+                    generation: context.generation,
+                    source_size,
+                    mtime_ns,
+                    source_content,
+                    prepared_index,
+                    structure_analyzer_id,
+                    structure_mode,
+                    structure_fallback_reason,
+                    symbols,
+                    ready_without_embedding_reason,
+                    chunk_ids: chunks,
+                    content_input_ids,
+                    path_input_id,
+                });
+            }
+        }
+
+        let mut manifest_batches = Vec::new();
+        if let Some(plan) = &content_plan {
+            for (batch_index, batch) in plan.batches.iter().enumerate() {
+                manifest_batches.push(VceEmbeddingBatchRecord::pending(
+                    format!("{}:content:{batch_index}", context.refresh_id),
+                    VceAiPurpose::CodeDocumentEmbedding.as_str(),
+                    batch,
+                ));
+            }
+        }
+        if let Some(plan) = &path_plan {
+            for (batch_index, batch) in plan.batches.iter().enumerate() {
+                manifest_batches.push(VceEmbeddingBatchRecord::pending(
+                    format!("{}:path:{batch_index}", context.refresh_id),
+                    VceAiPurpose::CodePathEmbedding.as_str(),
+                    batch,
+                ));
+            }
+        }
+        let now = current_unix_epoch_millis();
+        let planned_manifest = VceEmbeddingRunManifest {
+            schema_version: crate::manifest::VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION,
+            run_id: context.refresh_id.to_owned(),
+            namespace_id: context.index.binding().namespace_id.clone(),
+            generation: context.generation,
+            source_revision: context.source_revision.map(str::to_owned),
+            state: VceEmbeddingRunState::Planned,
+            contract: Some(contract),
+            base_checkpoint_version,
+            reused_blob_names,
+            nodes,
+            batches: manifest_batches,
+            created_at_unix_ms: now,
+            updated_at_unix_ms: now,
+        };
+        planned_manifest
+            .validate()
+            .map_err(VceError::InvalidRequest)?;
+        let mut manifest = match persisted_manifest {
+            Some(existing) => {
+                validate_embedding_manifest_plan(&planned_manifest, &existing)?;
+                if existing.state == VceEmbeddingRunState::Succeeded {
+                    return Err(VceError::InvalidRequest(
+                        "durable Embedding run was already published".to_owned(),
+                    ));
+                }
+                existing
+            }
+            None => {
+                context
+                    .index
+                    .persist_embedding_manifest(planned_manifest.clone())
+                    .await
+                    .map_err(VceError::Port)?;
+                planned_manifest
+            }
+        };
+        manifest
+            .mark_running(current_unix_epoch_millis())
+            .map_err(VceError::InvalidRequest)?;
+        context
+            .index
+            .persist_embedding_manifest(manifest.clone())
+            .await
+            .map_err(VceError::Port)?;
+
+        let mut content_vectors_by_blob = prepared_batches
+            .iter()
+            .map(|batch| {
+                (0..batch.pending_blobs.len())
+                    .map(|_| Vec::<SegmentVector>::new())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if let Some(plan) = &content_plan {
+            let content_segments = match self
+                .execute_embedding_plan_durable(
+                    plan,
+                    EmbeddingExecutionContext {
+                        request_id: &format!("{}:content", context.refresh_id),
+                        purpose: VceAiPurpose::CodeDocumentEmbedding,
+                        ai: context.ai,
+                        capability: context.capability,
+                        overall: Some((0, blob_names.len() as u64)),
+                    },
+                    context.control,
+                    context.index,
+                    &mut manifest,
+                )
+                .await
+            {
+                Ok(segments) => segments,
+                Err(error) => {
+                    manifest.state = if matches!(error, VceError::RefreshCancelled) {
+                        VceEmbeddingRunState::Cancelled
+                    } else {
+                        VceEmbeddingRunState::Failed
+                    };
+                    manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                    let _ = persist_manifest_run_state(context.index, &manifest).await;
+                    return Err(error);
+                }
+            };
+            for segment in content_segments {
+                let (batch_index, owner) = content_segment_owners
+                    .get(&segment.input_id)
+                    .copied()
+                    .ok_or_else(|| VceError::InvalidHostResponse {
+                    operation: VcePortOperation::Embedding,
+                    reason: format!(
+                        "content Embedding returned an unknown segment `{}`",
+                        segment.input_id
+                    ),
+                })?;
+                content_vectors_by_blob
+                    .get_mut(batch_index)
+                    .and_then(|batches| batches.get_mut(owner))
+                    .ok_or_else(|| VceError::InvalidHostResponse {
+                        operation: VcePortOperation::Embedding,
+                        reason: "content Embedding owner is outside the prepared plan".to_owned(),
+                    })?
+                    .push(segment);
+            }
+        }
+
+        let mut path_vectors = BTreeMap::new();
+        let mut path_error = None;
+        if let Some(plan) = &path_plan {
+            match self
+                .execute_embedding_plan_durable(
+                    plan,
+                    EmbeddingExecutionContext {
+                        request_id: &format!("{}:path", context.refresh_id),
+                        purpose: VceAiPurpose::CodePathEmbedding,
+                        ai: context.ai,
+                        capability: context.capability,
+                        overall: Some((0, blob_names.len() as u64)),
+                    },
+                    context.control,
+                    context.index,
+                    &mut manifest,
+                )
+                .await
+            {
+                Ok(segments) => {
+                    for vector in plan.aggregate(segments)? {
+                        path_vectors.insert(vector.input_id.clone(), vector);
+                    }
+                }
+                Err(VceError::RefreshCancelled) => {
+                    manifest.state = VceEmbeddingRunState::Cancelled;
+                    manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                    let _ = persist_manifest_run_state(context.index, &manifest).await;
+                    return Err(VceError::RefreshCancelled);
+                }
+                Err(error) => {
+                    let path_batch_positions = manifest
+                        .batches
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(position, batch)| {
+                            (batch.purpose == VceAiPurpose::CodePathEmbedding.as_str())
+                                .then_some(position)
+                        })
+                        .collect::<Vec<_>>();
+                    for position in path_batch_positions {
+                        manifest
+                            .batches
+                            .get_mut(position)
+                            .ok_or_else(|| {
+                                VceError::InvalidRequest(
+                                    "durable path Embedding batch position is invalid".to_owned(),
+                                )
+                            })?
+                            .mark_failed(error.to_string());
+                        manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                        persist_manifest_batch_record(context.index, &manifest, position).await?;
+                    }
+                    path_error = Some(error);
+                }
+            }
+        }
+
+        let mut staged = BTreeSet::new();
+        for prepared_batch in &mut prepared_batches {
+            if let Err(error) = context.control.check() {
+                if matches!(&error, VceError::RefreshCancelled) {
+                    // Persist cancellation after the provider phase so a resumed run can distinguish
+                    // an intentional stop from an unobserved crash during source materialization.
+                    // 在供应商阶段之后持久化取消，使恢复运行能够区分主动停止与源码物化期间未观察到的崩溃。
+                    manifest.state = VceEmbeddingRunState::Cancelled;
+                    manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                    let _ = persist_manifest_run_state(context.index, &manifest).await;
+                }
+                return Err(error);
+            }
+            let mut completed_pending = Vec::with_capacity(prepared_batch.pending_blobs.len());
+            for (owner, prepared) in prepared_batch.pending_blobs.drain(..).enumerate() {
+                let symbol_status = if prepared.symbols.is_empty() {
+                    AuxiliaryIndexStatus::NotApplicable
+                } else {
+                    AuxiliaryIndexStatus::Ready
+                };
+                let ready = self.indexing.complete(
+                    prepared.prepared,
+                    content_vectors_by_blob[prepared_batch.batch_index][owner]
+                        .drain(..)
+                        .collect(),
+                    self.config.embedding_space.dimension,
+                )?;
+                completed_pending.push(Some(IndexedBlob {
+                    blob_name: ready.blob_name,
+                    path: ready.path,
+                    generation: ready.generation,
+                    structure_analyzer_id: Some(prepared.structure_analyzer_id),
+                    structure_mode: Some(prepared.structure_mode),
+                    structure_fallback_reason: prepared.structure_fallback_reason,
+                    chunks: ready.chunks,
+                    embedding_vectors: ready.embedding_vectors,
+                    path_document: ready.path_document,
+                    path_embedding: None,
+                    symbols: prepared.symbols,
+                    path_status: AuxiliaryIndexStatus::NotApplicable,
+                    symbol_status,
+                    status: IndexedBlobStatus::Ready,
+                }));
+            }
+            let mut blobs = Vec::with_capacity(prepared_batch.blob_slots.len());
+            for slot in std::mem::take(&mut prepared_batch.blob_slots) {
+                match slot {
+                    PreparedBlobSlot::Ready(blob) => blobs.push(*blob),
+                    PreparedBlobSlot::Pending(owner) => blobs.push(
+                        completed_pending
+                            .get_mut(owner)
+                            .and_then(Option::take)
+                            .ok_or_else(|| {
+                                VceError::InvalidRequest(
+                                    "prepared Blob completion owner is missing".to_owned(),
+                                )
+                            })?,
+                    ),
+                }
+            }
+            for blob in &mut blobs {
+                if let Some(document) = blob.path_document.as_ref() {
+                    if let Some(vector) = path_vectors.get(&document.path_id) {
+                        blob.path_embedding = Some(vector.clone());
+                        blob.path_status = AuxiliaryIndexStatus::Ready;
+                    } else if let Some(error) = path_error.as_ref() {
+                        blob.path_status = AuxiliaryIndexStatus::Failed {
+                            reason: error.to_string(),
+                        };
+                    } else {
+                        return Err(VceError::InvalidHostResponse {
+                            operation: VcePortOperation::Embedding,
+                            reason: format!(
+                                "path Embedding returned no logical vector for `{}`",
+                                document.path_id
+                            ),
+                        });
+                    }
+                }
+            }
+            let operation_id = format!(
+                "{}:stage:{}",
+                context.refresh_id, prepared_batch.batch_index
+            );
+            let request = IndexStageBatch {
+                operation_id,
+                refresh_id: context.refresh_id.to_owned(),
+                generation: context.generation,
+                blobs,
+            };
+            let receipt = context.index.stage(request.clone()).await?;
+            validate_stage_receipt(&request, &receipt)?;
+            staged.extend(receipt.staged_blob_names);
+            context.control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Writing,
+                operation_id: context.refresh_id.to_owned(),
+                unit: VceRefreshUnit::Blobs,
+                completed: staged.len() as u64,
+                total: Some(blob_names.len() as u64),
+                overall_completed: staged.len() as u64,
+                overall_total: Some(blob_names.len() as u64),
+                current_path: None,
+            });
+        }
+        manifest
+            .mark_candidate_ready(current_unix_epoch_millis())
+            .map_err(VceError::InvalidRequest)?;
+        persist_manifest_run_state(context.index, &manifest).await?;
+        Ok(staged)
+    }
+
+    /// Restore one immutable prepared artifact and avoid re-reading or re-analyzing its source.
+    /// 恢复一个不可变准备产物，避免重新读取源码或重新执行结构分析。
+    fn restore_prepared_blob(
+        &self,
+        record: &FileRecord,
+        source_content: Option<&str>,
+        node: &VceCodeNodeSnapshot,
+        context: &RefreshStageContext<'_>,
+    ) -> Result<Option<PreparedBlobResult>, VceError> {
+        let expected_blob = record.blob_name.as_deref().ok_or_else(|| {
+            VceError::InvalidRequest(format!(
+                "present source `{}` has no Blob identity",
+                record.path
+            ))
+        })?;
+        if node.blob_name != expected_blob
+            || node.path != record.path
+            || node.generation != context.generation
+            || node.source_size != record.size
+            || node.mtime_ns != record.mtime_ns
+        {
+            return Err(VceError::InvalidRequest(format!(
+                "durable Embedding snapshot changed for `{}`",
+                record.path
+            )));
+        }
+        if let Some(content) = source_content {
+            let actual_blob = crate::identity::blob_name(&record.path, content)
+                .map_err(WorkspaceError::InvalidPath)?;
+            validate_prepared_blob_identity(expected_blob, &actual_blob, &record.path)?;
+        }
+
+        if let Some(reason) = &node.ready_without_embedding_reason {
+            if node.prepared_index.is_some() {
+                return Err(VceError::InvalidRequest(format!(
+                    "durable Embedding snapshot mixes terminal and prepared states for `{}`",
+                    record.path
+                )));
+            }
+            return Ok(Some(PreparedBlobResult::Ready(IndexedBlob {
+                blob_name: expected_blob.to_owned(),
+                path: record.path.clone(),
+                generation: context.generation,
+                structure_analyzer_id: None,
+                structure_mode: None,
+                structure_fallback_reason: None,
+                chunks: Vec::new(),
+                embedding_vectors: Vec::new(),
+                path_document: None,
+                path_embedding: None,
+                symbols: Vec::new(),
+                path_status: AuxiliaryIndexStatus::NotApplicable,
+                symbol_status: AuxiliaryIndexStatus::NotApplicable,
+                status: IndexedBlobStatus::ReadyWithoutEmbedding {
+                    reason: reason.clone(),
+                },
+            })));
+        }
+
+        let Some(prepared) = node.prepared_index.clone() else {
+            // Persisted manifests without a frozen contract are rejected before this helper;
+            // this branch remains only for explicit legacy in-memory fixtures.
+            // 持久清单若缺少冻结契约会在此辅助函数前被拒绝；此分支仅保留给显式旧版内存夹具。
+            return Ok(None);
+        };
+        if prepared.pending.generation != context.generation
+            || prepared.pending.blob_name != expected_blob
+            || prepared.pending.path != record.path
+            || source_content.is_some_and(|content| content != prepared.pending.content)
+            || prepared
+                .chunks
+                .iter()
+                .any(|chunk| chunk.blob_name != expected_blob || chunk.path != record.path)
+        {
+            return Err(VceError::InvalidRequest(format!(
+                "durable prepared Embedding artifact changed for `{}`",
+                record.path
+            )));
+        }
+        let actual_blob =
+            crate::identity::blob_name(&prepared.pending.path, &prepared.pending.content)
+                .map_err(WorkspaceError::InvalidPath)?;
+        validate_prepared_blob_identity(expected_blob, &actual_blob, &record.path)?;
+        if let Some(plan) = &prepared.embedding_plan {
+            plan.validate().map_err(VceError::Embedding)?;
+        }
+        let structure_analyzer_id = node.structure_analyzer_id.clone().ok_or_else(|| {
+            VceError::InvalidRequest(format!(
+                "durable prepared Embedding artifact has no analyzer identity for `{}`",
+                record.path
+            ))
+        })?;
+        let structure_mode = node.structure_mode.ok_or_else(|| {
+            VceError::InvalidRequest(format!(
+                "durable prepared Embedding artifact has no structure mode for `{}`",
+                record.path
+            ))
+        })?;
+        Ok(Some(PreparedBlobResult::Pending(
+            PreparedBlobForEmbedding {
+                prepared,
+                structure_analyzer_id,
+                structure_mode,
+                structure_fallback_reason: node.structure_fallback_reason.clone(),
+                symbols: node.symbols.clone(),
+            },
+        )))
     }
 
     /// Load only missing source text and verify it still matches the planned Blob identities.
@@ -2683,17 +3791,18 @@ impl VceEngine {
     async fn execute_embedding_plan(
         &self,
         plan: &EmbeddingPlan,
-        request_id: &str,
-        purpose: VceAiPurpose,
-        ai: &dyn VceAiPort,
-        capability: &VceAiCapabilitySnapshot,
+        context: EmbeddingExecutionContext<'_>,
         // Query calls have no indexing control; refresh calls share their exact job control.
         // 查询调用没有索引控制；刷新调用共享其精确作业控制。
         control: Option<&VceRefreshControl>,
-        // Refresh calls may report their confirmed whole-operation scope alongside this plan.
-        // 刷新调用可在此计划之外报告整个操作范围内已确认的进度。
-        overall: Option<(u64, u64)>,
     ) -> Result<Vec<SegmentVector>, VceError> {
+        let EmbeddingExecutionContext {
+            request_id,
+            purpose,
+            ai,
+            capability,
+            overall,
+        } = context;
         if !capability.registered || !capability.embedding_available {
             return Err(VceError::AiCapabilityUnavailable { purpose });
         }
@@ -2787,6 +3896,223 @@ impl VceEngine {
             .collect())
     }
 
+    /// Execute one durable synchronous plan in stable order and retain every validated result.
+    /// 按稳定顺序执行一份可恢复的同步计划，并保留每个已校验的批次结果。
+    async fn execute_embedding_plan_durable(
+        &self,
+        plan: &EmbeddingPlan,
+        context: EmbeddingExecutionContext<'_>,
+        control: &VceRefreshControl,
+        index: &dyn VceIndexPort,
+        manifest: &mut VceEmbeddingRunManifest,
+    ) -> Result<Vec<SegmentVector>, VceError> {
+        let EmbeddingExecutionContext {
+            request_id,
+            purpose,
+            ai,
+            capability,
+            overall,
+        } = context;
+        if !capability.registered || !capability.embedding_available {
+            return Err(VceError::AiCapabilityUnavailable { purpose });
+        }
+        plan.validate()?;
+        let manifest_positions = manifest
+            .batches
+            .iter()
+            .enumerate()
+            .filter_map(|(position, batch)| (batch.purpose == purpose.as_str()).then_some(position))
+            .collect::<Vec<_>>();
+        if manifest_positions.len() != plan.batches.len() {
+            return Err(VceError::InvalidRequest(format!(
+                "durable Embedding manifest batch count mismatch for {}",
+                purpose.as_str()
+            )));
+        }
+        let mut completed_batches = 0_u64;
+        let mut vectors = Vec::new();
+        for (batch_index, batch) in plan.batches.iter().enumerate() {
+            control.check()?;
+            let manifest_position = manifest_positions[batch_index];
+            let expected_input_ids = batch.request_input_ids();
+            let (batch_id, batch_state, actual_input_ids, actual_total_chars) = {
+                let manifest_batch = manifest.batches.get(manifest_position).ok_or_else(|| {
+                    VceError::InvalidRequest(
+                        "durable Embedding manifest batch position is invalid".to_owned(),
+                    )
+                })?;
+                (
+                    manifest_batch.batch_id.clone(),
+                    manifest_batch.state,
+                    manifest_batch.input_ids.clone(),
+                    manifest_batch.total_chars,
+                )
+            };
+            if actual_input_ids != expected_input_ids || actual_total_chars != batch.total_chars {
+                return Err(VceError::InvalidRequest(format!(
+                    "durable Embedding manifest batch {} no longer matches the frozen plan",
+                    batch_id
+                )));
+            }
+            let operation_id = format!("{request_id}:{batch_index}");
+            let recovered = match index
+                .load_embedding_batch_result(manifest.run_id.clone(), batch_id.clone())
+                .await
+                .map_err(VceError::Port)?
+            {
+                Some(result) => {
+                    if result.batch_id != batch_id {
+                        return Err(VceError::InvalidHostResponse {
+                            operation: VcePortOperation::EmbeddingManifest,
+                            reason: format!(
+                                "durable Embedding result identity mismatch for {}",
+                                batch_id
+                            ),
+                        });
+                    }
+                    let stored_vectors = result.into_vectors().map_err(VceError::InvalidRequest)?;
+                    let recovered = validate_embedding_response(
+                        self,
+                        &operation_id,
+                        VceEmbeddingResponse {
+                            operation_id: operation_id.clone(),
+                            vectors: stored_vectors,
+                            space: self.config.embedding_space.clone(),
+                        },
+                        batch,
+                    )?;
+                    if batch_state != VceEmbeddingBatchState::Succeeded {
+                        // A durable result is authoritative even when the following manifest write was interrupted.
+                        // 即使后续清单写入被中断，已持久化的结果仍是权威事实。
+                        manifest
+                            .batches
+                            .get_mut(manifest_position)
+                            .ok_or_else(|| {
+                                VceError::InvalidRequest(
+                                    "durable Embedding manifest batch position is invalid"
+                                        .to_owned(),
+                                )
+                            })?
+                            .mark_succeeded();
+                        manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                        persist_manifest_batch_record(index, manifest, manifest_position).await?;
+                    }
+                    Some(recovered)
+                }
+                None if batch_state == VceEmbeddingBatchState::Succeeded => {
+                    if let Some(manifest_batch) = manifest.batches.get_mut(manifest_position) {
+                        manifest_batch.state = VceEmbeddingBatchState::Pending;
+                        manifest_batch.error = None;
+                    } else {
+                        return Err(VceError::InvalidRequest(
+                            "durable Embedding manifest batch position is invalid".to_owned(),
+                        ));
+                    }
+                    manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                    persist_manifest_batch_record(index, manifest, manifest_position).await?;
+                    None
+                }
+                None => None,
+            };
+            let batch_vectors = if let Some(recovered) = recovered {
+                recovered
+            } else {
+                manifest
+                    .batches
+                    .get_mut(manifest_position)
+                    .ok_or_else(|| {
+                        VceError::InvalidRequest(
+                            "durable Embedding manifest batch position is invalid".to_owned(),
+                        )
+                    })?
+                    .mark_running()
+                    .map_err(VceError::InvalidRequest)?;
+                manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                persist_manifest_batch_record(index, manifest, manifest_position).await?;
+                let response = match ai
+                    .embed(VceEmbeddingRequest {
+                        context: VceAiRequestContext::new(
+                            operation_id.clone(),
+                            purpose,
+                            ai.binding(),
+                        ),
+                        batch: batch.clone(),
+                    })
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        if let Some(manifest_batch) = manifest.batches.get_mut(manifest_position) {
+                            manifest_batch.mark_failed(error.to_string());
+                        } else {
+                            return Err(VceError::InvalidRequest(
+                                "durable Embedding manifest batch position is invalid".to_owned(),
+                            ));
+                        }
+                        manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                        let _ =
+                            persist_manifest_batch_record(index, manifest, manifest_position).await;
+                        return Err(VceError::Port(error));
+                    }
+                };
+                let response_vectors =
+                    match validate_embedding_response(self, &operation_id, response, batch) {
+                        Ok(vectors) => vectors,
+                        Err(error) => {
+                            if let Some(manifest_batch) =
+                                manifest.batches.get_mut(manifest_position)
+                            {
+                                manifest_batch.mark_failed(error.to_string());
+                            } else {
+                                return Err(VceError::InvalidRequest(
+                                    "durable Embedding manifest batch position is invalid"
+                                        .to_owned(),
+                                ));
+                            }
+                            manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                            let _ =
+                                persist_manifest_batch_record(index, manifest, manifest_position)
+                                    .await;
+                            return Err(error);
+                        }
+                    };
+                let result = VceEmbeddingBatchResult::from_vectors(&batch_id, &response_vectors);
+                result.validate().map_err(VceError::InvalidRequest)?;
+                index
+                    .persist_embedding_batch_result(manifest.run_id.clone(), result)
+                    .await
+                    .map_err(VceError::Port)?;
+                manifest
+                    .batches
+                    .get_mut(manifest_position)
+                    .ok_or_else(|| {
+                        VceError::InvalidRequest(
+                            "durable Embedding manifest batch position is invalid".to_owned(),
+                        )
+                    })?
+                    .mark_succeeded();
+                manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                persist_manifest_batch_record(index, manifest, manifest_position).await?;
+                response_vectors
+            };
+            vectors.extend(batch_vectors);
+            completed_batches = completed_batches.saturating_add(1);
+            control.observe(VceRefreshProgress {
+                phase: VceRefreshPhase::Embedding,
+                operation_id: format!("{request_id}:{}", purpose.as_str()),
+                unit: VceRefreshUnit::Batches,
+                completed: completed_batches,
+                total: Some(plan.batches.len() as u64),
+                // Child batch completions cannot advance the Blob-based whole-refresh counter.
+                // 子批次完成量不能推进以 Blob 为单位的完整刷新计数。
+                overall_completed: overall.map_or(completed_batches, |(base, _)| base),
+                overall_total: overall.map(|(_, total)| total),
+                current_path: None,
+            });
+        }
+        Ok(vectors)
+    }
+
     /// Create and execute one logical query Embedding plan.
     /// 创建并执行一个逻辑查询向量计划。
     async fn query_vector(
@@ -2814,11 +4140,13 @@ impl VceEngine {
         let segments = self
             .execute_embedding_plan(
                 &plan,
-                &embedding_request_id,
-                purpose,
-                ai,
-                capability,
-                None,
+                EmbeddingExecutionContext {
+                    request_id: &embedding_request_id,
+                    purpose,
+                    ai,
+                    capability,
+                    overall: None,
+                },
                 None,
             )
             .await?;
@@ -3110,6 +4438,103 @@ fn validate_state_identity(
             expected.chunker_version.clone(),
             actual.chunker_version.clone(),
         ));
+    }
+    Ok(())
+}
+
+/// Return the current Unix timestamp in milliseconds for bounded manifest metadata.
+/// 返回当前 Unix 毫秒时间戳，用于有界清单元数据。
+fn current_unix_epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_millis().min(u64::MAX as u128) as u64
+        })
+}
+
+/// Persist only the current run lifecycle projection from one complete in-memory manifest.
+/// 仅从一份完整内存清单持久化当前运行生命周期投影。
+///
+/// `index` owns `manifest`; returns after saving its run identity, state, and timestamp or propagates the port error.
+/// `index` 拥有 `manifest`；保存运行身份、状态及时间戳后返回，失败时透传端口错误。
+async fn persist_manifest_run_state(
+    index: &dyn VceIndexPort,
+    manifest: &VceEmbeddingRunManifest,
+) -> Result<(), VceError> {
+    index
+        .persist_embedding_run_state(
+            manifest.run_id.clone(),
+            manifest.state,
+            manifest.updated_at_unix_ms,
+        )
+        .await
+        .map_err(VceError::Port)
+}
+
+/// Persist one mutable batch projection without rewriting the manifest's frozen source nodes.
+/// 持久化一条可变批次投影，不重写清单中的冻结源码节点。
+///
+/// `batch_position` selects a batch in `manifest` owned by `index`; returns persistence success or an explicit lookup/port error.
+/// `batch_position` 选择 `index` 所属 `manifest` 中的批次；返回持久化成功或明确的位置／端口错误。
+async fn persist_manifest_batch_record(
+    index: &dyn VceIndexPort,
+    manifest: &VceEmbeddingRunManifest,
+    batch_position: usize,
+) -> Result<(), VceError> {
+    // Copy only the selected mutable record; the complete frozen source plan stays in memory.
+    // 仅复制选中的可变记录；完整冻结源码计划保留在内存中。
+    let batch = manifest
+        .batches
+        .get(batch_position)
+        .cloned()
+        .ok_or_else(|| {
+            VceError::InvalidRequest(
+                "durable Embedding manifest batch position is invalid".to_owned(),
+            )
+        })?;
+    index
+        .persist_embedding_batch_record(manifest.run_id.clone(), batch, manifest.updated_at_unix_ms)
+        .await
+        .map_err(VceError::Port)
+}
+
+/// Verify that a recovered manifest describes exactly the newly computed source plan.
+/// 校验恢复清单是否精确描述了本次重新计算得到的源码计划。
+fn validate_embedding_manifest_plan(
+    planned: &VceEmbeddingRunManifest,
+    existing: &VceEmbeddingRunManifest,
+) -> Result<(), VceError> {
+    existing.validate().map_err(VceError::InvalidRequest)?;
+    if existing.contract.is_none() && planned.contract.is_some() {
+        return Err(VceError::InvalidRequest(
+            "durable Embedding manifest predates the frozen run contract; start a new run"
+                .to_owned(),
+        ));
+    }
+    if existing.run_id != planned.run_id
+        || existing.namespace_id != planned.namespace_id
+        || existing.generation != planned.generation
+        || existing.source_revision != planned.source_revision
+        || existing.contract != planned.contract
+        || existing.base_checkpoint_version != planned.base_checkpoint_version
+        || existing.reused_blob_names != planned.reused_blob_names
+        || existing.nodes != planned.nodes
+        || existing.batches.len() != planned.batches.len()
+    {
+        return Err(VceError::InvalidRequest(
+            "durable Embedding manifest does not match the frozen source plan".to_owned(),
+        ));
+    }
+    for (planned_batch, existing_batch) in planned.batches.iter().zip(&existing.batches) {
+        if planned_batch.batch_id != existing_batch.batch_id
+            || planned_batch.purpose != existing_batch.purpose
+            || planned_batch.input_ids != existing_batch.input_ids
+            || planned_batch.total_chars != existing_batch.total_chars
+        {
+            return Err(VceError::InvalidRequest(
+                "durable Embedding manifest batch does not match the frozen source plan".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -4458,6 +5883,7 @@ mod tests {
                             mode,
                             actions: Vec::new(),
                             affected_blob_count: 0,
+                            physical_tables: Vec::new(),
                         },
                     )
                 }
@@ -5267,11 +6693,22 @@ mod tests {
         let (mut ai, index, source, _) = fake_host();
         ai.embedding_max_inputs = Some(2);
         let batch_sizes = ai.embedding_batch_sizes.clone();
+        // progress_events retains both child-batch and whole-refresh counters for unit validation.
+        // progress_events 保留子批次与完整刷新计数，用于校验计量单位。
+        let progress_events = Arc::new(Mutex::new(Vec::<VceRefreshProgress>::new()));
+        // progress_sink is the observer-owned reference copied into the refresh control.
+        // progress_sink 是复制进刷新控制器、由观察器持有的引用。
+        let progress_sink = Arc::clone(&progress_events);
+        // control observes the real durable global batching path exercised below.
+        // control 观察下方实际执行的持久化全局分批路径。
+        let control = VceRefreshControl::default().with_observer(Arc::new(move |progress| {
+            progress_sink.lock().unwrap().push(progress);
+        }));
         let content = (0..128)
             .map(|index| format!("fn function_{index:03}() -> usize {{ {index} }}\n"))
             .collect::<String>();
 
-        block_on(engine.refresh(
+        block_on(engine.refresh_observed(
             RefreshRequest::full(
                 "refresh-model-batch-limit",
                 RefreshReason::Initial,
@@ -5286,6 +6723,7 @@ mod tests {
             &index,
             &ai,
             &source,
+            &control,
         ))
         .unwrap();
 
@@ -5295,6 +6733,24 @@ mod tests {
             "the fixture must produce multiple requests"
         );
         assert!(observed.iter().all(|size| *size <= 2));
+        // embedding_progress isolates provider-batch events from later Blob write acknowledgements.
+        // embedding_progress 将供应商批次事件与后续 Blob 落盘确认分离。
+        let embedding_progress = progress_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|progress| progress.phase == VceRefreshPhase::Embedding)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(embedding_progress.len() > 1);
+        assert!(embedding_progress.iter().all(|progress| {
+            progress.overall_completed == 0 && progress.overall_total == Some(1)
+        }));
+        assert!(progress_events.lock().unwrap().iter().all(|progress| {
+            progress
+                .overall_total
+                .is_none_or(|total| progress.overall_completed <= total)
+        }));
     }
 
     /// Verify separate source files share one provider batch within a bounded staging flush.
@@ -5340,9 +6796,9 @@ mod tests {
             .iter()
             .zip(sizes.iter())
             .filter_map(|(operation, size)| {
-                operation
-                    .contains("code_retrieval.document_embedding")
-                    .then_some(*size)
+                // The durable global plan identifies content batches by their stable channel segment.
+                // 持久化全局计划使用稳定的通道片段标识内容批次。
+                operation.contains(":content:").then_some(*size)
             })
             .collect::<Vec<_>>();
         assert_eq!(document_sizes.len(), 1);

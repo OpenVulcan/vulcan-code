@@ -333,11 +333,6 @@ impl VceRuntimeManager {
             ));
         }
         validate_stored_rebuild_confirmation(&predecessor, &previous, &work).await?;
-        if store.unfinished().await?.is_some() {
-            return Err(String::from(
-                "VCE unfinished job requires explicit cancellation or recovery before rebuilding",
-            ));
-        }
         let preview_contract = uninitialized_publication_contract(&input, &prepared, None);
         {
             let _configuration = crate::begin_public_ai_configuration_transaction().await;
@@ -366,6 +361,17 @@ impl VceRuntimeManager {
         index.require_write_access()?;
         let project_writer = Arc::new(writer);
         let store = index.job_store();
+        if let Some(previous) = store.unfinished().await? {
+            // The new project writer is exclusive after the in-memory owner slot was checked empty,
+            // so an unfinished receipt from an ended host run is safe to reconcile here.
+            // 内存所有者槽确认为空后已取得新的项目写入租约，因此可在此安全收敛已结束宿主留下的未完成回执。
+            let reason = if previous.owner_run_id == self.job_owner_run_id {
+                "VCE previous replacement job ended before its terminal receipt was acknowledged"
+            } else {
+                "VCE previous host replacement run ended before its terminal receipt was acknowledged"
+            };
+            store.interrupt_unfinished(reason).await?;
+        }
         let previous_time = store
             .latest()
             .await?
@@ -396,6 +402,7 @@ impl VceRuntimeManager {
             admitted_settings_revision: input.settings.revision,
             source_checkpoint_version: None,
             replacement: None,
+            compaction: None,
             result_checkpoint_version: None,
             progress: None,
             followup_requested: false,
@@ -415,6 +422,9 @@ impl VceRuntimeManager {
             control: VceRefreshControl::default(),
             cancel_wake: Notify::new(),
             persistence_error: Mutex::new(None),
+            pending_terminal_receipt: Mutex::new(None),
+            #[cfg(test)]
+            compaction_observation_persistence_failures: std::sync::atomic::AtomicUsize::new(0),
         });
         *state.active.lock().await = Some(Arc::clone(&job));
         self.event_emitter
@@ -423,12 +433,20 @@ impl VceRuntimeManager {
             )));
         let manager = self.clone();
         let worker_state = Arc::clone(&state);
-        executor.spawn(async move {
+        let completion_state = Arc::clone(&state);
+        let worker = executor.spawn(async move {
             let _execution = execution;
             manager
                 .run_uninitialized_rebuild_job(input, prepared, index, worker_state, job, work)
                 .await;
+            // Release the execution lease before removing the worker handle used by shutdown.
+            // 在移除关闭流程使用的工作句柄之前，先释放执行租约。
+            drop(_execution);
+            // The consumed job and index are released by the callee before this worker becomes clearable.
+            // 被消耗的作业与索引由被调用函数在此工作线程可清除前释放。
+            completion_state.clear_worker_handle().await;
         });
+        state.install_worker_handle(worker).await;
         Ok(receipt)
     }
 
@@ -522,10 +540,15 @@ impl VceRuntimeManager {
                 .try_acquire_project_writer(&input.project_id)?
                 .ok_or_else(|| String::from("VCE project already has an active host writer"))?,
         );
-        if store.unfinished().await?.is_some() {
-            return Err(String::from(
-                "VCE unfinished job requires confirmed ownership before replacement",
-            ));
+        if let Some(previous) = store.unfinished().await? {
+            // The project writer proves that no live host owns the old replacement receipt.
+            // 项目写入租约证明旧替换回执不再由活动宿主持有。
+            let reason = if previous.owner_run_id == self.job_owner_run_id {
+                "VCE previous replacement job ended before its terminal receipt was acknowledged"
+            } else {
+                "VCE previous host replacement run ended before its terminal receipt was acknowledged"
+            };
+            store.interrupt_unfinished(reason).await?;
         }
         let provenance = index.embedding_provenance().await?;
         validate_job_admission(
@@ -575,6 +598,7 @@ impl VceRuntimeManager {
                 },
                 target: prepared.index.clone(),
             })),
+            compaction: None,
             result_checkpoint_version: None,
             progress: None,
             followup_requested: false,
@@ -616,6 +640,9 @@ impl VceRuntimeManager {
             control: VceRefreshControl::default(),
             cancel_wake: Notify::new(),
             persistence_error: Mutex::new(None),
+            pending_terminal_receipt: Mutex::new(None),
+            #[cfg(test)]
+            compaction_observation_persistence_failures: std::sync::atomic::AtomicUsize::new(0),
         });
         *state.active.lock().await = Some(Arc::clone(&job));
         self.event_emitter
@@ -624,12 +651,20 @@ impl VceRuntimeManager {
             )));
         let manager = self.clone();
         let worker_state = Arc::clone(&state);
-        executor.spawn(async move {
+        let completion_state = Arc::clone(&state);
+        let worker = executor.spawn(async move {
             let _execution = execution;
             manager
                 .run_replacement_job(input, prepared, index, worker_state, job, work)
                 .await;
+            // Release the execution lease before removing the worker handle used by shutdown.
+            // 在移除关闭流程使用的工作句柄之前，先释放执行租约。
+            drop(_execution);
+            // The consumed job and index are released by the callee before this worker becomes clearable.
+            // 被消耗的作业与索引由被调用函数在此工作线程可清除前释放。
+            completion_state.clear_worker_handle().await;
         });
+        state.install_worker_handle(worker).await;
         Ok(receipt)
     }
 
@@ -719,14 +754,13 @@ impl VceRuntimeManager {
             // A failed initial job leaves the active fresh namespace uninitialized so the next
             // explicit rebuild can fence it with another fresh namespace.
             // 初始作业失败时保留全新的活动命名空间为未初始化状态，下一次显式重建可再次以新命名空间封锁它。
-            if let Err(execution_error) = &outcome {
-                if let Ok(provenance) = active.index.embedding_provenance().await {
-                    if provenance.checkpoint_version.is_some() {
-                        outcome = Err(format!(
-                            "{execution_error}; initial rebuild unexpectedly published a checkpoint"
-                        ));
-                    }
-                }
+            if let Err(execution_error) = &outcome
+                && let Ok(provenance) = active.index.embedding_provenance().await
+                && provenance.checkpoint_version.is_some()
+            {
+                outcome = Err(format!(
+                    "{execution_error}; initial rebuild unexpectedly published a checkpoint"
+                ));
             }
             if let Err(error) = active.ai.deactivate() {
                 outcome = Err(format!(
@@ -734,7 +768,8 @@ impl VceRuntimeManager {
                 ));
             }
         }
-        let _admission = state.admission.lock().await;
+        // Completion accounting must not hold admission while shutdown waits for the worker handle.
+        // 完成计账不能持有准入锁，否则退出会在等待工作句柄前卡住。
         if let Some(checkpoint) = published_checkpoint {
             let accounting = async {
                 let now = job_time()?;
@@ -755,6 +790,9 @@ impl VceRuntimeManager {
             }
         }
         let mut restored = None;
+        // Reacquire admission only after the receipt write so shutdown can fence and abort a locked receipt.
+        // 仅在回执写入后重新获取准入锁，使退出可以封锁并中止锁住的回执写入。
+        let _admission = state.admission.lock().await;
         if outcome.is_ok()
             && !state.stop_requested.load(Ordering::Acquire)
             && !self.shutting_down.load(Ordering::Acquire)
@@ -810,12 +848,14 @@ impl VceRuntimeManager {
                 },
             );
         }
+        // Terminal receipt persistence must not hold admission while shutdown waits for the worker handle.
+        // 终态回执持久化不能继续持有准入锁，否则退出无法通过工作句柄排空锁住的回执写入。
+        drop(_admission);
         self.finish_managed_job(None, &job, &job.store, outcome)
             .await;
         if job.persistence_error.lock().await.is_none() {
             *state.active.lock().await = None;
         }
-        drop(_admission);
         if let Some(restored) = restored {
             self.reconcile_runtime_watcher(&restored).await;
         }
@@ -916,9 +956,8 @@ impl VceRuntimeManager {
                 ));
             }
         }
-        // admission fences disable/shutdown handoff without taking their lifecycle gate and deadlocking drain.
-        // admission 封锁停用／退出交接，不获取其生命周期闸门，避免排空死锁。
-        let _admission = state.admission.lock().await;
+        // Completion accounting must not hold admission while shutdown waits for the worker handle.
+        // 完成计账不能持有准入锁，否则退出会在等待工作句柄前卡住。
         if let Some(checkpoint) = published_checkpoint {
             let accounting = async {
                 let now = job_time()?;
@@ -940,6 +979,9 @@ impl VceRuntimeManager {
         }
         // restored is retained for watcher reconciliation only after the terminal owner is settled.
         // restored 仅保留用于终态所有者确定之后的监听协调。
+        // Reacquire admission only after the receipt write so shutdown can fence and abort a locked receipt.
+        // 仅在回执写入后重新获取准入锁，使退出可以封锁并中止锁住的回执写入。
+        let _admission = state.admission.lock().await;
         let mut restored = None;
         if outcome.is_ok()
             && !state.stop_requested.load(Ordering::Acquire)
@@ -981,12 +1023,14 @@ impl VceRuntimeManager {
                 }
             }
         }
+        // Terminal receipt persistence must not hold admission while shutdown waits for the worker handle.
+        // 终态回执持久化不能继续持有准入锁，否则退出无法通过工作句柄排空锁住的回执写入。
+        drop(_admission);
         self.finish_managed_job(None, &job, &job.store, outcome)
             .await;
         if job.persistence_error.lock().await.is_none() {
             *state.active.lock().await = None;
         }
-        drop(_admission);
         if let Some(runtime) = restored {
             self.reconcile_runtime_watcher(&runtime).await;
         }

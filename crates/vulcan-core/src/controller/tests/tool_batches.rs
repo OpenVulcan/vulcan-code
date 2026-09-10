@@ -1,5 +1,70 @@
 use super::*;
 
+/// Test executor that can fail either the batch gate or one tool durability boundary.
+/// 可在批次门禁或单个工具持久化边界失败的测试执行器。
+#[derive(Debug, Clone, Default)]
+struct FatalDurabilityExecutor {
+    /// Whether the complete batch preparation must fail before any tool starts.
+    /// 是否在任何工具启动前让完整批次准备失败。
+    fail_preparation: bool,
+    /// Number of non-failing sibling tool bodies that reached completion.
+    /// 已完成的非失败兄弟工具主体数量。
+    completed_siblings: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl VulcanToolExecutor for FatalDurabilityExecutor {
+    /// Applies the configured fatal failure at the complete batch preparation gate.
+    /// 在完整批次准备门禁应用配置的致命失败。
+    ///
+    /// `requests` is the exact Provider-declared batch. The function returns success
+    /// unless `fail_preparation` is enabled, in which case no tool may execute.
+    /// `requests` 是 Provider 声明的精确批次。除非启用 `fail_preparation`，否则
+    /// 函数返回成功；启用时不得执行任何工具。
+    async fn prepare_tool_batch(
+        &self,
+        requests: &[ToolInvocationRequest],
+    ) -> Result<(), CoreError> {
+        if self.fail_preparation {
+            return Err(CoreError::ToolDurabilityFailure {
+                tool_name: String::from("tool_batch"),
+                message: format!(
+                    "durable batch preparation rejected {} invocation(s)",
+                    requests.len()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Fails the `fatal` tool boundary while allowing every sibling body to settle.
+    /// 让 `fatal` 工具边界失败，同时允许所有兄弟工具主体完成结算。
+    ///
+    /// `request` identifies the exact tool call. A successful sibling returns one
+    /// ordinary result; the fatal request returns the typed durability error.
+    /// `request` 标识精确工具调用。成功兄弟调用返回普通结果；致命调用返回强类型
+    /// 持久化错误。
+    async fn execute_tool(
+        &self,
+        request: &ToolInvocationRequest,
+    ) -> Result<ToolInvocationResult, CoreError> {
+        if request.tool_name == "fatal" {
+            return Err(CoreError::ToolDurabilityFailure {
+                tool_name: request.tool_name.clone(),
+                message: String::from("tool finish persistence rejected"),
+            });
+        }
+        self.completed_siblings.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolInvocationResult {
+            tool_call_id: request.tool_call_id.clone(),
+            tool_name: request.tool_name.clone(),
+            model_output: String::from("settled"),
+            host_result: None,
+            is_error: false,
+        })
+    }
+}
+
 /// Verifies one provider tool-call batch executes concurrently while preserving ordered tool-result replay.
 /// 验证单个 Provider 工具调用批次会并发执行，同时保留有序工具结果回放。
 #[test]
@@ -82,6 +147,146 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
             })
             .collect::<Vec<_>>();
         assert_eq!(finished_event_tool_call_ids, vec!["call-b", "call-a"]);
+    });
+}
+
+/// A tool-finish durability failure drains sibling futures and stops before another Provider request.
+/// 工具完成持久化失败会结算兄弟 Future，并在下一次 Provider 请求前停止。
+#[test]
+fn fatal_tool_durability_failure_stops_provider_loop_after_sibling_settlement() {
+    // runtime executes the asynchronous controller loop deterministically for this assertion.
+    // runtime 为当前断言确定性执行异步控制器循环。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // adapter exposes a second response whose dispatch would prove an invalid retry.
+        // adapter 提供第二个响应；若其被分派即可证明发生了无效重试。
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("fatal-tool-batch")),
+                    provider_message_state: None,
+                    tool_calls: vec![
+                        ConversationToolCall {
+                            id: String::from("fatal-item"),
+                            tool_call_id: Some(String::from("fatal-call")),
+                            tool_name: String::from("fatal"),
+                            arguments: json!({}),
+                            argument_parse_error: None,
+                        },
+                        ConversationToolCall {
+                            id: String::from("sibling-item"),
+                            tool_call_id: Some(String::from("sibling-call")),
+                            tool_name: String::from("sibling"),
+                            arguments: json!({}),
+                            argument_parse_error: None,
+                        },
+                    ],
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("must not dispatch"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("unexpected-second-request")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
+        // executor fails one terminal durability boundary while counting settled siblings.
+        // executor 让一个终态持久化边界失败，同时统计已结算兄弟调用。
+        let executor = FatalDurabilityExecutor::default();
+        // controller owns the provider loop and its ordered conversation snapshot.
+        // controller 持有 Provider 循环及其有序会话快照。
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        // error is the typed fatal boundary failure that must escape the loop.
+        // error 是必须逃逸出循环的强类型致命边界失败。
+        let error = controller
+            .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "run fatal batch")
+            .await
+            .expect_err("fatal durability failure must escape the tool loop");
+
+        assert!(matches!(
+            error,
+            CoreError::ToolDurabilityFailure { ref tool_name, ref message }
+                if tool_name == "fatal" && message == "tool finish persistence rejected"
+        ));
+        assert_eq!(executor.completed_siblings.load(Ordering::SeqCst), 1);
+        assert_eq!(adapter.built_requests().len(), 1);
+    });
+}
+
+/// A batch-preparation durability failure stops before any tool body or follow-up Provider request.
+/// 批次准备持久化失败会在任何工具主体或后续 Provider 请求前停止。
+#[test]
+fn fatal_batch_preparation_failure_stops_before_tool_execution() {
+    // runtime executes the asynchronous controller loop deterministically for this assertion.
+    // runtime 为当前断言确定性执行异步控制器循环。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // adapter records whether any request beyond the initial tool batch was dispatched.
+        // adapter 记录初始工具批次之后是否还分派了请求。
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            Vec::new(),
+            ProviderTurnResponse {
+                assistant_text: String::new(),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("fatal-preparation")),
+                provider_message_state: None,
+                tool_calls: vec![ConversationToolCall {
+                    id: String::from("never-runs-item"),
+                    tool_call_id: Some(String::from("never-runs-call")),
+                    tool_name: String::from("sibling"),
+                    arguments: json!({}),
+                    argument_parse_error: None,
+                }],
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        // executor rejects the complete durable batch gate before any body may start.
+        // executor 在任何主体启动前拒绝完整可靠批次门禁。
+        let executor = FatalDurabilityExecutor {
+            fail_preparation: true,
+            ..FatalDurabilityExecutor::default()
+        };
+        // controller owns the provider loop whose dispatch count is under test.
+        // controller 持有本次验证分派次数的 Provider 循环。
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        // error is the typed preparation failure returned without normal tool-result conversion.
+        // error 是未被转换为普通工具结果的强类型准备失败。
+        let error = controller
+            .run_user_turn_streaming(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "prepare fatal batch",
+            )
+            .await
+            .expect_err("fatal batch gate must escape the tool loop");
+
+        assert!(matches!(
+            error,
+            CoreError::ToolDurabilityFailure { ref tool_name, ref message }
+                if tool_name == "tool_batch"
+                    && message == "durable batch preparation rejected 1 invocation(s)"
+        ));
+        assert_eq!(executor.completed_siblings.load(Ordering::SeqCst), 0);
+        assert_eq!(adapter.built_requests().len(), 1);
     });
 }
 

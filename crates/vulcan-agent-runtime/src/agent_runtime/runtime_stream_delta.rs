@@ -478,6 +478,22 @@ fn successful_assistant_provider_turn_count(
 
 /// Processes one provider-stream item, mutates the loop state in place, and returns the execution events that should be emitted immediately.
 /// 处理一条 Provider 流项目，就地更新循环状态，并返回应立即发出的执行事件集合。
+/// Preserves an already observed response identity when a later usage payload omits it.
+/// 当后续用量载荷省略响应标识时保留已经观察到的响应标识。
+///
+/// # Parameters
+/// 参数
+/// next is the new cumulative usage snapshot and current is the previously retained snapshot.
+/// next 是新的累计用量快照，current 是此前保留的快照。
+fn preserve_provider_response_identity(
+    next: &mut CoreProviderUsageSnapshot,
+    current: Option<&CoreProviderUsageSnapshot>,
+) {
+    if next.response_id.is_none() {
+        next.response_id = current.and_then(|usage| usage.response_id.clone());
+    }
+}
+
 pub(crate) fn process_provider_stream_delta(
     session_id: SessionId,
     state: &mut RuntimeStreamDeltaState,
@@ -635,16 +651,33 @@ pub(crate) fn process_provider_stream_delta(
             }
             state.process_runtime_event(session_id, event)
         }
-        Ok(ProviderStreamDelta::UsageUpdated(usage)) => {
+        Ok(ProviderStreamDelta::ResponseIdentityObserved(response_id)) => {
+            let usage = state
+                .active_provider_usage
+                .get_or_insert_with(Default::default);
+            usage.response_id = Some(response_id);
+            Vec::new()
+        }
+        Ok(ProviderStreamDelta::UsageUpdated(mut usage)) => {
+            preserve_provider_response_identity(&mut usage, state.active_provider_usage.as_ref());
             state.active_provider_usage = Some(usage);
             Vec::new()
         }
         Ok(ProviderStreamDelta::RequestSucceeded {
-            usage,
+            mut usage,
             provider_source,
             tool_call_count,
             completion,
         }) => {
+            if let Some(usage) = usage.as_mut() {
+                preserve_provider_response_identity(usage, state.active_provider_usage.as_ref());
+            } else if state
+                .active_provider_usage
+                .as_ref()
+                .is_some_and(|current| current.response_id.is_some())
+            {
+                usage = state.active_provider_usage.clone();
+            }
             state.active_provider_usage = usage;
             let events = state
                 .provider_request_telemetry
@@ -1247,6 +1280,65 @@ mod tests {
         assert_eq!(
             completed_usage.and_then(|usage| usage.total_tokens),
             Some(25)
+        );
+    }
+
+    /// Verifies response.created identity survives an omitted usage identity and a later stream failure.
+    /// 验证 response.created 标识在后续用量省略标识并最终流失败时仍被保留。
+    #[test]
+    fn response_identity_survives_usage_update_and_failure() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::ResponseIdentityObserved(String::from(
+                "resp-created-1",
+            ))),
+        );
+        process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::UsageUpdated(
+                CoreProviderUsageSnapshot {
+                    input_tokens: Some(7),
+                    ..CoreProviderUsageSnapshot::default()
+                },
+            )),
+        );
+
+        let events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestFailed {
+                will_retry: false,
+                retry_number: 0,
+                max_retries: 0,
+                delay_ms: 0,
+                error_category: String::from("provider_transport_error"),
+                error: None,
+            }),
+        );
+        let completed_usage = events.into_iter().find_map(|event| match event {
+            ExecutionStreamEvent::ProviderRequestTelemetry(event) => event.completed_usage,
+            _ => None,
+        });
+        assert_eq!(
+            completed_usage
+                .as_ref()
+                .and_then(|usage| usage.response_id.as_deref()),
+            Some("resp-created-1")
+        );
+        assert_eq!(
+            completed_usage.and_then(|usage| usage.input_tokens),
+            Some(7)
         );
     }
 

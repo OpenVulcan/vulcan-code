@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -78,7 +79,67 @@ enum RuntimeEventProjectionReceipt {
     /// The durable tool batch returned the exact local identities for execution.
     /// 可靠工具批次返回了供执行使用的精确本地身份。
     ToolBatchPrepared(Vec<PreparedToolInvocationIdentity>),
+    /// The host rejected the barrier with the original durability failure detail.
+    /// 宿主使用原始持久化失败详情拒绝了该屏障。
+    Rejected(String),
 }
+
+/// One structured projection-barrier failure that must remain distinct from a normal tool error.
+/// 一种必须与普通工具错误保持区分的结构化投影屏障失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeEventProjectionError {
+    /// The host explicitly rejected persistence or projection and retained the originating detail.
+    /// 宿主明确拒绝了持久化或投影，并保留原始失败详情。
+    Rejected {
+        /// Original host-side durability or projection failure.
+        /// 原始宿主持久化或投影失败详情。
+        detail: String,
+    },
+    /// A mandatory execution barrier exceeded its bounded acknowledgement window.
+    /// 强制执行屏障超过了有界确认时间。
+    TimedOut,
+    /// The host acknowledged a tool-batch barrier with the wrong receipt shape.
+    /// 宿主使用错误回执形状确认了工具批次屏障。
+    UnexpectedReceipt,
+    /// The process-wide barrier registry could not be accessed consistently.
+    /// 无法一致访问进程级屏障注册表。
+    Registry {
+        /// Exact registry operation failure.
+        /// 精确的注册表操作失败。
+        detail: String,
+    },
+}
+
+impl Display for RuntimeEventProjectionError {
+    /// Formats one stable diagnostic without discarding the original rejection detail.
+    /// 格式化一条稳定诊断，且不丢弃原始拒绝详情。
+    ///
+    /// `formatter` receives the user-diagnosable projection failure text. The function
+    /// returns the formatter result and performs no state mutation.
+    /// `formatter` 接收用户可诊断的投影失败文本。此函数返回格式化结果且不修改状态。
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected { detail } => write!(
+                formatter,
+                "Tool recovery durability barrier was rejected before execution could advance: {detail}"
+            ),
+            Self::TimedOut => write!(
+                formatter,
+                "Tool recovery durability barrier timed out before execution could advance."
+            ),
+            Self::UnexpectedReceipt => write!(
+                formatter,
+                "Tool batch durability barrier completed without local V1 invocation identities."
+            ),
+            Self::Registry { detail } => write!(
+                formatter,
+                "Tool recovery durability barrier registry failed: {detail}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeEventProjectionError {}
 
 /// Stores pending projection barrier acknowledgements by stable barrier id.
 /// 按稳定屏障标识保存等待中的投影确认发送端。
@@ -535,7 +596,7 @@ pub(crate) fn attach_runtime_event_projection_barrier(
 /// 收到确认或没有屏障时返回成功。仅显示屏障容忍取消和超时，执行必需屏障则失败关闭。
 pub(crate) async fn wait_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
-) -> Result<(), String> {
+) -> Result<(), RuntimeEventProjectionError> {
     wait_runtime_event_projection_receipt(barrier)
         .await
         .map(|_| ())
@@ -556,12 +617,15 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
 /// 返回精确有序的本地身份；宿主确认了错误屏障形状时失败。
 pub(crate) async fn wait_tool_batch_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
-) -> Result<Vec<PreparedToolInvocationIdentity>, String> {
+) -> Result<Vec<PreparedToolInvocationIdentity>, RuntimeEventProjectionError> {
     match wait_runtime_event_projection_receipt(barrier).await? {
         RuntimeEventProjectionReceipt::ToolBatchPrepared(identities) => Ok(identities),
-        RuntimeEventProjectionReceipt::Projected => Err(String::from(
-            "Tool batch durability barrier completed without local V1 invocation identities.",
-        )),
+        RuntimeEventProjectionReceipt::Projected => {
+            Err(RuntimeEventProjectionError::UnexpectedReceipt)
+        }
+        RuntimeEventProjectionReceipt::Rejected(detail) => {
+            Err(RuntimeEventProjectionError::Rejected { detail })
+        }
     }
 }
 
@@ -569,17 +633,22 @@ pub(crate) async fn wait_tool_batch_projection_barrier(
 /// 等待一个内部运行时事件投影回执。
 async fn wait_runtime_event_projection_receipt(
     barrier: Option<RuntimeEventProjectionBarrier>,
-) -> Result<RuntimeEventProjectionReceipt, String> {
+) -> Result<RuntimeEventProjectionReceipt, RuntimeEventProjectionError> {
     let Some(barrier) = barrier else {
         return Ok(RuntimeEventProjectionReceipt::Projected);
     };
     let barrier_id = barrier.id.clone();
     let required_for_execution = barrier.required_for_execution;
     match tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver).await {
+        Ok(Ok(RuntimeEventProjectionReceipt::Rejected(detail))) if required_for_execution => {
+            Err(RuntimeEventProjectionError::Rejected { detail })
+        }
         Ok(Ok(receipt)) => Ok(receipt),
-        Ok(Err(_)) if required_for_execution => Err(String::from(
-            "Tool recovery durability barrier was rejected before execution could advance.",
-        )),
+        Ok(Err(_)) if required_for_execution => Err(RuntimeEventProjectionError::Rejected {
+            detail: String::from(
+                "The host closed the mandatory projection barrier without an acknowledgement.",
+            ),
+        }),
         Ok(Err(_)) => Ok(RuntimeEventProjectionReceipt::Projected),
         Err(_) => {
             if let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() {
@@ -587,12 +656,11 @@ async fn wait_runtime_event_projection_receipt(
                     registry,
                     &barrier_id,
                     "remove a timed-out barrier",
-                )?;
+                )
+                .map_err(|detail| RuntimeEventProjectionError::Registry { detail })?;
             }
             if required_for_execution {
-                return Err(String::from(
-                    "Tool recovery durability barrier timed out before execution could advance.",
-                ));
+                return Err(RuntimeEventProjectionError::TimedOut);
             }
             Ok(RuntimeEventProjectionReceipt::Projected)
         }
@@ -717,16 +785,41 @@ pub fn acknowledge_tool_batch_projection_barrier_from_event(
 pub fn reject_runtime_event_projection_barrier_from_event(
     event: &RuntimeEvent,
 ) -> Result<bool, String> {
+    reject_runtime_event_projection_barrier_from_event_with_reason(
+        event,
+        "The host rejected the runtime-event projection without a more specific diagnostic.",
+    )
+}
+
+/// Rejects one projection barrier and delivers the originating host failure to the waiter.
+/// 拒绝一条投影屏障，并把宿主原始失败传递给等待方。
+///
+/// `event` owns the exact barrier identity and `reason` is the controlled failure emitted
+/// by the persistence or projection boundary. The function returns whether a waiter received
+/// the rejection, while a missing barrier remains a legitimate `Ok(false)`.
+/// `event` 持有精确屏障身份，`reason` 是持久化或投影边界发出的受控失败。函数返回
+/// 是否有等待方收到拒绝；屏障不存在仍是合法的 `Ok(false)`。
+pub fn reject_runtime_event_projection_barrier_from_event_with_reason(
+    event: &RuntimeEvent,
+    reason: impl Into<String>,
+) -> Result<bool, String> {
     let Some(barrier_id) = runtime_event_projection_barrier_id(event) else {
         return Ok(false);
     };
     let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
         return Ok(false);
     };
-    Ok(
-        remove_runtime_event_projection_barrier(registry, barrier_id, "reject a projected event")?
-            .is_some(),
-    )
+    // sender is the exact one-shot owner removed before the rejection is delivered.
+    // sender 是在发送拒绝回执前移除的精确一次性 owner。
+    let sender =
+        remove_runtime_event_projection_barrier(registry, barrier_id, "reject a projected event")?;
+    if let Some(sender) = sender {
+        Ok(sender
+            .send(RuntimeEventProjectionReceipt::Rejected(reason.into()))
+            .is_ok())
+    } else {
+        Ok(false)
+    }
 }
 
 /// Returns whether one runtime event is the exact mandatory gate before a real tool body may start.

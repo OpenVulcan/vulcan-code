@@ -361,7 +361,49 @@ fn missing_session_models_remain_exact_until_explicit_reselection_or_revocation(
         runtime_state.active_provider_id = Some(String::from("revoked-provider"));
         runtime_state.active_connection_id = Some(String::from("revoked-connection"));
         runtime_state.active_model_id = Some(String::from("revoked-model"));
+        runtime_state.provider_route_lease =
+            Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+                schema_version: 1,
+                provider_id: String::from("revoked-provider"),
+                connection_id: String::from("revoked-connection"),
+                model_id: String::from("revoked-model"),
+                protocol_profile_id: String::from("openai-responses.v1"),
+                manifest_revision: 1,
+                manifest_generation: 1,
+                catalog_revision: String::from("revoked-catalog"),
+                route_revision: String::from("revoked-route"),
+            });
     }
+    // pendingOnlySession proves disabling a future account choice does not revoke the unrelated
+    // active route that the session still owns.
+    // pendingOnlySession 证明停用未来账号选择不会撤销会话仍持有的无关活动路由。
+    let pending_only_session_id = crate::SessionId::from_u128(0x5103);
+    let surviving_lease = vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+        schema_version: 1,
+        provider_id: String::from("surviving-provider"),
+        connection_id: String::from("surviving-connection"),
+        model_id: String::from("surviving-model"),
+        protocol_profile_id: String::from("openai-responses.v1"),
+        manifest_revision: 1,
+        manifest_generation: 1,
+        catalog_revision: String::from("surviving-catalog"),
+        route_revision: String::from("surviving-route"),
+    };
+    workspace.session_runtime_state.insert(
+        pending_only_session_id,
+        vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("surviving-provider")),
+            active_connection_id: Some(String::from("surviving-connection")),
+            active_model_id: Some(String::from("surviving-model")),
+            provider_route_lease: Some(surviving_lease.clone()),
+            pending_model_selection: Some(SessionPendingModelSelection {
+                provider_id: String::from("revoked-provider"),
+                connection_id: String::from("revoked-connection"),
+                model_id: String::from("revoked-model"),
+            }),
+            ..vulcan_workbench_model::SessionRuntimeStateEntry::default()
+        },
+    );
     // revokedSessionIds proves explicit access revocation covers active and archived owners
     // without silently replacing either user-owned route.
     // revokedSessionIds 证明显式访问撤销会覆盖活动与归档所有者，同时不会静默替换
@@ -370,18 +412,41 @@ fn missing_session_models_remain_exact_until_explicit_reselection_or_revocation(
         reconcile_disabled_connection_sessions(&mut workspace, "revoked-connection", None);
     assert_eq!(
         revoked_session_ids,
-        BTreeSet::from([active_session_id, archived_session_id])
+        BTreeSet::from([
+            active_session_id,
+            archived_session_id,
+            pending_only_session_id,
+        ])
     );
-    for runtime_state in workspace
-        .session_runtime_state
-        .values()
-        .chain(workspace.archived_session_runtime_state.values())
-    {
+    for runtime_state in [
+        workspace
+            .session_runtime_state
+            .get(&active_session_id)
+            .expect("active revoked session should remain"),
+        workspace
+            .archived_session_runtime_state
+            .get(&archived_session_id)
+            .expect("archived revoked session should remain"),
+    ] {
         assert_eq!(
             runtime_state.active_connection_id.as_deref(),
             Some("revoked-connection")
         );
+        assert!(runtime_state.provider_route_lease.is_none());
     }
+    let pending_only_state = workspace
+        .session_runtime_state
+        .get(&pending_only_session_id)
+        .expect("pending-only session should remain");
+    assert_eq!(
+        pending_only_state.active_connection_id.as_deref(),
+        Some("surviving-connection")
+    );
+    assert_eq!(
+        pending_only_state.provider_route_lease.as_ref(),
+        Some(&surviving_lease)
+    );
+    assert!(pending_only_state.pending_model_selection.is_none());
 
     configuration.active = None;
     assert_eq!(

@@ -24,7 +24,7 @@ $VldbControllerBinDir = Join-Path $VldbControllerDir "bin"
 # VldbControllerOutputBinDir 是打包运行与调试启动优先使用的运行时目录。
 $VldbControllerOutputBinDir = Join-Path $ProjectDir "output\bin"
 $VldbControllerRepo = "OpenVulcan/vldb-controller"
-$VldbControllerTag = "v0.2.3"
+$VldbControllerTag = "v0.2.4"
 
 # RtkPluginDir is the real RTK plugin package owned and distributed by Vulcan Code.
 # RtkPluginDir 是由 Vulcan Code 持有并分发的真实 RTK 插件包。

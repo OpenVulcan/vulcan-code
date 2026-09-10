@@ -45,6 +45,10 @@ pub struct ModelProtocolBinding {
     /// Rule identifier that produced the binding; empty for provider-default bindings.
     /// 产生绑定的规则标识；供应商默认绑定为空。
     pub rule_id: String,
+    /// Closed Codex behavior frozen from the exact matched system rule.
+    /// 从精确命中系统规则冻结的封闭 Codex 行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_behavior: Option<super::CodexModelBehavior>,
 }
 
 /// Why one model has no executable protocol binding.
@@ -207,6 +211,7 @@ pub fn resolve_system_model_protocol_binding(
         return Ok(ModelProtocolBinding {
             protocol_profile_id,
             source: ModelProtocolBindingSource::SystemManifest,
+            codex_behavior: instance.codex_behavior.clone(),
             manifest_revision: resolved.revision,
             rule_id: instance.rule_id.clone(),
         });
@@ -229,6 +234,7 @@ pub fn resolve_system_model_protocol_binding(
             Ok(ModelProtocolBinding {
                 protocol_profile_id,
                 source: ModelProtocolBindingSource::SystemManifest,
+                codex_behavior: None,
                 manifest_revision: resolved.revision,
                 rule_id: String::new(),
             })
@@ -308,6 +314,7 @@ pub fn resolve_custom_model_protocol_binding(
         return Ok(ModelProtocolBinding {
             protocol_profile_id: only_protocol.to_string(),
             source: ModelProtocolBindingSource::CustomAutoDefault,
+            codex_behavior: None,
             manifest_revision,
             rule_id: String::from("unique_protocol"),
         });
@@ -316,6 +323,7 @@ pub fn resolve_custom_model_protocol_binding(
         return Ok(ModelProtocolBinding {
             protocol_profile_id: explicit_protocol.to_string(),
             source: ModelProtocolBindingSource::CustomUser,
+            codex_behavior: None,
             manifest_revision,
             rule_id: String::from("custom_user"),
         });
@@ -341,6 +349,7 @@ pub fn resolve_custom_model_protocol_binding(
     Ok(ModelProtocolBinding {
         protocol_profile_id: (*auto_protocol).to_string(),
         source: ModelProtocolBindingSource::CustomAutoDefault,
+        codex_behavior: None,
         manifest_revision,
         rule_id: String::from("custom_auto_default"),
     })

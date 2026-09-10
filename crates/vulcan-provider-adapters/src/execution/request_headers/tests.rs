@@ -265,4 +265,42 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
             .and_then(|value| value.to_str().ok()),
         Some("codex_cli_rs")
     );
+    assert!(!headers.contains_key(CODEX_RESPONSES_LITE_HEADER_NAME));
+
+    // lite_route freezes the same native route with the adopted Lite model dialect.
+    // lite_route 在同一原生路由上冻结已采纳的 Lite 模型方言。
+    let mut lite_route = route.clone();
+    lite_route.codex_behavior = Some(crate::provider_manifest::CodexModelBehavior {
+        wire_dialect: crate::provider_manifest::CodexWireDialect::Lite,
+        ..Default::default()
+    });
+    // lite_headers prove the common HTTP header map also feeds WebSocket and compact requests.
+    // lite_headers 证明公共 HTTP 请求头映射同时供 WebSocket 与压缩请求使用。
+    let lite_headers = execution_headers(&lite_route, &encoded.headers, &secret, None)
+        .expect("native Codex Lite headers should resolve");
+    assert_eq!(
+        lite_headers
+            .get(CODEX_RESPONSES_LITE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    // websocket_map is the exact secret-safe projection used by the WebSocket handshake.
+    // websocket_map 是 WebSocket 握手使用的精确不泄密投影。
+    let websocket_map =
+        websocket_headers(&lite_headers).expect("Lite WebSocket headers should project");
+    assert_eq!(
+        websocket_map
+            .get(CODEX_RESPONSES_LITE_HEADER_NAME)
+            .map(String::as_str),
+        Some("true")
+    );
+
+    // spoofed_route proves provider-owned declarations cannot replace the host selector.
+    // spoofed_route 证明供应商声明不能替换宿主选择头。
+    let mut spoofed_route = lite_route;
+    spoofed_route.entry.request_headers.insert(
+        String::from(CODEX_RESPONSES_LITE_HEADER_NAME),
+        String::from("false"),
+    );
+    assert!(execution_headers(&spoofed_route, &encoded.headers, &secret, None).is_err());
 }

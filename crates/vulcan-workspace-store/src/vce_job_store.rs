@@ -6,20 +6,41 @@ use super::{
     VceRebuildCandidateBase, sqlite_string_literal, sqlite_text,
 };
 use serde::{Deserialize, Serialize};
-use vulcan_context_engine::VceRefreshProgress;
+use std::time::{SystemTime, UNIX_EPOCH};
+use vulcan_context_engine::{VcePhysicalTablePlan, VcePhysicalTableStatistics, VceRefreshProgress};
 
-/// Sole supported receipt format; no legacy receipt migration is performed.
-/// 唯一支持的回执格式；不执行历史回执迁移。
-pub const VCE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 2;
+/// Current durable receipt format written by this runtime.
+/// 当前运行时写入的持久回执格式。
+pub const VCE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 3;
+
+/// Oldest receipt format that remains readable without rewriting user storage.
+/// 无需改写用户存储即可继续读取的最旧回执格式。
+const VCE_MIN_READABLE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 2;
 
 /// Bound storage confirmation retries so a transient controller transport fault cannot strand a live owner.
 /// 限制存储确认重试次数，避免短暂的控制器传输故障把活动作业所有权永久卡住。
-const VCE_RECEIPT_CONFIRM_RETRIES: usize = 3;
+const VCE_RECEIPT_CONFIRM_RETRIES: usize = 7;
+
+/// Base delay for bounded receipt reconciliation after a controller busy response.
+/// 控制器返回忙状态后进行有界回执收敛时使用的基础延迟。
+const VCE_RECEIPT_CONFIRM_RETRY_BASE_MS: u64 = 250;
 
 /// Identify controller failures that are safe to reconcile after an ambiguous receipt operation.
 /// 识别可以在回执操作结果不明确时收敛处理的控制器错误。
 fn is_retryable_receipt_transport_error(error: &str) -> bool {
-    error.contains("transport error") || error.contains("database is locked")
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("transport error")
+        || normalized.contains("database is locked")
+        || normalized.contains("database busy")
+        || normalized.contains("sqlite_busy")
+}
+
+/// Calculate exponential backoff without allowing one ambiguous write to spin.
+/// 计算指数退避，避免一次结果不明确的写入进入忙循环。
+fn receipt_retry_delay(attempt: usize) -> std::time::Duration {
+    let shift = attempt.min(5) as u32;
+    let multiplier = 1_u64 << shift;
+    std::time::Duration::from_millis(VCE_RECEIPT_CONFIRM_RETRY_BASE_MS.saturating_mul(multiplier))
 }
 
 /// Immutable physical replacement target captured before candidate allocation starts.
@@ -51,6 +72,9 @@ pub enum VceJobKind {
     /// Human-confirmed reconstruction, preserving the prior committed space until publication.
     /// 人工确认的重建，在发布前保留先前已提交空间。
     Rebuild,
+    /// Human-confirmed native physical compaction that preserves the logical checkpoint.
+    /// 人工确认且保留逻辑检查点的原生物理整理。
+    Compact,
 }
 
 /// Durable job lifecycle independent from whether an older checkpoint remains queryable.
@@ -140,6 +164,410 @@ pub struct VceCompletedJobUpdate {
     pub at_unix_ms: u64,
 }
 
+/// Durable lifecycle of one physical table within a compaction job.
+/// 整理作业中一张物理表的持久生命周期。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceCompactionTableState {
+    /// The table is admitted but no controller operation has been submitted.
+    /// 表已准入，但尚未提交控制器操作。
+    Pending,
+    /// The controller accepted the current bounded operation.
+    /// 控制器已受理当前有界操作。
+    Queued,
+    /// The controller is executing the current atomic operation.
+    /// 控制器正在执行当前原子操作。
+    Running,
+    /// The table no longer requires compaction under the frozen policy.
+    /// 表在冻结策略下已不再需要整理。
+    Succeeded,
+    /// The table operation failed with an explicit diagnostic.
+    /// 表操作失败并带有明确诊断。
+    Failed,
+    /// Cancellation completed at a safe controller boundary.
+    /// 取消已在控制器安全边界完成。
+    Cancelled,
+    /// Controller restart or history expiry made the submitted operation unknowable.
+    /// 控制器重启或历史过期导致已提交操作状态不可知。
+    StateLost,
+    /// The owning host ended before a later bounded round could be submitted.
+    /// 所属宿主在后续有界轮次提交前结束。
+    Interrupted,
+}
+
+impl VceCompactionTableState {
+    /// Return whether no more controller work may be attached to this table receipt.
+    /// 返回此表回执是否已不能再附加控制器工作。
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::StateLost | Self::Interrupted
+        )
+    }
+
+    /// Return whether one non-identical durable table transition is permitted.
+    /// 返回一条非恒等持久表状态转换是否允许。
+    ///
+    /// `next` is the proposed successor. Returns false for regression or terminal rewriting.
+    /// `next` 是拟议后继。状态倒退或改写终态时返回假。
+    fn permits(self, next: Self) -> bool {
+        match self {
+            Self::Pending => matches!(
+                next,
+                Self::Queued | Self::Failed | Self::Cancelled | Self::Interrupted
+            ),
+            Self::Queued => matches!(
+                next,
+                Self::Running
+                    | Self::Pending
+                    | Self::Succeeded
+                    | Self::Failed
+                    | Self::Cancelled
+                    | Self::StateLost
+                    | Self::Interrupted
+            ),
+            Self::Running => matches!(
+                next,
+                Self::Pending
+                    | Self::Succeeded
+                    | Self::Failed
+                    | Self::Cancelled
+                    | Self::StateLost
+                    | Self::Interrupted
+            ),
+            Self::Succeeded
+            | Self::Failed
+            | Self::Cancelled
+            | Self::StateLost
+            | Self::Interrupted => false,
+        }
+    }
+}
+
+/// Cumulative physical file-compaction metrics for one table.
+/// 一张表的累计物理文件整理指标。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VceCompactionMetrics {
+    /// Total source fragments replaced by acknowledged rounds.
+    /// 已确认轮次累计替换的源片段数量。
+    pub fragments_removed: u64,
+    /// Total replacement fragments added by acknowledged rounds.
+    /// 已确认轮次累计新增的替代片段数量。
+    pub fragments_added: u64,
+    /// Total physical files replaced by acknowledged rounds.
+    /// 已确认轮次累计替换的物理文件数量。
+    pub files_removed: u64,
+    /// Total physical files added by acknowledged rounds.
+    /// 已确认轮次累计新增的物理文件数量。
+    pub files_added: u64,
+}
+
+/// Durable receipt for one table and its current bounded controller operation.
+/// 一张表及其当前有界控制器操作的持久回执。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VceCompactionTableReceipt {
+    /// Exact confirmed action identity.
+    /// 精确的已确认操作身份。
+    pub action_id: String,
+    /// Frozen table statistics and bounded options from the confirmed plan.
+    /// 从已确认计划冻结的表统计与有界参数。
+    pub plan: VcePhysicalTablePlan,
+    /// Current table lifecycle state.
+    /// 当前表生命周期状态。
+    pub state: VceCompactionTableState,
+    /// One-based submitted operation round; zero means pending.
+    /// 从一开始的已提交操作轮次；零表示待处理。
+    pub round: u32,
+    /// Stable identifier of the current or latest controller operation.
+    /// 当前或最近一次控制器操作的稳定标识。
+    pub operation_id: Option<String>,
+    /// Exact physical version supplied to the current operation.
+    /// 提交给当前操作的精确物理版本。
+    pub operation_expected_version: Option<u64>,
+    /// Latest authoritative statistics acknowledged from the controller.
+    /// 最近一次从控制器确认的权威统计信息。
+    pub latest_statistics: VcePhysicalTableStatistics,
+    /// Cumulative metrics from every acknowledged successful round.
+    /// 所有已确认成功轮次的累计指标。
+    pub metrics: VceCompactionMetrics,
+    /// Bounded table-local failure or state-loss diagnostic.
+    /// 有界的表级失败或状态丢失诊断。
+    pub error: Option<String>,
+}
+
+/// Small durable compaction payload attached to one host job receipt.
+/// 附加到一个宿主作业回执的小型持久整理载荷。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VceCompactionJobReceipt {
+    /// Selected physical tables in deterministic role order.
+    /// 按确定性角色顺序排列的已选物理表。
+    pub tables: Vec<VceCompactionTableReceipt>,
+}
+
+impl VceCompactionTableReceipt {
+    /// Validate one table receipt without consulting mutable controller state.
+    /// 在不查询可变控制器状态的情况下校验一张表的回执。
+    fn validate(&self) -> Result<(), String> {
+        let plan_statistics = &self.plan.statistics;
+        let latest = &self.latest_statistics;
+        let options = &self.plan.options;
+        if !vulcan_context_engine::is_sha256_identity(&self.action_id)
+            || !self.plan.compaction_required
+            || plan_statistics.table_name.trim().is_empty()
+            || plan_statistics.table_name.len() > 512
+            || plan_statistics.version == 0
+            || plan_statistics.small_fragment_count > plan_statistics.fragment_count
+            || latest.role != plan_statistics.role
+            || latest.table_name != plan_statistics.table_name
+            || latest.version == 0
+            || latest.version < plan_statistics.version
+            || latest.row_count != plan_statistics.row_count
+            || latest.index_count != plan_statistics.index_count
+            || latest.small_fragment_count > latest.fragment_count
+            || [
+                options.target_rows_per_fragment,
+                options.max_rows_per_group,
+                options.max_bytes_per_file,
+                options.num_threads,
+                options.batch_size,
+                options.max_source_fragments,
+            ]
+            .contains(&0)
+            || options.num_threads > 8
+        {
+            return Err(String::from(
+                "VCE compaction table receipt has invalid identity, statistics, or options",
+            ));
+        }
+        if self
+            .operation_id
+            .as_ref()
+            .is_some_and(|operation_id| operation_id.trim().is_empty() || operation_id.len() > 2048)
+            || self.operation_expected_version == Some(0)
+        {
+            return Err(String::from(
+                "VCE compaction table operation identity is invalid",
+            ));
+        }
+        let operation_ready = self.round > 0
+            && self.operation_id.is_some()
+            && self.operation_expected_version.is_some();
+        let terminal_without_operation = self.state.is_terminal()
+            && self.state != VceCompactionTableState::Succeeded
+            && self.round == 0
+            && self.operation_id.is_none()
+            && self.operation_expected_version.is_none();
+        let terminal_after_completed_round = matches!(
+            self.state,
+            VceCompactionTableState::Failed
+                | VceCompactionTableState::Cancelled
+                | VceCompactionTableState::Interrupted
+        ) && self.round > 0
+            && self.operation_id.is_none()
+            && self.operation_expected_version.is_none()
+            && self.latest_statistics.version > self.plan.statistics.version
+            && self.metrics.fragments_removed > 0;
+        if (self.state == VceCompactionTableState::Pending
+            && (self.operation_id.is_some()
+                || self.operation_expected_version.is_some()
+                || (self.round == 0 && latest != plan_statistics)))
+            || (matches!(
+                self.state,
+                VceCompactionTableState::Queued | VceCompactionTableState::Running
+            ) && !operation_ready)
+            || (self.state.is_terminal()
+                && !operation_ready
+                && !terminal_without_operation
+                && !terminal_after_completed_round)
+        {
+            return Err(String::from(
+                "VCE compaction table state does not match its operation round",
+            ));
+        }
+        if self
+            .operation_expected_version
+            .is_some_and(|version| latest.version < version)
+        {
+            return Err(String::from(
+                "VCE compaction table statistics precede its submitted version",
+            ));
+        }
+        let requires_error = matches!(
+            self.state,
+            VceCompactionTableState::Failed
+                | VceCompactionTableState::StateLost
+                | VceCompactionTableState::Interrupted
+        );
+        if requires_error
+            != self
+                .error
+                .as_ref()
+                .is_some_and(|error| !error.trim().is_empty())
+            || self.error.as_ref().is_some_and(|error| error.len() > 8192)
+        {
+            return Err(String::from(
+                "VCE compaction table diagnostic does not match its state",
+            ));
+        }
+        if self.state == VceCompactionTableState::Succeeded
+            && latest.fragment_count > 1
+            && latest.small_fragment_count > 0
+        {
+            return Err(String::from(
+                "VCE compaction table succeeded while still requiring compaction",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl VceCompactionJobReceipt {
+    /// Validate deterministic bounded table receipts for one compact job.
+    /// 校验一个整理作业中确定且有界的表回执。
+    fn validate(&self) -> Result<(), String> {
+        if self.tables.is_empty() || self.tables.len() > 2 {
+            return Err(String::from(
+                "VCE compaction job must contain one or two physical tables",
+            ));
+        }
+        let mut roles = std::collections::BTreeSet::new();
+        let mut actions = std::collections::BTreeSet::new();
+        let mut previous_role = None;
+        for table in &self.tables {
+            table.validate()?;
+            let role = table.plan.statistics.role;
+            if previous_role.is_some_and(|previous| previous >= role)
+                || !roles.insert(role)
+                || !actions.insert(table.action_id.as_str())
+            {
+                return Err(String::from(
+                    "VCE compaction job table order or identity is invalid",
+                ));
+            }
+            previous_role = Some(role);
+        }
+        Ok(())
+    }
+
+    /// Validate a monotonic durable successor without consulting controller memory.
+    /// 在不查询控制器内存的情况下校验单调持久后继。
+    ///
+    /// `next` is the proposed next receipt. Returns unit only when immutable plans and every
+    /// table lifecycle advance without rewriting acknowledged physical facts.
+    /// `next` 是拟议下一份回执。仅当不可变计划及所有表生命周期均未改写已确认物理事实时返回空值。
+    fn validate_transition(&self, next: &Self) -> Result<(), String> {
+        if self.tables.len() != next.tables.len() {
+            return Err(String::from(
+                "VCE compaction update changed its frozen table set",
+            ));
+        }
+        for (previous, successor) in self.tables.iter().zip(&next.tables) {
+            if previous.action_id != successor.action_id || previous.plan != successor.plan {
+                return Err(String::from(
+                    "VCE compaction update changed its frozen table plan",
+                ));
+            }
+            validate_compaction_table_transition(previous, successor)?;
+        }
+        Ok(())
+    }
+}
+
+/// Validate one table's durable state, operation round, statistics, and cumulative metrics.
+/// 校验一张表的持久状态、操作轮次、统计信息及累计指标。
+///
+/// `previous` is already acknowledged and `next` is proposed. Returns unit only for one
+/// forward transition that preserves every immutable or cumulative fact.
+/// `previous` 已获确认，`next` 是拟议后继。仅对保留全部不可变或累计事实的前向转换返回空值。
+fn validate_compaction_table_transition(
+    previous: &VceCompactionTableReceipt,
+    next: &VceCompactionTableReceipt,
+) -> Result<(), String> {
+    if previous == next {
+        return Ok(());
+    }
+    let round_advanced = next.round > previous.round;
+    let expected_next_round = previous.round.checked_add(1);
+    if !previous.state.permits(next.state)
+        || next.round < previous.round
+        || (round_advanced && expected_next_round != Some(next.round))
+        || next.latest_statistics.version < previous.latest_statistics.version
+        || next.metrics.fragments_removed < previous.metrics.fragments_removed
+        || next.metrics.fragments_added < previous.metrics.fragments_added
+        || next.metrics.files_removed < previous.metrics.files_removed
+        || next.metrics.files_added < previous.metrics.files_added
+    {
+        return Err(String::from(
+            "VCE compaction table update regressed its durable lifecycle or physical facts",
+        ));
+    }
+
+    // A new round is admitted only from a pending boundary frozen at the latest acknowledged version.
+    // 新轮次只能从待处理边界准入，并冻结最近一次已确认版本。
+    if round_advanced {
+        if previous.state != VceCompactionTableState::Pending
+            || next.state != VceCompactionTableState::Queued
+            || next.operation_id.is_none()
+            || next.operation_expected_version != Some(previous.latest_statistics.version)
+            || next.latest_statistics != previous.latest_statistics
+            || next.metrics != previous.metrics
+        {
+            return Err(String::from(
+                "VCE compaction table update has an invalid operation admission",
+            ));
+        }
+        return Ok(());
+    }
+
+    // Completing a bounded round may clear its operation only when another pending round is needed.
+    // 完成一个有界轮次后，仅在还需下一待处理轮次时才可清除当前操作。
+    let completed_round = matches!(
+        previous.state,
+        VceCompactionTableState::Queued | VceCompactionTableState::Running
+    ) && next.state == VceCompactionTableState::Pending;
+    if completed_round {
+        if next.operation_id.is_some()
+            || next.operation_expected_version.is_some()
+            || (next.latest_statistics == previous.latest_statistics
+                && next.metrics == previous.metrics)
+        {
+            return Err(String::from(
+                "VCE compaction table update did not acknowledge its completed round",
+            ));
+        }
+    } else if next.operation_id != previous.operation_id
+        || next.operation_expected_version != previous.operation_expected_version
+    {
+        return Err(String::from(
+            "VCE compaction table update rewrote its admitted operation identity",
+        ));
+    }
+
+    // Controller observations cannot rewrite statistics unless the active round has settled.
+    // 控制器观察不能改写统计信息；只有活动轮次结算时才可更新。
+    let physical_facts_changed =
+        next.latest_statistics != previous.latest_statistics || next.metrics != previous.metrics;
+    let may_acknowledge_physical_result = matches!(
+        previous.state,
+        VceCompactionTableState::Queued | VceCompactionTableState::Running
+    ) && matches!(
+        next.state,
+        VceCompactionTableState::Pending
+            | VceCompactionTableState::Succeeded
+            | VceCompactionTableState::Failed
+            | VceCompactionTableState::Cancelled
+    );
+    if physical_facts_changed && !may_acknowledge_physical_result {
+        return Err(String::from(
+            "VCE compaction table update rewrote unacknowledged physical facts",
+        ));
+    }
+    Ok(())
+}
+
 /// Versioned durable receipt owned by one project and one host execution run.
 /// 由单个项目及单次宿主执行持有的版本化持久回执。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -195,6 +623,10 @@ pub struct VceStoredJob {
     /// Box the uncommon target so ordinary receipts and their asynchronous owners remain small.
     /// 单独分配较少使用的目标，保持普通回执及其异步所有者足够小。
     pub replacement: Option<Box<VceJobReplacement>>,
+    /// Table-scoped physical compaction state, present only for compact jobs.
+    /// 仅整理作业持有的表作用域物理整理状态。
+    #[serde(default)]
+    pub compaction: Option<VceCompactionJobReceipt>,
     /// Resulting checkpoint after successful initialization, synchronization or rebuilding.
     /// 成功初始化、同步或重建之后的结果检查点。
     pub result_checkpoint_version: Option<u64>,
@@ -219,7 +651,8 @@ impl VceStoredJob {
     /// Takes no parameters. Returns explicit malformed-contract diagnostics.
     /// 无参数。返回明确的契约格式错误诊断。
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != VCE_JOB_RECEIPT_SCHEMA_VERSION
+        if !(VCE_MIN_READABLE_JOB_RECEIPT_SCHEMA_VERSION..=VCE_JOB_RECEIPT_SCHEMA_VERSION)
+            .contains(&self.schema_version)
             || self.sequence == 0
             || self.admitted_settings_revision == 0
             || self.created_at_unix_ms == 0
@@ -240,12 +673,20 @@ impl VceStoredJob {
                 ));
             }
         }
-        for fingerprint in [&self.request_fingerprint, &self.contract_fingerprint] {
-            if !vulcan_context_engine::is_sha256_identity(fingerprint) {
-                return Err(String::from(
-                    "VCE job fingerprint must be an exact SHA-256 identity",
-                ));
-            }
+        if !vulcan_context_engine::is_sha256_identity(&self.request_fingerprint) {
+            return Err(String::from(
+                "VCE job request fingerprint must be an exact SHA-256 identity",
+            ));
+        }
+        let valid_contract_fingerprint = if self.kind == VceJobKind::Compact {
+            vulcan_context_engine::is_tagged_sha256_identity(&self.contract_fingerprint)
+        } else {
+            vulcan_context_engine::is_sha256_identity(&self.contract_fingerprint)
+        };
+        if !valid_contract_fingerprint {
+            return Err(String::from(
+                "VCE job contract fingerprint does not match its operation kind",
+            ));
         }
         if self
             .retry_of_job_id
@@ -259,9 +700,16 @@ impl VceStoredJob {
         if self.sequence > i64::MAX as u64
             || self.created_at_unix_ms > i64::MAX as u64
             || self.updated_at_unix_ms > i64::MAX as u64
+            || self.updated_at_unix_ms < self.created_at_unix_ms
+            || self
+                .source_checkpoint_version
+                .is_some_and(|version| version == 0 || version > i64::MAX as u64)
+            || self
+                .result_checkpoint_version
+                .is_some_and(|version| version == 0 || version > i64::MAX as u64)
         {
             return Err(String::from(
-                "VCE job receipt exceeds the storage integer range",
+                "VCE job receipt has an invalid timestamp or exceeds the storage integer range",
             ));
         }
         if self.error.as_ref().is_some_and(|error| error.len() > 8192) {
@@ -271,6 +719,29 @@ impl VceStoredJob {
             return Err(String::from(
                 "Only VCE synchronization jobs can coalesce a follow-up",
             ));
+        }
+        match (self.kind, &self.compaction) {
+            (VceJobKind::Compact, Some(compaction)) => {
+                if self.schema_version != VCE_JOB_RECEIPT_SCHEMA_VERSION
+                    || self.source_checkpoint_version.is_none()
+                    || self.replacement.is_some()
+                    || self.followup_requested
+                {
+                    return Err(String::from(
+                        "VCE compaction job has an incompatible receipt or checkpoint contract",
+                    ));
+                }
+                compaction.validate()?;
+            }
+            (VceJobKind::Compact, None) => {
+                return Err(String::from("VCE compaction job omitted its table receipt"));
+            }
+            (_, Some(_)) => {
+                return Err(String::from(
+                    "Non-compaction VCE job included physical table state",
+                ));
+            }
+            (_, None) => {}
         }
         if let Some(replacement) = &self.replacement {
             replacement.target.validate()?;
@@ -330,7 +801,8 @@ impl VceStoredJob {
             ));
         }
         if (self.state == VceJobState::Succeeded
-            && (self.result_checkpoint_version.is_none() || self.completed_update.is_none()))
+            && (self.result_checkpoint_version.is_none()
+                || (self.kind != VceJobKind::Compact && self.completed_update.is_none())))
             || (self.state == VceJobState::Failed
                 && self
                     .error
@@ -342,10 +814,28 @@ impl VceStoredJob {
                 "VCE job terminal receipt does not match its result state",
             ));
         }
+        if self.kind == VceJobKind::Compact
+            && (self.completed_update.is_some()
+                || (self.state == VceJobState::Succeeded
+                    && (self.result_checkpoint_version != self.source_checkpoint_version
+                        || self.compaction.as_ref().is_none_or(|compaction| {
+                            compaction
+                                .tables
+                                .iter()
+                                .any(|table| table.state != VceCompactionTableState::Succeeded)
+                        }))))
+        {
+            return Err(String::from(
+                "VCE compaction success must preserve its checkpoint and complete every table",
+            ));
+        }
         if let Some(progress) = &self.progress
             && (progress
                 .total
                 .is_some_and(|total| progress.completed > total)
+                || progress
+                    .overall_total
+                    .is_some_and(|total| progress.overall_completed > total)
                 || progress.operation_id.len() > 2048
                 || progress
                     .current_path
@@ -358,6 +848,27 @@ impl VceStoredJob {
         }
         Ok(())
     }
+}
+
+/// Validate a job lifecycle edge with the compaction-only atomic cancellation exception.
+/// 校验作业生命周期边，并处理仅适用于整理作业的原子取消例外。
+///
+/// `previous` is the acknowledged receipt and `next` is the proposed successor. Returns true for
+/// ordinary lifecycle edges or for a direct running-to-cancelled compaction settlement whose every
+/// table is already terminal in the same compare-and-swap.
+/// `previous` 是已确认回执，`next` 是拟议后继。普通生命周期边返回 true；若整理作业在同一次
+/// 比较交换中把全部表确定为终态，也允许从运行中直接进入已取消。
+fn job_state_transition_permitted(previous: &VceStoredJob, next: &VceStoredJob) -> bool {
+    previous.state.permits(next.state)
+        || (previous.kind == VceJobKind::Compact
+            && previous.state == VceJobState::Running
+            && next.state == VceJobState::Cancelled
+            && next.compaction.as_ref().is_some_and(|compaction| {
+                compaction
+                    .tables
+                    .iter()
+                    .all(|table| table.state.is_terminal())
+            }))
 }
 
 /// One exact physical project's durable job repository supplied by the host factory.
@@ -411,11 +922,30 @@ impl VceProjectJobStore {
     ///
     /// `data_plane` and `project_id` come from the factory. Returns a lightweight leased repository.
     /// `data_plane` 与 `project_id` 来自工厂。返回轻量租约仓库。
-    pub(super) fn new(data_plane: VceDataPlaneHandle, project_id: String) -> Self {
+    pub(crate) fn new(data_plane: VceDataPlaneHandle, project_id: String) -> Self {
         Self {
             data_plane,
             project_id,
         }
+    }
+
+    /// Execute one bounded project-storage script solely for deterministic downstream fault tests.
+    /// 仅为下游确定性故障测试执行一条有界项目存储脚本。
+    ///
+    /// `sql` is test-owned schema instrumentation and never accepts user input. Returns the real
+    /// controller result through the same process-wide SQLite mutation gate as production writes.
+    /// `sql` 是测试持有的结构插桩，绝不接收用户输入。通过与生产写入相同的进程级 SQLite
+    /// 变更闸门返回真实控制器结果。
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn execute_test_storage_script(&self, sql: &str) -> Result<(), String> {
+        if sql.trim().is_empty() || sql.len() > 65_536 {
+            return Err(String::from(
+                "VCE test storage script is empty or exceeds its bound",
+            ));
+        }
+        self.data_plane
+            .execute(sql, Vec::new(), "Execute VCE test storage script")
+            .await
     }
 
     /// Register a queued receipt before returning admission to the user; replay an identical key.
@@ -488,15 +1018,125 @@ impl VceProjectJobStore {
                     if is_retryable_receipt_transport_error(&error)
                         && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
                 {
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        200 * (attempt as u64 + 1),
-                    ))
-                    .await;
+                    tokio::time::sleep(receipt_retry_delay(attempt)).await;
                 }
                 Err(error) => return Err(error),
             }
         }
         unreachable!("bounded VCE receipt read retry exhausted without a result")
+    }
+
+    /// Convert the sole unfinished receipt into an explicit interruption after its host has stopped.
+    /// 宿主停止后，将唯一未完成回执转换为明确的中断终态。
+    ///
+    /// `diagnostic` explains why the previous owner ended; the caller must already hold the
+    /// project writer lease, so a live cooperating worker cannot be silently adopted.
+    /// `diagnostic` 说明前一个所有者为何结束；调用方必须已经持有项目写入租约，
+    /// 因此活动的协作工作线程不会被静默接管。
+    /// Returns the acknowledged interrupted receipt, or `None` when no unfinished receipt exists.
+    /// 返回已确认的中断回执；不存在未完成回执时返回 `None`。
+    pub async fn interrupt_unfinished(
+        &self,
+        diagnostic: impl Into<String>,
+    ) -> Result<Option<VceStoredJob>, String> {
+        let Some(previous) = self.unfinished().await? else {
+            return Ok(None);
+        };
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| format!("Read VCE interruption timestamp: {error}"))?
+                .as_millis(),
+        )
+        .map_err(|_| String::from("VCE interruption timestamp exceeds storage range"))?;
+        let mut next = previous.clone();
+        next.state = VceJobState::Interrupted;
+        next.followup_requested = false;
+        next.error = Some(diagnostic.into().chars().take(8_192).collect());
+        next.sequence = previous
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| String::from("VCE job interruption sequence overflow"))?;
+        next.updated_at_unix_ms = now.max(previous.updated_at_unix_ms);
+        self.update(&previous, &next).await.map(Some)
+    }
+
+    /// Settle a receipt whose executor has ended, using exact committed refresh evidence.
+    /// 使用精确已提交刷新证据收敛执行者已经结束的回执。
+    /// `expected_job_id` fences recovery to the receipt originally selected by the caller.
+    /// `expected_job_id` 将恢复限制在调用方最初选定的回执。
+    /// The caller must hold the exclusive project writer lease and exclude local admission.
+    /// 调用方必须持有项目独占写入租约并排斥本地准入。
+    /// Returns the terminal receipt without scheduling source work or deleting stored content.
+    /// 返回终态回执，不安排源码处理、不删除存储内容。
+    pub(crate) async fn reconcile_ended_job(
+        &self,
+        expected_job_id: &str,
+    ) -> Result<Option<VceStoredJob>, String> {
+        let Some(mut previous) = self.unfinished().await? else {
+            return Ok(None);
+        };
+        // The selected job may have ended while a newer one was admitted; never settle that successor.
+        // 选定作业可能已结束并准入了更新作业；绝不收敛该后继。
+        if previous.job_id != expected_job_id {
+            return Ok(None);
+        }
+        // Only the final, non-coalesced publication phase identifies the whole job's last refresh.
+        // 只有不存在待合并后续任务的最终发布阶段才能标识整个作业的最后一次刷新。
+        let refresh = previous.progress.as_ref().filter(|progress| {
+            previous.state == VceJobState::Running
+                && !previous.followup_requested
+                && matches!(
+                    progress.phase,
+                    vulcan_context_engine::VceRefreshPhase::Committing
+                        | vulcan_context_engine::VceRefreshPhase::Complete
+                )
+                && (progress.operation_id == previous.job_id
+                    || progress
+                        .operation_id
+                        .strip_prefix(&format!("{}:batch:", previous.job_id))
+                        .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok()))
+        });
+        if let Some(refresh) = refresh {
+            // Join all three atomic publication facts; a completed storage-operation counter is insufficient.
+            // 联接三个原子发布事实；存储操作完成计数不足以证明发布。
+            let publications: Vec<VceCompletedJobUpdate> = self.data_plane.query_rows(
+                "SELECT c.checkpoint_version, c.committed_at_unix_ms AS at_unix_ms FROM vce_read_checkpoints c JOIN vce_project_bindings b ON b.namespace_id = c.namespace_id JOIN vce_generations g ON g.namespace_id = c.namespace_id AND g.refresh_id = c.refresh_id AND g.generation = c.generation AND g.state = 'committed' JOIN vce_commit_receipts r ON r.namespace_id = g.namespace_id AND r.operation_id = g.operation_id WHERE b.project_id = ? AND c.refresh_id = ? AND g.operation_id = ? AND (? IS NULL OR c.namespace_id = ?) LIMIT 2;",
+                vec![sqlite_text(&self.project_id), sqlite_text(&refresh.operation_id), sqlite_text(format!("{}:commit", refresh.operation_id)), previous.replacement.as_ref().map_or(ControllerSqliteValue::Null, |replacement| sqlite_text(&replacement.target.binding.namespace_id)), previous.replacement.as_ref().map_or(ControllerSqliteValue::Null, |replacement| sqlite_text(&replacement.target.binding.namespace_id))],
+            ).await?;
+            if publications.len() > 1 {
+                return Err(String::from(
+                    "VCE ended job has ambiguous committed refresh evidence",
+                ));
+            }
+            if let Some(publication) = publications.into_iter().next() {
+                let mut accounted = previous.clone();
+                // Preserve acknowledged completion time when replaying an already accounted publication.
+                // 重放已经计账的发布时保留已确认完成时间。
+                if accounted.completed_update.as_ref().is_none_or(|update| {
+                    update.checkpoint_version != publication.checkpoint_version
+                }) {
+                    accounted.completed_update = Some(publication.clone());
+                    accounted.sequence = accounted
+                        .sequence
+                        .checked_add(1)
+                        .ok_or("VCE job sequence overflow")?;
+                    accounted.updated_at_unix_ms =
+                        accounted.updated_at_unix_ms.max(publication.at_unix_ms);
+                    previous = self.update(&previous, &accounted).await?;
+                }
+                let mut finished = previous.clone();
+                finished.state = VceJobState::Succeeded;
+                finished.result_checkpoint_version = Some(publication.checkpoint_version);
+                finished.error = None;
+                finished.sequence = finished
+                    .sequence
+                    .checked_add(1)
+                    .ok_or("VCE job sequence overflow")?;
+                return self.update(&previous, &finished).await.map(Some);
+            }
+        }
+        self.interrupt_unfinished("VCE executor ended before a complete job publication could be confirmed; stored index data has been preserved").await
     }
 
     /// Find a previously admitted request without rerunning its expensive work.
@@ -704,7 +1344,12 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
     ) -> Result<VceStoredJob, String> {
         self.validate_owner(previous)?;
         self.validate_owner(next)?;
-        if !previous.state.permits(next.state)
+        if let (Some(previous_compaction), Some(next_compaction)) =
+            (&previous.compaction, &next.compaction)
+        {
+            previous_compaction.validate_transition(next_compaction)?;
+        }
+        if !job_state_transition_permitted(previous, next)
             || next.updated_at_unix_ms < previous.updated_at_unix_ms
             || (previous.completed_update != next.completed_update
                 && next.state != VceJobState::Running)
@@ -778,21 +1423,25 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
                 Err(error) if is_retryable_receipt_transport_error(&error) => {
                     // The write may already have committed; reconcile before attempting it again.
                     // 写入可能已经提交，重试写入前先读取并收敛到已提交结果。
-                    match self.get_after_transport_retry(&next.job_id).await? {
-                        Some(receipt) if receipt == *next => return Ok(receipt),
-                        Some(receipt)
+                    match self.get_after_transport_retry(&next.job_id).await {
+                        Ok(Some(receipt)) if receipt == *next => return Ok(receipt),
+                        Ok(Some(receipt))
                             if receipt == *previous && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
                         {
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                200 * (attempt as u64 + 1),
-                            ))
-                            .await;
+                            tokio::time::sleep(receipt_retry_delay(attempt)).await;
                         }
-                        Some(receipt) if receipt == *previous => return Err(error),
-                        Some(_) => {
+                        Ok(Some(receipt)) if receipt == *previous => return Err(error),
+                        Ok(Some(_)) => {
                             return Err(String::from("VCE job receipt changed during update"));
                         }
-                        None => return Err(String::from("VCE job to update does not exist")),
+                        Ok(None) => return Err(String::from("VCE job to update does not exist")),
+                        Err(read_error)
+                            if is_retryable_receipt_transport_error(&read_error)
+                                && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
+                        {
+                            tokio::time::sleep(receipt_retry_delay(attempt)).await;
+                        }
+                        Err(read_error) => return Err(read_error),
                     }
                 }
                 Err(error) => return Err(error),
@@ -921,6 +1570,7 @@ pub(super) fn replacement_test_receipt(
             predecessor,
             target,
         })),
+        compaction: None,
         progress: None,
         followup_requested: false,
         completed_update: None,
@@ -932,6 +1582,77 @@ pub(super) fn replacement_test_receipt(
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    /// Build one valid pending physical compaction receipt for lifecycle validation tests.
+    /// 为生命周期校验测试构造一份有效的待处理物理整理回执。
+    fn compaction_test_receipt() -> VceStoredJob {
+        let statistics = VcePhysicalTableStatistics {
+            role: vulcan_context_engine::VcePhysicalTableRole::Content,
+            table_name: String::from("content_vectors"),
+            version: 9,
+            total_bytes: 4096,
+            row_count: 32,
+            index_count: 0,
+            fragment_count: 8,
+            small_fragment_count: 8,
+            fragment_rows: vulcan_context_engine::VcePhysicalFragmentSummary {
+                minimum_rows: 4,
+                maximum_rows: 4,
+                mean_rows: 4,
+                p25_rows: 4,
+                p50_rows: 4,
+                p75_rows: 4,
+                p99_rows: 4,
+            },
+        };
+        VceStoredJob {
+            schema_version: VCE_JOB_RECEIPT_SCHEMA_VERSION,
+            project_id: String::from("compaction-project"),
+            job_id: String::from("compaction-job"),
+            owner_run_id: String::from("compaction-owner"),
+            idempotency_key: String::from("compaction-request"),
+            retry_of_job_id: None,
+            request_fingerprint: "a".repeat(64),
+            contract_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            kind: VceJobKind::Compact,
+            state: VceJobState::Queued,
+            sequence: 1,
+            created_at_unix_ms: 1_000,
+            updated_at_unix_ms: 1_000,
+            admitted_settings_revision: 1,
+            source_checkpoint_version: Some(7),
+            replacement: None,
+            compaction: Some(VceCompactionJobReceipt {
+                tables: vec![VceCompactionTableReceipt {
+                    action_id: "c".repeat(64),
+                    plan: VcePhysicalTablePlan {
+                        statistics: statistics.clone(),
+                        compaction_required: true,
+                        options: vulcan_context_engine::VceCompactionOptions {
+                            target_rows_per_fragment: 100_000,
+                            max_rows_per_group: 1_024,
+                            max_bytes_per_file: 256 * 1024 * 1024,
+                            num_threads: 2,
+                            batch_size: 8_192,
+                            max_source_fragments: 512,
+                        },
+                    },
+                    state: VceCompactionTableState::Pending,
+                    round: 0,
+                    operation_id: None,
+                    operation_expected_version: None,
+                    latest_statistics: statistics,
+                    metrics: VceCompactionMetrics::default(),
+                    error: None,
+                }],
+            }),
+            result_checkpoint_version: None,
+            progress: None,
+            followup_requested: false,
+            completed_update: None,
+            error: None,
+        }
+    }
 
     // SQLite lock conflicts and transport failures both require receipt reconciliation, not blind duplicate writes.
     // SQLite 锁冲突与传输失败都必须走回执收敛，而不是盲目重复写入。
@@ -946,6 +1667,42 @@ mod tests {
         assert!(!is_retryable_receipt_transport_error(
             "VCE job receipt has invalid ownership"
         ));
+    }
+
+    /// Reject a durable receipt whose whole-job progress exceeds its declared denominator.
+    /// 拒绝整体作业进度超过声明分母的持久回执。
+    #[test]
+    fn receipt_rejects_overflowing_overall_progress() {
+        let mut receipt = compaction_test_receipt();
+        receipt.progress = Some(VceRefreshProgress {
+            phase: vulcan_context_engine::VceRefreshPhase::Writing,
+            operation_id: String::from("compaction-job:compact:content:1"),
+            unit: vulcan_context_engine::VceRefreshUnit::Tables,
+            completed: 0,
+            total: Some(1),
+            overall_completed: 2,
+            overall_total: Some(1),
+            current_path: None,
+        });
+
+        assert!(receipt.validate().is_err());
+    }
+
+    /// Reject non-monotonic receipt time and zero or out-of-range checkpoint identities.
+    /// 拒绝非单调回执时间以及零值或越界的检查点身份。
+    #[test]
+    fn receipt_rejects_invalid_durable_time_and_checkpoint_identity() {
+        let mut backwards_time = compaction_test_receipt();
+        backwards_time.updated_at_unix_ms = backwards_time.created_at_unix_ms - 1;
+        assert!(backwards_time.validate().is_err());
+
+        let mut zero_checkpoint = compaction_test_receipt();
+        zero_checkpoint.source_checkpoint_version = Some(0);
+        assert!(zero_checkpoint.validate().is_err());
+
+        let mut oversized_checkpoint = compaction_test_receipt();
+        oversized_checkpoint.source_checkpoint_version = Some(i64::MAX as u64 + 1);
+        assert!(oversized_checkpoint.validate().is_err());
     }
 
     /// Round-trip exact replacement identity and reject inconsistent or unsupported receipt facts.
@@ -1060,5 +1817,374 @@ mod tests {
         let mut unknown = serde_json::to_value(&receipt).expect("encode malformed fixture");
         unknown["replacement"]["target"]["unrecognized_target"] = serde_json::json!(true);
         assert!(serde_json::from_value::<VceStoredJob>(unknown).is_err());
+    }
+
+    /// Verify schema-v2 non-compaction history remains readable without an eager storage migration.
+    /// 验证 v2 非整理历史无需立即迁移存储即可继续读取。
+    #[test]
+    fn version_two_job_receipts_remain_readable_without_compaction_fields() {
+        let root = std::env::current_dir()
+            .expect("read absolute fixture root")
+            .display()
+            .to_string();
+        let space = vulcan_context_engine::EmbeddingSpace {
+            vector_space_id: String::from("legacy-space"),
+            physical_fingerprint: Some(String::from("legacy-producer")),
+            dimension: 3,
+            preprocessing_version: String::from("preprocess-v1"),
+            chunker_version: String::from("chunker-v1"),
+        };
+        let mut receipt = replacement_test_receipt(
+            VceProjectIndexConfig {
+                project_id: String::from("legacy-project"),
+                root_hash: hex::encode(Sha256::digest(root.as_bytes())),
+                root_path: root,
+                binding: vulcan_context_engine::VceIndexBinding::new(
+                    "legacy-target",
+                    "legacy-chain",
+                    1,
+                    space.clone(),
+                )
+                .expect("legacy binding should be valid"),
+                vector_space_id: space.vector_space_id,
+                physical_fingerprint: space
+                    .physical_fingerprint
+                    .expect("legacy producer should be explicit"),
+                preprocessing_version: space.preprocessing_version,
+                chunker_version: space.chunker_version,
+                dimension: 3,
+                config_revision: 1,
+            },
+            VceRebuildCandidateBase {
+                namespace_id: String::from("legacy-source"),
+                checkpoint_version: 4,
+                job_id: String::from("legacy-job"),
+            },
+        );
+        receipt.schema_version = 2;
+        let mut encoded = serde_json::to_value(&receipt).expect("legacy receipt should encode");
+        encoded
+            .as_object_mut()
+            .expect("legacy receipt should be an object")
+            .remove("compaction");
+
+        let decoded = serde_json::from_value::<VceStoredJob>(encoded)
+            .expect("v2 receipt without the new field should decode");
+        decoded
+            .validate()
+            .expect("v2 non-compaction receipt should remain valid");
+        assert_eq!(decoded.schema_version, 2);
+        assert!(decoded.compaction.is_none());
+    }
+
+    /// Verify table and host terminal states preserve the checkpoint and reject false success.
+    /// 验证表级与宿主终态会保留检查点，并拒绝虚假成功。
+    #[test]
+    fn compaction_receipt_state_machine_rejects_false_success() {
+        let mut receipt = compaction_test_receipt();
+        receipt
+            .validate()
+            .expect("pending compaction receipt should be valid");
+
+        let table = receipt
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("compaction table should exist");
+        table.state = VceCompactionTableState::Queued;
+        table.round = 1;
+        table.operation_id = Some(String::from("compaction-job:compact:content:1"));
+        table.operation_expected_version = Some(9);
+        receipt.state = VceJobState::Running;
+        receipt.sequence += 1;
+        receipt.updated_at_unix_ms += 1;
+        receipt
+            .validate()
+            .expect("admitted operation should be valid");
+
+        let table = receipt
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("compaction table should exist");
+        table.state = VceCompactionTableState::Succeeded;
+        table.latest_statistics.version = 10;
+        table.latest_statistics.fragment_count = 1;
+        table.latest_statistics.small_fragment_count = 1;
+        table.latest_statistics.fragment_rows.minimum_rows = 32;
+        table.latest_statistics.fragment_rows.maximum_rows = 32;
+        table.latest_statistics.fragment_rows.mean_rows = 32;
+        table.latest_statistics.fragment_rows.p25_rows = 32;
+        table.latest_statistics.fragment_rows.p50_rows = 32;
+        table.latest_statistics.fragment_rows.p75_rows = 32;
+        table.latest_statistics.fragment_rows.p99_rows = 32;
+        table.metrics.fragments_removed = 8;
+        table.metrics.fragments_added = 1;
+        receipt.state = VceJobState::Succeeded;
+        receipt.result_checkpoint_version = receipt.source_checkpoint_version;
+        receipt.sequence += 1;
+        receipt.updated_at_unix_ms += 1;
+        receipt
+            .validate()
+            .expect("successful compaction should preserve the source checkpoint");
+
+        let mut wrong_checkpoint = receipt.clone();
+        wrong_checkpoint.result_checkpoint_version = Some(8);
+        assert!(wrong_checkpoint.validate().is_err());
+
+        let mut unfinished_table = receipt.clone();
+        let table = unfinished_table
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("compaction table should exist");
+        table.latest_statistics.fragment_count = 2;
+        table.latest_statistics.small_fragment_count = 2;
+        assert!(unfinished_table.validate().is_err());
+
+        let mut changed_rows = receipt.clone();
+        changed_rows
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("compaction table should exist")
+            .latest_statistics
+            .row_count -= 1;
+        assert!(changed_rows.validate().is_err());
+
+        let mut changed_indexes = receipt.clone();
+        changed_indexes
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("compaction table should exist")
+            .latest_statistics
+            .index_count += 1;
+        assert!(changed_indexes.validate().is_err());
+
+        let mut lost_state = compaction_test_receipt();
+        let table = lost_state
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("compaction table should exist");
+        table.state = VceCompactionTableState::StateLost;
+        table.round = 1;
+        table.operation_id = Some(String::from("lost-operation"));
+        table.operation_expected_version = Some(9);
+        table.error = Some(String::from("controller operation history was lost"));
+        lost_state.state = VceJobState::Interrupted;
+        lost_state.error = Some(String::from("controller operation history was lost"));
+        lost_state.sequence += 1;
+        lost_state.updated_at_unix_ms += 1;
+        lost_state
+            .validate()
+            .expect("state loss should remain an explicit interrupted terminal receipt");
+    }
+
+    /// Verify durable compaction updates cannot rewrite plans, operation identities, or acknowledged facts.
+    /// 验证持久整理更新不能改写计划、操作身份或已确认事实。
+    #[test]
+    fn compaction_receipt_transition_is_monotonic() {
+        // Pending plan and its valid first controller admission.
+        // 待处理计划及其合法的首次控制器准入。
+        let pending = compaction_test_receipt()
+            .compaction
+            .expect("pending compaction payload");
+        let mut admitted = pending.clone();
+        let table = admitted.tables.first_mut().expect("admitted table");
+        table.state = VceCompactionTableState::Queued;
+        table.round = 1;
+        table.operation_id = Some(String::from("compaction-job:compact:content:1"));
+        table.operation_expected_version = Some(9);
+        admitted.validate().expect("admitted receipt");
+        pending
+            .validate_transition(&admitted)
+            .expect("first round admission should advance");
+
+        let mut skipped_round = admitted.clone();
+        let table = skipped_round.tables.first_mut().expect("skipped table");
+        table.round = 3;
+        table.operation_id = Some(String::from("compaction-job:compact:content:3"));
+        assert!(pending.validate_transition(&skipped_round).is_err());
+
+        let mut changed_plan = admitted.clone();
+        changed_plan.tables[0].plan.options.batch_size += 1;
+        changed_plan
+            .validate()
+            .expect("changed plan is standalone valid");
+        assert!(pending.validate_transition(&changed_plan).is_err());
+
+        let mut running = admitted.clone();
+        running.tables[0].state = VceCompactionTableState::Running;
+        admitted
+            .validate_transition(&running)
+            .expect("queued operation may begin running");
+
+        let mut rewritten_operation = running.clone();
+        rewritten_operation.tables[0].state = VceCompactionTableState::Failed;
+        rewritten_operation.tables[0].operation_id = Some(String::from("replacement-operation"));
+        rewritten_operation.tables[0].error = Some(String::from("controller failure"));
+        rewritten_operation
+            .validate()
+            .expect("rewritten operation is standalone valid");
+        assert!(running.validate_transition(&rewritten_operation).is_err());
+
+        let mut completed_round = running.clone();
+        let table = completed_round.tables.first_mut().expect("completed table");
+        table.state = VceCompactionTableState::Pending;
+        table.operation_id = None;
+        table.operation_expected_version = None;
+        table.latest_statistics.version = 10;
+        table.latest_statistics.fragment_count = 4;
+        table.latest_statistics.small_fragment_count = 4;
+        table.metrics.fragments_removed = 8;
+        table.metrics.fragments_added = 4;
+        running
+            .validate_transition(&completed_round)
+            .expect("acknowledged round may request another bounded round");
+
+        let mut regressed_facts = completed_round.clone();
+        let table = regressed_facts.tables.first_mut().expect("regressed table");
+        table.state = VceCompactionTableState::Queued;
+        table.round = 2;
+        table.operation_id = Some(String::from("compaction-job:compact:content:2"));
+        table.operation_expected_version = Some(10);
+        regressed_facts
+            .validate()
+            .expect("second admission should be standalone valid");
+        completed_round
+            .validate_transition(&regressed_facts)
+            .expect("second round admission should advance");
+        regressed_facts.tables[0].metrics.fragments_removed = 7;
+        assert!(
+            completed_round
+                .validate_transition(&regressed_facts)
+                .is_err()
+        );
+    }
+
+    /// Verify atomic cancellation and post-round settlement have explicit durable transitions.
+    /// 验证原子取消及轮次完成后的收敛具有明确持久转换。
+    #[test]
+    fn compaction_terminal_transition_covers_running_and_completed_round_boundaries() {
+        let pending = compaction_test_receipt();
+        let mut admitted = pending.clone();
+        admitted.state = VceJobState::Running;
+        admitted.sequence += 1;
+        admitted.updated_at_unix_ms += 1;
+        let admitted_table = admitted
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("admitted table exists");
+        admitted_table.state = VceCompactionTableState::Queued;
+        admitted_table.round = 1;
+        admitted_table.operation_id = Some(String::from("compaction-job:compact:content:1"));
+        admitted_table.operation_expected_version = Some(9);
+        admitted.validate().expect("admitted receipt is valid");
+        pending
+            .compaction
+            .as_ref()
+            .expect("pending payload")
+            .validate_transition(admitted.compaction.as_ref().expect("admitted payload"))
+            .expect("pending operation may advance to admitted");
+
+        let mut running = admitted.clone();
+        running.sequence += 1;
+        running.updated_at_unix_ms += 1;
+        running
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("running table exists")
+            .state = VceCompactionTableState::Running;
+        running.validate().expect("running receipt is valid");
+        admitted
+            .compaction
+            .as_ref()
+            .expect("admitted payload")
+            .validate_transition(running.compaction.as_ref().expect("running payload"))
+            .expect("admitted operation may advance to running");
+
+        let mut cancelled = running.clone();
+        cancelled.state = VceJobState::Cancelled;
+        cancelled.sequence += 1;
+        cancelled.updated_at_unix_ms += 1;
+        cancelled.error = Some(String::from("VCE refresh cancelled"));
+        let cancelled_table = cancelled
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("cancelled table exists");
+        cancelled_table.state = VceCompactionTableState::Cancelled;
+        cancelled.validate().expect("cancelled receipt is valid");
+        assert!(job_state_transition_permitted(&running, &cancelled));
+        running
+            .compaction
+            .as_ref()
+            .expect("running payload")
+            .validate_transition(cancelled.compaction.as_ref().expect("cancelled payload"))
+            .expect("running compaction may settle cancellation atomically");
+
+        let mut non_compaction = running.clone();
+        non_compaction.kind = VceJobKind::Synchronize;
+        assert!(!job_state_transition_permitted(&non_compaction, &cancelled));
+
+        let mut completed_boundary = running.clone();
+        let completed_table = completed_boundary
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("completed boundary table exists");
+        completed_table.state = VceCompactionTableState::Pending;
+        completed_table.operation_id = None;
+        completed_table.operation_expected_version = None;
+        completed_table.latest_statistics.version = 10;
+        completed_table.latest_statistics.fragment_count = 4;
+        completed_table.latest_statistics.small_fragment_count = 4;
+        completed_table.metrics.fragments_removed = 8;
+        completed_table.metrics.fragments_added = 4;
+        completed_boundary
+            .validate()
+            .expect("completed round boundary is valid");
+        running
+            .compaction
+            .as_ref()
+            .expect("running payload")
+            .validate_transition(
+                completed_boundary
+                    .compaction
+                    .as_ref()
+                    .expect("completed boundary payload"),
+            )
+            .expect("running round may persist its continuation boundary");
+
+        let mut failed_after_round = completed_boundary.clone();
+        failed_after_round.state = VceJobState::Failed;
+        failed_after_round.sequence += 1;
+        failed_after_round.updated_at_unix_ms += 1;
+        failed_after_round.error = Some(String::from("continuation persistence failed"));
+        let failed_table = failed_after_round
+            .compaction
+            .as_mut()
+            .and_then(|compaction| compaction.tables.first_mut())
+            .expect("failed table exists");
+        failed_table.state = VceCompactionTableState::Failed;
+        failed_table.error = Some(String::from("continuation persistence failed"));
+        failed_after_round
+            .validate()
+            .expect("post-round failure remains readable without an active operation");
+        completed_boundary
+            .compaction
+            .as_ref()
+            .expect("completed boundary payload")
+            .validate_transition(
+                failed_after_round
+                    .compaction
+                    .as_ref()
+                    .expect("failed payload"),
+            )
+            .expect("completed round boundary may settle as failed");
     }
 }

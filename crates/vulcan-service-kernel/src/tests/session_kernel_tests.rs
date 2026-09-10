@@ -6,8 +6,20 @@ use crate::pending_prompts::dispatch_queued_pending_prompt_hook;
 use crate::session_goal_lifecycle::session_goal_dispatch_authority_from_v1_handle;
 use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
 use crate::webui_prompt_lifecycle::commit_prompt_preparation_failure_boundary;
-use vulcan_session_core::v1::document::{FlushCandidate, SessionDocument};
-use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use vulcan_session_core::v1::context::LockedBaselineProjection;
+use vulcan_session_core::v1::document::{FlushCandidate, PrepareAndStartApiInput, SessionDocument};
+use vulcan_session_core::v1::event::{ApiRequestSnapshot, ProviderProjectionProof};
+use vulcan_session_core::v1::ids::Seq;
+use vulcan_session_core::v1::projection::provider_visible_fingerprint;
+use vulcan_session_core::v1::{
+    ApiCallStatus, ApiEndReason, ApiPurposeKind, ContinuationEligibility, DisplayNoticeKind,
+    EventBody,
+};
+use vulcan_workspace_store::workspace_store::{
+    SessionV1FlushResult, SessionV1StorageError, SessionV1StoreError,
+};
 
 /// Read-only persistence seam for restart-derived Goal dispatch authority tests.
 /// 用于重启派生 Goal 分发权威测试的只读持久化接缝。
@@ -21,6 +33,49 @@ impl SessionPersistenceBackend for RestartGoalReadOnlyBackend {
         _candidate: &FlushCandidate,
     ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
         panic!("restart Goal dispatch authority must not flush before Provider start")
+    }
+}
+
+/// Test backend that rejects exactly the next flush and accepts every other candidate.
+/// 精确拒绝下一次 flush、并接纳其他全部候选的测试后端。
+#[derive(Default)]
+struct FailNextSessionPersistenceBackend {
+    /// Whether the next physical flush must fail.
+    /// 下一次物理 flush 是否必须失败。
+    fail_next: AtomicBool,
+    /// Total physical flush attempts observed by the backend.
+    /// 后端观察到的物理 flush 总尝试次数。
+    flush_count: AtomicUsize,
+}
+
+impl SessionPersistenceBackend for FailNextSessionPersistenceBackend {
+    /// Rejects one armed call, then publishes the exact complete candidate.
+    /// 拒绝一次已布防调用，随后发布精确完整候选。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `candidate` is the complete immutable V1 revision offered by the session owner.
+    /// `candidate` 是会话 owner 提交的完整不可变 V1 修订。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns an injected storage error once, otherwise the exact publication receipt.
+    /// 首次返回注入的存储错误，其他调用返回精确发布回执。
+    fn flush(
+        &self,
+        candidate: &FlushCandidate,
+    ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+        self.flush_count.fetch_add(1, Ordering::SeqCst);
+        if self.fail_next.swap(false, Ordering::SeqCst) {
+            return Err(SessionV1StoreError::Storage(SessionV1StorageError::io(
+                PathBuf::from("injected-terminal-failure.json"),
+                "injected terminal failure flush",
+            )));
+        }
+        Ok(SessionV1FlushResult {
+            written_file_count: candidate.dirty.len(),
+            published_metadata: Some(candidate.metadata.clone()),
+        })
     }
 }
 
@@ -2773,6 +2828,432 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
         .expect("replacement admission should be inspectable");
     start_webui_session_kernel_user_turn(&mut guard, session_id, "replacement-turn")
         .expect("replacement turn should start after durable terminal settlement");
+}
+
+/// Verifies a host failure after successful API persistence adds an error without rewriting the API terminal.
+/// 验证成功 API 持久化后的宿主失败会追加错误，且不会改写 API 终态。
+#[tokio::test]
+async fn post_terminal_failure_persists_error_without_rewriting_completed_api() {
+    // session_id identifies the isolated V1 session whose live projection fails after persistence.
+    // session_id 标识持久化后实时投影失败的隔离 V1 会话。
+    let session_id = SessionId::from_u128(0x9611);
+    // document initializes the logical Turn that remains open after its physical API completes.
+    // document 初始化物理 API 完成后仍保持开放的逻辑回合。
+    let document = SessionDocument::new(
+        session_id.to_string(),
+        "project-a",
+        "Post-terminal projection failure",
+        1,
+    );
+    // service_state owns the registered session and terminal-persistence admission marker.
+    // service_state 持有已注册会话与终态持久化准入标记。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    // handle performs every durable mutation asserted by this test.
+    // handle 执行本测试断言的全部可靠变更。
+    let handle = register_test_session_v1_document(&mut service_state, session_id, document);
+    handle
+        .submit_root_input(
+            vulcan_session_core::v1::ClientInputSubmission::new(
+                vulcan_session_core::v1::ClientActionId::try_new("post-terminal-root")
+                    .expect("valid client action id"),
+                "write a file",
+                Vec::new(),
+            ),
+            2,
+        )
+        .expect("root input should open one V1 turn");
+    // preparation binds the exact current event frontier to the successful physical API.
+    // preparation 把精确的当前事件前沿绑定到成功物理 API。
+    let preparation = handle
+        .read(|document| {
+            // through_seq is the final input event visible to this physical API.
+            // through_seq 是当前物理 API 可见的最后一条输入事件。
+            let through_seq = document
+                .events()
+                .last()
+                .map(|event| event.seq)
+                .expect("provider projection requires one root event");
+            PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::MainGeneration,
+                request: ApiRequestSnapshot::new("deepseek", "deepseek-v4.1-flash"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq: Seq::try_new(1).expect("valid retained sequence"),
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .expect("valid provider-visible fingerprint"),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms: 3,
+            }
+        })
+        .expect("provider preparation should be derivable");
+    // api_call_id identifies the successful terminal that must remain unchanged.
+    // api_call_id 标识必须保持不变的成功终态。
+    let api_call_id = handle
+        .prepare_and_start_api_durable(preparation)
+        .expect("physical API should start durably")
+        .value
+        .api_call_id;
+    // completed_terminal persists the successful ApiStats before the simulated live projection failure.
+    // completed_terminal 在模拟实时投影失败前持久化成功 ApiStats。
+    let completed_terminal = handle
+        .clone()
+        .mutate_durable_async(
+            crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
+            crate::session_runtime_registry_v1::SessionFlushReason::ApiCompleted,
+            move |document| {
+                document.complete_api_group(
+                    api_call_id,
+                    vulcan_session_core::v1::document::ApiCompletion {
+                        request: ApiRequestSnapshot::new("deepseek", "deepseek-v4.1-flash"),
+                        usage: vulcan_session_core::v1::stats::UsageSnapshot::default(),
+                        status: ApiCallStatus::Completed,
+                        end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                        error: None,
+                        continuation_eligibility: ContinuationEligibility::Forbidden,
+                        timing: vulcan_session_core::v1::event::ApiTimings::default(),
+                        provider_source: None,
+                        completed_at_ms: 4,
+                    },
+                )
+            },
+        )
+        .await
+        .expect("successful API terminal should be durable");
+    assert_eq!(completed_terminal.value.api_call_id, api_call_id);
+    // terminal_owner keeps new input fail-closed until the later host failure is durable.
+    // terminal_owner 在后续宿主失败可靠落盘前保持新输入失败关闭。
+    let terminal_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
+    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
+        .expect("terminal owner should register");
+    // state exposes the same session and owner to terminal settlement.
+    // state 向终态结算暴露同一会话与 owner。
+    let state = Arc::new(Mutex::new(service_state));
+    // terminal_guard adopts the exact marker installed for this finished stream.
+    // terminal_guard 接管为当前已结束流安装的精确标记。
+    let terminal_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        session_id,
+        terminal_owner,
+    )
+    .expect("terminal owner should be adoptable");
+    // exact_error is the controlled root cause that must survive reload.
+    // exact_error 是重载后仍必须保留的受控根因。
+    let exact_error = "live lifecycle projection rejected after durable tool completion";
+
+    assert!(
+        settle_stream_terminal_authority(
+            &state,
+            session_id,
+            false,
+            "stream_failed_after_v1_api_terminal",
+            Some(exact_error.to_owned()),
+            terminal_guard,
+        )
+        .await
+    );
+    handle
+        .read(|document| {
+            assert!(document.active_api().is_none());
+            assert!(document.active_turn().is_some_and(|turn| turn.closed));
+            assert!(document.events().iter().any(|event| {
+                matches!(
+                    &event.event,
+                    EventBody::ApiStats(stats)
+                        if stats.api_call_id == api_call_id
+                            && stats.status == ApiCallStatus::Completed
+                            && stats.end_reason == Some(ApiEndReason::CompletedSuccessfully)
+                            && stats.error.is_none()
+                )
+            }));
+            assert!(document.events().iter().any(|event| {
+                matches!(
+                    &event.event,
+                    EventBody::DisplayNote(note)
+                        if note.notice_kind == DisplayNoticeKind::SystemError
+                            && note.reason_code == "stream_failed_after_v1_api_terminal"
+                            && note.redacted_detail.as_deref() == Some(exact_error)
+                )
+            }));
+            // reloaded proves the successful API and later host failure form one valid durable graph.
+            // reloaded 证明成功 API 与后续宿主失败构成合法的可靠事件图。
+            let mut reloaded = document.clone();
+            reloaded
+                .rebuild_derived_state()
+                .expect("post-terminal failure state should rebuild");
+            reloaded
+                .submit_root_input(
+                    vulcan_session_core::v1::ClientInputSubmission::new(
+                        vulcan_session_core::v1::ClientActionId::try_new(
+                            "after-post-terminal-failure",
+                        )
+                        .expect("valid replacement action id"),
+                        "new prompt",
+                        Vec::new(),
+                    ),
+                    10,
+                )
+                .expect("new root should be accepted after durable failure closure");
+        })
+        .expect("post-terminal failure projection should remain readable");
+    // owner_release proves admission reopens only after the additional failure boundary is durable.
+    // owner_release 证明只有附加失败边界可靠落盘后才重新开放准入。
+    let owner_release = state
+        .lock()
+        .expect("terminal owner table should remain readable");
+    assert!(
+        owner_release
+            .session_terminal_persistence_owners
+            .get(&session_id)
+            .is_none()
+    );
+}
+
+/// Verifies a fatal active-API durability failure closes V1 state and forbids Continue.
+/// 验证活动 API 的致命持久化失败会闭合 V1 状态并禁止继续。
+#[tokio::test]
+async fn finished_active_api_failure_persists_exact_error_and_reopens_admission() {
+    // session_id identifies the V1 session whose active Provider boundary fails.
+    // session_id 标识活动 Provider 边界发生失败的 V1 会话。
+    let session_id = SessionId::from_u128(0x9609);
+    // document initializes the exact V1 session before durable mutations run through its handle.
+    // document 在可靠变更通过其 handle 执行前初始化精确 V1 会话。
+    let document =
+        SessionDocument::new(session_id.to_string(), "project-a", "Active API failure", 1);
+    // service_state supplies the registered durable V1 owner used by the stream fallback.
+    // service_state 提供流终态兜底使用的已注册可靠 V1 owner。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    // handle owns every durable root, API, and failure mutation asserted by this test.
+    // handle 持有本测试断言的每项可靠根输入、API 与失败变更。
+    let handle = register_test_session_v1_document(&mut service_state, session_id, document);
+    handle
+        .submit_root_input(
+            vulcan_session_core::v1::ClientInputSubmission::new(
+                vulcan_session_core::v1::ClientActionId::try_new("active-api-root")
+                    .expect("valid client action id"),
+                "write a file",
+                Vec::new(),
+            ),
+            2,
+        )
+        .expect("root input should open one V1 turn");
+    // preparation binds the exact durable source frontier to the physical API request.
+    // preparation 把精确可靠来源前沿绑定到物理 API 请求。
+    let preparation = handle
+        .read(|document| {
+            // through_seq is the latest event included in the Provider-visible projection.
+            // through_seq 是 Provider 可见投影包含的最新事件。
+            let through_seq = document
+                .events()
+                .last()
+                .map(|event| event.seq)
+                .expect("provider projection requires one root event");
+            PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::MainGeneration,
+                request: ApiRequestSnapshot::new("deepseek", "deepseek-v4.1-flash"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq: Seq::try_new(1).expect("valid retained sequence"),
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .expect("valid provider-visible fingerprint"),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms: 3,
+            }
+        })
+        .expect("provider preparation should be derivable");
+    // api_call_id selects the physical API that must become a non-continuable failure.
+    // api_call_id 选择必须转为不可继续失败的物理 API。
+    let api_call_id = handle
+        .prepare_and_start_api_durable(preparation)
+        .expect("physical API should start durably")
+        .value
+        .api_call_id;
+    // terminal_owner is the exact stream owner permitted to release admission after durability.
+    // terminal_owner 是持久化完成后获准释放准入的精确流 owner。
+    let terminal_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
+    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
+        .expect("terminal owner should register");
+    // state exposes the shared service registry to the asynchronous persistence boundary.
+    // state 向异步持久化边界暴露共享服务注册表。
+    let state = Arc::new(Mutex::new(service_state));
+    // terminal_guard retains fail-closed ownership until durable terminal settlement succeeds.
+    // terminal_guard 在可靠终态结算成功前保持失败关闭所有权。
+    let terminal_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        session_id,
+        terminal_owner,
+    )
+    .expect("terminal owner should be adoptable");
+    // exact_error is the original canonical ChangeSet rejection shown to the user and ledger.
+    // exact_error 是向用户和账本显示的原始规范 ChangeSet 拒绝原因。
+    let exact_error = "Invalid change-set field at payload.files[0].hunks";
+
+    assert!(
+        settle_stream_terminal_authority(
+            &state,
+            session_id,
+            false,
+            "tool_boundary_durability_failed",
+            Some(exact_error.to_owned()),
+            terminal_guard,
+        )
+        .await
+    );
+    handle
+        .read(|document| {
+            assert!(document.active_api().is_none());
+            assert!(document.active_turn().is_some_and(|turn| turn.closed));
+            assert!(document.events().iter().any(|event| {
+                matches!(
+                    &event.event,
+                    EventBody::ApiStats(stats)
+                        if stats.api_call_id == api_call_id
+                            && stats.status == ApiCallStatus::Failed
+                            && stats.end_reason == Some(ApiEndReason::Unknown)
+                            && stats.continuation_eligibility == ContinuationEligibility::Forbidden
+                            && stats.error.as_ref().is_some_and(|error|
+                                error.error_code.as_deref()
+                                    == Some("tool_boundary_durability_failed")
+                                    && error.message == exact_error)
+                )
+            }));
+            assert!(document.events().iter().any(|event| {
+                matches!(
+                    &event.event,
+                    EventBody::DisplayNote(note)
+                        if note.notice_kind == DisplayNoticeKind::SystemError
+                            && note.reason_code == "tool_boundary_durability_failed"
+                            && note.redacted_detail.as_deref() == Some(exact_error)
+                )
+            }));
+            // reloaded proves the persisted event graph can rebuild before accepting a new root.
+            // reloaded 证明持久化事件图可重建并接受新的根输入。
+            let mut reloaded = document.clone();
+            reloaded
+                .rebuild_derived_state()
+                .expect("failed terminal state should rebuild");
+            reloaded
+                .submit_root_input(
+                    vulcan_session_core::v1::ClientInputSubmission::new(
+                        vulcan_session_core::v1::ClientActionId::try_new(
+                            "after-active-api-failure",
+                        )
+                        .expect("valid replacement action id"),
+                        "new prompt",
+                        Vec::new(),
+                    ),
+                    10,
+                )
+                .expect("new root should be accepted after durable failure closure");
+        })
+        .expect("V1 failure projection should remain readable");
+    // guard verifies durable settlement released the exact stream owner.
+    // guard 验证可靠结算已释放精确流 owner。
+    let guard = state
+        .lock()
+        .expect("terminal owner table should remain readable");
+    assert!(
+        guard
+            .session_terminal_persistence_owners
+            .get(&session_id)
+            .is_none()
+    );
+}
+
+/// Verifies a transient storage failure retries the same dirty terminal revision exactly once.
+/// 验证瞬时存储失败会对同一脏终态修订精确重试一次。
+#[tokio::test]
+async fn execution_failure_boundary_retries_same_dirty_revision_after_storage_failure() {
+    // session_id identifies the isolated V1 failure boundary under test.
+    // session_id 标识本测试隔离的 V1 失败边界。
+    let session_id = SessionId::from_u128(0x9610);
+    // backend injects one failure only after the root input is already durable.
+    // backend 仅在根输入可靠落盘后注入一次失败。
+    let backend = Arc::new(FailNextSessionPersistenceBackend::default());
+    // handle owns the authoritative in-memory revision and its test persistence seam.
+    // handle 持有权威内存修订及其测试持久化接缝。
+    let handle = SessionHandle::with_backend(
+        session_id,
+        SessionDocument::new(
+            session_id.to_string(),
+            "project-a",
+            "Retry terminal flush",
+            1,
+        ),
+        backend.clone(),
+    );
+    handle
+        .submit_root_input(
+            vulcan_session_core::v1::ClientInputSubmission::new(
+                vulcan_session_core::v1::ClientActionId::try_new("retry-terminal-root")
+                    .expect("valid client action id"),
+                "write a file",
+                Vec::new(),
+            ),
+            2,
+        )
+        .expect("root input should be durable before failure injection");
+    // service_state registers the same handle resolved by the production failure helper.
+    // service_state 注册生产失败辅助函数解析的同一个 handle。
+    let service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .session_runtime_registry
+        .register(handle.clone())
+        .expect("test V1 session should register");
+    // state exposes the registered owner to the asynchronous terminal failure path.
+    // state 向异步终态失败路径暴露已注册 owner。
+    let state = Arc::new(Mutex::new(service_state));
+    backend.fail_next.store(true, Ordering::SeqCst);
+
+    persist_v1_execution_failure_boundary(
+        &state,
+        session_id,
+        "tool_boundary_durability_failed",
+        Some(String::from("exact ChangeSet rejection")),
+    )
+    .await
+    .expect("second persistence attempt should flush the same dirty revision");
+
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 3);
+    handle
+        .read(|document| {
+            assert_eq!(document.memory_revision(), document.durable_revision());
+            assert!(document.active_turn().is_some_and(|turn| turn.closed));
+            assert_eq!(
+                document
+                    .events()
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            &event.event,
+                            EventBody::DisplayNote(note)
+                                if note.reason_code == "tool_boundary_durability_failed"
+                                    && note.redacted_detail.as_deref()
+                                        == Some("exact ChangeSet rejection")
+                        )
+                    })
+                    .count(),
+                1
+            );
+        })
+        .expect("retried terminal revision should remain readable");
 }
 
 /// Verifies stale preparation cleanup cannot stop a replacement kernel turn.

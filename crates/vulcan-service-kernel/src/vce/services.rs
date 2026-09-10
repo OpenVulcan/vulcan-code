@@ -736,6 +736,7 @@ pub(crate) fn map_vce_job(
             VceJobKind::Initialize => api::VceJobKindSummary::Initialize,
             VceJobKind::Synchronize => api::VceJobKindSummary::Synchronize,
             VceJobKind::Rebuild => api::VceJobKindSummary::Rebuild,
+            VceJobKind::Compact => api::VceJobKindSummary::Compact,
         },
         state: match job.state {
             VceJobState::Queued => api::VceJobStateSummary::Queued,
@@ -768,6 +769,7 @@ pub(crate) fn map_vce_job(
                 VceRefreshUnit::Files => "files",
                 VceRefreshUnit::Blobs => "blobs",
                 VceRefreshUnit::Batches => "batches",
+                VceRefreshUnit::Tables => "tables",
                 VceRefreshUnit::None => "none",
             }
             .to_owned(),
@@ -777,8 +779,64 @@ pub(crate) fn map_vce_job(
             overall_total: progress.overall_total,
             current_path: progress.current_path,
         }),
+        compaction: job.compaction.map(map_compaction_job),
         followup_requested: job.followup_requested,
         error: job.error,
+    }
+}
+
+/// Project one durable physical compaction payload into management-safe public state.
+/// 将一个持久物理整理载荷投影为管理安全的公共状态。
+fn map_compaction_job(
+    compaction: vulcan_workspace_store::vce_data_plane::VceCompactionJobReceipt,
+) -> api::VceCompactionJobSummary {
+    use vulcan_workspace_store::vce_data_plane::VceCompactionTableState;
+    api::VceCompactionJobSummary {
+        tables: compaction
+            .tables
+            .into_iter()
+            .map(|table| {
+                let state = match table.state {
+                    VceCompactionTableState::Pending => {
+                        api::VceCompactionTableStateSummary::Pending
+                    }
+                    VceCompactionTableState::Queued => api::VceCompactionTableStateSummary::Queued,
+                    VceCompactionTableState::Running => {
+                        api::VceCompactionTableStateSummary::Running
+                    }
+                    VceCompactionTableState::Succeeded => {
+                        api::VceCompactionTableStateSummary::Succeeded
+                    }
+                    VceCompactionTableState::Failed => api::VceCompactionTableStateSummary::Failed,
+                    VceCompactionTableState::Cancelled => {
+                        api::VceCompactionTableStateSummary::Cancelled
+                    }
+                    VceCompactionTableState::StateLost => {
+                        api::VceCompactionTableStateSummary::StateLost
+                    }
+                    VceCompactionTableState::Interrupted => {
+                        api::VceCompactionTableStateSummary::Interrupted
+                    }
+                };
+                api::VceCompactionTableJobSummary {
+                    role: map_physical_table_role(table.plan.statistics.role),
+                    state,
+                    round: table.round,
+                    operation_id: table.operation_id,
+                    planned_version: table.plan.statistics.version,
+                    current_version: table.latest_statistics.version,
+                    planned_fragment_count: table.plan.statistics.fragment_count,
+                    current_fragment_count: table.latest_statistics.fragment_count,
+                    metrics: api::VceCompactionMetricsSummary {
+                        fragments_removed: table.metrics.fragments_removed,
+                        fragments_added: table.metrics.fragments_added,
+                        files_removed: table.metrics.files_removed,
+                        files_added: table.metrics.files_added,
+                    },
+                    error: table.error,
+                }
+            })
+            .collect(),
     }
 }
 
@@ -876,20 +934,40 @@ pub(crate) async fn service_plan_vce_maintenance(
     state: SharedServiceBridgeState,
     request: api::VceMaintenancePlanRequest,
 ) -> Result<api::VceMaintenancePlanResponse, String> {
-    // readiness freezes the preview target before storage reads; later model changes invalidate new execution.
-    // readiness 在读取存储之前固定预览目标；后续模型变化会使新执行失效。
-    let readiness = require_vce_configuration_ready(&state)?;
-    let manager = vce_manager_for_project(&state, &request.project_id)?;
     let mode = parse_maintenance_mode(&request.mode)?;
-    let plan = load_maintenance_plan(&manager, &request.project_id, mode).await?;
+    // Physical compaction reads only the stored index contract; model-producing modes retain the
+    // live model-readiness gate before any maintenance target is exposed.
+    // 物理整理只读取已存索引契约；会产生模型结果的模式仍在暴露维护目标前保留实时模型就绪门禁。
+    let manager = if mode == VceMaintenanceMode::Compact {
+        vce_manager_for_stored_project(&state, &request.project_id)?
+    } else {
+        vce_manager_for_project(&state, &request.project_id)?
+    };
+    let target = manager
+        .stored_maintenance_target(&request.project_id, mode)
+        .await?;
+    if mode == VceMaintenanceMode::Compact {
+        return Ok(map_maintenance_plan(
+            target.plan,
+            target.embedding_fingerprint,
+            target.embedding_dimension,
+            target.checkpoint_version,
+        ));
+    }
+    // Model-producing maintenance retains the live readiness identity while its plan and checkpoint
+    // come from the same stored snapshot. Compact mode returned above and never requires readiness.
+    // 会生产模型结果的维护保留实时就绪身份，而计划与检查点来自同一已存快照。
+    // compact 模式已在上方返回，绝不要求就绪状态。
+    let readiness = require_vce_configuration_ready(&state)?;
     Ok(map_maintenance_plan(
-        plan,
+        target.plan,
         readiness
             .embedding_physical_fingerprint
             .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?,
         readiness
             .embedding_dimension
             .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?,
+        target.checkpoint_version,
     ))
 }
 
@@ -900,9 +978,6 @@ pub(crate) async fn service_execute_vce_maintenance(
     state: SharedServiceBridgeState,
     request: api::VceMaintenanceExecutionRequest,
 ) -> Result<api::VceMaintenanceExecutionResponse, String> {
-    // readiness validates live availability; the confirmed preview supplies the immutable execution target below.
-    // readiness 校验实时可用性；下方由已确认预览提供不可变执行目标。
-    let readiness = require_vce_configuration_ready(&state)?;
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
     validate_project_revision(&project, request.expected_settings_revision)?;
     if !project.vce.enabled {
@@ -913,7 +988,42 @@ pub(crate) async fn service_execute_vce_maintenance(
     validate_maintenance_checkpoint_requirement(mode, request.expected_checkpoint_version)?;
     // Exact action sets enter durable admission before current-plan reads, so completed retries can replay.
     // 精确动作集合在读取当前计划前进入持久准入，使已完成请求能够重放。
+    let requested_action_count = request.action_ids.len();
     let requested_ids = request.action_ids.into_iter().collect::<BTreeSet<_>>();
+    if requested_ids.len() != requested_action_count {
+        return Err(String::from("VCE 维护操作包含重复身份，请重新生成计划。"));
+    }
+    if mode == VceMaintenanceMode::Compact {
+        // Physical compaction binds only to the stored index contract and never activates a model.
+        // 物理整理仅绑定已存索引契约，绝不激活模型。
+        let executor = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .service_runtime
+            .clone()
+            .ok_or_else(|| String::from("VCE 后台执行器尚未就绪。"))?;
+        let receipt = manager
+            .submit_physical_compaction(
+                &project.id,
+                super::VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: vulcan_workspace_store::vce_data_plane::VceJobKind::Compact,
+                    idempotency_key: request.idempotency_key,
+                    expected_settings_revision: request.expected_settings_revision,
+                    expected_checkpoint_version: request.expected_checkpoint_version,
+                    contract_fingerprint: request.expected_embedding_fingerprint,
+                },
+                requested_ids,
+                &executor,
+            )
+            .await?;
+        return Ok(api::VceMaintenanceExecutionResponse::Job {
+            job: Box::new(map_vce_job(receipt)),
+        });
+    }
+    // Model-dependent rebuild and legacy cleanup retain their existing live readiness guard.
+    // 依赖模型的重建与既有清理保留原有实时就绪保护。
+    let readiness = require_vce_configuration_ready(&state)?;
     if matches!(
         mode,
         VceMaintenanceMode::Repair | VceMaintenanceMode::Rebuild
@@ -1185,6 +1295,15 @@ fn vce_manager_for_project(
     project_id: &str,
 ) -> Result<VceRuntimeManager, String> {
     require_vce_configuration_ready(state)?;
+    vce_manager_for_stored_project(state, project_id)
+}
+
+/// Return the VCE runtime for storage-only operations without requiring a live model route.
+/// 返回供纯存储操作使用的 VCE 运行时，不要求实时模型路由。
+fn vce_manager_for_stored_project(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+) -> Result<VceRuntimeManager, String> {
     let (project, manager, _) = vce_project_runtime_inputs(state, project_id)?;
     if !project.vce.enabled {
         return Err(format!("VCE 项目 `{}` 已禁用。", project.id));
@@ -1235,10 +1354,12 @@ fn map_maintenance_plan(
     plan: VceMaintenancePlan,
     embedding_fingerprint: String,
     embedding_dimension: u32,
+    checkpoint_version: Option<u64>,
 ) -> api::VceMaintenancePlanResponse {
     api::VceMaintenancePlanResponse {
         embedding_fingerprint,
         embedding_dimension,
+        checkpoint_version,
         mode: maintenance_mode_text(plan.mode).to_owned(),
         actions: plan
             .actions
@@ -1248,9 +1369,66 @@ fn map_maintenance_plan(
                 description: action.description,
                 blob_names: action.blob_names,
                 destructive: action.destructive,
+                physical_table_role: action
+                    .physical_table
+                    .map(|table| map_physical_table_role(table.statistics.role)),
             })
             .collect(),
         affected_blob_count: plan.affected_blob_count,
+        physical_tables: plan
+            .physical_tables
+            .into_iter()
+            .map(map_physical_table_plan)
+            .collect(),
+    }
+}
+
+/// Project one core physical table plan into the public preview contract.
+/// 将一份内核物理表计划投影到公共预览契约。
+fn map_physical_table_plan(
+    table: vulcan_context_engine::VcePhysicalTablePlan,
+) -> api::VcePhysicalTablePlanSummary {
+    let statistics = table.statistics;
+    let options = table.options;
+    api::VcePhysicalTablePlanSummary {
+        role: map_physical_table_role(statistics.role),
+        version: statistics.version,
+        total_bytes: statistics.total_bytes,
+        row_count: statistics.row_count,
+        index_count: statistics.index_count,
+        fragment_count: statistics.fragment_count,
+        small_fragment_count: statistics.small_fragment_count,
+        fragment_rows: api::VcePhysicalFragmentSummary {
+            minimum_rows: statistics.fragment_rows.minimum_rows,
+            maximum_rows: statistics.fragment_rows.maximum_rows,
+            mean_rows: statistics.fragment_rows.mean_rows,
+            p25_rows: statistics.fragment_rows.p25_rows,
+            p50_rows: statistics.fragment_rows.p50_rows,
+            p75_rows: statistics.fragment_rows.p75_rows,
+            p99_rows: statistics.fragment_rows.p99_rows,
+        },
+        compaction_required: table.compaction_required,
+        options: api::VceCompactionOptionsSummary {
+            target_rows_per_fragment: options.target_rows_per_fragment,
+            max_rows_per_group: options.max_rows_per_group,
+            max_bytes_per_file: options.max_bytes_per_file,
+            num_threads: options.num_threads,
+            batch_size: options.batch_size,
+            max_source_fragments: options.max_source_fragments,
+        },
+    }
+}
+
+/// Map one internal physical table role into its public stable enum.
+/// 将一个内部物理表角色映射为公共稳定枚举。
+fn map_physical_table_role(
+    role: vulcan_context_engine::VcePhysicalTableRole,
+) -> api::VcePhysicalTableRoleSummary {
+    match role {
+        vulcan_context_engine::VcePhysicalTableRole::Content => {
+            api::VcePhysicalTableRoleSummary::Content
+        }
+        vulcan_context_engine::VcePhysicalTableRole::Path => api::VcePhysicalTableRoleSummary::Path,
     }
 }
 
@@ -1757,6 +1935,7 @@ fn parse_maintenance_mode(value: &str) -> Result<VceMaintenanceMode, String> {
         "repair" => Ok(VceMaintenanceMode::Repair),
         "rebuild" => Ok(VceMaintenanceMode::Rebuild),
         "cleanup_staging" => Ok(VceMaintenanceMode::CleanupStaging),
+        "compact" => Ok(VceMaintenanceMode::Compact),
         _ => Err(format!("不支持的 VCE 维护模式：`{value}`。")),
     }
 }
@@ -1772,7 +1951,9 @@ fn validate_maintenance_checkpoint_requirement(
     expected_checkpoint: Option<u64>,
 ) -> Result<(), String> {
     if expected_checkpoint.is_none() && mode != VceMaintenanceMode::Rebuild {
-        return Err(String::from("修复或暂存清理要求一个已发布检查点。"));
+        return Err(String::from(
+            "修复、暂存清理或物理整理要求一个已发布检查点。",
+        ));
     }
     Ok(())
 }
@@ -1944,6 +2125,7 @@ fn maintenance_mode_text(value: VceMaintenanceMode) -> &'static str {
         VceMaintenanceMode::Repair => "repair",
         VceMaintenanceMode::Rebuild => "rebuild",
         VceMaintenanceMode::CleanupStaging => "cleanup_staging",
+        VceMaintenanceMode::Compact => "compact",
     }
 }
 
@@ -2284,7 +2466,9 @@ mod tests {
     /// 验证空检查点仅用于明确的重建恢复流程。
     #[test]
     fn maintenance_checkpoint_requirement_is_explicit() {
-        assert!(validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Rebuild, None).is_ok());
+        assert!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Rebuild, None).is_ok()
+        );
         assert!(
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Rebuild, Some(7))
                 .is_ok()
@@ -2293,18 +2477,34 @@ mod tests {
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Repair, Some(7))
                 .is_ok()
         );
-        assert!(validate_maintenance_checkpoint_requirement(
-            VceMaintenanceMode::CleanupStaging,
-            Some(7),
-        )
-        .is_ok());
+        assert!(
+            validate_maintenance_checkpoint_requirement(
+                VceMaintenanceMode::CleanupStaging,
+                Some(7),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Compact, Some(7))
+                .is_ok()
+        );
         assert_eq!(
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Repair, None),
-            Err(String::from("修复或暂存清理要求一个已发布检查点。"))
+            Err(String::from(
+                "修复、暂存清理或物理整理要求一个已发布检查点。"
+            ))
         );
         assert_eq!(
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::CleanupStaging, None),
-            Err(String::from("修复或暂存清理要求一个已发布检查点。"))
+            Err(String::from(
+                "修复、暂存清理或物理整理要求一个已发布检查点。"
+            ))
+        );
+        assert_eq!(
+            validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Compact, None),
+            Err(String::from(
+                "修复、暂存清理或物理整理要求一个已发布检查点。"
+            ))
         );
     }
 

@@ -283,7 +283,8 @@ pub(crate) fn public_ai_provider_rows_for_selection(
     // 从不可变目录与持久化覆盖重新构建有效快照，确保模型行立即反映能力编辑而不是旧的内存目录副本。
     let mut catalog_snapshot = runtime.resolved_model_catalog_snapshot(configuration)?;
     catalog_snapshot.retain(|connection_id, _| {
-        !configuration.connection_is_pending_validation(connection_id.as_str())
+        configuration.connection_is_enabled(connection_id.as_str())
+            && !configuration.connection_is_pending_validation(connection_id.as_str())
     });
     let catalogs =
         vulcan_provider_adapters::RuntimeConnectionCatalogs::from_snapshot(catalog_snapshot);
@@ -291,7 +292,9 @@ pub(crate) fn public_ai_provider_rows_for_selection(
     let providers = runtime.effective_providers(configuration)?;
     let mut rows = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
-        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+        if !configuration.connection_is_enabled(connection.id.as_str())
+            || configuration.connection_is_pending_validation(connection.id.as_str())
+        {
             continue;
         }
         let provider = providers

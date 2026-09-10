@@ -139,6 +139,7 @@ pub(super) fn provider_execution_route_revision(
         &route.secondary_route,
         &route.custom_model_projection,
         route.tool_schema_projection,
+        &route.codex_behavior,
         &route.request_projection_profiles,
         &route.response_projection_profiles,
         &route.upload_channels,

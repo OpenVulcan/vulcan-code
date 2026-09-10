@@ -126,6 +126,24 @@ pub(crate) struct VceRuntimeRetrieveResult {
     pub(crate) result: RetrieveResult,
 }
 
+/// Model-independent stored target returned with one read-only maintenance plan.
+/// 与一份只读维护计划一同返回的模型无关存储目标。
+#[derive(Clone, Debug)]
+pub(crate) struct VceStoredMaintenanceTarget {
+    /// Deterministic plan produced against the exact stored index.
+    /// 针对精确已存索引生成的确定性计划。
+    pub(crate) plan: vulcan_context_engine::VceMaintenancePlan,
+    /// Stored physical embedding identity, independent from current provider readiness.
+    /// 已存物理向量身份，独立于当前供应商就绪状态。
+    pub(crate) embedding_fingerprint: String,
+    /// Stored explicit vector dimension.
+    /// 已存明确向量维度。
+    pub(crate) embedding_dimension: u32,
+    /// Exact published checkpoint observed while the plan was generated.
+    /// 生成计划时观察到的精确已发布检查点。
+    pub(crate) checkpoint_version: Option<u64>,
+}
+
 /// Shared process-wide manager for all enabled project VCE runtimes.
 /// 所有已启用项目 VCE 运行时使用的进程级共享管理器。
 #[derive(Clone)]
@@ -769,9 +787,25 @@ impl VceRuntimeManager {
             self.reconcile_runtime_watcher(&existing).await;
             return Ok(());
         }
+        // Fence and drain the project's durable job owner before replacing its runtime or leases.
+        // 在替换运行时或租约前封锁并排空项目的持久作业所有者。
+        let jobs = self
+            .project_job_states
+            .lock()
+            .await
+            .get(project_id)
+            .cloned();
+        if let Some(jobs) = &jobs {
+            jobs.request_stop().await;
+        }
         // Release the map lock before draining a replaced runtime's in-flight operations.
         // 在排空被替换运行时的执行中操作前释放映射锁。
         let previous = self.projects.write().await.remove(project_id);
+        if let Some(jobs) = jobs {
+            jobs.cancel_and_drain()
+                .await
+                .map_err(VceActivationError::runtime)?;
+        }
         if let Some(previous) = previous {
             self.stop_runtime(&previous).await?;
         }
@@ -1055,13 +1089,16 @@ impl VceRuntimeManager {
         // 在发布边界等待工作任务之前撤销查询／运行时准入。
         let runtime = self.projects.write().await.remove(project_id);
         self.activation_failures.write().await.remove(project_id);
-        if let Some(runtime) = runtime {
-            self.stop_runtime(&runtime).await?;
-        }
         // Project-owned writers must stop even when no compatible query runtime was activated.
         // 即使没有激活兼容查询运行时，也必须停止项目自有写入任务。
         if let Some(jobs) = jobs {
             jobs.cancel_and_drain().await?;
+        }
+        // Drain workers before runtime teardown so a terminal receipt cannot hold the operation
+        // gate while shutdown is waiting for the same worker's SQLite write to settle.
+        // 在运行时拆卸前排空工作任务，避免终态回执持有操作闸门时关闭流程反过来等待同一任务的 SQLite 写入。
+        if let Some(runtime) = runtime {
+            self.stop_runtime(&runtime).await?;
         }
         Ok(())
     }
@@ -1454,11 +1491,11 @@ impl VceRuntimeManager {
     /// 独立于模型／运行时激活，从精确持久索引读取维护计划。
     /// `project_id` selects existing storage; `mode` selects the read-only plan. Returns a core-validated plan.
     /// `project_id` 选择已有存储；`mode` 选择只读计划。返回经核心校验的计划。
-    pub(crate) async fn stored_maintenance_plan(
+    pub(crate) async fn stored_maintenance_target(
         &self,
         project_id: &str,
         mode: vulcan_context_engine::VceMaintenanceMode,
-    ) -> Result<vulcan_context_engine::VceMaintenancePlan, String> {
+    ) -> Result<VceStoredMaintenanceTarget, String> {
         // lifecycle excludes shutdown and project removal, without acquiring any inference or refresh lock.
         // lifecycle 排斥关闭与项目移除，不获取推理或刷新锁。
         let _lifecycle = self.lifecycle_gate.read().await;
@@ -1471,7 +1508,7 @@ impl VceRuntimeManager {
         }
         // Prefer the active binding, then read the deterministic orphaned recovery binding without activating or scanning it.
         // 优先使用活动绑定；否则读取确定性的孤立恢复绑定，不激活也不扫描。
-        let (original, index) = if let Some(config) = self
+        let (original, index, active) = if let Some(config) = self
             .data_plane
             .load_active_project_config(project_id)
             .await?
@@ -1481,8 +1518,13 @@ impl VceRuntimeManager {
                 .open_existing_project_index(&config)
                 .await?
                 .ok_or_else(|| String::from("VCE maintenance index disappeared during planning"))?;
-            (config, index)
+            (config, index, true)
         } else {
+            if mode == vulcan_context_engine::VceMaintenanceMode::Compact {
+                return Err(String::from(
+                    "VCE physical compaction planning requires an active published index",
+                ));
+            }
             let config = self
                 .data_plane
                 .load_uninitialized_recovery_config(project_id)
@@ -1495,8 +1537,18 @@ impl VceRuntimeManager {
                 .open_uninitialized_recovery_project_index(&config)
                 .await?
                 .ok_or_else(|| String::from("VCE recovery index disappeared during planning"))?;
-            (config, index)
+            (config, index, false)
         };
+        let provenance = if active {
+            index.embedding_provenance().await?
+        } else {
+            index.uninitialized_recovery_provenance().await?
+        };
+        if provenance.original != original {
+            return Err(String::from(
+                "VCE maintenance target changed while its stored identity was read",
+            ));
+        }
         // config creates only the core's validation context; no source scan or provider registration occurs.
         // config 仅创建核心校验上下文；不扫描源码，也不注册供应商。
         let mut config = vulcan_context_engine::VceConfig::new(
@@ -1504,7 +1556,7 @@ impl VceRuntimeManager {
             original.binding.embedding_space.clone(),
         )
         .map_err(|error| error.to_string())?;
-        config.index_namespace_id = original.binding.namespace_id;
+        config.index_namespace_id = original.binding.namespace_id.clone();
         config.index_schema_version = original.binding.schema_version;
         // engine validates request/response identity and the exact bound namespace without restoring a query runtime.
         // engine 校验请求／响应身份与精确绑定命名空间，不恢复查询运行时。
@@ -1519,12 +1571,34 @@ impl VceRuntimeManager {
             )
             .await
             .map_err(|error| error.to_string())?;
-        match response.result {
-            vulcan_context_engine::VceManagementQueryResult::MaintenancePlan(plan) => Ok(plan),
+        let plan = match response.result {
+            vulcan_context_engine::VceManagementQueryResult::MaintenancePlan(plan) => plan,
             _ => Err(String::from(
                 "VCE stored maintenance query returned an unexpected result",
-            )),
-        }
+            ))?,
+        };
+        Ok(VceStoredMaintenanceTarget {
+            plan,
+            embedding_fingerprint: original.physical_fingerprint,
+            embedding_dimension: original.dimension,
+            checkpoint_version: provenance.checkpoint_version,
+        })
+    }
+
+    /// Build one read-only maintenance plan from stored identity without requiring a live model.
+    /// 使用已存身份构建一份只读维护计划，不要求模型实时可用。
+    ///
+    /// `project_id` selects the exact project and `mode` selects the maintenance semantics.
+    /// Returns only the deterministic core plan for existing callers.
+    /// `project_id` 选择精确项目，`mode` 选择维护语义。仅为现有调用方返回确定性内核计划。
+    pub(crate) async fn stored_maintenance_plan(
+        &self,
+        project_id: &str,
+        mode: vulcan_context_engine::VceMaintenanceMode,
+    ) -> Result<vulcan_context_engine::VceMaintenancePlan, String> {
+        self.stored_maintenance_target(project_id, mode)
+            .await
+            .map(|target| target.plan)
     }
 
     /// Return one management-safe status even when activation is blocked.
@@ -1613,11 +1687,6 @@ impl VceRuntimeManager {
             .collect::<Vec<_>>();
         self.activation_failures.write().await.clear();
         let mut failures = Vec::new();
-        for runtime in runtimes {
-            if let Err(error) = self.stop_runtime(&runtime).await {
-                failures.push(error);
-            }
-        }
         // Snapshot project controls without holding the registry lock across worker completion.
         // 获取项目控制快照，不跨工作任务完成过程持有注册表锁。
         let job_states = self
@@ -1627,11 +1696,27 @@ impl VceRuntimeManager {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        // Broadcast stop before draining any one project; otherwise a later worker can keep a
+        // runtime operation read lease while the first project is still persisting its receipt.
+        // 先广播停止再逐个排空项目，避免第一个项目持久化回执时后续工作任务仍持有运行时读租约。
+        for jobs in &job_states {
+            jobs.request_stop().await;
+        }
         for jobs in job_states {
             if let Err(error) = jobs.cancel_and_drain().await {
                 failures.push(error);
             }
         }
+        // Worker leases are gone before runtime teardown tries to acquire its operation write gate.
+        // 工作任务租约已释放后再拆卸运行时，避免运行时写闸门与终态回执互相等待。
+        for runtime in &runtimes {
+            if let Err(error) = self.stop_runtime(runtime).await {
+                failures.push(error);
+            }
+        }
+        // Drop the shutdown snapshot before closing cached bindings; each runtime index retains one project lease.
+        // 在关闭缓存绑定前释放退出快照；每个 runtime index 都会保留一个项目租约。
+        drop(runtimes);
         // Keep the lightweight catalog alive for failed app-shutdown recovery; close content leases.
         // 为应用关闭失败恢复保留轻量目录，只关闭内容租约。
         if let Err(error) = self.data_plane.close_project_bindings().await {

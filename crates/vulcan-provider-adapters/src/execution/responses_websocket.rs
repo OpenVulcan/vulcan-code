@@ -7,7 +7,9 @@ use super::failure::{
     stream_transport_failure_with_websocket_close_code,
 };
 use super::projection_profiles::apply_response_projection_profiles;
-use super::request_encoding::request_without_nonpersistent_responses_continuation;
+use super::request_encoding::{
+    request_with_codex_tool_input_contract, request_without_nonpersistent_responses_continuation,
+};
 use super::request_headers::{execution_headers, websocket_headers};
 use super::route::upstream_protocol_for_route;
 use super::stream_state::{update_semantic_output_observation, validate_stream_event};
@@ -124,6 +126,7 @@ impl ProviderExecutionClient {
         } else {
             request_without_nonpersistent_responses_continuation(route, request)
         };
+        let effective_request = request_with_codex_tool_input_contract(route, &effective_request);
         self.encode_request_with_credential(route, &effective_request, secret)
     }
 
@@ -168,6 +171,8 @@ impl ProviderExecutionClient {
                 &route,
                 &request,
             );
+            let handshake_request =
+                request_with_codex_tool_input_contract(&route, &handshake_request);
             let handshake_encoded = client
                 .encode_request_with_credential(&route, &handshake_request, &secret)
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
@@ -247,6 +252,9 @@ impl ProviderExecutionClient {
                 &request,
                 session.previous_response_id(),
             );
+            // wireRequest is the exact encoded and decoded request snapshot for this response.
+            // wireRequest 是当前响应用于编码与解码的精确请求快照。
+            let wire_request = request_with_codex_tool_input_contract(&route, &wire_request);
             let encoded = client
                 .encode_request_with_credential(&route, &wire_request, &secret)
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
@@ -300,7 +308,7 @@ impl ProviderExecutionClient {
                 .create_stream_decoder(
                     route.protocol_route.protocol_profile_id.as_str(),
                     execution_id.clone(),
-                    &request,
+                    &wire_request,
                 )
                 .map_err(|error| {
                     let failure = llm_core_protocol_failure(error);

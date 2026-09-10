@@ -432,11 +432,16 @@ impl TestControllerRuntimeRoot {
             .expect("attached test controller address")
             .port();
         drop(listener);
-        // executable resolves the bundled controller used by production-shaped integration tests.
-        // executable 指向生产形态集成测试使用的内置控制器。
-        let executable = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("output/bin/vldb-controller.exe");
+        // executable accepts the same explicit upstream-test override as the VCE storage suites;
+        // without an override it still validates the bundled production-shaped controller.
+        // executable 接受与 VCE 存储测试相同的显式上游测试覆盖；未覆盖时仍验证生产形态内置控制器。
+        let executable = std::env::var_os("VLDB_CONTROLLER_TEST_EXECUTABLE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join("output/bin/vldb-controller.exe")
+            });
         assert!(executable.is_file(), "bundled controller must exist");
         // endpoint isolates this fixture from every application and parallel test controller.
         // endpoint 将该夹具与所有应用实例及并行测试控制器隔离。

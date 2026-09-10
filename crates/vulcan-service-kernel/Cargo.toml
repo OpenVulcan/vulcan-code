@@ -37,6 +37,7 @@ vulcan-provider-adapters.workspace = true
 luaskills.workspace = true
 hex.workspace = true
 sha2.workspace = true
+tracing.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true

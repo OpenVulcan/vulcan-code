@@ -779,6 +779,7 @@ fn connection_contract_comparison_normalizes_every_route() {
             remote_compaction:
                 vulcan_provider_adapters::ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
             websocket: vulcan_provider_adapters::ResponsesWebsocketPolicy::Disabled,
+            recovery: Default::default(),
         });
     }
     let candidate = PreparedCustomProviderCandidate {

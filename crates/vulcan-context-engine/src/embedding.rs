@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 
 /// A logical Embedding input owned by the VCE indexing or query pipeline.
 /// 由 VCE 索引或查询管线拥有的逻辑向量输入。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmbeddingInput {
     /// Stable identity retained across batching and result alignment.
     /// 在批处理和结果对齐过程中保持不变的稳定身份。
@@ -38,7 +38,7 @@ impl EmbeddingInput {
 
 /// A character-preserving segment of one logical Embedding input.
 /// 一个保留字符边界的逻辑向量输入片段。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TextSegment {
     /// Stable identity of the logical input that owns this segment.
     /// 拥有该片段的逻辑输入稳定身份。
@@ -73,7 +73,7 @@ impl TextSegment {
 
 /// One provider-sized batch of Embedding segments.
 /// 一个符合供应商限制的向量片段批次。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmbeddingBatch {
     /// Ordered segments whose result order must be preserved.
     /// 必须保持返回顺序的有序片段集合。
@@ -139,7 +139,7 @@ impl EmbeddingBatch {
 
 /// A deterministic plan for splitting, batching, and later aggregating Embeddings.
 /// 用于切分、批处理和后续聚合向量的确定性计划。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmbeddingPlan {
     /// Original logical inputs in caller order.
     /// 按调用方顺序保存的原始逻辑输入。

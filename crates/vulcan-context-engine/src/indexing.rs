@@ -70,7 +70,7 @@ impl Default for IndexingConfig {
 
 /// A newly accepted Blob waiting for chunking and Embedding.
 /// 等待切块和向量化的新接收 Blob。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingIndex {
     /// Stable path-plus-content Blob identity.
     /// 稳定的路径加内容 Blob 身份。
@@ -94,7 +94,7 @@ pub struct PendingIndex {
 
 /// A Blob after deterministic Chunking and before provider execution.
 /// 完成确定性切块但尚未执行供应商调用的 Blob。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PreparedIndex {
     /// Pending Blob metadata and staging state.
     /// 待处理 Blob 元数据和暂存状态。

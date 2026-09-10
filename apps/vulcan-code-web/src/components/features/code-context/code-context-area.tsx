@@ -1,5 +1,12 @@
 import * as React from "react";
-import { Database, FileCode2, LoaderCircle, RefreshCw, Save, SearchCheck } from "lucide-react";
+import {
+  Database,
+  FileCode2,
+  LoaderCircle,
+  RefreshCw,
+  Save,
+  SearchCheck,
+} from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,6 +62,11 @@ import {
   VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
 } from "./vce-observer-timeouts";
 
+// Stable host diagnostic returned when the bundled controller predates physical compaction RPCs.
+// 打包控制器早于物理整理 RPC 时返回的稳定宿主诊断。
+const VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED =
+  "VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED";
+
 // loadAuthoritativeVceOverview reads and validates the current host-owned project snapshot.
 // loadAuthoritativeVceOverview 读取并校验当前由宿主持有的项目快照。
 //
@@ -66,12 +78,19 @@ import {
 // 返回值：请求项目经过校验的当前概览。
 export async function loadAuthoritativeVceOverview(
   projectId: string,
-  loader: (projectId: string, options?: ServiceRequestOptions) => Promise<VceProjectOverviewResponse> = loadVceProjectOverview,
+  loader: (
+    projectId: string,
+    options?: ServiceRequestOptions,
+  ) => Promise<VceProjectOverviewResponse> = loadVceProjectOverview,
   options?: ServiceRequestOptions,
 ): Promise<VceProjectOverviewResponse> {
-  const overview = options ? await loader(projectId, options) : await loader(projectId);
+  const overview = options
+    ? await loader(projectId, options)
+    : await loader(projectId);
   if (overview.status.projectId !== projectId) {
-    throw new Error("VCE overview recovery returned a mismatched project identity.");
+    throw new Error(
+      "VCE overview recovery returned a mismatched project identity.",
+    );
   }
   return overview;
 }
@@ -116,7 +135,10 @@ export function CodeContextArea(props: {
   busy: boolean;
   // Persists a complete editable settings document.
   // 持久化完整可编辑设置文档。
-  onSave: (settings: VceProjectSettingsInput, expectedRevision: number) => Promise<VceProjectSettingsSummary>;
+  onSave: (
+    settings: VceProjectSettingsInput,
+    expectedRevision: number,
+  ) => Promise<VceProjectSettingsSummary>;
   // Shared activity read error; never inferred from empty management results.
   // 共享活动读取错误；绝不从空管理结果推断。
   activityError: string | null;
@@ -141,11 +163,15 @@ export function CodeContextArea(props: {
   const indexing = useVceProjectJob(props.projectId);
   // projectReportsActiveJob is the host lifecycle projection available before the receipt observer finishes rehydrating.
   // projectReportsActiveJob 是作业回执观察器完成恢复前，宿主已经提供的生命周期投影。
-  const projectReportsActiveJob = props.overview?.status.lifecycle === "indexing";
+  const projectReportsActiveJob =
+    props.overview?.status.lifecycle === "indexing";
   // Use the acknowledged project job to offer at most one subsequent manual synchronization.
   // 使用已确认项目作业提供至多一次后续手动同步。
   const synchronization = projectReportsActiveJob
-    ? { disabled: true, label: locale === "zh-CN" ? "索引任务进行中" : "Index job in progress" }
+    ? {
+        disabled: true,
+        label: locale === "zh-CN" ? "索引任务进行中" : "Index job in progress",
+      }
     : vceSynchronizationControl(indexing.job, locale === "zh-CN");
   // zh returns Chinese copy for the active Chinese locale and English otherwise.
   // zh 为当前中文语言返回中文文案，否则返回英文文案。
@@ -155,18 +181,25 @@ export function CodeContextArea(props: {
   );
   // replacementInProgressActivityError identifies the expected read race while a durable replacement owns the project.
   // replacementInProgressActivityError 识别持久替换作业持有项目期间预期的读取竞争。
-  const replacementInProgressActivityError = props.activityError === "VCE explicit replacement is in progress; observe its durable job";
+  const replacementInProgressActivityError =
+    props.activityError ===
+    "VCE explicit replacement is in progress; observe its durable job";
   // indexingStatusVisible turns active work into a neutral localized status instead of an inline error.
   // indexingStatusVisible 将活动作业转换为中性的本地化状态，而不是行内错误。
-  const indexingStatusVisible = indexing.active || projectReportsActiveJob || replacementInProgressActivityError;
+  const indexingStatusVisible =
+    indexing.active ||
+    projectReportsActiveJob ||
+    replacementInProgressActivityError;
   // draft holds only user-editable fields and never mirrors host-owned revision fields.
   // draft 只保存用户可编辑字段，绝不镜像宿主持有的修订字段。
-  const [draft, setDraft] = React.useState<VceProjectSettingsInput | null>(() => (
-    props.overview ? editableSettings(props.overview.settings) : null
-  ));
+  const [draft, setDraft] = React.useState<VceProjectSettingsInput | null>(
+    () => (props.overview ? editableSettings(props.overview.settings) : null),
+  );
   // draftBase freezes the exact persisted revision from which the user's editable draft was created.
   // draftBase 固定用户可编辑草稿创建时的精确持久修订。
-  const draftBase = React.useRef<VceProjectSettingsSummary | null>(props.overview?.settings ?? null);
+  const draftBase = React.useRef<VceProjectSettingsSummary | null>(
+    props.overview?.settings ?? null,
+  );
   // draftConflict warns about remote changes without discarding unsaved local edits.
   // draftConflict 提示远端变化，不丢弃未保存的本地编辑。
   const [draftConflict, setDraftConflict] = React.useState(false);
@@ -175,15 +208,16 @@ export function CodeContextArea(props: {
   const [managementExpanded, setManagementExpanded] = React.useState(false);
   // managementOverview retains statistics only for their exact project/checkpoint/settings identity.
   // managementOverview 仅按其精确项目、检查点及设置身份保留统计。
-  const [managementOverview, setManagementOverview] = React.useState<VceProjectOverviewResponse | null>(props.overview);
+  const [managementOverview, setManagementOverview] =
+    React.useState<VceProjectOverviewResponse | null>(props.overview);
   // managementBusy covers bounded file, operation, and integrity reads.
   // managementBusy 表示有界文件、操作与完整性读取正在进行。
   const [managementBusy, setManagementBusy] = React.useState(false);
   // filePage stores one bounded file page and its opaque navigation history.
   // filePage 保存一页有界文件记录及其不透明导航历史。
-  const [filePage, setFilePage] = React.useState<VceManagementPageState<VceFileSummary>>(
-    emptyVceManagementPage,
-  );
+  const [filePage, setFilePage] = React.useState<
+    VceManagementPageState<VceFileSummary>
+  >(emptyVceManagementPage);
   // operationPage stores one bounded durable-operation page.
   // operationPage 保存一页有界持久操作记录。
   const [operationPage, setOperationPage] = React.useState<
@@ -199,19 +233,35 @@ export function CodeContextArea(props: {
   const [blob, setBlob] = React.useState<VceBlobDetailResponse | null>(null);
   // maintenancePlan stores the latest read-only maintenance preview.
   // maintenancePlan 保存最近一份只读维护预览。
-  const [maintenancePlan, setMaintenancePlan] = React.useState<VceMaintenancePlanResponse | null>(null);
+  const [maintenancePlan, setMaintenancePlan] =
+    React.useState<VceMaintenancePlanResponse | null>(null);
   // managementError stores a bounded management-load diagnostic.
   // managementError 保存一条有界管理加载诊断。
-  const [managementError, setManagementError] = React.useState<string | null>(null);
+  const [managementError, setManagementError] = React.useState<string | null>(
+    null,
+  );
+  // localizedManagementError translates known capability states while retaining unknown diagnostics verbatim.
+  // localizedManagementError 翻译已知能力状态，同时原样保留未知诊断。
+  const localizedManagementError = managementError?.startsWith(
+    VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED,
+  )
+    ? copy(
+        "当前 VLDB 控制器版本不支持物理索引整理，请升级到 vldb-controller 0.2.4 或更高版本。现有索引与查询不受影响。",
+        "The current VLDB controller does not support physical index compaction. Upgrade to vldb-controller 0.2.4 or newer. Existing indexes and queries remain available.",
+      )
+    : managementError;
   // managementRequestVersion invalidates stale asynchronous responses after project or page changes.
   // managementRequestVersion 在项目或分页变化后使陈旧异步响应失效。
   const managementRequestVersion = React.useRef(0);
   // managementOverviewReadAbortController owns the optional management overview transport.
   // managementOverviewReadAbortController 持有可选管理概览读取的传输中止控制器。
-  const managementOverviewReadAbortController = React.useRef<AbortController | null>(null);
+  const managementOverviewReadAbortController =
+    React.useRef<AbortController | null>(null);
   // managementOverviewReadDeadlineTimer bounds the optional overview request by its generation.
   // managementOverviewReadDeadlineTimer 按请求代次限制可选概览请求的最长等待时间。
-  const managementOverviewReadDeadlineTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const managementOverviewReadDeadlineTimer = React.useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   // Actions retain the admitted project and service lifetime, not merely a reusable project ID.
   // 操作保留准入项目和服务生命周期，而不只是可重复使用的项目编号。
   const isCurrentAction = useVceActionScope(props.projectId);
@@ -243,13 +293,21 @@ export function CodeContextArea(props: {
     // settings is projected explicitly so host-owned metadata cannot be resubmitted.
     // settings 被显式投影，因此宿主持有的元数据不会被重新提交。
     const settings = props.overview.settings;
-    if (draftBase.current !== null && draftBase.current.revision >= settings.revision) return;
+    if (
+      draftBase.current !== null &&
+      draftBase.current.revision >= settings.revision
+    )
+      return;
     // A new checkpoint/progress snapshot is not a settings edit. A remote settings edit cannot
     // silently rebase a dirty draft onto a newer revision and overwrite someone else's choices.
     // 新检查点或进度快照不是设置编辑。远端设置编辑不能静默把脏草稿
     // 改基到新修订并覆盖他人的选择。
-    if (draft !== null && draftBase.current !== null
-      && JSON.stringify(draft) !== JSON.stringify(editableSettings(draftBase.current))) {
+    if (
+      draft !== null &&
+      draftBase.current !== null &&
+      JSON.stringify(draft) !==
+        JSON.stringify(editableSettings(draftBase.current))
+    ) {
       setDraftConflict(true);
       return;
     }
@@ -278,7 +336,12 @@ export function CodeContextArea(props: {
     setOperationPage(emptyVceManagementPage());
     setIssuePage(emptyVceManagementPage());
     setBlob(null);
-    if (!managementExpanded || !props.overview?.configuration.ready || !props.overview.settings.enabled || props.overview.status.checkpointVersion == null) {
+    if (
+      !managementExpanded ||
+      !props.overview?.configuration.ready ||
+      !props.overview.settings.enabled ||
+      props.overview.status.checkpointVersion == null
+    ) {
       setFilePage(emptyVceManagementPage());
       setOperationPage(emptyVceManagementPage());
       setIssuePage(emptyVceManagementPage());
@@ -305,9 +368,13 @@ export function CodeContextArea(props: {
     try {
       // Pin the host-issued identity before requesting lists; never infer it from a numeric checkpoint.
       // 请求列表之前固定宿主签发身份；绝不从数字检查点推断身份。
-      const overview = await loadAuthoritativeVceOverview(props.projectId, loadVceProjectOverview, {
-        signal: controller.signal,
-      });
+      const overview = await loadAuthoritativeVceOverview(
+        props.projectId,
+        loadVceProjectOverview,
+        {
+          signal: controller.signal,
+        },
+      );
       clearTimeout(deadline);
       if (managementOverviewReadDeadlineTimer.current === deadline) {
         managementOverviewReadDeadlineTimer.current = null;
@@ -322,11 +389,27 @@ export function CodeContextArea(props: {
         return;
       }
       if (managementRequestVersion.current !== requestVersion) return;
-      if (!overview.readIdentity) throw new Error(copy("索引尚无可读取的已发布版本。", "No published index is available for management reads."));
+      if (!overview.readIdentity)
+        throw new Error(
+          copy(
+            "索引尚无可读取的已发布版本。",
+            "No published index is available for management reads.",
+          ),
+        );
       const [filePage, operationPage, issuePage] = await Promise.all([
-        listVceFiles(props.projectId, overview.readIdentity, null, VCE_MANAGEMENT_PAGE_SIZE),
+        listVceFiles(
+          props.projectId,
+          overview.readIdentity,
+          null,
+          VCE_MANAGEMENT_PAGE_SIZE,
+        ),
         listVceOperations(props.projectId, null, VCE_MANAGEMENT_PAGE_SIZE),
-        listVceIntegrityIssues(props.projectId, overview.readIdentity, null, VCE_MANAGEMENT_PAGE_SIZE),
+        listVceIntegrityIssues(
+          props.projectId,
+          overview.readIdentity,
+          null,
+          VCE_MANAGEMENT_PAGE_SIZE,
+        ),
       ]);
       if (managementRequestVersion.current !== requestVersion) {
         return;
@@ -334,7 +417,9 @@ export function CodeContextArea(props: {
       setManagementOverview(overview);
       const firstPageRequest = { cursor: null, previousCursors: [] };
       setFilePage(materializeVceManagementPage(filePage, firstPageRequest));
-      setOperationPage(materializeVceManagementPage(operationPage, firstPageRequest));
+      setOperationPage(
+        materializeVceManagementPage(operationPage, firstPageRequest),
+      );
       setIssuePage(materializeVceManagementPage(issuePage, firstPageRequest));
     } catch (error) {
       if (controller.signal.aborted) {
@@ -342,7 +427,9 @@ export function CodeContextArea(props: {
           setManagementError(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
         }
       } else if (managementRequestVersion.current === requestVersion) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     } finally {
       clearTimeout(deadline);
@@ -356,7 +443,16 @@ export function CodeContextArea(props: {
         setManagementBusy(false);
       }
     }
-  }, [copy, isCurrentAction, managementExpanded, props.overview?.configuration.ready, props.overview?.settings.enabled, props.overview?.status.checkpointVersion, props.overview?.settings.revision, props.projectId]);
+  }, [
+    copy,
+    isCurrentAction,
+    managementExpanded,
+    props.overview?.configuration.ready,
+    props.overview?.settings.enabled,
+    props.overview?.status.checkpointVersion,
+    props.overview?.settings.revision,
+    props.projectId,
+  ]);
 
   React.useEffect(() => {
     // A replacement can publish a new physical namespace at the same numeric checkpoint.
@@ -367,38 +463,57 @@ export function CodeContextArea(props: {
     return () => {
       managementRequestVersion.current += 1;
     };
-  }, [reloadManagement, props.overview?.status.checkpointVersion, indexing.job?.jobId, indexing.job?.state]);
+  }, [
+    reloadManagement,
+    props.overview?.status.checkpointVersion,
+    indexing.job?.jobId,
+    indexing.job?.state,
+  ]);
 
   // loadManagementPage commits only the latest page response for the selected project.
   // loadManagementPage 只提交所选项目的最新分页响应。
-  const loadManagementPage = React.useCallback(async <T,>(
-    request: VceManagementPageRequest | null,
-    loader: (cursor: string | null, readIdentity: string) => Promise<import("@/types").VcePageResponse<T>>,
-    applyPage: (page: VceManagementPageState<T>) => void,
-  ) => {
-    if (!request) {
-      return;
-    }
-    const requestVersion = managementRequestVersion.current + 1;
-    managementRequestVersion.current = requestVersion;
-    setManagementBusy(true);
-    setManagementError(null);
-    try {
-      if (!managementOverview?.readIdentity) throw new Error(copy("请先刷新索引详情。", "Refresh index details first."));
-      const response = await loader(request.cursor, managementOverview.readIdentity);
-      if (managementRequestVersion.current === requestVersion) {
-        applyPage(materializeVceManagementPage(response, request));
+  const loadManagementPage = React.useCallback(
+    async <T,>(
+      request: VceManagementPageRequest | null,
+      loader: (
+        cursor: string | null,
+        readIdentity: string,
+      ) => Promise<import("@/types").VcePageResponse<T>>,
+      applyPage: (page: VceManagementPageState<T>) => void,
+    ) => {
+      if (!request) {
+        return;
       }
-    } catch (error) {
-      if (managementRequestVersion.current === requestVersion) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+      const requestVersion = managementRequestVersion.current + 1;
+      managementRequestVersion.current = requestVersion;
+      setManagementBusy(true);
+      setManagementError(null);
+      try {
+        if (!managementOverview?.readIdentity)
+          throw new Error(
+            copy("请先刷新索引详情。", "Refresh index details first."),
+          );
+        const response = await loader(
+          request.cursor,
+          managementOverview.readIdentity,
+        );
+        if (managementRequestVersion.current === requestVersion) {
+          applyPage(materializeVceManagementPage(response, request));
+        }
+      } catch (error) {
+        if (managementRequestVersion.current === requestVersion) {
+          setManagementError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      } finally {
+        if (managementRequestVersion.current === requestVersion) {
+          setManagementBusy(false);
+        }
       }
-    } finally {
-      if (managementRequestVersion.current === requestVersion) {
-        setManagementBusy(false);
-      }
-    }
-  }, [copy, managementOverview]);
+    },
+    [copy, managementOverview],
+  );
 
   // inspectBlob loads only the selected immutable Blob identity.
   // inspectBlob 只加载所选不可变 Blob 身份。
@@ -414,17 +529,35 @@ export function CodeContextArea(props: {
     setManagementBusy(true);
     setManagementError(null);
     try {
-      if (!managementOverview?.readIdentity) throw new Error(copy("请先刷新索引详情。", "Refresh index details first."));
-      const nextBlob = await loadVceBlobDetail(projectId, blobName, managementOverview.readIdentity);
-      if (isCurrentAction() && managementRequestVersion.current === requestVersion) {
+      if (!managementOverview?.readIdentity)
+        throw new Error(
+          copy("请先刷新索引详情。", "Refresh index details first."),
+        );
+      const nextBlob = await loadVceBlobDetail(
+        projectId,
+        blobName,
+        managementOverview.readIdentity,
+      );
+      if (
+        isCurrentAction() &&
+        managementRequestVersion.current === requestVersion
+      ) {
         setBlob(nextBlob);
       }
     } catch (error) {
-      if (isCurrentAction() && managementRequestVersion.current === requestVersion) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+      if (
+        isCurrentAction() &&
+        managementRequestVersion.current === requestVersion
+      ) {
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     } finally {
-      if (isCurrentAction() && managementRequestVersion.current === requestVersion) {
+      if (
+        isCurrentAction() &&
+        managementRequestVersion.current === requestVersion
+      ) {
         setManagementBusy(false);
       }
     }
@@ -432,18 +565,34 @@ export function CodeContextArea(props: {
 
   // loadMaintenancePlan obtains a read-only plan and performs no mutation.
   // loadMaintenancePlan 获取只读计划且不执行修改。
-  const loadMaintenancePlan = async (mode: "repair" | "rebuild" | "cleanup_staging") => {
+  const loadMaintenancePlan = async (
+    mode: "repair" | "rebuild" | "cleanup_staging" | "compact",
+  ) => {
     const projectId = props.projectId;
     // A live durable job owns the project's write path until it reaches a terminal state.
     // 活跃持久作业在进入终态前持有项目写入路径。
     if (indexing.active) {
-      setManagementError(copy("当前索引任务仍在运行，请先取消或等待它结束。", "The current index job is still active. Cancel it or wait for it to finish first."));
+      setManagementError(
+        copy(
+          "当前索引任务仍在运行，请先取消或等待它结束。",
+          "The current index job is still active. Cancel it or wait for it to finish first.",
+        ),
+      );
       return;
     }
     // Only rebuild can recover an uninitialized or failed first publication.
     // 只有重建可以恢复尚未初始化或首次发布失败的项目。
-    if (mode !== "rebuild" && props.overview?.status.checkpointVersion == null) {
-      setManagementError(copy("该项目尚无已发布检查点，只能生成重建计划。", "This project has no published checkpoint; only a rebuild plan is available."));
+    if (
+      mode !== "rebuild" &&
+      mode !== "compact" &&
+      props.overview?.status.checkpointVersion == null
+    ) {
+      setManagementError(
+        copy(
+          "该项目尚无已发布检查点，只能生成重建计划。",
+          "This project has no published checkpoint; only a rebuild plan is available.",
+        ),
+      );
       return;
     }
     // A preview is retired by the same publication, collapse and reload boundary as its displayed data.
@@ -454,15 +603,26 @@ export function CodeContextArea(props: {
     setManagementError(null);
     try {
       const nextPlan = await planVceMaintenance(projectId, mode);
-      if (isCurrentAction() && managementRequestVersion.current === requestVersion) {
+      if (
+        isCurrentAction() &&
+        managementRequestVersion.current === requestVersion
+      ) {
         setMaintenancePlan(nextPlan);
       }
     } catch (error) {
-      if (isCurrentAction() && managementRequestVersion.current === requestVersion) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+      if (
+        isCurrentAction() &&
+        managementRequestVersion.current === requestVersion
+      ) {
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     } finally {
-      if (isCurrentAction() && managementRequestVersion.current === requestVersion) {
+      if (
+        isCurrentAction() &&
+        managementRequestVersion.current === requestVersion
+      ) {
         setManagementBusy(false);
       }
     }
@@ -480,10 +640,15 @@ export function CodeContextArea(props: {
       // saved 为已确认设置文档，绝非本地合成修订。
       // Preserve raw draft lines while typing; remove blank rules only at the existing save boundary.
       // 输入时保留原始草稿行；仅在既有保存边界移除空规则。
-      const saved = await props.onSave({
-        ...next,
-        extraIgnorePatterns: next.extraIgnorePatterns.map((value) => value.trim()).filter(Boolean),
-      }, draftBase.current.revision);
+      const saved = await props.onSave(
+        {
+          ...next,
+          extraIgnorePatterns: next.extraIgnorePatterns
+            .map((value) => value.trim())
+            .filter(Boolean),
+        },
+        draftBase.current.revision,
+      );
       if (isCurrentAction()) {
         draftBase.current = saved;
         setDraft(editableSettings(saved));
@@ -491,7 +656,9 @@ export function CodeContextArea(props: {
       }
     } catch (error) {
       if (isCurrentAction()) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
         // Shared read errors are rendered independently through activityError, never swallowed here.
         // 共享读取错误通过 activityError 独立渲染，绝不在此吞掉。
         await props.onReloadActivity();
@@ -502,13 +669,20 @@ export function CodeContextArea(props: {
   // refreshIndex reports a rejected refresh locally instead of creating an unhandled promise.
   // refreshIndex 在本地报告被拒绝的刷新，而不是产生未处理 Promise。
   const refreshIndex = async () => {
-    if (!props.overview?.configuration.ready || !props.overview.settings.enabled) return;
+    if (
+      !props.overview?.configuration.ready ||
+      !props.overview.settings.enabled
+    )
+      return;
     setManagementError(null);
     try {
       const receipt = await props.onRefresh();
       if (isCurrentAction()) indexing.receive(receipt);
     } catch (error) {
-      if (isCurrentAction()) setManagementError(error instanceof Error ? error.message : String(error));
+      if (isCurrentAction())
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
     }
   };
 
@@ -520,42 +694,81 @@ export function CodeContextArea(props: {
     try {
       await props.onReloadActivity();
     } catch (error) {
-      if (isCurrentAction()) setManagementError(error instanceof Error ? error.message : String(error));
+      if (isCurrentAction())
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
     }
   };
 
   // executeMaintenance executes only a dialog-frozen current read-only plan.
   // executeMaintenance 仅执行由对话框冻结且仍然有效的当前只读计划。
-  const executeMaintenance = async (confirmation: VceMaintenanceConfirmation) => {
+  const executeMaintenance = async (
+    confirmation: VceMaintenanceConfirmation,
+  ) => {
     const overview = props.overview;
     if (maintenanceMutationInFlightRef.current) {
       return;
     }
     if (!overview || !maintenancePlan || maintenancePlan.actions.length === 0) {
-      setManagementError(copy("当前计划没有可执行操作。", "The current plan has no executable actions."));
+      setManagementError(
+        copy(
+          "当前计划没有可执行操作。",
+          "The current plan has no executable actions.",
+        ),
+      );
       return;
     }
     if (indexing.active) {
-      setManagementError(copy("当前索引任务仍在运行，请先取消或等待它结束。", "The current index job is still active. Cancel it or wait for it to finish first."));
+      setManagementError(
+        copy(
+          "当前索引任务仍在运行，请先取消或等待它结束。",
+          "The current index job is still active. Cancel it or wait for it to finish first.",
+        ),
+      );
       return;
     }
     const projectId = props.projectId;
     const checkpoint = overview.status.checkpointVersion ?? null;
+    const plannedCheckpoint = maintenancePlan.checkpointVersion;
     const actionIds = maintenancePlan.actions.map((action) => action.actionId);
-    const planStillCurrent = confirmation.projectId === projectId
-      && confirmation.settingsRevision === overview.settings.revision
-      && confirmation.checkpointVersion === checkpoint
-      && confirmation.mode === maintenancePlan.mode
-      && confirmation.embeddingFingerprint === maintenancePlan.embeddingFingerprint
-      && confirmation.actionIds.length === actionIds.length
-      && confirmation.actionIds.every((actionId, index) => actionId === actionIds[index]);
+    // A model-unavailable overview intentionally hides query authority and its checkpoint. Compact
+    // mode instead retains the exact stored checkpoint from its plan; the host revalidates it at admission.
+    // 模型不可用概览会有意隐藏查询权威及其检查点。compact 模式改用计划中的精确已存检查点；宿主在准入时再次校验。
+    const storedCompactionAuthority =
+      maintenancePlan.mode === "compact" &&
+      !overview.configuration.ready &&
+      checkpoint === null &&
+      plannedCheckpoint !== null;
+    const planStillCurrent =
+      confirmation.projectId === projectId &&
+      confirmation.settingsRevision === overview.settings.revision &&
+      confirmation.checkpointVersion === plannedCheckpoint &&
+      (storedCompactionAuthority || plannedCheckpoint === checkpoint) &&
+      confirmation.mode === maintenancePlan.mode &&
+      confirmation.embeddingFingerprint ===
+        maintenancePlan.embeddingFingerprint &&
+      confirmation.actionIds.length === actionIds.length &&
+      confirmation.actionIds.every(
+        (actionId, index) => actionId === actionIds[index],
+      );
     if (!planStillCurrent) {
       setMaintenancePlan(null);
-      setManagementError(copy("维护计划已失效，请重新生成计划后再确认。", "The maintenance plan is stale. Generate a new plan before confirming it."));
+      setManagementError(
+        copy(
+          "维护计划已失效，请重新生成计划后再确认。",
+          "The maintenance plan is stale. Generate a new plan before confirming it.",
+        ),
+      );
       return;
     }
-    if (checkpoint === null && maintenancePlan.mode !== "rebuild") {
-      setManagementError(copy("维护操作要求一个已发布检查点。", "Maintenance requires a published checkpoint."));
+    if (plannedCheckpoint === null && maintenancePlan.mode !== "rebuild") {
+      setManagementError(
+        copy(
+          "维护操作要求一个已发布检查点。",
+          "Maintenance requires a published checkpoint.",
+        ),
+      );
       return;
     }
     maintenanceMutationInFlightRef.current = true;
@@ -568,7 +781,7 @@ export function CodeContextArea(props: {
         projectId,
         maintenancePlan.mode,
         overview.settings.revision,
-        checkpoint,
+        plannedCheckpoint,
         actionIds,
         confirmation.idempotencyKey,
         maintenancePlan.embeddingFingerprint,
@@ -585,7 +798,9 @@ export function CodeContextArea(props: {
       await reloadManagement();
     } catch (error) {
       if (isCurrentAction()) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     } finally {
       if (isCurrentAction()) {
@@ -619,7 +834,9 @@ export function CodeContextArea(props: {
       indexing.receive(receipt);
     } catch (error) {
       if (isCurrentAction()) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     } finally {
       if (isCurrentAction()) {
@@ -641,17 +858,16 @@ export function CodeContextArea(props: {
     setManagementBusy(true);
     setManagementError(null);
     try {
-      const receipt = await cancelVceOperation(
-        projectId,
-        operationId,
-      );
+      const receipt = await cancelVceOperation(projectId, operationId);
       if (!isCurrentAction()) {
         return;
       }
       indexing.receive(receipt);
     } catch (error) {
       if (isCurrentAction()) {
-        setManagementError(error instanceof Error ? error.message : String(error));
+        setManagementError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     } finally {
       if (isCurrentAction()) {
@@ -664,21 +880,40 @@ export function CodeContextArea(props: {
   if (!props.overview || !draft) {
     return (
       <div className="project-settings-section">
-        {props.activityError && !replacementInProgressActivityError ? <>
-          <p role="alert" className="text-sm text-destructive">{props.activityError}</p>
-          <Button type="button" onClick={() => void props.onReloadActivity()}>{copy("重新读取状态", "Reload status")}</Button>
-        </> : null}
-        {indexing.job ? <VceJobProgress
-          chinese={locale === "zh-CN"}
-          job={indexing.job}
-          onCancel={() => void indexing.cancel()}
-          cancelPending={indexing.cancelPending}
-        /> : indexingStatusVisible ? <p className="project-settings-muted" role="status" aria-live="polite">
-          <LoaderCircle className="mr-2 inline animate-spin" size={14} />{t("projectSettings.codeContext.generating")}
-        </p> : <>
-          <LoaderCircle className="animate-spin" size={18} />
-          <p className="project-settings-muted">{copy("正在加载代码语义索引…", "Loading code semantic index…")}</p>
-        </>}
+        {props.activityError && !replacementInProgressActivityError ? (
+          <>
+            <p role="alert" className="text-sm text-destructive">
+              {props.activityError}
+            </p>
+            <Button type="button" onClick={() => void props.onReloadActivity()}>
+              {copy("重新读取状态", "Reload status")}
+            </Button>
+          </>
+        ) : null}
+        {indexing.job ? (
+          <VceJobProgress
+            chinese={locale === "zh-CN"}
+            job={indexing.job}
+            onCancel={() => void indexing.cancel()}
+            cancelPending={indexing.cancelPending}
+          />
+        ) : indexingStatusVisible ? (
+          <p
+            className="project-settings-muted"
+            role="status"
+            aria-live="polite"
+          >
+            <LoaderCircle className="mr-2 inline animate-spin" size={14} />
+            {t("projectSettings.codeContext.generating")}
+          </p>
+        ) : (
+          <>
+            <LoaderCircle className="animate-spin" size={18} />
+            <p className="project-settings-muted">
+              {copy("正在加载代码语义索引…", "Loading code semantic index…")}
+            </p>
+          </>
+        )}
       </div>
     );
   }
@@ -688,54 +923,148 @@ export function CodeContextArea(props: {
   const status = props.overview.status;
   // rebuildRecoveryRequired keeps an unsuccessful first publication on an explicit recovery path.
   // rebuildRecoveryRequired 将首次发布失败保持在明确的恢复路径上。
-  const rebuildRecoveryRequired = status.lifecycle === "rebuild_required"
-    || (status.lifecycle === "failed" && status.checkpointVersion == null)
-    || (status.checkpointVersion == null && isUnpublishedVceRecoveryJob(indexing.job));
+  const rebuildRecoveryRequired =
+    status.lifecycle === "rebuild_required" ||
+    (status.lifecycle === "failed" && status.checkpointVersion == null) ||
+    (status.checkpointVersion == null &&
+      isUnpublishedVceRecoveryJob(indexing.job));
   // counts supplies aggregate storage statistics when the runtime is active.
   // counts 在运行时活动时提供存储聚合统计。
-  const counts = managementOverview?.status.projectId === props.projectId
-    && managementOverview.status.checkpointVersion === status.checkpointVersion
-    && managementOverview.settings.revision === props.overview.settings.revision
-    ? managementOverview.counts : null;
+  const counts =
+    managementOverview?.status.projectId === props.projectId &&
+    managementOverview.status.checkpointVersion === status.checkpointVersion &&
+    managementOverview.settings.revision === props.overview.settings.revision
+      ? managementOverview.counts
+      : null;
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading project-settings-heading-with-action">
         <Database size={18} />
         <div>
           <strong>{copy("代码语义索引", "Code semantic index")}</strong>
-          <span>{copy("为 AI 提供当前项目的自然语言代码检索。", "Provides natural-language code retrieval for AI in this project.")}</span>
+          <span>
+            {copy(
+              "为 AI 提供当前项目的自然语言代码检索。",
+              "Provides natural-language code retrieval for AI in this project.",
+            )}
+          </span>
         </div>
         <div className="project-settings-heading-actions">
-          {indexingStatusVisible ? <div className="project-settings-heading-status" role="status" aria-live="polite">
-            <LoaderCircle className="animate-spin" size={14} />{t("projectSettings.codeContext.generating")}
-          </div> : null}
+          {indexingStatusVisible ? (
+            <div
+              className="project-settings-heading-status"
+              role="status"
+              aria-live="polite"
+            >
+              <LoaderCircle className="animate-spin" size={14} />
+              {t("projectSettings.codeContext.generating")}
+            </div>
+          ) : null}
           <Button
             aria-label={copy("刷新状态", "Refresh status")}
-            disabled={props.busy || !draft.enabled}
+            disabled={props.busy}
             onClick={() => void refreshStatus()}
             size="icon-sm"
             type="button"
             variant="outline"
           >
-            <RefreshCw className={props.busy ? "animate-spin" : undefined} size={15} />
+            <RefreshCw
+              className={props.busy ? "animate-spin" : undefined}
+              size={15}
+            />
           </Button>
         </div>
       </header>
 
-      {props.activityError && !replacementInProgressActivityError ? <p role="alert" className="text-sm text-destructive">{props.activityError}</p> : null}
-      {draftConflict ? <div role="alert" className="rounded-lg border border-amber-500/30 p-3 text-sm">
-        <p>{copy("项目设置已在其他位置更新。您的未保存修改已保留；请重新载入设置后再保存，避免覆盖新设置。", "Project settings changed elsewhere. Unsaved edits are preserved; reload before saving to avoid overwriting newer settings.")}</p>
-        <Button type="button" variant="outline" size="sm" disabled={props.busy} onClick={() => {
-          draftBase.current = props.overview!.settings;
-          setDraft(editableSettings(props.overview!.settings));
-          setDraftConflict(false);
-        }}>{copy("放弃修改并载入当前设置", "Discard edits and load current settings")}</Button>
-      </div> : null}
+      {props.activityError && !replacementInProgressActivityError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {props.activityError}
+        </p>
+      ) : null}
+      {draftConflict ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-amber-500/30 p-3 text-sm"
+        >
+          <p>
+            {copy(
+              "项目设置已在其他位置更新。您的未保存修改已保留；请重新载入设置后再保存，避免覆盖新设置。",
+              "Project settings changed elsewhere. Unsaved edits are preserved; reload before saving to avoid overwriting newer settings.",
+            )}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={props.busy}
+            onClick={() => {
+              draftBase.current = props.overview!.settings;
+              setDraft(editableSettings(props.overview!.settings));
+              setDraftConflict(false);
+            }}
+          >
+            {copy(
+              "放弃修改并载入当前设置",
+              "Discard edits and load current settings",
+            )}
+          </Button>
+        </div>
+      ) : null}
 
-      {!props.overview.configuration.ready ? <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-        <p>{copy("引擎模型尚未就绪。您可以保存项目设置，但创建、更新索引和 AI 检索保持关闭。", "Engine models are not ready. Project settings can be saved, but indexing and AI retrieval remain disabled.")}</p>
-        <Button type="button" variant="link" size="sm" onClick={props.onOpenEngineSettings}>{copy("配置语义引擎模型", "Configure engine models")}</Button>
-      </div> : null}
+      {!props.overview.configuration.ready ? (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+          <p>
+            {copy(
+              "引擎模型尚未就绪。您可以保存项目设置，但创建、更新索引和 AI 检索保持关闭。",
+              "Engine models are not ready. Project settings can be saved, but indexing and AI retrieval remain disabled.",
+            )}
+          </p>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            onClick={props.onOpenEngineSettings}
+          >
+            {copy("配置语义引擎模型", "Configure engine models")}
+          </Button>
+          {draft.enabled ? (
+            <div className="mt-3 space-y-2 border-t pt-3">
+              <p className="text-xs text-muted-foreground">
+                {copy(
+                  "已有索引的物理整理不调用模型。可读取已存索引并生成整理计划；若尚无已发布索引，计划请求会明确拒绝。",
+                  "Physical compaction of an existing index does not call a model. You can inspect the stored index and generate a compaction plan; the request is rejected explicitly when no published index exists.",
+                )}
+              </p>
+              <Button
+                disabled={managementBusy || indexing.active}
+                onClick={() => void loadMaintenancePlan("compact")}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {copy(
+                  "检查并整理物理索引",
+                  "Inspect and compact physical index",
+                )}
+              </Button>
+              {maintenancePlan?.mode === "compact" ? (
+                <MaintenancePlanPreview
+                  active={indexing.active}
+                  busy={managementBusy}
+                  copy={copy}
+                  error={localizedManagementError}
+                  onExecute={(confirmation) =>
+                    void executeMaintenance(confirmation)
+                  }
+                  plan={maintenancePlan}
+                  projectId={props.projectId}
+                  settingsRevision={props.overview.settings.revision}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="project-settings-toggle-row">
         <Switch
@@ -749,40 +1078,121 @@ export function CodeContextArea(props: {
           }}
         />
         <span>
-          <strong>{copy("启用代码语义索引", "Enable code semantic index")}</strong>
-          <small>{copy("开启只授权此项目使用语义引擎；索引需要单独创建，默认手动更新。", "Enabling only authorizes this project to use the engine; create its index separately. Updates are manual by default.")}</small>
+          <strong>
+            {copy("启用代码语义索引", "Enable code semantic index")}
+          </strong>
+          <small>
+            {copy(
+              "开启只授权此项目使用语义引擎；索引需要单独创建，默认手动更新。",
+              "Enabling only authorizes this project to use the engine; create its index separately. Updates are manual by default.",
+            )}
+          </small>
         </span>
       </div>
+
+      {indexing.job ? (
+        <VceJobProgress
+          job={indexing.job}
+          chinese={locale === "zh-CN"}
+          onCancel={() => void indexing.cancel()}
+          cancelPending={indexing.cancelPending}
+          onRetry={
+            indexing.job.kind !== "rebuild" &&
+            !rebuildRecoveryRequired &&
+            !managementBusy &&
+            props.overview?.configuration.ready === true &&
+            draft.enabled
+              ? () => void retryOperation(indexing.job!.jobId)
+              : undefined
+          }
+        />
+      ) : null}
+      {indexing.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {copy("索引状态暂不可用：", "Index status unavailable: ")}
+          {indexing.error}
+        </p>
+      ) : null}
 
       {draft.enabled ? (
         <section className="space-y-3 rounded-lg border p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <strong>{status.checkpointVersion == null ? copy("创建项目索引", "Create project index") : copy("更新项目索引", "Update project index")}</strong>
-              <p className="mt-1 text-sm text-muted-foreground">{status.checkpointVersion == null ? copy("只有点击创建，才会扫描此项目并调用向量模型。", "Files are scanned and embedded only after you choose to create this project's index.") : copy("手动同步立即受理，不受自动更新间隔限制。", "Manual synchronization bypasses the automatic update interval.")}</p>
+              <strong>
+                {status.checkpointVersion == null
+                  ? copy("创建项目索引", "Create project index")
+                  : copy("更新项目索引", "Update project index")}
+              </strong>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {status.checkpointVersion == null
+                  ? copy(
+                      "只有点击创建，才会扫描此项目并调用向量模型。",
+                      "Files are scanned and embedded only after you choose to create this project's index.",
+                    )
+                  : copy(
+                      "手动同步立即受理，不受自动更新间隔限制。",
+                      "Manual synchronization bypasses the automatic update interval.",
+                    )}
+              </p>
             </div>
-            <Button type="button" disabled={props.busy || synchronization.disabled || indexingStatusVisible || !props.overview.configuration.ready || !props.overview.settings.enabled || rebuildRecoveryRequired} onClick={() => void refreshIndex()}>
-              <Database size={15} />{status.checkpointVersion == null ? copy("创建语义索引", "Create semantic index") : synchronization.label}
+            <Button
+              type="button"
+              disabled={
+                props.busy ||
+                synchronization.disabled ||
+                indexingStatusVisible ||
+                !props.overview.configuration.ready ||
+                !props.overview.settings.enabled ||
+                rebuildRecoveryRequired
+              }
+              onClick={() => void refreshIndex()}
+            >
+              <Database size={15} />
+              {status.checkpointVersion == null
+                ? copy("创建语义索引", "Create semantic index")
+                : synchronization.label}
             </Button>
           </div>
           {rebuildRecoveryRequired ? (
             <section className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <strong>{copy("索引需要重建", "The index needs to be rebuilt")}</strong>
-                  <p className="mt-1 text-sm text-muted-foreground">{status.checkpointVersion == null
-                    ? indexing.active
-                      ? copy("上次索引创建没有发布可用结果。请先取消遗留任务，再生成并确认一份重建计划。", "The previous index creation did not publish a usable result. Cancel the stale job, then generate and confirm a rebuild plan.")
-                      : copy("上次索引创建没有发布可用结果。现在可以生成并确认重建计划，使用当前模型设置重新创建索引。", "The previous index creation did not publish a usable result. You can now generate and confirm a rebuild plan to recreate the index with the current model settings.")
-                    : copy("当前索引需要按新的模型契约重建。请生成并确认一份重建计划；当前运行中的任务必须先取消或等待结束。", "The current index must be rebuilt for the new model contract. Generate and confirm a rebuild plan; an active job must be cancelled or allowed to finish first.")}</p>
+                  <strong>
+                    {copy("索引需要重建", "The index needs to be rebuilt")}
+                  </strong>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {status.checkpointVersion == null
+                      ? indexing.active
+                        ? copy(
+                            "上次索引创建没有发布可用结果。请先取消遗留任务，再生成并确认一份重建计划。",
+                            "The previous index creation did not publish a usable result. Cancel the stale job, then generate and confirm a rebuild plan.",
+                          )
+                        : copy(
+                            "上次索引创建没有发布可用结果。现在可以生成并确认重建计划，使用当前模型设置重新创建索引。",
+                            "The previous index creation did not publish a usable result. You can now generate and confirm a rebuild plan to recreate the index with the current model settings.",
+                          )
+                      : copy(
+                          "当前索引需要按新的模型契约重建。请生成并确认一份重建计划；当前运行中的任务必须先取消或等待结束。",
+                          "The current index must be rebuilt for the new model contract. Generate and confirm a rebuild plan; an active job must be cancelled or allowed to finish first.",
+                        )}
+                  </p>
                 </div>
                 <Button
-                  disabled={props.busy || managementBusy || indexing.active || !props.overview.configuration.ready || !props.overview.settings.enabled}
+                  disabled={
+                    props.busy ||
+                    managementBusy ||
+                    indexing.active ||
+                    !props.overview.configuration.ready ||
+                    !props.overview.settings.enabled
+                  }
                   onClick={() => void loadMaintenancePlan("rebuild")}
                   type="button"
                   variant="outline"
                 >
-                  <RefreshCw size={15} />{maintenancePlan?.mode === "rebuild" ? copy("重新生成重建计划", "Regenerate rebuild plan") : copy("生成重建计划", "Generate rebuild plan")}
+                  <RefreshCw size={15} />
+                  {maintenancePlan?.mode === "rebuild"
+                    ? copy("重新生成重建计划", "Regenerate rebuild plan")
+                    : copy("生成重建计划", "Generate rebuild plan")}
                 </Button>
               </div>
               {maintenancePlan?.mode === "rebuild" ? (
@@ -790,9 +1200,10 @@ export function CodeContextArea(props: {
                   active={indexing.active}
                   busy={managementBusy}
                   copy={copy}
-                  checkpointVersion={status.checkpointVersion ?? null}
-                  error={managementError}
-                  onExecute={(confirmation) => void executeMaintenance(confirmation)}
+                  error={localizedManagementError}
+                  onExecute={(confirmation) =>
+                    void executeMaintenance(confirmation)
+                  }
                   plan={maintenancePlan}
                   projectId={props.projectId}
                   settingsRevision={props.overview.settings.revision}
@@ -800,149 +1211,446 @@ export function CodeContextArea(props: {
               ) : null}
             </section>
           ) : null}
-          {indexing.job ? <VceJobProgress job={indexing.job} chinese={locale === "zh-CN"} onCancel={() => void indexing.cancel()} cancelPending={indexing.cancelPending}
-            onRetry={indexing.job.kind !== "rebuild" && !rebuildRecoveryRequired && !managementBusy && props.overview?.configuration.ready === true && draft.enabled
-              ? () => void retryOperation(indexing.job!.jobId) : undefined} /> : null}
-          {indexing.error ? <p role="alert" className="text-sm text-destructive">{copy("索引状态暂不可用：", "Index status unavailable: ")}{indexing.error}</p> : null}
           <fieldset className="space-y-2" disabled={props.busy}>
-            <legend className="text-sm font-medium">{copy("索引更新模式", "Index update mode")}</legend>
+            <legend className="text-sm font-medium">
+              {copy("索引更新模式", "Index update mode")}
+            </legend>
             <div className="flex flex-wrap gap-4 text-sm">
-              {(["manual", "automatic"] as const).map((mode) => <label key={mode} className="flex items-center gap-2"><input type="radio" name={`vce-update-mode-${props.projectId}`} checked={draft.updateMode === mode} onChange={() => { const next = { ...draft, updateMode: mode }; setDraft(next); void saveDraft(next); }} />{mode === "manual" ? copy("手动更新", "Manual updates") : copy("自动更新", "Automatic updates")}</label>)}
+              {(["manual", "automatic"] as const).map((mode) => (
+                <label key={mode} className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name={`vce-update-mode-${props.projectId}`}
+                    checked={draft.updateMode === mode}
+                    onChange={() => {
+                      const next = { ...draft, updateMode: mode };
+                      setDraft(next);
+                      void saveDraft(next);
+                    }}
+                  />
+                  {mode === "manual"
+                    ? copy("手动更新", "Manual updates")
+                    : copy("自动更新", "Automatic updates")}
+                </label>
+              ))}
             </div>
-            <p className="text-xs text-muted-foreground">{copy("此设置属于项目，所有会话共享。自动更新仅在首次初始化成功后跟随文件变化。", "This project setting is shared across conversations. Automatic file-change updates start only after initialization succeeds.")}</p>
+            <p className="text-xs text-muted-foreground">
+              {copy(
+                "此设置属于项目，所有会话共享。自动更新仅在首次初始化成功后跟随文件变化。",
+                "This project setting is shared across conversations. Automatic file-change updates start only after initialization succeeds.",
+              )}
+            </p>
           </fieldset>
           <label className="flex items-center gap-3 text-sm">
-            {copy("自动更新最低间隔（秒）", "Minimum automatic interval (seconds)")}
-            <Input className="w-28" type="number" min={60} max={86400} disabled={props.busy} value={draft.autoUpdateMinIntervalSeconds} onChange={(event) => setDraft({ ...draft, autoUpdateMinIntervalSeconds: Number(event.target.value) })} />
-            <Button type="button" size="sm" variant="outline" disabled={props.busy || !Number.isInteger(draft.autoUpdateMinIntervalSeconds) || draft.autoUpdateMinIntervalSeconds < 60 || draft.autoUpdateMinIntervalSeconds > 86400} onClick={() => void saveDraft(draft)}>{copy("保存间隔", "Save interval")}</Button>
+            {copy(
+              "自动更新最低间隔（秒）",
+              "Minimum automatic interval (seconds)",
+            )}
+            <Input
+              className="w-28"
+              type="number"
+              min={60}
+              max={86400}
+              disabled={props.busy}
+              value={draft.autoUpdateMinIntervalSeconds}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  autoUpdateMinIntervalSeconds: Number(event.target.value),
+                })
+              }
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={
+                props.busy ||
+                !Number.isInteger(draft.autoUpdateMinIntervalSeconds) ||
+                draft.autoUpdateMinIntervalSeconds < 60 ||
+                draft.autoUpdateMinIntervalSeconds > 86400
+              }
+              onClick={() => void saveDraft(draft)}
+            >
+              {copy("保存间隔", "Save interval")}
+            </Button>
           </label>
         </section>
       ) : null}
 
       <div className="project-settings-grid">
-        <div className="project-settings-panel"><strong>{copy("生命周期", "Lifecycle")}</strong><p>{status.lifecycle}</p></div>
-        <div className="project-settings-panel"><strong>{copy("检查点", "Checkpoint")}</strong><p>{status.checkpointVersion ?? "—"}</p></div>
-        <div className="project-settings-panel"><strong>{copy("文件", "Files")}</strong><p>{counts?.searchableFiles ?? status.presentFiles}</p></div>
-        <div className="project-settings-panel"><strong>{copy("代码块", "Chunks")}</strong><p>{counts?.chunks ?? "—"}</p></div>
-        <div className="project-settings-panel"><strong>{copy("向量", "Vectors")}</strong><p>{counts?.vectors ?? "—"}</p></div>
-        <div className="project-settings-panel"><strong>{copy("精确符号", "Exact symbols")}</strong><p>{counts?.symbols ?? "—"}</p></div>
+        <div className="project-settings-panel">
+          <strong>{copy("生命周期", "Lifecycle")}</strong>
+          <p>{status.lifecycle}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{copy("检查点", "Checkpoint")}</strong>
+          <p>{status.checkpointVersion ?? "—"}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{copy("文件", "Files")}</strong>
+          <p>{counts?.searchableFiles ?? status.presentFiles}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{copy("代码块", "Chunks")}</strong>
+          <p>{counts?.chunks ?? "—"}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{copy("向量", "Vectors")}</strong>
+          <p>{counts?.vectors ?? "—"}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{copy("精确符号", "Exact symbols")}</strong>
+          <p>{counts?.symbols ?? "—"}</p>
+        </div>
       </div>
 
-      {status.lastError && !indexingStatusVisible ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{status.lastError}</p> : null}
+      {status.lastError && !indexingStatusVisible ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          {status.lastError}
+        </p>
+      ) : null}
 
       <section className="project-settings-panel space-y-3">
         <strong>{copy("高级设置", "Advanced settings")}</strong>
         <label className="grid gap-1 text-sm">
-          {copy("附加忽略规则（每行一条）", "Additional ignore rules (one per line)")}
+          {copy(
+            "附加忽略规则（每行一条）",
+            "Additional ignore rules (one per line)",
+          )}
           <Textarea
             disabled={props.busy}
-            onChange={(event) => setDraft({ ...draft, extraIgnorePatterns: event.target.value.split(/\r?\n/) })}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                extraIgnorePatterns: event.target.value.split(/\r?\n/),
+              })
+            }
             value={draft.extraIgnorePatterns.join("\n")}
           />
         </label>
         <div className="grid grid-cols-2 gap-3">
-          <NumericSetting disabled={props.busy} label={copy("最大文件字节数", "Maximum file bytes")} value={draft.maxFileBytes} onChange={(value) => setDraft({ ...draft, maxFileBytes: value })} />
-          <NumericSetting disabled={props.busy} label={copy("最大结果数", "Maximum results")} value={draft.maxResults} onChange={(value) => setDraft({ ...draft, maxResults: value })} />
-          <NumericSetting disabled={props.busy} label={copy("上下文字符预算", "Context character budget")} value={draft.maxContextChars} onChange={(value) => setDraft({ ...draft, maxContextChars: value })} />
-          <NumericSetting disabled={props.busy} label={copy("向量并发", "Embedding concurrency")} value={draft.embeddingMaxConcurrency} onChange={(value) => setDraft({ ...draft, embeddingMaxConcurrency: value })} />
-          <NumericSetting disabled={props.busy} label={copy("查询并发", "Query concurrency")} value={draft.queryMaxConcurrency} onChange={(value) => setDraft({ ...draft, queryMaxConcurrency: value })} />
+          <NumericSetting
+            disabled={props.busy}
+            label={copy("最大文件字节数", "Maximum file bytes")}
+            value={draft.maxFileBytes}
+            onChange={(value) => setDraft({ ...draft, maxFileBytes: value })}
+          />
+          <NumericSetting
+            disabled={props.busy}
+            label={copy("最大结果数", "Maximum results")}
+            value={draft.maxResults}
+            onChange={(value) => setDraft({ ...draft, maxResults: value })}
+          />
+          <NumericSetting
+            disabled={props.busy}
+            label={copy("上下文字符预算", "Context character budget")}
+            value={draft.maxContextChars}
+            onChange={(value) => setDraft({ ...draft, maxContextChars: value })}
+          />
+          <NumericSetting
+            disabled={props.busy}
+            label={copy("向量并发", "Embedding concurrency")}
+            value={draft.embeddingMaxConcurrency}
+            onChange={(value) =>
+              setDraft({ ...draft, embeddingMaxConcurrency: value })
+            }
+          />
+          <NumericSetting
+            disabled={props.busy}
+            label={copy("查询并发", "Query concurrency")}
+            value={draft.queryMaxConcurrency}
+            onChange={(value) =>
+              setDraft({ ...draft, queryMaxConcurrency: value })
+            }
+          />
         </div>
-        <ToggleSetting checked={draft.allowQueryRewrite} disabled={props.busy} label={copy("允许 LLM 查询改写", "Allow LLM query rewriting")} onChange={(value) => setDraft({ ...draft, allowQueryRewrite: value })} />
-        <ToggleSetting checked={draft.allowRerank} disabled={props.busy} label={copy("允许候选重排", "Allow candidate reranking")} onChange={(value) => setDraft({ ...draft, allowRerank: value })} />
-        <Button disabled={props.busy} onClick={() => void saveDraft(draft)} type="button">
+        <ToggleSetting
+          checked={draft.allowQueryRewrite}
+          disabled={props.busy}
+          label={copy("允许 LLM 查询改写", "Allow LLM query rewriting")}
+          onChange={(value) => setDraft({ ...draft, allowQueryRewrite: value })}
+        />
+        <ToggleSetting
+          checked={draft.allowRerank}
+          disabled={props.busy}
+          label={copy("允许候选重排", "Allow candidate reranking")}
+          onChange={(value) => setDraft({ ...draft, allowRerank: value })}
+        />
+        <Button
+          disabled={props.busy}
+          onClick={() => void saveDraft(draft)}
+          type="button"
+        >
           <Save size={15} /> {copy("保存设置", "Save settings")}
         </Button>
       </section>
 
-      {props.overview.configuration.ready && draft.enabled && status.checkpointVersion != null ? <Button
-        type="button" variant="outline" aria-expanded={managementExpanded} onClick={() => setManagementExpanded(!managementExpanded)}>
-        {managementExpanded ? copy("收起索引详情", "Hide index details") : copy("查看索引详情与统计", "View index details and statistics")}
-      </Button> : null}
-      {managementExpanded && props.overview.configuration.ready && draft.enabled && status.checkpointVersion != null ? (
+      {draft.enabled && status.checkpointVersion != null ? (
+        <Button
+          type="button"
+          variant="outline"
+          aria-expanded={managementExpanded}
+          onClick={() => setManagementExpanded(!managementExpanded)}
+        >
+          {managementExpanded
+            ? copy("收起索引详情", "Hide index details")
+            : copy("查看索引详情与统计", "View index details and statistics")}
+        </Button>
+      ) : null}
+      {managementExpanded &&
+      draft.enabled &&
+      status.checkpointVersion != null ? (
         <>
           <section className="project-settings-panel space-y-2">
             <div className="flex items-center justify-between gap-2">
               <strong>{copy("文件与 Blob", "Files and Blobs")}</strong>
-              <Button disabled={managementBusy} onClick={() => void reloadManagement()} size="sm" type="button" variant="outline"><RefreshCw size={14} />{copy("刷新", "Refresh")}</Button>
+              <Button
+                disabled={managementBusy}
+                onClick={() => void reloadManagement()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw size={14} />
+                {copy("刷新", "Refresh")}
+              </Button>
             </div>
-            {filePage.items.length === 0 ? <p className="project-settings-muted">{copy("暂无已索引文件。", "No indexed files.")}</p> : filePage.items.map((file) => (
-              <button className="flex w-full items-center justify-between gap-3 rounded-md border p-2 text-left text-sm" key={`${file.path}:${file.generation}`} onClick={() => void inspectBlob(file.committedBlobName ?? file.blobName)} type="button">
-                <span className="min-w-0"><FileCode2 className="mr-2 inline" size={14} /><span className="break-all">{file.path}</span></span>
-                <span className="shrink-0 text-xs text-muted-foreground">{file.chunkCount} {copy("块", "chunks")}</span>
-              </button>
-            ))}
+            {filePage.items.length === 0 ? (
+              <p className="project-settings-muted">
+                {copy("暂无已索引文件。", "No indexed files.")}
+              </p>
+            ) : (
+              filePage.items.map((file) => (
+                <button
+                  className="flex w-full items-center justify-between gap-3 rounded-md border p-2 text-left text-sm"
+                  key={`${file.path}:${file.generation}`}
+                  onClick={() =>
+                    void inspectBlob(file.committedBlobName ?? file.blobName)
+                  }
+                  type="button"
+                >
+                  <span className="min-w-0">
+                    <FileCode2 className="mr-2 inline" size={14} />
+                    <span className="break-all">{file.path}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {file.chunkCount} {copy("块", "chunks")}
+                  </span>
+                </button>
+              ))
+            )}
             <ManagementPagination
               busy={managementBusy}
               copy={copy}
-              onNext={() => void loadManagementPage(
-                nextVceManagementPageRequest(filePage),
-                (cursor, readIdentity) => listVceFiles(props.projectId, readIdentity, cursor, VCE_MANAGEMENT_PAGE_SIZE),
-                setFilePage,
-              )}
-              onPrevious={() => void loadManagementPage(
-                previousVceManagementPageRequest(filePage),
-                (cursor, readIdentity) => listVceFiles(props.projectId, readIdentity, cursor, VCE_MANAGEMENT_PAGE_SIZE),
-                setFilePage,
-              )}
+              onNext={() =>
+                void loadManagementPage(
+                  nextVceManagementPageRequest(filePage),
+                  (cursor, readIdentity) =>
+                    listVceFiles(
+                      props.projectId,
+                      readIdentity,
+                      cursor,
+                      VCE_MANAGEMENT_PAGE_SIZE,
+                    ),
+                  setFilePage,
+                )
+              }
+              onPrevious={() =>
+                void loadManagementPage(
+                  previousVceManagementPageRequest(filePage),
+                  (cursor, readIdentity) =>
+                    listVceFiles(
+                      props.projectId,
+                      readIdentity,
+                      cursor,
+                      VCE_MANAGEMENT_PAGE_SIZE,
+                    ),
+                  setFilePage,
+                )
+              }
               page={filePage}
             />
           </section>
 
           {blob ? (
             <section className="project-settings-panel space-y-2">
-              <strong>{copy("Blob 详情", "Blob detail")}: {blob.path}</strong>
-              <p className="break-all text-xs text-muted-foreground">{blob.blobName}</p>
+              <strong>
+                {copy("Blob 详情", "Blob detail")}: {blob.path}
+              </strong>
+              <p className="break-all text-xs text-muted-foreground">
+                {blob.blobName}
+              </p>
               {blob.chunks.map((chunk) => (
-                <pre className="max-h-48 overflow-auto rounded-md border bg-muted/20 p-2 text-xs" key={chunk.chunkId}>{`${chunk.startLine}-${chunk.endLine} · ${chunk.kind}\n${chunk.preview ?? ""}`}</pre>
+                <pre
+                  className="max-h-48 overflow-auto rounded-md border bg-muted/20 p-2 text-xs"
+                  key={chunk.chunkId}
+                >{`${chunk.startLine}-${chunk.endLine} · ${chunk.kind}\n${chunk.preview ?? ""}`}</pre>
               ))}
             </section>
           ) : null}
 
           <section className="project-settings-panel space-y-2">
             <strong>{copy("作业历史", "Operation history")}</strong>
-            {operationPage.items.length === 0 ? <p className="project-settings-muted">{copy("暂无作业记录。", "No operation history.")}</p> : operationPage.items.map((operation) => (
-              <div className="flex items-center justify-between gap-2 text-sm" key={operation.operationId}>
-                <p>{operation.kind} · {operation.phase} · {operation.completedUnits}/{operation.totalUnits}{operation.error ? ` · ${operation.error}` : ""}</p>
-                {operation.phase === "failed" || operation.phase === "cancelled" ? (
-                  <Button disabled={managementBusy} onClick={() => void retryOperation(operation.operationId)} size="sm" type="button" variant="outline">{copy("重试", "Retry")}</Button>
-                ) : operation.phase !== "completed" ? (
-                  <Button disabled={managementBusy} onClick={() => void cancelOperation(operation.operationId)} size="sm" type="button" variant="outline">{copy("取消", "Cancel")}</Button>
-                ) : null}
-              </div>
-            ))}
+            {operationPage.items.length === 0 ? (
+              <p className="project-settings-muted">
+                {copy("暂无作业记录。", "No operation history.")}
+              </p>
+            ) : (
+              operationPage.items.map((operation) => (
+                <div
+                  className="flex items-center justify-between gap-2 text-sm"
+                  key={operation.operationId}
+                >
+                  <p>
+                    {operation.kind} · {operation.phase} ·{" "}
+                    {operation.completedUnits}/{operation.totalUnits}
+                    {operation.error ? ` · ${operation.error}` : ""}
+                  </p>
+                  {operation.phase === "failed" ||
+                  operation.phase === "cancelled" ? (
+                    <Button
+                      disabled={managementBusy}
+                      onClick={() => void retryOperation(operation.operationId)}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      {copy("重试", "Retry")}
+                    </Button>
+                  ) : operation.phase !== "completed" ? (
+                    <Button
+                      disabled={managementBusy}
+                      onClick={() =>
+                        void cancelOperation(operation.operationId)
+                      }
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      {copy("取消", "Cancel")}
+                    </Button>
+                  ) : null}
+                </div>
+              ))
+            )}
             <ManagementPagination
               busy={managementBusy}
               copy={copy}
-              onNext={() => void loadManagementPage(
-                nextVceManagementPageRequest(operationPage),
-                (cursor) => listVceOperations(props.projectId, cursor, VCE_MANAGEMENT_PAGE_SIZE),
-                setOperationPage,
-              )}
-              onPrevious={() => void loadManagementPage(
-                previousVceManagementPageRequest(operationPage),
-                (cursor) => listVceOperations(props.projectId, cursor, VCE_MANAGEMENT_PAGE_SIZE),
-                setOperationPage,
-              )}
+              onNext={() =>
+                void loadManagementPage(
+                  nextVceManagementPageRequest(operationPage),
+                  (cursor) =>
+                    listVceOperations(
+                      props.projectId,
+                      cursor,
+                      VCE_MANAGEMENT_PAGE_SIZE,
+                    ),
+                  setOperationPage,
+                )
+              }
+              onPrevious={() =>
+                void loadManagementPage(
+                  previousVceManagementPageRequest(operationPage),
+                  (cursor) =>
+                    listVceOperations(
+                      props.projectId,
+                      cursor,
+                      VCE_MANAGEMENT_PAGE_SIZE,
+                    ),
+                  setOperationPage,
+                )
+              }
               page={operationPage}
             />
           </section>
 
           <section className="project-settings-panel space-y-2">
             <strong>{copy("完整性与维护", "Integrity and maintenance")}</strong>
-            {issuePage.items.length === 0 ? <p className="project-settings-muted"><SearchCheck className="mr-2 inline" size={14} />{copy("未发现完整性问题。", "No integrity issues found.")}</p> : issuePage.items.map((issue) => <p className="text-sm text-destructive" key={issue.issueId}>{issue.kind}: {issue.message}</p>)}
+            {issuePage.items.length === 0 ? (
+              <p className="project-settings-muted">
+                <SearchCheck className="mr-2 inline" size={14} />
+                {copy("未发现完整性问题。", "No integrity issues found.")}
+              </p>
+            ) : (
+              issuePage.items.map((issue) => (
+                <div className="text-sm text-destructive" key={issue.issueId}>
+                  <p>
+                    {issue.kind}: {issue.message}
+                  </p>
+                  {issue.path != null ? (
+                    <p className="break-all font-mono text-xs">{issue.path}</p>
+                  ) : null}
+                </div>
+              ))
+            )}
             <div className="flex flex-wrap gap-2">
-              <Button disabled={managementBusy || indexing.active} onClick={() => void loadMaintenancePlan("repair")} size="sm" type="button" variant="outline">{copy("生成修复计划", "Plan repair")}</Button>
-              <Button disabled={managementBusy || indexing.active} onClick={() => void loadMaintenancePlan("rebuild")} size="sm" type="button" variant="outline">{copy("生成重建计划", "Plan rebuild")}</Button>
-              <Button disabled={managementBusy || indexing.active} onClick={() => void loadMaintenancePlan("cleanup_staging")} size="sm" type="button" variant="outline">{copy("生成暂存清理计划", "Plan staging cleanup")}</Button>
+              <Button
+                disabled={
+                  managementBusy ||
+                  indexing.active ||
+                  !props.overview.configuration.ready
+                }
+                onClick={() => void loadMaintenancePlan("repair")}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {copy("生成修复计划", "Plan repair")}
+              </Button>
+              <Button
+                disabled={
+                  managementBusy ||
+                  indexing.active ||
+                  !props.overview.configuration.ready
+                }
+                onClick={() => void loadMaintenancePlan("rebuild")}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {copy("生成重建计划", "Plan rebuild")}
+              </Button>
+              <Button
+                disabled={
+                  managementBusy ||
+                  indexing.active ||
+                  !props.overview.configuration.ready
+                }
+                onClick={() => void loadMaintenancePlan("cleanup_staging")}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {copy("生成暂存清理计划", "Plan staging cleanup")}
+              </Button>
+              {props.overview.configuration.ready ? (
+                <Button
+                  disabled={managementBusy || indexing.active}
+                  onClick={() => void loadMaintenancePlan("compact")}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {copy(
+                    "检查并整理物理索引",
+                    "Inspect and compact physical index",
+                  )}
+                </Button>
+              ) : null}
             </div>
-            {maintenancePlan && (!rebuildRecoveryRequired || maintenancePlan.mode !== "rebuild") ? (
+            {maintenancePlan &&
+            (maintenancePlan.mode !== "compact" ||
+              props.overview.configuration.ready) &&
+            (!rebuildRecoveryRequired || maintenancePlan.mode !== "rebuild") ? (
               <MaintenancePlanPreview
                 active={indexing.active}
                 busy={managementBusy}
                 copy={copy}
-                checkpointVersion={status.checkpointVersion ?? null}
-                error={managementError}
-                onExecute={(confirmation) => void executeMaintenance(confirmation)}
+                error={localizedManagementError}
+                onExecute={(confirmation) =>
+                  void executeMaintenance(confirmation)
+                }
                 plan={maintenancePlan}
                 projectId={props.projectId}
                 settingsRevision={props.overview.settings.revision}
@@ -951,24 +1659,49 @@ export function CodeContextArea(props: {
             <ManagementPagination
               busy={managementBusy}
               copy={copy}
-              onNext={() => void loadManagementPage(
-                nextVceManagementPageRequest(issuePage),
-                (cursor, readIdentity) => listVceIntegrityIssues(props.projectId, readIdentity, cursor, VCE_MANAGEMENT_PAGE_SIZE),
-                setIssuePage,
-              )}
-              onPrevious={() => void loadManagementPage(
-                previousVceManagementPageRequest(issuePage),
-                (cursor, readIdentity) => listVceIntegrityIssues(props.projectId, readIdentity, cursor, VCE_MANAGEMENT_PAGE_SIZE),
-                setIssuePage,
-              )}
+              onNext={() =>
+                void loadManagementPage(
+                  nextVceManagementPageRequest(issuePage),
+                  (cursor, readIdentity) =>
+                    listVceIntegrityIssues(
+                      props.projectId,
+                      readIdentity,
+                      cursor,
+                      VCE_MANAGEMENT_PAGE_SIZE,
+                    ),
+                  setIssuePage,
+                )
+              }
+              onPrevious={() =>
+                void loadManagementPage(
+                  previousVceManagementPageRequest(issuePage),
+                  (cursor, readIdentity) =>
+                    listVceIntegrityIssues(
+                      props.projectId,
+                      readIdentity,
+                      cursor,
+                      VCE_MANAGEMENT_PAGE_SIZE,
+                    ),
+                  setIssuePage,
+                )
+              }
               page={issuePage}
             />
           </section>
         </>
       ) : null}
 
-      {managementBusy ? <p className="project-settings-muted"><LoaderCircle className="mr-2 inline animate-spin" size={14} />{copy("正在加载管理数据…", "Loading management data…")}</p> : null}
-      {managementError ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{managementError}</p> : null}
+      {managementBusy ? (
+        <p className="project-settings-muted">
+          <LoaderCircle className="mr-2 inline animate-spin" size={14} />
+          {copy("正在加载管理数据…", "Loading management data…")}
+        </p>
+      ) : null}
+      {localizedManagementError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          {localizedManagementError}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -982,9 +1715,6 @@ function MaintenancePlanPreview(props: {
   // Whether the parent is waiting for a plan or execution response.
   // 父级是否正在等待计划或执行回执。
   busy: boolean;
-  // Exact checkpoint visible when this plan was presented.
-  // 此计划展示时可见的精确检查点。
-  checkpointVersion: number | null;
   // Current maintenance error remains visible inside the open confirmation dialog.
   // 当前维护错误保留在打开的确认弹窗内可见。
   error: string | null;
@@ -1006,19 +1736,30 @@ function MaintenancePlanPreview(props: {
 }) {
   // An uninitialized rebuild scans the project even when no existing Blob is affected.
   // 未初始化重建即使没有现有 Blob 受影响，也会扫描整个项目。
-  const unpublishedRebuild = props.checkpointVersion === null && props.plan.mode === "rebuild";
+  const unpublishedRebuild =
+    props.plan.checkpointVersion === null && props.plan.mode === "rebuild";
+  // physicalCompaction selects model-independent table copy and physical statistics.
+  // physicalCompaction 选择与模型无关的表级文案及物理统计。
+  const physicalCompaction = props.plan.mode === "compact";
   // confirmation retains the exact plan authority while the modal is open.
   // confirmation 在弹窗打开期间保留计划的精确权威。
-  const [confirmation, setConfirmation] = React.useState<VceMaintenanceConfirmation | null>(null);
-  const actionIds = React.useMemo(() => props.plan.actions.map((action) => action.actionId), [props.plan.actions]);
-  const confirmationIsCurrent = confirmation !== null
-    && confirmation.projectId === props.projectId
-    && confirmation.settingsRevision === props.settingsRevision
-    && confirmation.checkpointVersion === props.checkpointVersion
-    && confirmation.mode === props.plan.mode
-    && confirmation.embeddingFingerprint === props.plan.embeddingFingerprint
-    && confirmation.actionIds.length === actionIds.length
-    && confirmation.actionIds.every((actionId, index) => actionId === actionIds[index]);
+  const [confirmation, setConfirmation] =
+    React.useState<VceMaintenanceConfirmation | null>(null);
+  const actionIds = React.useMemo(
+    () => props.plan.actions.map((action) => action.actionId),
+    [props.plan.actions],
+  );
+  const confirmationIsCurrent =
+    confirmation !== null &&
+    confirmation.projectId === props.projectId &&
+    confirmation.settingsRevision === props.settingsRevision &&
+    confirmation.checkpointVersion === props.plan.checkpointVersion &&
+    confirmation.mode === props.plan.mode &&
+    confirmation.embeddingFingerprint === props.plan.embeddingFingerprint &&
+    confirmation.actionIds.length === actionIds.length &&
+    confirmation.actionIds.every(
+      (actionId, index) => actionId === actionIds[index],
+    );
 
   React.useEffect(() => {
     // A changed plan or authority closes the old confirmation and requires a fresh preview.
@@ -1035,7 +1776,7 @@ function MaintenancePlanPreview(props: {
     setConfirmation({
       projectId: props.projectId,
       settingsRevision: props.settingsRevision,
-      checkpointVersion: props.checkpointVersion,
+      checkpointVersion: props.plan.checkpointVersion,
       mode: props.plan.mode,
       actionIds: [...actionIds],
       embeddingFingerprint: props.plan.embeddingFingerprint,
@@ -1046,39 +1787,170 @@ function MaintenancePlanPreview(props: {
   // submitConfirmation 防止过期或忙碌弹窗派发命令。
   const submitConfirmation = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    if (confirmation === null || !confirmationIsCurrent || props.busy || props.active) return;
+    if (
+      confirmation === null ||
+      !confirmationIsCurrent ||
+      props.busy ||
+      props.active
+    )
+      return;
     props.onExecute(confirmation);
   };
   // scopeLabel describes the real work for both existing-index and first-build recovery plans.
   // scopeLabel 为已有索引及首次恢复计划描述真实工作范围。
-  const scopeLabel = unpublishedRebuild
-    ? props.copy("重新扫描当前项目并创建索引（当前没有已发布的索引）", "Rescan the current project and create an index (no published index exists)")
-    : `${props.plan.affectedBlobCount} ${props.copy("个 Blob", "Blobs")}`;
+  const scopeLabel = physicalCompaction
+    ? `${props.plan.physicalTables.filter((table) => table.compactionRequired).length} / ${props.plan.physicalTables.length} ${props.copy("张表需要整理", "tables require compaction")}`
+    : unpublishedRebuild
+      ? props.copy(
+          "重新扫描当前项目并创建索引（当前没有已发布的索引）",
+          "Rescan the current project and create an index (no published index exists)",
+        )
+      : `${props.plan.affectedBlobCount} ${props.copy("个 Blob", "Blobs")}`;
   return (
     <div className="space-y-2 rounded-md border bg-background/60 p-3">
-      <p className="text-sm">{props.copy("计划动作", "Planned actions")}: {props.plan.actions.length} · {props.copy("范围", "Scope")}: {scopeLabel}</p>
-      {props.plan.actions.map((action) => <p className="text-sm" key={action.actionId}>{action.description}</p>)}
-      <Button disabled={props.busy || props.active || props.plan.actions.length === 0} onClick={openConfirmation} size="sm" type="button">{props.copy("确认并执行", "Confirm and execute")}</Button>
-      <AlertDialog open={confirmation !== null && confirmationIsCurrent} onOpenChange={(open) => { if (!open && !props.busy) setConfirmation(null); }}>
+      <p className="text-sm">
+        {props.copy("计划动作", "Planned actions")}: {props.plan.actions.length}{" "}
+        · {props.copy("范围", "Scope")}: {scopeLabel}
+      </p>
+      {physicalCompaction
+        ? props.plan.physicalTables.map((table) => (
+            <div
+              className="grid gap-1 rounded-md border p-2 text-xs sm:grid-cols-3"
+              key={table.role}
+            >
+              <strong>
+                {table.role === "content"
+                  ? props.copy("内容向量表", "Content vector table")
+                  : props.copy("路径向量表", "Path vector table")}
+              </strong>
+              <span>
+                {props.copy("记录", "Rows")}: {table.rowCount.toLocaleString()}{" "}
+                · {props.copy("片段", "Fragments")}:{" "}
+                {table.fragmentCount.toLocaleString()} ·{" "}
+                {props.copy("小片段", "Small fragments")}:{" "}
+                {table.smallFragmentCount.toLocaleString()}
+              </span>
+              <span>
+                {table.compactionRequired
+                  ? props.copy("建议整理", "Compaction recommended")
+                  : props.copy("无需整理", "No compaction needed")}{" "}
+                · {props.copy("版本", "Version")} {table.version}
+              </span>
+            </div>
+          ))
+        : props.plan.actions.map((action) => (
+            <p className="text-sm" key={action.actionId}>
+              {action.description}
+            </p>
+          ))}
+      <Button
+        disabled={props.busy || props.active || props.plan.actions.length === 0}
+        onClick={openConfirmation}
+        size="sm"
+        type="button"
+      >
+        {physicalCompaction
+          ? props.copy("确认并整理", "Confirm and compact")
+          : props.copy("确认并执行", "Confirm and execute")}
+      </Button>
+      <AlertDialog
+        open={confirmation !== null && confirmationIsCurrent}
+        onOpenChange={(open) => {
+          if (!open && !props.busy) setConfirmation(null);
+        }}
+      >
         <AlertDialogContent className="max-h-[85vh] overflow-y-auto" size="sm">
           <AlertDialogHeader>
-            <AlertDialogTitle>{unpublishedRebuild ? props.copy("确认重新创建语义索引", "Confirm semantic index creation") : props.copy("确认执行索引维护", "Confirm index maintenance")}</AlertDialogTitle>
-            <AlertDialogDescription>{unpublishedRebuild
-              ? props.copy("本次操作会重新扫描当前项目并创建索引。当前没有已发布的索引，计划将按生成计划时的模型配置执行。", "This will rescan the current project and create an index. No published index exists; the plan will use the model configuration from plan generation time.")
-              : props.copy("请核对计划动作与影响范围。计划将按生成计划时的模型配置执行。", "Review the planned actions and scope. The plan will use the model configuration from plan generation time.")}</AlertDialogDescription>
+            <AlertDialogTitle>
+              {physicalCompaction
+                ? props.copy(
+                    "确认整理物理索引",
+                    "Confirm physical index compaction",
+                  )
+                : unpublishedRebuild
+                  ? props.copy(
+                      "确认重新创建语义索引",
+                      "Confirm semantic index creation",
+                    )
+                  : props.copy("确认执行索引维护", "Confirm index maintenance")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {physicalCompaction
+                ? props.copy(
+                    "本次操作仅合并现有向量表的物理片段，不调用模型、不重新生成向量，也不改变语义检查点。取消将在当前数据库安全步骤结束后生效。",
+                    "This only compacts physical fragments in existing vector tables. It does not call a model, regenerate vectors, or change the semantic checkpoint. Cancellation takes effect after the current database-safe step.",
+                  )
+                : unpublishedRebuild
+                  ? props.copy(
+                      "本次操作会重新扫描当前项目并创建索引。当前没有已发布的索引，计划将按生成计划时的模型配置执行。",
+                      "This will rescan the current project and create an index. No published index exists; the plan will use the model configuration from plan generation time.",
+                    )
+                  : props.copy(
+                      "请核对计划动作与影响范围。计划将按生成计划时的模型配置执行。",
+                      "Review the planned actions and scope. The plan will use the model configuration from plan generation time.",
+                    )}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <dl className="grid gap-3 rounded-md border p-3 text-sm sm:grid-cols-2">
-            <div><dt className="text-muted-foreground">{props.copy("计划动作", "Planned actions")}</dt><dd>{props.plan.actions.length}</dd></div>
-            <div><dt className="text-muted-foreground">{props.copy("目标向量维度", "Target vector dimension")}</dt><dd>{props.plan.embeddingDimension}</dd></div>
-            <div className="sm:col-span-2"><dt className="text-muted-foreground">{props.copy("影响范围", "Scope")}</dt><dd>{scopeLabel}</dd></div>
+            <div>
+              <dt className="text-muted-foreground">
+                {props.copy("计划动作", "Planned actions")}
+              </dt>
+              <dd>{props.plan.actions.length}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">
+                {physicalCompaction
+                  ? props.copy("现有向量维度", "Existing vector dimension")
+                  : props.copy("目标向量维度", "Target vector dimension")}
+              </dt>
+              <dd>{props.plan.embeddingDimension}</dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-muted-foreground">
+                {props.copy("影响范围", "Scope")}
+              </dt>
+              <dd>{scopeLabel}</dd>
+            </div>
           </dl>
           <div className="space-y-1">
-            {props.plan.actions.map((action) => <p className="text-sm" key={action.actionId}>{action.description}</p>)}
+            {physicalCompaction
+              ? props.plan.actions.map((action) => (
+                  <p className="text-sm" key={action.actionId}>
+                    {action.physicalTableRole === "content"
+                      ? props.copy(
+                          "整理内容向量表",
+                          "Compact the content vector table",
+                        )
+                      : props.copy(
+                          "整理路径向量表",
+                          "Compact the path vector table",
+                        )}
+                  </p>
+                ))
+              : props.plan.actions.map((action) => (
+                  <p className="text-sm" key={action.actionId}>
+                    {action.description}
+                  </p>
+                ))}
           </div>
-          {props.error ? <p className="break-words text-sm text-destructive" role="alert">{props.error}</p> : null}
+          {props.error ? (
+            <p className="break-words text-sm text-destructive" role="alert">
+              {props.error}
+            </p>
+          ) : null}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={props.busy}>{props.copy("取消", "Cancel")}</AlertDialogCancel>
-            <AlertDialogAction disabled={props.busy || props.active || !confirmationIsCurrent} onClick={submitConfirmation}>{props.copy("确认并执行", "Confirm and execute")}</AlertDialogAction>
+            <AlertDialogCancel disabled={props.busy}>
+              {props.copy("取消", "Cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={props.busy || props.active || !confirmationIsCurrent}
+              onClick={submitConfirmation}
+            >
+              {physicalCompaction
+                ? props.copy("确认并整理", "Confirm and compact")
+                : props.copy("确认并执行", "Confirm and execute")}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1089,8 +1961,13 @@ function MaintenancePlanPreview(props: {
 // isUnpublishedVceRecoveryJob recognizes only terminal initialize/rebuild receipts with no checkpoint.
 // isUnpublishedVceRecoveryJob 只识别无检查点的初始化／重建终态回执。
 function isUnpublishedVceRecoveryJob(job: VceJobSummary | null): boolean {
-  if (job === null || (job.kind !== "initialize" && job.kind !== "rebuild")) return false;
-  return job.state === "failed" || job.state === "cancelled" || job.state === "interrupted";
+  if (job === null || (job.kind !== "initialize" && job.kind !== "rebuild"))
+    return false;
+  return (
+    job.state === "failed" ||
+    job.state === "cancelled" ||
+    job.state === "interrupted"
+  );
 }
 
 // ManagementPagination renders cursor-safe previous and next controls for one bounded list.
@@ -1117,7 +1994,9 @@ function ManagementPagination<T>(props: {
     <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
       <span>
         {props.copy("第", "Page")} {pageNumber}
-        {props.page.total === null ? "" : ` · ${props.copy("共", "Total")} ${props.page.total}`}
+        {props.page.total === null
+          ? ""
+          : ` · ${props.copy("共", "Total")} ${props.page.total}`}
       </span>
       <Button
         disabled={props.busy || props.page.previousCursors.length === 0}
@@ -1143,7 +2022,9 @@ function ManagementPagination<T>(props: {
 
 // editableSettings strips host-owned fields from one settings summary.
 // editableSettings 从一项设置摘要中剥离宿主持有字段。
-function editableSettings(settings: VceProjectOverviewResponse["settings"]): VceProjectSettingsInput {
+function editableSettings(
+  settings: VceProjectOverviewResponse["settings"],
+): VceProjectSettingsInput {
   return {
     enabled: settings.enabled,
     updateMode: settings.updateMode,
@@ -1175,7 +2056,20 @@ function NumericSetting(props: {
   // 接收精确解析的整数。
   onChange: (value: number) => void;
 }) {
-  return <label className="grid gap-1 text-sm">{props.label}<Input disabled={props.disabled} min={1} onChange={(event) => props.onChange(Number.parseInt(event.target.value, 10) || 0)} type="number" value={props.value} /></label>;
+  return (
+    <label className="grid gap-1 text-sm">
+      {props.label}
+      <Input
+        disabled={props.disabled}
+        min={1}
+        onChange={(event) =>
+          props.onChange(Number.parseInt(event.target.value, 10) || 0)
+        }
+        type="number"
+        value={props.value}
+      />
+    </label>
+  );
 }
 
 // ToggleSetting renders one labeled Boolean VCE setting.
@@ -1194,5 +2088,14 @@ function ToggleSetting(props: {
   // 接收下一项明确布尔值。
   onChange: (value: boolean) => void;
 }) {
-  return <label className="flex items-center gap-2 text-sm"><Switch checked={props.checked} disabled={props.disabled} onCheckedChange={props.onChange} /><span>{props.label}</span></label>;
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <Switch
+        checked={props.checked}
+        disabled={props.disabled}
+        onCheckedChange={props.onChange}
+      />
+      <span>{props.label}</span>
+    </label>
+  );
 }

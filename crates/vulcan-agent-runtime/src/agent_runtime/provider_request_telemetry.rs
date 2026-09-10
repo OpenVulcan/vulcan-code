@@ -1234,10 +1234,18 @@ impl ProviderRequestTelemetryTracker {
             // retryExhausted is fixed before the active request moves into its terminal event.
             // retryExhausted 在活动请求移入终态事件前完成冻结。
             let retry_exhausted = !will_retry && active_request.retry_count > 0;
+            let terminal_status = if error
+                .and_then(AiExecutionError::confirmation_state)
+                .is_some()
+            {
+                ProviderRequestTerminalStatus::ResultReconciliationPending
+            } else {
+                ProviderRequestTerminalStatus::Failed
+            };
             events.push(build_completed_event(
                 context,
                 active_request,
-                ProviderRequestTerminalStatus::Failed,
+                terminal_status,
                 usage,
                 Some(error_category),
                 error.and_then(|value| value.upstream_code.as_deref()),
@@ -1341,6 +1349,9 @@ enum ProviderRequestTerminalStatus {
     /// Provider request failed.
     /// Provider 请求失败。
     Failed,
+    /// Provider accepted the request but its semantic result and usage still require reconciliation.
+    /// Provider 已接纳请求，但语义结果与用量仍需对账确认。
+    ResultReconciliationPending,
 }
 
 /// Shared fields included in every telemetry payload.
@@ -1716,15 +1727,18 @@ fn build_completed_event(
                 tool_call_count,
                 completed_at_ms,
             ),
-            ProviderRequestTerminalStatus::Failed => ProviderV1ApiTerminalFacts::failed(
-                request_facts,
-                &normalized_usage,
-                timing,
-                error,
-                retry_exhausted,
-                provider_failure_continuation_eligibility(error, retry_exhausted),
-                completed_at_ms,
-            ),
+            ProviderRequestTerminalStatus::Failed
+            | ProviderRequestTerminalStatus::ResultReconciliationPending => {
+                ProviderV1ApiTerminalFacts::failed(
+                    request_facts,
+                    &normalized_usage,
+                    timing,
+                    error,
+                    retry_exhausted,
+                    provider_failure_continuation_eligibility(error, retry_exhausted),
+                    completed_at_ms,
+                )
+            }
         };
         ProviderV1LifecycleFacts::ApiTerminal(terminal)
     });
@@ -1863,7 +1877,8 @@ fn accounted_total_tokens(
 /// Determines replay safety only from the structured failure facts used by the retry layer.
 /// 仅依据重试层使用的结构化失败事实判断重放安全性。
 fn provider_error_replay_safe(error: &AiExecutionError) -> bool {
-    !error.semantic_output_observed
+    error.confirmation_state().is_none()
+        && !error.semantic_output_observed
         && !error.side_effect_observed
         && error.dispatch_outcome != DispatchOutcome::Unknown
 }
@@ -2988,6 +3003,68 @@ mod tests {
                 .and_then(|value| value.total_tokens),
             Some(15)
         );
+    }
+
+    /// Verifies AgentSpace reconciliation remains a distinct persisted terminal instead of an ordinary failure.
+    /// 验证 AgentSpace 待对账保持为独立持久化终态，而不是普通失败。
+    #[test]
+    fn agentspace_reconciliation_persists_pending_terminal_status() {
+        let mut tracker = test_tracker();
+        tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build");
+        // error is already classified by the route-aware streaming boundary.
+        // error 已由感知路由的流边界完成分类。
+        let error = AiExecutionError {
+            category: vulcan_ai_contract::AiErrorCategory::Unclassified,
+            subcategory: Some(String::from(
+                vulcan_ai_contract::AGENTSPACE_RECONCILIATION_REQUIRED_SUBCATEGORY,
+            )),
+            stage: String::from("stream"),
+            http_status: None,
+            transport: Some(vulcan_ai_contract::AiTransportKind::Http),
+            websocket_close_code: None,
+            upstream_code: Some(String::from("reconciliation_required")),
+            upstream_type: Some(String::from("invocation.usage_unavailable")),
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: Some(String::from("provider-request-1")),
+            provider_id: Some(String::from("agentspace")),
+            entry_id: Some(String::from("chatgpt-plan")),
+            model_id: Some(String::from("gpt-6-astra")),
+            message: String::from("Result requires reconciliation."),
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        };
+        let usage = ProviderUsageSnapshot {
+            response_id: Some(String::from("resp-created-1")),
+            ..ProviderUsageSnapshot::default()
+        };
+
+        let events = tracker.complete_failure(
+            false,
+            0,
+            0,
+            0,
+            "provider_transport_error",
+            Some(&error),
+            Some(&usage),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["status"], "result_reconciliation_pending");
+        assert_eq!(
+            events[0]
+                .completed_usage
+                .as_ref()
+                .and_then(|usage| usage.response_id.as_deref()),
+            Some("resp-created-1")
+        );
+        assert_eq!(events[0].payload["replay_safe"], false);
     }
 
     /// Verifies a dropped consumer converts the active request into exactly one cancelled terminal event.

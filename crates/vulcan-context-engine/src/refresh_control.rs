@@ -48,6 +48,9 @@ pub enum VceRefreshUnit {
     /// Embedding batches whose responses passed validation.
     /// 响应已通过校验的向量批次。
     Batches,
+    /// Physical vector tables whose maintenance completed.
+    /// 已完成维护的物理向量表。
+    Tables,
     /// No numeric denominator is currently meaningful.
     /// 当前没有有意义的数字分母。
     None,
@@ -284,7 +287,7 @@ impl VceRefreshControl {
     ///
     /// Takes no parameters. Returns cancellation or a reuse error instead of overwriting admission.
     /// 无参数。返回取消或复用错误，不覆盖已经确定的准入结果。
-    pub(crate) fn finish_without_commit(&self) -> Result<(), VceError> {
+    pub fn finish_without_commit(&self) -> Result<(), VceError> {
         match self
             .state
             .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)

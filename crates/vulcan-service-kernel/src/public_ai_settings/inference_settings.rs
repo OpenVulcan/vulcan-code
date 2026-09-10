@@ -671,6 +671,7 @@ pub(super) fn build_internal_inference_candidates(
                         .values()
                         .filter(|connection| {
                             connection.provider_id == provider.id
+                                && configuration.connection_is_enabled(connection.id.as_str())
                                 && !configuration
                                     .connection_is_pending_validation(connection.id.as_str())
                         }),
@@ -687,7 +688,9 @@ pub(super) fn build_internal_inference_candidates(
     ]);
     let mut candidates = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
-        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+        if !configuration.connection_is_enabled(connection.id.as_str())
+            || configuration.connection_is_pending_validation(connection.id.as_str())
+        {
             continue;
         }
         let Some(catalog) = catalogs.get(connection.id.as_str()) else {

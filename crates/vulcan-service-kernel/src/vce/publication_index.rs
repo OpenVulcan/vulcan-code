@@ -339,4 +339,84 @@ impl VceIndexPort for VcePublicationIndex {
     ) -> VceFuture<Result<VceManagementQueryResponse, VcePortError>> {
         self.runtime.index.management_query(request)
     }
+
+    /// Forward complete-plan persistence to the exact project storage before provider I/O.
+    /// 在供应商调用前将完整计划持久化转发到精确项目存储。
+    /// `manifest` contains the complete frozen plan; returns the underlying persistence result unchanged.
+    /// `manifest` 包含完整冻结计划；原样返回底层持久化结果。
+    fn persist_embedding_manifest(
+        &self,
+        manifest: VceEmbeddingRunManifest,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.runtime.index.persist_embedding_manifest(manifest)
+    }
+
+    /// Forward exact manifest recovery without creating or replacing a run.
+    /// 转发精确清单恢复，不创建或替换运行。
+    /// `run_id` selects one plan; returns its optional durable snapshot or the storage error.
+    /// `run_id` 选择一个计划；返回其可选持久快照或存储错误。
+    fn load_embedding_manifest(
+        &self,
+        run_id: String,
+    ) -> VceFuture<Result<Option<VceEmbeddingRunManifest>, VcePortError>> {
+        self.runtime.index.load_embedding_manifest(run_id)
+    }
+
+    /// Forward one run-state mutation without rewriting its frozen plan.
+    /// 转发一次运行状态变更，不重写其冻结计划。
+    /// `run_id`, `state`, and `updated_at_unix_ms` define the update; returns the unchanged storage result.
+    /// `run_id`、`state` 与 `updated_at_unix_ms` 定义更新；原样返回存储结果。
+    fn persist_embedding_run_state(
+        &self,
+        run_id: String,
+        state: VceEmbeddingRunState,
+        updated_at_unix_ms: u64,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.runtime
+            .index
+            .persist_embedding_run_state(run_id, state, updated_at_unix_ms)
+    }
+
+    /// Forward one mutable batch record without rewriting source-node shards.
+    /// 转发一条可变批次记录，不重写源码节点分片。
+    /// Stores `batch` under `run_id` at `updated_at_unix_ms`; returns the underlying atomic update result.
+    /// 在 `updated_at_unix_ms` 将 `batch` 保存到 `run_id` 下；返回底层原子更新结果。
+    fn persist_embedding_batch_record(
+        &self,
+        run_id: String,
+        batch: VceEmbeddingBatchRecord,
+        updated_at_unix_ms: u64,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.runtime
+            .index
+            .persist_embedding_batch_record(run_id, batch, updated_at_unix_ms)
+    }
+
+    /// Forward one validated provider result to restart-safe project storage.
+    /// 将一份已校验供应商结果转发到可恢复项目存储。
+    /// `run_id` owns `result`; returns after its vectors are durable or forwards the storage error.
+    /// `run_id` 拥有 `result`；向量持久化后返回，失败时转发存储错误。
+    fn persist_embedding_batch_result(
+        &self,
+        run_id: String,
+        result: VceEmbeddingBatchResult,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.runtime
+            .index
+            .persist_embedding_batch_result(run_id, result)
+    }
+
+    /// Forward one exact provider-result lookup for durable batch recovery.
+    /// 为持久批次恢复转发一次精确供应商结果查询。
+    /// `run_id` and `batch_id` select an exact result; returns its optional vectors or the storage error.
+    /// `run_id` 与 `batch_id` 选择精确结果；返回其可选向量或存储错误。
+    fn load_embedding_batch_result(
+        &self,
+        run_id: String,
+        batch_id: String,
+    ) -> VceFuture<Result<Option<VceEmbeddingBatchResult>, VcePortError>> {
+        self.runtime
+            .index
+            .load_embedding_batch_result(run_id, batch_id)
+    }
 }

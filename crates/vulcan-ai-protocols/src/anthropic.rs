@@ -314,6 +314,7 @@ fn encode_anthropic_request(
     allow_video: bool,
     protocol_id: &str,
 ) -> Result<EncodedWireRequest, ProtocolConversionError> {
+    crate::require_json_schema_tool_inputs(request, protocol_id)?;
     crate::require_no_route_bound_provider_context(request, protocol_id)?;
     let mut system_blocks = Vec::new();
     let mut message_values = Vec::new();
@@ -1632,12 +1633,14 @@ mod tests {
                 name: String::from("skill"),
                 description: String::from("Loads one skill."),
                 input_schema: json!({"type": "object"}),
+                input_format: Default::default(),
                 strict: false,
             },
             vulcan_ai_contract::ToolDefinition {
                 name: String::from("Bash"),
                 description: String::from("Already title-cased."),
                 input_schema: json!({"type": "object"}),
+                input_format: Default::default(),
                 strict: false,
             },
         ];

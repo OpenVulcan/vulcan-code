@@ -255,6 +255,19 @@ fn openai_codex_model_rules_keep_multimodal_effort_contract() {
         );
         assert_eq!(rule["capabilities"]["reasoning_efforts"], expected_efforts);
         assert_eq!(rule["capabilities"]["context_limit"], 272000);
+        assert_eq!(rule["codex_behavior"]["wire_dialect"], "lite");
+        assert_eq!(rule["codex_behavior"]["tool_mode"], "code_mode_only");
+        assert_eq!(rule["codex_behavior"]["apply_patch_tool_type"], "freeform");
+        assert_eq!(rule["codex_behavior"]["shell_type"], "unified_exec");
+        assert_eq!(
+            rule["codex_behavior"]["web_search_tool_type"],
+            "text_and_image"
+        );
+        assert_eq!(
+            rule["codex_behavior"]["tool_output_truncation"]["limit"],
+            10000
+        );
+        assert_eq!(rule["codex_behavior"]["comp_hash"], "3000");
     }
 
     let sol_rule = model_rules
@@ -266,6 +279,20 @@ fn openai_codex_model_rules_keep_multimodal_effort_contract() {
         .find(|rule| rule["matcher"]["value"] == "gpt-6-astra")
         .expect("GPT-6 Astra Codex rule should exist");
     assert_eq!(astra_rule["capabilities"], sol_rule["capabilities"]);
+    assert_eq!(astra_rule["codex_behavior"]["multi_agent_version"], "v2");
+    assert_eq!(
+        astra_rule["codex_behavior"]["multi_agent_reasoning_effort"],
+        "xhigh"
+    );
+    assert_eq!(
+        astra_rule["codex_behavior"]["experimental_supported_tools"],
+        serde_json::json!(["send_user_message_async", "clock"])
+    );
+    let luna_rule = model_rules
+        .iter()
+        .find(|rule| rule["matcher"]["value"] == "gpt-5.6-luna")
+        .expect("GPT-5.6 Luna Codex rule should exist");
+    assert_eq!(luna_rule["codex_behavior"]["multi_agent_version"], "v1");
 }
 
 /// Verifies AgentSpace keeps its ChatGPT Plan Responses route separate from Codex image generation.
@@ -286,6 +313,10 @@ fn agentspace_chatgpt_plan_keeps_codex_image_contract() {
         "openai-codex-responses.v1"
     );
     assert_eq!(service["protocol_routes"][0]["endpoint_path"], "/responses");
+    assert_eq!(
+        service["protocol_routes"][0]["responses_features"]["recovery"],
+        "agent_space_result_and_usage_reconciliation_v1"
+    );
 
     let model_ids = service["model_catalog"]["models"]
         .as_array()
@@ -307,6 +338,14 @@ fn agentspace_chatgpt_plan_keeps_codex_image_contract() {
             String::from("gpt-6-astra"),
             String::from("gpt-image-2"),
         ])
+    );
+    assert!(
+        document["model_rules"]
+            .as_array()
+            .expect("AgentSpace model rules should be an array")
+            .iter()
+            .all(|rule| rule.get("codex_behavior").is_none()),
+        "AgentSpace must not inherit OpenAI Codex behavior from matching model names"
     );
 
     let image_target = document["tool_targets"]
@@ -709,15 +748,7 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         .iter()
         .map(|model| model.model_id.as_str())
         .collect::<BTreeSet<_>>();
-    assert_eq!(
-        declared_model_ids,
-        BTreeSet::from([
-            "deepseek-v4.1-flash-expires-on-0910",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-        ])
-    );
+    assert_eq!(declared_model_ids, BTreeSet::from(["deepseek-flash"]));
     assert_eq!(
         compiled.catalog_membership_policy,
         vulcan_provider_adapters::CatalogMembershipPolicy::DeclaredOnly
@@ -726,35 +757,33 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         compiled.unknown_model_policy,
         vulcan_provider_adapters::UnknownModelPolicy::DeclaredRuleRequired
     );
-    assert!(
-        compiled
-            .rule_for_model("official-api", None, "deepseek-chat")
-            .is_none(),
-        "retired DeepSeek Chat must not remain declared"
-    );
-    assert!(
-        compiled
-            .rule_for_model("official-api", None, "deepseek-reasoner")
-            .is_none(),
-        "retired DeepSeek Reasoner must not remain declared"
-    );
-    assert!(
-        compiled
-            .rule_for_model("official-api", None, "deepseek-v4-flash-preview")
-            .is_none(),
-        "the official Flash identity must use exact matching"
-    );
-    // flash owns Responses, Anthropic, and Chat with Responses selected.
-    // flash 持有 Responses、Anthropic 与 Chat，并选定 Responses。
+    // retiredModelIds contains identities merged into Flash or removed from the official catalog.
+    // retiredModelIds 包含已合并至 Flash 或已从官方目录移除的模型身份。
+    let retired_model_ids = [
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-v4-flash-preview",
+        "deepseek-v4-flash",
+        "deepseek-v4.1-flash-expires-on-0910",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-pro",
+    ];
+    // retiredModelId checks every removed identity against the compiled exact-rule table.
+    // retiredModelId 逐一检查所有已移除身份不会命中编译后的精确规则表。
+    for retired_model_id in retired_model_ids {
+        assert!(
+            compiled
+                .rule_for_model("official-api", None, retired_model_id)
+                .is_none(),
+            "retired DeepSeek model {retired_model_id} must not remain declared"
+        );
+    }
+    // flash is the only current official model identity exposed by the static catalog.
+    // flash 是静态目录公开的唯一当前官方模型身份。
     let flash = compiled
-        .rule_for_model("official-api", None, "deepseek-v4-flash")
-        .expect("DeepSeek V4 Flash rule must exist");
-    // flashCapabilities is the required model-level capability declaration for Flash.
-    // flashCapabilities 是 Flash 必须提供的模型级能力声明。
-    let flash_capabilities = flash
-        .capabilities
-        .as_ref()
-        .expect("DeepSeek V4 Flash capabilities must exist");
+        .rule_for_model("official-api", None, "deepseek-flash")
+        .expect("DeepSeek V4.1 Flash rule must exist");
+    assert_eq!(flash.display_name.as_deref(), Some("DeepSeek V4.1 Flash"));
     assert_eq!(
         flash
             .supported_protocols
@@ -771,21 +800,16 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         flash.selected_protocol.as_deref(),
         Some("openai-responses.v1")
     );
-    // expiringFlash is the temporary exact identity and must reuse the complete V4 Flash Vision contract.
-    // expiringFlash 是临时精确身份，必须复用完整的 V4 Flash Vision 契约。
-    let expiring_flash = compiled
-        .rule_for_model("official-api", None, "deepseek-v4.1-flash-expires-on-0910")
-        .expect("DeepSeek V4.1 Flash expiring rule must exist");
+    // flashCapabilities is the model-level authority for reasoning limits and image input.
+    // flashCapabilities 是思考限制与图片输入的模型级权威。
+    let flash_capabilities = flash
+        .capabilities
+        .as_ref()
+        .expect("DeepSeek V4.1 Flash capabilities must exist");
     assert_eq!(
-        expiring_flash.supported_protocols,
-        flash.supported_protocols
+        flash_capabilities.input_resources,
+        vec![vulcan_ai_contract::ResourceKind::Image]
     );
-    assert_eq!(expiring_flash.selected_protocol, flash.selected_protocol);
-    assert_eq!(
-        expiring_flash.protocol_capabilities,
-        flash.protocol_capabilities
-    );
-    assert_eq!(expiring_flash.model_parameters, flash.model_parameters);
     assert_eq!(
         flash_capabilities.reasoning_efforts,
         vec![
@@ -795,6 +819,8 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             vulcan_ai_contract::ReasoningEffort::Max,
         ]
     );
+    assert_eq!(flash_capabilities.context_limit, Some(1_000_000));
+    assert_eq!(flash_capabilities.output_limit, Some(393_216));
     assert_eq!(
         flash
             .protocol_capabilities
@@ -820,167 +846,31 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             .is_empty(),
         "Flash Chat must not declare provider-native web search"
     );
-    // vision owns the Flash contract plus one exact image-input capability and constraint set.
-    // vision 持有 Flash 契约，并额外声明一组精确的图片输入能力与约束。
-    let vision = compiled
-        .rule_for_model("official-api", None, "deepseek-v4-flash-vision-exp")
-        .expect("DeepSeek V4 Flash Vision Exp rule must exist");
-    // visionCapabilities is the model-level authority that makes image understanding selectable.
-    // visionCapabilities 是使图片理解可被选择的模型级权威声明。
-    let vision_capabilities = vision
-        .capabilities
-        .as_ref()
-        .expect("DeepSeek V4 Flash Vision Exp capabilities must exist");
-    assert_eq!(
-        vision.display_name.as_deref(),
-        Some("DeepSeek-V4-Flash-Vision-Exp")
-    );
-    assert_eq!(
-        vision
-            .supported_protocols
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "anthropic-messages.v1",
-            "openai-chat-completions.v1",
-            "openai-responses.v1",
-        ])
-    );
-    assert_eq!(
-        vision.selected_protocol.as_deref(),
-        Some("openai-responses.v1")
-    );
-    assert_eq!(
-        vision_capabilities.input_resources,
-        vec![vulcan_ai_contract::ResourceKind::Image]
-    );
-    assert_eq!(
-        vision_capabilities.reasoning_efforts,
-        flash_capabilities.reasoning_efforts
-    );
-    assert_eq!(
-        vision_capabilities.context_limit,
-        flash_capabilities.context_limit
-    );
-    assert_eq!(
-        vision_capabilities.output_limit,
-        flash_capabilities.output_limit
-    );
-    // visionImageConstraint freezes the limits representable by the current attachment contract.
-    // visionImageConstraint 冻结当前附件契约能够表达的图片限制。
-    let vision_image_constraint = vision
+    // imageConstraint freezes the limits representable by the current attachment contract.
+    // imageConstraint 冻结当前附件契约能够表达的图片限制。
+    let image_constraint = flash
         .input_resource_constraints
         .first()
-        .expect("Vision model must declare an image input constraint");
-    assert_eq!(vision.input_resource_constraints.len(), 1);
+        .expect("Flash must declare an image input constraint");
+    assert_eq!(flash.input_resource_constraints.len(), 1);
     assert_eq!(
-        vision_image_constraint.resource_kind,
+        image_constraint.resource_kind,
         vulcan_ai_contract::ResourceKind::Image
     );
     assert_eq!(
-        vision_image_constraint.accepted_mime_types,
+        image_constraint.accepted_mime_types,
         vec!["image/jpeg", "image/png", "image/gif", "image/webp",]
     );
-    assert_eq!(vision_image_constraint.max_bytes, Some(32 * 1024 * 1024));
-    assert_eq!(vision_image_constraint.max_count, Some(600));
+    assert_eq!(image_constraint.max_bytes, Some(32 * 1024 * 1024));
+    assert_eq!(image_constraint.max_count, Some(600));
     assert_eq!(
-        vision_image_constraint.reference_policy,
+        image_constraint.reference_policy,
         vulcan_provider_adapters::ResourceReferencePolicy::LocalOnly
     );
-    assert!(vision_image_constraint.upload_channel_refs.is_empty());
+    assert!(image_constraint.upload_channel_refs.is_empty());
     assert_eq!(
-        vision
-            .protocol_capabilities
-            .get("anthropic-messages.v1")
-            .expect("Vision Anthropic capabilities must exist")
-            .provider_native_tools,
-        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
-    );
-    assert_eq!(
-        vision
-            .protocol_capabilities
-            .get("openai-responses.v1")
-            .expect("Vision Responses capabilities must exist")
-            .provider_native_tools,
-        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
-    );
-    assert!(
-        vision
-            .protocol_capabilities
-            .get("openai-chat-completions.v1")
-            .expect("Vision Chat capabilities must exist")
-            .provider_native_tools
-            .is_empty(),
-        "Vision Chat must not declare provider-native web search"
-    );
-    // expiringVision must match Vision Exp exactly for multimodal capability and execution policy.
-    // expiringVision 必须在多模态能力与执行策略上与 Vision Exp 完全一致。
-    assert_eq!(expiring_flash.capabilities, vision.capabilities);
-    assert_eq!(
-        expiring_flash.protocol_capabilities,
-        vision.protocol_capabilities
-    );
-    assert_eq!(
-        expiring_flash.input_resource_constraints,
-        vision.input_resource_constraints
-    );
-    assert_eq!(expiring_flash.model_parameters, vision.model_parameters);
-    assert_eq!(
-        expiring_flash.provenance.provenance_ref,
-        vision.provenance.provenance_ref
-    );
-    // pro owns the same protocol set and selected Responses route as flash.
-    // pro 持有与 flash 相同的协议集合，并同样选定 Responses 路由。
-    let pro = compiled
-        .rule_for_model("official-api", None, "deepseek-v4-pro")
-        .expect("DeepSeek V4 Pro rule must exist");
-    // proCapabilities is the required model-level capability declaration for Pro.
-    // proCapabilities 是 Pro 必须提供的模型级能力声明。
-    let pro_capabilities = pro
-        .capabilities
-        .as_ref()
-        .expect("DeepSeek V4 Pro capabilities must exist");
-    assert_eq!(
-        pro.supported_protocols
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "anthropic-messages.v1",
-            "openai-chat-completions.v1",
-            "openai-responses.v1",
-        ])
-    );
-    assert_eq!(
-        pro.selected_protocol.as_deref(),
-        Some("openai-responses.v1")
-    );
-    assert_eq!(
-        pro_capabilities.reasoning_efforts,
-        flash_capabilities.reasoning_efforts
-    );
-    assert_eq!(
-        pro.protocol_capabilities
-            .get("anthropic-messages.v1")
-            .expect("Pro Anthropic capabilities must exist")
-            .provider_native_tools,
-        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
-    );
-    assert_eq!(
-        pro.protocol_capabilities
-            .get("openai-responses.v1")
-            .expect("Pro Responses capabilities must exist")
-            .provider_native_tools,
-        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
-    );
-    assert!(
-        pro.protocol_capabilities
-            .get("openai-chat-completions.v1")
-            .expect("Pro Chat capabilities must exist")
-            .provider_native_tools
-            .is_empty(),
-        "Pro Chat must not declare provider-native web search"
+        flash.provenance.provenance_ref.as_deref(),
+        Some("https://api-docs.deepseek.com/zh-cn/guides/vision")
     );
 }
 

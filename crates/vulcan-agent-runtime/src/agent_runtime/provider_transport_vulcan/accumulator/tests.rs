@@ -280,6 +280,70 @@ fn public_turn_persists_exact_responses_provider_context() {
     assert_eq!(replay.provider_context_items, vec![provider_item]);
 }
 
+/// Verifies Codex message phase and end_turn metadata survive the normalized runtime boundary.
+/// 验证 Codex 消息阶段与 end_turn 元数据可穿过规范化运行时边界。
+#[test]
+fn public_turn_persists_message_phase_and_explicit_continuation() {
+    let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut sink = RecordingProviderDeltaSink::default();
+    let mut accumulator = PublicTurnAccumulator::new(
+        "openai",
+        "connection-openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+        "openai-codex-responses.v1",
+        "gpt-6-astra",
+        None,
+    );
+    for event in [
+        AiStreamEvent::ResponseItemStarted {
+            item_id: String::from("message-item"),
+            item: ContentItem::Text {
+                text: String::new(),
+            },
+        },
+        AiStreamEvent::ResponseMessagePhaseUpdated {
+            item_id: String::from("message-item"),
+            phase: vulcan_ai_contract::AiMessagePhase::Commentary,
+        },
+        AiStreamEvent::ResponseTextDelta {
+            item_id: String::from("message-item"),
+            delta: String::from("still working"),
+        },
+        AiStreamEvent::ResponseItemCompleted {
+            item_id: String::from("message-item"),
+        },
+        AiStreamEvent::ResponseTurnBoundary { end_turn: false },
+        AiStreamEvent::ResponseCompleted,
+    ] {
+        accumulator
+            .apply_event("openai", &live_sender, &mut sink, event)
+            .expect("Codex event should accumulate");
+    }
+
+    let response = accumulator.finish().expect("Codex turn should finish");
+    assert_eq!(
+        response
+            .explicit_end_turn()
+            .expect("boundary should decode"),
+        Some(false)
+    );
+    let replay: ProviderReplayEnvelope = serde_json::from_value(
+        response
+            .provider_message_state
+            .as_ref()
+            .and_then(|state| state.pointer("/vulcan_ai/replay"))
+            .expect("replay envelope should exist")
+            .clone(),
+    )
+    .expect("replay envelope should decode");
+    assert_eq!(replay.message_phases.len(), 1);
+    assert_eq!(replay.message_phases[0].item_id, "message-item");
+    assert_eq!(
+        replay.message_phases[0].phase,
+        vulcan_ai_contract::AiMessagePhase::Commentary
+    );
+}
+
 /// Verifies malformed streamed tool arguments become one non-executable tool call instead of a retryable Provider failure.
 /// 验证格式错误的流式工具参数会成为一条不可执行工具调用，而不是可重试 Provider 失败。
 #[test]

@@ -1,7 +1,7 @@
 //! Durable provider-neutral assistant replay state.
 //! 可持久化的供应商无关助手重放状态。
 
-use crate::ContentItem;
+use crate::{AiMessagePhase, ContentItem};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -47,7 +47,19 @@ pub fn provider_continuation_payload<'a>(provider: &str, signature: &'a str) -> 
 
 /// Current durable replay envelope format version.
 /// 当前可持久化重放封套格式版本。
-pub const PROVIDER_REPLAY_ENVELOPE_VERSION: u16 = 3;
+pub const PROVIDER_REPLAY_ENVELOPE_VERSION: u16 = 4;
+
+/// Preserves one provider message phase without exposing private provider context.
+/// 在不暴露供应商私有上下文的情况下保存一项供应商消息阶段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderMessagePhaseSnapshot {
+    /// Exact public response item identifier owning the phase.
+    /// 持有该阶段的精确公共响应项标识。
+    pub item_id: String,
+    /// Closed assistant message phase.
+    /// 封闭的助手消息阶段。
+    pub phase: AiMessagePhase,
+}
 
 /// Canonicalizes official Codex Responses input aliases before durable replay validation.
 /// 在可持久化重放校验前规范化官方 Codex Responses 输入别名。
@@ -94,11 +106,23 @@ pub fn is_replayable_codex_responses_item(value: &Value) -> bool {
             .get("encrypted_content")
             .and_then(Value::as_str)
             .is_some_and(|encrypted_content| !encrypted_content.is_empty()),
+        // Reasoning is replayable only when it contains full content or an opaque continuation;
+        // a summary-only item is transient presentation state.
+        // 推理项仅在包含完整正文或不透明延续时可重放；只有摘要的项目属于瞬态展示状态。
+        Some("reasoning") => {
+            value
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+                || value
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|encrypted_content| !encrypted_content.is_empty())
+        }
         Some(
             "additional_tools"
             | "message"
             | "agent_message"
-            | "reasoning"
             | "local_shell_call"
             | "function_call"
             | "tool_search_call"
@@ -145,6 +169,10 @@ pub struct ProviderReplayEnvelope {
     /// 绑定物理路由使用的有序 Responses 原始输出项。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_context_items: Vec<Value>,
+    /// Typed message phases retained separately from opaque provider items.
+    /// 与不透明供应商项目分开保存的类型化消息阶段。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub message_phases: Vec<ProviderMessagePhaseSnapshot>,
 }
 
 impl ProviderReplayEnvelope {
@@ -182,7 +210,28 @@ impl ProviderReplayEnvelope {
             model_id: model_id.into(),
             content,
             provider_context_items,
+            message_phases: Vec::new(),
         }
+    }
+
+    /// Attaches validated message phases observed for this exact provider response.
+    /// 附加从当前精确供应商响应观察到的已校验消息阶段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `message_phases` preserves response item identity and closed phase values in stream order.
+    /// `message_phases` 按流顺序保存响应项身份与封闭阶段值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The replay envelope with typed message-phase metadata attached.
+    /// 返回附带类型化消息阶段元数据的重放封套。
+    pub fn with_message_phases(
+        mut self,
+        message_phases: Vec<ProviderMessagePhaseSnapshot>,
+    ) -> Self {
+        self.message_phases = message_phases;
+        self
     }
 
     /// Verifies that replay state belongs to the exact active execution route.

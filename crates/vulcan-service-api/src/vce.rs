@@ -35,6 +35,9 @@ pub enum VceJobKindSummary {
     /// Rebuild an explicitly confirmed index contract.
     /// 重建已明确确认的索引契约。
     Rebuild,
+    /// Compact physical vector fragments while preserving the logical checkpoint.
+    /// 在保留逻辑检查点的同时整理物理向量碎片。
+    Compact,
 }
 
 /// Job execution state; it is never the authority for query eligibility.
@@ -137,12 +140,215 @@ pub struct VceJobSummary {
     /// Real phase observation, absent while still queued.
     /// 真实阶段观察，仍在排队时缺失。
     pub progress: Option<VceJobProgressSummary>,
+    /// Table-scoped native compaction state, present only for compact jobs.
+    /// 仅整理作业持有的表作用域原生整理状态。
+    pub compaction: Option<VceCompactionJobSummary>,
     /// Whether one subsequent manual synchronization was coalesced.
     /// 是否合并了一个后续手动同步。
     pub followup_requested: bool,
     /// Bounded execution or cleanup diagnostic.
     /// 有界执行或清理诊断。
     pub error: Option<String>,
+}
+
+/// Public physical table role used by maintenance previews and job receipts.
+/// 维护预览与作业回执使用的公共物理表角色。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VcePhysicalTableRoleSummary {
+    /// Content-chunk vector table.
+    /// 内容切块向量表。
+    Content,
+    /// Canonical-path vector table.
+    /// 规范路径向量表。
+    Path,
+}
+
+/// Public physical fragment row-count distribution.
+/// 公共物理片段行数分布。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VcePhysicalFragmentSummary {
+    /// Minimum rows in one fragment.
+    /// 单个片段中的最少行数。
+    pub minimum_rows: u64,
+    /// Maximum rows in one fragment.
+    /// 单个片段中的最多行数。
+    pub maximum_rows: u64,
+    /// Mean rows across fragments.
+    /// 所有片段的平均行数。
+    pub mean_rows: u64,
+    /// Twenty-fifth percentile fragment row count.
+    /// 片段行数的百分之二十五分位值。
+    pub p25_rows: u64,
+    /// Median fragment row count.
+    /// 片段行数中位数。
+    pub p50_rows: u64,
+    /// Seventy-fifth percentile fragment row count.
+    /// 片段行数的百分之七十五分位值。
+    pub p75_rows: u64,
+    /// Ninety-ninth percentile fragment row count.
+    /// 片段行数的百分之九十九分位值。
+    pub p99_rows: u64,
+}
+
+/// Bounded native compaction options displayed in a maintenance preview.
+/// 维护预览中展示的有界原生整理参数。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceCompactionOptionsSummary {
+    /// Target rows per output fragment.
+    /// 每个输出片段的目标行数。
+    pub target_rows_per_fragment: u64,
+    /// Maximum rows per rewritten row group.
+    /// 每个重写行组的最大行数。
+    pub max_rows_per_group: u64,
+    /// Maximum bytes per output file.
+    /// 每个输出文件的最大字节数。
+    pub max_bytes_per_file: u64,
+    /// Maximum storage-engine worker threads.
+    /// 存储引擎最大工作线程数。
+    pub num_threads: u64,
+    /// Input scan batch size in rows.
+    /// 输入扫描批次行数。
+    pub batch_size: u64,
+    /// Maximum source fragments per controller operation.
+    /// 每次控制器操作的最大源片段数。
+    pub max_source_fragments: u64,
+}
+
+/// Read-only physical table preview returned before explicit confirmation.
+/// 明确确认前返回的只读物理表预览。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VcePhysicalTablePlanSummary {
+    /// Logical table role.
+    /// 逻辑表角色。
+    pub role: VcePhysicalTableRoleSummary,
+    /// Physical table version captured by the plan.
+    /// 计划捕获的物理表版本。
+    pub version: u64,
+    /// Total bytes reported by the storage engine.
+    /// 存储引擎报告的总字节数。
+    pub total_bytes: u64,
+    /// Current logical row count.
+    /// 当前逻辑行数。
+    pub row_count: u64,
+    /// Current secondary-index count.
+    /// 当前二级索引数量。
+    pub index_count: u64,
+    /// Current physical fragment count.
+    /// 当前物理片段数量。
+    pub fragment_count: u64,
+    /// Current small-fragment count.
+    /// 当前小片段数量。
+    pub small_fragment_count: u64,
+    /// Fragment row-count distribution.
+    /// 片段行数分布。
+    pub fragment_rows: VcePhysicalFragmentSummary,
+    /// Whether an executable action exists for this table.
+    /// 此表是否存在可执行操作。
+    pub compaction_required: bool,
+    /// Exact bounded parameters frozen by the preview.
+    /// 预览冻结的精确有界参数。
+    pub options: VceCompactionOptionsSummary,
+}
+
+/// Public lifecycle of one table in a physical compaction job.
+/// 物理整理作业中一张表的公共生命周期。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceCompactionTableStateSummary {
+    /// Admitted but not submitted to the controller.
+    /// 已准入但尚未提交控制器。
+    Pending,
+    /// Accepted by the controller and waiting to run.
+    /// 已被控制器受理并等待执行。
+    Queued,
+    /// Running one atomic physical step.
+    /// 正在执行一个原子物理步骤。
+    Running,
+    /// No further compaction is required.
+    /// 已无需继续整理。
+    Succeeded,
+    /// Failed with an explicit diagnostic.
+    /// 已失败并带有明确诊断。
+    Failed,
+    /// Cancelled at a safe boundary.
+    /// 已在安全边界取消。
+    Cancelled,
+    /// Controller operation state can no longer be queried.
+    /// 控制器操作状态已无法查询。
+    StateLost,
+    /// The host ended before a later bounded round could be submitted.
+    /// 宿主在后续有界轮次提交前结束。
+    Interrupted,
+}
+
+/// Cumulative native compaction metrics for one public table receipt.
+/// 一张表公共回执中的累计原生整理指标。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceCompactionMetricsSummary {
+    /// Source fragments replaced.
+    /// 已替换源片段数量。
+    pub fragments_removed: u64,
+    /// Replacement fragments added.
+    /// 已新增替代片段数量。
+    pub fragments_added: u64,
+    /// Physical files replaced.
+    /// 已替换物理文件数量。
+    pub files_removed: u64,
+    /// Physical files added.
+    /// 已新增物理文件数量。
+    pub files_added: u64,
+}
+
+/// Public progress and result for one compacted physical table.
+/// 一张已整理物理表的公共进度与结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceCompactionTableJobSummary {
+    /// Logical table role.
+    /// 逻辑表角色。
+    pub role: VcePhysicalTableRoleSummary,
+    /// Current table lifecycle state.
+    /// 当前表生命周期状态。
+    pub state: VceCompactionTableStateSummary,
+    /// Current one-based bounded operation round.
+    /// 当前从一开始的有界操作轮次。
+    pub round: u32,
+    /// Stable current or latest controller operation identifier.
+    /// 当前或最近控制器操作的稳定标识。
+    pub operation_id: Option<String>,
+    /// Version captured when the table action was confirmed.
+    /// 确认表操作时捕获的版本。
+    pub planned_version: u64,
+    /// Latest authoritative physical version.
+    /// 最近权威物理版本。
+    pub current_version: u64,
+    /// Fragment count captured by the confirmed plan.
+    /// 已确认计划捕获的片段数量。
+    pub planned_fragment_count: u64,
+    /// Latest authoritative fragment count.
+    /// 最近权威片段数量。
+    pub current_fragment_count: u64,
+    /// Cumulative acknowledged physical metrics.
+    /// 累计已确认物理指标。
+    pub metrics: VceCompactionMetricsSummary,
+    /// Bounded table-local diagnostic.
+    /// 有界表级诊断。
+    pub error: Option<String>,
+}
+
+/// Public table-scoped payload for one native compaction job.
+/// 一项原生整理作业的公共表作用域载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceCompactionJobSummary {
+    /// Deterministic selected table receipts.
+    /// 确定性排列的已选表回执。
+    pub tables: Vec<VceCompactionTableJobSummary>,
 }
 
 /// Exact human job command with optimistic guards and stable retry identity.
@@ -912,8 +1118,8 @@ pub struct VceMaintenancePlanRequest {
     /// Exact workbench project identity.
     /// 精确工作台项目身份。
     pub project_id: String,
-    /// Maintenance mode: repair, rebuild, or cleanup_staging.
-    /// 维护模式：repair、rebuild 或 cleanup_staging。
+    /// Maintenance mode: repair, rebuild, cleanup_staging, or compact.
+    /// 维护模式：repair、rebuild、cleanup_staging 或 compact。
     pub mode: String,
 }
 
@@ -934,6 +1140,9 @@ pub struct VceMaintenanceActionSummary {
     /// Whether execution removes persisted derived data.
     /// 执行是否会删除持久化派生数据。
     pub destructive: bool,
+    /// Physical table role for a compaction action.
+    /// 整理操作对应的物理表角色。
+    pub physical_table_role: Option<VcePhysicalTableRoleSummary>,
 }
 
 /// Read-only maintenance plan returned before any mutation.
@@ -947,6 +1156,9 @@ pub struct VceMaintenancePlanResponse {
     /// Explicit target dimension; no provider-default dimension is inferred.
     /// 明确目标维度；不推断供应商默认维度。
     pub embedding_dimension: u32,
+    /// Published checkpoint captured by this preview; absent only for an uninitialized rebuild.
+    /// 此预览捕获的已发布检查点；仅未初始化重建时缺失。
+    pub checkpoint_version: Option<u64>,
     /// Stable maintenance mode.
     /// 稳定维护模式。
     pub mode: String,
@@ -956,6 +1168,9 @@ pub struct VceMaintenancePlanResponse {
     /// Number of affected Blobs.
     /// 受影响 Blob 数量。
     pub affected_blob_count: u64,
+    /// Authoritative physical table previews, populated only by compact mode.
+    /// 仅由 compact 模式填充的权威物理表预览。
+    pub physical_tables: Vec<VcePhysicalTablePlanSummary>,
 }
 
 /// Guarded execution request copied from one current maintenance plan.

@@ -9,7 +9,10 @@ import type {
   ConversationBlock,
   ConversationBlockKind,
 } from "@/components/conversation/conversation-model";
-import { parseSystemProviderError } from "@/components/conversation/conversation-system-error-card";
+import {
+  isProviderResultReconciliationPending,
+  parseSystemProviderError,
+} from "@/components/conversation/conversation-system-error-card";
 import {
   conversationBlockHasToolEvidence,
   metadataToolFailureStatus,
@@ -56,15 +59,20 @@ export function parseConversationBlocks(
     ? parseSystemProviderError(message.body)
     : null;
   if (systemProviderError) {
+    // reconciliationPending keeps an accepted but unresolved AgentSpace attempt distinct from a normal failure.
+    // reconciliationPending 让已接纳但未确认的 AgentSpace 尝试区别于普通失败。
+    const reconciliationPending = isProviderResultReconciliationPending(systemProviderError);
     return [conversationSpecialBlock(
       message.id,
       0,
       "notice",
       message.body,
       {
-        title: t?.("conversation.systemError.title") ?? "System error",
+        title: reconciliationPending
+          ? (t?.("conversation.systemError.pendingTitle") ?? "Result pending confirmation")
+          : (t?.("conversation.systemError.title") ?? "System error"),
         summary: systemProviderError.message,
-        status: "failed",
+        status: reconciliationPending ? "pending" : "failed",
       },
       message.metadata,
     )];

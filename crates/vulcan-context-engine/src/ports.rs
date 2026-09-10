@@ -68,6 +68,9 @@ pub enum VcePortOperation {
     /// Execute a typed read-only management query.
     /// 执行一项类型化只读管理查询。
     ManagementQuery,
+    /// Persist the source snapshot and bounded embedding-batch manifest.
+    /// 持久化源码快照与有界向量批次清单。
+    EmbeddingManifest,
 }
 
 impl VcePortOperation {
@@ -88,6 +91,7 @@ impl VcePortOperation {
             Self::ExactSearch => "exact_search",
             Self::ManagementSnapshot => "management_snapshot",
             Self::ManagementQuery => "management_query",
+            Self::EmbeddingManifest => "embedding_manifest",
         }
     }
 }
@@ -595,6 +599,9 @@ pub struct IndexCommit {
     /// Successful engine state that must become durable in the same transaction as the checkpoint.
     /// 必须与检查点在同一事务中持久化的成功引擎状态。
     pub state_snapshot: VceStateSnapshot,
+    /// Whether the matching candidate-ready embedding manifest must be finalized in this transaction.
+    /// 是否必须在本次事务中将匹配的候选就绪向量清单收口为已成功。
+    pub finalize_embedding_manifest: bool,
 }
 
 /// Receipt returned after the host atomically publishes an index commit.
@@ -1399,4 +1406,78 @@ pub trait VceIndexPort: Send + Sync {
         &self,
         request: VceManagementQueryRequest,
     ) -> VceFuture<Result<VceManagementQueryResponse, VcePortError>>;
+
+    /// Persist one complete embedding plan before provider I/O and later state transitions.
+    /// 在供应商调用及后续状态转换前持久化一份完整向量计划。
+    ///
+    /// Stateless test ports retain the previous contract with an explicit no-op default; the
+    /// workspace-store implementation overrides this method with the project SQLite manifest.
+    /// 无状态测试端口使用显式空操作默认实现以保持既有契约；workspace-store 实现会覆盖为项目 SQLite 清单。
+    fn persist_embedding_manifest(
+        &self,
+        _manifest: crate::manifest::VceEmbeddingRunManifest,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Load one exact durable embedding manifest without creating a new run.
+    /// 读取一份精确的持久化向量清单，不创建新运行。
+    fn load_embedding_manifest(
+        &self,
+        _run_id: String,
+    ) -> VceFuture<Result<Option<crate::manifest::VceEmbeddingRunManifest>, VcePortError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Persist only one run lifecycle transition without rewriting its frozen source plan.
+    /// 仅持久化一次运行生命周期转换，不重写其冻结源码计划。
+    ///
+    /// `run_id`, `state`, and `updated_at_unix_ms` identify the exact published plan mutation.
+    /// `run_id`、`state` 与 `updated_at_unix_ms` 标识精确的已发布计划变更。
+    /// Returns persistence success or a port error; stateless test ports retain an explicit no-op default.
+    /// 返回持久化成功或端口错误；无状态测试端口保留显式空操作默认实现。
+    fn persist_embedding_run_state(
+        &self,
+        _run_id: String,
+        _state: crate::manifest::VceEmbeddingRunState,
+        _updated_at_unix_ms: u64,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Persist one mutable batch record while preserving its immutable request identity.
+    /// 持久化一条可变批次记录，同时保留其不可变请求身份。
+    ///
+    /// `run_id` owns `batch`; `updated_at_unix_ms` advances the parent run diagnostic time.
+    /// `run_id` 拥有 `batch`；`updated_at_unix_ms` 推进父运行诊断时间。
+    /// Returns persistence success or a port error; stateless test ports retain an explicit no-op default.
+    /// 返回持久化成功或端口错误；无状态测试端口保留显式空操作默认实现。
+    fn persist_embedding_batch_record(
+        &self,
+        _run_id: String,
+        _batch: crate::manifest::VceEmbeddingBatchRecord,
+        _updated_at_unix_ms: u64,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Persist validated vectors for one exact manifest batch before source staging.
+    /// 在源码暂存前持久化某份精确清单批次的已校验向量。
+    fn persist_embedding_batch_result(
+        &self,
+        _run_id: String,
+        _result: crate::manifest::VceEmbeddingBatchResult,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Load one exact batch result for crash recovery without creating provider requests.
+    /// 为崩溃恢复读取一份精确批次结果，不创建供应商请求。
+    fn load_embedding_batch_result(
+        &self,
+        _run_id: String,
+        _batch_id: String,
+    ) -> VceFuture<Result<Option<crate::manifest::VceEmbeddingBatchResult>, VcePortError>> {
+        Box::pin(async { Ok(None) })
+    }
 }

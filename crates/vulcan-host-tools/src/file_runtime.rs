@@ -20,6 +20,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::UNIX_EPOCH;
 use tokio::task;
+use vulcan_change_set::persistent_change_set_from_host_result;
 
 /// Maximum number of read/list/search targets accepted in one request.
 /// 单次请求允许处理的读取、列表或搜索目标最大数量。
@@ -731,7 +732,13 @@ fn native_write_file(
         certain: true,
     });
     let after_lines = after_document.logical_lines();
-    let file_payload = whole_file_payload(path, change_kind, &before_lines, &after_lines);
+    // file_payload selects the only lifecycle representation allowed by the canonical V1 parser.
+    // file_payload 选择规范 V1 解析器允许的唯一生命周期表示。
+    let file_payload = if existing.is_some() {
+        whole_file_modify_payload(path, &before_lines, &after_lines)
+    } else {
+        whole_file_create_payload(path, &after_document.text, &after_lines)
+    };
     let prepared = PreparedChange {
         change_kind: String::from(change_kind),
         source_path: path.to_path_buf(),
@@ -756,8 +763,7 @@ fn native_write_file(
             "final_range": {"start_line": 1, "line_count": after_lines.len()},
         })],
     };
-    verify_preconditions(std::slice::from_ref(&prepared))?;
-    commit_changes(std::slice::from_ref(&prepared))?;
+    commit_validated_changes("applied", std::slice::from_ref(&prepared))?;
     Ok(native_file_change_response("write", vec![prepared]))
 }
 
@@ -785,8 +791,7 @@ fn native_delete_file(path: &Path, request_path: &str) -> Result<FileToolRespons
             "final_range": Value::Null,
         })],
     };
-    verify_preconditions(std::slice::from_ref(&prepared))?;
-    commit_changes(std::slice::from_ref(&prepared))?;
+    commit_validated_changes("applied", std::slice::from_ref(&prepared))?;
     Ok(native_file_change_response("delete", vec![prepared]))
 }
 
@@ -838,22 +843,26 @@ fn native_move_file(
             "final_range": Value::Null,
         })],
     };
-    verify_preconditions(std::slice::from_ref(&prepared))?;
-    commit_changes(std::slice::from_ref(&prepared))?;
+    commit_validated_changes("applied", std::slice::from_ref(&prepared))?;
     Ok(native_file_change_response("move", vec![prepared]))
 }
 
-/// Builds one common whole-file change-set row.
-/// 构建一条公共整文件 change-set 行。
-fn whole_file_payload(
+/// Builds one whole-file modify row with canonical before and after line domains.
+/// 使用 canonical 的变更前后逻辑行域构建一条整文件修改记录。
+///
+/// `path` identifies the modified file, `before_lines` contains the original logical
+/// lines, and `after_lines` contains the replacement logical lines. The returned row
+/// is valid only for the V1 `modify` lifecycle and therefore always carries one hunk.
+/// `path` 标识被修改文件，`before_lines` 包含原始逻辑行，`after_lines` 包含替换后的
+/// 逻辑行。返回记录仅用于 V1 `modify` 生命周期，因此始终携带一条 hunk。
+fn whole_file_modify_payload(
     path: &Path,
-    change_kind: &str,
     before_lines: &[String],
     after_lines: &[String],
 ) -> Value {
     json!({
         "resource_id": "resource-1",
-        "change": change_kind,
+        "change": "modify",
         "path": display_path(path),
         "hunks": [{
             "before": "",
@@ -862,6 +871,25 @@ fn whole_file_payload(
             "after": "",
         }],
     })
+}
+
+/// Builds one whole-file create row with explicit bounded lifecycle content.
+/// 使用明确且有界的生命周期正文构建一条整文件创建记录。
+///
+/// `path` identifies the newly created file, `text` is the exact normalized text to
+/// publish, and `lines` supplies the authoritative logical-line count. The returned
+/// row intentionally contains no modify hunks.
+/// `path` 标识新建文件，`text` 是即将发布的精确归一化文本，`lines` 提供权威逻辑
+/// 行数。返回记录有意不包含任何 modify hunk。
+fn whole_file_create_payload(path: &Path, text: &str, lines: &[String]) -> Value {
+    // payload is the lifecycle-only row that must never acquire modify hunks.
+    // payload 是绝不能携带修改 hunk 的纯生命周期记录。
+    let mut payload = Map::new();
+    payload.insert(String::from("resource_id"), json!("resource-1"));
+    payload.insert(String::from("change"), json!("create"));
+    payload.insert(String::from("path"), json!(display_path(path)));
+    insert_lifecycle_content(&mut payload, text, lines);
+    Value::Object(payload)
 }
 
 /// Builds the model result and common change set for native file mutations.
@@ -1676,8 +1704,8 @@ fn execute_exact_file_edit_sync(
         file_payload: file_payload.clone(),
         operation_results: operation_results.clone(),
     };
-    verify_preconditions(std::slice::from_ref(&prepared)).map_err(enrich_request_edit_error)?;
-    commit_changes(std::slice::from_ref(&prepared)).map_err(enrich_request_edit_error)?;
+    commit_validated_changes("applied", std::slice::from_ref(&prepared))
+        .map_err(enrich_request_edit_error)?;
     let mut extension = native_file_tools_extension(
         "file_edit",
         std::slice::from_ref(&prepared),
@@ -1989,8 +2017,7 @@ fn execute_apply_patch_sync(
         }
         changes.push(prepared);
     }
-    verify_preconditions(&changes)?;
-    commit_changes(&changes)?;
+    commit_validated_changes("applied", &changes)?;
     let files = changes
         .iter()
         .map(|change| change.file_payload.clone())
@@ -2592,12 +2619,16 @@ fn execute_legacy_file_edit_sync(
         }
         changes.push(change);
     }
+    // mode binds validation to the exact preview or applied result returned to the caller.
+    // mode 将校验绑定到返回给调用方的精确预览或已应用结果。
+    let mode = if dry_run { "preview" } else { "applied" };
+    validate_prepared_change_set(mode, &changes)
+        .map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
     if !dry_run {
         verify_preconditions(&changes)
             .map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
         commit_changes(&changes).map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
     }
-    let mode = if dry_run { "preview" } else { "applied" };
     let files = changes
         .iter()
         .map(|change| change.file_payload.clone())
@@ -3205,7 +3236,11 @@ fn build_prepared_change(
         .iter()
         .map(|replacement| replacement_hunk(snapshot, replacement, &replacements))
         .collect::<Vec<_>>();
-    file_payload.insert(String::from("hunks"), Value::Array(hunks));
+    if change_kind == "rename" && hunks.is_empty() {
+        insert_lifecycle_content(&mut file_payload, &snapshot.document.text, &snapshot.lines);
+    } else {
+        file_payload.insert(String::from("hunks"), Value::Array(hunks));
+    }
     let mut operation_results = replacements
         .iter()
         .map(|replacement| operation_result(replacement, &replacements, dry_run, resource_id))
@@ -3366,8 +3401,70 @@ fn verify_preconditions(changes: &[PreparedChange]) -> Result<(), FileToolError>
     Ok(())
 }
 
-/// Commits all prepared changes and restores every captured path when one publish fails.
-/// 提交所有已准备变更，并在任一发布失败时恢复全部已捕获路径。
+/// Validates one prepared public ChangeSet with the canonical V1 parser.
+/// 使用 canonical V1 解析器校验一组准备完成的公共 ChangeSet。
+///
+/// `mode` is the producer-declared ChangeSet mode and `changes` contains the exact
+/// public file rows that will be returned after the operation. This function performs
+/// no filesystem mutation and returns a stable internal-contract error when any row
+/// violates the V1 lifecycle contract.
+/// `mode` 是产出方声明的 ChangeSet 模式，`changes` 包含操作完成后将返回的精确
+/// 公共文件记录。此函数不执行文件系统变更；任意记录违反 V1 生命周期契约时返回稳定的
+/// 内部契约错误。
+fn validate_prepared_change_set(
+    mode: &str,
+    changes: &[PreparedChange],
+) -> Result<(), FileToolError> {
+    // files are the unchanged public rows that the caller will receive after commit.
+    // files 是提交后调用方将收到的未改写公共记录。
+    let files = changes
+        .iter()
+        .map(|change| change.file_payload.clone())
+        .collect::<Vec<_>>();
+    // host_result recreates only the standard envelope required by the canonical parser.
+    // host_result 仅重建规范解析器所需的标准外层信封。
+    let host_result = json!({
+        "kind": "change_set",
+        "payload": {
+            "mode": mode,
+            "files": files,
+        },
+    });
+    match persistent_change_set_from_host_result(&host_result) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(FileToolError::new(
+            "invalid_change_set",
+            "The native file tool produced a result that was not recognized as a ChangeSet.",
+        )),
+        Err(error) => Err(FileToolError::new(
+            "invalid_change_set",
+            format!("The native file tool produced an invalid V1 ChangeSet: {error}"),
+        )),
+    }
+}
+
+/// Validates and commits prepared changes without exposing an invalid result after mutation.
+/// 在文件变更落盘前完成校验，避免变更后才暴露无效结果。
+///
+/// `mode` and `changes` are first checked against the canonical V1 ChangeSet
+/// contract, then filesystem preconditions are revalidated immediately before the
+/// transactional commit. The function returns no value after a successful commit.
+/// `mode` 与 `changes` 会先按 canonical V1 ChangeSet 契约校验，再于事务提交前
+/// 重新核验文件系统前置条件。提交成功后函数不返回额外数据。
+fn commit_validated_changes(mode: &str, changes: &[PreparedChange]) -> Result<(), FileToolError> {
+    validate_prepared_change_set(mode, changes)?;
+    verify_preconditions(changes)?;
+    commit_changes(changes)
+}
+
+/// Commits one validated mutation batch transactionally and rolls back partial writes.
+/// 以事务方式提交一组已校验变更，并回滚部分写入。
+///
+/// `changes` must already satisfy the public ChangeSet contract and filesystem
+/// preconditions. The function publishes every mutation or restores the captured
+/// pre-operation state and returns one structured error.
+/// `changes` 必须已经满足公共 ChangeSet 契约和文件系统前置条件。此函数要么发布
+/// 全部变更，要么恢复捕获的操作前状态并返回一条结构化错误。
 fn commit_changes(changes: &[PreparedChange]) -> Result<(), FileToolError> {
     let mut backups = BTreeMap::<PathBuf, FileBackup>::new();
     let mut published_new_paths = HashSet::<PathBuf>::new();
@@ -4945,14 +5042,17 @@ fn glob_matches(name: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_EDIT_LINES_PER_ARRAY, MAX_READ_LINES, MAX_READ_RESPONSE_BYTES, PreparedChange,
-        commit_changes, display_path, execute_apply_patch, execute_file, execute_file_edit,
-        path_key, read_raw_snapshot, resolve_path, verify_preconditions, whole_file_payload,
+        MAX_EDIT_LINES_PER_ARRAY, MAX_INLINE_LIFECYCLE_BYTES, MAX_READ_LINES,
+        MAX_READ_RESPONSE_BYTES, PreparedChange, commit_changes, commit_validated_changes,
+        display_path, execute_apply_patch, execute_file, execute_file_edit, path_key,
+        persistent_change_set_from_host_result, read_raw_snapshot, resolve_path,
+        verify_preconditions, whole_file_modify_payload,
     };
     use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
+    use vulcan_change_set::{ChangeSetFileChangeKind, PersistentLifecycleContent};
 
     /// Verifies native path resolution expands the established environment placeholder syntax.
     /// 验证原生路径解析会展开既有的环境变量占位符语法。
@@ -6199,7 +6299,9 @@ mod tests {
             b"caf\xE9"
         );
 
-        execute_file(
+        // created retains the real host response so its public ChangeSet can be parsed unchanged.
+        // created 保留真实宿主响应，以便原样解析其中的公共 ChangeSet。
+        let created = execute_file(
             directory.path().to_path_buf(),
             json!({
                 "action": "write",
@@ -6209,6 +6311,20 @@ mod tests {
         )
         .await
         .expect("new file should succeed");
+        // change_set is the exact payload returned after the new file was committed.
+        // change_set 是新文件提交后返回的精确载荷。
+        let change_set = created.change_set.expect("created file ChangeSet");
+        // persistent is the canonical durable projection of that real host payload.
+        // persistent 是该真实宿主载荷的规范可靠投影。
+        let persistent = persistent_change_set_from_host_result(&json!({
+            "kind": "change_set",
+            "payload": change_set,
+        }))
+        .expect("created file ChangeSet must satisfy the V1 contract")
+        .expect("native write must return a ChangeSet");
+        assert_eq!(persistent.files.len(), 1);
+        assert!(persistent.files[0].hunks.is_empty());
+        assert!(persistent.files[0].lifecycle_content.is_some());
         assert_eq!(
             fs::read(directory.path().join("new.txt")).expect("read new file"),
             b"a\nb\nc\nd"
@@ -6223,18 +6339,57 @@ mod tests {
         let existing_path = directory.path().join("existing.txt");
         fs::write(&existing_path, "before\n").expect("write existing fixture");
 
-        execute_file(
+        // created owns the lifecycle-only result for an empty new file.
+        // created 持有空白新文件的纯生命周期结果。
+        let created = execute_file(
             directory.path().to_path_buf(),
             json!({"action": "write", "path": "empty.txt", "content": ""}),
         )
         .await
         .expect("empty file creation should succeed");
-        execute_file(
+        // truncated owns the modify-hunk result for clearing an existing file.
+        // truncated 持有清空已有文件时的修改 hunk 结果。
+        let truncated = execute_file(
             directory.path().to_path_buf(),
             json!({"action": "write", "path": "existing.txt", "content": ""}),
         )
         .await
         .expect("existing file truncation should succeed");
+
+        // created_changeset is the canonical parse of the empty create result.
+        // created_changeset 是空文件创建结果的规范解析。
+        let created_changeset = persistent_change_set_from_host_result(&json!({
+            "kind": "change_set",
+            "payload": created.change_set.expect("empty create ChangeSet"),
+        }))
+        .expect("empty create must satisfy the V1 contract")
+        .expect("empty create must return a ChangeSet");
+        assert_eq!(
+            created_changeset.files[0].change,
+            ChangeSetFileChangeKind::Create
+        );
+        assert!(created_changeset.files[0].hunks.is_empty());
+        assert!(matches!(
+            created_changeset.files[0].lifecycle_content,
+            Some(PersistentLifecycleContent::Full {
+                ref content,
+                total_line_count: 0,
+            }) if content.is_empty()
+        ));
+        // truncated_changeset is the canonical parse of the empty modify result.
+        // truncated_changeset 是空文件修改结果的规范解析。
+        let truncated_changeset = persistent_change_set_from_host_result(&json!({
+            "kind": "change_set",
+            "payload": truncated.change_set.expect("empty modify ChangeSet"),
+        }))
+        .expect("empty modify must satisfy the V1 contract")
+        .expect("empty modify must return a ChangeSet");
+        assert_eq!(
+            truncated_changeset.files[0].change,
+            ChangeSetFileChangeKind::Modify
+        );
+        assert_eq!(truncated_changeset.files[0].hunks.len(), 1);
+        assert!(truncated_changeset.files[0].lifecycle_content.is_none());
 
         assert_eq!(
             fs::read(directory.path().join("empty.txt")).expect("read created empty file"),
@@ -6243,6 +6398,79 @@ mod tests {
         assert_eq!(
             fs::read(existing_path).expect("read truncated file"),
             Vec::<u8>::new()
+        );
+    }
+
+    /// Verifies lifecycle content uses full mode at the byte limit and safe truncation above it.
+    /// 验证生命周期正文在字节上限处使用完整模式，超过上限后安全截断。
+    #[tokio::test]
+    async fn native_create_lifecycle_content_respects_inline_byte_boundary() {
+        // directory isolates both real native file mutations from the repository workspace.
+        // directory 把两次真实原生文件变更与仓库工作区隔离。
+        let directory = tempdir().expect("create temporary directory");
+        // exact_limit contains exactly the maximum allowed inline UTF-8 byte count.
+        // exact_limit 精确包含允许内联的最大 UTF-8 字节数。
+        let exact_limit = "a".repeat(MAX_INLINE_LIFECYCLE_BYTES);
+        // over_limit crosses the boundary with one complete multibyte character.
+        // over_limit 使用一个完整多字节字符跨过边界。
+        let over_limit = format!("{}中", "a".repeat(MAX_INLINE_LIFECYCLE_BYTES));
+
+        // full_result is the actual host response emitted at the inclusive boundary.
+        // full_result 是在包含式边界处发出的真实宿主响应。
+        let full_result = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "write", "path": "full.txt", "content": exact_limit}),
+        )
+        .await
+        .expect("exact-limit create should succeed");
+        // truncated_result is the actual host response emitted above the byte boundary.
+        // truncated_result 是超过字节边界后发出的真实宿主响应。
+        let truncated_result = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "write", "path": "truncated.txt", "content": over_limit}),
+        )
+        .await
+        .expect("over-limit create should succeed");
+        // full_changeset is the canonical V1 parse of the unmodified real host payload.
+        // full_changeset 是对未改写真实宿主载荷执行的规范 V1 解析结果。
+        let full_changeset = persistent_change_set_from_host_result(&json!({
+            "kind": "change_set",
+            "payload": full_result.change_set.expect("full lifecycle ChangeSet"),
+        }))
+        .expect("full lifecycle payload must be valid")
+        .expect("full lifecycle payload must be declared");
+        // truncated_changeset is the canonical V1 parse of the over-limit real host payload.
+        // truncated_changeset 是对超限真实宿主载荷执行的规范 V1 解析结果。
+        let truncated_changeset = persistent_change_set_from_host_result(&json!({
+            "kind": "change_set",
+            "payload": truncated_result
+                .change_set
+                .expect("truncated lifecycle ChangeSet"),
+        }))
+        .expect("truncated lifecycle payload must be valid")
+        .expect("truncated lifecycle payload must be declared");
+
+        assert!(matches!(
+            full_changeset.files[0].lifecycle_content,
+            Some(PersistentLifecycleContent::Full {
+                ref content,
+                total_line_count: 1,
+            }) if content.len() == MAX_INLINE_LIFECYCLE_BYTES
+        ));
+        assert!(matches!(
+            truncated_changeset.files[0].lifecycle_content,
+            Some(PersistentLifecycleContent::Truncated {
+                ref head,
+                ref tail,
+                total_line_count: 1,
+            }) if head.chars().count() == 2000
+                && tail.chars().count() == 2000
+                && tail.ends_with('中')
+        ));
+        assert_eq!(
+            fs::read_to_string(directory.path().join("truncated.txt"))
+                .expect("read over-limit created file"),
+            over_limit
         );
     }
 
@@ -6447,9 +6675,8 @@ mod tests {
             before_bytes: Some(snapshot.bytes),
             original_permissions: Some(snapshot.permissions),
             after_bytes: Some(b"after\n".to_vec()),
-            file_payload: whole_file_payload(
+            file_payload: whole_file_modify_payload(
                 &path,
-                "modify",
                 &[String::from("before")],
                 &[String::from("after")],
             ),
@@ -6463,6 +6690,48 @@ mod tests {
             fs::read_to_string(path).expect("read external content"),
             "external\n"
         );
+    }
+
+    /// Verifies an invalid lifecycle row is rejected before any file is created.
+    /// 验证无效生命周期记录会在任何文件创建前被拒绝。
+    #[test]
+    fn invalid_changeset_is_rejected_before_commit() {
+        // directory isolates the negative commit assertion from the repository workspace.
+        // directory 把负向提交断言与仓库工作区隔离。
+        let directory = tempdir().expect("create temporary directory");
+        // path is the exact destination that must remain absent after validation fails.
+        // path 是校验失败后必须保持不存在的精确目标路径。
+        let path = directory.path().join("must-not-exist.txt");
+        // prepared intentionally violates the create lifecycle contract with one modify hunk.
+        // prepared 故意通过一条修改 hunk 违反创建生命周期契约。
+        let prepared = PreparedChange {
+            change_kind: String::from("create"),
+            source_path: path.clone(),
+            destination_path: None,
+            original_version: String::new(),
+            before_bytes: None,
+            original_permissions: None,
+            after_bytes: Some(b"unsafe\n".to_vec()),
+            file_payload: json!({
+                "resource_id": "resource-1",
+                "change": "create",
+                "path": display_path(&path),
+                "hunks": [{
+                    "before": "",
+                    "delete": [],
+                    "insert": [{"line": 1, "content": "unsafe"}],
+                    "after": "",
+                }],
+            }),
+            operation_results: Vec::new(),
+        };
+
+        // error is the pre-commit contract rejection returned by the shared validator.
+        // error 是共享校验器在提交前返回的契约拒绝。
+        let error = commit_validated_changes("applied", &[prepared])
+            .expect_err("invalid ChangeSet must fail before mutation");
+        assert_eq!(error.code, "invalid_change_set");
+        assert!(!path.exists());
     }
 
     /// Verifies a failed second publication restores the first file and reports a transaction error.

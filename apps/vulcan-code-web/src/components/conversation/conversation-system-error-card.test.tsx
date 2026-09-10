@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { ConversationMessage } from "@/types";
 import {
+  isProviderResultReconciliationPending,
   parseSystemProviderError,
   SystemErrorCard,
 } from "./conversation-system-error-card";
@@ -57,6 +58,27 @@ const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider
     source: "header_seconds",
   },
 })}。 [provider_route: provider=apikeyfun, model=gpt-5.6-luna, protocol=openai-chat-completions.v1, manifest_revision=0, manifest_generation=2, request_profiles=[], response_profiles=[]]`;
+
+// AGENTSPACE_RECONCILIATION_BODY mirrors the route-aware closed pending-confirmation classification.
+// AGENTSPACE_RECONCILIATION_BODY 模拟感知路由的封闭待确认分类。
+const AGENTSPACE_RECONCILIATION_BODY = `Vulcan 公共契约流式执行失败：provider agentspace failure: ${JSON.stringify({
+  category: "unclassified",
+  subcategory: "agentspace_result_reconciliation_required",
+  stage: "stream",
+  transport: "http",
+  upstream_code: "reconciliation_required",
+  upstream_type: "invocation.usage_unavailable",
+  request_id: "request-1",
+  provider_id: "agentspace",
+  entry_id: "chatgpt-plan",
+  model_id: "gpt-6-astra",
+  message: "The request result requires reconciliation.",
+  dispatch_outcome: "dispatched",
+  semantic_output_observed: false,
+  side_effect_observed: false,
+  terminal: true,
+  retryable: false,
+})}`;
 
 describe("system provider error card", () => {
   it("parses canonical provider failure fields without losing the upstream message", () => {
@@ -112,6 +134,35 @@ describe("system provider error card", () => {
     expect(block?.kind).toBe("notice");
     expect(block?.status).toBe("failed");
     expect(block?.summary).toBe("Our servers are currently overloaded. Please try again later.");
+  });
+
+  it("renders AgentSpace reconciliation as pending result and usage without retry", () => {
+    const error = parseSystemProviderError(AGENTSPACE_RECONCILIATION_BODY);
+    expect(error).not.toBeNull();
+    expect(isProviderResultReconciliationPending(error!)).toBe(true);
+
+    const message: ConversationMessage = {
+      id: "agentspace-pending",
+      conversationId: "conversation",
+      role: "system",
+      recordKind: "transcript",
+      body: AGENTSPACE_RECONCILIATION_BODY,
+    };
+    const [block] = parseConversationBlocks(message);
+    // Pending provider reconciliation remains active in the shared three-state block lifecycle.
+    // Provider 待核对状态在共享三态会话块生命周期中保持为进行中。
+    expect(block?.status).toBe("running");
+
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <SystemErrorCard error={error!} />
+      </I18nProvider>,
+    );
+    expect(markup).toContain("结果与费用待确认");
+    expect(markup).toContain("系统不会自动重发");
+    expect(markup).toContain("结果状态");
+    expect(markup).toContain("费用状态");
+    expect(markup).toContain("system-error-card-pending");
   });
 
   it("renders a compact summary with an expandable JSON detail block", () => {

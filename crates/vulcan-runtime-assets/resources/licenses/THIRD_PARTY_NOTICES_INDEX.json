@@ -15,17 +15,19 @@
     {
       "id": "rust-dependency-license-apache-license-2-0",
       "title": "Apache License 2.0",
-      "used_by_count": 388,
+      "used_by_count": 392,
       "used_by_entries": [
         "num_threads 0.1.7 - https://github.com/jhpratt/num_threads",
         "powerfmt 0.2.0 - https://github.com/jhpratt/powerfmt",
         "deranged 0.5.8 - https://github.com/jhpratt/deranged",
+        "chardetng 1.0.0 - https://github.com/hsivonen/chardetng",
         "embed_plist 1.2.2 - https://github.com/nvzqz/embed-plist-rs",
         "encoding_rs 0.8.35 - https://github.com/hsivonen/encoding_rs",
         "sse-stream 0.2.5 - https://github.com/4t145/sse-stream/",
         "utf8_iter 1.0.4 - https://github.com/hsivonen/utf8_iter",
         "zeroize 1.9.0 - https://github.com/RustCrypto/utils",
         "target-lexicon 0.12.16 - https://github.com/bytecodealliance/target-lexicon",
+        "unty 0.0.4 - https://github.com/bincode-org/unty",
         "windows-collections 0.2.0 - https://github.com/microsoft/windows-rs",
         "windows-collections 0.3.2 - https://github.com/microsoft/windows-rs",
         "windows-core 0.61.2 - https://github.com/microsoft/windows-rs",
@@ -90,6 +92,7 @@
         "toml_writer 1.1.2+spec-1.1.0 - https://github.com/toml-rs/toml",
         "async-broadcast 0.7.2 - https://github.com/smol-rs/async-broadcast",
         "jsonptr 0.6.3 - https://github.com/chanced/jsonptr",
+        "vulcan-apply-patch 0.1.0 - https://crates.io/crates/vulcan-apply-patch",
         "futures-channel 0.3.34 - https://github.com/rust-lang/futures-rs",
         "futures-core 0.3.34 - https://github.com/rust-lang/futures-rs",
         "futures-executor 0.3.34 - https://github.com/rust-lang/futures-rs",
@@ -404,6 +407,7 @@
         "vte 0.15.0 - https://github.com/alacritty/vte",
         "zstd-safe 7.2.4 - https://github.com/gyscos/zstd-rs",
         "zstd-sys 2.0.16+zstd.1.5.7 - https://github.com/gyscos/zstd-rs",
+        "chrono-tz 0.10.4 - https://github.com/chronotope/chrono-tz",
         "chrono 0.4.45 - https://github.com/chronotope/chrono"
       ],
       "start_line": 50,
@@ -426,8 +430,8 @@
         "aws-lc-sys 0.44.0 - https://github.com/aws/aws-lc-rs",
         "encoding_rs 0.8.35 - https://github.com/hsivonen/encoding_rs"
       ],
-      "start_line": 10113,
-      "end_line": 10141,
+      "start_line": 10772,
+      "end_line": 10800,
       "line_count": 29
     },
     {
@@ -437,8 +441,8 @@
       "used_by_entries": [
         "notify 8.2.0 - https://github.com/notify-rs/notify.git"
       ],
-      "start_line": 10343,
-      "end_line": 10383,
+      "start_line": 11002,
+      "end_line": 11042,
       "line_count": 41
     },
     {
@@ -448,8 +452,8 @@
       "used_by_entries": [
         "webpki-roots 1.0.9 - https://github.com/rustls/webpki-roots"
       ],
-      "start_line": 10392,
-      "end_line": 10452,
+      "start_line": 11051,
+      "end_line": 11111,
       "line_count": 61
     },
     {
@@ -466,14 +470,14 @@
         "aws-lc-rs 1.18.0 - https://github.com/aws/aws-lc-rs",
         "aws-lc-sys 0.44.0 - https://github.com/aws/aws-lc-rs"
       ],
-      "start_line": 10462,
-      "end_line": 10474,
+      "start_line": 11121,
+      "end_line": 11133,
       "line_count": 13
     },
     {
       "id": "rust-dependency-license-mit-license",
       "title": "MIT License",
-      "used_by_count": 217,
+      "used_by_count": 230,
       "used_by_entries": [
         "uds_windows 1.2.1 - https://github.com/haraldh/rust_uds_windows",
         "mlua 0.12.0 - https://github.com/mlua-rs/mlua",
@@ -548,9 +552,11 @@
         "outref 0.5.2 - https://github.com/Nugine/outref",
         "dom_query 0.27.0 - https://github.com/niklak/dom_query",
         "fluent-uri 0.4.1 - https://github.com/yescallop/fluent-uri-rs",
+        "vulcan-context-engine 0.1.0 - https://crates.io/crates/vulcan-context-engine",
         "vulcan-code-tauri 0.1.0 - https://crates.io/crates/vulcan-code-tauri",
         "vulcan-agent-runtime 0.1.0 - https://crates.io/crates/vulcan-agent-runtime",
         "vulcan-ai-contract 0.1.0 - https://crates.io/crates/vulcan-ai-contract",
+        "vulcan-apply-patch 0.1.0 - https://crates.io/crates/vulcan-apply-patch",
         "vulcan-change-set 0.1.0 - https://crates.io/crates/vulcan-change-set",
         "vulcan-context 0.1.0 - https://crates.io/crates/vulcan-context",
         "vulcan-context-compaction 0.1.0 - https://crates.io/crates/vulcan-context-compaction",
@@ -563,6 +569,11 @@
         "vulcan-luaskills-config 0.1.0 - https://crates.io/crates/vulcan-luaskills-config",
         "vulcan-luaskills-prompt 0.1.0 - https://crates.io/crates/vulcan-luaskills-prompt",
         "vulcan-mcp-runtime 0.1.0 - https://crates.io/crates/vulcan-mcp-runtime",
+        "vulcan-memorymesh-core 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core",
+        "vulcan-memorymesh-core-config 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-config",
+        "vulcan-memorymesh-core-contracts 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-contracts",
+        "vulcan-memorymesh-core-engine 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-engine",
+        "vulcan-memorymesh-core-storage 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-storage",
         "vulcan-plugin-runtime 0.1.0 - https://crates.io/crates/vulcan-plugin-runtime",
         "vulcan-process-lifecycle 0.1.0 - https://crates.io/crates/vulcan-process-lifecycle",
         "vulcan-prompt-composer 0.1.0 - https://crates.io/crates/vulcan-prompt-composer",
@@ -584,6 +595,7 @@
         "vulcan-vmm 0.1.0 - https://crates.io/crates/vulcan-vmm",
         "vulcan-workbench-model 0.1.0 - https://crates.io/crates/vulcan-workbench-model",
         "vulcan-workspace-store 0.1.0 - https://crates.io/crates/vulcan-workspace-store",
+        "vldb-controller-client 0.2.4 - https://github.com/OpenVulcan/vldb-controller",
         "async-stream-impl 0.3.6 - https://github.com/tokio-rs/async-stream",
         "async-stream 0.3.6 - https://github.com/tokio-rs/async-stream",
         "block2 0.6.2 - https://github.com/madsmtm/objc2",
@@ -662,10 +674,14 @@
         "javascriptcore-rs 1.1.2 - https://github.com/tauri-apps/javascriptcore-rs",
         "zip 8.6.0 - https://github.com/zip-rs/zip2",
         "zip 2.4.2 - https://github.com/zip-rs/zip2.git",
+        "bincode 2.0.1 - https://github.com/bincode-org/bincode",
+        "bincode_derive 2.0.1 - https://github.com/bincode-org/bincode",
+        "phf 0.12.1 - https://github.com/rust-phf/rust-phf",
         "phf 0.13.1 - https://github.com/rust-phf/rust-phf",
         "phf_codegen 0.13.1 - https://github.com/rust-phf/rust-phf",
         "phf_generator 0.13.1 - https://github.com/rust-phf/rust-phf",
         "phf_macros 0.13.1 - https://github.com/rust-phf/rust-phf",
+        "phf_shared 0.12.1 - https://github.com/rust-phf/rust-phf",
         "phf_shared 0.13.1 - https://github.com/rust-phf/rust-phf",
         "aho-corasick 1.1.5 - https://github.com/BurntSushi/aho-corasick",
         "byteorder 1.5.0 - https://github.com/BurntSushi/byteorder",
@@ -691,10 +707,11 @@
         "zstd 0.13.3 - https://github.com/gyscos/zstd-rs",
         "mime_guess 2.0.5 - https://github.com/abonander/mime_guess",
         "generic-array 0.14.7 - https://github.com/fizyk20/generic-array.git",
-        "quick-xml 0.41.0 - https://github.com/tafia/quick-xml"
+        "quick-xml 0.41.0 - https://github.com/tafia/quick-xml",
+        "virtue 0.0.18 - https://github.com/bincode-org/virtue"
       ],
-      "start_line": 10616,
-      "end_line": 10636,
+      "start_line": 11275,
+      "end_line": 11295,
       "line_count": 21
     },
     {
@@ -704,8 +721,8 @@
       "used_by_entries": [
         "borrow-or-share 0.2.4 - https://github.com/yescallop/borrow-or-share"
       ],
-      "start_line": 13225,
-      "end_line": 13242,
+      "start_line": 13984,
+      "end_line": 14001,
       "line_count": 18
     },
     {
@@ -719,8 +736,8 @@
         "option-ext 0.2.0 - https://github.com/soc/option-ext.git",
         "selectors 0.36.1 - https://github.com/servo/stylo"
       ],
-      "start_line": 13251,
-      "end_line": 13623,
+      "start_line": 14010,
+      "end_line": 14382,
       "line_count": 373
     },
     {
@@ -748,8 +765,8 @@
         "zerovec-derive 0.11.4 - https://github.com/unicode-org/icu4x",
         "zerovec 0.11.7 - https://github.com/unicode-org/icu4x"
       ],
-      "start_line": 14399,
-      "end_line": 14437,
+      "start_line": 15158,
+      "end_line": 15196,
       "line_count": 39
     },
     {
@@ -761,8 +778,8 @@
         "foldhash 0.1.5 - https://github.com/orlp/foldhash",
         "foldhash 0.2.0 - https://github.com/orlp/foldhash"
       ],
-      "start_line": 14519,
-      "end_line": 14537,
+      "start_line": 15278,
+      "end_line": 15296,
       "line_count": 19
     }
   ]

@@ -2,7 +2,7 @@
 //! 供应商无关的 Wire 协议 Profile。
 
 use std::collections::BTreeSet;
-use vulcan_ai_contract::{AiExecutionRequest, ResourceKind};
+use vulcan_ai_contract::{AiExecutionRequest, ResourceKind, ToolInputFormat};
 
 pub mod anthropic;
 pub mod cohere;
@@ -48,6 +48,35 @@ pub(crate) fn compatible_provider_signature<'a>(
     signature: &'a str,
 ) -> Option<&'a str> {
     vulcan_ai_contract::provider_continuation_payload(provider, signature)
+}
+
+/// Rejects freeform tool input on protocols that only implement JSON-schema functions.
+/// 在只实现 JSON Schema 函数的协议上拒绝自由文本工具输入。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the exact tool definitions and `protocol_id` identifies the rejecting profile.
+/// `request` 持有精确工具定义，`protocol_id` 标识执行拒绝的 Profile。
+///
+/// # Returns
+/// 返回值
+/// Success when every tool is JSON-schema based, otherwise a deterministic conversion failure.
+/// 全部工具都基于 JSON Schema 时成功，否则返回确定性转换失败。
+pub(crate) fn require_json_schema_tool_inputs(
+    request: &AiExecutionRequest,
+    protocol_id: &str,
+) -> Result<(), ProtocolConversionError> {
+    if let Some(tool) = request
+        .tools
+        .iter()
+        .find(|tool| !matches!(tool.input_format, ToolInputFormat::JsonSchema))
+    {
+        return Err(ProtocolConversionError::new(format!(
+            "Protocol profile `{protocol_id}` has no registered freeform input projector for tool `{}`.",
+            tool.name
+        )));
+    }
+    Ok(())
 }
 
 /// Returns whether one exact protocol profile has a registered local-media projector for a MIME type.

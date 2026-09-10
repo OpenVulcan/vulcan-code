@@ -35,6 +35,10 @@ pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
 
+/// Maximum persistence attempts for one terminal execution-failure boundary.
+/// 单个执行失败终态边界允许的最大持久化尝试次数。
+const FAILURE_BOUNDARY_PERSIST_ATTEMPTS: usize = 2;
+
 /// Returns the original checkpoint failure for one rejected Provider durability boundary.
 /// 为一个已拒绝的 Provider 可靠边界返回原始 checkpoint 失败。
 ///
@@ -59,6 +63,22 @@ fn rejected_provider_boundary_error(
         *retained_error = None;
     }
     Some(error)
+}
+
+/// Returns whether one runtime boundary may settle a tool body that already started.
+/// 返回一个运行时边界是否可以结算已经启动的工具主体。
+///
+/// `event` is inspected only through its typed recovery boundary. A terminal result remains
+/// admissible after an earlier sibling durability failure; batch preparation and tool start do not.
+/// `event` 仅通过其强类型恢复边界检查。较早兄弟工具发生持久化失败后，终态结果仍可
+/// 接纳；批次准备与工具开始则不可接纳。
+fn runtime_event_settles_started_tool(event: &RuntimeEvent) -> bool {
+    matches!(
+        event.tool_execution_boundary.as_ref(),
+        Some(
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Finished(_,)
+        )
+    )
 }
 
 #[cfg(test)]
@@ -92,6 +112,45 @@ mod rejected_provider_boundary_tests {
         );
         assert!(retained_error.is_none());
     }
+
+    /// Verifies a prior sibling failure still admits terminal facts but rejects new execution.
+    /// 验证较早兄弟失败后仍接纳终态事实，同时拒绝新的执行。
+    #[test]
+    fn checkpoint_error_allows_only_started_tool_settlement() {
+        // finished_event represents a real tool body whose external execution already completed.
+        // finished_event 表示外部执行已经完成的真实工具主体。
+        let finished_event = RuntimeEvent::new(
+            vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolFinished,
+            "finished",
+            "finished",
+        )
+        .with_tool_execution_boundary(
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Finished(
+                vulcan_core::types::ToolInvocationResult {
+                    tool_call_id: String::from("sibling-call"),
+                    tool_name: String::from("sibling"),
+                    model_output: String::from("settled"),
+                    host_result: None,
+                    is_error: false,
+                },
+            ),
+        );
+        // prepared_event represents new execution admission that must remain closed after failure.
+        // prepared_event 表示失败后必须保持关闭的新执行准入。
+        let prepared_event = RuntimeEvent::new(
+            vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolBatchPrepared,
+            "prepared",
+            "prepared",
+        )
+        .with_tool_execution_boundary(
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::BatchPrepared(
+                Vec::new(),
+            ),
+        );
+
+        assert!(runtime_event_settles_started_tool(&finished_event));
+        assert!(!runtime_event_settles_started_tool(&prepared_event));
+    }
 }
 
 /// Persists one owned stream failure in the authoritative V1 event ledger.
@@ -108,9 +167,8 @@ mod rejected_provider_boundary_tests {
 ///
 /// # Returns
 /// 返回值
-/// Returns only after either the active API is durably process-interrupted or one permanent
-/// display error is durably appended when no interruptible API exists.
-/// 仅在活动 API 已可靠投影为进程中断，或不存在可中断 API 时已可靠追加永久显示错误后返回。
+/// Returns only after the failed API/turn boundary and its exact durable display error are closed.
+/// 仅在失败的 API/回合边界及其精确的可靠显示错误均已闭合后返回。
 pub(crate) async fn persist_v1_execution_failure_boundary(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
@@ -124,34 +182,54 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
     // 失败或取消构建者可能仅留下已完成结果工作线程；在闭合本回合前结算它们。
     let _preparation_settlement = handle.acquire_request_preparation_settlement().await;
     let now_ms = current_v1_unix_millis()?;
-    handle
-        .mutate_durable_if_changed_async(
-            crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
-            crate::session_runtime_registry_v1::SessionFlushReason::DisplayBoundary,
-            move |document| {
-                if document.interrupt_active_api_for_process(now_ms)?.is_some() {
-                    return Ok(
-                        crate::session_runtime_registry_v1::SessionMutationChange::Changed(()),
-                    );
-                }
-                // The error and Turn closure are one revision; releasing only the stream owner leaves root input blocked.
-                // 错误与回合闭合属于同一修订；仅释放流 owner 会让根输入继续被阻塞。
-                Ok(
-                    if document.fail_turn_without_active_api(
-                        reason_code,
-                        redacted_detail.as_deref(),
-                        now_ms,
-                    )? {
-                        crate::session_runtime_registry_v1::SessionMutationChange::Changed(())
-                    } else {
-                        crate::session_runtime_registry_v1::SessionMutationChange::Unchanged(())
-                    },
-                )
-            },
-        )
-        .await
-        .map(|_| ())
-        .map_err(|error| format!("failed to persist V1 stream failure `{reason_code}`: {error}"))
+    // attempt retries only a physical store failure; the first in-memory mutation is idempotent,
+    // and the retry flushes that same dirty revision without creating another failure fact.
+    // attempt 仅重试物理存储失败；首次内存变更具备幂等性，重试只会刷写同一脏修订，
+    // 不会创建第二条失败事实。
+    for attempt in 1..=FAILURE_BOUNDARY_PERSIST_ATTEMPTS {
+        // attempt_detail gives the blocking mutation closure ownership of the exact same error.
+        // attempt_detail 让阻塞变更闭包持有完全相同的错误详情。
+        let attempt_detail = redacted_detail.clone();
+        // persistence_result keeps the structured storage category available for safe retry policy.
+        // persistence_result 保留结构化存储类别，以便执行安全的重试策略。
+        let persistence_result = handle
+            .clone()
+            .mutate_durable_if_changed_async(
+                crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
+                crate::session_runtime_registry_v1::SessionFlushReason::DisplayBoundary,
+                move |document| {
+                    Ok(
+                        if document.fail_execution_boundary_and_close_turn(
+                            reason_code,
+                            attempt_detail.as_deref(),
+                            now_ms,
+                        )? {
+                            crate::session_runtime_registry_v1::SessionMutationChange::Changed(())
+                        } else {
+                            crate::session_runtime_registry_v1::SessionMutationChange::Unchanged(())
+                        },
+                    )
+                },
+            )
+            .await;
+        match persistence_result {
+            Ok(_) => return Ok(()),
+            Err(crate::session_runtime_registry_v1::SessionRuntimeError::Storage(error))
+                if attempt < FAILURE_BOUNDARY_PERSIST_ATTEMPTS =>
+            {
+                eprintln!(
+                    "[webui-service] retrying V1 execution failure boundary persistence: session={session_id} attempt={attempt} error={error}"
+                );
+                tokio::task::yield_now().await;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to persist V1 stream failure `{reason_code}`: {error}"
+                ));
+            }
+        }
+    }
+    unreachable!("terminal failure persistence attempts are non-zero")
 }
 
 /// Settles one stream terminal authority and releases its exact admission owner.
@@ -163,10 +241,10 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
 /// `task_state` 持有已注册 V1 会话与终态持久化 owner 表。
 /// `session_id` selects the exact finished session.
 /// `session_id` 选择精确的已结束会话。
-/// `v1_api_terminal_persisted` reports whether Provider handling already produced a durable API terminal.
-/// `v1_api_terminal_persisted` 表示 Provider 处理是否已经生成可靠 API 终态。
-/// `fallback_reason_code` is the stable redacted fact used only when no API terminal exists.
-/// `fallback_reason_code` 是仅在不存在 API 终态时使用的稳定脱敏事实。
+/// `v1_terminal_authority_persisted` reports whether Provider handling already produced a durable terminal sufficient for this report.
+/// `v1_terminal_authority_persisted` 表示 Provider 处理是否已生成足以覆盖当前报告的可靠终态。
+/// `fallback_reason_code` is the stable redacted fact used when the existing terminal authority is insufficient.
+/// `fallback_reason_code` 是既有终态权威不足时使用的稳定脱敏事实。
 /// `redacted_detail` preserves a producer-owned original failure instead of replacing it with that fallback code.
 /// `redacted_detail` 保留生产端持有的原始失败，避免用该回退编号替代它。
 /// `terminal_persistence_owner` is the exact owner adopted after removing the active stream task.
@@ -179,14 +257,14 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
 pub(crate) async fn settle_stream_terminal_authority(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
-    v1_api_terminal_persisted: bool,
+    v1_terminal_authority_persisted: bool,
     fallback_reason_code: &'static str,
     redacted_detail: Option<String>,
     terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
 ) -> bool {
-    // A pre-ApiStarted failure has no ApiStats receipt, so the same V1 owner must append a permanent error before admission reopens.
-    // ApiStarted 前失败没有 ApiStats 回执，因此重新开放准入前必须由同一 V1 owner 追加永久错误。
-    let terminal_state_persisted = if v1_api_terminal_persisted {
+    // A missing or insufficient ApiStats requires the same V1 owner to append a permanent error before admission reopens.
+    // ApiStats 缺失或不足时，重新开放准入前必须由同一 V1 owner 追加永久错误。
+    let terminal_state_persisted = if v1_terminal_authority_persisted {
         true
     } else {
         match persist_v1_execution_failure_boundary(
@@ -571,27 +649,37 @@ fn spawn_agent_stream_task_with_restart_state(
                 } => {
                     let event_kind = event.kind;
                     let lifecycle = event.v1_lifecycle.clone();
-                    let permit_result = match (provider_v1_sink.as_mut(), lifecycle) {
-                        (Some(sink), Some(ProviderV1LifecycleFacts::RequestPrepared(facts))) => {
-                            sink.prepare_request(facts, candidate)
+                    // Once any prior V1 durability checkpoint fails, reject later preparation locally.
+                    // 任一既有 V1 可靠性检查点失败后，在本地拒绝后续准备，绝不再次进入唯一 owner。
+                    let permit_result = if let Some(error) =
+                        prepared_retry_checkpoint_error.as_ref()
+                    {
+                        Err(error.clone())
+                    } else {
+                        match (provider_v1_sink.as_mut(), lifecycle) {
+                            (
+                                Some(sink),
+                                Some(ProviderV1LifecycleFacts::RequestPrepared(facts)),
+                            ) => sink
+                                .prepare_request(facts, candidate)
                                 .await
-                                .map_err(|error| error.to_string())
+                                .map_err(|error| error.to_string()),
+                            (Some(_), Some(ProviderV1LifecycleFacts::ExcludedNonSession))
+                            | (None, Some(ProviderV1LifecycleFacts::ExcludedNonSession)) => {
+                                candidate.into_excluded_non_session()
+                            }
+                            (Some(_), _) => {
+                                Err(ProviderV1SinkError::MissingTypedRequestFacts.to_string())
+                            }
+                            (None, Some(ProviderV1LifecycleFacts::RequestPrepared(_))) => {
+                                Err(String::from(
+                                    "A V1 Provider preparation boundary has no registered session owner.",
+                                ))
+                            }
+                            (None, _) => Err(String::from(
+                                "Provider preparation is missing its typed lifecycle facts.",
+                            )),
                         }
-                        (Some(_), Some(ProviderV1LifecycleFacts::ExcludedNonSession))
-                        | (None, Some(ProviderV1LifecycleFacts::ExcludedNonSession)) => {
-                            candidate.into_excluded_non_session()
-                        }
-                        (Some(_), _) => {
-                            Err(ProviderV1SinkError::MissingTypedRequestFacts.to_string())
-                        }
-                        (None, Some(ProviderV1LifecycleFacts::RequestPrepared(_))) => {
-                            Err(String::from(
-                                "A V1 Provider preparation boundary has no registered session owner.",
-                            ))
-                        }
-                        (None, _) => Err(String::from(
-                            "Provider preparation is missing its typed lifecycle facts.",
-                        )),
                     };
                     // A real permit is the only progress boundary that replenishes configuration-restart allowance.
                     // 真实许可是唯一补充配置重启额度的进展边界。
@@ -858,9 +946,11 @@ fn spawn_agent_stream_task_with_restart_state(
                     ));
                 }
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
-                    if provider_v1_sink.is_some() && prepared_retry_checkpoint_error.is_some() {
+                    if let Some(boundary_error) = prepared_retry_checkpoint_error.as_deref()
+                        && !runtime_event_settles_started_tool(&event)
+                    {
                         if event.tool_execution_boundary.is_some()
-                            && let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event)
+                            && let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, boundary_error)
                         {
                             eprintln!(
                                 "[webui-service] reject failed Provider V1 tool boundary failed: {rejection_error}"
@@ -889,14 +979,19 @@ fn spawn_agent_stream_task_with_restart_state(
                             let boundary_outcome = match v1_tool_result {
                                 Ok(outcome) => outcome,
                                 Err(error) => {
+                                    // error preserves the exact sink rejection before the typed value is consumed.
+                                    // error 在强类型值被消费前保留精确 sink 拒绝详情。
+                                    let error = error.to_string();
                                     // The exact existing tool barrier is rejected; no legacy transcript fallback runs.
                                     // 拒绝精确的既有工具闸门；不运行旧转录降级路径。
-                                    if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                                    if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error) {
                                         eprintln!(
                                             "[webui-service] reject Provider V1 tool boundary failed: {rejection_error}"
                                         );
                                     }
-                                    prepared_retry_checkpoint_error = Some(error.to_string());
+                                    if prepared_retry_checkpoint_error.is_none() {
+                                        prepared_retry_checkpoint_error = Some(error.clone());
+                                    }
                                     eprintln!(
                                         "[webui-service] Provider V1 tool boundary failed: {error}"
                                     );
@@ -908,7 +1003,9 @@ fn spawn_agent_stream_task_with_restart_state(
                                 ProviderV1ToolBoundaryOutcome::BatchPrepared(identities) => vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_tool_batch_projection_barrier_from_event(&event, identities),
                             };
                             if let Err(error) = acknowledgement {
-                                prepared_retry_checkpoint_error = Some(error.clone());
+                                if prepared_retry_checkpoint_error.is_none() {
+                                    prepared_retry_checkpoint_error = Some(error.clone());
+                                }
                                 eprintln!(
                                     "[webui-service] acknowledge Provider V1 tool boundary failed: {error}"
                                 );
@@ -922,8 +1019,10 @@ fn spawn_agent_stream_task_with_restart_state(
                         let error = String::from(
                             "Provider V1 session ownership is unavailable for a tool boundary.",
                         );
-                        prepared_retry_checkpoint_error = Some(error.clone());
-                        if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                        if prepared_retry_checkpoint_error.is_none() {
+                            prepared_retry_checkpoint_error = Some(error.clone());
+                        }
+                        if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error) {
                             eprintln!(
                                 "[webui-service] reject unowned Provider V1 tool boundary failed: {rejection_error}"
                             );

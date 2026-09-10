@@ -540,6 +540,19 @@ fn real_controller_registered_configuration_revokes_existing_index_access() {
                 assert!(!vce::vce_project_tool_enabled(&state, "project-a"), "case {case} tool gate");
                 assert!(handler.retrieve("project-a".into(), "find cache code".into()).await.is_err(),
                     "case {case} retained callback must reject");
+                // Stored physical maintenance remains readable while model authority is revoked.
+                // 模型权威撤销期间，已存物理维护仍必须可读取。
+                let compact_plan = vce::service_plan_vce_maintenance(
+                    state.clone(),
+                    vulcan_service_api::VceMaintenancePlanRequest {
+                        project_id: String::from("project-a"),
+                        mode: String::from("compact"),
+                    },
+                )
+                .await
+                .unwrap_or_else(|error| panic!("case {case} stored compaction plan: {error}"));
+                assert_eq!(compact_plan.mode, "compact");
+                assert_eq!(compact_plan.checkpoint_version, Some(baseline.checkpoint_version));
                 runtime.replace_configuration(valid.clone()).expect("restore exact model routes");
                 assert!(vce::vce_project_tool_enabled(&state, "project-a"), "case {case} recovery");
                 let recovered: vulcan_service_api::VceRetrievalResponse = serde_json::from_value(

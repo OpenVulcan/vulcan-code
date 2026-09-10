@@ -33,6 +33,7 @@ function connectionFixture(id: string, displayName: string): PublicAiConnection 
     credential_mode: "token",
     credential_id: `credential-${id}`,
     display_name: displayName,
+    enabled: true,
     prompt_cache_by_protocol: {},
     pending_validation: false,
   }

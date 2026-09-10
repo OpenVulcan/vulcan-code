@@ -460,37 +460,27 @@ pub(super) async fn verify_nonempty_query_interleaving(
         .update(&published_queued, &published_attempt)
         .await
         .expect("start published checkpoint cancellation guard");
+    // A stopped executor can now be settled without retiring an already published binding.
+    // 现在可以收敛已停止执行者，而不退役已经发布的绑定。
+    let settled = manager
+        .cancel_job("nonempty-project", &published_attempt.job_id)
+        .await
+        .expect("settle cold attempt without deleting published content");
+    assert_eq!(settled.state, VceJobState::Interrupted);
+    assert!(settled.result_checkpoint_version.is_none());
+    // Exact committed query content must survive recovery of the unrelated unfinished attempt.
+    // 恢复不相关的未完成尝试后，精确已提交查询内容必须保留。
+    let preserved = manager
+        .retrieve("nonempty-project", "generation_marker")
+        .await
+        .expect("query preserved checkpoint");
+    assert_eq!(preserved.checkpoint_version, baseline.checkpoint_version);
     assert!(
-        manager
-            .cancel_job("nonempty-project", &published_attempt.job_id)
-            .await
-            .is_err()
+        preserved
+            .result
+            .formatted_context
+            .contains("vce_old_generation")
     );
-    // Cleanup follows the production state machine: running, cancelling, then cancelled.
-    // 清理遵循生产状态机：运行中、取消中、最终已取消。
-    let mut published_cancelling = published_attempt.clone();
-    published_cancelling.state = VceJobState::Cancelling;
-    published_cancelling.sequence = published_attempt.sequence.saturating_add(1);
-    published_cancelling.updated_at_unix_ms =
-        published_attempt.updated_at_unix_ms.saturating_add(1);
-    published_runtime
-        .index
-        .job_store()
-        .update(&published_attempt, &published_cancelling)
-        .await
-        .expect("mark published checkpoint guard cancellation");
-    let mut published_cleanup = published_cancelling.clone();
-    published_cleanup.state = VceJobState::Cancelled;
-    published_cleanup.sequence = published_cancelling.sequence.saturating_add(1);
-    published_cleanup.updated_at_unix_ms =
-        published_cancelling.updated_at_unix_ms.saturating_add(1);
-    published_cleanup.error = Some(String::from("published checkpoint guard test cleanup"));
-    published_runtime
-        .index
-        .job_store()
-        .update(&published_cancelling, &published_cleanup)
-        .await
-        .expect("clean up published checkpoint guard receipt");
     // A suspended old query already owns its revision, engine and read-generation lease.
     // 暂停的旧查询已持有自身修订、引擎及读取代次租约。
     let query_pause = ai.queries.arm();
@@ -776,6 +766,7 @@ pub(super) async fn verify_nonempty_query_interleaving(
         admitted_settings_revision: settings.revision,
         source_checkpoint_version: None,
         replacement: None,
+        compaction: None,
         result_checkpoint_version: None,
         progress: None,
         followup_requested: false,
@@ -933,6 +924,17 @@ pub(super) async fn verify_nonempty_query_interleaving(
     assert!(
         !recovery_actions.is_empty(),
         "orphaned uninitialized binding must keep an explicit rebuild entry"
+    );
+    let compact_error = manager
+        .stored_maintenance_plan(
+            "cold-cancel-project",
+            vulcan_context_engine::VceMaintenanceMode::Compact,
+        )
+        .await
+        .expect_err("orphaned uninitialized binding must not offer physical compaction");
+    assert!(
+        compact_error.contains("active published index"),
+        "compact preview should identify its active-index requirement: {compact_error}"
     );
     let recovery_input = VceRebuildProjectInput {
         project_id: String::from("cold-cancel-project"),

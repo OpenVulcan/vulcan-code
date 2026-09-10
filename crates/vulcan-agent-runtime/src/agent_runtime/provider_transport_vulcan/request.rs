@@ -7,9 +7,10 @@ use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinit
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiContinuation, AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole,
-    NativeToolKind, ParallelToolCallPolicy, ReasoningOutputPolicy, ResourceKind,
-    StructuredOutputPolicy, ToolChoicePolicy, ToolDefinition,
+    APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiContinuation, AiExecutionRequest, AiMessage,
+    AiOperation, ContentItem, FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax,
+    MessageRole, NativeToolKind, ParallelToolCallPolicy, ReasoningOutputPolicy, ResourceKind,
+    StructuredOutputPolicy, ToolChoicePolicy, ToolDefinition, ToolInputFormat,
 };
 use vulcan_core::provider::VulcanProviderAdapter;
 use vulcan_core::types::{
@@ -18,7 +19,9 @@ use vulcan_core::types::{
     ProviderRequestToolSchema as CoreProviderRequestToolSchema,
     ProviderTurnResponse as CoreProviderTurnResponse,
 };
-use vulcan_provider_adapters::{ProviderExecutionRoute, ToolSchemaProjectionMode};
+use vulcan_provider_adapters::{
+    CodexApplyPatchToolType, ProviderExecutionRoute, ToolSchemaProjectionMode,
+};
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
 /// Carries the public request together with the controller budget snapshot.
@@ -100,14 +103,33 @@ pub(crate) fn project_public_tool_definitions(
         configured_tool_schema_projection_profile(route.tool_schema_projection);
     tools
         .into_iter()
-        .map(|tool| ToolDefinition {
-            name: tool.name,
-            description: tool.description,
-            input_schema: project_tool_parameters_schema(
-                &tool.parameters,
-                schema_projection_profile,
-            ),
-            strict: false,
+        .map(|tool| {
+            // inputFormat is activated only by the exact frozen native route behavior and tool name.
+            // inputFormat 仅由精确冻结的原生路由行为与工具名称共同激活。
+            let input_format = if tool.name == APPLY_PATCH_TOOL_NAME
+                && route.codex_behavior.as_ref().is_some_and(|behavior| {
+                    behavior.apply_patch_tool_type == CodexApplyPatchToolType::Freeform
+                }) {
+                ToolInputFormat::Freeform {
+                    format: FreeformToolFormat::Grammar {
+                        syntax: FreeformToolSyntax::Lark,
+                        definition: APPLY_PATCH_LARK_GRAMMAR.to_string(),
+                    },
+                    argument_encoding: FreeformToolArgumentEncoding::ApplyPatchObject,
+                }
+            } else {
+                ToolInputFormat::JsonSchema
+            };
+            ToolDefinition {
+                name: tool.name,
+                description: tool.description,
+                input_schema: project_tool_parameters_schema(
+                    &tool.parameters,
+                    schema_projection_profile,
+                ),
+                input_format,
+                strict: false,
+            }
         })
         .collect()
 }

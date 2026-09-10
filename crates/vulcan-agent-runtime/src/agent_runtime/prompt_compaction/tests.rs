@@ -368,6 +368,7 @@ fn remote_compaction_request_preserves_identity_and_turn_reasoning_controls() {
             "properties": {"key": {"type": "string"}},
             "required": ["key"]
         }),
+        input_format: Default::default(),
         strict: false,
     }];
     // nativeTools proves provider-native capability declarations also enter the compact request.

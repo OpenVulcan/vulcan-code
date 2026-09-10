@@ -125,6 +125,18 @@ export async function updatePublicAiConnection(
   return serviceClient.request<PublicAiSettingsSnapshot>("service_update_public_ai_connection", { request });
 }
 
+// savePublicAiConnectionEnabled reversibly includes or excludes one stored credential from runtime work.
+// savePublicAiConnectionEnabled 以可逆方式让一个已保存凭据参与或退出运行时工作。
+export async function savePublicAiConnectionEnabled(request: {
+  connectionId: string;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_connection_enabled",
+    { request },
+  );
+}
+
 // removePublicAiConnection removes one credential and its secure secret.
 // removePublicAiConnection 移除一个凭据及其安全秘密。
 export async function removePublicAiConnection(request: {

@@ -35,14 +35,20 @@ describe("durable VCE job projections", () => {
 
   // A terminal persistence diagnostic keeps the recovery cancellation action enabled even after the last phase.
   // 终态持久化诊断即使出现在最后阶段，也必须保持恢复取消入口可用。
-  it("keeps recovery cancellation available for an active receipt error", () => {
+  it.each(["committing", "complete"] as const)("keeps recovery cancellation available in %s", (phase) => {
     const job: VceJobSummary = {
       ...receipt(), state: "running", error: "Persist VCE terminal job receipt failed: transport error",
-      progress: { phase: "complete", operationId: "job-a", unit: "batches", completed: 1, total: 1, currentPath: null },
+      progress: { phase, operationId: "job-a", unit: "batches", completed: 1, total: 1, currentPath: null },
     };
     const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese={false} onCancel={() => undefined} />);
     expect(markup).toContain("Recover and cancel");
+    expect(markup).toContain("The terminal receipt is not fully persisted");
+    expect(markup).toContain("View technical diagnostics");
+    expect(markup).toContain("transport error");
+    expect(markup).toContain("<details");
     expect(markup).not.toContain('disabled=""');
+    expect(renderToStaticMarkup(<VceJobProgress job={{ ...job, state: "cancelling" }} chinese onCancel={() => undefined} />)).not.toContain('disabled=""');
+    expect(renderToStaticMarkup(<VceJobProgress job={{ ...job, error: null }} chinese onCancel={() => undefined} />)).toContain('disabled=""');
   });
   // Slow reads and reordered events cannot roll back a terminal result or erase an observed job.
   // 缓慢读取与乱序事件不能回退终态结果或擦除已观察作业。
@@ -93,6 +99,71 @@ describe("durable VCE job projections", () => {
     job.progress!.overallTotal = null;
     const unknown = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
     expect(unknown).not.toContain('value="');
+  });
+
+  // Physical compaction renders localized table evidence without presenting model work or retry admission.
+  // 物理整理显示本地化表级证据，且不呈现模型工作或重试准入。
+  it("renders physical compaction as neutral model-independent progress", () => {
+    const job: VceJobSummary = {
+      ...receipt(),
+      kind: "compact",
+      state: "running",
+      sourceCheckpointVersion: 7,
+      progress: {
+        phase: "writing",
+        operationId: "job-a:compact:path:1",
+        unit: "tables",
+        completed: 1,
+        total: 2,
+        currentPath: null,
+      },
+      compaction: {
+        tables: [{
+          role: "content",
+          state: "succeeded",
+          round: 1,
+          operationId: "job-a:compact:content:1",
+          plannedVersion: 12,
+          currentVersion: 13,
+          plannedFragmentCount: 32,
+          currentFragmentCount: 4,
+          metrics: { fragmentsRemoved: 32, fragmentsAdded: 4, filesRemoved: 32, filesAdded: 4 },
+          error: null,
+        }, {
+          role: "path",
+          state: "state_lost",
+          round: 1,
+          operationId: "job-a:compact:path:1",
+          plannedVersion: 8,
+          currentVersion: 8,
+          plannedFragmentCount: 24,
+          currentFragmentCount: 24,
+          metrics: { fragmentsRemoved: 0, fragmentsAdded: 0, filesRemoved: 0, filesAdded: 0 },
+          error: "controller operation disappeared",
+        }],
+      },
+    };
+    const chinese = renderToStaticMarkup(
+      <VceJobProgress job={job} chinese onCancel={() => undefined} onRetry={() => undefined} />,
+    );
+    expect(chinese).toContain("正在整理物理向量表");
+    expect(chinese).toContain("取消整理");
+    expect(chinese).toContain("内容向量表");
+    expect(chinese).toContain("片段 32 → 4");
+    expect(chinese).toContain("控制器状态已丢失");
+    expect(chinese).toContain("整理复用现有向量");
+    expect(chinese).toContain("查看技术诊断");
+    expect(chinese).toContain("controller operation disappeared");
+    expect(chinese).toContain("<details");
+    expect(chinese).not.toContain("重新执行");
+
+    const english = renderToStaticMarkup(
+      <VceJobProgress job={job} chinese={false} onCancel={() => undefined} />,
+    );
+    expect(english).toContain("Compacting physical vector tables");
+    expect(english).toContain("Content vector table");
+    expect(english).toContain("Controller state lost");
+    expect(english).toContain("Compaction reuses existing vectors");
   });
 
   // A failed update does not turn the previously committed checkpoint into an uninitialized index.

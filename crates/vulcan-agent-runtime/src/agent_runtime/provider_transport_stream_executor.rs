@@ -132,7 +132,10 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
             .send(Ok(ProviderStreamDelta::RuntimeEvent(batch_event)));
         let identities = wait_tool_batch_projection_barrier(projection_barrier)
             .await
-            .map_err(|message| VulcanCoreError::InvalidState { message })?;
+            .map_err(|error| VulcanCoreError::ToolDurabilityFailure {
+                tool_name: String::from("tool_batch"),
+                message: error.to_string(),
+            })?;
         self.runtime_bridge
             .install_prepared_invocation_identities(requests, identities)
             .map_err(|message| VulcanCoreError::InvalidState { message })
@@ -175,7 +178,10 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         let has_projection_barrier = projection_barrier.is_some();
         wait_runtime_event_projection_barrier(projection_barrier)
             .await
-            .map_err(|message| VulcanCoreError::InvalidState { message })?;
+            .map_err(|error| VulcanCoreError::ToolDurabilityFailure {
+                tool_name: request.tool_name.clone(),
+                message: error.to_string(),
+            })?;
         if !has_projection_barrier {
             tokio::task::yield_now().await;
         }
@@ -239,7 +245,10 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         // 在 Core 进入下一次 Provider 回合前，等待宿主桥接层先观察到工具终态。
         wait_runtime_event_projection_barrier(projection_barrier)
             .await
-            .map_err(|message| VulcanCoreError::InvalidState { message })?;
+            .map_err(|error| VulcanCoreError::ToolDurabilityFailure {
+                tool_name: request.tool_name.clone(),
+                message: error.to_string(),
+            })?;
         Ok(result)
     }
 }

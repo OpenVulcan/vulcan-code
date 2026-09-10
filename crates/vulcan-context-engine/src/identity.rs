@@ -95,6 +95,18 @@ pub fn is_sha256_identity(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Return whether a value is one canonical type-tagged lowercase SHA-256 identity.
+/// 返回一个值是否为带规范类型前缀的小写 SHA-256 身份。
+///
+/// `value` must contain the exact `sha256:` tag followed by one raw digest. Returns false for
+/// untagged, uppercase, shortened, or extended values.
+/// `value` 必须包含精确的 `sha256:` 前缀及一个原始摘要。无前缀、大写、缩短或扩展值均返回 false。
+pub fn is_tagged_sha256_identity(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(is_sha256_identity)
+}
+
 /// Compute a stable occurrence identity for a Chunk inside a Blob.
 /// 计算代码块在 Blob 内出现位置的稳定身份。
 pub fn chunk_id(
@@ -249,5 +261,21 @@ mod tests {
         assert!(is_sha256_identity(&identity));
         assert!(!is_sha256_identity(&identity.to_uppercase()));
         assert!(!is_sha256_identity("short"));
+    }
+
+    /// Accept only the exact tagged representation used by physical contracts.
+    /// 仅接受物理契约使用的精确带前缀表示。
+    #[test]
+    fn validates_canonical_tagged_sha256_identity_text() {
+        let identity = content_hash("physical-contract");
+        assert!(is_tagged_sha256_identity(&format!("sha256:{identity}")));
+        assert!(!is_tagged_sha256_identity(&identity));
+        assert!(!is_tagged_sha256_identity(&format!(
+            "SHA256:{}",
+            identity.to_uppercase()
+        )));
+        assert!(!is_tagged_sha256_identity(&format!(
+            "sha256:{identity}:extra"
+        )));
     }
 }

@@ -905,6 +905,9 @@
           "selected_protocol": {
             "type": "string"
           },
+          "codex_behavior": {
+            "$ref": "#/$defs/codex_model_behavior"
+          },
           "capabilities": {
             "$ref": "#/$defs/capability_patch"
           },
@@ -1801,10 +1804,13 @@
       "additionalProperties": false,
       "properties": {
         "remote_compaction": {
-          "enum": ["disabled", "enabled_with_local_fallback"]
+          "enum": ["disabled", "enabled_with_local_fallback", "inline_v2"]
         },
         "websocket": {
           "enum": ["disabled", "verified", "unverified_override"]
+        },
+        "recovery": {
+          "enum": ["none", "agent_space_result_and_usage_reconciliation_v1"]
         }
       }
     },
@@ -2380,6 +2386,107 @@
           "items": {"type": "string", "minLength": 1}
         },
         "evidence_revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "codex_model_behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wire_dialect": {
+          "enum": ["standard", "lite"]
+        },
+        "tool_mode": {
+          "enum": ["direct", "code_mode", "code_mode_only"]
+        },
+        "apply_patch_tool_type": {
+          "enum": ["function", "freeform"]
+        },
+        "shell_type": {
+          "enum": ["shell_command", "unified_exec"]
+        },
+        "web_search_tool_type": {
+          "enum": ["text", "text_and_image"]
+        },
+        "supports_search_tool": {
+          "type": "boolean"
+        },
+        "experimental_supported_tools": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "supports_parallel_tool_calls": {
+          "type": "boolean"
+        },
+        "supports_image_detail_original": {
+          "type": "boolean"
+        },
+        "supports_verbosity": {
+          "type": "boolean"
+        },
+        "default_verbosity": {
+          "enum": ["low", "medium", "high"]
+        },
+        "multi_agent_version": {
+          "enum": ["v1", "v2"]
+        },
+        "multi_agent_reasoning_effort": {
+          "enum": ["none", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        },
+        "include_skills_usage_instructions": {
+          "type": "boolean"
+        },
+        "include_apps_usage_instructions": {
+          "type": "boolean"
+        },
+        "include_plugin_usage_instructions": {
+          "type": "boolean"
+        },
+        "node_repl_disabled": {
+          "type": "boolean"
+        },
+        "node_repl_auto_review_required": {
+          "type": "boolean"
+        },
+        "requires_sandboxed_review": {
+          "type": "boolean"
+        },
+        "auto_review_model_override": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "comp_hash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "tool_output_truncation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "limit"],
+          "properties": {
+            "mode": {
+              "const": "tokens"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          }
+        },
+        "prefer_websockets": {
+          "type": "boolean"
+        },
+        "supports_experimental_context": {
+          "type": "boolean"
+        }
       }
     },
     "capability_patch": {

@@ -3304,10 +3304,12 @@ mod tests {
             "alibaba.token-plan.personal-global.2026-08-01"
         );
         assert!(catalog.models.iter().any(|model| model.id == "glm-5.2"));
-        assert!(catalog
-            .models
-            .iter()
-            .any(|model| model.id == "deepseek-v4-pro-0813"));
+        assert!(
+            catalog
+                .models
+                .iter()
+                .any(|model| model.id == "deepseek-v4-pro-0813")
+        );
     }
 
     /// Verifies Alibaba Model Studio publishes only reviewed embedding and rerank contracts.

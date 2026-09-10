@@ -388,6 +388,12 @@ export type TranslationKey =
   | "conversation.systemError.title"
   | "conversation.systemError.status"
   | "conversation.systemError.message"
+  | "conversation.systemError.pendingTitle"
+  | "conversation.systemError.pendingStatus"
+  | "conversation.systemError.pendingNotice"
+  | "conversation.systemError.resultConfirmation"
+  | "conversation.systemError.usageConfirmation"
+  | "conversation.systemError.unconfirmed"
   | "conversation.systemError.provider"
   | "conversation.systemError.category"
   | "conversation.systemError.stage"
@@ -2845,6 +2851,9 @@ export type TranslationKey =
   | "settings.credentials.emptyAllDescription"
   | "settings.credentials.refreshUsage"
   | "settings.credentials.syncModels"
+  | "settings.credentials.enable"
+  | "settings.credentials.disable"
+  | "settings.credentials.disabledStatus"
   | "settings.credentials.currentDefault"
   | "settings.credentials.setDefault"
   | "settings.credentials.edit"
@@ -2971,6 +2980,9 @@ export type TranslationKey =
   | "settings.models.routeUnresolved"
   | "settings.models.routeUnavailableReason"
   | "settings.models.routeNoRule"
+  | "settings.models.blockedRouteDiagnostics"
+  | "settings.models.codexBehavior"
+  | "settings.models.requiredRuntimePrimitive"
   | "settings.models.collapseProviders"
   | "settings.models.expandProviders"
   | "settings.models.searchLabel"
@@ -3736,6 +3748,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.title": "系统错误",
     "conversation.systemError.status": "失败",
     "conversation.systemError.message": "错误消息",
+    "conversation.systemError.pendingTitle": "结果与费用待确认",
+    "conversation.systemError.pendingStatus": "待确认",
+    "conversation.systemError.pendingNotice": "供应商已接纳此请求，但尚未确认最终结果与费用。系统不会自动重发，避免重复执行或重复计费；请使用请求标识在供应商请求历史中核对。",
+    "conversation.systemError.resultConfirmation": "结果状态",
+    "conversation.systemError.usageConfirmation": "费用状态",
+    "conversation.systemError.unconfirmed": "待确认",
     "conversation.systemError.provider": "Provider",
     "conversation.systemError.category": "错误类别",
     "conversation.systemError.stage": "执行阶段",
@@ -6195,6 +6213,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.routeUnresolved": "所选账号当前没有后端解析出的可执行协议绑定；该模型在此账号下处于阻塞状态。",
     "settings.models.routeUnavailableReason": "后端阻塞原因",
     "settings.models.routeNoRule": "默认绑定",
+    "settings.models.blockedRouteDiagnostics": "不可执行模型路由",
+    "settings.models.codexBehavior": "Codex 行为",
+    "settings.models.requiredRuntimePrimitive": "缺失运行时原语",
     "settings.models.collapseProviders": "收起为胶囊",
     "settings.models.expandProviders": "展开供应商分类",
     "settings.models.searchLabel": "搜索模型",
@@ -6608,6 +6629,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.credentials.emptyAllDescription": "点击“添加凭据”，选择供应商、服务入口、凭据方式与协议。",
     "settings.credentials.refreshUsage": "刷新账号用量",
     "settings.credentials.syncModels": "同步支持模型",
+    "settings.credentials.enable": "启用凭据",
+    "settings.credentials.disable": "停用凭据",
+    "settings.credentials.disabledStatus": "已停用",
     "settings.credentials.currentDefault": "当前默认账号",
     "settings.credentials.setDefault": "设为默认账号",
     "settings.credentials.edit": "编辑凭据",
@@ -7082,6 +7106,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.title": "System error",
     "conversation.systemError.status": "Failed",
     "conversation.systemError.message": "Error message",
+    "conversation.systemError.pendingTitle": "Result and usage pending",
+    "conversation.systemError.pendingStatus": "Pending",
+    "conversation.systemError.pendingNotice": "The provider accepted this request but has not confirmed its final result or usage. Vulcan will not resend it automatically, avoiding duplicate execution or billing; use the request identifiers to reconcile it in provider history.",
+    "conversation.systemError.resultConfirmation": "Result status",
+    "conversation.systemError.usageConfirmation": "Usage status",
+    "conversation.systemError.unconfirmed": "Unconfirmed",
     "conversation.systemError.provider": "Provider",
     "conversation.systemError.category": "Category",
     "conversation.systemError.stage": "Stage",
@@ -9541,6 +9571,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.routeUnresolved": "The selected account has no backend-resolved executable protocol binding; this model is blocked for that account.",
     "settings.models.routeUnavailableReason": "Backend blocking reason",
     "settings.models.routeNoRule": "default binding",
+    "settings.models.blockedRouteDiagnostics": "Unavailable model routes",
+    "settings.models.codexBehavior": "Codex behavior",
+    "settings.models.requiredRuntimePrimitive": "Missing runtime primitive",
     "settings.models.collapseProviders": "Collapse to pill",
     "settings.models.expandProviders": "Expand provider categories",
     "settings.models.searchLabel": "Search models",
@@ -9954,6 +9987,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.credentials.emptyAllDescription": "Click Add credential to choose a provider, service entry, credential method, and protocol.",
     "settings.credentials.refreshUsage": "Refresh account usage",
     "settings.credentials.syncModels": "Sync supported models",
+    "settings.credentials.enable": "Enable credential",
+    "settings.credentials.disable": "Disable credential",
+    "settings.credentials.disabledStatus": "Disabled",
     "settings.credentials.currentDefault": "Current default account",
     "settings.credentials.setDefault": "Set as default account",
     "settings.credentials.edit": "Edit credential",

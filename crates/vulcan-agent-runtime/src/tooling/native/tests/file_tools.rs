@@ -3,6 +3,9 @@ use crate::tooling::native::{
     build_apply_patch_tool, build_file_edit_tool, build_file_tool,
 };
 use serde_json::json;
+use vulcan_change_set::{
+    ChangeSetFileChangeKind, PersistentLifecycleContent, persistent_change_set_from_host_result,
+};
 use vulcan_tools_manager::{
     IncrementalJsonEvent, IncrementalJsonPathSegment, IncrementalJsonScalar,
     ToolRequestParserContext, ToolRequestParserSession, VULCAN_TOOL_ERROR_DETAIL_KIND,
@@ -131,6 +134,64 @@ fn native_file_tools_expose_contracts() {
             .description
             .contains("@@ exact anchor line")
     );
+}
+
+/// Verifies the actual public file-write result is accepted by the canonical V1 ChangeSet parser.
+/// 验证真实公开文件写入结果可被规范 V1 ChangeSet 解析器接纳。
+#[tokio::test]
+async fn file_changeset_v1_native_create_round_trips_through_persistent_contract() {
+    // workspace isolates the real native file mutation from every user and shared project path.
+    // workspace 把真实原生文件变更与所有用户及共享项目路径隔离。
+    let workspace = tempfile::tempdir().expect("create isolated file tool workspace");
+    // file invokes the same public native tool descriptor used by Provider execution.
+    // file 调用 Provider 执行使用的同一公开原生工具描述符。
+    let file = build_file_tool();
+    // result retains the exact structured host result emitted after the file is committed.
+    // result 保留文件提交后发出的精确结构化宿主结果。
+    let result = file
+        .invoke(test_native_request_with_workspace(
+            json!({
+                "action": "write",
+                "path": "created.txt",
+                "content": "第一行\nsecond line\n"
+            }),
+            workspace.path().to_path_buf(),
+        ))
+        .await
+        .expect("native file write should succeed");
+    // host_result serializes the real runtime envelope without hand-building an expected ChangeSet.
+    // host_result 序列化真实运行时封套，不手工构造预期 ChangeSet。
+    let host_result = result
+        .host_result
+        .as_ref()
+        .map(|host_result| {
+            json!({
+                "kind": host_result.kind,
+                "payload": host_result.payload,
+            })
+        })
+        .expect("successful write should expose one host result");
+    // changeset is the canonical persistent representation consumed by the V1 session owner.
+    // changeset 是 V1 会话 owner 消费的规范持久化表示。
+    let changeset = persistent_change_set_from_host_result(&host_result)
+        .expect("native host result must satisfy the canonical parser")
+        .expect("native write must declare one change-set");
+
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("created.txt"))
+            .expect("created file should remain readable"),
+        "第一行\nsecond line\n"
+    );
+    assert_eq!(changeset.files.len(), 1);
+    assert_eq!(changeset.files[0].change, ChangeSetFileChangeKind::Create);
+    assert!(changeset.files[0].hunks.is_empty());
+    assert!(matches!(
+        changeset.files[0].lifecycle_content,
+        Some(PersistentLifecycleContent::Full {
+            ref content,
+            total_line_count: 2
+        }) if content == "第一行\nsecond line\n"
+    ));
 }
 
 /// Verifies malformed Apply Patch argument shapes remain tool results instead of aborting the run loop.

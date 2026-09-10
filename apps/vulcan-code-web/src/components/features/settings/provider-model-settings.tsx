@@ -35,6 +35,7 @@ import {
   savePublicAiModelEnabled,
 } from "@/service/settings-actions-service"
 import type {
+  PublicAiCodexModelBehavior,
   PublicAiModel,
   PublicAiOperation,
   PublicAiSettingsSnapshot,
@@ -166,6 +167,16 @@ export function ModelListSettingsArea() {
     () => filterProviderModels(providerModelRows, searchQuery, "all"),
     [providerModelRows, searchQuery],
   )
+  // blockedModelRoutes keeps backend diagnostics visible without admitting blocked routes to controls.
+  // blockedModelRoutes 保持后端诊断可见，同时不把受阻路由放入可操作控件。
+  const blockedModelRoutes = React.useMemo(() => {
+    if (!snapshot || !selectedGroup) {
+      return []
+    }
+    return (snapshot.modelRouteRecords ?? []).filter((record) => (
+      record.providerId === selectedGroup.provider.id && !record.executable
+    ))
+  }, [selectedGroup, snapshot])
   // selectedProviderLabel supplies the shared collapsed-menu pill label.
   // selectedProviderLabel 为共享收起菜单胶囊提供标签。
   const selectedProviderLabel = selectedGroup
@@ -227,6 +238,41 @@ export function ModelListSettingsArea() {
               </div>
               <span className="settings-muted-line">{t("settings.models.memoryOnly")}</span>
             </div>
+            {blockedModelRoutes.length > 0 ? (
+              <section aria-label={t("settings.models.blockedRouteDiagnostics")}>
+                <div className="settings-split-column-title">
+                  {t("settings.models.blockedRouteDiagnostics")}
+                </div>
+                <div className="settings-model-row-list">
+                  {blockedModelRoutes.map((record) => (
+                    <article
+                      className="settings-model-row"
+                      key={JSON.stringify([record.connectionId, record.modelId])}
+                    >
+                      <div className="settings-model-row-main">
+                        <div className="settings-model-title-line">
+                          <strong>{record.modelId}</strong>
+                          <Badge variant="outline">{record.protocolId ?? "—"}</Badge>
+                        </div>
+                        {record.codexBehavior ? (
+                          <span className="settings-model-route-binding">
+                            {t("settings.models.codexBehavior")}: {codexBehaviorSummary(record.codexBehavior)}
+                          </span>
+                        ) : null}
+                        {record.requiredRuntimePrimitive ? (
+                          <span className="settings-model-route-binding">
+                            {t("settings.models.requiredRuntimePrimitive")}: {record.requiredRuntimePrimitive}
+                          </span>
+                        ) : null}
+                        <span className="settings-validation-error">
+                          {t("settings.models.routeUnavailableReason")}: {record.unavailableReason ?? t("settings.models.routeUnresolved")}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
             <div className="settings-model-row-list">
               <div className="settings-model-sticky-controls">
                 <div className="settings-model-toolbar">
@@ -479,6 +525,20 @@ export function ModelListSettingsArea() {
       </div>
     </AdaptiveToolPanel>
   )
+}
+
+// codexBehaviorSummary formats the exact backend behavior without deriving new capability claims.
+// codexBehaviorSummary 格式化后端精确行为，不派生新的能力声明。
+function codexBehaviorSummary(
+  behavior: PublicAiCodexModelBehavior,
+): string {
+  return [
+    behavior.wire_dialect,
+    behavior.tool_mode,
+    behavior.apply_patch_tool_type,
+    behavior.shell_type,
+    behavior.multi_agent_version,
+  ].filter((value) => value !== undefined).join(" · ")
 }
 
 // modelRouteValue returns the stable tab value for one exact service-entry protocol route.

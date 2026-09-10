@@ -183,6 +183,46 @@ fn pending_validation_connection_is_isolated_from_normal_routing() {
     assert!(exact_error.contains("pending explicit model validation"));
 }
 
+/// Verifies a disabled credential behaves like an absent account until explicitly enabled again.
+/// 验证已停用凭据在再次显式启用前与不存在的账号行为一致。
+#[test]
+fn disabled_connection_is_excluded_from_fallback_and_exact_routing() {
+    // runtime and configuration contain two credentials exposing the same model.
+    // runtime 与 configuration 包含两个公开同一模型的凭据。
+    let (runtime, mut configuration) = two_account_runtime();
+    configuration
+        .connection_graph
+        .remember_model_connection("openrouter", "openai/gpt-5.6-sol", "one")
+        .expect("model preference should be recorded");
+    configuration.active = Some(ActiveAiModelSelection {
+        provider_id: String::from("openrouter"),
+        model_id: String::from("openai/gpt-5.6-sol"),
+        connection_id: String::from("one"),
+    });
+
+    configuration
+        .set_connection_enabled("one", false)
+        .expect("configured connection should be disabled");
+    runtime
+        .replace_configuration(configuration.clone())
+        .expect("disabled state should cross the activation boundary");
+
+    assert!(configuration.active.is_none());
+    let fallback = runtime
+        .resolve_model_selection(&configuration, "openrouter", "openai/gpt-5.6-sol")
+        .expect("enabled account should replace the disabled preference");
+    assert_eq!(fallback.route.connection.id, "two");
+    let Err(exact_error) = runtime.resolve_connection_model_selection(
+        &configuration,
+        "one",
+        "openrouter",
+        "openai/gpt-5.6-sol",
+    ) else {
+        panic!("disabled exact account must not execute");
+    };
+    assert!(exact_error.contains("disabled"));
+}
+
 /// Verifies workbench selectors and resolution reject operation-only internal models.
 /// 验证工作台选择器与解析会拒绝仅供内部操作使用的模型。
 #[test]

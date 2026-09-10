@@ -8,7 +8,7 @@ use std::fmt::{Display, Formatter};
 
 /// A provider-independent document representing one source path.
 /// 表示一个源码路径的不依赖供应商的路径文档。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PathDocument {
     /// Stable path occurrence identity.
     /// 稳定的路径出现位置身份。

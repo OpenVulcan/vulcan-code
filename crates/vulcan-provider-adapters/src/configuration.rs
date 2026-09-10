@@ -21,7 +21,7 @@ use vulcan_context::{
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 18;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 19;
 
 /// Largest integer that can cross the JSON-to-JavaScript settings boundary without precision loss.
 /// 可在 JSON 到 JavaScript 设置边界间无精度损失传递的最大整数。
@@ -853,6 +853,10 @@ pub struct PersistedAiConfiguration {
     /// 在一次显式付费模型验证成功前保持隔离的凭据连接。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub pending_validation_connection_ids: BTreeSet<String>,
+    /// Credential connections explicitly disabled while retaining their persisted secrets and metadata.
+    /// 在保留持久化秘密与元数据时被显式停用的凭据连接。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub disabled_connection_ids: BTreeSet<String>,
     /// Exact active model and account selection.
     /// 精确的当前模型与账号选择。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1040,6 +1044,7 @@ impl Default for PersistedAiConfiguration {
             custom_model_connection_enabled_overrides: BTreeMap::new(),
             connection_model_access_policies: BTreeMap::new(),
             pending_validation_connection_ids: BTreeSet::new(),
+            disabled_connection_ids: BTreeSet::new(),
             active: None,
             connection_graph: PersistedConnectionGraph::default(),
             model_overrides: BTreeMap::new(),
@@ -1303,6 +1308,9 @@ impl PersistedAiConfiguration {
             .pending_validation_connection_ids
             .retain(|connection_id| !removed_connection_ids.contains(connection_id.as_str()));
         projection
+            .disabled_connection_ids
+            .retain(|connection_id| !removed_connection_ids.contains(connection_id.as_str()));
+        projection
             .connection_model_access_policies
             .retain(|connection_id, _| !removed_connection_ids.contains(connection_id.as_str()));
         projection.provider_tool_selections.retain(|_, selection| {
@@ -1353,7 +1361,7 @@ impl PersistedAiConfiguration {
                 };
                 Ok(normalized || inserted_vmm)
             }
-            10..=17 => {
+            10..=18 => {
                 self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
@@ -2434,6 +2442,70 @@ impl PersistedAiConfiguration {
     pub fn connection_is_pending_validation(&self, connection_id: &str) -> bool {
         self.pending_validation_connection_ids
             .contains(connection_id)
+    }
+
+    /// Reports whether one persisted credential connection may participate in runtime work.
+    /// 报告一个持久化凭据连接是否可以参与运行时工作。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` is the exact stable credential connection identifier.
+    /// `connection_id` 是精确稳定的凭据连接标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` unless the user explicitly disabled this connection.
+    /// 除非用户显式停用此连接，否则返回 `true`。
+    pub fn connection_is_enabled(&self, connection_id: &str) -> bool {
+        !self.disabled_connection_ids.contains(connection_id)
+    }
+
+    /// Persists one credential connection's reversible enabled state.
+    /// 持久化一个凭据连接可逆的启用状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` is the configured connection and `enabled` is its requested runtime state.
+    /// `connection_id` 是已配置连接，`enabled` 是请求的运行时状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An error when the exact connection does not exist; otherwise no value.
+    /// 精确连接不存在时返回错误，否则无返回值。
+    pub fn set_connection_enabled(
+        &mut self,
+        connection_id: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        if !self
+            .connection_graph
+            .connections
+            .contains_key(connection_id)
+        {
+            return Err(format!("Connection `{connection_id}` is not configured."));
+        }
+        if enabled {
+            self.disabled_connection_ids.remove(connection_id);
+        } else {
+            self.disabled_connection_ids
+                .insert(connection_id.to_string());
+            self.connection_graph
+                .account_preferences
+                .provider_defaults
+                .retain(|_, value| value != connection_id);
+            self.connection_graph
+                .account_preferences
+                .model_last_connections
+                .retain(|_, value| value != connection_id);
+            if self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.connection_id == connection_id)
+            {
+                self.active = None;
+            }
+        }
+        Ok(())
     }
 
     /// Changes the isolated validation state for one configured connection.
@@ -4237,6 +4309,90 @@ mod tests {
         configuration.set_connection_model_enabled("account-a", "future-model", true);
         assert!(configuration.connection_model_is_enabled("account-a", "future-model"));
         assert!(!configuration.connection_model_is_enabled("account-a", "another-future-model"));
+    }
+
+    /// Verifies disabling a credential is sparse, reversible, and clears every routing preference that referenced it.
+    /// 验证停用凭据采用稀疏持久化、可逆，并清理引用它的全部路由偏好。
+    #[test]
+    fn connection_enabled_state_is_sparse_reversible_and_removes_routing_preferences() {
+        // connection is a real graph member so the state API cannot accept an orphan identifier.
+        // connection 是真实连接图成员，因此状态接口不会接受孤立标识。
+        let connection = custom_provider_connection("account-a", "custom:provider-a");
+        // configuration carries all preference shapes that must stop referring to a disabled account.
+        // configuration 承载停用账号后必须停止引用它的全部偏好形状。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .connections
+            .insert(connection.id.clone(), connection.clone());
+        configuration
+            .connection_graph
+            .account_preferences
+            .provider_defaults
+            .insert(connection.provider_id.clone(), connection.id.clone());
+        configuration
+            .connection_graph
+            .account_preferences
+            .model_last_connections
+            .insert(String::from("model-key"), connection.id.clone());
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: connection.provider_id.clone(),
+            model_id: String::from("model-a"),
+            connection_id: connection.id.clone(),
+        });
+
+        configuration
+            .set_connection_enabled(connection.id.as_str(), false)
+            .expect("configured connection should be disabled");
+        assert!(!configuration.connection_is_enabled(connection.id.as_str()));
+        assert!(configuration.active.is_none());
+        assert!(
+            configuration
+                .connection_graph
+                .account_preferences
+                .provider_defaults
+                .is_empty()
+        );
+        assert!(
+            configuration
+                .connection_graph
+                .account_preferences
+                .model_last_connections
+                .is_empty()
+        );
+
+        configuration
+            .set_connection_enabled(connection.id.as_str(), true)
+            .expect("disabled connection should be enabled again");
+        assert!(configuration.connection_is_enabled(connection.id.as_str()));
+        assert!(configuration.disabled_connection_ids.is_empty());
+        assert!(
+            configuration
+                .set_connection_enabled("missing-account", false)
+                .is_err()
+        );
+    }
+
+    /// Verifies schema eighteen upgrades with every existing credential enabled by default.
+    /// 验证 Schema 18 升级时全部既有凭据默认启用。
+    #[test]
+    fn schema_eighteen_migration_initializes_disabled_connection_state() {
+        // historical omits the new sparse field exactly as a version-eighteen file does.
+        // historical 与 Schema 18 文件一致，省略新增的稀疏字段。
+        let mut historical: PersistedAiConfiguration =
+            serde_json::from_str(r#"{"schema_version":18}"#)
+                .expect("schema eighteen fixture must deserialize");
+        assert!(historical.disabled_connection_ids.is_empty());
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema eighteen must migrate")
+        );
+        assert_eq!(
+            historical.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert!(historical.disabled_connection_ids.is_empty());
     }
 
     /// Verifies schema six loads without account policy data and migrates to the current schema exactly.

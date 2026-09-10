@@ -4,6 +4,7 @@ use super::{
     acknowledge_tool_batch_projection_barrier_from_event, attach_runtime_event_projection_barrier,
     cancel_runtime_event_projection_barrier, clear_runtime_event_projection_barriers,
     insert_runtime_event_projection_barrier, reject_runtime_event_projection_barrier_from_event,
+    reject_runtime_event_projection_barrier_from_event_with_reason,
     remove_runtime_event_projection_barrier, runtime_event_projection_barriers_enabled,
     runtime_event_requires_tool_execution_safety_barrier,
     set_runtime_event_projection_barriers_test_override,
@@ -1863,5 +1864,113 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
             .expect("tool task should join")
             .expect("tool call should complete");
         assert!(result.model_output.contains("src/main.rs"));
+    });
+}
+
+/// Verifies a rejected ToolFinished barrier preserves the original host error as a fatal Core error.
+/// 验证被拒绝的 ToolFinished 屏障会把宿主原始错误保留为致命 Core 错误。
+#[test]
+fn streaming_tool_executor_propagates_tool_finished_rejection_reason() {
+    // manager and definitions provide the real managed-tool catalog used by the bridge.
+    // manager 与 definitions 提供桥接层使用的真实托管工具目录。
+    let (manager, definitions) = build_demo_manager();
+    // runtime_bridge owns the invocation identity and executes the demo tool body.
+    // runtime_bridge 持有调用身份并执行演示工具主体。
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(manager),
+        &definitions,
+        Uuid::nil(),
+        "Build",
+    ));
+    // sender and receiver expose the same live runtime-event channel used by production streams.
+    // sender 与 receiver 暴露生产流使用的同一实时运行时事件通道。
+    let (sender, mut receiver): (
+        ProviderLiveDeltaSender,
+        tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    ) = tokio::sync::mpsc::unbounded_channel();
+    // executor emits mandatory start and finish projection barriers around the tool body.
+    // executor 在工具主体前后发出强制的开始与完成投影屏障。
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
+    // request is the exact managed invocation whose terminal barrier will be rejected.
+    // request 是其终态屏障将被拒绝的精确托管调用。
+    let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-finish-rejected"),
+        tool_call_id: String::from("finish-rejected-call"),
+        tool_name: String::from("demo_tool"),
+        arguments: json!({ "path": "src/main.rs" }),
+        argument_parse_error: None,
+    };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1801, 1802, 1803);
+    // runtime keeps event receipt and task completion ordering deterministic.
+    // runtime 让事件接收与任务完成顺序保持确定性。
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    runtime.block_on(async {
+        // barrier_override enables mandatory projection barriers only for this test thread.
+        // barrier_override 仅为当前测试线程启用强制投影屏障。
+        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
+        // task runs the tool concurrently so the test can acknowledge each emitted boundary.
+        // task 并发运行工具，使测试能够依次确认每个已发出的边界。
+        let task = tokio::spawn(async move { executor.execute_tool(&request).await });
+        // started_event is the first mandatory recovery boundary emitted before execution.
+        // started_event 是执行前发出的第一条强制恢复边界。
+        let started_event = receiver
+            .recv()
+            .await
+            .expect("tool-start event should be sent")
+            .expect("tool-start event should be ok");
+        // started_event narrows the received delta to the authoritative runtime event.
+        // started_event 将收到的增量收窄为权威运行时事件。
+        let ProviderStreamDelta::RuntimeEvent(started_event) = started_event else {
+            panic!("first delta should be a tool-start runtime event");
+        };
+        assert!(
+            acknowledge_runtime_event_projection_barrier_from_event(&started_event)
+                .expect("tool-start barrier acknowledgement")
+        );
+        // finished_event is the terminal durability boundary emitted after the tool body succeeds.
+        // finished_event 是工具主体成功后发出的终态持久化边界。
+        let finished_event = receiver
+            .recv()
+            .await
+            .expect("tool-finished event should be sent")
+            .expect("tool-finished event should be ok");
+        // finished_event narrows the second delta to the exact terminal runtime event.
+        // finished_event 将第二条增量收窄为精确终态运行时事件。
+        let ProviderStreamDelta::RuntimeEvent(finished_event) = finished_event else {
+            panic!("second delta should be a tool-finished runtime event");
+        };
+        // original_error is the canonical lifecycle rejection that must survive every boundary.
+        // original_error 是必须跨越全部边界保留的规范生命周期拒绝。
+        let original_error =
+            "Invalid change-set field at payload.files[0].hunks: lifecycle changes";
+        assert!(
+            reject_runtime_event_projection_barrier_from_event_with_reason(
+                &finished_event,
+                original_error,
+            )
+            .expect("tool-finished barrier rejection")
+        );
+
+        // error is the fatal Core result observed by the controller-facing caller.
+        // error 是面向控制器的调用方观察到的致命 Core 结果。
+        let error = task
+            .await
+            .expect("tool task should join")
+            .expect_err("rejected terminal barrier must fail the tool call");
+        assert!(matches!(
+            error,
+            VulcanCoreError::ToolDurabilityFailure { ref tool_name, ref message }
+                if tool_name == "demo_tool" && message.contains(original_error)
+        ));
     });
 }

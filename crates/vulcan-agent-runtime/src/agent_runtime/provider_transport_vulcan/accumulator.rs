@@ -11,13 +11,14 @@ use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiStreamEvent, ContentItem, ProviderReplayEnvelope, RequestUsage, ResourceKind,
-    ResourceReference, ToolCall as PublicToolCall, UsageValue, is_replayable_codex_responses_item,
+    AiStreamEvent, ContentItem, ProviderMessagePhaseSnapshot, ProviderReplayEnvelope, RequestUsage,
+    ResourceKind, ResourceReference, ToolCall as PublicToolCall, UsageValue,
+    is_replayable_codex_responses_item,
 };
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
-    ConversationToolCall, CoreError as VulcanCoreError, ProviderContinuation, ProviderTurnDelta,
-    ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
+    ConversationToolCall, CoreError as VulcanCoreError, ProviderContinuation, ProviderTurnBoundary,
+    ProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
 };
 use vulcan_provider_adapters::{ResponseProjectionProfile, TransientReasoningStatusMode};
 
@@ -102,6 +103,12 @@ pub(super) struct PublicTurnAccumulator {
     /// Exact provider output items retained in completed-event order.
     /// 按完成事件顺序保留的原始供应商输出项。
     provider_context_items: Vec<Value>,
+    /// Typed message phases retained independently from opaque provider context.
+    /// 与不透明供应商上下文独立保存的类型化消息阶段。
+    message_phases: Vec<ProviderMessagePhaseSnapshot>,
+    /// Explicit logical-turn boundary supplied by the provider completion event.
+    /// 供应商完成事件提供的显式逻辑回合边界。
+    end_turn: Option<bool>,
     /// Whether a successful terminal response event was observed.
     /// 是否已经观察到成功响应终态事件。
     completed: bool,
@@ -277,6 +284,8 @@ impl PublicTurnAccumulator {
             replay_item_indices: BTreeMap::new(),
             replay_items: Vec::new(),
             provider_context_items: Vec::new(),
+            message_phases: Vec::new(),
+            end_turn: None,
             completed: false,
             durable_reasoning_observed: false,
             transient_reasoning_status: transient_reasoning_kind.map(|kind| {
@@ -702,6 +711,18 @@ impl PublicTurnAccumulator {
                 self.clear_transient_reasoning_status(live_sender);
                 self.completed = true;
             }
+            AiStreamEvent::ResponseTurnBoundary { end_turn } => {
+                if self.end_turn.replace(end_turn).is_some() {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Provider emitted its logical-turn boundary more than once.",
+                    ));
+                }
+            }
+            AiStreamEvent::ResponseMessagePhaseUpdated { item_id, phase } => {
+                self.message_phases
+                    .push(ProviderMessagePhaseSnapshot { item_id, phase });
+            }
             AiStreamEvent::ResponseFailed { error } => {
                 self.clear_transient_reasoning_status(live_sender);
                 return Err(public_execution_failure(provider_id, error));
@@ -773,18 +794,28 @@ impl PublicTurnAccumulator {
         } else {
             Vec::new()
         };
+        let replay = ProviderReplayEnvelope::new(
+            self.provider_id.clone(),
+            self.connection_id.clone(),
+            self.route_fingerprint.clone(),
+            self.protocol_profile_id.clone(),
+            self.model_id.clone(),
+            replay_content,
+            provider_context_items,
+        )
+        .with_message_phases(self.message_phases);
+        // vulcanAiState keeps public typed metadata separate from opaque route-bound replay items.
+        // vulcanAiState 将公共类型化元数据与不透明的路由绑定重放项目分开保存。
+        let mut vulcan_ai_state = serde_json::Map::new();
+        vulcan_ai_state.insert(String::from("replay"), json!(replay));
+        if let Some(end_turn) = self.end_turn {
+            vulcan_ai_state.insert(
+                String::from("turn_boundary"),
+                json!(ProviderTurnBoundary { end_turn }),
+            );
+        }
         let provider_message_state = Some(json!({
-            "vulcan_ai": {
-                "replay": ProviderReplayEnvelope::new(
-                    self.provider_id.clone(),
-                    self.connection_id.clone(),
-                    self.route_fingerprint.clone(),
-                    self.protocol_profile_id.clone(),
-                    self.model_id.clone(),
-                    replay_content,
-                    provider_context_items,
-                ),
-            }
+            "vulcan_ai": Value::Object(vulcan_ai_state),
         }));
         Ok(CoreProviderTurnResponse {
             assistant_text: self.text,

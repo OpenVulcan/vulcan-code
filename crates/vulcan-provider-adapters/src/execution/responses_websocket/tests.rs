@@ -132,6 +132,57 @@ async fn nonpersistent_responses_continuation_is_scoped_to_the_active_websocket(
     assert!(effective.body.get("previous_response_id").is_none());
 }
 
+/// Verifies full-history and socket-incremental requests share every non-chain wire field.
+/// 验证全量历史与 Socket 增量请求共享全部非链路线路字段。
+#[tokio::test]
+async fn websocket_full_and_incremental_requests_have_equivalent_envelopes() {
+    let request = request_with_codex_continuation();
+    let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+    route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+        .expect("test key should validate")
+        .execution_secret()
+        .expect("test key should resolve");
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+
+    let full_request = request_without_nonpersistent_responses_continuation(&route, &request);
+    let incremental_request =
+        responses_websocket_request_for_active_session(&request, Some("response-1"));
+    let full = client
+        .encode_request_with_credential(&route, &full_request, &secret)
+        .expect("full-history request should encode");
+    let incremental = client
+        .encode_request_with_credential(&route, &incremental_request, &secret)
+        .expect("incremental request should encode");
+
+    assert_eq!(full.path, incremental.path);
+    assert_eq!(full.headers, incremental.headers);
+    assert!(
+        full.body["input"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+    assert!(
+        incremental.body["input"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
+    assert_eq!(incremental.body["previous_response_id"], "response-1");
+    let mut full_common = full.body;
+    let mut incremental_common = incremental.body;
+    for body in [&mut full_common, &mut incremental_common] {
+        let object = body
+            .as_object_mut()
+            .expect("Responses request body should remain an object");
+        object.remove("input");
+        object.remove("previous_response_id");
+    }
+    assert_eq!(full_common, incremental_common);
+}
+
 /// Verifies only official recoverable WebSocket controls become replay-safe failures.
 /// 验证仅官方可恢复 WebSocket 控制错误会转换为可安全重放失败。
 #[test]
@@ -227,6 +278,7 @@ async fn websocket_1013_failure_falls_back_to_full_history_http_attempt() {
     route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
         remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
         websocket: ResponsesWebsocketPolicy::Verified,
+        recovery: Default::default(),
     });
     let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
         .expect("test key should validate")
@@ -363,6 +415,7 @@ async fn websocket_previous_response_not_found_retries_without_stale_cursor() {
     route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
         remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
         websocket: ResponsesWebsocketPolicy::Verified,
+        recovery: Default::default(),
     });
     let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
         .expect("test key should validate")

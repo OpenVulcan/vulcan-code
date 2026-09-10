@@ -464,6 +464,136 @@ impl WorkspaceState {
         Ok(self.snapshot())
     }
 
+    /// Reconcile a retry against the generation already frozen by a durable VCE run.
+    /// 按持久化 VCE 运行已经冻结的代数协调一次重试。
+    ///
+    /// The normal reconciliation API advances the generation for every new refresh. A durable
+    /// retry must instead reuse the original generation when the previous process already wrote
+    /// its source snapshot, otherwise the persisted node identities can never match the retry.
+    /// 普通协调接口每次刷新都会推进代数；持久化重试必须复用原始代数，否则已保存的节点身份永远无法与重试匹配。
+    pub(crate) fn reconcile_for_existing_run(
+        &mut self,
+        full_scan: bool,
+        target_generation: u64,
+        observations: impl IntoIterator<Item = FileObservation>,
+        removed_paths: impl IntoIterator<Item = String>,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        if target_generation == 0
+            || (target_generation != self.generation
+                && target_generation != self.next_generation()?)
+        {
+            return Err(WorkspaceError::InvalidCheckpoint {
+                reason: format!(
+                    "durable VCE retry generation {target_generation} does not follow workspace generation {}",
+                    self.generation
+                ),
+            });
+        }
+        let observations = observations.into_iter().collect::<Vec<_>>();
+        let mut touched_paths = BTreeSet::new();
+        let mut next_records = if full_scan {
+            BTreeMap::new()
+        } else {
+            self.records.clone()
+        };
+
+        for observation in observations {
+            let path =
+                normalize_relative_path(&observation.path).map_err(WorkspaceError::InvalidPath)?;
+            if !touched_paths.insert(path.clone()) {
+                return Err(WorkspaceError::DuplicatePath { path });
+            }
+            let previous = self.records.get(&path);
+            let record = if let Some(previous) = previous.filter(|record| {
+                record.source == FileSource::Explicit
+                    && record.status == FileStatus::Present
+                    && observation.source == FileSource::Filesystem
+            }) {
+                if filesystem_observation_matches_explicit(&path, &observation, previous)? {
+                    Self::record_from_observation(
+                        path.clone(),
+                        observation,
+                        Some(previous),
+                        target_generation,
+                    )?
+                } else {
+                    let mut record = previous.clone();
+                    record.generation = target_generation;
+                    record
+                }
+            } else {
+                Self::record_from_observation(
+                    path.clone(),
+                    observation,
+                    previous,
+                    target_generation,
+                )?
+            };
+            next_records.insert(path, record);
+        }
+
+        if full_scan {
+            for (path, previous) in &self.records {
+                if !touched_paths.contains(path) {
+                    if previous.source == FileSource::Explicit
+                        && previous.status == FileStatus::Present
+                    {
+                        let mut retained = previous.clone();
+                        retained.generation = target_generation;
+                        next_records.insert(path.clone(), retained);
+                        continue;
+                    }
+                    let deleted = Self::record_from_observation(
+                        path.clone(),
+                        FileObservation::deleted(path.clone(), FileSource::Filesystem),
+                        Some(previous),
+                        target_generation,
+                    )?;
+                    next_records.insert(path.clone(), deleted);
+                }
+            }
+        } else {
+            for removed_path in removed_paths {
+                let path =
+                    normalize_relative_path(&removed_path).map_err(WorkspaceError::InvalidPath)?;
+                if !touched_paths.insert(path.clone()) {
+                    return Err(WorkspaceError::DuplicatePath { path });
+                }
+                let previous = self.records.get(&path);
+                if let Some(previous) = previous.filter(|record| {
+                    record.source == FileSource::Explicit && record.status == FileStatus::Present
+                }) {
+                    let mut record = previous.clone();
+                    record.generation = target_generation;
+                    next_records.insert(path, record);
+                    continue;
+                }
+                let committed_blob_name =
+                    previous.and_then(|record| record.committed_blob_name.clone());
+                next_records.insert(
+                    path.clone(),
+                    FileRecord {
+                        path,
+                        blob_name: None,
+                        committed_blob_name,
+                        status: FileStatus::Deleted,
+                        size: 0,
+                        mtime_ns: None,
+                        source: FileSource::Filesystem,
+                        content: None,
+                        generation: target_generation,
+                        skip_reason: None,
+                    },
+                );
+            }
+        }
+
+        validate_blob_ownership(&next_records)?;
+        self.generation = target_generation;
+        self.records = next_records;
+        Ok(self.snapshot())
+    }
+
     /// Restore the pure workspace state from a previously captured snapshot.
     /// 从之前捕获的快照恢复纯工作区状态。
     pub fn from_snapshot(snapshot: WorkspaceSnapshot) -> Result<Self, WorkspaceError> {

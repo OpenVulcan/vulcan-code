@@ -218,7 +218,9 @@ impl PublicAiRuntime {
         // available 仅累积满足服务、凭据与模型访问条件的目标。
         let mut available = Vec::new();
         for connection in configuration.connection_graph.connections.values() {
-            if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            if !configuration.connection_is_enabled(connection.id.as_str())
+                || configuration.connection_is_pending_validation(connection.id.as_str())
+            {
                 continue;
             }
             if configuration.custom_provider_manifest_is_isolated(connection.provider_id.as_str()) {
@@ -391,6 +393,12 @@ impl PublicAiRuntime {
                     selection.connection_id
                 )
             })?;
+        if !configuration.connection_is_enabled(connection.id.as_str()) {
+            return Err(format!(
+                "Provider tool connection `{}` is disabled.",
+                connection.id
+            ));
+        }
         if configuration.connection_is_pending_validation(connection.id.as_str()) {
             return Err(format!(
                 "Provider tool connection `{}` is pending explicit model validation.",

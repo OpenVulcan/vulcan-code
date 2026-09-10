@@ -7,7 +7,9 @@ use std::fmt::{Display, Formatter};
 
 /// Identify the source strategy used to create a code Chunk.
 /// 标识代码块使用的切块策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum ChunkKind {
     /// A semantic AST-derived code window.
     /// 基于语义 AST 生成的代码窗口。
@@ -53,7 +55,9 @@ pub enum FileStatus {
 
 /// A source range using one-based inclusive line numbers.
 /// 使用从一开始且闭区间行号的源码范围。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct SourceRange {
     /// The first source line included in the range.
     /// 范围包含的第一行源码行号。
@@ -107,7 +111,7 @@ impl SourceRange {
 
 /// A content-addressed and source-locatable code Chunk.
 /// 一个具有内容地址和源码定位信息的代码块。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Chunk {
     /// Stable occurrence identity of this Chunk in its Blob.
     /// 代码块在 Blob 内的稳定出现位置身份。

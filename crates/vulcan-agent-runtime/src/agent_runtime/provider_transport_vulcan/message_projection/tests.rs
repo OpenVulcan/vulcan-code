@@ -171,6 +171,7 @@ fn ordinary_replay_content_requires_exact_connection_route() {
                     "id": "reasoning-item",
                     "status": "completed",
                     "summary": [{"type": "summary_text", "text": "reasoning"}],
+                    "encrypted_content": "opaque-replay-context",
                 })],
             )
         }

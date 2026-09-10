@@ -68,6 +68,18 @@ fn build_tool_execution_failure_result(
     }
 }
 
+/// Returns whether one executor error represents a fatal recovery-durability boundary failure.
+/// 判断一条执行器错误是否表示致命的恢复持久化边界失败。
+///
+/// `error` is inspected by its typed Core variant. The function returns `true` only
+/// when the controller must stop the Provider loop instead of converting the failure
+/// into an ordinary model-visible tool result.
+/// `error` 按 Core 类型变体检查。仅当控制器必须停止 Provider 循环、不得把失败转换为
+/// 普通模型可见工具结果时返回 `true`。
+fn is_tool_durability_failure(error: &CoreError) -> bool {
+    matches!(error, CoreError::ToolDurabilityFailure { .. })
+}
+
 /// Converts a batch-preparation failure into one terminal non-executed result.
 /// 将批次准备失败转换为一条终态且未执行的结果。
 fn build_tool_batch_preparation_failure_result(
@@ -296,6 +308,7 @@ impl VulcanCoreController {
         self.record_tool_started(request);
         let result = match executor.execute_tool(request).await {
             Ok(result) => result,
+            Err(error) if is_tool_durability_failure(&error) => return Err(error),
             Err(error) => build_tool_execution_failure_result(request, &error),
         };
         self.record_tool_finished(&result);
@@ -315,6 +328,9 @@ impl VulcanCoreController {
         P: VulcanToolPolicy,
     {
         if let Err(error) = executor.prepare_tool_batch(&requests).await {
+            if is_tool_durability_failure(&error) {
+                return Err(error);
+            }
             let results = requests
                 .iter()
                 .map(|request| {
@@ -343,10 +359,11 @@ impl VulcanCoreController {
             if policy.should_execute(&request, &policy_snapshot) {
                 pending_executions.push(async move {
                     let result = match executor.execute_tool(&request).await {
-                        Ok(result) => result,
-                        Err(error) => build_tool_execution_failure_result(&request, &error),
+                        Ok(result) => Ok(result),
+                        Err(error) if is_tool_durability_failure(&error) => Err(error),
+                        Err(error) => Ok(build_tool_execution_failure_result(&request, &error)),
                     };
-                    (request_index, Ok(result))
+                    (request_index, result)
                 });
             } else {
                 let skipped_result = ToolInvocationResult {
@@ -370,11 +387,20 @@ impl VulcanCoreController {
 
         // Completion events follow actual per-tool completion while result slots preserve the Provider-declared replay order.
         // 完成事件遵循每个工具的实际完成时序，而结果槽位保留 Provider 声明的回放顺序。
+        let mut fatal_durability_error = None;
         while let Some((request_index, result)) = pending_executions.next().await {
             if let Ok(completed_result) = &result {
                 self.record_tool_finished(completed_result);
             }
+            if let Err(error) = &result
+                && fatal_durability_error.is_none()
+            {
+                fatal_durability_error = Some(error.clone());
+            }
             result_slots[request_index] = Some(result);
+        }
+        if let Some(error) = fatal_durability_error {
+            return Err(error);
         }
 
         let mut ordered_results = Vec::with_capacity(result_slots.len());

@@ -148,6 +148,17 @@
   color: var(--destructive);
 }
 
+/* Pending reconciliation uses warning semantics while retaining the same inspectable error payload. */
+/* 待对账使用警告语义，同时保留同一份可检查错误载荷。 */
+.system-error-card-pending .system-error-icon {
+  color: var(--warning-foreground, #b7791f);
+}
+
+.system-error-card-pending .system-error-message {
+  border-left-color: var(--warning-foreground, #b7791f);
+  background: color-mix(in srgb, var(--warning-foreground, #b7791f) 10%, transparent);
+}
+
 .system-error-title strong {
   color: var(--foreground);
   font-size: 13px;
@@ -806,6 +817,19 @@
   display: grid;
   gap: 7px;
   padding-top: 1px;
+}
+
+/* Reconciliation notice explains why automatic replay is intentionally unavailable. */
+/* 对账提示说明为何自动重放被有意禁用。 */
+.system-error-reconciliation-notice {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--warning-foreground, #b7791f) 45%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning-foreground, #b7791f) 8%, transparent);
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .turn-stats-cache-header {

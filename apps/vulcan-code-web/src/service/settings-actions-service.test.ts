@@ -8,6 +8,7 @@ import {
   savePublicAiMediaDeliveryPolicy,
   savePublicAiSessionProviderToolSelections,
   savePublicAiInferenceRoute,
+  savePublicAiConnectionEnabled,
 } from "./settings-actions-service";
 
 // The hoisted transport spy observes the real settings action without invoking a running service.
@@ -70,6 +71,30 @@ describe("media delivery settings action", () => {
     await expect(savePublicAiMediaDeliveryPolicy(mediaDeliverySettingsFixture().policy, "read-revision"))
       .rejects.toThrow("media policy publication failed");
     expect(transport.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("credential enabled-state action", () => {
+  // Reset the shared transport before observing the exact credential mutation request.
+  // 在观察精确凭据变更请求前重置共享传输。
+  beforeEach(() => {
+    transport.request.mockReset();
+  });
+
+  // The browser forwards only the stable connection identity and requested reversible state.
+  // 浏览器仅转发稳定连接身份与请求的可逆状态。
+  it("forwards the exact enabled-state request and returns the backend snapshot", async () => {
+    // published represents the authoritative backend snapshot returned after activation.
+    // published 表示激活后后端返回的权威快照。
+    const published = { connections: [{ id: "account-a", enabled: false }] };
+    transport.request.mockResolvedValue(published);
+
+    expect(await savePublicAiConnectionEnabled({ connectionId: "account-a", enabled: false }))
+      .toBe(published);
+    expect(transport.request).toHaveBeenCalledExactlyOnceWith(
+      "service_save_public_ai_connection_enabled",
+      { request: { connectionId: "account-a", enabled: false } },
+    );
   });
 });
 

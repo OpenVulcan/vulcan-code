@@ -7,13 +7,16 @@ use super::{
     ProviderExecutionClient, ProviderExecutionFailure, ProviderExecutionRoute, pre_dispatch_failure,
 };
 use crate::{
-    CredentialExecutionSecret, CustomModelRequestProjection, RequestProjectorKind,
-    SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection,
+    CodexApplyPatchToolType, CodexWireDialect, CredentialExecutionSecret,
+    CustomModelRequestProjection, RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID,
+    SecondaryRouteSelection,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiExecutionRequest, ContentItem, ModelParameterValue, ReasoningEffort, StructuredOutputPolicy,
+    APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem,
+    FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax, ModelParameterValue,
+    ReasoningEffort, StructuredOutputPolicy, ToolInputFormat,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -46,12 +49,15 @@ impl ProviderExecutionClient {
         route: &ProviderExecutionRoute,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
-        validate_request_policy(route, request)?;
-        validate_request_projection_guards_before_encoding(route, request)?;
+        // effectiveRequest is the single request snapshot shared by wire encoding and stream decoding.
+        // effectiveRequest 是线路编码与流解码共同使用的唯一请求快照。
+        let effective_request = request_with_codex_tool_input_contract(route, request);
+        validate_request_policy(route, &effective_request)?;
+        validate_request_projection_guards_before_encoding(route, &effective_request)?;
         // Internal media stays typed until the exact target profile projects every resource.
         // 内部媒体保持强类型，直到精确目标 Profile 投影全部资源。
-        let encoded = project_internal_baseline_for_provider(route, request)?;
-        project_provider_request(route, request, encoded)
+        let encoded = project_internal_baseline_for_provider(route, &effective_request)?;
+        project_provider_request(route, &effective_request, encoded)
     }
 
     /// Proves that one exact encoded request preserves the caller-required no-reasoning contract.
@@ -387,6 +393,7 @@ pub(super) fn project_provider_request(
     if let Some(endpoint_path) = route.protocol_route.endpoint_path.as_ref() {
         encoded.path = endpoint_path.clone();
     }
+    project_codex_model_behavior(route, request, &mut encoded)?;
     project_sampling_temperature(request, &mut encoded)?;
     // The ordered Manifest Profile chain is the only provider/model-specific request mapper.
     // Empty chains mean that baseline protocol encoding needs no vendor mutation and never
@@ -407,6 +414,218 @@ pub(super) fn project_provider_request(
     )
     .map_err(|error| pre_dispatch_failure(format!("Final media projection is invalid: {error}")))?;
     Ok(encoded)
+}
+
+/// Projects one frozen model's closed Codex behavior onto the final native Responses envelope.
+/// 将一个冻结模型的封闭 Codex 行为投影到最终原生 Responses 封装。
+///
+/// # Parameters
+/// 参数
+/// The route owns the behavior, request owns stable session identity, and encoded owns the final body.
+/// 路由持有行为，请求持有稳定会话身份，encoded 持有最终正文。
+///
+/// # Returns
+/// 返回值
+/// Success after deterministic projection, or a pre-dispatch contract failure.
+/// 确定性投影后成功，或返回分派前契约失败。
+fn project_codex_model_behavior(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let Some(behavior) = route.codex_behavior.as_ref() else {
+        return Ok(());
+    };
+    if !route_uses_native_codex_responses(route) {
+        return Err(pre_dispatch_failure(
+            "A frozen codex_behavior may only project onto the native Codex Responses profile.",
+        ));
+    }
+    let body = request_body_mut(encoded, "Codex model behavior")?;
+    let tools = body
+        .remove("tools")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    if behavior.supports_verbosity
+        && let Some(verbosity) = behavior.default_verbosity
+    {
+        let text = body
+            .entry(String::from("text"))
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        let Some(text) = text.as_object_mut() else {
+            return Err(pre_dispatch_failure(
+                "Codex Responses text controls must be a JSON object.",
+            ));
+        };
+        text.insert(
+            String::from("verbosity"),
+            serde_json::to_value(verbosity).map_err(|error| {
+                pre_dispatch_failure(format!(
+                    "Codex Responses verbosity could not be serialized: {error}"
+                ))
+            })?,
+        );
+    }
+    if !behavior.supports_parallel_tool_calls
+        || matches!(behavior.wire_dialect, CodexWireDialect::Lite)
+    {
+        body.insert(String::from("parallel_tool_calls"), Value::Bool(false));
+    }
+    if matches!(behavior.wire_dialect, CodexWireDialect::Standard) {
+        if !tools.is_empty() {
+            body.insert(String::from("tools"), Value::Array(tools));
+        }
+        return Ok(());
+    }
+
+    let session_id = request.cache_scope_id.as_deref().ok_or_else(|| {
+        pre_dispatch_failure(
+            "Responses Lite requires a stable cache_scope_id for prefix item identity.",
+        )
+    })?;
+    let namespaced_tools = codex_lite_tools(tools);
+    let tools_payload = serde_json::to_vec(&namespaced_tools).map_err(|error| {
+        pre_dispatch_failure(format!(
+            "Responses Lite tools could not be serialized for stable identity: {error}"
+        ))
+    })?;
+    let mut prefix = vec![json!({
+        "id": codex_lite_prefix_item_id("at", session_id, tools_payload.as_slice()),
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": namespaced_tools,
+    })];
+    if let Some(instructions) = body
+        .remove("instructions")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .filter(|value| !value.is_empty())
+    {
+        prefix.push(json!({
+            "id": codex_lite_prefix_item_id("msg", session_id, instructions.as_bytes()),
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": instructions,
+            }],
+        }));
+    }
+    let input = body
+        .get_mut("input")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| pre_dispatch_failure("Responses Lite input must be an array."))?;
+    input.splice(0..0, prefix);
+    let reasoning = body
+        .entry(String::from("reasoning"))
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let Some(reasoning) = reasoning.as_object_mut() else {
+        return Err(pre_dispatch_failure(
+            "Responses Lite reasoning controls must be a JSON object.",
+        ));
+    };
+    reasoning.insert(
+        String::from("context"),
+        Value::String(String::from("all_turns")),
+    );
+    Ok(())
+}
+
+/// Applies the exact route-owned Apply Patch input contract to one immutable request snapshot.
+/// 将路由持有的精确 Apply Patch 输入契约应用到不可变请求快照。
+///
+/// # Parameters
+/// 参数
+/// `route` owns the frozen behavior and `request` owns the exact registered tool definitions.
+/// `route` 持有冻结行为，`request` 持有精确注册工具定义。
+///
+/// # Returns
+/// 返回值
+/// A cloned request whose Apply Patch definition matches the provider wire and response decoder.
+/// 返回一份 Apply Patch 定义同时匹配供应商线路与响应解码器的请求副本。
+pub(super) fn request_with_codex_tool_input_contract(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+) -> AiExecutionRequest {
+    let mut effective_request = request.clone();
+    let Some(behavior) = route.codex_behavior.as_ref() else {
+        return effective_request;
+    };
+    for tool in &mut effective_request.tools {
+        if tool.name != APPLY_PATCH_TOOL_NAME {
+            continue;
+        }
+        tool.input_format = match behavior.apply_patch_tool_type {
+            CodexApplyPatchToolType::Function => ToolInputFormat::JsonSchema,
+            CodexApplyPatchToolType::Freeform => ToolInputFormat::Freeform {
+                format: FreeformToolFormat::Grammar {
+                    syntax: FreeformToolSyntax::Lark,
+                    definition: String::from(APPLY_PATCH_LARK_GRAMMAR),
+                },
+                argument_encoding: FreeformToolArgumentEncoding::ApplyPatchObject,
+            },
+        };
+    }
+    effective_request
+}
+
+/// Groups function and custom tools into the default Responses Lite namespace.
+/// 将函数工具与自定义工具分组进默认 Responses Lite 命名空间。
+///
+/// # Parameters
+/// 参数
+/// The input is the exact ordered standard tool list.
+/// 输入是精确有序的标准工具列表。
+///
+/// # Returns
+/// 返回值
+/// The ordered Lite list with standalone native tools preserved.
+/// 返回保留独立原生工具的有序 Lite 列表。
+fn codex_lite_tools(tools: Vec<Value>) -> Vec<Value> {
+    let mut namespaced = Vec::new();
+    let mut standalone = Vec::new();
+    let mut insertion_index = None;
+    for tool in tools {
+        if matches!(
+            tool.get("type").and_then(Value::as_str),
+            Some("function" | "custom")
+        ) {
+            insertion_index.get_or_insert(standalone.len());
+            namespaced.push(tool);
+        } else {
+            standalone.push(tool);
+        }
+    }
+    if let Some(index) = insertion_index
+        && !namespaced.is_empty()
+    {
+        standalone.insert(
+            index,
+            json!({
+                "type": "namespace",
+                "name": "functions",
+                "description": "",
+                "tools": namespaced,
+            }),
+        );
+    }
+    standalone
+}
+
+/// Builds the stable upstream-compatible identifier for one Responses Lite prefix item.
+/// 为一个 Responses Lite 前缀项构建与上游兼容的稳定标识。
+///
+/// # Parameters
+/// 参数
+/// The prefix selects the item family, session_id owns the thread namespace, and payload owns identity.
+/// prefix 选择项目族，session_id 持有线程命名空间，payload 持有身份。
+///
+/// # Returns
+/// 返回值
+/// A stable prefixed UUID v5 string.
+/// 返回稳定的带前缀 UUID v5 字符串。
+fn codex_lite_prefix_item_id(prefix: &str, session_id: &str, payload: &[u8]) -> String {
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, session_id.as_bytes());
+    format!("{prefix}_{}", uuid::Uuid::new_v5(&namespace, payload))
 }
 
 /// Validates the final provider body against the closed no-reasoning wire vocabulary.

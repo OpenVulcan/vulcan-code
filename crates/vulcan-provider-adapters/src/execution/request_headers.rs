@@ -5,7 +5,7 @@ use super::failure::{ProviderExecutionFailure, pre_dispatch_failure};
 use super::route::{ProviderExecutionRoute, route_uses_native_codex_responses};
 use crate::{
     AuthenticationProjection, CredentialExecutionSecret,
-    provider_manifest::is_host_owned_session_header,
+    provider_manifest::{CodexWireDialect, is_host_owned_session_header},
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::BTreeMap;
@@ -14,6 +14,10 @@ use vulcan_ai_protocols::CODEX_RESPONSES_USER_AGENT;
 /// Stable VulcanCode user agent used by every non-Codex provider protocol.
 /// 所有非 Codex 供应商协议使用的稳定 VulcanCode 用户代理。
 pub(super) const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
+
+/// Host-owned marker that selects the Responses Lite wire contract.
+/// 由宿主持有、用于选择 Responses Lite 线路契约的标记。
+pub(super) const CODEX_RESPONSES_LITE_HEADER_NAME: &str = "x-openai-internal-codex-responses-lite";
 
 /// Builds provider authentication and public application headers.
 /// 构建供应商鉴权与公共应用请求头。
@@ -58,9 +62,10 @@ pub(crate) fn execution_headers(
         if name == reqwest::header::AUTHORIZATION
             || name == HeaderName::from_static("x-api-key")
             || name == HeaderName::from_static("x-goog-api-key")
+            || name == HeaderName::from_static(CODEX_RESPONSES_LITE_HEADER_NAME)
         {
             return Err(pre_dispatch_failure(format!(
-                "Protocol profile must not provide credential header `{name}`."
+                "Protocol profile must not provide host-owned header `{name}`."
             )));
         }
         let value = HeaderValue::from_str(value).map_err(|_| {
@@ -83,6 +88,7 @@ pub(crate) fn execution_headers(
             || name == HeaderName::from_static("x-goog-user-project")
             || name == reqwest::header::ACCEPT_ENCODING
             || name == reqwest::header::CONTENT_TYPE
+            || name == HeaderName::from_static(CODEX_RESPONSES_LITE_HEADER_NAME)
         {
             return Err(pre_dispatch_failure(format!(
                 "Service entry must not override reserved header `{name}`."
@@ -108,6 +114,7 @@ pub(crate) fn execution_headers(
             || name == HeaderName::from_static("x-goog-user-project")
             || name == reqwest::header::ACCEPT_ENCODING
             || name == reqwest::header::CONTENT_TYPE
+            || name == HeaderName::from_static(CODEX_RESPONSES_LITE_HEADER_NAME)
         {
             return Err(pre_dispatch_failure(format!(
                 "Protocol route must not override reserved header `{name}`."
@@ -246,6 +253,21 @@ pub(crate) fn execution_headers(
             VULCAN_CODE_USER_AGENT
         }),
     );
+    // Lite is an exact frozen native-model behavior. The host emits its selector after all
+    // provider declarations have been validated so no manifest or profile may spoof it.
+    // Lite 是精确冻结的原生模型行为。宿主在全部供应商声明校验后写入选择头，
+    // 因而任何清单或 Profile 都不能伪造该标记。
+    if route_uses_native_codex_responses(route)
+        && route
+            .codex_behavior
+            .as_ref()
+            .is_some_and(|behavior| behavior.wire_dialect == CodexWireDialect::Lite)
+    {
+        headers.insert(
+            HeaderName::from_static(CODEX_RESPONSES_LITE_HEADER_NAME),
+            HeaderValue::from_static("true"),
+        );
+    }
     // Session projection is last so every already materialized host or provider header can win.
     // 会话投影最后执行，确保所有已经生成的宿主或供应商请求头优先保留。
     inject_session_header(&mut headers, route, session_id)?;

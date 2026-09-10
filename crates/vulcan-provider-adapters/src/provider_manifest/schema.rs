@@ -776,6 +776,255 @@ pub enum UnknownModelPolicy {
     DefaultBindingAllowed,
 }
 
+/// Selects the final OpenAI Codex Responses request dialect for one exact model rule.
+/// 为一条精确模型规则选择最终 OpenAI Codex Responses 请求方言。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexWireDialect {
+    /// Uses the ordinary Responses envelope with top-level instructions and tools.
+    /// 使用带顶层 instructions 与 tools 的普通 Responses 封装。
+    #[default]
+    Standard,
+    /// Uses the Responses Lite prefix-item and namespace-tool envelope.
+    /// 使用 Responses Lite 前缀项与命名空间工具封装。
+    Lite,
+}
+
+/// Selects how a Codex model may invoke the frozen tool inventory.
+/// 选择 Codex 模型调用冻结工具目录的方式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexToolMode {
+    /// Exposes the authorized tools directly.
+    /// 直接暴露已授权工具。
+    #[default]
+    Direct,
+    /// Allows either direct tools or the isolated code-mode host.
+    /// 允许直接工具或隔离代码模式宿主。
+    CodeMode,
+    /// Requires the isolated code-mode host and never falls back to direct exposure.
+    /// 强制使用隔离代码模式宿主且绝不回退到直接暴露。
+    CodeModeOnly,
+}
+
+/// Selects the provider-visible Apply Patch input representation.
+/// 选择 Provider 可见的 Apply Patch 输入表示。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexApplyPatchToolType {
+    /// Sends Apply Patch as a JSON-schema function tool.
+    /// 将 Apply Patch 作为 JSON Schema 函数工具发送。
+    #[default]
+    Function,
+    /// Sends Apply Patch as a Lark-grammar freeform tool.
+    /// 将 Apply Patch 作为 Lark grammar 自由文本工具发送。
+    Freeform,
+}
+
+/// Selects the shell contract expected by one Codex model.
+/// 选择一个 Codex 模型期望的终端契约。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexShellType {
+    /// Uses the legacy single-command shell contract.
+    /// 使用旧版单命令终端契约。
+    #[default]
+    ShellCommand,
+    /// Uses the unified exec and wait lifecycle.
+    /// 使用统一 exec 与 wait 生命周期。
+    UnifiedExec,
+}
+
+/// Selects the native web-search result modalities visible to one Codex model.
+/// 选择一个 Codex 模型可见的原生网络搜索结果模态。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexWebSearchToolType {
+    /// Exposes text-only web-search results.
+    /// 暴露纯文本网络搜索结果。
+    #[default]
+    Text,
+    /// Exposes text and image-search results.
+    /// 暴露文本与图片搜索结果。
+    TextAndImage,
+}
+
+/// Identifies the multi-agent contract generation expected by one Codex model.
+/// 标识一个 Codex 模型期望的多智能体契约代际。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexMultiAgentVersion {
+    /// Uses the first-generation task collaboration contract.
+    /// 使用第一代任务协作契约。
+    V1,
+    /// Uses the second-generation task collaboration contract.
+    /// 使用第二代任务协作契约。
+    V2,
+}
+
+/// Selects the native Responses text verbosity value.
+/// 选择原生 Responses 文本详细程度值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexTextVerbosity {
+    /// Requests compact output.
+    /// 请求精简输出。
+    Low,
+    /// Requests balanced output.
+    /// 请求平衡输出。
+    Medium,
+    /// Requests detailed output.
+    /// 请求详细输出。
+    High,
+}
+
+/// Selects the token-bounded tool-output truncation contract.
+/// 选择按 Token 限定的工具输出截断契约。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexToolOutputTruncationMode {
+    /// Truncates tool output by token count.
+    /// 按 Token 数量截断工具输出。
+    Tokens,
+}
+
+/// Declares one exact Codex tool-output truncation policy.
+/// 声明一项精确 Codex 工具输出截断策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexToolOutputTruncation {
+    /// Closed truncation algorithm.
+    /// 封闭的截断算法。
+    pub mode: CodexToolOutputTruncationMode,
+    /// Positive token ceiling.
+    /// 正数 Token 上限。
+    pub limit: u64,
+}
+
+/// Declares closed, host-implemented Codex behavior for one exact model rule.
+/// 为一条精确模型规则声明封闭且由宿主实现的 Codex 行为。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexModelBehavior {
+    /// Final native Responses wire dialect.
+    /// 最终原生 Responses 线路方言。
+    #[serde(default)]
+    pub wire_dialect: CodexWireDialect,
+    /// Frozen tool exposure mode.
+    /// 冻结的工具暴露模式。
+    #[serde(default)]
+    pub tool_mode: CodexToolMode,
+    /// Apply Patch wire representation.
+    /// Apply Patch 线路表示。
+    #[serde(default)]
+    pub apply_patch_tool_type: CodexApplyPatchToolType,
+    /// Shell lifecycle contract.
+    /// 终端生命周期契约。
+    #[serde(default)]
+    pub shell_type: CodexShellType,
+    /// Native web-search result contract.
+    /// 原生网络搜索结果契约。
+    #[serde(default)]
+    pub web_search_tool_type: CodexWebSearchToolType,
+    /// Whether delayed tool search is supported.
+    /// 是否支持延迟工具搜索。
+    #[serde(default)]
+    pub supports_search_tool: bool,
+    /// Exact registered experimental tool names admitted for this model.
+    /// 当前模型允许的精确已注册实验工具名称。
+    #[serde(default)]
+    pub experimental_supported_tools: Vec<String>,
+    /// Whether the model accepts parallel tool calls.
+    /// 模型是否接受并行工具调用。
+    #[serde(default)]
+    pub supports_parallel_tool_calls: bool,
+    /// Whether image input may request original detail.
+    /// 图片输入是否可以请求原始细节。
+    #[serde(default)]
+    pub supports_image_detail_original: bool,
+    /// Whether the Responses text verbosity parameter is supported.
+    /// 是否支持 Responses 文本详细程度参数。
+    #[serde(default)]
+    pub supports_verbosity: bool,
+    /// Default text verbosity when the user supplies no override.
+    /// 用户未提供覆盖时的默认文本详细程度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<CodexTextVerbosity>,
+    /// Optional multi-agent contract generation.
+    /// 可选的多智能体契约代际。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<CodexMultiAgentVersion>,
+    /// Optional reasoning effort used by delegated agents.
+    /// 委派智能体使用的可选思考强度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_reasoning_effort: Option<ReasoningEffort>,
+    /// Whether model-facing skill usage instructions are appended.
+    /// 是否追加面向模型的技能使用说明。
+    #[serde(default)]
+    pub include_skills_usage_instructions: bool,
+    /// Whether model-facing app usage instructions are appended.
+    /// 是否追加面向模型的应用使用说明。
+    #[serde(default)]
+    pub include_apps_usage_instructions: bool,
+    /// Whether model-facing plugin usage instructions are appended.
+    /// 是否追加面向模型的插件使用说明。
+    #[serde(default)]
+    pub include_plugin_usage_instructions: bool,
+    /// Whether the node-style code host is disabled.
+    /// 是否禁用 Node 风格代码宿主。
+    #[serde(default)]
+    pub node_repl_disabled: bool,
+    /// Whether every code-host mutation requires automatic review.
+    /// 是否要求自动审核每次代码宿主变更。
+    #[serde(default)]
+    pub node_repl_auto_review_required: bool,
+    /// Whether review must run inside a sandbox.
+    /// 审核是否必须在沙箱内运行。
+    #[serde(default)]
+    pub requires_sandboxed_review: bool,
+    /// Optional exact model override used only for automatic review.
+    /// 仅供自动审核使用的可选精确模型覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_review_model_override: Option<String>,
+    /// Context-compaction compatibility identity.
+    /// 上下文压缩兼容身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comp_hash: Option<String>,
+    /// Optional model-owned tool-output truncation policy.
+    /// 可选的模型自有工具输出截断策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_output_truncation: Option<CodexToolOutputTruncation>,
+    /// Whether this model prefers an already verified WebSocket route.
+    /// 当前模型是否偏好已经验证的 WebSocket 路由。
+    #[serde(default)]
+    pub prefer_websockets: bool,
+    /// Whether the model permits the larger experimental context window.
+    /// 模型是否允许更大的实验上下文窗口。
+    #[serde(default)]
+    pub supports_experimental_context: bool,
+}
+
+/// Stable runtime primitive required by Codex code-mode tool exposure.
+/// Codex 代码模式工具暴露所需的稳定运行时原语。
+pub const CODEX_JAVASCRIPT_HOST_PRIMITIVE_ID: &str = "codex_javascript_host_v1";
+
+impl CodexModelBehavior {
+    /// Returns the runtime primitive still missing for this behavior in the current build.
+    /// 返回当前构建为此行为仍缺失的运行时原语。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The JavaScript host primitive for code-mode behaviors; direct-tool behaviors need none.
+    /// 代码模式行为返回 JavaScript 宿主原语；直接工具行为不需要额外原语。
+    pub fn missing_runtime_primitive(&self) -> Option<&'static str> {
+        matches!(
+            self.tool_mode,
+            CodexToolMode::CodeMode | CodexToolMode::CodeModeOnly
+        )
+        .then_some(CODEX_JAVASCRIPT_HOST_PRIMITIVE_ID)
+    }
+}
+
 /// One Exact/Prefix model rule with scoped overrides.
 /// 单条 Exact/Prefix 模型规则与作用域覆盖。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -803,6 +1052,10 @@ pub struct ModelRule {
     /// 此规则的唯一生效协议。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_protocol: Option<String>,
+    /// Optional closed Codex behavior owned by this exact model rule.
+    /// 当前精确模型规则持有的可选封闭 Codex 行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_behavior: Option<CodexModelBehavior>,
     /// Protocol-independent capability patch; omitted fields inherit.
     /// 协议无关能力补丁；省略字段继承。
     #[serde(default, skip_serializing_if = "Option::is_none")]

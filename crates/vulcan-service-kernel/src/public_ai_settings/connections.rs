@@ -12,9 +12,12 @@ use vulcan_provider_adapters::{
 use vulcan_service_api::ServiceEventEmitter;
 
 use super::{
-    PublicAiSettingsSnapshot, build_public_ai_settings_snapshot, combine_results,
-    compensated_operation_error, ensure_active_model_selection,
-    mutate_public_ai_configuration_and_publish_in_transaction, public_ai_runtime_and_configuration,
+    PublicAiSettingsSnapshot, build_public_ai_settings_snapshot,
+    catalog_projection::{PublicAiModelDirectoryKind, service_entry_model_directory_kind},
+    combine_results, compensated_operation_error, ensure_active_model_selection,
+    mutate_public_ai_configuration_and_publish_in_transaction,
+    preferred_replacement_model_selection, public_ai_runtime_and_configuration,
+    publication::mutate_public_ai_configuration_and_publish_sessions_in_transaction,
     publish_public_ai_workbench,
     publish_public_ai_workbench_with_session_reconciliation_and_commit,
     reconcile_disabled_connection_sessions,
@@ -103,6 +106,19 @@ pub(crate) struct PublicAiDefaultConnectionSaveRequest {
     /// Exact connection identifier.
     /// 精确连接标识。
     connection_id: String,
+}
+
+/// Saves the reversible runtime enabled state for one credential connection.
+/// 保存一个凭据连接可逆的运行时启用状态。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiConnectionEnabledSaveRequest {
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Requested enabled state.
+    /// 请求的启用状态。
+    enabled: bool,
 }
 
 /// Removes one connection with an explicit replacement default when required.
@@ -520,6 +536,32 @@ async fn validate_connection_credential(
                 }))
             }
         }
+    }
+}
+
+/// Rejects model synchronization unless the backend-resolved directory is remotely dynamic.
+/// 除非后端解析出的模型目录可远端动态更新，否则拒绝模型同步。
+///
+/// # Parameters
+/// 参数
+/// `connection_id` identifies the requested account and `directory_kind` is the exact
+/// Manifest-derived aggregate policy for its service entry.
+/// `connection_id` 标识请求账号，`directory_kind` 是其服务入口由 Manifest 推导的精确聚合策略。
+///
+/// # Returns
+/// 返回值
+/// Success only for dynamic directories, or a controlled error before credential validation.
+/// 仅动态目录返回成功，否则在凭据验证前返回受控错误。
+fn validate_model_synchronization_directory(
+    connection_id: &str,
+    directory_kind: PublicAiModelDirectoryKind,
+) -> Result<(), String> {
+    if directory_kind == PublicAiModelDirectoryKind::Dynamic {
+        Ok(())
+    } else {
+        Err(format!(
+            "Connection `{connection_id}` uses a non-dynamic model directory and cannot synchronize models."
+        ))
     }
 }
 
@@ -1322,6 +1364,12 @@ pub(crate) async fn service_save_public_ai_default_connection(
                     request.connection_id
                 ));
             }
+            if !configuration.connection_is_enabled(request.connection_id.as_str()) {
+                return Err(format!(
+                    "Connection `{}` is disabled and cannot become a provider default.",
+                    request.connection_id
+                ));
+            }
             configuration
                 .connection_graph
                 .account_preferences
@@ -1331,6 +1379,92 @@ pub(crate) async fn service_save_public_ai_default_connection(
         },
         |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Enables or disables one stored credential without deleting its secret or metadata.
+/// 启用或停用一个已保存凭据，且不删除其秘密或元数据。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the workbench, `state` owns runtime state, and `request` identifies the connection and desired state.
+/// `app` 发布工作台，`state` 持有运行时状态，`request` 标识连接及目标状态。
+///
+/// # Returns
+/// 返回值
+/// The authoritative settings snapshot after atomic persistence, activation, and session reconciliation.
+/// 原子持久化、激活与会话协调后的权威设置快照。
+pub(crate) async fn service_save_public_ai_connection_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiConnectionEnabledSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("connectionId", request.connection_id.as_str())?;
+    // transaction retains writer ownership across persistence, activation, sessions, and publication.
+    // transaction 在持久化、激活、会话与发布期间保持写入所有权。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // currentConfiguration is the exact rollback image and source for the requested transition.
+    // currentConfiguration 是精确的回滚镜像，也是请求状态转换的来源。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // connection freezes the current owner before the candidate configuration is mutated.
+    // connection 在候选配置变更前冻结当前归属。
+    let connection = current_configuration
+        .connection_graph
+        .connections
+        .get(request.connection_id.as_str())
+        .cloned()
+        .ok_or_else(|| format!("Connection `{}` is not configured.", request.connection_id))?;
+    // disabledActive captures the exact global selection that needs a deterministic replacement.
+    // disabledActive 捕获需要确定性替换的精确全局选择。
+    let disabled_active = (!request.enabled)
+        .then(|| current_configuration.active.clone())
+        .flatten()
+        .filter(|selection| selection.connection_id.as_str() == connection.id.as_str());
+    // candidateConfiguration carries the sparse disabled state through the normal activation path.
+    // candidateConfiguration 通过常规激活路径承载稀疏停用状态。
+    let mut candidate_configuration = current_configuration.clone();
+    candidate_configuration
+        .set_connection_enabled(request.connection_id.as_str(), request.enabled)?;
+    // candidateCatalogs proves the disabled connection no longer contributes an effective catalog.
+    // candidateCatalogs 证明已停用连接不再贡献有效目录。
+    let candidate_catalogs = runtime.resolved_model_catalog_snapshot(&candidate_configuration)?;
+    if let Some(selection) = disabled_active {
+        candidate_configuration.active = preferred_replacement_model_selection(
+            runtime.as_ref(),
+            &candidate_configuration,
+            &candidate_catalogs,
+            selection.provider_id.as_str(),
+            selection.model_id.as_str(),
+        )?;
+    }
+    runtime.validate_model_catalog_overlays(&candidate_configuration)?;
+
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
+            &app,
+            &state,
+            runtime.as_ref(),
+            &current_configuration,
+            "保存凭据启用状态失败",
+            |configuration| {
+                *configuration = candidate_configuration.clone();
+                Ok(())
+            },
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |workspace| {
+                Ok(if request.enabled {
+                    std::collections::BTreeSet::new()
+                } else {
+                    reconcile_disabled_connection_sessions(
+                        workspace,
+                        request.connection_id.as_str(),
+                        None,
+                    )
+                })
+            },
+            "credential_connection_disabled",
+        )?;
     drop(transaction);
     Ok(snapshot)
 }
@@ -1517,17 +1651,26 @@ pub(crate) async fn service_sync_public_ai_connection(
         .connections
         .get(connection_id.as_str())
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-    let entry_kind = registered_service_entry_kind(
+    if !configuration.connection_is_enabled(connection_id.as_str()) {
+        return Err(format!(
+            "Connection `{connection_id}` is disabled and cannot synchronize models."
+        ));
+    }
+    let entry = registered_service_entry(
         runtime.as_ref(),
         &configuration,
         connection.provider_id.as_str(),
         connection.service_entry_id.as_str(),
     )?;
+    validate_model_synchronization_directory(
+        connection_id.as_str(),
+        service_entry_model_directory_kind(&entry),
+    )?;
     let refresh_result = validate_connection_credential(
         runtime.as_ref(),
         &configuration,
         connection_id.as_str(),
-        entry_kind,
+        entry.kind,
     )
     .await;
     // activation_result publishes either the refreshed source or the existing/manual fallback
@@ -1665,7 +1808,8 @@ pub(super) fn remove_connection_from_configuration(
             connection.provider_id == removed.provider_id && connection.id != connection_id
         })
         .filter(|connection| {
-            !configuration.connection_is_pending_validation(connection.id.as_str())
+            configuration.connection_is_enabled(connection.id.as_str())
+                && !configuration.connection_is_pending_validation(connection.id.as_str())
         })
         .collect::<Vec<_>>();
     let replacement = if deleting_provider_default && !remaining_same_provider.is_empty() {
@@ -1699,6 +1843,7 @@ pub(super) fn remove_connection_from_configuration(
     configuration
         .pending_validation_connection_ids
         .remove(connection_id);
+    configuration.disabled_connection_ids.remove(connection_id);
     configuration
         .connection_graph
         .account_preferences

@@ -127,6 +127,40 @@ export interface VceJobSubmitRequest {
   expectedCheckpointVersion: number | null;
 }
 
+// VcePhysicalTableRole identifies one bound VCE vector table without exposing its physical name.
+// VcePhysicalTableRole 标识一张已绑定 VCE 向量表，但不暴露其物理名称。
+export type VcePhysicalTableRole = "content" | "path";
+
+// VceCompactionMetrics summarizes acknowledged native file-compaction changes.
+// VceCompactionMetrics 汇总已确认的原生文件整理变化。
+export interface VceCompactionMetrics {
+  fragmentsRemoved: number;
+  fragmentsAdded: number;
+  filesRemoved: number;
+  filesAdded: number;
+}
+
+// VceCompactionTableJobSummary reports one table's durable maintenance lifecycle.
+// VceCompactionTableJobSummary 报告一张表的持久维护生命周期。
+export interface VceCompactionTableJobSummary {
+  role: VcePhysicalTableRole;
+  state: "pending" | "queued" | "running" | "succeeded" | "failed" | "cancelled" | "state_lost" | "interrupted";
+  round: number;
+  operationId: string | null;
+  plannedVersion: number;
+  currentVersion: number;
+  plannedFragmentCount: number;
+  currentFragmentCount: number;
+  metrics: VceCompactionMetrics;
+  error: string | null;
+}
+
+// VceCompactionJobSummary contains deterministic table-scoped maintenance receipts.
+// VceCompactionJobSummary 包含按确定顺序排列的表级维护回执。
+export interface VceCompactionJobSummary {
+  tables: VceCompactionTableJobSummary[];
+}
+
 // VceJobSummary mirrors only durable host receipts, never calculated query eligibility.
 // VceJobSummary 仅镜像持久宿主回执，绝不计算查询资格。
 export interface VceJobSummary {
@@ -141,7 +175,7 @@ export interface VceJobSummary {
   jobId: string;
   // Human-confirmed operation category.
   // 人为确认操作分类。
-  kind: "initialize" | "synchronize" | "rebuild";
+  kind: "initialize" | "synchronize" | "rebuild" | "compact";
   // Durable execution state, independent from conversation state.
   // 持久执行状态，独立于会话状态。
   state: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled" | "interrupted";
@@ -171,7 +205,7 @@ export interface VceJobSummary {
     operationId: string;
     // Meaning of the numeric counters.
     // 数字计数的含义。
-    unit: "files" | "blobs" | "batches" | "none";
+    unit: "files" | "blobs" | "batches" | "tables" | "none";
     // Confirmed completions, not started requests.
     // 已确认完成量，而非已开始请求量。
     completed: number;
@@ -188,6 +222,9 @@ export interface VceJobSummary {
     // 可选相对路径，绝不包含源码内容。
     currentPath: string | null;
   } | null;
+  // Native table maintenance details, present only for compact jobs.
+  // 原生表维护详情，仅整理作业存在。
+  compaction?: VceCompactionJobSummary | null;
   // Whether one subsequent manual sync was coalesced by the host.
   // 宿主是否合并一个后续手动同步。
   followupRequested: boolean;
@@ -457,6 +494,47 @@ export interface VceMaintenanceActionSummary {
   description: string;
   blobNames: string[];
   destructive: boolean;
+  // Bound physical role for compact actions; absent for logical index maintenance.
+  // 整理动作绑定的物理角色；逻辑索引维护时为空。
+  physicalTableRole?: VcePhysicalTableRole | null;
+}
+
+// VcePhysicalFragmentSummary describes the row distribution across physical fragments.
+// VcePhysicalFragmentSummary 描述物理片段之间的行数分布。
+export interface VcePhysicalFragmentSummary {
+  minimumRows: number;
+  maximumRows: number;
+  meanRows: number;
+  p25Rows: number;
+  p50Rows: number;
+  p75Rows: number;
+  p99Rows: number;
+}
+
+// VceCompactionOptionsSummary contains the bounded native options frozen by a preview.
+// VceCompactionOptionsSummary 包含预览冻结的有界原生整理参数。
+export interface VceCompactionOptionsSummary {
+  targetRowsPerFragment: number;
+  maxRowsPerGroup: number;
+  maxBytesPerFile: number;
+  numThreads: number;
+  batchSize: number;
+  maxSourceFragments: number;
+}
+
+// VcePhysicalTablePlanSummary is one authoritative read-only physical table preview.
+// VcePhysicalTablePlanSummary 是一项权威只读物理表预览。
+export interface VcePhysicalTablePlanSummary {
+  role: VcePhysicalTableRole;
+  version: number;
+  totalBytes: number;
+  rowCount: number;
+  indexCount: number;
+  fragmentCount: number;
+  smallFragmentCount: number;
+  fragmentRows: VcePhysicalFragmentSummary;
+  compactionRequired: boolean;
+  options: VceCompactionOptionsSummary;
 }
 
 // VceMaintenancePlanResponse is a read-only mutation preview.
@@ -468,9 +546,15 @@ export interface VceMaintenancePlanResponse {
   // Explicit target dimension presented for confirmation.
   // 提交确认时展示的明确目标维度。
   embeddingDimension: number;
+  // Exact checkpoint observed by this plan; null only for an uninitialized rebuild.
+  // 此计划观察到的精确检查点；仅未初始化重建时为空。
+  checkpointVersion: number | null;
   mode: string;
   actions: VceMaintenanceActionSummary[];
   affectedBlobCount: number;
+  // Physical table statistics populated only for compact mode.
+  // 仅整理模式填充的物理表统计。
+  physicalTables: VcePhysicalTablePlanSummary[];
 }
 
 // VceMaintenanceExecutionRequest copies one current plan into a guarded destructive command.

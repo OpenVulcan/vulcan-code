@@ -13,7 +13,7 @@ use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1Lifecycle
 use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
     acknowledge_runtime_event_projection_barrier_from_event,
     acknowledge_tool_batch_projection_barrier_from_event,
-    reject_runtime_event_projection_barrier_from_event,
+    reject_runtime_event_projection_barrier_from_event_with_reason,
 };
 use vulcan_context_compaction::extract_compaction_model_summary;
 
@@ -574,18 +574,26 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
         }
         ExecutionStreamEvent::RuntimeEvent { event, .. } => {
             if event.tool_execution_boundary.is_some() {
-                // nowMs binds the tool mutation to the observed runtime boundary.
-                // nowMs 将工具变更绑定到观测到的运行时边界。
-                let now_ms = i64::try_from(current_unix_millis_value())
-                    .map_err(|_| String::from("Current timestamp exceeds the V1 i64 range."))?;
-                let outcome = match provider_v1_sink
-                    .apply_tool_event(app, state, &event, now_ms)
-                    .await
-                {
+                // tool_boundary_result retains both timestamp and sink failures so neither path
+                // can leave the mandatory compaction projection barrier pending.
+                // tool_boundary_result 同时保留时间戳与 sink 失败，使两条路径都不会遗留
+                // 强制压缩投影屏障。
+                let tool_boundary_result = match i64::try_from(current_unix_millis_value()) {
+                    Ok(now_ms) => provider_v1_sink
+                        .apply_tool_event(app, state, &event, now_ms)
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(_) => Err(String::from("Current timestamp exceeds the V1 i64 range.")),
+                };
+                // outcome is available only after the same compaction sink accepted the boundary.
+                // outcome 仅在同一压缩 sink 接纳边界后可用。
+                let outcome = match tool_boundary_result {
                     Ok(outcome) => outcome,
                     Err(error) => {
-                        let _ = reject_runtime_event_projection_barrier_from_event(&event);
-                        return Err(error.to_string());
+                        let _ = reject_runtime_event_projection_barrier_from_event_with_reason(
+                            &event, &error,
+                        );
+                        return Err(error);
                     }
                 };
                 let acknowledgement = match outcome {

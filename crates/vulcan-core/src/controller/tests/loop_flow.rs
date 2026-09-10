@@ -128,6 +128,70 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
     });
 }
 
+/// Continues sampling when the provider explicitly marks a tool-free assistant message as non-terminal.
+/// 当供应商明确将无工具调用的助理消息标记为非终态时，继续执行下一次采样。
+#[test]
+fn run_user_turn_respects_explicit_end_turn_false_without_tools() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let adapter = MockProviderAdapter::new(vec![
+            ProviderTurnResponse {
+                assistant_text: String::from("Still working."),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-progress")),
+                provider_message_state: Some(json!({
+                    "vulcan_ai": {
+                        "turn_boundary": {
+                            "end_turn": false
+                        }
+                    }
+                })),
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+            ProviderTurnResponse {
+                assistant_text: String::from("Finished."),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-final")),
+                provider_message_state: Some(json!({
+                    "vulcan_ai": {
+                        "turn_boundary": {
+                            "end_turn": true
+                        }
+                    }
+                })),
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        ]);
+        let executor = MockToolExecutor::new();
+        let mut controller =
+            VulcanCoreController::new(build_test_config(3), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let result = controller
+            .run_user_turn(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "Continue until the provider ends the turn.",
+            )
+            .await
+            .expect("run user turn");
+
+        assert_eq!(result.provider_turns_executed, 2);
+        assert_eq!(result.tool_calls_processed, 0);
+        assert_eq!(controller.phase(), ControllerPhase::Completed);
+        assert_eq!(adapter.built_requests().len(), 2);
+        assert!(matches!(
+            controller.snapshot().messages.last().map(|message| &message.payload),
+            Some(ConversationPayload::Assistant { text, .. }) if text == "Finished."
+        ));
+    });
+}
+
 /// Clears a stale provider continuation when the latest response does not expose a reusable cursor.
 /// 当最新响应未提供可复用游标时，清除陈旧的 Provider continuation。
 #[test]

@@ -45,6 +45,9 @@ fn connection_removal_clears_exact_media_and_extension_references() {
         .connection_graph
         .connections
         .insert(removed_connection.id.clone(), removed_connection.clone());
+    configuration
+        .disabled_connection_ids
+        .insert(removed_connection.id.clone());
     configuration.media_understanding_selections.insert(
         ProviderToolCapabilityKind::ImageUnderstand,
         MediaUnderstandingBackendSelection::ProviderTool {
@@ -111,6 +114,11 @@ fn connection_removal_clears_exact_media_and_extension_references() {
             .connection_graph
             .connections
             .contains_key(removed_connection.id.as_str())
+    );
+    assert!(
+        !configuration
+            .disabled_connection_ids
+            .contains(removed_connection.id.as_str())
     );
     assert_eq!(configuration.media_understanding_selections.len(), 1);
     assert!(
@@ -201,5 +209,47 @@ fn connection_requests_reject_user_selected_protocol() {
         };
         let error = rejected.expect_err("selectedProtocol must be rejected");
         assert!(error.to_string().contains("selectedProtocol"));
+    }
+}
+
+/// Verifies the enabled-state request accepts only the exact closed wire contract.
+/// 验证启用状态请求仅接受精确封闭的线协议契约。
+#[test]
+fn connection_enabled_request_is_closed_and_explicit() {
+    // accepted contains both required fields and no credential secret material.
+    // accepted 包含两个必填字段且不含任何凭据秘密材料。
+    let accepted = serde_json::json!({
+        "connectionId": "connection-a",
+        "enabled": false
+    });
+    serde_json::from_value::<PublicAiConnectionEnabledSaveRequest>(accepted.clone())
+        .expect("exact enabled-state request should deserialize");
+
+    // forbidden proves callers cannot smuggle unrelated mutation authority into this endpoint.
+    // forbidden 证明调用方不能把无关变更权限夹带进此端点。
+    let mut forbidden = accepted;
+    forbidden["secret"] = serde_json::Value::String(String::from("must-not-be-accepted"));
+    assert!(serde_json::from_value::<PublicAiConnectionEnabledSaveRequest>(forbidden).is_err());
+}
+
+/// Verifies the backend rejects every non-dynamic directory before synchronization can dispatch.
+/// 验证后端在同步可能分派前拒绝全部非动态目录。
+#[test]
+fn model_synchronization_requires_dynamic_directory() {
+    assert_eq!(
+        validate_model_synchronization_directory(
+            "connection-a",
+            PublicAiModelDirectoryKind::Dynamic,
+        ),
+        Ok(())
+    );
+    for kind in [
+        PublicAiModelDirectoryKind::Fixed,
+        PublicAiModelDirectoryKind::Manual,
+        PublicAiModelDirectoryKind::Unavailable,
+    ] {
+        let error = validate_model_synchronization_directory("connection-a", kind)
+            .expect_err("non-dynamic directories must reject synchronization");
+        assert!(error.contains("non-dynamic model directory"));
     }
 }

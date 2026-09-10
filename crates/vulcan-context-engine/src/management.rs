@@ -4,6 +4,7 @@
 use crate::identity::{is_sha256_identity, normalize_relative_path};
 use crate::model::{ChunkKind, FileStatus, SourceRange};
 use crate::ports::{RefreshMode, RefreshReason};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Bound one management page without imposing a host database implementation.
@@ -340,6 +341,125 @@ pub enum VceMaintenanceMode {
     /// Remove only orphaned unpublished staging data.
     /// 只删除孤立的未发布暂存数据。
     CleanupStaging,
+    /// Compact physical vector-table fragments without changing logical index membership.
+    /// 在不改变逻辑索引成员关系的情况下整理物理向量表片段。
+    Compact,
+}
+
+/// Identify one physical vector table without exposing an arbitrary storage path.
+/// 在不暴露任意存储路径的情况下标识一张物理向量表。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum VcePhysicalTableRole {
+    /// Content-chunk vector table.
+    /// 内容切块向量表。
+    Content,
+    /// Canonical-path vector table.
+    /// 规范路径向量表。
+    Path,
+}
+
+/// Physical fragment row-count distribution reported by the storage engine.
+/// 存储引擎报告的物理片段行数分布。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VcePhysicalFragmentSummary {
+    /// Minimum physical rows in one fragment.
+    /// 单个片段中的最少物理行数。
+    pub minimum_rows: u64,
+    /// Maximum physical rows in one fragment.
+    /// 单个片段中的最多物理行数。
+    pub maximum_rows: u64,
+    /// Mean physical rows across fragments.
+    /// 所有片段的平均物理行数。
+    pub mean_rows: u64,
+    /// Twenty-fifth percentile fragment row count.
+    /// 片段行数的百分之二十五分位值。
+    pub p25_rows: u64,
+    /// Median fragment row count.
+    /// 片段行数中位数。
+    pub p50_rows: u64,
+    /// Seventy-fifth percentile fragment row count.
+    /// 片段行数的百分之七十五分位值。
+    pub p75_rows: u64,
+    /// Ninety-ninth percentile fragment row count.
+    /// 片段行数的百分之九十九分位值。
+    pub p99_rows: u64,
+}
+
+/// Authoritative physical statistics for one bound vector table.
+/// 一张已绑定向量表的权威物理统计信息。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VcePhysicalTableStatistics {
+    /// Logical VCE role of this table.
+    /// 此表的 VCE 逻辑角色。
+    pub role: VcePhysicalTableRole,
+    /// Exact bound table name retained for guarded execution.
+    /// 为受保护执行保留的精确绑定表名。
+    pub table_name: String,
+    /// Current physical table version.
+    /// 当前物理表版本。
+    pub version: u64,
+    /// Total physical bytes reported by the storage engine.
+    /// 存储引擎报告的物理总字节数。
+    pub total_bytes: u64,
+    /// Current logical row count.
+    /// 当前逻辑行数。
+    pub row_count: u64,
+    /// Current secondary-index count.
+    /// 当前二级索引数量。
+    pub index_count: u64,
+    /// Current physical fragment count.
+    /// 当前物理片段数量。
+    pub fragment_count: u64,
+    /// Fragments below the engine's documented small-fragment threshold.
+    /// 低于引擎已说明小片段阈值的片段数量。
+    pub small_fragment_count: u64,
+    /// Physical row-count distribution across fragments.
+    /// 各物理片段的行数分布。
+    pub fragment_rows: VcePhysicalFragmentSummary,
+}
+
+/// Frozen bounded parameters for one native physical compaction operation.
+/// 一项原生物理整理操作的冻结有界参数。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VceCompactionOptions {
+    /// Target rows per output fragment.
+    /// 每个输出片段的目标行数。
+    pub target_rows_per_fragment: u64,
+    /// Maximum rows in one rewritten row group.
+    /// 单个重写行组的最大行数。
+    pub max_rows_per_group: u64,
+    /// Maximum bytes in one output file.
+    /// 单个输出文件的最大字节数。
+    pub max_bytes_per_file: u64,
+    /// Maximum worker threads used by the storage engine.
+    /// 存储引擎使用的最大工作线程数。
+    pub num_threads: u64,
+    /// Input scan batch size in rows.
+    /// 输入扫描批次行数。
+    pub batch_size: u64,
+    /// Maximum source fragments handled by one controller operation.
+    /// 单次控制器操作处理的最大源片段数量。
+    pub max_source_fragments: u64,
+}
+
+/// Read-only physical-table plan used for preview and exact execution admission.
+/// 用于预览和精确执行准入的只读物理表计划。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VcePhysicalTablePlan {
+    /// Statistics captured while the plan was generated.
+    /// 生成计划时捕获的统计信息。
+    pub statistics: VcePhysicalTableStatistics,
+    /// Whether the captured layout can benefit from compaction.
+    /// 捕获的布局是否可从整理中获益。
+    pub compaction_required: bool,
+    /// Exact bounded options frozen into the action identity.
+    /// 冻结到操作身份中的精确有界参数。
+    pub options: VceCompactionOptions,
 }
 
 /// One host-executable maintenance action produced by a read-only plan.
@@ -358,6 +478,9 @@ pub struct VceMaintenanceAction {
     /// Whether executing this action removes persisted derived data.
     /// 执行此操作是否会删除已持久化派生数据。
     pub destructive: bool,
+    /// Exact physical-table target for compaction actions only.
+    /// 仅物理整理操作持有的精确物理表目标。
+    pub physical_table: Option<VcePhysicalTablePlan>,
 }
 
 /// Read-only plan that a VulcanCode manager may present before execution.
@@ -373,6 +496,9 @@ pub struct VceMaintenancePlan {
     /// Number of affected Blobs.
     /// 受影响 Blob 数量。
     pub affected_blob_count: u64,
+    /// Physical table previews, populated only by compact mode.
+    /// 仅由 compact 模式填充的物理表预览。
+    pub physical_tables: Vec<VcePhysicalTablePlan>,
 }
 
 /// Select one read-only management operation.
@@ -866,6 +992,7 @@ fn validate_maintenance_plan(
     }
     let mut action_ids = BTreeSet::new();
     let mut affected_blobs = BTreeSet::new();
+    let mut action_table_roles = BTreeSet::new();
     for action in &plan.actions {
         if action.action_id.trim().is_empty()
             || action.description.trim().is_empty()
@@ -887,10 +1014,116 @@ fn validate_maintenance_plan(
             });
         }
         affected_blobs.extend(action.blob_names.iter().cloned());
+        match (requested_mode, &action.physical_table) {
+            (VceMaintenanceMode::Compact, Some(table)) => {
+                validate_physical_table_plan(table)?;
+                if action.destructive
+                    || !action.blob_names.is_empty()
+                    || !table.compaction_required
+                    || !action_table_roles.insert(table.statistics.role)
+                    || !plan.physical_tables.contains(table)
+                {
+                    return Err(VceManagementContractError::InvalidResponse {
+                        reason: format!(
+                            "physical compaction action `{}` has inconsistent table metadata",
+                            action.action_id
+                        ),
+                    });
+                }
+            }
+            (VceMaintenanceMode::Compact, None) => {
+                return Err(VceManagementContractError::InvalidResponse {
+                    reason: format!(
+                        "physical compaction action `{}` omitted its table target",
+                        action.action_id
+                    ),
+                });
+            }
+            (_, Some(_)) => {
+                return Err(VceManagementContractError::InvalidResponse {
+                    reason: format!(
+                        "non-compaction action `{}` included a physical table target",
+                        action.action_id
+                    ),
+                });
+            }
+            (_, None) => {}
+        }
     }
     if plan.affected_blob_count != affected_blobs.len() as u64 {
         return Err(VceManagementContractError::InvalidResponse {
             reason: "maintenance plan affected Blob count does not match its actions".to_owned(),
+        });
+    }
+    if requested_mode == VceMaintenanceMode::Compact {
+        let mut table_roles = BTreeSet::new();
+        let mut table_names = BTreeSet::new();
+        for table in &plan.physical_tables {
+            validate_physical_table_plan(table)?;
+            if !table_roles.insert(table.statistics.role)
+                || !table_names.insert(table.statistics.table_name.as_str())
+            {
+                return Err(VceManagementContractError::InvalidResponse {
+                    reason: "physical compaction plan contains duplicate table identity".to_owned(),
+                });
+            }
+        }
+        if table_roles
+            != BTreeSet::from([VcePhysicalTableRole::Content, VcePhysicalTableRole::Path])
+            || plan.affected_blob_count != 0
+            || !affected_blobs.is_empty()
+        {
+            return Err(VceManagementContractError::InvalidResponse {
+                reason:
+                    "physical compaction plan must describe exactly the content and path tables"
+                        .to_owned(),
+            });
+        }
+        let required_table_roles = plan
+            .physical_tables
+            .iter()
+            .filter(|table| table.compaction_required)
+            .map(|table| table.statistics.role)
+            .collect::<BTreeSet<_>>();
+        if action_table_roles != required_table_roles {
+            return Err(VceManagementContractError::InvalidResponse {
+                reason: "physical compaction actions do not exactly cover the required tables"
+                    .to_owned(),
+            });
+        }
+    } else if !plan.physical_tables.is_empty() {
+        return Err(VceManagementContractError::InvalidResponse {
+            reason: "non-compaction maintenance plan included physical table previews".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Validate one physical table preview and its bounded compaction parameters.
+/// 校验一张物理表预览及其有界整理参数。
+fn validate_physical_table_plan(
+    table: &VcePhysicalTablePlan,
+) -> Result<(), VceManagementContractError> {
+    let statistics = &table.statistics;
+    let options = &table.options;
+    let values = [
+        options.target_rows_per_fragment,
+        options.max_rows_per_group,
+        options.max_bytes_per_file,
+        options.num_threads,
+        options.batch_size,
+        options.max_source_fragments,
+    ];
+    if statistics.table_name.trim().is_empty()
+        || statistics.version == 0
+        || statistics.small_fragment_count > statistics.fragment_count
+        || values.contains(&0)
+        || options.num_threads > 8
+        || table.compaction_required
+            != (statistics.fragment_count > 1 && statistics.small_fragment_count > 0)
+    {
+        return Err(VceManagementContractError::InvalidResponse {
+            reason: "physical compaction plan contains invalid statistics or options".to_owned(),
         });
     }
     Ok(())
@@ -932,6 +1165,49 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// Build one internally valid physical table preview for contract tests.
+    /// 为契约测试构造一张内部有效的物理表预览。
+    fn physical_table_plan(
+        role: VcePhysicalTableRole,
+        compaction_required: bool,
+    ) -> VcePhysicalTablePlan {
+        let fragment_count = if compaction_required { 8 } else { 1 };
+        VcePhysicalTablePlan {
+            statistics: VcePhysicalTableStatistics {
+                role,
+                table_name: match role {
+                    VcePhysicalTableRole::Content => "content_vectors",
+                    VcePhysicalTableRole::Path => "path_vectors",
+                }
+                .to_owned(),
+                version: 7,
+                total_bytes: 4_096,
+                row_count: 32,
+                index_count: 1,
+                fragment_count,
+                small_fragment_count: u64::from(compaction_required),
+                fragment_rows: VcePhysicalFragmentSummary {
+                    minimum_rows: 1,
+                    maximum_rows: 32,
+                    mean_rows: 4,
+                    p25_rows: 1,
+                    p50_rows: 2,
+                    p75_rows: 8,
+                    p99_rows: 32,
+                },
+            },
+            compaction_required,
+            options: VceCompactionOptions {
+                target_rows_per_fragment: 1_024,
+                max_rows_per_group: 8_192,
+                max_bytes_per_file: 128 * 1024 * 1024,
+                num_threads: 4,
+                batch_size: 1_024,
+                max_source_fragments: 512,
+            },
+        }
+    }
 
     /// Verify page limits reject unbounded management queries.
     /// 验证分页限制会拒绝无界管理查询。
@@ -1035,6 +1311,34 @@ mod tests {
         ));
     }
 
+    /// Verify compact actions exactly cover every table marked as requiring compaction.
+    /// 验证整理动作会精确覆盖每张标记为需要整理的表。
+    #[test]
+    fn compaction_plan_requires_bidirectional_action_coverage() {
+        let content = physical_table_plan(VcePhysicalTableRole::Content, true);
+        let path = physical_table_plan(VcePhysicalTableRole::Path, false);
+        let mut plan = VceMaintenancePlan {
+            mode: VceMaintenanceMode::Compact,
+            actions: Vec::new(),
+            affected_blob_count: 0,
+            physical_tables: vec![content.clone(), path],
+        };
+        assert!(validate_maintenance_plan(VceMaintenanceMode::Compact, &plan).is_err());
+
+        plan.actions.push(VceMaintenanceAction {
+            action_id: crate::identity::content_hash("compact content"),
+            description: "Compact content vectors".to_owned(),
+            blob_names: Vec::new(),
+            destructive: false,
+            physical_table: Some(content),
+        });
+        validate_maintenance_plan(VceMaintenanceMode::Compact, &plan)
+            .expect("the exact required table action should be accepted");
+
+        plan.physical_tables[1] = physical_table_plan(VcePhysicalTableRole::Path, true);
+        assert!(validate_maintenance_plan(VceMaintenanceMode::Compact, &plan).is_err());
+    }
+
     /// Verify management rows, failed jobs, and maintenance counts remain self-consistent.
     /// 验证管理行、失败作业和维护计数保持内部一致。
     #[test]
@@ -1083,8 +1387,10 @@ mod tests {
                 description: "Repair one Blob".to_owned(),
                 blob_names: vec![blob_name],
                 destructive: true,
+                physical_table: None,
             }],
             affected_blob_count: 0,
+            physical_tables: Vec::new(),
         };
         assert!(validate_maintenance_plan(VceMaintenanceMode::Repair, &plan).is_err());
 

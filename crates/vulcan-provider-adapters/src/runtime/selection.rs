@@ -163,7 +163,8 @@ impl PublicAiRuntime {
         let configuration = generation.configuration.as_ref();
         let mut eligible_catalogs = generation.activated_effective_catalogs.snapshot();
         eligible_catalogs.retain(|connection_id, _| {
-            !configuration.connection_is_pending_validation(connection_id.as_str())
+            configuration.connection_is_enabled(connection_id.as_str())
+                && !configuration.connection_is_pending_validation(connection_id.as_str())
         });
         let eligible_catalogs = RuntimeConnectionCatalogs::from_snapshot(eligible_catalogs);
         let connection = configuration
@@ -336,6 +337,12 @@ impl PublicAiRuntime {
         required_internal_operation: Option<AiOperation>,
         catalog_snapshot: Arc<ResolvedProviderGeneration>,
     ) -> Result<ResolvedPublicAiSelection, String> {
+        if !configuration.connection_is_enabled(connection.id.as_str()) {
+            return Err(format!(
+                "Connection `{}` is disabled and cannot execute requests.",
+                connection.id
+            ));
+        }
         if configuration.connection_is_pending_validation(connection.id.as_str()) {
             return Err(format!(
                 "Connection `{}` is pending explicit model validation and cannot execute normal requests.",
@@ -428,6 +435,7 @@ impl PublicAiRuntime {
                     .values()
                     .filter(|candidate| {
                         candidate.provider_id == provider_id
+                            && configuration.connection_is_enabled(candidate.id.as_str())
                             && !configuration
                                 .connection_is_pending_validation(candidate.id.as_str())
                     }),
@@ -605,6 +613,18 @@ impl PublicAiRuntime {
         // 自定义模型与系统模型共用一条合并投影链，而不是替换掉已继承的上级层。
         route.custom_model_projection =
             resolve_request_projection(configuration, provider_id, model_id)?;
+        // Codex behavior is copied from the exact frozen binding and never inferred from a model name.
+        // Codex 行为从精确冻结绑定复制，绝不根据模型名称推断。
+        route.codex_behavior = protocol_binding.codex_behavior.clone();
+        if let Some(required_primitive) = route
+            .codex_behavior
+            .as_ref()
+            .and_then(crate::provider_manifest::CodexModelBehavior::missing_runtime_primitive)
+        {
+            return Err(format!(
+                "Model '{model_id}' requires runtime primitive '{required_primitive}', which is not registered by this build."
+            ));
+        }
         // toolSchemaProjection is resolved only from the active system Manifest or the exact
         // custom-model advanced setting. Protocol and model-name heuristics are intentionally absent.
         // toolSchemaProjection 只从活动系统 Manifest 或精确自定义模型高级设置解析。

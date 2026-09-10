@@ -63,6 +63,16 @@ pub enum CoreError {
         /// 人类可读的失败细节。
         message: String,
     },
+    /// A mandatory tool recovery boundary could not be durably persisted or projected.
+    /// 强制工具恢复边界无法可靠持久化或投影。
+    ToolDurabilityFailure {
+        /// Tool name or the stable tool-batch boundary label.
+        /// 工具名称或稳定的工具批次边界标签。
+        tool_name: String,
+        /// Original durability or projection failure detail.
+        /// 原始持久化或投影失败详情。
+        message: String,
+    },
 }
 
 impl Display for CoreError {
@@ -85,6 +95,12 @@ impl Display for CoreError {
             }
             CoreError::ToolFailure { tool_name, message } => {
                 write!(f, "tool `{tool_name}` failure: {message}")
+            }
+            CoreError::ToolDurabilityFailure { tool_name, message } => {
+                write!(
+                    f,
+                    "tool `{tool_name}` durability boundary failure: {message}"
+                )
             }
         }
     }
@@ -1173,6 +1189,16 @@ fn accumulate_optional_token_count(target: &mut Option<usize>, value: Option<usi
     *target = Some(target.unwrap_or(0).saturating_add(value));
 }
 
+/// Carries an explicit provider response boundary for the current logical user turn.
+/// 承载当前逻辑用户回合的显式供应商响应边界。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderTurnBoundary {
+    /// Whether this response ended the logical user turn.
+    /// 本次响应是否结束了当前逻辑用户回合。
+    pub end_turn: bool,
+}
+
 /// Represents one normalized provider turn response consumed by the host-owned controller loop.
 /// 表示一份由宿主自有控制器循环消费的规范化 Provider 单回合响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1200,6 +1226,31 @@ pub struct ProviderTurnResponse {
     /// Optional continuation cursor snapshot refreshed by the provider.
     /// 由 Provider 刷新的可选 continuation 游标快照。
     pub continuation: Option<ProviderContinuation>,
+}
+
+impl ProviderTurnResponse {
+    /// Reads the optional typed logical-turn boundary from host-owned provider state.
+    /// 从宿主持有的供应商状态中读取可选的类型化逻辑回合边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(None)` when the provider omitted the boundary, the exact boolean otherwise, or a
+    /// controlled state error when host-owned persisted data is malformed.
+    /// 供应商省略边界时返回 `Ok(None)`，否则返回精确布尔值；宿主持有的持久数据非法时返回受控状态错误。
+    pub fn explicit_end_turn(&self) -> Result<Option<bool>, CoreError> {
+        let Some(value) = self
+            .provider_message_state
+            .as_ref()
+            .and_then(|state| state.pointer("/vulcan_ai/turn_boundary"))
+        else {
+            return Ok(None);
+        };
+        let boundary: ProviderTurnBoundary =
+            serde_json::from_value(value.clone()).map_err(|error| CoreError::InvalidState {
+                message: format!("Persisted provider turn boundary is invalid: {error}"),
+            })?;
+        Ok(Some(boundary.end_turn))
+    }
 }
 
 /// Represents one streaming delta emitted while the provider is still building the normalized turn response.

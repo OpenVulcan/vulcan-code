@@ -362,6 +362,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                         self.provider_id(),
                         self.route.entry.id.as_str(),
                         self.model_id(),
+                        self.route.protocol_route.responses_recovery_policy(),
                     );
                     recover_rejected_oauth_credential(
                         &self.credential,
@@ -391,6 +392,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     self.provider_id(),
                     self.route.entry.id.as_str(),
                     self.model_id(),
+                    self.route.protocol_route.responses_recovery_policy(),
                 );
                 recover_rejected_oauth_credential(
                     &self.credential,
@@ -449,6 +451,14 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             // terminalEvent closes the normalized response at its explicit protocol boundary instead of waiting for transport EOF.
             // terminalEvent 在显式协议终态边界关闭规范化响应，而不是继续等待传输 EOF。
             let terminal_event = public_stream_event_is_terminal(&event);
+            // responseIdentity captures response.created before a later terminal stream error can end this attempt.
+            // responseIdentity 在后续终态流错误结束本次尝试前捕获 response.created。
+            let response_identity = match &event {
+                AiStreamEvent::ResponseMetadataUpdated { continuation } => {
+                    Some(continuation.provider_message_id.clone())
+                }
+                _ => None,
+            };
             let usage_updated = matches!(&event, AiStreamEvent::UsageUpdated { .. });
             let processing_stage = provider_trace_processing_stage_for_event(&event);
             // applyResult is separated from `?` so trace mode can retain the rest of a failed API body.
@@ -466,6 +476,13 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 let _ = self.live_sender.send(Ok(ProviderStreamDelta::UsageUpdated(
                     public_usage_to_core(usage),
                 )));
+            }
+            if let Some(response_id) = response_identity {
+                let _ = self
+                    .live_sender
+                    .send(Ok(ProviderStreamDelta::ResponseIdentityObserved(
+                        response_id,
+                    )));
             }
             if terminal_event {
                 if self.provider_request_trace_enabled {
@@ -550,10 +567,27 @@ fn attach_execution_route_context(
     provider_id: &str,
     entry_id: &str,
     model_id: &str,
+    recovery_policy: vulcan_provider_adapters::ResponsesRecoveryPolicy,
 ) {
     error.provider_id = Some(provider_id.to_string());
     error.entry_id = Some(entry_id.to_string());
     error.model_id = Some(model_id.to_string());
+    // AgentSpace reconciliation is classified only at the route-aware boundary; the generic
+    // OpenAI decoder cannot authorize a provider-specific recovery state.
+    // AgentSpace 对账仅在感知路由的边界分类；通用 OpenAI 解码器无权授予供应商专属恢复状态。
+    if recovery_policy
+        == vulcan_provider_adapters::ResponsesRecoveryPolicy::AgentSpaceResultAndUsageReconciliationV1
+        && provider_id == "agentspace"
+        && entry_id == "chatgpt-plan"
+        && error.upstream_code.as_deref() == Some("reconciliation_required")
+        && error.dispatch_outcome == vulcan_ai_contract::DispatchOutcome::Dispatched
+    {
+        error.subcategory = Some(String::from(
+            vulcan_ai_contract::AGENTSPACE_RECONCILIATION_REQUIRED_SUBCATEGORY,
+        ));
+        error.terminal = true;
+        error.retryable = false;
+    }
 }
 
 #[cfg(test)]

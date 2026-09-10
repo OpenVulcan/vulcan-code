@@ -590,6 +590,9 @@ pub enum ResponsesRemoteCompactionPolicy {
     /// Uses remote compaction and falls back to local compaction when safe.
     /// 使用远端压缩，并在安全时回退到本地压缩。
     EnabledWithLocalFallback,
+    /// Selects inline Responses compaction V2 driven by a streamed compaction trigger.
+    /// 选择由流式压缩触发项驱动的 Responses 内联压缩 V2。
+    InlineV2,
 }
 
 /// Selects the explicitly verified Responses WebSocket capability for one route.
@@ -610,6 +613,20 @@ pub enum ResponsesWebsocketPolicy {
     UnverifiedOverride,
 }
 
+/// Selects a route-owned terminal recovery classification implemented by the host.
+/// 选择由宿主实现、归属于路由的终态恢复分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesRecoveryPolicy {
+    /// Leaves provider failures under the generic protocol classification.
+    /// 让供应商失败保持通用协议分类。
+    #[default]
+    None,
+    /// Preserves AgentSpace reconciliation failures as result-and-usage pending without replay.
+    /// 将 AgentSpace 对账失败保留为结果与用量待确认且禁止重放。
+    AgentSpaceResultAndUsageReconciliationV1,
+}
+
 /// Carries explicit optional capabilities for one OpenAI Responses route.
 /// 承载一条 OpenAI Responses 路由的显式可选能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -623,6 +640,10 @@ pub struct ResponsesRouteFeatures {
     /// 当前精确路由的 Responses WebSocket 能力。
     #[serde(default)]
     pub websocket: ResponsesWebsocketPolicy,
+    /// Route-owned provider recovery classification.
+    /// 路由持有的供应商恢复分类。
+    #[serde(default)]
+    pub recovery: ResponsesRecoveryPolicy,
 }
 
 /// Defines which source representations one input resource kind may use on a frozen route.
@@ -748,17 +769,30 @@ impl ProtocolRoute {
         })
     }
 
-    /// Reports whether this exact route explicitly enables standalone remote Responses compaction.
-    /// 报告当前精确路由是否显式启用独立远端 Responses 压缩。
+    /// Reports whether this exact route explicitly enables standalone remote Responses compaction V1.
+    /// 报告当前精确路由是否显式启用独立远端 Responses 压缩 V1。
     ///
     /// # Returns
     /// 返回值
-    /// `true` only for an explicit enabled-with-safe-local-fallback policy.
-    /// 仅在显式选择启用并允许安全本地回退策略时返回 `true`。
+    /// `true` only for the standalone V1 policy with safe local fallback.
+    /// 仅在显式选择带安全本地回退的独立 V1 策略时返回 `true`。
     pub fn remote_compaction_enabled(&self) -> bool {
         self.responses_features.as_ref().is_some_and(|features| {
             features.remote_compaction == ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
         })
+    }
+
+    /// Returns the exact recovery policy frozen into this route.
+    /// 返回冻结到当前路由的精确恢复策略。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The declared closed policy, or `None` when the route declares no Responses features.
+    /// 返回已声明的封闭策略；路由未声明 Responses 能力时返回 `None`。
+    pub fn responses_recovery_policy(&self) -> ResponsesRecoveryPolicy {
+        self.responses_features
+            .map(|features| features.recovery)
+            .unwrap_or_default()
     }
 
     /// Resolves the protocol-specific base URL or the service-entry default.

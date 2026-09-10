@@ -189,11 +189,12 @@ export type PublicAiCustomProviderProtocol =
   | "open_ai_chat"
   | "open_ai_responses"
   | "open_ai_codex_responses";
-// PublicAiResponsesRemoteCompactionPolicy selects the explicit standalone compact behavior.
-// PublicAiResponsesRemoteCompactionPolicy 选择显式的独立远端压缩行为。
+// PublicAiResponsesRemoteCompactionPolicy selects the closed remote compaction dialect.
+// PublicAiResponsesRemoteCompactionPolicy 选择封闭的远端压缩方言。
 export type PublicAiResponsesRemoteCompactionPolicy =
   | "disabled"
-  | "enabled_with_local_fallback";
+  | "enabled_with_local_fallback"
+  | "inline_v2";
 
 // PublicAiCustomProviderModelDiscoveryMode selects automatic, custom-path, or manual discovery.
 // PublicAiCustomProviderModelDiscoveryMode 选择自动、自定义路径或手工发现。
@@ -533,6 +534,9 @@ export interface PublicAiConnection {
   credential_mode: CredentialMode;
   credential_id: string;
   display_name: string;
+  // Whether this stored credential currently participates in model and tool routing.
+  // 此已保存凭据当前是否参与模型与工具路由。
+  enabled: boolean;
   prompt_cache_by_protocol: Record<string, unknown>;
   // Whether normal routing is blocked until one explicit model validation succeeds.
   // 在一次显式模型验证成功前是否阻止常规路由。
@@ -686,6 +690,35 @@ export interface PublicAiConnectionCatalog {
   discovery_schema_revision: string;
 }
 
+// PublicAiCodexModelBehavior carries the exact closed model behavior frozen by the backend.
+// PublicAiCodexModelBehavior 承载后端冻结的精确封闭模型行为。
+export interface PublicAiCodexModelBehavior {
+  wire_dialect: "standard" | "lite";
+  tool_mode: "direct" | "code_mode" | "code_mode_only";
+  apply_patch_tool_type: "function" | "freeform";
+  shell_type: "shell_command" | "unified_exec";
+  web_search_tool_type: "text" | "text_and_image";
+  supports_search_tool: boolean;
+  experimental_supported_tools: string[];
+  supports_parallel_tool_calls: boolean;
+  supports_image_detail_original: boolean;
+  supports_verbosity: boolean;
+  default_verbosity?: "low" | "medium" | "high";
+  multi_agent_version?: "v1" | "v2";
+  multi_agent_reasoning_effort?: string;
+  include_skills_usage_instructions: boolean;
+  include_apps_usage_instructions: boolean;
+  include_plugin_usage_instructions: boolean;
+  node_repl_disabled: boolean;
+  node_repl_auto_review_required: boolean;
+  requires_sandboxed_review: boolean;
+  auto_review_model_override?: string;
+  comp_hash?: string;
+  tool_output_truncation?: { mode: "tokens"; limit: number };
+  prefer_websockets: boolean;
+  supports_experimental_context: boolean;
+}
+
 // PublicAiModelRouteRecord carries one backend-resolved model protocol route status.
 // PublicAiModelRouteRecord 承载一条由后端解析的模型协议路由状态。
 export interface PublicAiModelRouteRecord {
@@ -713,6 +746,12 @@ export interface PublicAiModelRouteRecord {
   // Stable manifest rule identifier when present.
   // 存在时的稳定 Manifest 规则标识。
   bindingRuleId?: string;
+  // Exact closed Codex behavior frozen by the matched model rule.
+  // 由匹配模型规则冻结的精确封闭 Codex 行为。
+  codexBehavior?: PublicAiCodexModelBehavior;
+  // Stable runtime primitive required before this route can execute.
+  // 当前路由可执行前所需的稳定运行时原语。
+  requiredRuntimePrimitive?: string;
   // Activated provider-manifest revision owning the binding.
   // 持有绑定的已激活供应商 Manifest 修订。
   manifestRevision: number;

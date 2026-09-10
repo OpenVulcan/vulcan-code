@@ -19,6 +19,30 @@ pub(super) enum FinishedStreamEventOutcome {
     OwnershipUnavailable,
 }
 
+/// Decides whether the durable API terminal fully represents the final execution report.
+/// 判定可靠 API 终态是否完整表达最终执行报告。
+///
+/// # Parameters
+/// 参数
+/// `api_terminal_persisted` states whether the final physical API has a durable terminal receipt.
+/// `api_terminal_persisted` 表示最终物理 API 是否具有可靠终态回执。
+/// `api_terminal_failure_persisted` states whether that terminal contains a controlled failure.
+/// `api_terminal_failure_persisted` 表示该终态是否包含受控失败。
+/// `report_failed` states whether the runtime subsequently reported execution failure.
+/// `report_failed` 表示运行时随后是否报告执行失败。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only when no additional durable failure boundary is required.
+/// 仅在不需要追加可靠失败边界时返回 `true`。
+fn v1_api_terminal_satisfies_report(
+    api_terminal_persisted: bool,
+    api_terminal_failure_persisted: bool,
+    report_failed: bool,
+) -> bool {
+    api_terminal_persisted && (!report_failed || api_terminal_failure_persisted)
+}
+
 /// Handles one terminal execution report after stream generation validation succeeds.
 /// 在流代际校验成功后处理单个终态执行报告。
 ///
@@ -62,6 +86,7 @@ pub(super) async fn handle_finished_stream_event(
 ) -> FinishedStreamEventOutcome {
     let ProviderV1FinishedDurability {
         api_terminal: v1_api_terminal_receipt,
+        api_terminal_failure_persisted,
         turn_completion: turn_completion_receipt,
         ..
     } = v1_finished_durability;
@@ -268,13 +293,27 @@ pub(super) async fn handle_finished_stream_event(
             final_report_apply.is_some()
         ),
     );
-    // A durable ApiStats or the explicit pre-API fallback is required before the exact owner may reopen admission.
-    // 只有可靠 ApiStats 或明确的 API 前失败回退落盘后，精确 owner 才允许重新开放准入。
+    // A successful ApiStats cannot hide a later host projection failure; that failure needs its own durable boundary.
+    // 成功 ApiStats 不能掩盖随后发生的宿主投影失败；该失败需要独立的可靠边界。
+    let v1_terminal_authority_persisted = v1_api_terminal_satisfies_report(
+        v1_api_terminal_receipt.is_some(),
+        api_terminal_failure_persisted,
+        terminal_error.is_some(),
+    );
+    // failure_reason_code distinguishes a missing terminal from a failure observed after successful API persistence.
+    // failure_reason_code 区分缺失终态与成功 API 持久化后才观察到的失败。
+    let failure_reason_code = if v1_api_terminal_receipt.is_some() {
+        "stream_failed_after_v1_api_terminal"
+    } else {
+        "stream_finished_without_v1_api_terminal"
+    };
+    // A sufficient ApiStats or an explicit fallback is required before the exact owner may reopen admission.
+    // 只有充分的 ApiStats 或明确回退落盘后，精确 owner 才允许重新开放准入。
     let terminal_authority_settled = settle_stream_terminal_authority(
         task_state,
         finished_session_id,
-        v1_api_terminal_receipt.is_some(),
-        "stream_finished_without_v1_api_terminal",
+        v1_terminal_authority_persisted,
+        failure_reason_code,
         terminal_error,
         terminal_persistence_owner,
     )
@@ -489,6 +528,28 @@ mod tests {
             finished_turn_terminal_status(true),
             TurnTerminalStatus::Failed
         ));
+    }
+
+    /// Verifies a successful API terminal cannot satisfy a later failed execution report.
+    /// 验证成功 API 终态不能满足随后出现的失败执行报告。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[test]
+    fn api_terminal_must_contain_failure_when_report_failed() {
+        assert!(!v1_api_terminal_satisfies_report(false, false, false));
+        assert!(!v1_api_terminal_satisfies_report(false, false, true));
+        assert!(!v1_api_terminal_satisfies_report(false, true, true));
+        assert!(v1_api_terminal_satisfies_report(true, false, false));
+        assert!(!v1_api_terminal_satisfies_report(true, false, true));
+        assert!(v1_api_terminal_satisfies_report(true, true, true));
     }
 
     /// Verifies completed and failed outcomes produce distinct deterministic lifecycle events.

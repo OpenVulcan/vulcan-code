@@ -547,6 +547,7 @@ fn rust_model_rule_fields() -> BTreeSet<&'static str> {
         "display_name",
         "supported_protocols",
         "selected_protocol",
+        "codex_behavior",
         "capabilities",
         "tool_schema_projection",
         "protocol_capabilities",

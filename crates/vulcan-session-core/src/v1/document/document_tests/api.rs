@@ -181,6 +181,211 @@ fn explicit_interrupt_finishes_waiting_ask_and_preserves_open_turn() -> Result<(
     Ok(())
 }
 
+/// A fatal tool durability failure closes the logical Turn and forbids Continue.
+/// 致命工具持久化失败会闭合逻辑回合并禁止继续。
+#[test]
+fn execution_boundary_failure_closes_turn_and_forbids_continue() -> Result<(), DomainError> {
+    // document is the authoritative event graph mutated by the fatal boundary transition.
+    // document 是由致命边界转换修改的权威事件图。
+    let mut document = new_document();
+    // turn_id identifies the logical owner that must be closed atomically.
+    // turn_id 标识必须原子闭合的逻辑 owner。
+    let turn_id = document.submit_root_input_fixture("root", Vec::new(), T0)?;
+    // api_call_id identifies the active physical request that must become failed.
+    // api_call_id 标识必须进入失败状态的活动物理请求。
+    let api_call_id = document.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("deepseek", "deepseek-v4.1-flash"),
+        T0,
+    )?;
+    // tool_call_id identifies the in-flight tool that must become interrupted.
+    // tool_call_id 标识必须进入中断状态的进行中工具。
+    let tool_call_id = document.start_tool(
+        api_call_id,
+        "file",
+        ToolPayload::try_new(serde_json::json!({"action": "write", "path": "new.txt"}))?,
+        None,
+        T0,
+    )?;
+    // revision_before_failure proves the composite transition publishes exactly one revision.
+    // revision_before_failure 证明复合转换只发布一个修订。
+    let revision_before_failure = document.memory_revision();
+
+    assert!(document.fail_execution_boundary_and_close_turn(
+        "tool_boundary_durability_failed",
+        Some("Invalid change-set field at payload.files[0].hunks"),
+        T0 + 1,
+    )?);
+    assert_eq!(document.memory_revision(), revision_before_failure + 1);
+    // failure_receipt must contain every API, tool, notice, and Turn terminal mutation.
+    // failure_receipt 必须包含全部 API、工具、提示与回合终态变更。
+    let failure_receipt = document.memory_revision_receipt(revision_before_failure + 1)?;
+    assert_eq!(failure_receipt.revision, revision_before_failure + 1);
+    assert!(failure_receipt.changed_events.iter().any(|event| {
+        matches!(
+            &event.event,
+            EventBody::ToolCall(tool) if tool.tool_call_id == tool_call_id
+        )
+    }));
+    assert!(failure_receipt.changed_events.iter().any(|event| {
+        matches!(
+            &event.event,
+            EventBody::ApiStats(stats) if stats.api_call_id == api_call_id
+        )
+    }));
+    assert!(
+        failure_receipt
+            .changed_events
+            .iter()
+            .any(|event| { matches!(&event.event, EventBody::DisplayNote(_)) })
+    );
+    assert!(
+        failure_receipt
+            .changed_events
+            .iter()
+            .any(|event| { matches!(&event.event, EventBody::TurnBoundary(_)) })
+    );
+    assert!(
+        failure_receipt
+            .changed_events
+            .iter()
+            .any(|event| { matches!(&event.event, EventBody::TurnStats(_)) })
+    );
+    assert!(matches!(
+        document.memory_revision_receipt(revision_before_failure + 2),
+        Err(DomainError::ReferenceViolation {
+            kind: "memory_revision_receipt",
+            ..
+        })
+    ));
+    assert!(document.active_api().is_none());
+    assert_eq!(
+        document
+            .active_turn()
+            .map(|turn| (turn.turn_id, turn.closed)),
+        Some((turn_id, true))
+    );
+    assert!(document.events().iter().any(|event| {
+        matches!(
+            &event.event,
+            EventBody::ToolCall(tool)
+                if tool.tool_call_id == tool_call_id
+                    && tool.status == ToolCallStatus::Interrupted
+                    && tool.finished_at_ms == Some(T0 + 1)
+        )
+    }));
+    assert!(document.events().iter().any(|event| {
+        matches!(
+            &event.event,
+            EventBody::ApiStats(stats)
+                if stats.api_call_id == api_call_id
+                    && stats.status == ApiCallStatus::Failed
+                    && stats.end_reason == Some(ApiEndReason::Unknown)
+                    && stats.continuation_eligibility == ContinuationEligibility::Forbidden
+                    && stats.error.as_ref().is_some_and(|error|
+                        error.category == ApiErrorCategory::Unknown
+                            && error.error_code.as_deref()
+                                == Some("tool_boundary_durability_failed")
+                            && error.message
+                                == "Invalid change-set field at payload.files[0].hunks")
+        )
+    }));
+    assert!(document.events().iter().any(|event| {
+        matches!(
+            &event.event,
+            EventBody::DisplayNote(note)
+                if note.notice_kind == DisplayNoticeKind::SystemError
+                    && note.severity == NoticeSeverity::Error
+                    && note.reason_code == "tool_boundary_durability_failed"
+                    && note.api_call_id == Some(api_call_id)
+                    && note.redacted_detail.as_deref()
+                        == Some("Invalid change-set field at payload.files[0].hunks")
+        )
+    }));
+    assert!(!document.fail_execution_boundary_and_close_turn(
+        "tool_boundary_durability_failed",
+        Some("Invalid change-set field at payload.files[0].hunks"),
+        T0 + 2,
+    )?);
+    document.rebuild_derived_state()?;
+    document.submit_root_input_fixture("new root", Vec::new(), T0 + 3)?;
+    Ok(())
+}
+
+/// A host failure after successful API persistence preserves that terminal and closes the Turn separately.
+/// 成功 API 已持久化后的宿主失败会保留该终态，并单独闭合逻辑回合。
+#[test]
+fn post_terminal_host_failure_preserves_successful_api_and_closes_turn() -> Result<(), DomainError>
+{
+    // document owns one open logical Turn whose physical API has already completed durably.
+    // document 持有一个物理 API 已可靠完成但逻辑回合仍开放的会话。
+    let mut document = new_document();
+    // turn_id identifies the logical owner that the later host failure must close.
+    // turn_id 标识后续宿主失败必须闭合的逻辑 owner。
+    let turn_id = document.submit_root_input_fixture("root", Vec::new(), T0)?;
+    // api_call_id identifies the successful physical API that must not be rewritten.
+    // api_call_id 标识不得被改写的成功物理 API。
+    let api_call_id = document.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0,
+    )?;
+    // stats_seq locates the exact completed terminal retained across the host failure.
+    // stats_seq 定位跨宿主失败仍需保留的精确已完成终态。
+    let stats_seq = complete_ok(&mut document, api_call_id, None, T0 + 1)?;
+    // terminal_before is the byte-for-byte event value that the failure boundary must preserve.
+    // terminal_before 是失败边界必须原样保留的事件值。
+    let terminal_before = document
+        .events()
+        .iter()
+        .find(|event| event.seq == stats_seq)
+        .cloned()
+        .expect("completed API terminal");
+    // revision_before_failure proves the later host failure publishes one independent revision.
+    // revision_before_failure 证明后续宿主失败发布一个独立修订。
+    let revision_before_failure = document.memory_revision();
+
+    assert!(document.fail_execution_boundary_and_close_turn(
+        "tool_lifecycle_projection_failed",
+        Some("live lifecycle projection rejected after durable tool completion"),
+        T0 + 2,
+    )?);
+    assert_eq!(document.memory_revision(), revision_before_failure + 1);
+    assert_eq!(
+        document
+            .events()
+            .iter()
+            .find(|event| event.seq == stats_seq),
+        Some(&terminal_before)
+    );
+    assert!(matches!(
+        &terminal_before.event,
+        EventBody::ApiStats(stats)
+            if stats.api_call_id == api_call_id
+                && stats.status == ApiCallStatus::Completed
+                && stats.error.is_none()
+    ));
+    assert!(document.events().iter().any(|event| {
+        matches!(
+            &event.event,
+            EventBody::DisplayNote(note)
+                if note.notice_kind == DisplayNoticeKind::SystemError
+                    && note.reason_code == "tool_lifecycle_projection_failed"
+                    && note.redacted_detail.as_deref()
+                        == Some("live lifecycle projection rejected after durable tool completion")
+        )
+    }));
+    assert_eq!(
+        document
+            .active_turn()
+            .map(|turn| (turn.turn_id, turn.closed)),
+        Some((turn_id, true))
+    );
+    document.rebuild_derived_state()?;
+    document.submit_root_input_fixture("new root", Vec::new(), T0 + 3)?;
+    Ok(())
+}
+
 /// An interruption atomically promotes pending supplements after ApiStats and keeps the Turn open.
 /// 中断会在 ApiStats 之后原子晋升待处理补充，并保持逻辑回合开放。
 #[test]

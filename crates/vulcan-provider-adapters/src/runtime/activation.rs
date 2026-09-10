@@ -1019,6 +1019,11 @@ impl PublicAiRuntime {
             {
                 continue;
             }
+            // Disabled credentials retain their prior source evidence but never perform activation-time I/O.
+            // 已停用凭据保留既有来源证据，但绝不执行激活阶段 I/O。
+            if !runtime_configuration.connection_is_enabled(connection_id.as_str()) {
+                continue;
+            }
             // Provider-tool entries own credentials and tools but intentionally have no
             // conversation model catalog; generation activation must not project one for them.
             // 供应商工具入口只持有凭据与工具，并且有意不存在对话模型目录；代际激活不得为其

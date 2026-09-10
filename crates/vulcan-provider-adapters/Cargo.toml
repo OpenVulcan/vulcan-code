@@ -28,7 +28,7 @@ hex.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 time = { workspace = true, features = ["parsing"] }
-uuid.workspace = true
+uuid = { workspace = true, features = ["v5"] }
 vulcan-ai-contract.workspace = true
 vulcan-context.workspace = true
 vulcan-llm-core.workspace = true

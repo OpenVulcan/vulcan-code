@@ -10,9 +10,10 @@ pub use internal_input::{
     INTERNAL_RESOURCE_PART_TYPE, InternalResponsesRequest, encode_internal_responses_request,
 };
 use vulcan_ai_contract::{
-    APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem, MessageRole, NativeToolKind,
-    ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RequestUsage,
-    StructuredOutputPolicy, ToolChoicePolicy, is_replayable_codex_responses_item,
+    APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem, FreeformToolFormat, FreeformToolSyntax,
+    MessageRole, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy,
+    RequestUsage, StructuredOutputPolicy, ToolChoicePolicy, ToolInputFormat,
+    is_replayable_codex_responses_item,
 };
 
 /// Wraps one northbound OpenAI reasoning payload with explicit replay provenance.
@@ -89,6 +90,7 @@ impl ProtocolProfile for OpenAiChatProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         crate::shared::require_no_native_tools(request, self.id())?;
+        crate::require_json_schema_tool_inputs(request, self.id())?;
         require_default_cache_policy(&request.prompt_cache, self.id())?;
         let messages = encode_messages(request)?;
         let tools = encode_openai_tools(request);
@@ -190,11 +192,14 @@ impl ProtocolProfile for OpenAiResponsesProfile {
     fn create_stream_decoder(
         &self,
         execution_id: String,
-        _request: &AiExecutionRequest,
+        request: &AiExecutionRequest,
     ) -> Box<dyn ProtocolStreamDecoder> {
-        Box::new(crate::openai_stream::OpenAiResponsesStreamDecoder::new(
-            execution_id,
-        ))
+        Box::new(
+            crate::openai_stream::OpenAiResponsesStreamDecoder::with_registered_tools(
+                execution_id,
+                &request.tools,
+            ),
+        )
     }
 }
 
@@ -230,11 +235,14 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
     fn create_stream_decoder(
         &self,
         execution_id: String,
-        _request: &AiExecutionRequest,
+        request: &AiExecutionRequest,
     ) -> Box<dyn ProtocolStreamDecoder> {
-        Box::new(crate::openai_stream::OpenAiResponsesStreamDecoder::new(
-            execution_id,
-        ))
+        Box::new(
+            crate::openai_stream::OpenAiResponsesStreamDecoder::with_registered_tools(
+                execution_id,
+                &request.tools,
+            ),
+        )
     }
 }
 
@@ -368,7 +376,7 @@ fn encode_chat_tool_choice(request: &AiExecutionRequest) -> Result<Value, Protoc
         ToolChoicePolicy::Required => Value::String(String::from("required")),
         ToolChoicePolicy::Disabled => Value::String(String::from("none")),
         ToolChoicePolicy::Specific { tool_name } => {
-            require_registered_tool(request, tool_name)?;
+            let _ = require_registered_tool(request, tool_name)?;
             json!({ "type": "function", "function": { "name": tool_name } })
         }
     })
@@ -394,8 +402,14 @@ fn encode_responses_tool_choice(
         ToolChoicePolicy::Required => Value::String(String::from("required")),
         ToolChoicePolicy::Disabled => Value::String(String::from("none")),
         ToolChoicePolicy::Specific { tool_name } => {
-            require_registered_tool(request, tool_name)?;
-            json!({ "type": "function", "name": tool_name })
+            let tool = require_registered_tool(request, tool_name)?;
+            json!({
+                "type": match &tool.input_format {
+                    ToolInputFormat::JsonSchema => "function",
+                    ToolInputFormat::Freeform { .. } => "custom",
+                },
+                "name": tool_name,
+            })
         }
     })
 }
@@ -410,18 +424,21 @@ fn encode_responses_tool_choice(
 ///
 /// # Returns
 /// 返回值
-/// Success only when the tool is registered.
-/// 仅当工具已注册时成功。
-fn require_registered_tool(
-    request: &AiExecutionRequest,
+/// The exact registered definition, or a controlled conversion failure.
+/// 返回精确注册定义，或受控转换失败。
+fn require_registered_tool<'request>(
+    request: &'request AiExecutionRequest,
     tool_name: &str,
-) -> Result<(), ProtocolConversionError> {
-    if request.tools.iter().any(|tool| tool.name == tool_name) {
-        return Ok(());
-    }
-    Err(ProtocolConversionError::new(format!(
-        "Tool choice references unregistered tool `{tool_name}`."
-    )))
+) -> Result<&'request vulcan_ai_contract::ToolDefinition, ProtocolConversionError> {
+    request
+        .tools
+        .iter()
+        .find(|tool| tool.name == tool_name)
+        .ok_or_else(|| {
+            ProtocolConversionError::new(format!(
+                "Tool choice references unregistered tool `{tool_name}`."
+            ))
+        })
 }
 
 /// Projects the public reasoning-output policy into an existing Responses reasoning object.
@@ -1264,8 +1281,8 @@ fn encode_openai_tools(request: &AiExecutionRequest) -> Vec<Value> {
         .collect()
 }
 
-/// Encodes public tool definitions into the flat Responses function-tool shape.
-/// 将公共工具定义编码为扁平的 Responses 函数工具结构。
+/// Encodes public tool definitions into their exact Responses function or custom shape.
+/// 将公共工具定义编码为精确的 Responses 函数或自定义工具结构。
 ///
 /// # Parameters
 /// 参数
@@ -1281,15 +1298,36 @@ fn encode_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
         .tools
         .iter()
         .map(|tool| {
-            // Host tools share the declared JSON schema on every protocol, including Apply Patch.
-            // 宿主工具在所有协议上共用声明的 JSON Schema，包括 Apply Patch。
-            json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.input_schema,
-                "strict": tool.strict,
-            })
+            match &tool.input_format {
+                ToolInputFormat::JsonSchema => json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                    "strict": tool.strict,
+                }),
+                ToolInputFormat::Freeform { format, .. } => {
+                    // format is a closed public contract; only registered grammar syntax reaches
+                    // the provider wire and host-side argument encoding never leaks upstream.
+                    // format 是封闭公共契约；只有已注册 grammar 语法进入供应商线路，
+                    // 宿主侧参数编码绝不会泄漏到上游。
+                    let format = match format {
+                        FreeformToolFormat::Grammar { syntax, definition } => json!({
+                            "type": "grammar",
+                            "syntax": match syntax {
+                                FreeformToolSyntax::Lark => "lark",
+                            },
+                            "definition": definition,
+                        }),
+                    };
+                    json!({
+                        "type": "custom",
+                        "name": tool.name,
+                        "description": tool.description,
+                        "format": format,
+                    })
+                }
+            }
         })
         .collect::<Vec<_>>();
     for native_tool in &request.native_tools {
@@ -1404,6 +1442,7 @@ mod tests {
                 name: String::from("lookup"),
                 description: String::from("Looks up source code."),
                 input_schema: json!({"type": "object"}),
+                input_format: Default::default(),
                 strict: false,
             }],
             native_tools: Vec::new(),
@@ -1755,6 +1794,7 @@ mod tests {
             name: String::from("image_gen.imagegen"),
             description: String::from("Generates an image."),
             input_schema: json!({"type": "object"}),
+            input_format: Default::default(),
             strict: false,
         });
 
@@ -1808,6 +1848,7 @@ mod tests {
                 "properties": {"patch": {"type": "string"}},
                 "required": ["patch"],
             }),
+            input_format: Default::default(),
             strict: false,
         });
 
@@ -1860,6 +1901,52 @@ mod tests {
         assert_eq!(
             function["function"]["parameters"]["required"],
             json!(["patch"])
+        );
+    }
+
+    /// Verifies Responses freeform tools emit custom grammar and matching tool choice.
+    /// 验证 Responses 自由文本工具输出 custom grammar 与匹配的工具选择。
+    #[test]
+    fn responses_freeform_tool_uses_registered_custom_wire_shape() {
+        // request owns one exact raw-text grammar tool and its matching specific choice.
+        // request 持有一个精确原始文本 grammar 工具及匹配的指定选择。
+        let mut request = codex_request();
+        request.tools.push(ToolDefinition {
+            name: String::from("exec"),
+            description: String::from("Executes JavaScript in the isolated host."),
+            input_schema: json!({"type": "string"}),
+            input_format: ToolInputFormat::Freeform {
+                format: FreeformToolFormat::Grammar {
+                    syntax: FreeformToolSyntax::Lark,
+                    definition: String::from("start: /[\\s\\S]+/"),
+                },
+                argument_encoding: vulcan_ai_contract::FreeformToolArgumentEncoding::RawText,
+            },
+            strict: false,
+        });
+        request.tool_choice = ToolChoicePolicy::Specific {
+            tool_name: String::from("exec"),
+        };
+
+        let encoded = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("freeform Responses tool should encode");
+        let custom = encoded.body["tools"]
+            .as_array()
+            .and_then(|tools| tools.iter().find(|tool| tool["name"] == "exec"))
+            .expect("custom exec tool should be present");
+        assert_eq!(custom["type"], "custom");
+        assert_eq!(custom["format"]["type"], "grammar");
+        assert_eq!(custom["format"]["syntax"], "lark");
+        assert_eq!(custom["format"]["definition"], "start: /[\\s\\S]+/");
+        assert!(custom.get("parameters").is_none());
+        assert_eq!(
+            encoded.body["tool_choice"],
+            json!({"type": "custom", "name": "exec"})
+        );
+        assert!(
+            OpenAiChatProfile.encode(&request).is_err(),
+            "Chat must reject the unregistered freeform input projection"
         );
     }
 
@@ -2333,6 +2420,7 @@ mod tests {
                 "id": "reasoning-item",
                 "status": "completed",
                 "summary": [{"type": "summary_text", "text": "inspect the workspace"}],
+                "encrypted_content": "opaque-replay-context",
             }),
             json!({
                 "type": "function_call",

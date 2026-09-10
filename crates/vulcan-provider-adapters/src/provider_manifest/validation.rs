@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use vulcan_ai_contract::{AiOperation, ResourceKind};
+use vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID;
 
 use super::{
     EnginePrimitiveRegistry, FORBIDDEN_MANIFEST_HEADERS, MANIFEST_SCHEMA_VERSION,
@@ -1595,6 +1596,26 @@ fn validate_protocol_route(
             "Responses optional capabilities are only allowed on Codex Responses routes",
         ));
     }
+    if route.responses_features.is_some_and(|features| {
+        features.recovery
+            == crate::ResponsesRecoveryPolicy::AgentSpaceResultAndUsageReconciliationV1
+    }) && (manifest.provider_id != "agentspace" || entry.service_entry_id != "chatgpt-plan")
+    {
+        errors.push(ManifestValidationError::new(
+            "agentspace_recovery_policy_scope_mismatch",
+            &format!("{path}.responses_features.recovery"),
+            "AgentSpace reconciliation recovery is restricted to provider 'agentspace' service entry 'chatgpt-plan'",
+        ));
+    }
+    if route.responses_features.is_some_and(|features| {
+        features.remote_compaction == crate::ResponsesRemoteCompactionPolicy::InlineV2
+    }) {
+        errors.push(ManifestValidationError::new(
+            "responses_inline_compaction_v2_runtime_unavailable",
+            &format!("{path}.responses_features.remote_compaction"),
+            "Responses inline compaction V2 is unavailable because this runtime has no registered streamed compaction-trigger executor",
+        ));
+    }
 }
 
 /// Validates the bounded closed shape of one resource-constraint list.
@@ -2341,6 +2362,7 @@ fn validate_model_rule(
             "rule must declare supported_protocols or selected_protocol",
         ));
     }
+    validate_codex_model_behavior(rule, index, errors);
 
     if let Some(capabilities) = &rule.capabilities {
         validate_capabilities(capabilities, &path(".capabilities"), errors);
@@ -2512,6 +2534,117 @@ fn validate_model_rule(
                     ));
                 }
             }
+        }
+    }
+}
+
+/// Validates the closed Codex behavior declared by one exact model rule.
+/// 校验一条精确模型规则声明的封闭 Codex 行为。
+///
+/// # Parameters
+/// 参数
+/// The rule owns the declaration, the index identifies its JSON path, and errors receives every violation.
+/// 规则持有声明，索引标识其 JSON 路径，errors 接收全部违规项。
+fn validate_codex_model_behavior(
+    rule: &ModelRule,
+    index: usize,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    let Some(behavior) = rule.codex_behavior.as_ref() else {
+        return;
+    };
+    let base_path = format!("$.model_rules[{index}].codex_behavior");
+    if rule
+        .selected_protocol
+        .as_deref()
+        .is_some_and(|profile| profile != OPENAI_CODEX_RESPONSES_PROFILE_ID)
+        || (!rule.supported_protocols.is_empty()
+            && !rule
+                .supported_protocols
+                .iter()
+                .any(|profile| profile == OPENAI_CODEX_RESPONSES_PROFILE_ID))
+    {
+        errors.push(ManifestValidationError::new(
+            "codex_behavior_requires_native_protocol",
+            base_path.as_str(),
+            format!(
+                "codex_behavior requires protocol profile '{OPENAI_CODEX_RESPONSES_PROFILE_ID}'"
+            ),
+        ));
+    }
+    if behavior.default_verbosity.is_some() && !behavior.supports_verbosity {
+        errors.push(ManifestValidationError::new(
+            "codex_default_verbosity_without_support",
+            format!("{base_path}.default_verbosity"),
+            "default_verbosity requires supports_verbosity",
+        ));
+    }
+    if behavior.multi_agent_reasoning_effort.is_some() && behavior.multi_agent_version.is_none() {
+        errors.push(ManifestValidationError::new(
+            "codex_multi_agent_effort_without_version",
+            format!("{base_path}.multi_agent_reasoning_effort"),
+            "multi_agent_reasoning_effort requires multi_agent_version",
+        ));
+    }
+    if behavior.node_repl_disabled
+        && (behavior.node_repl_auto_review_required
+            || matches!(
+                behavior.tool_mode,
+                crate::provider_manifest::CodexToolMode::CodeMode
+                    | crate::provider_manifest::CodexToolMode::CodeModeOnly
+            ))
+    {
+        errors.push(ManifestValidationError::new(
+            "codex_code_mode_disabled_conflict",
+            format!("{base_path}.node_repl_disabled"),
+            "node_repl_disabled conflicts with code-mode exposure or automatic node review",
+        ));
+    }
+    if let Some(truncation) = behavior.tool_output_truncation
+        && (truncation.limit == 0 || truncation.limit > 1_000_000)
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_codex_tool_output_limit",
+            format!("{base_path}.tool_output_truncation.limit"),
+            "tool-output token limit must be between 1 and 1000000",
+        ));
+    }
+    if behavior.experimental_supported_tools.len() > 64 {
+        errors.push(ManifestValidationError::new(
+            "too_many_codex_experimental_tools",
+            format!("{base_path}.experimental_supported_tools"),
+            "experimental tool allowlist exceeds 64 entries",
+        ));
+    }
+    let mut tool_names = BTreeSet::new();
+    for tool_name in &behavior.experimental_supported_tools {
+        if tool_name.trim().is_empty() || tool_name.len() > 256 {
+            errors.push(ManifestValidationError::new(
+                "invalid_codex_experimental_tool",
+                format!("{base_path}.experimental_supported_tools"),
+                "experimental tool names must contain between 1 and 256 UTF-8 bytes",
+            ));
+        } else if !tool_names.insert(tool_name.as_str()) {
+            errors.push(ManifestValidationError::new(
+                "duplicate_codex_experimental_tool",
+                format!("{base_path}.experimental_supported_tools"),
+                format!("duplicate experimental tool name '{tool_name}'"),
+            ));
+        }
+    }
+    for (field, value) in [
+        ("comp_hash", behavior.comp_hash.as_deref()),
+        (
+            "auto_review_model_override",
+            behavior.auto_review_model_override.as_deref(),
+        ),
+    ] {
+        if value.is_some_and(|value| value.trim().is_empty() || value.len() > 256) {
+            errors.push(ManifestValidationError::new(
+                "invalid_codex_behavior_string",
+                format!("{base_path}.{field}"),
+                "Codex behavior strings must contain between 1 and 256 UTF-8 bytes",
+            ));
         }
     }
 }
@@ -7213,6 +7346,35 @@ mod tests {
         assert_eq!(result, Ok(()), "minimal manifest must validate: {result:?}");
     }
 
+    /// Verifies inline Responses compaction V2 cannot be declared before its streamed trigger executor exists.
+    /// 验证流式触发执行器存在之前不能声明 Responses 内联压缩 V2。
+    #[test]
+    fn inline_responses_compaction_v2_fails_closed_without_runtime_primitive() {
+        let mut manifest = minimal_manifest();
+        let profile_id = String::from(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        manifest.engine_contract.required_protocol_profiles = vec![profile_id.clone()];
+        manifest.model_defaults.supported_protocols = vec![profile_id.clone()];
+        manifest.model_defaults.selected_protocol = Some(profile_id.clone());
+        let route = manifest.services[0]
+            .protocol_routes
+            .first_mut()
+            .expect("minimal manifest should contain one route");
+        route.protocol_profile_id = profile_id;
+        route.responses_features = Some(crate::ResponsesRouteFeatures {
+            remote_compaction: crate::ResponsesRemoteCompactionPolicy::InlineV2,
+            websocket: Default::default(),
+            recovery: Default::default(),
+        });
+
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("inline V2 must fail until its runtime primitive is registered");
+        assert!(
+            errors.iter().any(|error| {
+                error.code == "responses_inline_compaction_v2_runtime_unavailable"
+            })
+        );
+    }
+
     /// Verifies every used protocol must be declared by the manifest engine contract.
     /// 验证每个已使用协议都必须由 Manifest 引擎契约声明。
     #[test]
@@ -7755,6 +7917,7 @@ mod tests {
                 display_name: None,
                 supported_protocols: vec![String::from("openai-responses.v1")],
                 selected_protocol: Some(String::from("openai-responses.v1")),
+                codex_behavior: None,
                 capabilities: None,
                 tool_schema_projection: Default::default(),
                 protocol_capabilities: Default::default(),
@@ -7779,6 +7942,7 @@ mod tests {
                 display_name: None,
                 supported_protocols: vec![String::from("openai-responses.v1")],
                 selected_protocol: Some(String::from("openai-responses.v1")),
+                codex_behavior: None,
                 capabilities: None,
                 tool_schema_projection: Default::default(),
                 protocol_capabilities: Default::default(),
@@ -7874,6 +8038,7 @@ mod tests {
                 display_name: None,
                 supported_protocols: vec![String::from("openai-responses.v1")],
                 selected_protocol: Some(String::from("openai-responses.v1")),
+                codex_behavior: None,
                 capabilities: None,
                 tool_schema_projection: Default::default(),
                 protocol_capabilities: Default::default(),
@@ -7901,6 +8066,7 @@ mod tests {
                 display_name: None,
                 supported_protocols: vec![String::from("openai-responses.v1")],
                 selected_protocol: Some(String::from("openai-responses.v1")),
+                codex_behavior: None,
                 capabilities: None,
                 tool_schema_projection: Default::default(),
                 protocol_capabilities: Default::default(),
@@ -7939,6 +8105,7 @@ mod tests {
             display_name: None,
             supported_protocols: vec![String::from("anthropic-messages.v1")],
             selected_protocol: Some(String::from("anthropic-messages.v1")),
+            codex_behavior: None,
             capabilities: None,
             tool_schema_projection: Default::default(),
             protocol_capabilities: Default::default(),

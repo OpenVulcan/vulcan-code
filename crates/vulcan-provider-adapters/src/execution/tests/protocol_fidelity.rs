@@ -1,6 +1,7 @@
 //! End-to-end protocol identity and canonical-history projection contracts.
 //! 端到端协议身份与规范历史投影契约。
 
+use super::super::request_encoding::request_with_codex_tool_input_contract;
 use super::super::test_support::{
     bundled_manifest_route, deepseek_route, minimal_request, pinned_openrouter_route,
 };
@@ -8,7 +9,8 @@ use super::super::{ProviderExecutionClient, upstream_protocol_for_profile_id};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use vulcan_ai_contract::{
-    AiContinuation, AiMessage, ContentItem, DispatchOutcome, MessageRole, ReasoningEffort,
+    AiContinuation, AiMessage, AiStreamEvent, ContentItem, DispatchOutcome, MessageRole,
+    ReasoningEffort,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -17,6 +19,119 @@ use vulcan_ai_protocols::{
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
 use vulcan_llm_core::UpstreamProtocol;
+
+/// Verifies one declared Lite model projects only at the native Codex egress boundary.
+/// 验证一项已声明 Lite 模型只在原生 Codex 出站边界投影。
+#[test]
+fn codex_lite_projection_matches_stable_prefix_and_namespace_contract() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+    route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+    route.codex_behavior = Some(crate::provider_manifest::CodexModelBehavior {
+        wire_dialect: crate::provider_manifest::CodexWireDialect::Lite,
+        apply_patch_tool_type: crate::provider_manifest::CodexApplyPatchToolType::Freeform,
+        supports_parallel_tool_calls: true,
+        supports_verbosity: true,
+        default_verbosity: Some(crate::provider_manifest::CodexTextVerbosity::Low),
+        ..Default::default()
+    });
+    let mut request = minimal_request();
+    request.cache_scope_id = Some(String::from("00000000-0000-0000-0000-000000000123"));
+    request.messages.insert(
+        0,
+        AiMessage {
+            role: MessageRole::System,
+            content: vec![ContentItem::Text {
+                text: String::from("system contract"),
+            }],
+            provider_context_items: Vec::new(),
+        },
+    );
+    request.tools.push(vulcan_ai_contract::ToolDefinition {
+        name: String::from(vulcan_ai_contract::APPLY_PATCH_TOOL_NAME),
+        description: String::from("Apply one patch"),
+        input_schema: json!({"type":"object","properties":{"patch":{"type":"string"}}}),
+        input_format: Default::default(),
+        strict: false,
+    });
+
+    let first = client
+        .encode_request(&route, &request)
+        .expect("Lite route should encode");
+    let second = client
+        .encode_request(&route, &request)
+        .expect("repeated Lite route should encode");
+
+    assert!(first.body.get("instructions").is_none());
+    assert!(first.body.get("tools").is_none());
+    assert_eq!(first.body["parallel_tool_calls"], false);
+    assert_eq!(first.body["reasoning"]["context"], "all_turns");
+    assert_eq!(first.body["text"]["verbosity"], "low");
+    assert_eq!(first.body["input"][0]["type"], "additional_tools");
+    assert_eq!(first.body["input"][0]["role"], "developer");
+    assert_eq!(first.body["input"][1]["type"], "message");
+    assert_eq!(first.body["input"][1]["role"], "developer");
+    assert_eq!(
+        first.body["input"][1]["content"][0]["text"],
+        "system contract"
+    );
+    assert_eq!(
+        first.body["input"][0]["id"], second.body["input"][0]["id"],
+        "tool prefix identity must remain stable"
+    );
+    assert_eq!(
+        first.body["input"][1]["id"], second.body["input"][1]["id"],
+        "instruction prefix identity must remain stable"
+    );
+    let namespace = &first.body["input"][0]["tools"][0];
+    assert_eq!(namespace["type"], "namespace");
+    assert_eq!(namespace["name"], "functions");
+    assert_eq!(namespace["tools"][0]["type"], "custom");
+    assert_eq!(namespace["tools"][0]["name"], "apply_patch");
+    assert_eq!(namespace["tools"][0]["format"]["syntax"], "lark");
+
+    // effectiveRequest is the same immutable snapshot consumed by live HTTP and WebSocket decoders.
+    // effectiveRequest 是真实 HTTP 与 WebSocket 解码器共同消费的同一不可变快照。
+    let effective_request = request_with_codex_tool_input_contract(&route, &request);
+    let registry = ProtocolRegistry::first_batch().expect("profiles should register");
+    let mut decoder = registry
+        .require(OPENAI_CODEX_RESPONSES_PROFILE_ID)
+        .expect("Codex Responses profile should register")
+        .create_stream_decoder(String::from("execution"), &effective_request);
+    decoder
+        .push_sse(
+            Some("response.output_item.added"),
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"item","call_id":"call","name":"apply_patch","input":""}}"#,
+        )
+        .expect("freeform Apply Patch should start through the production registry");
+    let patch = "*** Begin Patch\n*** Add File: note.txt\n+done\n*** End Patch";
+    let completed = decoder
+        .push_sse(
+            Some("response.output_item.done"),
+            serde_json::to_string(&json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "custom_tool_call",
+                    "id": "item",
+                    "call_id": "call",
+                    "name": "apply_patch",
+                    "input": patch,
+                },
+            }))
+            .expect("completion should serialize")
+            .as_str(),
+        )
+        .expect("freeform Apply Patch should complete through the production registry");
+    assert!(completed.iter().any(|event| matches!(
+        event,
+        AiStreamEvent::ToolCallCompleted { call, .. }
+            if call.name == "apply_patch" && call.arguments == json!({"patch": patch})
+    )));
+}
 
 /// Verifies the production Responses-first encoder carries Apply Patch schemas and replay across every protocol family.
 /// 验证生产 Responses 优先编码链在所有协议族中保留 Apply Patch Schema 与历史重放。
@@ -105,6 +220,7 @@ fn apply_patch_standard_function_survives_production_protocol_projection() {
             name: String::from("apply_patch"),
             description: String::from("Apply an atomic patch."),
             input_schema: schema.clone(),
+            input_format: Default::default(),
             strict: false,
         }];
         let fresh = client
@@ -520,6 +636,7 @@ fn gemini_interactions_route_uses_responses_baseline_and_preserves_replay() {
         name: String::from("lookup"),
         description: String::from("Lookup"),
         input_schema: json!({"type":"object"}),
+        input_format: Default::default(),
         strict: false,
     });
 

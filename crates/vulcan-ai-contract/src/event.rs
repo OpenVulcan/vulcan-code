@@ -9,6 +9,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Classifies one assistant message as interim commentary or a final answer.
+/// 将一条助手消息分类为中间说明或最终答复。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiMessagePhase {
+    /// Mid-turn assistant text after which more output or tool calls may follow.
+    /// 回合中的助手文本，之后仍可能继续输出或调用工具。
+    Commentary,
+    /// Terminal assistant answer text for the current logical turn.
+    /// 当前逻辑回合的最终助手答复文本。
+    FinalAnswer,
+}
+
 /// Represents one normalized event emitted by an AI execution.
 /// 表示一次 AI 执行产生的归一化事件。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,6 +86,16 @@ pub enum AiStreamEvent {
         /// Decoded text delta.
         /// 解码后的文本增量。
         delta: String,
+    },
+    /// The provider supplied an explicit phase for one assistant message item.
+    /// 供应商为一条助手消息项提供了显式阶段。
+    ResponseMessagePhaseUpdated {
+        /// Owning response item identifier.
+        /// 所属响应项标识。
+        item_id: String,
+        /// Exact closed message phase supplied by the provider.
+        /// 供应商提供的精确封闭消息阶段。
+        phase: AiMessagePhase,
     },
     /// Reasoning content has started.
     /// 推理内容已经开始。
@@ -205,6 +228,13 @@ pub enum AiStreamEvent {
         /// 归一化用量快照。
         usage: Box<RequestUsage>,
     },
+    /// The provider supplied an explicit logical-turn boundary on completion.
+    /// 供应商在完成事件中提供了显式逻辑回合边界。
+    ResponseTurnBoundary {
+        /// Whether the completed response also ended the logical user turn.
+        /// 已完成响应是否同时结束当前逻辑用户回合。
+        end_turn: bool,
+    },
     /// Response completed successfully.
     /// 响应成功完成。
     ResponseCompleted,
@@ -233,9 +263,15 @@ pub struct AiStreamStateMachine {
     /// Whether the one permitted final usage event was observed.
     /// 是否已经观察到唯一允许的最终用量事件。
     final_usage_observed: bool,
+    /// Explicit logical-turn boundary observed before terminal completion.
+    /// 在终态完成前观察到的显式逻辑回合边界。
+    end_turn_observed: Option<bool>,
     /// Open response item identifiers.
     /// 尚未完成的响应项标识。
     open_items: BTreeSet<String>,
+    /// Message phases keyed by exact response item identity.
+    /// 按精确响应项身份保存的消息阶段。
+    message_phases: BTreeMap<String, AiMessagePhase>,
     /// Tool lifecycle state keyed by stream item identifier.
     /// 按流项目标识索引的工具生命周期状态。
     tools: BTreeMap<String, ToolLifecycle>,
@@ -314,6 +350,19 @@ impl AiStreamStateMachine {
             | AiStreamEvent::ReasoningDelta { item_id, .. } => {
                 self.require_open_item(item_id)?;
             }
+            AiStreamEvent::ResponseMessagePhaseUpdated { item_id, phase } => {
+                self.require_open_item(item_id)?;
+                if let Some(existing) = self.message_phases.insert(item_id.clone(), *phase) {
+                    if existing != *phase {
+                        return Err(format!(
+                            "Response item `{item_id}` changed its message phase during one stream."
+                        ));
+                    }
+                    return Err(format!(
+                        "Response item `{item_id}` emitted its message phase more than once."
+                    ));
+                }
+            }
             AiStreamEvent::ReasoningCompleted { item_id, .. }
             | AiStreamEvent::ResponseItemCompleted { item_id } => {
                 if !self.open_items.remove(item_id) {
@@ -369,6 +418,13 @@ impl AiStreamStateMachine {
                     ));
                 }
                 self.terminal = true;
+            }
+            AiStreamEvent::ResponseTurnBoundary { end_turn } => {
+                if self.end_turn_observed.replace(*end_turn).is_some() {
+                    return Err(String::from(
+                        "The response emitted its logical-turn boundary more than once.",
+                    ));
+                }
             }
             AiStreamEvent::UsageUpdated { usage }
                 if matches!(usage.update_kind, UsageUpdateKind::Final) =>
@@ -434,6 +490,7 @@ impl AiStreamEvent {
             Self::ResponseMetadataUpdated { .. } => "response_metadata_updated",
             Self::ResponseItemStarted { .. } => "response_item_started",
             Self::ResponseTextDelta { .. } => "response_text_delta",
+            Self::ResponseMessagePhaseUpdated { .. } => "response_message_phase_updated",
             Self::ReasoningStarted { .. } => "reasoning_started",
             Self::ReasoningDelta { .. } => "reasoning_delta",
             Self::ReasoningSummaryUpdated { .. } => "reasoning_summary_updated",
@@ -447,6 +504,7 @@ impl AiStreamEvent {
             Self::ResponseItemCompleted { .. } => "response_item_completed",
             Self::ProviderContextItemCaptured { .. } => "provider_context_item_captured",
             Self::UsageUpdated { .. } => "usage_updated",
+            Self::ResponseTurnBoundary { .. } => "response_turn_boundary",
             Self::ResponseCompleted => "response_completed",
             Self::ResponseFailed { .. } => "response_failed",
             Self::ResponseCancelled => "response_cancelled",

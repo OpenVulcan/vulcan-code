@@ -79,13 +79,15 @@ use connections::{add_public_ai_connection_with_secret, apply_connection_update}
     reason = "Preserve the original connection request type paths."
 )]
 pub(super) use connections::{
-    PublicAiConnectionAddRequest, PublicAiConnectionRemoveRequest, PublicAiConnectionUpdateRequest,
+    PublicAiConnectionAddRequest, PublicAiConnectionEnabledSaveRequest,
+    PublicAiConnectionRemoveRequest, PublicAiConnectionUpdateRequest,
     PublicAiDefaultConnectionSaveRequest,
 };
 pub(super) use connections::{
     service_add_public_ai_connection, service_query_public_ai_connection_usage,
-    service_remove_public_ai_connection, service_save_public_ai_default_connection,
-    service_sync_public_ai_connection, service_update_public_ai_connection,
+    service_remove_public_ai_connection, service_save_public_ai_connection_enabled,
+    service_save_public_ai_default_connection, service_sync_public_ai_connection,
+    service_update_public_ai_connection,
 };
 // Preserve custom-model RPC type paths, including nested contracts inferred by dispatch.
 // 保留自定义模型 RPC 类型路径，包括分发层推导的嵌套契约。

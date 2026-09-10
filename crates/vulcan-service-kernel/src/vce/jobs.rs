@@ -6,10 +6,17 @@ use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, watch};
-use vulcan_context_engine::{VceRefreshFailure, VceRefreshProgress};
+use vldb_controller_client::{
+    ControllerLanceDbCompactionOperation, ControllerLanceDbCompactionState,
+};
+use vulcan_context_engine::{
+    VcePhysicalTableRole, VcePhysicalTableStatistics, VceRefreshFailure, VceRefreshPhase,
+    VceRefreshProgress, VceRefreshUnit,
+};
 use vulcan_workspace_store::vce_data_plane::{
-    VceCompletedJobUpdate, VceJobKind, VceJobState, VceProjectJobStore, VceProjectWriterLease,
-    VceStoredJob,
+    VceCompactionJobReceipt, VceCompactionMetrics, VceCompactionTableReceipt,
+    VceCompactionTableState, VceCompletedJobUpdate, VceJobKind, VceJobState, VceProjectIndex,
+    VceProjectJobStore, VceProjectWriterLease, VceStoredJob,
 };
 
 /// Maximum number of additional attempts for transient progress-receipt contention.
@@ -20,6 +27,14 @@ const VCE_PROGRESS_PERSIST_RETRIES: usize = 3;
 /// 有界进度回执重试退避的基础延迟。
 const VCE_PROGRESS_PERSIST_RETRY_BASE_MS: u64 = 250;
 
+/// Maximum grace period before a shutdown aborts a worker that is stuck in terminal persistence.
+/// 关闭期间等待终态持久化的最长宽限时间，超时后中止卡住的工作任务。
+const VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Polling interval for one already-submitted controller compaction operation.
+/// 已提交控制器整理操作的轮询间隔。
+const VCE_COMPACTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Identify storage failures that may clear without cancelling the admitted refresh.
 /// 识别可能自行消退、因此不应取消已准入刷新的存储失败。
 ///
@@ -28,7 +43,11 @@ const VCE_PROGRESS_PERSIST_RETRY_BASE_MS: u64 = 250;
 /// Returns true only for the existing transient transport and SQLite-busy contracts.
 /// 仅当错误匹配现有瞬时传输或 SQLite 忙合约时返回 true。
 fn is_transient_progress_persistence_error(error: &str) -> bool {
-    error.contains("transport error") || error.contains("database is locked")
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("transport error")
+        || normalized.contains("database is locked")
+        || normalized.contains("database busy")
+        || normalized.contains("sqlite_busy")
 }
 
 /// Retry one progress receipt update without blocking the indexing worker forever.
@@ -109,6 +128,128 @@ enum VceJobWork {
         /// 合并路径或明确完整核对标记。
         paths: Option<BTreeSet<String>>,
     },
+}
+
+/// Terminal host interpretation of one model-independent physical compaction job.
+/// 一项模型无关物理整理作业的宿主终态解释。
+enum VceCompactionJobOutcome {
+    /// Every selected table reached the frozen compaction target.
+    /// 每张已选表均达到冻结整理目标。
+    Succeeded,
+    /// Every selected table completed, and the last physical result still needs terminal persistence.
+    /// 每张已选表均已完成，且最后一份物理结果仍需随终态一并持久化。
+    SucceededWithTableUpdate(Box<VceCompactionTableTerminalUpdate>),
+    /// One table failed with a deterministic execution error.
+    /// 一张表因确定性执行错误失败。
+    Failed(String),
+    /// Execution failed after one controller result that must not be lost from the terminal receipt.
+    /// 控制器已返回一份不能从终态回执中丢失的结果，随后执行失败。
+    FailedWithTableUpdate {
+        /// Bounded job-level failure diagnostic.
+        /// 有界的作业级失败诊断。
+        error: String,
+        /// Exact table facts to merge into the same terminal compare-and-swap.
+        /// 需要合并进同一次终态比较交换的精确表事实。
+        table_update: Box<VceCompactionTableTerminalUpdate>,
+    },
+    /// User or shutdown cancellation settled at a safe boundary.
+    /// 用户或退出取消已在安全边界确定。
+    Cancelled,
+    /// Cancellation settled after an atomic controller round completed and returned authoritative facts.
+    /// 一轮控制器原子操作完成并返回权威事实后，取消才进入确定状态。
+    CancelledWithTableUpdate(Box<VceCompactionTableTerminalUpdate>),
+    /// The host or controller lost authority needed to continue safely.
+    /// 宿主或控制器丢失了安全继续所需的权威状态。
+    Interrupted(String),
+    /// Authority was lost after a table-local terminal condition that must remain queryable.
+    /// 表级终止条件已经确定后丢失继续执行所需权限，该事实必须保持可查询。
+    InterruptedWithTableUpdate {
+        /// Bounded job-level interruption diagnostic.
+        /// 有界的作业级中断诊断。
+        error: String,
+        /// Exact table condition to merge into the terminal receipt.
+        /// 需要合并进终态回执的精确表状态。
+        table_update: Box<VceCompactionTableTerminalUpdate>,
+    },
+}
+
+/// One authoritative table result retained until the host terminal receipt is durable.
+/// 在宿主终态回执持久化之前保留的一份权威表结果。
+struct VceCompactionTableTerminalUpdate {
+    /// Deterministic slot in the frozen compaction plan.
+    /// 冻结整理计划中的确定性槽位。
+    table_index: usize,
+    /// Immutable action identity proving the slot still represents the same confirmed plan.
+    /// 用于证明该槽位仍表示同一确认计划的不可变操作身份。
+    action_id: String,
+    /// Submitted round that produced this terminal observation.
+    /// 产生本次终止观察的已提交轮次。
+    round: u32,
+    /// Stable controller operation identity, absent only before controller admission.
+    /// 稳定的控制器操作身份，仅在控制器准入前缺失。
+    operation_id: Option<String>,
+    /// Frozen physical version for the operation, absent only before controller admission.
+    /// 操作冻结的物理版本，仅在控制器准入前缺失。
+    operation_expected_version: Option<u64>,
+    /// Latest controller statistics known to be authoritative.
+    /// 最近一份已确认权威的控制器统计。
+    latest_statistics: VcePhysicalTableStatistics,
+    /// Cumulative metrics including the completed controller round when one exists.
+    /// 累计指标；存在已完成控制器轮次时包含该轮结果。
+    metrics: VceCompactionMetrics,
+    /// Terminal table state represented by this update.
+    /// 本次更新表示的表终态。
+    state: VceCompactionTableState,
+    /// Bounded table-local diagnostic required by failure and interruption states.
+    /// 失败及中断状态所需的有界表级诊断。
+    error: Option<String>,
+}
+
+/// Acquire the process-wide compaction budget without abandoning an admitted controller operation.
+/// 获取进程级整理预算，同时不得遗弃已被控制器准入的操作。
+///
+/// `writer_budget` serializes host writers, `cancel_wake` wakes host-only queued work, and
+/// `has_admitted_operation` preserves controller ownership across host recovery. Returns a permit,
+/// an immediate safe cancellation before controller admission, or an explicit closed-budget error.
+/// `writer_budget` 串行化宿主写入，`cancel_wake` 唤醒仅在宿主排队的工作，
+/// `has_admitted_operation` 在宿主恢复期间保留控制器所有权。返回预算许可、控制器准入前的即时安全取消，
+/// 或明确的预算关闭错误。
+async fn acquire_compaction_writer_budget(
+    writer_budget: Arc<tokio::sync::Semaphore>,
+    cancel_wake: &Notify,
+    has_admitted_operation: bool,
+) -> Result<tokio::sync::OwnedSemaphorePermit, VceCompactionJobOutcome> {
+    if has_admitted_operation {
+        return writer_budget.acquire_owned().await.map_err(|_| {
+            VceCompactionJobOutcome::Failed(String::from("VCE writer budget was closed"))
+        });
+    }
+    let notified = cancel_wake.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+    tokio::select! {
+        permit = writer_budget.acquire_owned() => permit.map_err(|_| {
+            VceCompactionJobOutcome::Failed(String::from("VCE writer budget was closed"))
+        }),
+        _ = notified => Err(VceCompactionJobOutcome::Cancelled),
+    }
+}
+
+/// Settled result of one controller-owned bounded compaction operation.
+/// 一项控制器持有的有界整理操作的确定结果。
+enum VceCompactionStepOutcome {
+    /// Controller returned complete before/after statistics and metrics.
+    /// 控制器返回了完整的前后统计与指标。
+    Succeeded(Box<ControllerLanceDbCompactionOperation>),
+    /// Controller recorded an execution failure.
+    /// 控制器记录了执行失败。
+    Failed(String),
+    /// Controller confirmed cancellation before mutation.
+    /// 控制器确认在变更前取消。
+    Cancelled,
+    /// A previously admitted operation is no longer queryable.
+    /// 先前已准入的操作已无法查询。
+    StateLost(String),
 }
 
 /// Runtime-only project scheduling policy and the monotonic last admission time.
@@ -279,6 +420,13 @@ pub(super) struct VceManagedJob {
     /// Persistence failure is explicit, never represented by invented successful progress.
     /// 持久化失败明确暴露，绝不表示为虚构的成功进度。
     persistence_error: Mutex<Option<String>>,
+    /// Exact terminal successor retained when its compare-and-swap could not be acknowledged.
+    /// 终态比较交换未获确认时保留的精确后继回执。
+    pending_terminal_receipt: Mutex<Option<VceStoredJob>>,
+    /// Test-only count proving advisory compaction observations can fail without losing ownership.
+    /// 仅供测试统计，用于证明整理观察值失败时不会丢失操作所有权。
+    #[cfg(test)]
+    compaction_observation_persistence_failures: std::sync::atomic::AtomicUsize,
 }
 
 /// Stable control for one project's job, independent of query engine and model registration lifetimes.
@@ -297,6 +445,9 @@ pub(super) struct VceProjectJobState {
     /// Stop successor admission even when the current one-shot control has already completed its commit.
     /// 即使当前一次性控制已经完成提交，也停止后继准入。
     stop_requested: AtomicBool,
+    /// Retain the spawned worker handle so shutdown can abort a task stuck on a locked receipt.
+    /// 保留工作任务句柄，使关闭时可以中止因回执持锁而卡住的任务。
+    worker_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl VceProjectJobState {
@@ -314,23 +465,144 @@ impl VceProjectJobState {
         }
     }
 
+    /// Install the spawned worker handle while the caller still holds the admission fence.
+    /// 在调用方仍持有准入栅栏时安装工作任务句柄。
+    async fn install_worker_handle(&self, handle: tokio::task::JoinHandle<()>) {
+        *self.worker_handle.lock().await = Some(handle);
+    }
+
+    /// Clear the worker handle after normal completion without retaining a detached task handle.
+    /// 正常完成后清除工作任务句柄，避免保留已脱离的任务句柄。
+    async fn clear_worker_handle(&self) {
+        let _admission = self.admission.lock().await;
+        let _ = self.worker_handle.lock().await.take();
+    }
+
+    /// Take the worker handle under the admission fence so shutdown can await or abort it safely.
+    /// 在准入栅栏下取出工作任务句柄，使退出流程可以安全等待或中止它。
+    async fn take_worker_handle_for_shutdown(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let _admission = self.admission.lock().await;
+        self.worker_handle.lock().await.take()
+    }
+
     /// Cancel the admitted owner and drain its worker without holding the transition lock during completion.
     /// 取消已准入所有者并排空其任务，完成期间不持有转换锁。
-    /// Caller must exclude new submissions with the project or manager lifecycle gate; returns persisted-drain errors.
-    /// 调用方须用项目或管理器生命周期闸门排斥新提交；返回持久化排空错误。
+    /// Caller must exclude new submissions with the project or manager lifecycle gate.
+    /// 调用方必须通过项目或管理器生命周期闸门排斥新提交。
     pub(super) async fn cancel_and_drain(&self) -> Result<(), String> {
         self.request_stop().await;
-        // drained waits for all terminal processing; the worker may acquire admission while finishing.
-        // drained 等待全部终态处理；工作任务在完成时仍可获取准入锁。
-        let _drained = self.execution.write().await;
-        if let Some(job) = self.active.lock().await.as_ref() {
-            return Err(job.persistence_error.lock().await.clone().unwrap_or_else(|| {
-                String::from("VCE project job owner survived worker drain; explicit recovery is required")
-            }));
+        // A locked receipt must not make application shutdown wait forever; the tracked worker is
+        // aborted only after the normal cooperative drain grace period expires.
+        // 锁住的回执不能让应用退出永久等待；仅在正常协作排空宽限期结束后中止已跟踪任务。
+        let (drained, mut forced_abort) = match tokio::time::timeout(
+            VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT,
+            self.execution.write(),
+        )
+        .await
+        {
+            Ok(drained) => (drained, false),
+            Err(_) => {
+                let Some(worker) = self.take_worker_handle_for_shutdown().await else {
+                    return Err(String::from(
+                        "VCE worker did not drain and no tracked worker handle was available",
+                    ));
+                };
+                tracing::warn!(
+                    "VCE worker exceeded shutdown drain grace period; aborting it before releasing project leases"
+                );
+                worker.abort();
+                let _ = worker.await;
+                let drained = tokio::time::timeout(
+                    VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT,
+                    self.execution.write(),
+                )
+                .await
+                .map_err(|_| {
+                    String::from(
+                        "VCE worker abort completed without releasing its project execution lease",
+                    )
+                })?;
+                (drained, true)
+            }
+        };
+        if !forced_abort {
+            // Execution may have drained while terminal receipt persistence still owns the job lease.
+            // 即使执行租约已排空，终态回执持久化仍可能继续持有作业租约。
+            if let Some(mut worker) = self.take_worker_handle_for_shutdown().await {
+                match tokio::time::timeout(VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT, &mut worker).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::warn!(
+                            error = %error,
+                            "VCE worker ended abnormally while draining terminal persistence"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "VCE worker exceeded shutdown drain grace period during terminal persistence; aborting it"
+                        );
+                        worker.abort();
+                        let _ = worker.await;
+                        forced_abort = true;
+                    }
+                }
+            }
+        }
+        let active = self.active.lock().await.take();
+        if let Some(job) = active {
+            let existing_persistence_error = job.persistence_error.lock().await.clone();
+            let error = existing_persistence_error.clone().unwrap_or_else(|| {
+                String::from(
+                    "VCE project job owner survived worker drain; explicit recovery is required",
+                )
+            });
+            if forced_abort || existing_persistence_error.is_some() {
+                // The durable receipt remains recoverable by the next admission after a forced abort.
+                // 强制中止或已知回执写入失败后由下一次准入恢复未完成的持久回执。
+                tracing::warn!(
+                    job_id = %job.job_id,
+                    forced_abort,
+                    "VCE shutdown left an interrupted receipt for next-admission recovery"
+                );
+            } else {
+                // Settle the durable receipt while the exact owner and its storage binding are still available.
+                // 在精确所有者及其存储绑定仍可用时确定持久回执。
+                let recovery = tokio::time::timeout(
+                    VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT,
+                    job.persist_interrupted_after_drain(error.clone()),
+                )
+                .await
+                .map_err(|_| {
+                    String::from(
+                        "VCE shutdown interruption receipt persistence exceeded its grace period",
+                    )
+                })
+                .and_then(|result| result);
+                if let Err(recovery_error) = recovery {
+                    // The owner is still released below; an unresolved receipt is recoverable on the next
+                    // admission because the writer lease proves this host no longer owns live work.
+                    // 下面仍会释放所有者；未确定的回执可在下次准入时恢复，因为写入租约证明本宿主已无活动工作。
+                    let project_id = job.receipt.lock().await.project_id.clone();
+                    tracing::error!(
+                        project_id = %project_id,
+                        job_id = %job.job_id,
+                        error = %recovery_error,
+                        "failed to persist interrupted VCE job during shutdown"
+                    );
+                }
+            }
+            // The execution write lease proves the worker is gone; drop the owner before returning so
+            // shutdown can close the project binding even when the last receipt write was busy.
+            // 执行写租约证明工作线程已经结束；返回前释放所有者，使最后一次回执写入遇到忙状态时退出仍可关闭项目绑定。
+            drop(job);
+            self.stop_requested.store(false, Ordering::Release);
+            drop(drained);
+            return Ok(());
         }
         // The execution write lease proves no old worker can observe the reset and start another batch.
         // 执行写租约证明没有旧工作任务能观察到复位并开始另一批。
         self.stop_requested.store(false, Ordering::Release);
+        drop(drained);
         Ok(())
     }
 }
@@ -358,12 +630,32 @@ impl VceManagedJob {
         store: &VceProjectJobStore,
         change: impl FnOnce(&mut VceStoredJob),
     ) -> Result<VceStoredJob, String> {
+        self.persist_checked(store, |receipt| {
+            change(receipt);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Persist a checked receipt transition and retain an unacknowledged terminal successor exactly.
+    /// 持久化一条经过校验的回执转换，并精确保留未获确认的终态后继。
+    ///
+    /// `store` owns the physical project and `change` may reject an inconsistent runtime projection
+    /// before any write. Returns the acknowledged receipt; a failed terminal compare-and-swap leaves
+    /// the exact proposed successor available for explicit retry instead of reconstructing its facts.
+    /// `store` 持有物理项目，`change` 可在写入前拒绝不一致的运行时投影。返回已确认回执；
+    /// 终态比较交换失败时保留精确拟议后继，以供明确重试，而不是重新推测其中事实。
+    async fn persist_checked(
+        &self,
+        store: &VceProjectJobStore,
+        change: impl FnOnce(&mut VceStoredJob) -> Result<(), String>,
+    ) -> Result<VceStoredJob, String> {
         // The gate serializes compare-and-swap transitions while the receipt lock remains short-lived.
         // 闸门串行化比较交换转换，同时让回执锁只覆盖短暂的内存快照。
         let _persistence = self.persistence_gate.lock().await;
         let previous = self.receipt.lock().await.clone();
         let mut next = previous.clone();
-        change(&mut next);
+        change(&mut next)?;
         if next == previous {
             return Ok(next);
         }
@@ -372,10 +664,67 @@ impl VceManagedJob {
             .checked_add(1)
             .ok_or_else(|| String::from("VCE job receipt sequence overflow"))?;
         next.updated_at_unix_ms = job_time()?.max(previous.updated_at_unix_ms);
-        let persisted = store.update(&previous, &next).await?;
+        let persisted = match store.update(&previous, &next).await {
+            Ok(persisted) => persisted,
+            Err(error) => {
+                if next.state.is_terminal() {
+                    *self.pending_terminal_receipt.lock().await = Some(next);
+                }
+                return Err(error);
+            }
+        };
         // No other receipt transition can pass the gate while this compare-and-swap is in flight.
         // 此比较交换进行期间没有其他回执转换可以通过闸门。
         *self.receipt.lock().await = persisted.clone();
+        if persisted.state.is_terminal() {
+            *self.pending_terminal_receipt.lock().await = None;
+        }
+        self.event_emitter
+            .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                super::super::services::map_vce_job(persisted.clone()),
+            )));
+        Ok(persisted)
+    }
+
+    /// Reconcile one exact active receipt to `Interrupted` after its worker has fully drained.
+    /// 在工作任务完全排空后，将一个精确活动回执收敛为 `Interrupted`。
+    ///
+    /// No provider or source work is resumed here; the method only adopts an already committed
+    /// terminal receipt or records a bounded shutdown interruption before the owner is dropped.
+    /// 本方法不恢复供应商或源码工作；仅采用已经提交的终态回执，或在释放所有者前记录有界的退出中断。
+    async fn persist_interrupted_after_drain(
+        &self,
+        diagnostic: String,
+    ) -> Result<VceStoredJob, String> {
+        let _persistence = self.persistence_gate.lock().await;
+        let current = self
+            .store
+            .get_after_transport_retry(&self.job_id)
+            .await?
+            .ok_or_else(|| String::from("VCE drained job receipt does not exist"))?;
+        if current.state.is_terminal() {
+            // An ambiguous terminal write already settled the job; never overwrite it as interrupted.
+            // 结果不明确的终态写入已经确定作业；绝不把它覆盖为中断。
+            *self.receipt.lock().await = current.clone();
+            *self.persistence_error.lock().await = None;
+            *self.pending_terminal_receipt.lock().await = None;
+            return Ok(current);
+        }
+        let mut next = current.clone();
+        next.state = VceJobState::Interrupted;
+        next.followup_requested = false;
+        next.error = Some(bounded_error(format!(
+            "VCE job interrupted during shutdown: {diagnostic}"
+        )));
+        next.sequence = current
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| String::from("VCE interruption sequence overflow"))?;
+        next.updated_at_unix_ms = job_time()?.max(current.updated_at_unix_ms);
+        let persisted = self.store.update(&current, &next).await?;
+        *self.receipt.lock().await = persisted.clone();
+        *self.persistence_error.lock().await = None;
+        *self.pending_terminal_receipt.lock().await = None;
         self.event_emitter
             .emit(crate::ServiceEvent::VceJobChanged(Box::new(
                 super::super::services::map_vce_job(persisted.clone()),
@@ -438,6 +787,188 @@ impl VceRuntimeManager {
             executor,
         )
         .await
+    }
+
+    /// Admit a confirmed model-independent physical compaction job.
+    /// 准入一项已确认且模型无关的物理整理作业。
+    ///
+    /// `project_id`, `command`, and `action_ids` freeze the stored checkpoint and exact current
+    /// plan; `executor` owns the tracked background worker. Returns immediately after durable
+    /// admission or returns the exact idempotent replay.
+    /// `project_id`、`command` 与 `action_ids` 冻结已存检查点及精确当前计划；`executor` 持有
+    /// 受跟踪后台任务。持久准入后立即返回，或返回精确幂等重放。
+    pub(crate) async fn submit_physical_compaction(
+        &self,
+        project_id: &str,
+        command: VceJobAdmission,
+        action_ids: BTreeSet<String>,
+        executor: &tokio::runtime::Runtime,
+    ) -> Result<VceStoredJob, String> {
+        validate_compaction_command(&command, &action_ids)?;
+        let _lifecycle = self.lifecycle_gate.read().await;
+        let project_gate = self.project_lifecycle_gate(project_id).await;
+        let _project_gate = project_gate.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(String::from("VCE job manager is shutting down"));
+        }
+        let state = self.project_job_state(project_id).await;
+        let _admission = state.admission.lock().await;
+        let config = self
+            .data_plane
+            .load_active_project_config(project_id)
+            .await?
+            .ok_or_else(|| String::from("VCE physical compaction requires an active index"))?;
+        let index = self
+            .data_plane
+            .open_existing_project_index(&config)
+            .await?
+            .ok_or_else(|| String::from("VCE physical compaction index disappeared"))?;
+        index.require_write_access()?;
+        let provenance = index.embedding_provenance().await?;
+        validate_compaction_target(&command, &config, provenance.checkpoint_version)?;
+        let store = index.job_store();
+        let request_fingerprint =
+            compaction_request_fingerprint(project_id, &command, &action_ids)?;
+        if let Some(existing) = store
+            .find_submission(&command.idempotency_key, &request_fingerprint)
+            .await?
+        {
+            return Ok(existing);
+        }
+        if let Some(active) = state.active.lock().await.clone() {
+            let receipt = active.receipt.lock().await.clone();
+            if receipt.idempotency_key == command.idempotency_key
+                && receipt.request_fingerprint == request_fingerprint
+            {
+                return Ok(receipt);
+            }
+            return Err(String::from(
+                "VCE project already has an admitted index or maintenance job",
+            ));
+        }
+        let project_writer = self
+            .data_plane
+            .try_acquire_project_writer(project_id)?
+            .ok_or_else(|| String::from("VCE project already has an active host writer"))?;
+        if let Some(previous) = store.unfinished().await? {
+            if previous.kind == VceJobKind::Compact {
+                return Err(format!(
+                    "VCE physical compaction job `{}` is still unfinished; query that job before submitting another",
+                    previous.job_id
+                ));
+            }
+            let reason = if previous.owner_run_id == self.job_owner_run_id {
+                "VCE previous job ended before its terminal receipt was acknowledged"
+            } else {
+                "VCE previous host run ended before its terminal receipt was acknowledged"
+            };
+            store.interrupt_unfinished(reason).await?;
+        }
+        let plan = index
+            .physical_compaction_plan()
+            .await
+            .map_err(|error| error.to_string())?;
+        let planned_ids = plan
+            .actions
+            .iter()
+            .map(|action| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        if planned_ids.is_empty() || planned_ids != action_ids {
+            return Err(String::from(
+                "VCE physical compaction plan changed; generate and confirm a new preview",
+            ));
+        }
+        let mut tables = plan
+            .actions
+            .into_iter()
+            .map(|action| {
+                let table = action.physical_table.ok_or_else(|| {
+                    String::from("VCE physical compaction action omitted its table target")
+                })?;
+                Ok(VceCompactionTableReceipt {
+                    action_id: action.action_id,
+                    latest_statistics: table.statistics.clone(),
+                    plan: table,
+                    state: VceCompactionTableState::Pending,
+                    round: 0,
+                    operation_id: None,
+                    operation_expected_version: None,
+                    metrics: VceCompactionMetrics::default(),
+                    error: None,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        tables.sort_by_key(|table| table.plan.statistics.role);
+        let previous_time = store
+            .latest()
+            .await?
+            .map(|job| job.created_at_unix_ms)
+            .unwrap_or(0);
+        let timestamp = job_time()?.max(
+            previous_time
+                .checked_add(1)
+                .ok_or_else(|| String::from("VCE job admission timestamp overflow"))?,
+        );
+        let receipt = VceStoredJob {
+            schema_version: vulcan_workspace_store::vce_data_plane::VCE_JOB_RECEIPT_SCHEMA_VERSION,
+            project_id: project_id.to_owned(),
+            job_id: Uuid::new_v4().to_string(),
+            owner_run_id: self.job_owner_run_id.clone(),
+            idempotency_key: command.idempotency_key,
+            retry_of_job_id: None,
+            request_fingerprint,
+            contract_fingerprint: command.contract_fingerprint,
+            kind: VceJobKind::Compact,
+            state: VceJobState::Queued,
+            sequence: 1,
+            created_at_unix_ms: timestamp,
+            updated_at_unix_ms: timestamp,
+            admitted_settings_revision: command.expected_settings_revision,
+            source_checkpoint_version: command.expected_checkpoint_version,
+            replacement: None,
+            compaction: Some(VceCompactionJobReceipt { tables }),
+            result_checkpoint_version: None,
+            progress: None,
+            followup_requested: false,
+            completed_update: None,
+            error: None,
+        };
+        let receipt = store.register(&receipt).await?;
+        state.stop_requested.store(false, Ordering::Release);
+        let project_execution = Arc::clone(&state.execution).read_owned().await;
+        let job = Arc::new(VceManagedJob {
+            job_id: receipt.job_id.clone(),
+            replacement_settings: None,
+            project_writer: Arc::new(project_writer),
+            store: store.clone(),
+            event_emitter: self.event_emitter.clone(),
+            receipt: Mutex::new(receipt.clone()),
+            persistence_gate: Mutex::new(()),
+            control: VceRefreshControl::default(),
+            cancel_wake: Notify::new(),
+            persistence_error: Mutex::new(None),
+            pending_terminal_receipt: Mutex::new(None),
+            #[cfg(test)]
+            compaction_observation_persistence_failures: std::sync::atomic::AtomicUsize::new(0),
+        });
+        *state.active.lock().await = Some(Arc::clone(&job));
+        self.event_emitter
+            .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                super::super::services::map_vce_job(receipt.clone()),
+            )));
+        let manager = self.clone();
+        let worker_state = Arc::clone(&state);
+        let worker = executor.spawn(async move {
+            let _project_execution = project_execution;
+            manager
+                .run_physical_compaction_job(index, Arc::clone(&job))
+                .await;
+            drop(job);
+            drop(_project_execution);
+            worker_state.clear_worker_handle().await;
+        });
+        state.install_worker_handle(worker).await;
+        Ok(receipt)
     }
 
     /// Admit initialized watcher work through the same durable writer and progress queue.
@@ -669,6 +1200,17 @@ impl VceRuntimeManager {
                 .try_acquire_project_writer(project_id)?
                 .ok_or_else(|| String::from("VCE project already has an active host writer"))?,
         );
+        if let Some(previous) = store.unfinished().await? {
+            // The writer lease was acquired only after the in-memory owner slot was found empty;
+            // this proves the old cooperating worker no longer owns the project.
+            // 只有在内存所有者槽为空后才取得写入租约；这证明旧协作工作线程已不再持有项目。
+            let reason = if previous.owner_run_id == self.job_owner_run_id {
+                "VCE previous job ended before its terminal receipt was acknowledged"
+            } else {
+                "VCE previous host run ended before its terminal receipt was acknowledged"
+            };
+            store.interrupt_unfinished(reason).await?;
+        }
         if let Some(origin_id) = &command.retry_of_job_id {
             let origin = store.get(origin_id).await?
                 .ok_or_else(|| String::from("VCE retry origin has no durable host receipt; submit an explicit synchronization instead"))?;
@@ -683,20 +1225,6 @@ impl VceRuntimeManager {
                     "VCE retry origin is not a retryable initialization or synchronization",
                 ));
             }
-        }
-        if let Some(previous) = store.unfinished().await? {
-            if previous.owner_run_id == self.job_owner_run_id {
-                return Err(String::from(
-                    "VCE job recovery is required after an incomplete receipt publication",
-                ));
-            }
-            // A different run UUID proves neither death nor exclusive recovery authority.
-            // 不同运行标识既不能证明对方退出，也不能证明本次具有排他恢复权。
-            // Keep its durable receipt untouched until host ownership can be positively established.
-            // 在确证宿主归属前保持其持久回执不变。
-            return Err(String::from(
-                "VCE unfinished job belongs to another host run; ownership must be confirmed before recovery or a new index job",
-            ));
         }
         let checkpoint = runtime
             .committed_projection
@@ -760,6 +1288,7 @@ impl VceRuntimeManager {
             retry_of_job_id: command.retry_of_job_id.clone(),
             schema_version: vulcan_workspace_store::vce_data_plane::VCE_JOB_RECEIPT_SCHEMA_VERSION,
             replacement: None,
+            compaction: None,
             project_id: project_id.to_owned(),
             job_id: Uuid::new_v4().to_string(),
             owner_run_id: self.job_owner_run_id.clone(),
@@ -799,6 +1328,9 @@ impl VceRuntimeManager {
             control: VceRefreshControl::default(),
             cancel_wake: Notify::new(),
             persistence_error: Mutex::new(None),
+            pending_terminal_receipt: Mutex::new(None),
+            #[cfg(test)]
+            compaction_observation_persistence_failures: std::sync::atomic::AtomicUsize::new(0),
         });
         *runtime.job_state.active.lock().await = Some(Arc::clone(&job));
         self.event_emitter
@@ -807,7 +1339,8 @@ impl VceRuntimeManager {
             )));
         let manager = self.clone();
         let worker_runtime = Arc::clone(&runtime);
-        executor.spawn(async move {
+        let worker_state = Arc::clone(&runtime.job_state);
+        let worker = executor.spawn(async move {
             // Leases live until the worker and terminal receipt settle, including queued cancellation.
             // 租约持续到工作线程与终态回执确定，包括排队取消。
             let _operation = operation;
@@ -816,7 +1349,21 @@ impl VceRuntimeManager {
             manager
                 .run_managed_job_chain(&worker_runtime, job, &store, work)
                 .await;
+            // Release every project/storage lease before removing the only shutdown join handle.
+            // 在移除关闭流程唯一可回收的任务句柄之前，先释放全部项目和存储租约。
+            drop(_writer);
+            drop(_project_execution);
+            drop(_operation);
+            // Release the worker's storage-bearing clones before removing the only shutdown join handle.
+            // 在移除关闭流程唯一可回收的任务句柄之前，先释放工作线程持有的存储租约克隆。
+            drop(store);
+            drop(worker_runtime);
+            worker_state.clear_worker_handle().await;
         });
+        // The admission fence remains held here, so a worker that finishes immediately cannot
+        // clear a handle that has not been installed yet.
+        // 此处仍持有准入栅栏，因此立即完成的工作任务不会清除尚未安装的句柄。
+        runtime.job_state.install_worker_handle(worker).await;
         Ok(receipt)
     }
 
@@ -832,6 +1379,24 @@ impl VceRuntimeManager {
         project_id: &str,
         job_id: Option<&str>,
     ) -> Result<Option<VceStoredJob>, String> {
+        // Historical terminal queries remain read-only, even when a newer cold job exists.
+        // 即使存在更新的冷态作业，历史终态查询也保持只读。
+        let receipt = self
+            .read_job(
+                project_id,
+                match job_id {
+                    Some(id) => VceJobSelection::Exact(id),
+                    None => VceJobSelection::Latest,
+                },
+            )
+            .await?;
+        let Some(receipt) = receipt else {
+            return Ok(None);
+        };
+        if receipt.state.is_terminal() {
+            return Ok(Some(receipt));
+        }
+        self.reconcile_cold_job(project_id, &receipt).await?;
         self.read_job(
             project_id,
             match job_id {
@@ -840,6 +1405,144 @@ impl VceRuntimeManager {
             },
         )
         .await
+    }
+
+    /// Resolve an abandoned receipt without adopting a worker or starting a new job.
+    /// 收敛遗留回执，不接管工作线程、不启动新作业。
+    /// `project_id` and `job_id` select the observed owner; returns after reconciliation or a live-owner no-op.
+    /// `project_id` 与 `job_id` 选择已观察所有者；持久收敛完成或确认活动所有者后返回。
+    async fn reconcile_cold_job(
+        &self,
+        project_id: &str,
+        observed: &VceStoredJob,
+    ) -> Result<(), String> {
+        // Polling must not wait on shutdown/removal gates that may themselves be draining this watcher.
+        // 轮询不能等待关闭或移除闸门，因为这些闸门可能正在排空当前观察线程。
+        let Ok(_lifecycle) = self.lifecycle_gate.try_read() else {
+            return Ok(());
+        };
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let project_gate = self.project_lifecycle_gate(project_id).await;
+        let Ok(_project_gate) = project_gate.try_lock() else {
+            return Ok(());
+        };
+        let state = self.project_job_state(project_id).await;
+        let Ok(_admission) = state.admission.try_lock() else {
+            return Ok(());
+        };
+        if state.active.lock().await.is_some() {
+            return Ok(());
+        }
+        if observed.kind == VceJobKind::Compact {
+            let Some((writer, index, store, receipt)) = self
+                .data_plane
+                .prepare_cold_compaction_recovery(project_id, &observed.job_id)
+                .await?
+            else {
+                // Another cooperating process still holds the exact project writer lease.
+                // 另一个协作进程仍持有精确项目写入租约。
+                return Ok(());
+            };
+            if receipt.state.is_terminal() {
+                self.event_emitter
+                    .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                        super::super::services::map_vce_job(receipt),
+                    )));
+                return Ok(());
+            }
+            self.attach_cold_compaction_job(&state, writer, index, store, receipt, false)
+                .await?;
+            return Ok(());
+        }
+        if let Some(receipt) = self
+            .data_plane
+            .reconcile_ended_project_job(project_id, &observed.job_id)
+            .await?
+        {
+            self.event_emitter
+                .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                    super::super::services::map_vce_job(receipt),
+                )));
+        }
+        Ok(())
+    }
+
+    /// Attach one cold durable compaction receipt to this host without inventing another operation.
+    /// 将一项冷态持久整理回执关联到当前宿主，且不虚构另一项操作。
+    ///
+    /// `state` is the exact project slot; `writer`, `index`, and `store` are the storage factory's
+    /// jointly validated ownership; `receipt` is the sole unfinished owner. `cancel_requested`
+    /// restores or initiates cancellation before monitoring. Returns the acknowledged attached state.
+    /// `state` 是精确项目槽位；`writer`、`index` 与 `store` 是存储工厂联合校验的所有权；
+    /// `receipt` 是唯一未完成所有者。`cancel_requested` 会在观察前恢复或发起取消。
+    /// 返回已确认的关联状态。
+    async fn attach_cold_compaction_job(
+        &self,
+        state: &Arc<VceProjectJobState>,
+        writer: VceProjectWriterLease,
+        index: VceProjectIndex,
+        store: VceProjectJobStore,
+        receipt: VceStoredJob,
+        cancel_requested: bool,
+    ) -> Result<VceStoredJob, String> {
+        if receipt.kind != VceJobKind::Compact || receipt.state.is_terminal() {
+            return Err(String::from(
+                "VCE cold compaction attachment requires one unfinished compact receipt",
+            ));
+        }
+        let executor = tokio::runtime::Handle::try_current().map_err(|error| {
+            format!("VCE compaction recovery requires the retained service runtime: {error}")
+        })?;
+        let should_cancel = cancel_requested || receipt.state == VceJobState::Cancelling;
+        let job = Arc::new(VceManagedJob {
+            job_id: receipt.job_id.clone(),
+            replacement_settings: None,
+            project_writer: Arc::new(writer),
+            store: store.clone(),
+            event_emitter: self.event_emitter.clone(),
+            receipt: Mutex::new(receipt),
+            persistence_gate: Mutex::new(()),
+            control: VceRefreshControl::default(),
+            cancel_wake: Notify::new(),
+            persistence_error: Mutex::new(None),
+            pending_terminal_receipt: Mutex::new(None),
+            #[cfg(test)]
+            compaction_observation_persistence_failures: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let attached = if should_cancel {
+            let _ = job.control.cancel();
+            job.persist(&store, |receipt| {
+                if !receipt.state.is_terminal() {
+                    receipt.state = VceJobState::Cancelling;
+                    receipt.followup_requested = false;
+                }
+            })
+            .await?
+        } else {
+            job.receipt.lock().await.clone()
+        };
+        state.stop_requested.store(false, Ordering::Release);
+        let project_execution = Arc::clone(&state.execution).read_owned().await;
+        *state.active.lock().await = Some(Arc::clone(&job));
+        self.event_emitter
+            .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                super::super::services::map_vce_job(attached.clone()),
+            )));
+        let manager = self.clone();
+        let worker_state = Arc::clone(state);
+        let worker = executor.spawn(async move {
+            let _project_execution = project_execution;
+            manager
+                .run_physical_compaction_job(index, Arc::clone(&job))
+                .await;
+            drop(job);
+            drop(_project_execution);
+            worker_state.clear_worker_handle().await;
+        });
+        state.install_worker_handle(worker).await;
+        Ok(attached)
     }
 
     /// Read the last successful content-update time without mistaking a failed attempt for freshness.
@@ -947,6 +1650,13 @@ impl VceRuntimeManager {
         job_id: &str,
     ) -> Result<VceStoredJob, String> {
         validate_project_identity(project_id, 1)?;
+        if let Some(receipt) = self
+            .read_job(project_id, VceJobSelection::Exact(job_id))
+            .await?
+            && receipt.state.is_terminal()
+        {
+            return Ok(receipt);
+        }
         // Stable project control, not model activation, owns cancellation and exact receipt replay.
         // 稳定项目控制而非模型激活，持有取消及精确回执重放。
         let job_state = self.project_job_state(project_id).await;
@@ -957,17 +1667,16 @@ impl VceRuntimeManager {
         let job = match active {
             Some(job) if job.job_id == job_id => job,
             _ => {
-                if let Some(receipt) = self
+                let receipt = self
                     .read_job(project_id, VceJobSelection::Exact(job_id))
                     .await?
-                {
-                    // Terminal replay stays read-only, even when a newer writer currently owns the project.
-                    // 终态回放保持只读，即使项目当前由更新的写入者持有也不能被阻塞。
-                    if receipt.state.is_terminal() {
-                        return Ok(receipt);
-                    }
+                    .ok_or_else(|| String::from("VCE cancellation job does not exist"))?;
+                // Terminal replay stays read-only, even when a newer writer currently owns the project.
+                // 终态回放保持只读，即使项目当前由更新的写入者持有也不能被阻塞。
+                if receipt.state.is_terminal() {
+                    return Ok(receipt);
                 }
-                return self.cancel_cold_uninitialized_job(project_id, job_id).await;
+                return self.cancel_cold_job(project_id, &receipt).await;
             }
         };
         // A finished worker with an unacknowledged terminal receipt cannot accept another control signal;
@@ -999,25 +1708,47 @@ impl VceRuntimeManager {
         }
     }
 
-    /// Cancel one durable uninitialized job after its in-memory owner has disappeared.
-    /// 在内存所有者消失后，取消一个持久化的未初始化作业。
+    /// Settle a durable cold job, cancelling only an unpublished uninitialized binding.
+    /// 收敛持久冷态作业，仅对未发布的未初始化绑定执行取消。
     ///
     /// `project_id` and `job_id` select the exact cold receipt. The storage factory holds the
     /// project writer while fencing the binding and while both receipt transitions are persisted.
     /// `project_id` 与 `job_id` 选择精确的冷态回执。存储工厂在封锁绑定及持久化两次回执转换期间
     /// 持有项目写入租约。
     ///
-    /// Returns the terminal cancellation receipt; published checkpoints and incompatible job
-    /// kinds are rejected before any binding mutation.
-    /// 返回取消终态回执；已发布检查点与不兼容作业类型在修改绑定前被拒绝。
-    async fn cancel_cold_uninitialized_job(
+    /// Returns a terminal receipt; published and replacement attempts preserve all stored content.
+    /// 返回终态回执；已发布与替换尝试保留全部存储内容。
+    async fn cancel_cold_job(
         &self,
         project_id: &str,
-        job_id: &str,
+        observed: &VceStoredJob,
     ) -> Result<VceStoredJob, String> {
+        if observed.kind == VceJobKind::Compact {
+            let Some((writer, index, store, receipt)) = self
+                .data_plane
+                .prepare_cold_compaction_recovery(project_id, &observed.job_id)
+                .await?
+            else {
+                return Err(String::from(
+                    "VCE compaction cancellation is still owned by another active host",
+                ));
+            };
+            if receipt.state.is_terminal() {
+                return Ok(receipt);
+            }
+            let state = self.project_job_state(project_id).await;
+            if state.active.lock().await.is_some() {
+                return Err(String::from(
+                    "VCE project acquired another active job during cold cancellation",
+                ));
+            }
+            return self
+                .attach_cold_compaction_job(&state, writer, index, store, receipt, true)
+                .await;
+        }
         let Some((_project_writer, store, receipt)) = self
             .data_plane
-            .prepare_uninitialized_job_cancellation(project_id, job_id)
+            .prepare_cold_job_cancellation(project_id, &observed.job_id)
             .await?
         else {
             return Err(String::from("VCE cancellation job does not exist"));
@@ -1068,12 +1799,39 @@ impl VceRuntimeManager {
             // 结果不确定的写入可能已经提交；采用该权威终态回执。
             *job.receipt.lock().await = current.clone();
             *job.persistence_error.lock().await = None;
+            *job.pending_terminal_receipt.lock().await = None;
             *state.active.lock().await = None;
             self.event_emitter
                 .emit(crate::ServiceEvent::VceJobChanged(Box::new(
                     super::super::services::map_vce_job(current.clone()),
                 )));
             return Ok(current);
+        }
+
+        // Retry the exact successor built from authoritative controller facts before considering
+        // any generic settlement. Reconstructing this receipt would lose a completed physical round.
+        // 在考虑任何通用收敛前重试由权威控制器事实构建的精确后继。重新构造该回执会丢失已完成物理轮次。
+        let pending_terminal_receipt = job.pending_terminal_receipt.lock().await.clone();
+        if let Some(candidate) = pending_terminal_receipt {
+            let expected_sequence = current
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| String::from("VCE terminal recovery sequence overflow"))?;
+            if candidate.sequence != expected_sequence {
+                return Err(String::from(
+                    "VCE retained terminal receipt no longer follows the durable receipt",
+                ));
+            }
+            let persisted = job.store.update(&current, &candidate).await?;
+            *job.receipt.lock().await = persisted.clone();
+            *job.persistence_error.lock().await = None;
+            *job.pending_terminal_receipt.lock().await = None;
+            *state.active.lock().await = None;
+            self.event_emitter
+                .emit(crate::ServiceEvent::VceJobChanged(Box::new(
+                    super::super::services::map_vce_job(persisted.clone()),
+                )));
+            return Ok(persisted);
         }
 
         // A retained successful batch proves that some publication may already exist, so recovery is a
@@ -1128,6 +1886,7 @@ impl VceRuntimeManager {
             };
         *job.receipt.lock().await = persisted.clone();
         *job.persistence_error.lock().await = None;
+        *job.pending_terminal_receipt.lock().await = None;
         *state.active.lock().await = None;
         self.event_emitter
             .emit(crate::ServiceEvent::VceJobChanged(Box::new(
@@ -1168,6 +1927,685 @@ impl VceRuntimeManager {
         Ok(persisted)
     }
 
+    /// Run one tracked physical compaction job and settle its durable terminal receipt.
+    /// 运行一项受跟踪物理整理作业，并确定其持久终态回执。
+    ///
+    /// `index` is the exact admitted storage target and `job` owns every lease. A recovered table
+    /// with an operation identity is queried only; a pending table has provably never been submitted
+    /// because identity persistence precedes controller admission. Returns after terminal persistence
+    /// or an explicitly retained persistence error.
+    /// `index` 是精确准入存储目标，`job` 持有全部租约。恢复后带操作身份的表仅执行查询；
+    /// 待处理表由于身份持久化先于控制器准入，可证明从未提交。终态持久化完成或明确保留持久化错误后返回。
+    async fn run_physical_compaction_job(&self, index: VceProjectIndex, job: Arc<VceManagedJob>) {
+        let outcome = AssertUnwindSafe(self.execute_physical_compaction_job(&index, &job))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                VceCompactionJobOutcome::Failed(String::from(
+                    "VCE physical compaction worker panicked",
+                ))
+            });
+        self.finish_physical_compaction_job(&job, outcome).await;
+        let project_id = job.receipt.lock().await.project_id.clone();
+        let state = self.project_job_state(&project_id).await;
+        if job.persistence_error.lock().await.is_none() {
+            let mut active = state.active.lock().await;
+            if active
+                .as_ref()
+                .is_some_and(|active_job| active_job.job_id == job.job_id)
+            {
+                *active = None;
+            }
+        }
+        super::super::services::emit_vce_runtime_changed(&self.event_emitter, self, &project_id)
+            .await;
+    }
+
+    /// Execute selected table compactions under the shared global writer budget.
+    /// 在共享全局写入预算下执行已选表整理。
+    ///
+    /// `index` and `job` are immutable admitted owners. Pending tables may submit their first or
+    /// next uniquely identified bounded round; persisted operation identities are never submitted
+    /// again. Returns a typed host terminal outcome.
+    /// `index` 与 `job` 是不可变准入所有者。待处理表可提交其首轮或下一轮具有唯一身份的有界操作；
+    /// 已持久化的操作身份绝不再次提交。返回类型化宿主终态结果。
+    async fn execute_physical_compaction_job(
+        &self,
+        index: &VceProjectIndex,
+        job: &Arc<VceManagedJob>,
+    ) -> VceCompactionJobOutcome {
+        // A recovered cancellation must still reach an already-admitted controller operation;
+        // a pending host-only job can finish immediately without creating physical work.
+        // 恢复后的取消仍必须送达已经准入的控制器操作；仅在宿主中待处理的作业可直接结束，
+        // 且不会创建物理工作。
+        let has_admitted_operation = compaction_has_admitted_operation(job).await;
+        if job.control.check().is_err() && !has_admitted_operation {
+            return VceCompactionJobOutcome::Cancelled;
+        }
+        let _budget = match acquire_compaction_writer_budget(
+            Arc::clone(&self.job_writer_budget),
+            &job.cancel_wake,
+            has_admitted_operation,
+        )
+        .await
+        {
+            Ok(permit) => permit,
+            Err(outcome) => return outcome,
+        };
+        if job.control.check().is_err() && !has_admitted_operation {
+            return VceCompactionJobOutcome::Cancelled;
+        }
+        if let Err(error) = job
+            .persist(&job.store, |receipt| {
+                if receipt.state == VceJobState::Queued {
+                    receipt.state = VceJobState::Running;
+                }
+            })
+            .await
+        {
+            return VceCompactionJobOutcome::Failed(format!(
+                "Persist VCE compaction start: {error}"
+            ));
+        }
+        let table_count = job
+            .receipt
+            .lock()
+            .await
+            .compaction
+            .as_ref()
+            .map(|compaction| compaction.tables.len())
+            .unwrap_or(0);
+        if table_count == 0 {
+            return VceCompactionJobOutcome::Failed(String::from(
+                "VCE physical compaction receipt has no selected tables",
+            ));
+        }
+        for table_index in 0..table_count {
+            loop {
+                let Some(mut table) = compaction_table_snapshot(job, table_index).await else {
+                    return VceCompactionJobOutcome::Failed(String::from(
+                        "VCE physical compaction table receipt disappeared",
+                    ));
+                };
+                match table.state {
+                    VceCompactionTableState::Succeeded => break,
+                    VceCompactionTableState::Failed => {
+                        return VceCompactionJobOutcome::Failed(table.error.unwrap_or_else(|| {
+                            String::from("VCE physical compaction table failed")
+                        }));
+                    }
+                    VceCompactionTableState::Cancelled => {
+                        return VceCompactionJobOutcome::Cancelled;
+                    }
+                    VceCompactionTableState::StateLost | VceCompactionTableState::Interrupted => {
+                        return VceCompactionJobOutcome::Interrupted(table.error.unwrap_or_else(
+                            || String::from("VCE physical compaction operation was interrupted"),
+                        ));
+                    }
+                    VceCompactionTableState::Pending
+                    | VceCompactionTableState::Queued
+                    | VceCompactionTableState::Running => {}
+                }
+                // Cancellation before controller admission settles every remaining pending table;
+                // queued or running operations continue below so cancellation reaches their owner.
+                // 控制器准入前的取消会确定全部剩余待处理表；排队或运行中的操作继续向下执行，
+                // 使取消请求能够送达其所有者。
+                if job.control.check().is_err() && table.state == VceCompactionTableState::Pending {
+                    return VceCompactionJobOutcome::Cancelled;
+                }
+                let submit_current = table.state == VceCompactionTableState::Pending;
+                if submit_current {
+                    let Some(round) = table.round.checked_add(1) else {
+                        let error = String::from("VCE physical compaction round overflow");
+                        return VceCompactionJobOutcome::FailedWithTableUpdate {
+                            table_update: compaction_table_terminal_update(
+                                table_index,
+                                &table,
+                                VceCompactionTableState::Failed,
+                                Some(error.clone()),
+                            ),
+                            error,
+                        };
+                    };
+                    let role_text = compaction_table_role_text(table.plan.statistics.role);
+                    let operation_id = format!("{}:compact:{role_text}:{round}", job.job_id);
+                    let expected_version = table.latest_statistics.version;
+                    let operation_id_for_receipt = operation_id.clone();
+                    if let Err(error) = job
+                        .persist(&job.store, |receipt| {
+                            receipt.state = VceJobState::Running;
+                            receipt.progress = Some(compaction_progress(
+                                &operation_id_for_receipt,
+                                table_index as u64,
+                                table_count as u64,
+                                VceRefreshPhase::Writing,
+                            ));
+                            if let Some(table) = receipt
+                                .compaction
+                                .as_mut()
+                                .and_then(|compaction| compaction.tables.get_mut(table_index))
+                            {
+                                table.state = VceCompactionTableState::Queued;
+                                table.round = round;
+                                table.operation_id = Some(operation_id_for_receipt);
+                                table.operation_expected_version = Some(expected_version);
+                                table.error = None;
+                            }
+                        })
+                        .await
+                    {
+                        return VceCompactionJobOutcome::Failed(format!(
+                            "Persist VCE compaction operation admission: {error}"
+                        ));
+                    }
+                    table = match compaction_table_snapshot(job, table_index).await {
+                        Some(table) => table,
+                        None => {
+                            return VceCompactionJobOutcome::Failed(String::from(
+                                "VCE admitted compaction table receipt disappeared",
+                            ));
+                        }
+                    };
+                }
+                let Some(operation_id) = table.operation_id.clone() else {
+                    return VceCompactionJobOutcome::Interrupted(String::from(
+                        "VCE physical compaction operation identity is missing",
+                    ));
+                };
+                let Some(expected_version) = table.operation_expected_version else {
+                    return VceCompactionJobOutcome::Interrupted(String::from(
+                        "VCE physical compaction expected version is missing",
+                    ));
+                };
+                let initial = if submit_current {
+                    match index
+                        .submit_physical_compaction(
+                            table.plan.statistics.role,
+                            &operation_id,
+                            expected_version,
+                            &table.plan.options,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(submit_error) => match index
+                            .physical_compaction_operation(
+                                table.plan.statistics.role,
+                                &operation_id,
+                            )
+                            .await
+                        {
+                            Ok(operation) => operation,
+                            Err(query_error) if is_uncertain_compaction_error(&submit_error) => {
+                                let error = format!(
+                                    "VCE compaction submission is uncertain and its operation cannot be queried: {submit_error}; {query_error}"
+                                );
+                                return VceCompactionJobOutcome::InterruptedWithTableUpdate {
+                                    table_update: compaction_table_terminal_update(
+                                        table_index,
+                                        &table,
+                                        VceCompactionTableState::StateLost,
+                                        Some(error.clone()),
+                                    ),
+                                    error,
+                                };
+                            }
+                            Err(_) => {
+                                return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                    table_update: compaction_table_terminal_update(
+                                        table_index,
+                                        &table,
+                                        VceCompactionTableState::Failed,
+                                        Some(submit_error.clone()),
+                                    ),
+                                    error: submit_error,
+                                };
+                            }
+                        },
+                    }
+                } else {
+                    match index
+                        .physical_compaction_operation(table.plan.statistics.role, &operation_id)
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(error) => {
+                            let diagnostic = format!(
+                                "VCE admitted compaction operation state was lost: {error}"
+                            );
+                            return VceCompactionJobOutcome::InterruptedWithTableUpdate {
+                                table_update: compaction_table_terminal_update(
+                                    table_index,
+                                    &table,
+                                    VceCompactionTableState::StateLost,
+                                    Some(diagnostic.clone()),
+                                ),
+                                error: diagnostic,
+                            };
+                        }
+                    }
+                };
+                let step = self
+                    .wait_physical_compaction_operation(
+                        index,
+                        job,
+                        table_index,
+                        table_count,
+                        table.plan.statistics.role,
+                        initial,
+                    )
+                    .await;
+                match step {
+                    VceCompactionStepOutcome::Failed(error) => {
+                        return VceCompactionJobOutcome::FailedWithTableUpdate {
+                            table_update: compaction_table_terminal_update(
+                                table_index,
+                                &table,
+                                VceCompactionTableState::Failed,
+                                Some(error.clone()),
+                            ),
+                            error,
+                        };
+                    }
+                    VceCompactionStepOutcome::Cancelled => {
+                        return VceCompactionJobOutcome::CancelledWithTableUpdate(
+                            compaction_table_terminal_update(
+                                table_index,
+                                &table,
+                                VceCompactionTableState::Cancelled,
+                                None,
+                            ),
+                        );
+                    }
+                    VceCompactionStepOutcome::StateLost(error) => {
+                        return VceCompactionJobOutcome::InterruptedWithTableUpdate {
+                            table_update: compaction_table_terminal_update(
+                                table_index,
+                                &table,
+                                VceCompactionTableState::StateLost,
+                                Some(error.clone()),
+                            ),
+                            error,
+                        };
+                    }
+                    VceCompactionStepOutcome::Succeeded(operation) => {
+                        let before = match operation.before {
+                            Some(statistics) => match index.physical_operation_statistics(
+                                table.plan.statistics.role,
+                                statistics,
+                            ) {
+                                Ok(statistics) => statistics,
+                                Err(error) => {
+                                    return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                        table_update: compaction_table_terminal_update(
+                                            table_index,
+                                            &table,
+                                            VceCompactionTableState::Failed,
+                                            Some(error.clone()),
+                                        ),
+                                        error,
+                                    };
+                                }
+                            },
+                            None => {
+                                let error = String::from(
+                                    "VCE controller omitted pre-compaction statistics",
+                                );
+                                return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                    table_update: compaction_table_terminal_update(
+                                        table_index,
+                                        &table,
+                                        VceCompactionTableState::Failed,
+                                        Some(error.clone()),
+                                    ),
+                                    error,
+                                };
+                            }
+                        };
+                        let after = match operation.after {
+                            Some(statistics) => match index.physical_operation_statistics(
+                                table.plan.statistics.role,
+                                statistics,
+                            ) {
+                                Ok(statistics) => statistics,
+                                Err(error) => {
+                                    return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                        table_update: compaction_table_terminal_update(
+                                            table_index,
+                                            &table,
+                                            VceCompactionTableState::Failed,
+                                            Some(error.clone()),
+                                        ),
+                                        error,
+                                    };
+                                }
+                            },
+                            None => {
+                                let error = String::from(
+                                    "VCE controller omitted post-compaction statistics",
+                                );
+                                return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                    table_update: compaction_table_terminal_update(
+                                        table_index,
+                                        &table,
+                                        VceCompactionTableState::Failed,
+                                        Some(error.clone()),
+                                    ),
+                                    error,
+                                };
+                            }
+                        };
+                        let Some(metrics) = operation.metrics else {
+                            let error = String::from("VCE controller omitted compaction metrics");
+                            return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                table_update: compaction_table_terminal_update(
+                                    table_index,
+                                    &table,
+                                    VceCompactionTableState::Failed,
+                                    Some(error.clone()),
+                                ),
+                                error,
+                            };
+                        };
+                        if let Err(error) = validate_compaction_statistics_transition(
+                            &table.latest_statistics,
+                            expected_version,
+                            &before,
+                            &after,
+                            metrics.fragments_removed,
+                            metrics.fragments_added,
+                        ) {
+                            return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                table_update: compaction_table_terminal_update(
+                                    table_index,
+                                    &table,
+                                    VceCompactionTableState::Failed,
+                                    Some(error.clone()),
+                                ),
+                                error,
+                            };
+                        }
+                        let accumulated = match accumulate_compaction_metrics(
+                            &table.metrics,
+                            metrics.fragments_removed,
+                            metrics.fragments_added,
+                            metrics.files_removed,
+                            metrics.files_added,
+                        ) {
+                            Ok(metrics) => metrics,
+                            Err(error) => {
+                                return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                    table_update: compaction_table_terminal_update(
+                                        table_index,
+                                        &table,
+                                        VceCompactionTableState::Failed,
+                                        Some(error.clone()),
+                                    ),
+                                    error,
+                                };
+                            }
+                        };
+                        let requires_more = physical_table_requires_compaction(&after);
+                        let cancelled = job.control.check().is_err();
+                        if requires_more
+                            && (metrics.fragments_removed == 0
+                                || after.fragment_count >= before.fragment_count)
+                        {
+                            let error = String::from(
+                                "VCE native compaction made no measurable fragment progress",
+                            );
+                            return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                table_update: completed_compaction_table_terminal_update(
+                                    table_index,
+                                    &table,
+                                    after,
+                                    accumulated,
+                                    VceCompactionTableState::Failed,
+                                    Some(error.clone()),
+                                ),
+                                error,
+                            };
+                        }
+                        if cancelled {
+                            let next_state = if requires_more {
+                                VceCompactionTableState::Cancelled
+                            } else {
+                                VceCompactionTableState::Succeeded
+                            };
+                            let update = completed_compaction_table_terminal_update(
+                                table_index,
+                                &table,
+                                after,
+                                accumulated,
+                                next_state,
+                                None,
+                            );
+                            if !requires_more && table_index + 1 == table_count {
+                                return VceCompactionJobOutcome::SucceededWithTableUpdate(update);
+                            }
+                            return VceCompactionJobOutcome::CancelledWithTableUpdate(update);
+                        }
+                        let operation_id_for_progress = operation_id.clone();
+                        if let Err(error) = job
+                            .persist(&job.store, |receipt| {
+                                let completed = table_index as u64 + u64::from(!requires_more);
+                                receipt.progress = Some(compaction_progress(
+                                    &operation_id_for_progress,
+                                    completed,
+                                    table_count as u64,
+                                    VceRefreshPhase::Writing,
+                                ));
+                                if let Some(table) = receipt
+                                    .compaction
+                                    .as_mut()
+                                    .and_then(|compaction| compaction.tables.get_mut(table_index))
+                                {
+                                    table.latest_statistics = after.clone();
+                                    table.metrics = accumulated.clone();
+                                    table.state = if requires_more {
+                                        VceCompactionTableState::Pending
+                                    } else {
+                                        VceCompactionTableState::Succeeded
+                                    };
+                                    if requires_more {
+                                        table.operation_id = None;
+                                        table.operation_expected_version = None;
+                                    }
+                                    table.error = None;
+                                }
+                            })
+                            .await
+                        {
+                            let diagnostic =
+                                format!("Persist VCE compaction round result: {error}");
+                            let table_state = if requires_more {
+                                VceCompactionTableState::Failed
+                            } else {
+                                VceCompactionTableState::Succeeded
+                            };
+                            let table_error = requires_more.then(|| diagnostic.clone());
+                            let update = completed_compaction_table_terminal_update(
+                                table_index,
+                                &table,
+                                after,
+                                accumulated,
+                                table_state,
+                                table_error,
+                            );
+                            if !requires_more && table_index + 1 == table_count {
+                                return VceCompactionJobOutcome::SucceededWithTableUpdate(update);
+                            }
+                            return VceCompactionJobOutcome::FailedWithTableUpdate {
+                                error: diagnostic,
+                                table_update: update,
+                            };
+                        }
+                        if !requires_more {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        match job.control.finish_without_commit() {
+            Ok(()) => VceCompactionJobOutcome::Succeeded,
+            Err(vulcan_context_engine::VceError::RefreshCancelled) => {
+                VceCompactionJobOutcome::Cancelled
+            }
+            Err(error) => VceCompactionJobOutcome::Failed(error.to_string()),
+        }
+    }
+
+    /// Poll one controller operation while forwarding cancellation at its real safe boundary.
+    /// 轮询一项控制器操作，同时在其真实安全边界转发取消请求。
+    async fn wait_physical_compaction_operation(
+        &self,
+        index: &VceProjectIndex,
+        job: &Arc<VceManagedJob>,
+        table_index: usize,
+        table_count: usize,
+        role: VcePhysicalTableRole,
+        mut operation: ControllerLanceDbCompactionOperation,
+    ) -> VceCompactionStepOutcome {
+        let mut cancellation_forwarded = false;
+        // Observation persistence is advisory after the operation identity has been durably admitted.
+        // 操作身份持久准入后，运行中观察值的持久化仅用于展示，不再决定操作所有权。
+        let mut observation_persistence_failure_logged = false;
+        loop {
+            if job.control.check().is_err() && !cancellation_forwarded {
+                match index
+                    .cancel_physical_compaction(role, &operation.operation_id)
+                    .await
+                {
+                    Ok(cancelled) => operation = cancelled,
+                    Err(cancel_error) => {
+                        match index
+                            .physical_compaction_operation(role, &operation.operation_id)
+                            .await
+                        {
+                            Ok(current) => operation = current,
+                            Err(query_error) => {
+                                return VceCompactionStepOutcome::StateLost(format!(
+                                    "VCE compaction cancellation result is unknown: {cancel_error}; {query_error}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                // A successful query does not acknowledge a failed cancellation RPC. Keep retrying
+                // until the controller reports the durable flag or the operation has already settled.
+                // 查询成功并不能确认失败的取消 RPC 已送达。仅当控制器报告持久取消标记，或操作已经
+                // 进入终态时，才停止后续取消重试。
+                cancellation_forwarded = compaction_cancellation_acknowledged(&operation);
+            }
+            let table_state = match operation.state {
+                ControllerLanceDbCompactionState::Queued => VceCompactionTableState::Queued,
+                ControllerLanceDbCompactionState::Running => VceCompactionTableState::Running,
+                ControllerLanceDbCompactionState::Succeeded => {
+                    return VceCompactionStepOutcome::Succeeded(Box::new(operation));
+                }
+                ControllerLanceDbCompactionState::Failed => {
+                    return VceCompactionStepOutcome::Failed(
+                        operation.error.unwrap_or(operation.message),
+                    );
+                }
+                ControllerLanceDbCompactionState::Cancelled => {
+                    return VceCompactionStepOutcome::Cancelled;
+                }
+                ControllerLanceDbCompactionState::Unspecified => {
+                    return VceCompactionStepOutcome::StateLost(String::from(
+                        "VCE controller returned an unspecified compaction state",
+                    ));
+                }
+            };
+            let operation_id = operation.operation_id.clone();
+            if let Err(error) = job
+                .persist(&job.store, |receipt| {
+                    receipt.progress = Some(compaction_progress(
+                        &operation_id,
+                        table_index as u64,
+                        table_count as u64,
+                        VceRefreshPhase::Writing,
+                    ));
+                    if let Some(table) = receipt
+                        .compaction
+                        .as_mut()
+                        .and_then(|compaction| compaction.tables.get_mut(table_index))
+                    {
+                        table.state = table_state;
+                    }
+                })
+                .await
+            {
+                // The durable receipt already contains the stable controller operation ID. Abandoning
+                // polling here would release host ownership while the controller may still be mutating
+                // the table. Continue querying the same operation and let its authoritative terminal
+                // result share the final compare-and-swap; a terminal persistence failure keeps the
+                // project lease and exact recovery candidate instead of creating an orphan operation.
+                // 持久回执已经保存稳定控制器操作 ID。此处放弃轮询会在控制器仍可能修改表时释放宿主
+                // 所有权。继续查询同一操作，并让权威终态结果进入最终比较交换；若终态持久化失败，
+                // 则继续保留项目租约和精确恢复候选，而不是产生孤儿操作。
+                if !observation_persistence_failure_logged {
+                    #[cfg(test)]
+                    job.compaction_observation_persistence_failures
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    tracing::warn!(
+                        job_id = %job.job_id,
+                        operation_id = %operation.operation_id,
+                        error = %error,
+                        "VCE compaction observation persistence failed; continuing authoritative operation polling"
+                    );
+                    observation_persistence_failure_logged = true;
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(VCE_COMPACTION_POLL_INTERVAL) => {}
+                _ = job.cancel_wake.notified() => {}
+            }
+            operation = match index
+                .physical_compaction_operation(role, &operation.operation_id)
+                .await
+            {
+                Ok(operation) => operation,
+                Err(error) => {
+                    return VceCompactionStepOutcome::StateLost(format!(
+                        "VCE admitted compaction operation state was lost: {error}"
+                    ));
+                }
+            };
+        }
+    }
+
+    /// Persist one physical compaction terminal state without changing the logical checkpoint.
+    /// 在不改变逻辑检查点的情况下持久化物理整理终态。
+    async fn finish_physical_compaction_job(
+        &self,
+        job: &VceManagedJob,
+        outcome: VceCompactionJobOutcome,
+    ) {
+        // Table facts and the host terminal state share one compare-and-swap. This removes the
+        // failure window where a completed native round could be omitted by a later terminal write.
+        // 表事实与宿主终态共享同一次比较交换，从而消除已完成原生轮次被后续终态写入遗漏的故障窗口。
+        let persisted = job
+            .persist_checked(&job.store, |receipt| {
+                apply_physical_compaction_terminal_outcome(receipt, outcome)
+            })
+            .await;
+        job.control.finish();
+        match persisted {
+            Ok(_) => {
+                // One acknowledged terminal receipt contains every table fact used by the decision.
+                // 一份已确认终态回执包含该决定使用的全部表事实。
+                *job.persistence_error.lock().await = None;
+            }
+            Err(error) => {
+                *job.persistence_error.lock().await = Some(format!(
+                    "Persist VCE physical compaction terminal receipt failed: {error}"
+                ));
+            }
+        }
+    }
+
     /// Run coalesced batches serially under one durable job, renewing one-shot controls between batches.
     /// 在一个持久作业内串行运行合并批次，在批次之间更新一次性控制器。
     /// `runtime` owns the writer lease, `job` owns the receipt, and `work` is the initial source scope.
@@ -1206,9 +2644,9 @@ impl VceRuntimeManager {
                     Err(self.finish_panicked_refresh(runtime, &operation_id).await)
                 }
             };
-            // Admission excludes clicks, cancellation and teardown handoff while choosing the one successor.
-            // 决定唯一后续批次时，准入锁排斥点击、取消与拆卸交接。
-            let _admission = runtime.job_state.admission.lock().await;
+            // Completion accounting is a durable write, so it must not hold the admission mutex while
+            // shutdown is trying to fence the same owner and wait for its execution lease.
+            // 完成计账属于持久化写入，因此不能在退出封锁同一所有者并等待执行租约时持有准入互斥锁。
             if let Ok(checkpoint) = outcome {
                 match job_time() {
                     Ok(now) => {
@@ -1229,74 +2667,86 @@ impl VceRuntimeManager {
                     Err(error) => outcome = Err(error),
                 }
             }
-            // Inspect the acknowledged pending slot after excluding competing clicks and cancellation.
-            // 排除竞争点击与取消后检查已确认的待处理槽位。
-            let receipt = job.receipt.lock().await.clone();
-            // No successor survives failure, closure, cancellation or shutdown.
-            // 失败、关闭、取消或退出后均不继续后续批次。
-            let continue_requested = outcome.is_ok()
-                && receipt.followup_requested
-                && receipt.state == VceJobState::Running
-                && !runtime.job_state.stop_requested.load(Ordering::Acquire)
-                && runtime
-                    .operation_admission
-                    .accepting
-                    .load(Ordering::Acquire)
-                && !self.shutting_down.load(Ordering::Acquire);
-            if continue_requested {
-                // Recheck live shared authority before another scan or paid request, not merely at publication.
-                // 在另一次扫描或付费请求前重新校验实时共享权威，而不只在发布时检查。
-                let publication = publication_index::VcePublicationIndex::new(
-                    Arc::clone(runtime),
-                    Arc::clone(&self.publication_authority),
-                    &self.job_owner_run_id,
-                );
-                // Reuse the host authority contract instead of creating a second provider registry.
-                // 复用宿主权威契约，而非创建第二个供应商注册表。
-                let authorization = {
-                    // Match the publisher's existing shared transaction contract; release it before the next batch.
-                    // 遵守发布器既有共享事务契约；在下一批次之前释放。
-                    let _transaction = crate::begin_public_ai_configuration_transaction().await;
-                    publication.validate().await
-                };
-                match authorization {
-                    Ok(()) => {
-                        match job
-                            .persist(store, |receipt| {
-                                receipt.followup_requested = false;
-                                receipt.state = VceJobState::Queued;
-                                receipt.progress = None;
-                            })
-                            .await
-                        {
-                            Ok(next) => {
-                                operation_id = format!("{}:batch:{}", next.job_id, Uuid::new_v4());
-                                job = Arc::new(VceManagedJob {
-                                    job_id: next.job_id.clone(),
-                                    replacement_settings: None,
-                                    project_writer: Arc::clone(&job.project_writer),
-                                    store: store.clone(),
-                                    event_emitter: self.event_emitter.clone(),
-                                    receipt: Mutex::new(next),
-                                    persistence_gate: Mutex::new(()),
-                                    control: VceRefreshControl::default(),
-                                    cancel_wake: Notify::new(),
-                                    persistence_error: Mutex::new(None),
-                                });
-                                *runtime.job_state.active.lock().await = Some(Arc::clone(&job));
-                                work = VceJobWork::Manual;
-                                continue;
-                            }
-                            Err(error) => {
-                                outcome = Err(format!(
-                                    "VCE follow-up admission persistence failed: {error}"
-                                ))
+            // Admission excludes clicks, cancellation and teardown handoff while choosing the one successor.
+            // 决定唯一后续批次时，准入锁排斥点击、取消与拆卸交接。
+            {
+                let _admission = runtime.job_state.admission.lock().await;
+                // Inspect the acknowledged pending slot after excluding competing clicks and cancellation.
+                // 排除竞争点击与取消后检查已确认的待处理槽位。
+                let receipt = job.receipt.lock().await.clone();
+                // No successor survives failure, closure, cancellation or shutdown.
+                // 失败、关闭、取消或退出后均不继续后续批次。
+                let continue_requested = outcome.is_ok()
+                    && receipt.followup_requested
+                    && receipt.state == VceJobState::Running
+                    && !runtime.job_state.stop_requested.load(Ordering::Acquire)
+                    && runtime
+                        .operation_admission
+                        .accepting
+                        .load(Ordering::Acquire)
+                    && !self.shutting_down.load(Ordering::Acquire);
+                if continue_requested {
+                    // Recheck live shared authority before another scan or paid request, not merely at publication.
+                    // 在另一次扫描或付费请求前重新校验实时共享权威，而不只在发布时检查。
+                    let publication = publication_index::VcePublicationIndex::new(
+                        Arc::clone(runtime),
+                        Arc::clone(&self.publication_authority),
+                        &self.job_owner_run_id,
+                    );
+                    // Reuse the host authority contract instead of creating a second provider registry.
+                    // 复用宿主权威契约，而非创建第二个供应商注册表。
+                    let authorization = {
+                        // Match the publisher's existing shared transaction contract; release it before the next batch.
+                        // 遵守发布器既有共享事务契约；在下一批次之前释放。
+                        let _transaction = crate::begin_public_ai_configuration_transaction().await;
+                        publication.validate().await
+                    };
+                    match authorization {
+                        Ok(()) => {
+                            match job
+                                .persist(store, |receipt| {
+                                    receipt.followup_requested = false;
+                                    receipt.state = VceJobState::Queued;
+                                    receipt.progress = None;
+                                })
+                                .await
+                            {
+                                Ok(next) => {
+                                    operation_id =
+                                        format!("{}:batch:{}", next.job_id, Uuid::new_v4());
+                                    job = Arc::new(VceManagedJob {
+                                        job_id: next.job_id.clone(),
+                                        replacement_settings: None,
+                                        project_writer: Arc::clone(&job.project_writer),
+                                        store: store.clone(),
+                                        event_emitter: self.event_emitter.clone(),
+                                        receipt: Mutex::new(next),
+                                        persistence_gate: Mutex::new(()),
+                                        control: VceRefreshControl::default(),
+                                        cancel_wake: Notify::new(),
+                                        persistence_error: Mutex::new(None),
+                                        pending_terminal_receipt: Mutex::new(None),
+                                        #[cfg(test)]
+                                        compaction_observation_persistence_failures:
+                                            std::sync::atomic::AtomicUsize::new(0),
+                                    });
+                                    *runtime.job_state.active.lock().await = Some(Arc::clone(&job));
+                                    work = VceJobWork::Manual;
+                                    continue;
+                                }
+                                Err(error) => {
+                                    outcome = Err(format!(
+                                        "VCE follow-up admission persistence failed: {error}"
+                                    ))
+                                }
                             }
                         }
+                        Err(error) => outcome = Err(error),
                     }
-                    Err(error) => outcome = Err(error),
                 }
             }
+            // Terminal receipt persistence must not wait behind admission while shutdown is draining.
+            // 终态回执持久化不能在退出排空期间继续占用准入锁。
             self.finish_managed_job(Some(runtime), &job, store, outcome)
                 .await;
             // Failed persistence keeps ownership visible and blocks new writers until explicit recovery.
@@ -1864,6 +3314,488 @@ async fn validate_rebuild_confirmation(
     Ok(())
 }
 
+/// Validate the bounded human command shape used only by physical compaction admission.
+/// 校验仅供物理整理准入使用的有界人为命令结构。
+///
+/// `command` supplies the exact observed project state and `action_ids` supplies the confirmed
+/// table actions. Returns an explicit error before any storage lease or controller request.
+/// `command` 提供精确观察到的项目状态，`action_ids` 提供已确认表操作。
+/// 在取得任何存储租约或发送控制器请求前返回明确错误。
+fn validate_compaction_command(
+    command: &VceJobAdmission,
+    action_ids: &BTreeSet<String>,
+) -> Result<(), String> {
+    if command.kind != VceJobKind::Compact || command.retry_of_job_id.is_some() {
+        return Err(String::from(
+            "VCE physical compaction requires a fresh compact command",
+        ));
+    }
+    if command.idempotency_key.trim().is_empty() || command.idempotency_key.len() > 512 {
+        return Err(String::from(
+            "VCE compaction idempotency key must contain 1..512 bytes",
+        ));
+    }
+    if command.expected_settings_revision == 0
+        || command
+            .expected_checkpoint_version
+            .is_none_or(|version| version == 0)
+        || !vulcan_context_engine::is_tagged_sha256_identity(&command.contract_fingerprint)
+    {
+        return Err(String::from(
+            "VCE compaction command has an invalid revision, checkpoint, or contract fingerprint",
+        ));
+    }
+    if action_ids.is_empty()
+        || action_ids.len() > 2
+        || action_ids
+            .iter()
+            .any(|action_id| !vulcan_context_engine::is_sha256_identity(action_id))
+    {
+        return Err(String::from(
+            "VCE physical compaction requires one or two exact action identities",
+        ));
+    }
+    Ok(())
+}
+
+/// Compare a compaction command with the authoritative immutable physical binding.
+/// 将整理命令与权威不可变物理绑定进行比较。
+///
+/// `command` is caller-observed state, `config` is the active stored binding, and `checkpoint`
+/// is the index provenance. The service boundary separately guards the mutable project-policy
+/// revision. Returns only when every immutable execution guard matches exactly.
+/// `command` 是调用方观察状态，`config` 是活动存储绑定，`checkpoint` 是索引来源信息。
+/// 服务边界单独保护可变的项目策略修订。仅在全部不可变执行保护精确匹配时返回成功。
+fn validate_compaction_target(
+    command: &VceJobAdmission,
+    config: &vulcan_workspace_store::vce_data_plane::VceProjectIndexConfig,
+    checkpoint: Option<u64>,
+) -> Result<(), String> {
+    if command.expected_checkpoint_version != checkpoint
+        || command.contract_fingerprint != config.physical_fingerprint
+    {
+        return Err(String::from(
+            "VCE compaction checkpoint or physical contract changed; reload before submitting",
+        ));
+    }
+    Ok(())
+}
+
+/// Hash one exact compaction submission independently of mutable execution progress.
+/// 独立于可变执行进度散列一项精确整理提交。
+///
+/// `project_id`, `command`, and sorted `action_ids` form the complete replay authority.
+/// Returns a SHA-256 identity suitable for durable idempotency matching.
+/// `project_id`、`command` 与已排序 `action_ids` 构成完整重放权威。
+/// 返回适用于持久幂等匹配的 SHA-256 身份。
+fn compaction_request_fingerprint(
+    project_id: &str,
+    command: &VceJobAdmission,
+    action_ids: &BTreeSet<String>,
+) -> Result<String, String> {
+    let identity = serde_json::to_vec(&(
+        project_id,
+        command.kind,
+        command.expected_settings_revision,
+        command.expected_checkpoint_version,
+        &command.contract_fingerprint,
+        action_ids,
+    ))
+    .map_err(|error| format!("Encode VCE compaction identity: {error}"))?;
+    Ok(hex::encode(Sha256::digest(identity)))
+}
+
+/// Determine whether a durable receipt already owns a queryable controller operation.
+/// 判断持久回执是否已经持有可查询的控制器操作。
+///
+/// `job` supplies the acknowledged receipt. Returns true only for a queued or running table with
+/// both stable operation identity and expected physical version.
+/// `job` 提供已确认回执。仅当排队或运行中的表同时具有稳定操作身份与预期物理版本时返回真。
+async fn compaction_has_admitted_operation(job: &VceManagedJob) -> bool {
+    job.receipt
+        .lock()
+        .await
+        .compaction
+        .as_ref()
+        .is_some_and(|compaction| {
+            compaction.tables.iter().any(|table| {
+                matches!(
+                    table.state,
+                    VceCompactionTableState::Queued | VceCompactionTableState::Running
+                ) && table.operation_id.is_some()
+                    && table.operation_expected_version.is_some()
+            })
+        })
+}
+
+/// Clone one table receipt without retaining the job receipt lock across controller I/O.
+/// 克隆一份表回执，避免在控制器输入输出期间持续持有作业回执锁。
+///
+/// `job` owns the acknowledged snapshot and `table_index` selects its deterministic table slot.
+/// Returns absence only when the durable compaction payload or slot is missing.
+/// `job` 持有已确认快照，`table_index` 选择其确定性表槽位。
+/// 仅在持久整理载荷或槽位缺失时返回空值。
+async fn compaction_table_snapshot(
+    job: &VceManagedJob,
+    table_index: usize,
+) -> Option<VceCompactionTableReceipt> {
+    job.receipt
+        .lock()
+        .await
+        .compaction
+        .as_ref()
+        .and_then(|compaction| compaction.tables.get(table_index))
+        .cloned()
+}
+
+/// Freeze one table-local terminal condition from the last acknowledged receipt facts.
+/// 从最近确认的回执事实冻结一项表级终止条件。
+///
+/// `table_index` identifies the deterministic slot, `table` supplies immutable operation ownership,
+/// and `state` plus `error` describe the terminal condition. Returns an owned update suitable for
+/// the same compare-and-swap as the host terminal state.
+/// `table_index` 标识确定性槽位，`table` 提供不可变操作归属，`state` 与 `error` 描述终止条件。
+/// 返回可与宿主终态使用同一次比较交换的自包含更新。
+fn compaction_table_terminal_update(
+    table_index: usize,
+    table: &VceCompactionTableReceipt,
+    state: VceCompactionTableState,
+    error: Option<String>,
+) -> Box<VceCompactionTableTerminalUpdate> {
+    Box::new(VceCompactionTableTerminalUpdate {
+        table_index,
+        action_id: table.action_id.clone(),
+        round: table.round,
+        operation_id: table.operation_id.clone(),
+        operation_expected_version: table.operation_expected_version,
+        latest_statistics: table.latest_statistics.clone(),
+        metrics: table.metrics.clone(),
+        state,
+        error: error.map(bounded_error),
+    })
+}
+
+/// Freeze one completed controller round together with its authoritative statistics and metrics.
+/// 将一轮已完成控制器操作与其权威统计及指标一并冻结。
+///
+/// `table_index` and `table` identify the admitted operation; `latest_statistics` and `metrics`
+/// are already validated cumulative facts. `state` and `error` describe the terminal host decision.
+/// Returns an update that preserves the completed physical round even if an earlier receipt write failed.
+/// `table_index` 与 `table` 标识已准入操作；`latest_statistics` 与 `metrics` 是已校验累计事实。
+/// `state` 与 `error` 描述宿主终止决定。即使先前回执写入失败，返回值仍保留已完成物理轮次。
+fn completed_compaction_table_terminal_update(
+    table_index: usize,
+    table: &VceCompactionTableReceipt,
+    latest_statistics: VcePhysicalTableStatistics,
+    metrics: VceCompactionMetrics,
+    state: VceCompactionTableState,
+    error: Option<String>,
+) -> Box<VceCompactionTableTerminalUpdate> {
+    let mut update = compaction_table_terminal_update(table_index, table, state, error);
+    update.latest_statistics = latest_statistics;
+    update.metrics = metrics;
+    update
+}
+
+/// Merge one retained table update only into its exact frozen slot and operation identity.
+/// 仅将一份保留的表更新合并进其精确冻结槽位及操作身份。
+///
+/// `receipt` is the proposed durable successor and `update` contains controller-authoritative facts.
+/// Returns an explicit error rather than applying a result to a changed plan or operation.
+/// `receipt` 是拟议持久后继，`update` 包含控制器权威事实。计划或操作已经变化时返回明确错误，
+/// 绝不把结果应用到错误目标。
+fn apply_compaction_table_terminal_update(
+    receipt: &mut VceStoredJob,
+    update: VceCompactionTableTerminalUpdate,
+) -> Result<(), String> {
+    let table = receipt
+        .compaction
+        .as_mut()
+        .and_then(|compaction| compaction.tables.get_mut(update.table_index))
+        .ok_or_else(|| String::from("VCE terminal compaction table slot disappeared"))?;
+    if table.action_id != update.action_id
+        || table.round != update.round
+        || table.operation_id != update.operation_id
+        || table.operation_expected_version != update.operation_expected_version
+        || !update.state.is_terminal()
+    {
+        return Err(String::from(
+            "VCE terminal compaction table update no longer matches its admitted operation",
+        ));
+    }
+    table.latest_statistics = update.latest_statistics;
+    table.metrics = update.metrics;
+    table.state = update.state;
+    table.error = update.error;
+    Ok(())
+}
+
+/// Apply a physical compaction outcome as one complete terminal receipt transition.
+/// 将物理整理结果作为一次完整终态回执转换应用。
+///
+/// `receipt` is cloned from the latest acknowledged state and `outcome` may carry one controller
+/// result not yet persisted. Returns only after every selected table has a truthful terminal state.
+/// `receipt` 从最近确认状态克隆，`outcome` 可携带一份尚未持久化的控制器结果。
+/// 仅当每张已选表均具有真实终态后返回。
+fn apply_physical_compaction_terminal_outcome(
+    receipt: &mut VceStoredJob,
+    outcome: VceCompactionJobOutcome,
+) -> Result<(), String> {
+    match outcome {
+        VceCompactionJobOutcome::SucceededWithTableUpdate(update) => {
+            apply_compaction_table_terminal_update(receipt, *update)?;
+            apply_physical_compaction_terminal_outcome(receipt, VceCompactionJobOutcome::Succeeded)
+        }
+        VceCompactionJobOutcome::FailedWithTableUpdate {
+            error,
+            table_update,
+        } => {
+            apply_compaction_table_terminal_update(receipt, *table_update)?;
+            apply_physical_compaction_terminal_outcome(
+                receipt,
+                VceCompactionJobOutcome::Failed(error),
+            )
+        }
+        VceCompactionJobOutcome::CancelledWithTableUpdate(update) => {
+            apply_compaction_table_terminal_update(receipt, *update)?;
+            apply_physical_compaction_terminal_outcome(receipt, VceCompactionJobOutcome::Cancelled)
+        }
+        VceCompactionJobOutcome::InterruptedWithTableUpdate {
+            error,
+            table_update,
+        } => {
+            apply_compaction_table_terminal_update(receipt, *table_update)?;
+            apply_physical_compaction_terminal_outcome(
+                receipt,
+                VceCompactionJobOutcome::Interrupted(error),
+            )
+        }
+        VceCompactionJobOutcome::Succeeded => {
+            let compaction = receipt.compaction.as_ref().ok_or_else(|| {
+                String::from("VCE physical compaction terminal receipt omitted table state")
+            })?;
+            if compaction
+                .tables
+                .iter()
+                .any(|table| table.state != VceCompactionTableState::Succeeded)
+            {
+                return Err(String::from(
+                    "VCE physical compaction cannot succeed before every table succeeds",
+                ));
+            }
+            let table_count = compaction.tables.len() as u64;
+            receipt.state = VceJobState::Succeeded;
+            receipt.result_checkpoint_version = receipt.source_checkpoint_version;
+            receipt.progress = Some(compaction_progress(
+                &receipt.job_id,
+                table_count,
+                table_count,
+                VceRefreshPhase::Complete,
+            ));
+            receipt.error = None;
+            Ok(())
+        }
+        VceCompactionJobOutcome::Failed(error) => {
+            let diagnostic = bounded_error(error);
+            let table_diagnostic = bounded_error(format!(
+                "VCE compaction table was not completed because the job failed: {diagnostic}"
+            ));
+            let compaction = receipt.compaction.as_mut().ok_or_else(|| {
+                String::from("VCE physical compaction terminal receipt omitted table state")
+            })?;
+            for table in &mut compaction.tables {
+                if !table.state.is_terminal() {
+                    table.state = VceCompactionTableState::Interrupted;
+                    table.error = Some(table_diagnostic.clone());
+                }
+            }
+            receipt.state = VceJobState::Failed;
+            receipt.result_checkpoint_version = None;
+            receipt.error = Some(diagnostic);
+            Ok(())
+        }
+        VceCompactionJobOutcome::Cancelled => {
+            let compaction = receipt.compaction.as_mut().ok_or_else(|| {
+                String::from("VCE physical compaction terminal receipt omitted table state")
+            })?;
+            for table in &mut compaction.tables {
+                if !table.state.is_terminal() {
+                    table.state = VceCompactionTableState::Cancelled;
+                    table.error = None;
+                }
+            }
+            receipt.state = VceJobState::Cancelled;
+            receipt.result_checkpoint_version = None;
+            receipt.error = Some(String::from(VCE_REFRESH_CANCELLED_ERROR));
+            Ok(())
+        }
+        VceCompactionJobOutcome::Interrupted(error) => {
+            let diagnostic = bounded_error(error);
+            let compaction = receipt.compaction.as_mut().ok_or_else(|| {
+                String::from("VCE physical compaction terminal receipt omitted table state")
+            })?;
+            for table in &mut compaction.tables {
+                if !table.state.is_terminal() {
+                    table.state = VceCompactionTableState::Interrupted;
+                    table.error = Some(diagnostic.clone());
+                }
+            }
+            receipt.state = VceJobState::Interrupted;
+            receipt.result_checkpoint_version = None;
+            receipt.error = Some(diagnostic);
+            Ok(())
+        }
+    }
+}
+
+/// Return the stable operation identifier component for one physical table role.
+/// 返回一个物理表角色的稳定操作标识组成部分。
+///
+/// `role` is the typed VCE table owner. Returns storage-safe ASCII text.
+/// `role` 是类型化 VCE 表归属。返回存储安全的 ASCII 文本。
+fn compaction_table_role_text(role: VcePhysicalTableRole) -> &'static str {
+    match role {
+        VcePhysicalTableRole::Content => "content",
+        VcePhysicalTableRole::Path => "path",
+    }
+}
+
+/// Build truthful table-level progress for one physical maintenance operation.
+/// 为一项物理维护操作构建真实的表级进度。
+///
+/// `operation_id` identifies the current child operation, while `completed` and `total` count
+/// confirmed tables. Returns a progress snapshot without simulated percentages or source paths.
+/// `operation_id` 标识当前子操作，`completed` 与 `total` 统计已确认表。
+/// 返回不含模拟百分比或源码路径的进度快照。
+fn compaction_progress(
+    operation_id: &str,
+    completed: u64,
+    total: u64,
+    phase: VceRefreshPhase,
+) -> VceRefreshProgress {
+    VceRefreshProgress {
+        phase,
+        operation_id: operation_id.to_owned(),
+        unit: VceRefreshUnit::Tables,
+        completed,
+        total: Some(total),
+        overall_completed: completed,
+        overall_total: Some(total),
+        current_path: None,
+    }
+}
+
+/// Identify submit failures whose server-side admission may have succeeded before reply loss.
+/// 识别服务端可能已准入、但回复丢失的提交失败。
+///
+/// `error` is the controller error projected through the data plane. Returns true only for the
+/// typed controller transport prefix rather than interpreting domain validation failures.
+/// `error` 是经数据面投影的控制器错误。仅对类型化控制器传输前缀返回真，
+/// 不会把领域校验失败解释为不确定结果。
+fn is_uncertain_compaction_error(error: &str) -> bool {
+    error
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("transport error:")
+}
+
+/// Report whether the controller has durably acknowledged cancellation or already settled the work.
+/// 判断控制器是否已持久确认取消，或相关工作是否已经进入终态。
+fn compaction_cancellation_acknowledged(operation: &ControllerLanceDbCompactionOperation) -> bool {
+    operation.cancel_requested || operation.state.is_terminal()
+}
+
+/// Add one acknowledged controller round to cumulative metrics with overflow checks.
+/// 通过溢出检查将一轮已确认控制器结果加入累计指标。
+///
+/// `current` is the prior durable total and the remaining values are the new round metrics.
+/// Returns the exact accumulated metrics or an explicit integer-overflow error.
+/// `current` 是先前持久累计值，其余值为新轮次指标。
+/// 返回精确累计指标或明确整数溢出错误。
+fn accumulate_compaction_metrics(
+    current: &VceCompactionMetrics,
+    fragments_removed: u64,
+    fragments_added: u64,
+    files_removed: u64,
+    files_added: u64,
+) -> Result<VceCompactionMetrics, String> {
+    Ok(VceCompactionMetrics {
+        fragments_removed: current
+            .fragments_removed
+            .checked_add(fragments_removed)
+            .ok_or_else(|| String::from("VCE removed-fragment metric overflow"))?,
+        fragments_added: current
+            .fragments_added
+            .checked_add(fragments_added)
+            .ok_or_else(|| String::from("VCE added-fragment metric overflow"))?,
+        files_removed: current
+            .files_removed
+            .checked_add(files_removed)
+            .ok_or_else(|| String::from("VCE removed-file metric overflow"))?,
+        files_added: current
+            .files_added
+            .checked_add(files_added)
+            .ok_or_else(|| String::from("VCE added-file metric overflow"))?,
+    })
+}
+
+/// Validate that one native compaction round preserves logical table contents and exact admission facts.
+/// 校验一轮原生整理会保留逻辑表内容及精确准入事实。
+///
+/// `admitted` is the latest durable snapshot, `expected_version` is the frozen controller guard,
+/// `before` and `after` are untrusted operation boundaries, and fragment metrics describe the
+/// physical rewrite. Returns success only for one internally consistent, data-preserving transition.
+/// `admitted` 是最近的持久快照，`expected_version` 是冻结的控制器保护值，`before` 与 `after`
+/// 是不受信任的操作边界，片段指标描述物理改写。仅对内部一致且保留数据的转换返回成功。
+fn validate_compaction_statistics_transition(
+    admitted: &VcePhysicalTableStatistics,
+    expected_version: u64,
+    before: &VcePhysicalTableStatistics,
+    after: &VcePhysicalTableStatistics,
+    fragments_removed: u64,
+    fragments_added: u64,
+) -> Result<(), String> {
+    if before != admitted || before.version != expected_version {
+        return Err(String::from(
+            "VCE compaction result does not match its admitted table statistics",
+        ));
+    }
+    if after.role != before.role
+        || after.table_name != before.table_name
+        || after.version < before.version
+    {
+        return Err(String::from(
+            "VCE compaction result changed its table identity or regressed its version",
+        ));
+    }
+    if after.row_count != before.row_count || after.index_count != before.index_count {
+        return Err(String::from(
+            "VCE compaction changed logical rows or secondary indexes",
+        ));
+    }
+    let expected_fragments = before
+        .fragment_count
+        .checked_sub(fragments_removed)
+        .and_then(|count| count.checked_add(fragments_added))
+        .ok_or_else(|| String::from("VCE compaction fragment metrics are inconsistent"))?;
+    if after.fragment_count != expected_fragments {
+        return Err(String::from(
+            "VCE compaction fragment metrics do not match its table statistics",
+        ));
+    }
+    Ok(())
+}
+
+/// Apply the same physical-fragment predicate used by read-only compaction planning.
+/// 应用与只读整理计划相同的物理片段判定条件。
+///
+/// `statistics` is an authoritative post-operation snapshot. Returns whether another bounded
+/// native compaction round is needed.
+/// `statistics` 是权威操作后快照。返回是否仍需下一轮有界原生整理。
+fn physical_table_requires_compaction(statistics: &VcePhysicalTableStatistics) -> bool {
+    statistics.fragment_count > 1 && statistics.small_fragment_count > 0
+}
+
 /// Freeze command identity from exact host facts; display names and current job state are excluded.
 /// 根据精确宿主事实冻结命令身份；不包含展示名与当前作业状态。
 ///
@@ -1975,6 +3907,996 @@ pub(super) fn job_time() -> Result<u64, String> {
 mod tests {
     use super::*;
     use vulcan_context_engine::VceIndexPort;
+
+    /// Build one deterministic physical-statistics snapshot for compaction transition tests.
+    /// 为整理转换测试构造一份确定性的物理统计快照。
+    ///
+    /// `version`, `row_count`, `index_count`, and `fragment_count` select the tested invariants.
+    /// Returns a content-table snapshot whose fragment distribution is internally valid.
+    /// `version`、`row_count`、`index_count` 与 `fragment_count` 选择待测试的不变量。
+    /// 返回一份片段分布内部有效的内容表快照。
+    fn compaction_statistics_fixture(
+        version: u64,
+        row_count: u64,
+        index_count: u64,
+        fragment_count: u64,
+    ) -> VcePhysicalTableStatistics {
+        VcePhysicalTableStatistics {
+            role: VcePhysicalTableRole::Content,
+            table_name: String::from("content_vectors"),
+            version,
+            total_bytes: 4096,
+            row_count,
+            index_count,
+            fragment_count,
+            small_fragment_count: fragment_count,
+            fragment_rows: vulcan_context_engine::VcePhysicalFragmentSummary {
+                minimum_rows: row_count.checked_div(fragment_count).unwrap_or(0),
+                maximum_rows: row_count,
+                mean_rows: row_count.checked_div(fragment_count).unwrap_or(0),
+                p25_rows: row_count.checked_div(fragment_count).unwrap_or(0),
+                p50_rows: row_count.checked_div(fragment_count).unwrap_or(0),
+                p75_rows: row_count.checked_div(fragment_count).unwrap_or(0),
+                p99_rows: row_count,
+            },
+        }
+    }
+
+    /// Reject controller success projections that alter logical contents or contradict rewrite metrics.
+    /// 拒绝会改变逻辑内容或与改写指标矛盾的控制器成功投影。
+    #[test]
+    fn compaction_transition_requires_data_preservation_and_exact_metrics() {
+        let admitted = compaction_statistics_fixture(9, 32, 2, 8);
+        let mut after = compaction_statistics_fixture(10, 32, 2, 1);
+        validate_compaction_statistics_transition(&admitted, 9, &admitted, &after, 8, 1)
+            .expect("a data-preserving physical rewrite should be accepted");
+
+        after.row_count = 31;
+        assert!(
+            validate_compaction_statistics_transition(&admitted, 9, &admitted, &after, 8, 1)
+                .is_err()
+        );
+        after.row_count = 32;
+        after.index_count = 1;
+        assert!(
+            validate_compaction_statistics_transition(&admitted, 9, &admitted, &after, 8, 1)
+                .is_err()
+        );
+        after.index_count = 2;
+        assert!(
+            validate_compaction_statistics_transition(&admitted, 9, &admitted, &after, 7, 1)
+                .is_err()
+        );
+
+        let mut forged_before = admitted.clone();
+        forged_before.total_bytes += 1;
+        assert!(
+            validate_compaction_statistics_transition(&admitted, 9, &forged_before, &after, 8, 1,)
+                .is_err()
+        );
+    }
+
+    /// Resolve the explicitly built test controller, falling back to the packaged debug binary.
+    /// 解析显式构建的测试控制器；未指定时回退到打包的调试二进制。
+    fn test_controller_executable() -> std::path::PathBuf {
+        std::env::var_os("VLDB_CONTROLLER_TEST_EXECUTABLE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join("output/bin/vldb-controller.exe")
+            })
+    }
+
+    /// Verify a successful lookup cannot masquerade as cancellation acknowledgement.
+    /// 验证一次成功查询不能冒充取消确认。
+    #[test]
+    fn cancellation_acknowledgement_requires_flag_or_terminal_state() {
+        // operation starts as an unacknowledged controller-owned running step.
+        // operation 初始表示一项尚未确认取消、由控制器持有的运行中步骤。
+        let mut operation = ControllerLanceDbCompactionOperation {
+            operation_id: String::from("compact-content-round-1"),
+            table_name: String::from("content"),
+            state: ControllerLanceDbCompactionState::Running,
+            cancel_requested: false,
+            message: String::from("running"),
+            error: None,
+            submitted_at_unix_ms: 1,
+            started_at_unix_ms: Some(2),
+            completed_at_unix_ms: None,
+            before: None,
+            after: None,
+            metrics: None,
+        };
+
+        assert!(!compaction_cancellation_acknowledged(&operation));
+        operation.cancel_requested = true;
+        assert!(compaction_cancellation_acknowledged(&operation));
+        operation.cancel_requested = false;
+        operation.state = ControllerLanceDbCompactionState::Succeeded;
+        assert!(compaction_cancellation_acknowledged(&operation));
+    }
+
+    /// Verify cancellation wakes host-only work but cannot release an admitted controller operation.
+    /// 验证取消会唤醒仅在宿主排队的工作，但不能释放已准入的控制器操作。
+    #[tokio::test]
+    async fn admitted_compaction_cancellation_retains_the_writer_budget_wait() {
+        let writer_budget = Arc::new(tokio::sync::Semaphore::new(1));
+        let held = Arc::clone(&writer_budget)
+            .acquire_owned()
+            .await
+            .expect("hold writer budget before recovered compaction");
+        let cancel_wake = Arc::new(Notify::new());
+        cancel_wake.notify_one();
+        let waiting_budget = Arc::clone(&writer_budget);
+        let waiting_wake = Arc::clone(&cancel_wake);
+        let admitted_wait = tokio::spawn(async move {
+            acquire_compaction_writer_budget(waiting_budget, waiting_wake.as_ref(), true).await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !admitted_wait.is_finished(),
+            "an admitted operation must remain owned while waiting to forward cancellation"
+        );
+        drop(held);
+        let admitted_result = tokio::time::timeout(Duration::from_secs(1), admitted_wait)
+            .await
+            .expect("admitted budget wait should finish after permit release")
+            .expect("admitted budget wait task should not panic");
+        assert!(admitted_result.is_ok());
+
+        let host_only_budget = Arc::new(tokio::sync::Semaphore::new(0));
+        let host_only_wake = Notify::new();
+        host_only_wake.notify_one();
+        let host_only_result = tokio::time::timeout(
+            Duration::from_secs(1),
+            acquire_compaction_writer_budget(host_only_budget, &host_only_wake, false),
+        )
+        .await
+        .expect("host-only cancellation should wake immediately");
+        assert!(matches!(
+            host_only_result,
+            Err(VceCompactionJobOutcome::Cancelled)
+        ));
+    }
+
+    /// Stage deterministic one-row content and path fragments through the production VCE port.
+    /// 通过生产 VCE 端口暂存确定性的单行内容与路径碎片。
+    ///
+    /// `index` is an isolated writable fixture, `label` separates attempts, and the numeric range
+    /// creates unique canonical Blobs. The function returns only after every physical write is
+    /// acknowledged by the real controller.
+    /// `index` 是隔离的可写夹具，`label` 区分不同尝试，数字范围用于创建唯一规范 Blob。
+    /// 该函数仅在真实控制器确认全部物理写入后返回。
+    async fn stage_real_compaction_fragments(
+        index: &VceProjectIndex,
+        label: &str,
+        start: usize,
+        count: usize,
+        generation: u64,
+    ) {
+        for ordinal in start..start + count {
+            let path = format!("src/{label}_{ordinal}.rs");
+            let content = format!("pub fn {label}_{ordinal}() {{}}");
+            let blob_name = vulcan_context_engine::blob_name(&path, &content)
+                .expect("build canonical compaction fixture Blob");
+            let chunk = vulcan_context_engine::Chunk::new(
+                blob_name.clone(),
+                &path,
+                content,
+                1,
+                1,
+                vulcan_context_engine::ChunkKind::Recursive,
+            )
+            .expect("build compaction fixture Chunk");
+            let path_document = vulcan_context_engine::PathDocument::new(blob_name.clone(), &path)
+                .expect("build compaction fixture path document");
+            let indexed_blob = vulcan_context_engine::IndexedBlob {
+                blob_name: blob_name.clone(),
+                path,
+                generation,
+                structure_analyzer_id: None,
+                structure_mode: None,
+                structure_fallback_reason: None,
+                chunks: vec![chunk.clone()],
+                embedding_vectors: vec![vulcan_context_engine::EmbeddingVector {
+                    input_id: chunk.chunk_id,
+                    values: vec![1.0, 0.0, 0.0],
+                }],
+                path_embedding: Some(vulcan_context_engine::EmbeddingVector {
+                    input_id: path_document.path_id.clone(),
+                    values: vec![0.0, 1.0, 0.0],
+                }),
+                path_document: Some(path_document),
+                symbols: Vec::new(),
+                path_status: vulcan_context_engine::AuxiliaryIndexStatus::Ready,
+                symbol_status: vulcan_context_engine::AuxiliaryIndexStatus::NotApplicable,
+                status: vulcan_context_engine::IndexedBlobStatus::Ready,
+            };
+            index
+                .stage(vulcan_context_engine::IndexStageBatch {
+                    operation_id: format!("stage-{label}-{ordinal}"),
+                    refresh_id: format!("refresh-{label}-{ordinal}"),
+                    generation,
+                    blobs: vec![indexed_blob],
+                })
+                .await
+                .expect("stage real compaction fixture fragment");
+        }
+    }
+
+    /// Wait until a host compaction receipt durably records one controller-owned operation.
+    /// 等待宿主整理回执持久记录一项由控制器持有的操作。
+    ///
+    /// `manager`, `project_id`, and `job_id` identify the exact fixture job; `index` queries the
+    /// matching controller binding. Returns the table role and stable operation identity only
+    /// after both durable owners acknowledge it.
+    /// `manager`、`project_id` 与 `job_id` 标识精确夹具作业；`index` 查询匹配的控制器绑定。
+    /// 仅在两个持久所有者均确认后返回表角色与稳定操作身份。
+    async fn await_admitted_compaction_operation(
+        manager: &VceRuntimeManager,
+        index: &VceProjectIndex,
+        project_id: &str,
+        job_id: &str,
+    ) -> (VcePhysicalTableRole, String) {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let receipt = manager
+                    .get_job(project_id, Some(job_id))
+                    .await
+                    .expect("read compaction fixture receipt")
+                    .expect("compaction fixture receipt exists");
+                assert!(
+                    !receipt.state.is_terminal(),
+                    "compaction finished before host recovery was injected: {:?}",
+                    receipt.error
+                );
+                if let Some((role, operation_id)) = receipt.compaction.as_ref().and_then(|state| {
+                    state.tables.iter().find_map(|table| {
+                        table
+                            .operation_id
+                            .as_ref()
+                            .map(|operation_id| (table.plan.statistics.role, operation_id.clone()))
+                    })
+                }) {
+                    // The host records the stable identity before submission so an uncertain reply
+                    // can be queried safely. Wait for controller acknowledgement before injecting
+                    // host loss; an absent operation at that earlier boundary is a different fault.
+                    // 宿主在提交前记录稳定身份，以便安全查询不确定响应。注入宿主丢失前等待控制器确认；
+                    // 更早边界上的操作缺失属于另一种故障。
+                    if index
+                        .physical_compaction_operation(role, &operation_id)
+                        .await
+                        .is_ok()
+                    {
+                        return (role, operation_id);
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("controller operation must be durably admitted before deadline")
+    }
+
+    /// Drop only the fixture host worker and its in-memory owner while preserving durable state.
+    /// 仅丢弃夹具宿主工作任务及其内存所有者，同时保留持久状态。
+    ///
+    /// `state` is the exact project job slot. The function returns after the task and writer lease
+    /// are gone, reproducing a host restart without stopping the external controller.
+    /// `state` 是精确项目作业槽位。该函数在任务与写入租约释放后返回，以复现不停止外部控制器的宿主重启。
+    async fn abandon_fixture_host_worker(state: &Arc<VceProjectJobState>) {
+        let worker = state
+            .worker_handle
+            .lock()
+            .await
+            .take()
+            .expect("fixture host worker exists");
+        worker.abort();
+        assert!(
+            worker
+                .await
+                .expect_err("fixture host worker is deliberately aborted")
+                .is_cancelled()
+        );
+        let active = state
+            .active
+            .lock()
+            .await
+            .take()
+            .expect("fixture in-memory owner exists");
+        drop(active);
+    }
+
+    /// Verify real physical compaction recovery and explicit controller-state loss end to end.
+    /// 端到端验证真实物理整理恢复及明确的控制器状态丢失。
+    ///
+    /// `executor` owns all fixture workers. Every database and vector table lives under one
+    /// temporary directory; no user project, provider, or billed inference request is involved.
+    /// `executor` 持有全部夹具任务。所有数据库与向量表均位于同一临时目录，不涉及用户项目、供应商或计费推理请求。
+    async fn verify_real_compaction_host_recovery(executor: Arc<tokio::runtime::Runtime>) {
+        use vldb_controller_client::{
+            ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
+        };
+        use vulcan_ai_contract::test_support::MockHostAiPort;
+        use vulcan_workspace_store::data_plane::{
+            ControllerRuntimeHandle, ControllerRuntimeMetadata,
+        };
+
+        let temporary = tempfile::tempdir().expect("create isolated compaction fixture");
+        let project_root = temporary.path().join("source");
+        let data_root = temporary.path().join("data");
+        std::fs::create_dir_all(&project_root).expect("create compaction source root");
+        std::fs::create_dir_all(&data_root).expect("create compaction data root");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve compaction endpoint");
+        let port = listener
+            .local_addr()
+            .expect("read compaction controller port")
+            .port();
+        drop(listener);
+        let executable = test_controller_executable();
+        assert!(executable.is_file(), "test controller must exist");
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let client = ControllerClient::new(
+            ControllerClientConfig {
+                endpoint: endpoint.clone(),
+                auto_spawn: true,
+                spawn_executable: Some(executable.display().to_string()),
+                spawn_process_mode: ControllerProcessMode::Managed,
+                minimum_uptime_secs: 0,
+                idle_timeout_secs: 1,
+                default_lease_ttl_secs: 30,
+                connect_timeout_secs: 30,
+                startup_timeout_secs: 15,
+                startup_retry_interval_ms: 100,
+                lease_renew_interval_secs: 10,
+            },
+            ClientRegistration {
+                client_name: format!("vce-compaction-recovery-{}", Uuid::new_v4()),
+                host_kind: String::from("test"),
+                process_id: std::process::id(),
+                process_name: String::from("vce-compaction-recovery-test"),
+                lease_ttl_secs: Some(30),
+            },
+        );
+        client
+            .connect()
+            .await
+            .expect("connect isolated compaction controller");
+        let controller = ControllerRuntimeHandle::new(
+            client.clone(),
+            ControllerRuntimeMetadata {
+                endpoint,
+                executable: executable.display().to_string(),
+                data_root: data_root.clone(),
+                sqlite_path: data_root.join("unused.sqlite3"),
+                sqlite_binding_id: Uuid::new_v4().to_string(),
+                system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
+                system_statistics_sqlite_binding_id: Uuid::new_v4().to_string(),
+            },
+        );
+        let factory = VceDataPlaneFactory::bootstrap(&controller)
+            .await
+            .expect("bootstrap compaction fixture storage");
+        let capabilities = job_test_capabilities();
+        let fingerprint = crate::vce::vce_embedding_physical_fingerprint(&capabilities, 3)
+            .expect("freeze compaction fixture fingerprint");
+        let mock = MockHostAiPort::new();
+        mock.set_capability_snapshot(capabilities)
+            .expect("configure compaction fixture capability metadata");
+        let expected_fingerprint = fingerprint.clone();
+        let manager = VceRuntimeManager::new(
+            Arc::new(mock),
+            factory.clone(),
+            ServiceEventEmitter::new(Vec::new()),
+            Arc::new(move |contract| {
+                if contract.project_id == "compaction-project"
+                    && contract.dimension == 3
+                    && contract.embedding_fingerprint == expected_fingerprint
+                {
+                    Ok(())
+                } else {
+                    Err(String::from("Compaction fixture publication authority rejected").into())
+                }
+            }),
+        );
+        let mut settings = ProjectVceSettings {
+            enabled: true,
+            revision: 1,
+            update_mode: vulcan_workbench_model::ProjectVceUpdateMode::Manual,
+            ..ProjectVceSettings::default()
+        };
+        manager
+            .enable_project(
+                "compaction-project",
+                &project_root,
+                settings.clone(),
+                3,
+                &fingerprint,
+                true,
+            )
+            .await
+            .expect("prepare isolated compaction project");
+        let initialized = manager
+            .submit_job(
+                "compaction-project",
+                VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: VceJobKind::Initialize,
+                    idempotency_key: String::from("initialize-compaction-project"),
+                    expected_settings_revision: settings.revision,
+                    expected_checkpoint_version: None,
+                    contract_fingerprint: fingerprint.clone(),
+                },
+                &executor,
+            )
+            .await
+            .expect("admit empty compaction fixture initialization");
+        let initialized = await_test_job(&manager, "compaction-project", &initialized.job_id).await;
+        assert_eq!(initialized.state, VceJobState::Succeeded);
+        let checkpoint = initialized
+            .result_checkpoint_version
+            .expect("empty compaction fixture publishes a checkpoint");
+        assert!(settings.revision > 0);
+        assert!(checkpoint > 0);
+        assert!(
+            vulcan_context_engine::is_tagged_sha256_identity(&fingerprint),
+            "fixture fingerprint must satisfy compaction admission: {fingerprint}"
+        );
+        let runtime = manager
+            .require_project("compaction-project")
+            .await
+            .expect("read active compaction runtime");
+        stage_real_compaction_fragments(&runtime.index, "recovery", 0, 32, 2).await;
+        // Policy-only changes advance host admission without rewriting immutable physical provenance.
+        // 仅策略变更推进宿主准入，但不改写不可变物理来源。
+        settings.revision += 1;
+        settings.max_results += 1;
+        assert!(
+            manager
+                .reconcile_policy_revision(
+                    "compaction-project",
+                    &project_root,
+                    &settings,
+                    &fingerprint,
+                )
+                .await
+                .expect("adopt policy-only compaction fixture revision"),
+            "policy-only revision must retain the active physical index",
+        );
+
+        let target = manager
+            .stored_maintenance_target(
+                "compaction-project",
+                vulcan_context_engine::VceMaintenanceMode::Compact,
+            )
+            .await
+            .expect("plan real physical compaction");
+        assert_eq!(target.checkpoint_version, Some(checkpoint));
+        assert_eq!(
+            target.plan.actions.len(),
+            2,
+            "both vector tables need compaction"
+        );
+        let before_by_role = target
+            .plan
+            .physical_tables
+            .iter()
+            .map(|table| (table.statistics.role, table.statistics.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let action_ids = target
+            .plan
+            .actions
+            .iter()
+            .map(|action| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        let first = manager
+            .submit_physical_compaction(
+                "compaction-project",
+                VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: VceJobKind::Compact,
+                    idempotency_key: String::from("compact-with-host-recovery"),
+                    expected_settings_revision: settings.revision,
+                    expected_checkpoint_version: Some(checkpoint),
+                    contract_fingerprint: fingerprint.clone(),
+                },
+                action_ids,
+                &executor,
+            )
+            .await
+            .expect("admit physical compaction recovery fixture");
+        let (admitted_role, admitted_operation_id) = await_admitted_compaction_operation(
+            &manager,
+            &runtime.index,
+            "compaction-project",
+            &first.job_id,
+        )
+        .await;
+        let state = manager.project_job_state("compaction-project").await;
+        abandon_fixture_host_worker(&state).await;
+
+        let attached = manager
+            .get_job("compaction-project", Some(&first.job_id))
+            .await
+            .expect("reattach exact physical compaction")
+            .expect("reattached physical compaction exists");
+        assert_eq!(attached.job_id, first.job_id);
+        let recovered = await_test_job(&manager, "compaction-project", &first.job_id).await;
+        assert_eq!(
+            recovered.state,
+            VceJobState::Succeeded,
+            "recovered compaction diagnostic: {:?}",
+            recovered.error
+        );
+        assert_eq!(recovered.source_checkpoint_version, Some(checkpoint));
+        assert_eq!(recovered.result_checkpoint_version, Some(checkpoint));
+        let recovered_operation = recovered
+            .compaction
+            .as_ref()
+            .expect("recovered table receipts")
+            .tables
+            .iter()
+            .find(|table| table.plan.statistics.role == admitted_role)
+            .and_then(|table| table.operation_id.as_deref())
+            .expect("recovered operation identity remains durable");
+        assert_eq!(recovered_operation, admitted_operation_id);
+        for table in recovered
+            .compaction
+            .as_ref()
+            .expect("completed table receipts")
+            .tables
+            .iter()
+        {
+            let before = before_by_role
+                .get(&table.plan.statistics.role)
+                .expect("planned role has initial statistics");
+            assert_eq!(table.state, VceCompactionTableState::Succeeded);
+            assert!(table.latest_statistics.fragment_count < before.fragment_count);
+            assert!(table.metrics.fragments_removed > 0);
+        }
+
+        // A second fragmented layout supplies an unfinished receipt whose controller operation is
+        // deliberately absent, reproducing controller restart state loss without killing a process.
+        // 第二组碎片布局提供控制器操作被刻意移除的未完成回执，在不终止进程的情况下复现控制器重启状态丢失。
+        stage_real_compaction_fragments(&runtime.index, "state_lost", 100, 8, 3).await;
+        let target = manager
+            .stored_maintenance_target(
+                "compaction-project",
+                vulcan_context_engine::VceMaintenanceMode::Compact,
+            )
+            .await
+            .expect("plan state-loss compaction fixture");
+        let action_ids = target
+            .plan
+            .actions
+            .iter()
+            .map(|action| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(!action_ids.is_empty());
+        let budget = manager
+            .job_writer_budget
+            .acquire()
+            .await
+            .expect("hold compaction writer budget");
+        let queued = manager
+            .submit_physical_compaction(
+                "compaction-project",
+                VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: VceJobKind::Compact,
+                    idempotency_key: String::from("compact-with-state-loss"),
+                    expected_settings_revision: settings.revision,
+                    expected_checkpoint_version: Some(checkpoint),
+                    contract_fingerprint: fingerprint.clone(),
+                },
+                action_ids,
+                &executor,
+            )
+            .await
+            .expect("queue controller state-loss fixture");
+        assert_eq!(queued.state, VceJobState::Queued);
+        let state = manager.project_job_state("compaction-project").await;
+        let active = state
+            .active
+            .lock()
+            .await
+            .clone()
+            .expect("state-loss fixture owns one queued job");
+        let store = active.store.clone();
+        let mut admitted = queued.clone();
+        admitted.state = VceJobState::Running;
+        admitted.sequence += 1;
+        admitted.updated_at_unix_ms = job_time()
+            .expect("read state-loss fixture time")
+            .max(admitted.updated_at_unix_ms);
+        let fake_operation_id = format!("{}:lost-controller-operation", admitted.job_id);
+        let table_count = admitted
+            .compaction
+            .as_ref()
+            .expect("queued compaction tables")
+            .tables
+            .len() as u64;
+        admitted.progress = Some(compaction_progress(
+            &fake_operation_id,
+            0,
+            table_count,
+            VceRefreshPhase::Writing,
+        ));
+        let first_table = admitted
+            .compaction
+            .as_mut()
+            .expect("admitted compaction tables")
+            .tables
+            .first_mut()
+            .expect("state-loss fixture has one table");
+        first_table.state = VceCompactionTableState::Queued;
+        first_table.round = 1;
+        first_table.operation_id = Some(fake_operation_id.clone());
+        first_table.operation_expected_version = Some(first_table.plan.statistics.version);
+        admitted
+            .validate()
+            .expect("injected admitted receipt remains contract-valid");
+        let admitted = store
+            .update(&queued, &admitted)
+            .await
+            .expect("persist missing controller operation admission");
+        let mut running = admitted.clone();
+        running.sequence += 1;
+        running.updated_at_unix_ms = job_time()
+            .expect("read running state-loss fixture time")
+            .max(running.updated_at_unix_ms);
+        running
+            .compaction
+            .as_mut()
+            .expect("running compaction tables")
+            .tables
+            .first_mut()
+            .expect("state-loss fixture has one running table")
+            .state = VceCompactionTableState::Running;
+        running
+            .validate()
+            .expect("injected state-loss receipt remains contract-valid");
+        store
+            .update(&admitted, &running)
+            .await
+            .expect("persist running but missing controller operation");
+        abandon_fixture_host_worker(&state).await;
+        drop(active);
+        drop(budget);
+
+        manager
+            .get_job("compaction-project", Some(&queued.job_id))
+            .await
+            .expect("reattach missing controller operation")
+            .expect("state-loss receipt exists");
+        let interrupted = await_test_job(&manager, "compaction-project", &queued.job_id).await;
+        assert_eq!(interrupted.state, VceJobState::Interrupted);
+        assert_eq!(interrupted.source_checkpoint_version, Some(checkpoint));
+        assert!(interrupted.result_checkpoint_version.is_none());
+        assert!(
+            interrupted
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("state was lost")),
+            "state loss must remain explicit: {:?}",
+            interrupted.error
+        );
+        let lost_table = interrupted
+            .compaction
+            .as_ref()
+            .expect("interrupted table receipts")
+            .tables
+            .first()
+            .expect("interrupted table exists");
+        assert_eq!(lost_table.state, VceCompactionTableState::StateLost);
+        assert_eq!(
+            lost_table.operation_id.as_deref(),
+            Some(fake_operation_id.as_str())
+        );
+        assert_eq!(
+            manager
+                .get_job("compaction-project", Some(&queued.job_id))
+                .await
+                .expect("replay interrupted state-loss receipt"),
+            Some(interrupted)
+        );
+
+        // A previously observed transient table-receipt error must not retain the active owner
+        // after a later authoritative terminal receipt has been persisted successfully.
+        // 此前观察到的瞬时表回执错误不能在后续权威终态回执成功持久化后继续保留活动所有者。
+        stage_real_compaction_fragments(&runtime.index, "terminal_recovery", 200, 8, 4).await;
+        let target = manager
+            .stored_maintenance_target(
+                "compaction-project",
+                vulcan_context_engine::VceMaintenanceMode::Compact,
+            )
+            .await
+            .expect("plan terminal persistence recovery compaction");
+        let action_ids = target
+            .plan
+            .actions
+            .iter()
+            .map(|action| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(!action_ids.is_empty());
+        let budget = manager
+            .job_writer_budget
+            .acquire()
+            .await
+            .expect("hold terminal recovery writer budget");
+        let terminal_recovery = manager
+            .submit_physical_compaction(
+                "compaction-project",
+                VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: VceJobKind::Compact,
+                    idempotency_key: String::from("compact-clears-stale-persistence-diagnostic"),
+                    expected_settings_revision: settings.revision,
+                    expected_checkpoint_version: Some(checkpoint),
+                    contract_fingerprint: fingerprint.clone(),
+                },
+                action_ids,
+                &executor,
+            )
+            .await
+            .expect("queue terminal persistence recovery compaction");
+        let state = manager.project_job_state("compaction-project").await;
+        let active = state
+            .active
+            .lock()
+            .await
+            .clone()
+            .expect("terminal persistence recovery owns one queued job");
+        *active.persistence_error.lock().await = Some(String::from(
+            "fixture transient table receipt persistence failure",
+        ));
+        drop(active);
+        drop(budget);
+        let recovered =
+            await_test_job(&manager, "compaction-project", &terminal_recovery.job_id).await;
+        assert_eq!(recovered.state, VceJobState::Succeeded);
+        assert!(recovered.error.is_none());
+        assert!(state.active.lock().await.is_none());
+
+        // The controller contract returns a queued snapshot immediately after admission. Reject every
+        // subsequent non-terminal observation update and prove the host still polls the same durable
+        // operation to its authoritative terminal result instead of orphaning controller work.
+        // 控制器合约在准入后立即返回排队快照。拒绝后续每次非终态观察更新，并证明宿主仍会轮询同一
+        // 持久操作直至权威终态，而不是遗弃控制器工作。
+        stage_real_compaction_fragments(&runtime.index, "observation_failure", 250, 8, 5).await;
+        let target = manager
+            .stored_maintenance_target(
+                "compaction-project",
+                vulcan_context_engine::VceMaintenanceMode::Compact,
+            )
+            .await
+            .expect("plan observation persistence failure compaction");
+        let action_ids = target
+            .plan
+            .actions
+            .iter()
+            .map(|action| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(!action_ids.is_empty());
+        let budget = manager
+            .job_writer_budget
+            .acquire()
+            .await
+            .expect("hold observation failure writer budget");
+        let observation_recovery = manager
+            .submit_physical_compaction(
+                "compaction-project",
+                VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: VceJobKind::Compact,
+                    idempotency_key: String::from(
+                        "compact-continues-after-observation-persistence-failure",
+                    ),
+                    expected_settings_revision: settings.revision,
+                    expected_checkpoint_version: Some(checkpoint),
+                    contract_fingerprint: fingerprint.clone(),
+                },
+                action_ids,
+                &executor,
+            )
+            .await
+            .expect("queue observation persistence failure compaction");
+        let observation_state = manager.project_job_state("compaction-project").await;
+        let observation_active = observation_state
+            .active
+            .lock()
+            .await
+            .clone()
+            .expect("observation persistence fixture owns one queued job");
+        let trigger = format!(
+            "CREATE TRIGGER reject_compaction_observation BEFORE UPDATE ON vce_host_jobs \
+             WHEN OLD.job_id = '{}' \
+             AND json_extract(OLD.snapshot_json, '$.compaction.tables[0].operation_id') IS NOT NULL \
+             AND json_extract(NEW.snapshot_json, '$.state') = 'running' \
+             AND json_extract(NEW.snapshot_json, '$.compaction.tables[0].state') IN ('queued', 'running') \
+             BEGIN SELECT RAISE(ABORT, 'injected compaction observation failure'); END;",
+            observation_recovery.job_id
+        );
+        observation_active
+            .store
+            .execute_test_storage_script(&trigger)
+            .await
+            .expect("install observation persistence fault");
+        drop(budget);
+        let observation_recovered =
+            await_test_job(&manager, "compaction-project", &observation_recovery.job_id).await;
+        assert_eq!(observation_recovered.state, VceJobState::Succeeded);
+        assert!(observation_recovered.error.is_none());
+        assert!(
+            observation_active
+                .compaction_observation_persistence_failures
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0,
+            "fixture must reject at least one advisory observation receipt"
+        );
+        observation_active
+            .store
+            .execute_test_storage_script("DROP TRIGGER reject_compaction_observation;")
+            .await
+            .expect("remove observation persistence fault");
+        assert!(observation_state.active.lock().await.is_none());
+        drop(observation_active);
+        drop(observation_state);
+
+        // Reject both the ordinary round-result write and its first terminal retry. The exact
+        // terminal candidate must retain the completed physical facts and become recoverable once
+        // storage accepts writes again; cancellation is only the recovery command, not a rewrite.
+        // 同时拒绝普通轮次结果写入及首次终态重试。精确终态候选必须保留已完成物理事实，并在存储恢复
+        // 可写后能够继续；取消在此仅是恢复命令，不能改写既有结果。
+        stage_real_compaction_fragments(&runtime.index, "terminal_candidate", 300, 8, 6).await;
+        let target = manager
+            .stored_maintenance_target(
+                "compaction-project",
+                vulcan_context_engine::VceMaintenanceMode::Compact,
+            )
+            .await
+            .expect("plan retained terminal candidate compaction");
+        let action_ids = target
+            .plan
+            .actions
+            .iter()
+            .map(|action| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(!action_ids.is_empty());
+        let budget = manager
+            .job_writer_budget
+            .acquire()
+            .await
+            .expect("hold retained candidate writer budget");
+        let retained = manager
+            .submit_physical_compaction(
+                "compaction-project",
+                VceJobAdmission {
+                    retry_of_job_id: None,
+                    kind: VceJobKind::Compact,
+                    idempotency_key: String::from("compact-retains-terminal-candidate"),
+                    expected_settings_revision: settings.revision,
+                    expected_checkpoint_version: Some(checkpoint),
+                    contract_fingerprint: fingerprint,
+                },
+                action_ids,
+                &executor,
+            )
+            .await
+            .expect("queue retained terminal candidate compaction");
+        let retained_state = manager.project_job_state("compaction-project").await;
+        let retained_active = retained_state
+            .active
+            .lock()
+            .await
+            .clone()
+            .expect("retained candidate fixture owns one queued job");
+        let trigger = format!(
+            "CREATE TRIGGER reject_compaction_terminal_candidate BEFORE UPDATE ON vce_host_jobs \
+             WHEN OLD.job_id = '{}' AND (((json_extract(NEW.snapshot_json, '$.state') = 'running') \
+             AND (json_extract(NEW.snapshot_json, '$.compaction.tables[0].latest_statistics.version') \
+             > json_extract(OLD.snapshot_json, '$.compaction.tables[0].latest_statistics.version'))) \
+             OR json_extract(NEW.snapshot_json, '$.state') IN ('succeeded', 'failed', 'cancelled', 'interrupted')) \
+             BEGIN SELECT RAISE(ABORT, 'injected compaction terminal candidate failure'); END;",
+            retained.job_id
+        );
+        retained_active
+            .store
+            .execute_test_storage_script(&trigger)
+            .await
+            .expect("install retained terminal candidate fault");
+        drop(budget);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if retained_active.persistence_error.lock().await.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("terminal persistence fault must become visible");
+        let candidate = retained_active
+            .pending_terminal_receipt
+            .lock()
+            .await
+            .clone()
+            .expect("exact failed terminal successor remains retained");
+        assert_eq!(candidate.state, VceJobState::Failed);
+        let candidate_table = candidate
+            .compaction
+            .as_ref()
+            .expect("candidate retains table state")
+            .tables
+            .first()
+            .expect("candidate retains selected table");
+        assert!(matches!(
+            candidate_table.state,
+            VceCompactionTableState::Succeeded | VceCompactionTableState::Failed
+        ));
+        assert!(
+            candidate_table.latest_statistics.version > candidate_table.plan.statistics.version
+        );
+        assert!(candidate_table.metrics.fragments_removed > 0);
+        retained_active
+            .store
+            .execute_test_storage_script("DROP TRIGGER reject_compaction_terminal_candidate;")
+            .await
+            .expect("remove retained terminal candidate fault");
+        let recovered_candidate = manager
+            .cancel_job("compaction-project", &retained.job_id)
+            .await
+            .expect("retry exact retained terminal candidate");
+        assert_eq!(recovered_candidate, candidate);
+        assert!(retained_state.active.lock().await.is_none());
+        drop(retained_active);
+        drop(retained_state);
+
+        drop(store);
+        drop(state);
+        drop(runtime);
+        manager
+            .shutdown()
+            .await
+            .expect("shutdown compaction fixture manager");
+        factory
+            .shutdown()
+            .await
+            .expect("close compaction fixture bindings");
+        client
+            .shutdown()
+            .await
+            .expect("stop isolated compaction controller");
+    }
+
+    /// Exercise host reattachment and controller state-loss handling through real temporary storage.
+    /// 通过真实临时存储验证宿主重新附着与控制器状态丢失处理。
+    ///
+    /// Takes no parameters and uses an isolated production-sized runtime stack.
+    /// 无参数，并使用隔离且与生产规模相当的运行时栈。
+    #[test]
+    #[ignore = "requires a vldb-controller 0.2.4 test executable"]
+    fn real_controller_compaction_recovers_without_duplicate_submission() {
+        let executor = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("build isolated compaction runtime"),
+        );
+        std::thread::Builder::new()
+            .name(String::from("vce-compaction-recovery"))
+            .stack_size(8 * 1024 * 1024)
+            .spawn({
+                let executor = Arc::clone(&executor);
+                move || executor.block_on(verify_real_compaction_host_recovery(executor.clone()))
+            })
+            .expect("spawn isolated compaction fixture thread")
+            .join()
+            .expect("isolated compaction fixture thread completed");
+    }
 
     /// Prove the real supervisor keeps execution polling while progress persistence waits on shared storage.
     /// 证明真实监管器在进度持久化等待共享存储时仍持续轮询执行任务。
@@ -2284,6 +5206,9 @@ mod tests {
         project_id: &str,
         job_id: &str,
     ) -> VceStoredJob {
+        // Retain the last observation so a timeout identifies the stalled phase and owner.
+        // 保留最后一次观察，使超时能够指出卡住的阶段与所有者。
+        let mut last_observation = None;
         tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 let receipt = manager
@@ -2294,6 +5219,7 @@ mod tests {
                 // Stable project ownership also covers cancellation before any model runtime exists.
                 // 稳定项目归属也覆盖任何模型运行时存在之前的取消。
                 let state = manager.project_job_state(project_id).await;
+                last_observation = Some((receipt.clone(), state.active.lock().await.is_some()));
                 if receipt.state.is_terminal()
                     && state.active.lock().await.is_none()
                     && state.execution.try_write().is_ok()
@@ -2304,7 +5230,7 @@ mod tests {
             }
         })
         .await
-        .expect("fixture job must settle before deadline")
+        .unwrap_or_else(|error| panic!("fixture job must settle before deadline: {error}; last observation: {last_observation:?}"))
     }
 
     /// Exercise durable admission, empty initialization, cancellation and shutdown against real storage.
@@ -2347,9 +5273,7 @@ mod tests {
                 std::net::TcpListener::bind("127.0.0.1:0").expect("reserve controller endpoint");
             let port = listener.local_addr().expect("read controller port").port();
             drop(listener);
-            let executable = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join("output/bin/vldb-controller.exe");
+            let executable = test_controller_executable();
             assert!(executable.is_file(), "bundled controller must exist");
             let endpoint = format!("http://127.0.0.1:{port}");
             let client = ControllerClient::new(
@@ -2571,6 +5495,14 @@ mod tests {
                 .await
                 .clone()
                 .expect("project retains queued owner");
+            // Terminal-persistence failure is reported only after execution ends in production.
+            // 生产环境只有执行结束后才会报告终态持久化失败。
+            // Stop the synthetic queued worker before injecting that diagnostic; otherwise it still owns the budget wait.
+            // 注入该诊断前停止模拟排队线程，否则它仍持有等待执行预算的任务。
+            let abandoned_worker = retained_runtime.job_state.worker_handle.lock().await.take().expect("queued worker handle");
+            abandoned_worker.abort();
+            assert!(abandoned_worker.await.expect_err("fixture worker aborted").is_cancelled());
+            active_job.control.finish();
             *active_job.persistence_error.lock().await =
                 Some(String::from("fixture receipt failure"));
             let observed_failed_receipt = manager
@@ -3432,7 +6364,11 @@ mod tests {
                 .expect("read closed chain")
                 .expect("closed receipt persists");
             assert!(!closed.followup_requested);
-            assert_eq!(closed.state, VceJobState::Failed);
+            // Cooperative rejection records failure; the bounded shutdown abort records interruption.
+            // 协作拒绝记录失败；有界关闭中止则记录中断。
+            // Both paths must be terminal and must not invent a successfully published batch.
+            // 两条路径都必须终结作业，且不能虚构成功发布的批次。
+            assert!(matches!(closed.state, VceJobState::Failed | VceJobState::Interrupted));
             assert!(
                 closed.completed_update.is_none(),
                 "revoked publication must not invent successful completion"
@@ -3486,6 +6422,10 @@ mod tests {
                 .register(&foreign)
                 .await
                 .expect("register foreign fixture job");
+            // A live cooperating host owns an OS writer lease, not merely a different receipt UUID.
+            // 活动协作宿主持有操作系统写入租约，而不只是不同的回执编号。
+            let foreign_lease = factory.try_acquire_project_writer("job-project").expect("foreign writer lock").expect("foreign writer lease");
+            assert_eq!(manager.get_job("job-project", Some(&foreign.job_id)).await.expect("read live foreign job"), Some(foreign.clone()));
             // This staged generation belongs to the explicit foreign fixture, never to project shutdown.
             // 此暂存代次属于明确的外部夹具，绝不属于项目关闭流程。
             recovery_runtime
@@ -3511,7 +6451,7 @@ mod tests {
                     )
                     .await
                     .expect_err("unconfirmed foreign ownership rejects new work")
-                    .contains("ownership must be confirmed")
+                    .contains("active host writer")
             );
             assert_eq!(
                 recovery_store
@@ -3532,7 +6472,7 @@ mod tests {
                     .cleanup_staging("job-project")
                     .await
                     .expect_err("maintenance cannot erase unconfirmed staging")
-                    .contains("writer recovery is required")
+                    .contains("active host writer")
             );
             manager
                 .disable_project("job-project")
@@ -3580,6 +6520,7 @@ mod tests {
                 .update(&foreign, &foreign_finished)
                 .await
                 .expect("foreign fixture owner releases its slot");
+            drop(foreign_lease);
             drop(recovery_store);
             drop(recovery_runtime);
             // Shutdown must wake a queued synchronization while the existing checkpoint remains stored.
@@ -4476,16 +7417,68 @@ mod tests {
                     target: candidate_config.clone(),
                 },
             )),
+            compaction: None,
             result_checkpoint_version: None,
             progress: None,
             followup_requested: false,
             completed_update: None,
             error: None,
         };
+        // An unpublished abandoned receipt becomes interrupted, without scheduling replacement work.
+        // 未发布的遗留回执变为中断，不安排替换工作。
+        let mut abandoned = queued.clone();
+        abandoned.job_id = Uuid::new_v4().to_string();
+        abandoned.idempotency_key = format!("request:{}", abandoned.job_id);
+        abandoned.kind = VceJobKind::Synchronize;
+        abandoned.replacement = None;
+        candidate_store
+            .register(&abandoned)
+            .await
+            .expect("register abandoned receipt");
+        let interrupted = manager
+            .get_job("job-project", Some(&abandoned.job_id))
+            .await
+            .expect("settle unpublished job")
+            .expect("interrupted receipt");
+        assert_eq!(interrupted.state, VceJobState::Interrupted);
+        assert!(interrupted.result_checkpoint_version.is_none());
+        assert_eq!(
+            manager
+                .get_job("job-project", Some(&abandoned.job_id))
+                .await
+                .expect("replay interruption"),
+            Some(interrupted)
+        );
         candidate_store
             .register(&queued)
             .await
             .expect("admit fixture physical replacement");
+        // Reading or cancelling an old terminal job cannot settle a different queued receipt.
+        // 读取或取消旧终态作业不能收敛另一个排队回执。
+        assert_eq!(
+            manager
+                .get_job("job-project", Some(&abandoned.job_id))
+                .await
+                .expect("historical terminal read")
+                .expect("old receipt")
+                .state,
+            VceJobState::Interrupted
+        );
+        assert_eq!(
+            manager
+                .cancel_job("job-project", &abandoned.job_id)
+                .await
+                .expect("historical terminal cancellation")
+                .state,
+            VceJobState::Interrupted
+        );
+        assert_eq!(
+            candidate_store
+                .get(&queued.job_id)
+                .await
+                .expect("new cold receipt unchanged"),
+            Some(queued.clone())
+        );
         // running is acknowledged before starting the owned candidate phase.
         // running 在开始有归属候选阶段之前得到确认。
         let mut running = queued.clone();
@@ -4577,29 +7570,59 @@ mod tests {
             .await
             .expect("publish candidate through host commit/read handoff");
         drop(writer);
-        // accounted/finished acknowledge the real published checkpoint before ordinary synchronization may be admitted.
-        // accounted/finished 在准入普通同步之前确认真实发布检查点。
-        let mut accounted = running.clone();
-        accounted.sequence += 1;
-        accounted.updated_at_unix_ms = job_time()
-            .expect("candidate completion clock")
-            .max(admitted_at);
-        accounted.completed_update = Some(VceCompletedJobUpdate {
-            checkpoint_version: published,
-            at_unix_ms: accounted.updated_at_unix_ms,
+        // Simulate a host ending after publication but before final job accounting.
+        // 模拟发布完成后、最终作业计账前宿主结束。
+        let mut committing = running.clone();
+        committing.sequence += 1;
+        committing.progress = Some(VceRefreshProgress {
+            phase: vulcan_context_engine::VceRefreshPhase::Committing,
+            operation_id: base.job_id.clone(),
+            unit: vulcan_context_engine::VceRefreshUnit::None,
+            completed: 0,
+            total: None,
+            overall_completed: 0,
+            overall_total: None,
+            current_path: None,
         });
         candidate_store
-            .update(&running, &accounted)
+            .update(&running, &committing)
             .await
-            .expect("account candidate publication");
-        let mut finished = accounted.clone();
-        finished.sequence += 1;
-        finished.state = VceJobState::Succeeded;
-        finished.result_checkpoint_version = Some(published);
-        candidate_store
-            .update(&accounted, &finished)
+            .expect("persist stuck publication phase");
+        // A cooperating writer prevents reconciliation even though the receipt looks stale.
+        // 即使回执看似过期，协作写入者仍会阻止收敛。
+        let lease = factory
+            .try_acquire_project_writer("job-project")
+            .expect("lock project")
+            .expect("writer available");
+        assert_eq!(
+            manager
+                .get_job("job-project", Some(&base.job_id))
+                .await
+                .expect("read live job"),
+            Some(committing)
+        );
+        drop(lease);
+        let finished = manager
+            .get_job("job-project", Some(&base.job_id))
             .await
-            .expect("finish explicit candidate fixture");
+            .expect("reconcile publication")
+            .expect("receipt exists");
+        assert_eq!(finished.state, VceJobState::Succeeded);
+        assert_eq!(finished.result_checkpoint_version, Some(published));
+        assert_eq!(
+            manager
+                .get_job("job-project", Some(&base.job_id))
+                .await
+                .expect("idempotent recovery"),
+            Some(finished.clone())
+        );
+        assert_eq!(
+            manager
+                .cancel_job("job-project", &base.job_id)
+                .await
+                .expect("terminal cancellation replay"),
+            finished
+        );
         drop(candidate_store);
         assert_eq!(
             factory
@@ -4723,6 +7746,75 @@ mod tests {
         );
     }
 
+    /// Abort a tracked worker that cannot release its execution lease within the shutdown grace period.
+    /// 验证无法在关闭宽限期内释放执行租约的已跟踪工作任务会被中止。
+    #[tokio::test]
+    async fn project_job_drain_aborts_tracked_worker_after_shutdown_timeout() {
+        let state = Arc::new(VceProjectJobState::default());
+        let execution = Arc::clone(&state.execution).read_owned().await;
+        let completion_state = Arc::clone(&state);
+        let worker = tokio::spawn(async move {
+            let _execution = execution;
+            std::future::pending::<()>().await;
+            completion_state.clear_worker_handle().await;
+        });
+        state.install_worker_handle(worker).await;
+
+        tokio::time::timeout(Duration::from_secs(5), state.cancel_and_drain())
+            .await
+            .expect("forced shutdown drain must be bounded")
+            .expect("tracked worker must be abortable");
+        assert!(
+            state.worker_handle.lock().await.is_none(),
+            "forced drain must not retain a detached worker handle"
+        );
+        assert!(
+            !state.stop_requested.load(Ordering::Acquire),
+            "forced drain must reset the stop fence after releasing execution"
+        );
+    }
+
+    /// Wait for a worker that already released execution but still owns terminal persistence.
+    /// 验证执行租约已释放但仍持有终态持久化的工作任务会被退出流程等待。
+    #[tokio::test]
+    async fn project_job_drain_waits_for_terminal_persistence_worker() {
+        let state = Arc::new(VceProjectJobState::default());
+        let worker_started = Arc::new(Notify::new());
+        let release_worker = Arc::new(Notify::new());
+        let worker_state = Arc::clone(&state);
+        let worker_started_signal = Arc::clone(&worker_started);
+        let release_worker_signal = Arc::clone(&release_worker);
+        let worker = tokio::spawn(async move {
+            // No execution lease is held here; the worker models the terminal receipt write itself.
+            // 这里不持有执行租约；工作任务本身模拟终态回执写入。
+            worker_started_signal.notify_one();
+            release_worker_signal.notified().await;
+            worker_state.clear_worker_handle().await;
+        });
+        state.install_worker_handle(worker).await;
+
+        let closing = Arc::clone(&state);
+        let drain = tokio::spawn(async move { closing.cancel_and_drain().await });
+        tokio::time::timeout(Duration::from_secs(1), worker_started.notified())
+            .await
+            .expect("terminal persistence worker must start");
+        tokio::task::yield_now().await;
+        assert!(
+            !drain.is_finished(),
+            "shutdown must wait for terminal persistence after execution drained"
+        );
+        release_worker.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), drain)
+            .await
+            .expect("terminal persistence drain must be bounded")
+            .expect("drain task must complete")
+            .expect("terminal persistence worker must drain cleanly");
+        assert!(
+            state.worker_handle.lock().await.is_none(),
+            "terminal persistence drain must not retain a worker handle"
+        );
+    }
+
     /// Check that initialization, synchronization, and contract changes cannot bypass exact guards.
     /// 检查初始化、同步与契约变化无法绕过精确保护。
     ///
@@ -4751,6 +7843,57 @@ mod tests {
         assert!(validate_job_admission(&command, 4, Some(1), Some(&fingerprint)).is_ok());
         command.expected_checkpoint_version = None;
         assert!(validate_job_admission(&command, 4, None, Some(&fingerprint)).is_err());
+    }
+
+    /// Verify physical compaction ignores policy-only revisions while retaining immutable guards.
+    /// 验证物理整理忽略纯策略修订，同时保留不可变保护。
+    ///
+    /// Takes no parameters; prepares one physical binding and checks revision, checkpoint, and fingerprint behavior.
+    /// 无参数；准备一个物理绑定并检查修订、检查点及指纹行为。
+    #[test]
+    fn physical_compaction_target_uses_immutable_binding_guards() {
+        // temporary supplies one canonical project root without touching user storage.
+        // temporary 提供一个规范项目根目录，且不触碰用户存储。
+        let temporary = tempfile::tempdir().expect("create compaction target fixture");
+        // settings represent the immutable binding's original project revision.
+        // settings 表示不可变绑定最初的项目修订。
+        let settings = ProjectVceSettings {
+            enabled: true,
+            revision: 1,
+            ..ProjectVceSettings::default()
+        };
+        // fingerprint is one canonical physical embedding identity.
+        // fingerprint 是一个规范物理向量身份。
+        let fingerprint = format!("sha256:{}", "a".repeat(64));
+        // config retains the original database write-guard revision.
+        // config 保留原始数据库写保护修订。
+        let config = runtime_configuration::prepare_runtime_configuration(
+            "compaction-target-project",
+            temporary.path(),
+            &settings,
+            3,
+            &fingerprint,
+            None,
+        )
+        .expect("prepare compaction target")
+        .index;
+        // command carries a later policy-only admission revision for the same physical target.
+        // command 携带同一物理目标后续的纯策略准入修订。
+        let mut command = VceJobAdmission {
+            retry_of_job_id: None,
+            kind: VceJobKind::Compact,
+            idempotency_key: String::from("compact-after-policy-change"),
+            expected_settings_revision: 2,
+            expected_checkpoint_version: Some(9),
+            contract_fingerprint: fingerprint,
+        };
+        assert_eq!(config.config_revision, 1);
+        assert!(validate_compaction_target(&command, &config, Some(9)).is_ok());
+        command.expected_checkpoint_version = Some(10);
+        assert!(validate_compaction_target(&command, &config, Some(9)).is_err());
+        command.expected_checkpoint_version = Some(9);
+        command.contract_fingerprint = format!("sha256:{}", "b".repeat(64));
+        assert!(validate_compaction_target(&command, &config, Some(9)).is_err());
     }
 
     /// Wait for a real completed core observation while the fixture deliberately holds host publication.

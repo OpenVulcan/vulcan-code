@@ -8,6 +8,7 @@ pub mod engine;
 pub mod identity;
 pub mod indexing;
 pub mod management;
+pub mod manifest;
 pub mod model;
 pub mod path_index;
 pub mod ports;
@@ -44,18 +45,24 @@ pub use engine::{
 };
 pub use identity::{
     PathError, blob_name, chunk_id, chunk_id_with_offset, content_hash, is_sha256_identity,
-    normalize_relative_path,
+    is_tagged_sha256_identity, normalize_relative_path,
 };
 pub use indexing::{
     IndexStatus, IndexingConfig, IndexingEngine, IngestResult, PendingIndex, ReadyIndex,
 };
 pub use management::{
-    VceBlobDetail, VceChannelState, VceChunkSummary, VceFileQuery, VceFileSummary,
-    VceIntegrityIssue, VceIntegrityIssueKind, VceMaintenanceAction, VceMaintenanceMode,
-    VceMaintenancePlan, VceManagementContractError, VceManagementQuery, VceManagementQueryRequest,
-    VceManagementQueryResponse, VceManagementQueryResult, VceOperationKind, VceOperationPhase,
-    VceOperationSummary, VcePage, VcePageRequest, validate_management_query,
-    validate_management_response,
+    VceBlobDetail, VceChannelState, VceChunkSummary, VceCompactionOptions, VceFileQuery,
+    VceFileSummary, VceIntegrityIssue, VceIntegrityIssueKind, VceMaintenanceAction,
+    VceMaintenanceMode, VceMaintenancePlan, VceManagementContractError, VceManagementQuery,
+    VceManagementQueryRequest, VceManagementQueryResponse, VceManagementQueryResult,
+    VceOperationKind, VceOperationPhase, VceOperationSummary, VcePage, VcePageRequest,
+    VcePhysicalFragmentSummary, VcePhysicalTablePlan, VcePhysicalTableRole,
+    VcePhysicalTableStatistics, validate_management_query, validate_management_response,
+};
+pub use manifest::{
+    VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION, VceCodeNodeSnapshot, VceEmbeddingBatchRecord,
+    VceEmbeddingBatchResult, VceEmbeddingBatchState, VceEmbeddingRunContract,
+    VceEmbeddingRunManifest, VceEmbeddingRunState, VceEmbeddingVectorResult,
 };
 pub use model::{
     Chunk, ChunkError, ChunkKind, FileRecord, FileSource, FileStatus, HitKind, SearchHit,

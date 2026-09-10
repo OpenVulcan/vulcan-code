@@ -10,7 +10,9 @@ use std::collections::BTreeSet;
 
 /// Identify the structural kind of an exact symbol occurrence.
 /// 标识精确符号出现位置的结构类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum SymbolKind {
     /// A command, route, or other externally visible endpoint.
     /// 命令、路由或其他对外可见入口。
@@ -25,7 +27,7 @@ pub enum SymbolKind {
 
 /// One exact symbol occurrence retained independently of a graph database.
 /// 独立于图数据库保存的一个精确符号出现位置。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SymbolOccurrence {
     /// Stable occurrence identity.
     /// 稳定的出现位置身份。

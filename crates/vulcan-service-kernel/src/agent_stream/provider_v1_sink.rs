@@ -468,6 +468,9 @@ pub(crate) struct ProviderV1StreamSink {
     /// Durable terminal receipt of the last physical API completed by this stream.
     /// 当前流最后一次已完成物理 API 的可靠终态回执。
     api_terminal_completion: Option<SessionMutationReceipt<ApiGroupCompletionReceipt>>,
+    /// Whether that durable terminal already contains the stream's failure fact.
+    /// 该可靠终态是否已经包含当前流的失败事实。
+    api_terminal_failure_persisted: bool,
     /// Durable logical-Turn completion produced by the final tool-free API of this stream.
     /// 当前流最终无工具 API 产生的可靠逻辑回合完成凭据。
     turn_completion: Option<SessionMutationReceipt<TurnCompletionTransition>>,
@@ -501,6 +504,9 @@ pub(crate) struct ProviderV1FinishedDurability {
     /// Exact ApiStats mutation proving that the final physical API is durable.
     /// 证明最终物理 API 已可靠落盘的精确 ApiStats 修改。
     pub(crate) api_terminal: Option<SessionMutationReceipt<ApiGroupCompletionReceipt>>,
+    /// Whether the durable API terminal already persisted a controlled failure.
+    /// 可靠 API 终态是否已经持久化一条受控失败。
+    pub(crate) api_terminal_failure_persisted: bool,
     /// Exact logical-Turn completion and successor selection, when this API closed the Turn.
     /// 当本次 API 闭合逻辑回合时产生的精确回合完成与后继选择。
     pub(super) turn_completion: Option<SessionMutationReceipt<TurnCompletionTransition>>,
@@ -1373,6 +1379,7 @@ impl ProviderV1StreamSink {
             project_resource_catalog_registry,
             active: None,
             api_terminal_completion: None,
+            api_terminal_failure_persisted: false,
             turn_completion: None,
             completed_assistant_text: None,
             completed_locked_baseline: None,
@@ -1384,6 +1391,9 @@ impl ProviderV1StreamSink {
     pub(crate) fn take_finished_durability(&mut self) -> ProviderV1FinishedDurability {
         ProviderV1FinishedDurability {
             api_terminal: self.api_terminal_completion.take(),
+            api_terminal_failure_persisted: std::mem::take(
+                &mut self.api_terminal_failure_persisted,
+            ),
             turn_completion: self.turn_completion.take(),
             completed_assistant_text: self.completed_assistant_text.take(),
             locked_baseline: self.completed_locked_baseline.take(),
@@ -1481,6 +1491,7 @@ impl ProviderV1StreamSink {
         // A newly prepared API supersedes the previous physical terminal as the stream's final API.
         // 新准备的 API 会取代上一物理终态，成为当前流的最终物理 API。
         self.api_terminal_completion = None;
+        self.api_terminal_failure_persisted = false;
         self.turn_completion = None;
         self.completed_assistant_text = None;
         self.completed_locked_baseline = None;
@@ -2129,6 +2140,9 @@ impl ProviderV1StreamSink {
         // completedLockedBaseline is the exact baseline admitted with this physical request.
         // completedLockedBaseline 是与当前物理请求一同准入的精确基线。
         let completed_locked_baseline = active.locked_baseline.clone();
+        // api_terminal_failure_persisted is derived only from the typed terminal fact that will be committed below.
+        // api_terminal_failure_persisted 仅从下方即将提交的强类型终态事实派生。
+        let api_terminal_failure_persisted = terminal.error.is_some();
         let completion = api_completion_from_terminal(terminal);
         let receipt = Arc::clone(&self.handle)
             .mutate_durable_async(
@@ -2139,6 +2153,7 @@ impl ProviderV1StreamSink {
             .await?;
         self.completed_assistant_text = completed_assistant_text;
         self.completed_locked_baseline = Some(completed_locked_baseline);
+        self.api_terminal_failure_persisted = api_terminal_failure_persisted;
         self.active = None;
         Ok(receipt)
     }
@@ -2198,8 +2213,9 @@ mod tests {
         SessionDocument, SubagentReturnBuildRequest,
     };
     use vulcan_session_core::v1::event::{
-        ApiEndReason, ApiPurposeKind, ApiRequestSnapshot, ApiTimings, ConversationEvent, EventBody,
-        ExternalResourceKind, ProviderProjectionProof,
+        ApiEndReason, ApiErrorCategory, ApiPurposeKind, ApiRequestSnapshot, ApiTimings,
+        ConversationEvent, EventBody, ExternalResourceKind, ProviderProjectionProof,
+        RedactedApiError,
     };
     use vulcan_session_core::v1::ids::{ClientActionId, Seq, SubagentTaskId};
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
@@ -3285,13 +3301,65 @@ mod tests {
             durability.api_terminal.is_some(),
             "the physical API terminal must remain available to finished handling"
         );
+        assert!(!durability.api_terminal_failure_persisted);
         let receipt = durability
             .turn_completion
             .expect("final assistant should produce one durable Turn receipt");
         assert_eq!(receipt.value.successor, TurnSuccessor::None);
         let consumed = sink.take_finished_durability();
         assert!(consumed.api_terminal.is_none());
+        assert!(!consumed.api_terminal_failure_persisted);
         assert!(consumed.turn_completion.is_none());
+    }
+
+    /// Verifies failed API completion transfers an explicit durable-failure marker exactly once.
+    /// 验证失败 API 完成会精确转移一次明确的可靠失败标记。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[tokio::test]
+    async fn failed_api_terminal_transfers_durable_failure_marker_once() {
+        // handle owns the isolated durable session used by the failed terminal.
+        // handle 持有失败终态使用的隔离可靠会话。
+        let handle = published_open_turn();
+        // sink owns the exact physical request and its once-only finished facts.
+        // sink 持有精确物理请求及其仅可转移一次的结束事实。
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&handle, &mut sink);
+        // terminal is a contract-valid failed fact with no replay source or continuation permission.
+        // terminal 是一份契约合法的失败事实，不携带重放来源或继续权限。
+        let mut terminal = terminal_facts(0);
+        terminal.status = ApiCallStatus::Failed;
+        terminal.end_reason = Some(ApiEndReason::Unknown);
+        terminal.error = Some(RedactedApiError {
+            category: ApiErrorCategory::Unknown,
+            error_code: Some(String::from("test_failure")),
+            message: String::from("controlled failure"),
+        });
+        terminal.provider_source = None;
+
+        assert_eq!(
+            sink.accept_terminal(terminal)
+                .await
+                .expect("failed terminal boundary"),
+            ProviderV1TerminalOutcome::Completed
+        );
+        let durability = sink.take_finished_durability();
+        assert!(durability.api_terminal.is_some());
+        assert!(durability.api_terminal_failure_persisted);
+        let consumed = sink.take_finished_durability();
+        assert!(consumed.api_terminal.is_none());
+        assert!(!consumed.api_terminal_failure_persisted);
     }
 
     /// Verifies a child return committed during the parent API is transferred to stream-finished dispatch instead of closing the Turn.
@@ -4232,6 +4300,142 @@ mod tests {
         let error = persistent_change_set_from_tool_result(&result)
             .expect_err("declared malformed change-set must fail");
         assert!(matches!(error, ProviderV1SinkError::ChangeSet(_)));
+    }
+
+    /// Verifies a lifecycle ChangeSet rejection preserves the running tool for terminal fallback.
+    /// 验证生命周期 ChangeSet 被拒绝时会保留运行中工具，交由终态兜底结算。
+    #[tokio::test]
+    async fn lifecycle_changeset_rejection_preserves_running_tool_and_exact_error() {
+        // handle owns the durable V1 event graph inspected after the boundary rejects.
+        // handle 持有边界拒绝后检查的可靠 V1 事件图。
+        let handle = published_open_turn();
+        // sink is the unique in-stream owner of the active API and tool lifecycle.
+        // sink 是活动 API 与工具生命周期的唯一流内 owner。
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&handle, &mut sink);
+        sink.accept_terminal(terminal_facts(2))
+            .await
+            .expect("terminal should wait for both tools");
+        // request binds the exact Provider tool identity used at every durable boundary.
+        // request 绑定每个可靠边界使用的精确 Provider 工具身份。
+        let request = recovery_request("tool-1", "file_edit", json!({"path": "bad.txt"}));
+        // sibling_request models a concurrently started tool whose real success must be retained.
+        // sibling_request 模拟并发启动且必须保留真实成功结果的兄弟工具。
+        let sibling_request = recovery_request(
+            "tool-2",
+            "shell_command",
+            json!({"command": "echo settled"}),
+        );
+        sink.apply_tool_boundary(
+            &ToolExecutionRecoveryBoundary::BatchPrepared(vec![
+                request.clone(),
+                sibling_request.clone(),
+            ]),
+            9,
+        )
+        .await
+        .expect("tool batch should prepare");
+        sink.apply_tool_boundary(
+            &ToolExecutionRecoveryBoundary::Started {
+                request: request.request.clone(),
+                binding_fingerprint: request.binding_fingerprint.clone(),
+            },
+            10,
+        )
+        .await
+        .expect("invalid tool should start");
+        sink.apply_tool_boundary(
+            &ToolExecutionRecoveryBoundary::Started {
+                request: sibling_request.request.clone(),
+                binding_fingerprint: sibling_request.binding_fingerprint.clone(),
+            },
+            10,
+        )
+        .await
+        .expect("sibling tool should start");
+        // invalid_result reproduces the original create-plus-hunks contract violation exactly.
+        // invalid_result 精确复现原始 create 与 hunks 并存的契约违规。
+        let invalid_result = ToolInvocationResult {
+            tool_call_id: String::from("tool-1"),
+            tool_name: String::from("file_edit"),
+            model_output: String::from("written"),
+            host_result: Some(json!({
+                "kind": "change_set",
+                "payload": {
+                    "mode": "applied",
+                    "files": [{
+                        "resource_id": "resource-1",
+                        "change": "create",
+                        "path": "bad.txt",
+                        "content_mode": "full",
+                        "content": "created",
+                        "total_line_count": 1,
+                        "hunks": [{
+                            "before": "",
+                            "delete": [],
+                            "insert": [{"line": 1, "content": "created"}],
+                            "after": ""
+                        }]
+                    }]
+                }
+            })),
+            is_error: false,
+        };
+        // error proves the canonical validator, rather than a downstream generic failure, rejected it.
+        // error 证明拒绝来自规范校验器，而不是下游通用失败。
+        let error = sink
+            .apply_tool_boundary(&ToolExecutionRecoveryBoundary::Finished(invalid_result), 11)
+            .await
+            .expect_err("create plus hunks must fail the ToolFinished boundary");
+        assert!(matches!(&error, ProviderV1SinkError::ChangeSet(_)));
+        assert_eq!(
+            error.to_string(),
+            "The V1 tool ChangeSet is invalid: Invalid change-set field at `payload.files[0].hunks`: lifecycle changes must not contain modify hunks"
+        );
+        // sibling_result is a valid terminal fact emitted after the first boundary already failed.
+        // sibling_result 是首个边界已经失败后发出的合法兄弟终态事实。
+        let sibling_result = ToolInvocationResult {
+            tool_call_id: String::from("tool-2"),
+            tool_name: String::from("shell_command"),
+            model_output: String::from("settled"),
+            host_result: None,
+            is_error: false,
+        };
+        sink.apply_tool_boundary(&ToolExecutionRecoveryBoundary::Finished(sibling_result), 12)
+            .await
+            .expect("valid sibling terminal must remain persistable after the first failure");
+        handle
+            .read(|document| {
+                assert!(document.active_api().is_some());
+                assert!(document.events().iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        EventBody::ToolCall(tool)
+                            if tool.provider_tool_call_id.as_deref() == Some("tool-1")
+                                && tool.status == ToolCallStatus::Running
+                                && tool.finished_at_ms.is_none()
+                    )
+                }));
+                assert!(document.events().iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        EventBody::ToolCall(tool)
+                            if tool.provider_tool_call_id.as_deref() == Some("tool-2")
+                                && tool.status == ToolCallStatus::Completed
+                                && tool.finished_at_ms == Some(12)
+                    )
+                }));
+                assert!(
+                    document
+                        .events()
+                        .iter()
+                        .all(|event| !matches!(&event.event, EventBody::ApiStats(_)))
+                );
+            })
+            .expect("rejected boundary must leave the durable running state readable");
     }
 
     /// Verifies an unrelated host result is not interpreted as a ChangeSet.

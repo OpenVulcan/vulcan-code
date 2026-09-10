@@ -5267,6 +5267,8 @@ fn aggregate_restricted_llm_event(
         AiStreamEvent::TransportObserved { .. }
         | AiStreamEvent::ResponseStarted { .. }
         | AiStreamEvent::ResponseMetadataUpdated { .. }
+        | AiStreamEvent::ResponseMessagePhaseUpdated { .. }
+        | AiStreamEvent::ResponseTurnBoundary { .. }
         | AiStreamEvent::ReasoningStarted { .. }
         | AiStreamEvent::ProviderContextItemCaptured { .. }
         | AiStreamEvent::ResponseItemCompleted { .. } => {}
@@ -6559,6 +6561,7 @@ mod tests {
             name: String::from("lookup"),
             description: String::from("Looks up one value."),
             input_schema: serde_json::json!({"type": "object"}),
+            input_format: Default::default(),
             strict: true,
         });
 

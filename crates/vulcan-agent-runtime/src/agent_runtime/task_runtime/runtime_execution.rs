@@ -223,7 +223,9 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     // Wait until the parent workbench projection sees the subagent-start event before the child run advances.
     // 等待父级工作台投影看到子代理启动事件后，再推进子任务执行。
     let has_projection_barrier = projection_barrier.is_some();
-    wait_runtime_event_projection_barrier(projection_barrier).await?;
+    wait_runtime_event_projection_barrier(projection_barrier)
+        .await
+        .map_err(|error| error.to_string())?;
     if !has_projection_barrier {
         tokio::task::yield_now().await;
     }

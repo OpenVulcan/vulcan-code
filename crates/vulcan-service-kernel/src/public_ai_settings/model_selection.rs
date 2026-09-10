@@ -185,6 +185,12 @@ pub(crate) async fn service_select_public_ai_model(
             request.connection_id, request.provider_id
         ));
     }
+    if !current_configuration.connection_is_enabled(request.connection_id.as_str()) {
+        return Err(format!(
+            "Connection `{}` is disabled and cannot be selected.",
+            request.connection_id
+        ));
+    }
     if current_configuration.connection_is_pending_validation(request.connection_id.as_str()) {
         return Err(format!(
             "Connection `{}` is pending explicit model validation and cannot be selected for a conversation.",
@@ -416,6 +422,7 @@ fn model_selection_is_available(
         return Ok(false);
     };
     if connection.provider_id != selection.provider_id
+        || !configuration.connection_is_enabled(selection.connection_id.as_str())
         || configuration.connection_is_pending_validation(selection.connection_id.as_str())
         || !configuration.connection_model_is_enabled(
             selection.connection_id.as_str(),
@@ -538,7 +545,8 @@ fn preferred_available_connection_for_model(
     // eligibleCatalogs 排除不能参与常规会话路由的凭据。
     let mut eligible_catalogs = catalogs.clone();
     eligible_catalogs.retain(|connection_id, _| {
-        !configuration.connection_is_pending_validation(connection_id.as_str())
+        configuration.connection_is_enabled(connection_id.as_str())
+            && !configuration.connection_is_pending_validation(connection_id.as_str())
     });
     let eligible_catalogs =
         vulcan_provider_adapters::RuntimeConnectionCatalogs::from_snapshot(eligible_catalogs);
@@ -672,7 +680,9 @@ pub(super) fn first_enabled_model_selection(
 ) -> Result<Option<ActiveAiModelSelection>, String> {
     let mut candidates = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
-        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+        if !configuration.connection_is_enabled(connection.id.as_str())
+            || configuration.connection_is_pending_validation(connection.id.as_str())
+        {
             continue;
         }
         let Some(catalog) = catalogs.get(connection.id.as_str()) else {
@@ -734,7 +744,8 @@ pub(super) fn preferred_replacement_model_selection(
         .values()
         .filter(|connection| connection.provider_id == provider_id)
     {
-        if configuration.connection_is_pending_validation(connection.id.as_str())
+        if !configuration.connection_is_enabled(connection.id.as_str())
+            || configuration.connection_is_pending_validation(connection.id.as_str())
             || !runtime.model_is_enabled_for_connection(
                 configuration,
                 connection.id.as_str(),
@@ -786,7 +797,7 @@ pub(super) fn reconcile_disabled_connection_sessions(
     connection_id: &str,
     model_id: Option<&str>,
 ) -> BTreeSet<crate::SessionId> {
-    reconcile_explicitly_revoked_session_model_selections(
+    let mut changed_session_ids = reconcile_explicitly_revoked_session_model_selections(
         workspace,
         |_session_id, runtime_state| {
             let exact_connection =
@@ -795,7 +806,33 @@ pub(super) fn reconcile_disabled_connection_sessions(
                 .is_none_or(|model_id| runtime_state.active_model_id.as_deref() == Some(model_id));
             exact_connection && exact_model
         },
-    )
+    );
+    // revokePending removes future authority for the disabled connection even when the current
+    // session route belongs to another account and therefore keeps its live lease.
+    // revokePending 即使当前会话路由属于另一个账号并保留其活动租约，也会移除已停用连接的未来权限。
+    let mut revoke_pending = |states: &mut BTreeMap<
+        crate::SessionId,
+        vulcan_workbench_model::SessionRuntimeStateEntry,
+    >| {
+        for (session_id, runtime_state) in states.iter_mut() {
+            let pending_matches =
+                runtime_state
+                    .pending_model_selection
+                    .as_ref()
+                    .is_some_and(|selection| {
+                        selection.connection_id == connection_id
+                            && model_id
+                                .is_none_or(|model_id| selection.model_id.as_str() == model_id)
+                    });
+            if pending_matches {
+                runtime_state.pending_model_selection = None;
+                changed_session_ids.insert(*session_id);
+            }
+        }
+    };
+    revoke_pending(&mut workspace.session_runtime_state);
+    revoke_pending(&mut workspace.archived_session_runtime_state);
+    changed_session_ids
 }
 
 /// Revokes process-local route leases without rewriting exact session-owned route facts.

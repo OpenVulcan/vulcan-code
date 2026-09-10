@@ -326,7 +326,14 @@ impl VulcanCoreController {
 
             let assistant_message_id = self.append_assistant_turn(&response);
             self.refresh_continuation(&response, assistant_message_id.as_str());
-            if response.tool_calls.is_empty() {
+            let explicit_end_turn = match response.explicit_end_turn() {
+                Ok(value) => value,
+                Err(error) => {
+                    self.mark_failed(error.to_string());
+                    return Err(error);
+                }
+            };
+            if response.tool_calls.is_empty() && explicit_end_turn != Some(false) {
                 self.phase = ControllerPhase::Completed;
                 self.push_final_event(
                     provider_turns_executed,
@@ -612,7 +619,14 @@ impl VulcanCoreController {
             // checkpoint_before_tools 在任何工具可能阻塞下一回合前发布已完成 Provider 调用的用量。
             on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
 
-            if response.tool_calls.is_empty() {
+            let explicit_end_turn = match response.explicit_end_turn() {
+                Ok(value) => value,
+                Err(error) => {
+                    self.mark_failed(error.to_string());
+                    return Err(error);
+                }
+            };
+            if response.tool_calls.is_empty() && explicit_end_turn != Some(false) {
                 self.phase = ControllerPhase::Completed;
                 self.push_final_event(
                     provider_turns_executed,
@@ -624,6 +638,35 @@ impl VulcanCoreController {
                     tool_calls_processed,
                     final_assistant_message_id: Some(assistant_message_id),
                 });
+            }
+
+            if response.tool_calls.is_empty() {
+                // endTurnFalseIntervention gives queued input and route-policy owners the same
+                // safe sampling boundary used after a completed tool batch.
+                // endTurnFalseIntervention 让排队输入与路由策略所有者复用工具批次完成后的安全采样边界。
+                let mut intervention_draft = self.clone();
+                let intervention_changed =
+                    match on_before_next_provider_turn(&mut intervention_draft) {
+                        Ok(changed) => changed,
+                        Err(error) => {
+                            if !matches!(
+                                &error,
+                                CoreError::ProviderRouteSwitchRequired { .. }
+                                    | CoreError::ContextCompactionPolicyRefreshRequired { .. }
+                            ) {
+                                self.mark_failed(error.to_string());
+                            }
+                            return Err(error);
+                        }
+                    };
+                if intervention_changed {
+                    *self = intervention_draft;
+                    on_safe_checkpoint(
+                        &self.snapshot,
+                        self.last_successful_provider_usage.as_ref(),
+                    );
+                }
+                continue;
             }
 
             let requests = response

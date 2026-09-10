@@ -50,6 +50,7 @@ import {
   loadPublicAiSettings,
   queryPublicAiConnectionUsage,
   removePublicAiConnection,
+  savePublicAiConnectionEnabled,
   savePublicAiDefaultConnection,
   startPublicAiOAuth,
   syncPublicAiConnection,
@@ -60,6 +61,7 @@ import type {
   PublicAiAccountUsage,
   PublicAiConnection,
   PublicAiCredentialProfile,
+  PublicAiModelDirectoryKind,
   PublicAiOAuthTransaction,
   PublicAiProviderDescriptor,
   PublicAiServiceEntry,
@@ -256,9 +258,14 @@ export function CredentialManagementArea() {
               const entry = entryForConnection(provider, connection)
               const credentialProfile = credentialProfileForConnection(entry, connection)
               const usage = usageByConnection[connection.id] ?? snapshot.usageCache[connection.id]
+              // modelDirectoryKind is the backend-resolved source policy for this exact credential.
+              // modelDirectoryKind 是后端为此精确凭据解析的来源策略。
+              const modelDirectoryKind = snapshot.connectionModelAccessPolicyRecords
+                .find((record) => record.connectionId === connection.id)
+                ?.directoryKind
               // Provider-tool entries do not own a model catalog, so historical model-sync errors are irrelevant.
               // 供应商工具入口不拥有模型目录，因此历史模型同步错误与其无关。
-              const catalogError = entry?.kind === "provider_tools"
+              const catalogError = !connection.enabled || entry?.kind === "provider_tools"
                 ? undefined
                 : snapshot.catalogErrors[connection.id]
               const isDefault = snapshot.providerDefaults[connection.provider_id] === connection.id
@@ -271,8 +278,13 @@ export function CredentialManagementArea() {
                   entry={entry}
                   isDefault={isDefault}
                   key={connection.id}
+                  modelDirectoryKind={modelDirectoryKind}
                   onDelete={() => setDeletingConnection(connection)}
                   onEdit={() => setEditingConnection(connection)}
+                  onEnabledChange={(enabled) => void runConnectionAction(
+                    connection.id,
+                    () => savePublicAiConnectionEnabled({ connectionId: connection.id, enabled }),
+                  )}
                   onManageModels={() => setModelAccessConnection(connection)}
                   onRefreshUsage={() => void refreshUsage(connection.id)}
                   onSetDefault={() => void runConnectionAction(
@@ -394,12 +406,18 @@ interface CredentialAccountCardProps {
   // isDefault identifies the provider's default account.
   // isDefault 标识供应商默认账号。
   isDefault: boolean
+  // modelDirectoryKind is the backend-resolved fixed, dynamic, manual, or unavailable catalog policy.
+  // modelDirectoryKind 是后端解析的固定、动态、手工或不可用目录策略。
+  modelDirectoryKind?: PublicAiModelDirectoryKind
   // onDelete opens the destructive confirmation.
   // onDelete 打开破坏性确认。
   onDelete: () => void
   // onEdit opens exact credential editing.
   // onEdit 打开精确凭据编辑。
   onEdit: () => void
+  // onEnabledChange persists whether this credential participates in runtime work.
+  // onEnabledChange 持久化此凭据是否参与运行时工作。
+  onEnabledChange: (enabled: boolean) => void
   // onRefreshUsage queries current account usage.
   // onRefreshUsage 查询当前账号用量。
   onRefreshUsage: () => void
@@ -467,11 +485,24 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
                   {t("settings.customModels.pendingValidation")}
                 </Badge>
               ) : null}
+              {!props.connection.enabled ? (
+                <Badge className="h-4 px-1.5 text-[10px]" variant="secondary">
+                  {t("settings.credentials.disabledStatus")}
+                </Badge>
+              ) : null}
             </CardDescription>
           </div>
+          <Switch
+            aria-label={props.connection.enabled
+              ? t("settings.credentials.disable")
+              : t("settings.credentials.enable")}
+            checked={props.connection.enabled}
+            disabled={props.busy}
+            onCheckedChange={props.onEnabledChange}
+          />
           {usageSupported ? (
             <CredentialIconAction
-              disabled={props.busy}
+              disabled={props.busy || !props.connection.enabled}
               label={t("settings.credentials.refreshUsage")}
               onClick={props.onRefreshUsage}
             >
@@ -497,16 +528,16 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       <CardFooter className="mt-auto shrink-0 flex-wrap justify-end gap-2 px-3 py-1.5">
         {props.entry?.kind !== "provider_tools" ? (
           <CredentialIconAction
-            disabled={props.busy || props.connection.pending_validation}
+            disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
             label={t("settings.credentialModels.manage")}
             onClick={props.onManageModels}
           >
             <ListChecks className="size-4" />
           </CredentialIconAction>
         ) : null}
-        {props.entry?.kind !== "provider_tools" ? (
+        {credentialSupportsModelSynchronization(props.modelDirectoryKind) ? (
           <CredentialIconAction
-            disabled={props.busy || props.connection.pending_validation}
+            disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
             label={t("settings.credentials.syncModels")}
             onClick={props.onSync}
           >
@@ -514,7 +545,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
           </CredentialIconAction>
         ) : null}
         <CredentialIconAction
-          disabled={props.busy || props.connection.pending_validation || props.isDefault}
+          disabled={props.busy || !props.connection.enabled || props.connection.pending_validation || props.isDefault}
           label={props.connection.pending_validation
             ? t("settings.customModels.pendingCannotDefault")
             : props.isDefault
@@ -541,6 +572,14 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       </CardFooter>
     </Card>
   )
+}
+
+// credentialSupportsModelSynchronization identifies directories whose model membership can change remotely.
+// credentialSupportsModelSynchronization 标识模型成员可由远端变化的目录。
+export function credentialSupportsModelSynchronization(
+  directoryKind: PublicAiModelDirectoryKind | undefined,
+): boolean {
+  return directoryKind === "dynamic"
 }
 
 // CredentialIconActionProps defines one compact card action whose text is delegated to a tooltip.

@@ -8,6 +8,7 @@ use super::failure::{
 };
 use super::framing::IncrementalFrameParser;
 use super::projection_profiles::project_response_record_text;
+use super::request_encoding::request_with_codex_tool_input_contract;
 use super::request_encoding::request_without_nonpersistent_responses_continuation;
 use super::request_headers::execution_headers;
 use super::response_body::read_bounded_response_text_with_capture;
@@ -66,6 +67,9 @@ impl ProviderExecutionClient {
                 &transport_started_at,
             );
             let request = request_without_nonpersistent_responses_continuation(&route, &request);
+            // request freezes the same model-owned tool input contract for encoding and decoding.
+            // request 为编码与解码冻结同一份模型自有工具输入契约。
+            let request = request_with_codex_tool_input_contract(&route, &request);
             let encoded = client
                 .encode_request_with_credential(&route, &request, &secret)
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;

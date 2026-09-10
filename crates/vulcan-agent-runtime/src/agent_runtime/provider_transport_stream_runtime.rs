@@ -832,7 +832,8 @@ fn structured_provider_failure(
         | CoreError::ContextCompactionRequired { .. }
         | CoreError::ContextCompactionPolicyRefreshRequired { .. }
         | CoreError::ProviderRouteSwitchRequired { .. }
-        | CoreError::ToolFailure { .. } => None,
+        | CoreError::ToolFailure { .. }
+        | CoreError::ToolDurabilityFailure { .. } => None,
     }
 }
 

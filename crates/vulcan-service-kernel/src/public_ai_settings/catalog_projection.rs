@@ -4,8 +4,8 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 use vulcan_provider_adapters::{
-    ConnectionModelAccessPolicy, ConnectionModelCatalog, CredentialConnection, ModelDiscoveryKind,
-    PersistedAiConfiguration, ProviderRegistry,
+    CodexModelBehavior, ConnectionModelAccessPolicy, ConnectionModelCatalog, CredentialConnection,
+    ModelDiscoveryKind, PersistedAiConfiguration, ProviderRegistry, ServiceEntry,
 };
 
 /// Identifies how one credential account obtains its model membership.
@@ -78,6 +78,14 @@ pub(crate) struct PublicAiModelRouteRecord {
     /// Manifest 规则生成绑定时的稳定规则标识。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) binding_rule_id: Option<String>,
+    /// Exact closed Codex behavior frozen by the matched model rule.
+    /// 由匹配模型规则冻结的精确封闭 Codex 行为。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) codex_behavior: Option<CodexModelBehavior>,
+    /// Stable runtime primitive required before this route can execute.
+    /// 当前路由可执行前所需的稳定运行时原语。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) required_runtime_primitive: Option<String>,
     /// Activated provider-manifest revision that owns the binding.
     /// 持有绑定的已激活供应商 Manifest 修订。
     pub(super) manifest_revision: u64,
@@ -118,6 +126,24 @@ fn connection_model_directory_kind(
     else {
         return PublicAiModelDirectoryKind::Unavailable;
     };
+    service_entry_model_directory_kind(entry)
+}
+
+/// Resolves the closed aggregate model-directory kind for one exact service entry.
+/// 解析一个精确服务入口的封闭聚合模型目录类型。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the Manifest-compiled service entry whose verified routes own discovery semantics.
+/// `entry` 是由已验证路由持有发现语义的 Manifest 编译服务入口。
+///
+/// # Returns
+/// 返回值
+/// Dynamic when any verified route can refresh remotely; otherwise fixed, manual, or unavailable.
+/// 任一已验证路由可远端刷新时返回动态，否则返回固定、手工或不可用。
+pub(super) fn service_entry_model_directory_kind(
+    entry: &ServiceEntry,
+) -> PublicAiModelDirectoryKind {
     // hasDynamic, hasFixed, and hasManual summarize route-owned discovery contracts.
     // hasDynamic、hasFixed 与 hasManual 汇总路由持有的发现契约。
     let mut has_dynamic = false;
@@ -381,35 +407,50 @@ pub(super) fn build_public_ai_model_route_records(
                         .copied()
                 })
                 .unwrap_or_default();
+            // requiredRuntimePrimitive is derived only from the exact frozen behavior.
+            // requiredRuntimePrimitive 只从精确冻结行为派生。
+            let required_runtime_primitive = binding
+                .and_then(|binding| binding.codex_behavior.as_ref())
+                .and_then(CodexModelBehavior::missing_runtime_primitive)
+                .map(str::to_string);
             // unavailableReason is computed from the same captured provider/catalog generation.
             // unavailableReason 从同一捕获供应商/目录代际计算。
-            let unavailable_reason = match protocol_id.as_deref() {
-                Some(bound_protocol)
-                    if binding.is_some()
-                        && !model.protocol_variants.contains_key(bound_protocol) =>
-                {
-                    Some(format!(
-                        "Model '{}' has no capability variant for its bound protocol '{}'; execution is blocked.",
-                        model.id, bound_protocol
-                    ))
+            let unavailable_reason = if let Some(required_primitive) =
+                required_runtime_primitive.as_deref()
+            {
+                Some(format!(
+                    "Model '{}' requires runtime primitive '{}', which is not registered by this build.",
+                    model.id, required_primitive
+                ))
+            } else {
+                match protocol_id.as_deref() {
+                    Some(bound_protocol)
+                        if binding.is_some()
+                            && !model.protocol_variants.contains_key(bound_protocol) =>
+                    {
+                        Some(format!(
+                            "Model '{}' has no capability variant for its bound protocol '{}'; execution is blocked.",
+                            model.id, bound_protocol
+                        ))
+                    }
+                    Some(_) => None,
+                    None if configuration
+                        .custom_providers
+                        .contains_key(connection.provider_id.as_str()) =>
+                    {
+                        Some(custom_model_route_unavailable_reason(
+                            configuration,
+                            providers,
+                            connection,
+                            model,
+                            manifest_revision,
+                        ))
+                    }
+                    None => Some(format!(
+                        "Model '{}' has no protocol binding frozen in the activated provider generation.",
+                        model.id
+                    )),
                 }
-                Some(_) => None,
-                None if configuration
-                    .custom_providers
-                    .contains_key(connection.provider_id.as_str()) =>
-                {
-                    Some(custom_model_route_unavailable_reason(
-                        configuration,
-                        providers,
-                        connection,
-                        model,
-                        manifest_revision,
-                    ))
-                }
-                None => Some(format!(
-                    "Model '{}' has no protocol binding frozen in the activated provider generation.",
-                    model.id
-                )),
             };
             let executable = protocol_id.is_some() && unavailable_reason.is_none();
             records.push(PublicAiModelRouteRecord {
@@ -423,6 +464,8 @@ pub(super) fn build_public_ai_model_route_records(
                 binding_rule_id: binding
                     .map(|binding| binding.rule_id.clone())
                     .filter(|rule_id| !rule_id.is_empty()),
+                codex_behavior: binding.and_then(|binding| binding.codex_behavior.clone()),
+                required_runtime_primitive,
                 manifest_revision,
                 executable,
                 unavailable_reason,

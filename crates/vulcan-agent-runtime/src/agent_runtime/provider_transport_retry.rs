@@ -335,6 +335,7 @@ pub(crate) fn provider_delta_makes_retry_unsafe(delta: &ProviderStreamDelta) -> 
             | ProviderStreamDelta::ToolRequestFragment(_)
             | ProviderStreamDelta::RuntimeEvent(_)
             | ProviderStreamDelta::UsageUpdated(_)
+            | ProviderStreamDelta::ResponseIdentityObserved(_)
             | ProviderStreamDelta::FinalConversationState(_, _)
     )
 }
@@ -382,6 +383,12 @@ fn classify_structured_retry_reason(
     error: &AiExecutionError,
     retry_429: bool,
 ) -> Option<ProviderRetryClassification> {
+    // A provider-owned reconciliation state forbids transparent replay even if a future generic
+    // classifier learns to recognize its HTTP status or surrounding error type.
+    // 供应商自有待对账状态禁止透明重放，即使未来通用分类器识别了其 HTTP 状态或外围错误类型。
+    if error.confirmation_state().is_some() {
+        return None;
+    }
     // An observed 4xx response is an authoritative request/application rejection. It remains
     // terminal even when an adapter supplied an overly broad retryable category or overload
     // marker (original plan §13.5).
@@ -622,6 +629,7 @@ fn classify_legacy_retry_reason(
             | VulcanCoreError::ContextCompactionPolicyRefreshRequired { .. }
             | VulcanCoreError::ProviderRouteSwitchRequired { .. }
             | VulcanCoreError::ToolFailure { .. }
+            | VulcanCoreError::ToolDurabilityFailure { .. }
     ) {
         return None;
     }
@@ -751,7 +759,7 @@ mod tests {
     //! 面向 Provider 传输失败分类的定向重试策略测试。
 
     use super::{
-        ProviderRetryPolicy, TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY,
+        ProviderRetryPolicy, TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY, classify_retry_reason,
         provider_delta_makes_retry_unsafe,
     };
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
@@ -1368,6 +1376,20 @@ mod tests {
                 .next_retry(&provider_error("HTTP 503 Service Unavailable"), 0, true)
                 .is_none()
         );
+    }
+
+    /// Verifies a failed mandatory tool durability boundary is never replayed transparently.
+    /// 验证失败的强制工具持久化边界绝不会被透明重放。
+    #[test]
+    fn tool_durability_failure_is_terminal() {
+        // error is the exact Core category emitted after a tool side effect cannot be confirmed durably.
+        // error 是工具副作用无法被可靠确认后发出的精确 Core 分类。
+        let error = VulcanCoreError::ToolDurabilityFailure {
+            tool_name: String::from("file"),
+            message: String::from("canonical ChangeSet rejection"),
+        };
+        assert!(policy().next_retry(&error, 0, false).is_none());
+        assert!(classify_retry_reason(&error, true).is_none());
     }
 
     /// Verifies visible assistant output marks the attempt as unsafe to replay.

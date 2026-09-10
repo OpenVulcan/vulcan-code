@@ -59,6 +59,11 @@ impl PublicAiRuntime {
         configuration: &PersistedAiConfiguration,
         connection_id: &str,
     ) -> Result<AccountUsageSnapshot, String> {
+        if !configuration.connection_is_enabled(connection_id) {
+            return Err(format!(
+                "Connection `{connection_id}` is disabled and cannot query account usage."
+            ));
+        }
         let _refresh_guard = self.catalog_refresh_flight.lock().await;
         let (_provider, entry, connection) =
             self.resolve_connection_metadata(configuration, connection_id)?;
@@ -242,7 +247,10 @@ impl PublicAiRuntime {
         configuration: &PersistedAiConfiguration,
     ) -> Result<(), String> {
         for connection in configuration.connection_graph.connections.values() {
-            if configuration.custom_provider_manifest_is_isolated(connection.provider_id.as_str()) {
+            if !configuration.connection_is_enabled(connection.id.as_str())
+                || configuration
+                    .custom_provider_manifest_is_isolated(connection.provider_id.as_str())
+            {
                 continue;
             }
             let (_, entry, _) =

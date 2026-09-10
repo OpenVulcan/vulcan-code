@@ -3093,7 +3093,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tokio",
- "vldb-controller-client",
+ "vldb-controller-client 0.2.3",
  "windows-sys 0.61.2",
  "zip 2.4.2",
 ]
@@ -5233,6 +5233,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6617,6 +6623,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
@@ -6653,6 +6660,20 @@ name = "vldb-controller-client"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb18823ea72ebce89658ed9f93ef07accf5674535c0b77b49b74cb6dea97023d"
+dependencies = [
+ "prost",
+ "protoc-bin-vendored",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "vldb-controller-client"
+version = "0.2.4"
 dependencies = [
  "prost",
  "protoc-bin-vendored",
@@ -6736,7 +6757,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "vldb-controller-client",
+ "vldb-controller-client 0.2.4",
  "vulcan-ai-contract",
  "vulcan-change-set",
  "vulcan-context",
@@ -6915,6 +6936,7 @@ dependencies = [
  "uuid",
  "vt100",
  "vulcan-apply-patch",
+ "vulcan-change-set",
  "vulcan-runtime-assets",
  "vulcan-terminal-host-protocol",
  "vulcan-workbench-model",
@@ -7217,8 +7239,9 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml 1.1.4+spec-1.1.0",
+ "tracing",
  "uuid",
- "vldb-controller-client",
+ "vldb-controller-client 0.2.4",
  "vulcan-agent-runtime",
  "vulcan-ai-contract",
  "vulcan-change-set",
@@ -7423,7 +7446,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
- "vldb-controller-client",
+ "vldb-controller-client 0.2.4",
  "vulcan-ai-contract",
  "vulcan-change-set",
  "vulcan-context",

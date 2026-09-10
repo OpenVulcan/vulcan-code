@@ -208,6 +208,9 @@ pub struct ResolvedRuleInstance {
     /// Inherited selected protocol; may be `None` when no layer declares one.
     /// 继承后的生效协议；无任何层声明时可为 `None`。
     pub selected_protocol: Option<String>,
+    /// Rule-owned closed Codex behavior without provider-default inference.
+    /// 规则自有的封闭 Codex 行为，不进行供应商默认推断。
+    pub codex_behavior: Option<super::CodexModelBehavior>,
     /// Inherited tool-schema projection contract.
     /// 继承后的工具 Schema 投影契约。
     pub tool_schema_projection: super::ToolSchemaProjectionMode,
@@ -592,6 +595,7 @@ fn resolve_rule_for_entry(
         normalized_scope: super::scope::NormalizedRuleTargets::default(),
         supported_protocols,
         selected_protocol,
+        codex_behavior: rule.codex_behavior.clone(),
         tool_schema_projection,
         capabilities,
         capability_provenance,

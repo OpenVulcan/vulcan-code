@@ -22,6 +22,7 @@ fn manual_model_discovery_signature_excludes_observation_generation() {
             source: crate::provider_manifest::ModelProtocolBindingSource::CustomAutoDefault,
             manifest_revision: 0,
             rule_id: String::new(),
+            codex_behavior: None,
         }),
     };
     // firstModel and refreshedModel differ only in their observation generation.
@@ -64,6 +65,7 @@ fn custom_auto_binding_rebinds_when_protocol_priority_changes() {
         source: crate::provider_manifest::ModelProtocolBindingSource::CustomAutoDefault,
         manifest_revision: 1,
         rule_id: String::new(),
+        codex_behavior: None,
     };
     assert!(frozen_binding_is_current(
         &auto_binding,
@@ -88,6 +90,7 @@ fn custom_auto_binding_rebinds_when_protocol_priority_changes() {
         source: crate::provider_manifest::ModelProtocolBindingSource::CustomUser,
         manifest_revision: 1,
         rule_id: String::new(),
+        codex_behavior: None,
     };
     let explicit_preference = crate::CustomModelProtocolPreference::Explicit {
         protocol: crate::CustomProviderProtocol::AnthropicMessages,

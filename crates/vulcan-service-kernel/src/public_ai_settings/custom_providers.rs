@@ -266,6 +266,7 @@ fn prepare_custom_provider_candidate(
     let route_features = declares_codex.then_some(ResponsesRouteFeatures {
         remote_compaction: request.remote_compaction_policy,
         websocket: request.websocket_policy,
+        recovery: Default::default(),
     });
     if let Some(features) = route_features {
         for entry in &mut descriptor.service_entries {

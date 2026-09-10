@@ -11,7 +11,9 @@ use std::fmt::{Debug, Display, Formatter};
 
 /// Identify whether semantic AST windows or the recursive fallback produced a result.
 /// 标识结果由语义 AST 窗口还是递归回退生成。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum StructureMode {
     /// A language-aware analyzer produced semantic AST windows.
     /// 语言感知分析器生成了语义 AST 窗口。

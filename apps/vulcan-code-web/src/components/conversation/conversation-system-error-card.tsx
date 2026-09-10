@@ -91,6 +91,11 @@ const SYSTEM_PROVIDER_ERROR_FAILURE_MARKER = " failure: ";
 // SYSTEM_PROVIDER_ERROR_ROUTE_MARKER 标识追加在 JSON 失败对象后的精确路由诊断后缀起点。
 const SYSTEM_PROVIDER_ERROR_ROUTE_MARKER = "。 [provider_route: ";
 
+// AGENTSPACE_RECONCILIATION_SUBCATEGORY is assigned only by the route-aware backend boundary.
+// AGENTSPACE_RECONCILIATION_SUBCATEGORY 仅由感知路由的后端边界赋值。
+const AGENTSPACE_RECONCILIATION_SUBCATEGORY =
+  "agentspace_result_reconciliation_required";
+
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES lists fields emitted by the legacy text formatter.
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES 列出旧文本格式化器发出的字段。
 const SYSTEM_PROVIDER_ERROR_FIELD_NAMES = new Set([
@@ -322,6 +327,20 @@ export function parseSystemProviderError(body: string): SystemProviderError | nu
   return buildLegacyStructuredError(normalizedBody, provider, values, messageParts.join(" | ").trim());
 }
 
+// isProviderResultReconciliationPending returns whether the backend classified this exact attempt as unresolved.
+// isProviderResultReconciliationPending 返回后端是否已将当前精确尝试分类为待确认。
+export function isProviderResultReconciliationPending(
+  error: SystemProviderError,
+): boolean {
+  return error.provider === "agentspace"
+    && error.entryId === "chatgpt-plan"
+    && error.upstreamCode === "reconciliation_required"
+    && error.subcategory === AGENTSPACE_RECONCILIATION_SUBCATEGORY
+    && error.dispatchOutcome === "dispatched"
+    && error.terminal
+    && !error.retryable;
+}
+
 // formatSystemProviderErrorJson returns the expanded JSON Markdown code-block body.
 // formatSystemProviderErrorJson 返回展开后的 JSON Markdown 代码块正文。
 export function formatSystemProviderErrorJson(error: SystemProviderError): string {
@@ -332,6 +351,9 @@ export function formatSystemProviderErrorJson(error: SystemProviderError): strin
 // SystemErrorCard 渲染紧凑错误摘要与可展开的元数据面板。
 export function SystemErrorCard(props: SystemErrorCardProps) {
   const { t } = useI18n();
+  // reconciliationPending is derived exclusively from the backend-owned closed classification.
+  // reconciliationPending 仅从后端持有的封闭分类派生。
+  const reconciliationPending = isProviderResultReconciliationPending(props.error);
   const fields: Array<{ label: string; value: string }> = [
     { label: t("conversation.systemError.category"), value: props.error.category },
     { label: t("conversation.systemError.stage"), value: props.error.stage },
@@ -364,9 +386,29 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
       value: `${props.error.retryAfterMs} ms`,
     });
   }
+  if (reconciliationPending) {
+    fields.push(
+      {
+        label: t("conversation.systemError.resultConfirmation"),
+        value: t("conversation.systemError.unconfirmed"),
+      },
+      {
+        label: t("conversation.systemError.usageConfirmation"),
+        value: t("conversation.systemError.unconfirmed"),
+      },
+    );
+  }
 
   return (
-    <details aria-label={t("conversation.systemError.title")} className="system-error-card" role="alert">
+    <details
+      aria-label={reconciliationPending
+        ? t("conversation.systemError.pendingTitle")
+        : t("conversation.systemError.title")}
+      className={reconciliationPending
+        ? "system-error-card system-error-card-pending"
+        : "system-error-card"}
+      role={reconciliationPending ? "status" : "alert"}
+    >
       <summary className="system-error-summary">
         <div className="system-error-message">
           <span>{t("conversation.systemError.message")}</span>
@@ -378,12 +420,26 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
         <div className="system-error-header">
           <div className="system-error-title">
             <CircleAlert aria-hidden="true" className="system-error-icon" size={17} />
-            <strong>{t("conversation.systemError.title")}</strong>
+            <strong>
+              {reconciliationPending
+                ? t("conversation.systemError.pendingTitle")
+                : t("conversation.systemError.title")}
+            </strong>
           </div>
           <div className="system-error-actions">
-            <StatusPill status="error" label={t("conversation.systemError.status")} />
+            <StatusPill
+              status={reconciliationPending ? "pending" : "error"}
+              label={reconciliationPending
+                ? t("conversation.systemError.pendingStatus")
+                : t("conversation.systemError.status")}
+            />
           </div>
         </div>
+        {reconciliationPending ? (
+          <p className="system-error-reconciliation-notice">
+            {t("conversation.systemError.pendingNotice")}
+          </p>
+        ) : null}
         <dl className="system-error-fields">
           {fields.map((field) => (
             <div className="system-error-field" key={field.label}>

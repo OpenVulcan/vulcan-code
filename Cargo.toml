@@ -171,7 +171,7 @@ tower = "0.5.3"
 tower-http = "0.7.0"
 tracing = "0.1.44"
 uuid = { version = "1.24.1", features = ["v4", "serde"] }
-vldb-controller-client = "0.2.3"
+vldb-controller-client = { version = "0.2.4", path = "../../projects/vldb-controller/client" }
 vt100 = "0.16.2"
 windows-sys = "0.61.2"
 xz2 = { version = "0.1.7", features = ["static"] }

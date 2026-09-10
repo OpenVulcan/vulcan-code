@@ -309,6 +309,9 @@ pub(crate) struct PublicAiConnectionSnapshot {
     /// User-visible connection name.
     /// 用户可见连接名称。
     display_name: String,
+    /// Whether this credential connection currently participates in runtime work.
+    /// 此凭据连接当前是否参与运行时工作。
+    enabled: bool,
     /// Protocol-scoped public cache policies.
     /// 协议作用域的公共缓存策略。
     prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
@@ -373,6 +376,7 @@ impl PublicAiConnectionSnapshot {
             credential_mode: connection.credential_mode,
             credential_id: connection.credential_id.clone(),
             display_name: connection.display_name.clone(),
+            enabled: configuration.connection_is_enabled(connection.id.as_str()),
             prompt_cache_by_protocol: connection.prompt_cache_by_protocol.clone(),
             pending_validation: configuration
                 .connection_is_pending_validation(connection.id.as_str()),

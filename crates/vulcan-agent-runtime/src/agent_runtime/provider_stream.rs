@@ -96,6 +96,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Latest accumulated normalized usage for the active physical Provider request.
     /// 当前活动真实 Provider 请求的最新累计规范化用量。
     UsageUpdated(CoreProviderUsageSnapshot),
+    /// Provider response identity observed before the physical attempt reaches its terminal state.
+    /// 真实尝试到达终态前观察到的 Provider 响应标识。
+    ResponseIdentityObserved(String),
     /// Successful physical request boundary that must be durable before the controller continues.
     /// 成功物理请求边界；控制器继续前必须可靠持久化。
     RequestSucceeded {

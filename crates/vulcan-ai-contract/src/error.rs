@@ -3,6 +3,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Host-owned subcategory used only after the exact AgentSpace route is verified.
+/// 仅在精确 AgentSpace 路由核验后使用的宿主自有子类别。
+pub const AGENTSPACE_RECONCILIATION_REQUIRED_SUBCATEGORY: &str =
+    "agentspace_result_reconciliation_required";
+
+/// Identifies a non-replayable provider outcome that still requires authoritative confirmation.
+/// 标识不可自动重放但仍需权威确认的供应商结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiExecutionConfirmationState {
+    /// Both semantic result and billing usage remain unconfirmed.
+    /// 语义结果与计费用量都仍未确认。
+    ResultAndUsagePending,
+}
+
 /// Identifies the exact upstream transport used by one physical attempt.
 /// 标识一次真实尝试所使用的精确上游传输。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,4 +209,24 @@ pub struct AiExecutionError {
     /// 供应商报告时带精确来源的建议重试延迟。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<RetryAfterHint>,
+}
+
+impl AiExecutionError {
+    /// Returns the closed host-owned confirmation state carried by this exact failure.
+    /// 返回当前精确失败携带的封闭宿主确认状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A pending state only for the fully classified AgentSpace reconciliation failure.
+    /// 仅对已完整分类的 AgentSpace 对账失败返回待确认状态。
+    pub fn confirmation_state(&self) -> Option<AiExecutionConfirmationState> {
+        (self.provider_id.as_deref() == Some("agentspace")
+            && self.entry_id.as_deref() == Some("chatgpt-plan")
+            && self.upstream_code.as_deref() == Some("reconciliation_required")
+            && self.subcategory.as_deref() == Some(AGENTSPACE_RECONCILIATION_REQUIRED_SUBCATEGORY)
+            && self.dispatch_outcome == DispatchOutcome::Dispatched
+            && self.terminal
+            && !self.retryable)
+            .then_some(AiExecutionConfirmationState::ResultAndUsagePending)
+    }
 }

@@ -46,6 +46,7 @@ impl ProtocolProfile for GeminiInteractionsProfile {
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
+        crate::require_json_schema_tool_inputs(request, self.id())?;
         crate::require_no_route_bound_provider_context(request, self.id())?;
         if !matches!(request.prompt_cache, PromptCachePolicy::ProviderDefault) {
             return Err(ProtocolConversionError::new(
@@ -1037,6 +1038,7 @@ mod tests {
                 name: String::from("lookup"),
                 description: String::from("Looks up a value."),
                 input_schema: json!({"type": "object"}),
+                input_format: Default::default(),
                 strict: false,
             }],
             native_tools: Vec::new(),

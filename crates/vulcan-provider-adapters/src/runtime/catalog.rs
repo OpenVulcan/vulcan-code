@@ -771,6 +771,11 @@ impl PublicAiRuntime {
         provider_generation: Arc<ResolvedProviderGeneration>,
         publish_effective_catalog: bool,
     ) -> Result<ConnectionModelCatalog, String> {
+        if !configuration.connection_is_enabled(connection_id) {
+            return Err(format!(
+                "Connection `{connection_id}` is disabled and cannot refresh its model catalog."
+            ));
+        }
         let observed_at_ms = current_unix_millis()?;
         let (provider, entry, connection) = self.resolve_connection_metadata_from_generation(
             configuration,

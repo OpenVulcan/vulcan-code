@@ -26,6 +26,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_commit_public_ai_oauth_connection",
     "service_add_public_ai_connection",
     "service_update_public_ai_connection",
+    "service_save_public_ai_connection_enabled",
     "service_remove_public_ai_connection",
     "service_probe_public_ai_custom_provider",
     "service_save_public_ai_custom_provider",
@@ -194,6 +195,14 @@ pub(super) async fn dispatch(
         "service_update_public_ai_connection" => rpc_json_result(
             service_update_public_ai_connection(app, state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_save_public_ai_connection_enabled" => rpc_json_result(
+            service_save_public_ai_connection_enabled(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
         ),
         "service_remove_public_ai_connection" => rpc_json_result(
             service_remove_public_ai_connection(app, state, rpc_required_param(params, "request")?)
