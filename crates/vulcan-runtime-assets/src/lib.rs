@@ -31,14 +31,6 @@ pub const DEBUG_WEBUI_SERVICE_HTTP_PORT: u16 = 17_921;
 /// Debug 浏览器侧服务结束端口。
 pub const DEBUG_WEBUI_SERVICE_HTTP_PORT_END: u16 = 17_950;
 
-/// Release VLDB controller port.
-/// Release VLDB 控制器端口。
-pub const RELEASE_VLDB_CONTROLLER_PORT: u16 = 19_801;
-
-/// Debug VLDB controller port.
-/// Debug VLDB 控制器端口。
-pub const DEBUG_VLDB_CONTROLLER_PORT: u16 = 19_802;
-
 /// Returns the default browser-facing service start port for the current Cargo profile.
 /// 返回当前 Cargo 构建配置对应的浏览器侧服务起始端口。
 pub const fn default_webui_service_http_port() -> u16 {
@@ -56,16 +48,6 @@ pub const fn default_webui_service_http_port_end() -> u16 {
         DEBUG_WEBUI_SERVICE_HTTP_PORT_END
     } else {
         RELEASE_WEBUI_SERVICE_HTTP_PORT_END
-    }
-}
-
-/// Returns the default VLDB controller port for the current Cargo profile.
-/// 返回当前 Cargo 构建配置对应的 VLDB 控制器端口。
-pub const fn default_vldb_controller_port() -> u16 {
-    if cfg!(debug_assertions) {
-        DEBUG_VLDB_CONTROLLER_PORT
-    } else {
-        RELEASE_VLDB_CONTROLLER_PORT
     }
 }
 
@@ -95,12 +77,6 @@ pub fn resolve_user_vulcan_root() -> Option<PathBuf> {
 /// 解析当前用户对应当前构建配置的 Vulcan Code 根目录。
 pub fn resolve_user_vulcan_code_root() -> Option<PathBuf> {
     dirs::home_dir().map(|home| user_vulcan_code_root_for_home(&home))
-}
-
-/// Returns the current profile's default VLDB controller endpoint.
-/// 返回当前构建配置对应的 VLDB 控制器默认端点。
-pub fn default_vldb_controller_endpoint() -> String {
-    format!("http://127.0.0.1:{}", default_vldb_controller_port())
 }
 
 /// Shared external user-text decoding boundaries.
@@ -279,9 +255,9 @@ const DEPENDENCIES_DIR_NAME: &str = "dependencies";
 /// 位于共享依赖根目录下的相对受管运行时发行目录名称。
 const MANAGED_RUNTIME_DISTRIBUTIONS_DIR_NAME: &str = "runtimes";
 
-/// Relative controller binary directory name bundled into the output root.
-/// 打包到 output 根目录中的控制器二进制目录名称。
-const CONTROLLER_BIN_DIR_NAME: &str = "bin";
+/// Relative bundled binary directory name inside the output root.
+/// 打包到 output 根目录中的二进制目录名称。
+const BIN_DIR_NAME: &str = "bin";
 
 /// Returns the source-tree resource directory compiled into the application.
 /// 返回编译进应用的源码树资源目录。
@@ -409,51 +385,10 @@ pub fn resolve_output_config_directory() -> Option<PathBuf> {
         .then(|| repository_output_root.join(CONFIG_DIR_NAME))
 }
 
-/// Returns the effective controller configuration file path for the current process.
-/// 返回当前进程使用的生效控制器配置文件路径。
-pub fn resolve_controller_config_file_path() -> PathBuf {
-    #[cfg(feature = "test-support")]
-    if let Some(path) = test_support::isolated_controller_configuration_path() {
-        return path;
-    }
-    resolve_app_config_directory().join("controller.json")
-}
-
 /// Explicit path isolation for standalone integration-test processes; excluded from normal builds.
 /// 独立集成测试进程的显式路径隔离；普通构建不包含此入口。
 #[cfg(feature = "test-support")]
 pub mod test_support;
-
-/// Returns one bundled controller executable path when the current process runs from one packaged output root.
-/// 当当前进程从某个打包 output 根目录运行时，返回其中的控制器可执行文件路径。
-pub fn resolve_bundled_controller_executable_path() -> Option<PathBuf> {
-    let executable_name = controller_executable_name();
-    let mut candidates = Vec::new();
-
-    if let Some(output_root) = resolve_output_root() {
-        candidates.push(
-            output_root
-                .join(CONTROLLER_BIN_DIR_NAME)
-                .join(executable_name),
-        );
-    }
-
-    if let Some(executable_dir) = current_executable_directory() {
-        candidates.push(executable_dir.join(executable_name));
-    }
-
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("third_party")
-            .join("vldb_controller")
-            .join("bin")
-            .join(executable_name),
-    );
-
-    candidates.into_iter().find(|path| path.is_file())
-}
 
 /// Resolves the active LuaSkills runtime root used by the WebUI host.
 /// 解析WebUI宿主实际使用的 LuaSkills 活动运行根目录。
@@ -614,7 +549,7 @@ fn resolve_output_root() -> Option<PathBuf> {
             || candidate.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME).is_dir()
             || candidate.join(LUA_PACKAGES_DIR_NAME).is_dir()
             || candidate.join(TOOLS_DIR_NAME).is_dir()
-            || candidate.join(CONTROLLER_BIN_DIR_NAME).is_dir()
+            || candidate.join(BIN_DIR_NAME).is_dir()
     })
 }
 
@@ -625,16 +560,6 @@ fn current_executable_directory() -> Option<PathBuf> {
         .ok()?
         .parent()
         .map(Path::to_path_buf)
-}
-
-/// Returns the platform-specific controller binary file name.
-/// 返回平台相关的控制器二进制文件名。
-fn controller_executable_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "vldb-controller.exe"
-    } else {
-        "vldb-controller"
-    }
 }
 
 #[cfg(test)]
@@ -653,15 +578,14 @@ mod tests {
         assert_eq!(USER_VULCAN_ROOT_DIRECTORY_NAME, expected);
     }
 
-    /// Verifies debug and release service/controller defaults are disjoint.
-    /// 验证 Debug 与 Release 的服务和控制器默认端口彼此不重叠。
+    /// Verifies debug and release service defaults are disjoint.
+    /// 验证 Debug 与 Release 的服务默认端口彼此不重叠。
     #[test]
     fn profile_port_defaults_are_disjoint() {
         assert_ne!(
             DEBUG_WEBUI_SERVICE_HTTP_PORT,
             RELEASE_WEBUI_SERVICE_HTTP_PORT
         );
-        assert_ne!(DEBUG_VLDB_CONTROLLER_PORT, RELEASE_VLDB_CONTROLLER_PORT);
     }
 
     /// Verifies plugin roots stay below the profile-specific user Code namespace.

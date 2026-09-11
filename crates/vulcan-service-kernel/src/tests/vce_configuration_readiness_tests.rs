@@ -6,10 +6,9 @@
 /// No input; verifies stale review rejection, explicit dimensions, peer preservation and no first index.
 /// 无输入；验证过期审查拒绝、明确维度、其他消费者保留及不创建首次索引。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_vce_route_save_is_atomic_and_preserves_peer_profiles() {
+fn real_host_storage_vce_route_save_is_atomic_and_preserves_peer_profiles() {
     use super::public_ai_persistence_scope::PUBLIC_AI_CONFIGURATION_ROOT;
-    use super::test_support::TestControllerRuntimeRoot;
+    use super::test_support::TestHostRuntimeRoot;
     use crate::public_ai_settings::{
         service_preflight_vce_embedding_route, service_save_public_ai_inference_route,
     };
@@ -25,9 +24,9 @@ fn real_controller_vce_route_save_is_atomic_and_preserves_peer_profiles() {
         .enable_all()
         .build()
         .expect("save test executor");
-    let storage = TestControllerRuntimeRoot::new(uuid::Uuid::new_v4());
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
     executor.block_on(async {
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         let (state, runtime, mut configuration) = configured_state();
         // Seed both actual consumer namespaces so whole-document equality detects collateral edits.
         // 播种两个真实消费者命名空间，使整份文档相等检查能发现附带修改。
@@ -122,7 +121,6 @@ fn real_controller_vce_route_save_is_atomic_and_preserves_peer_profiles() {
         )).catch_unwind().await;
         manager.shutdown().await.expect("drain private manager");
         factory.shutdown().await.expect("release private factory");
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = outcome { std::panic::resume_unwind(panic); }
     });
 }
@@ -448,11 +446,10 @@ fn vce_registered_model_revocations_close_readiness_without_side_effects() {
 /// Verify live model and project revocation against the real tool callback after a committed empty index.
 /// 在提交空索引后，通过真实工具回调验证实时模型和项目撤销。
 /// Takes no input; uses isolated controller storage and rejects all credential access, so no billed calls occur.
-/// 无输入；使用隔离控制器存储并拒绝所有凭据访问，因此没有计费调用。
+/// 无输入；使用隔离宿主存储并拒绝所有凭据访问，因此没有计费调用。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_registered_configuration_revokes_existing_index_access() {
-    use super::test_support::TestControllerRuntimeRoot;
+fn real_host_storage_registered_configuration_revokes_existing_index_access() {
+    use super::test_support::TestHostRuntimeRoot;
     use futures_util::FutureExt;
     use std::time::Duration;
     use vulcan_workbench_model::{ProjectVceSettings, TaskProjectSummary};
@@ -467,9 +464,9 @@ fn real_controller_registered_configuration_revokes_existing_index_access() {
             .build()
             .expect("isolated configuration-revocation runtime"),
     );
-    let storage = TestControllerRuntimeRoot::new(uuid::Uuid::new_v4());
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
     executor.block_on(async {
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         // Retire the managed controller even if a production gate or assertion fails.
         // 即使生产门禁或断言失败，也退出托管控制器。
         let outcome = std::panic::AssertUnwindSafe(async {
@@ -583,9 +580,74 @@ fn real_controller_registered_configuration_revokes_existing_index_access() {
                 .expect("initial remains latest").job_id, initial.job_id,
                 "status and model/project changes must not create another index job");
             assert!(state.lock().expect("fixture state").vce_watcher.is_none());
+            // A successful drain followed by a failed window close has already removed every VCE runtime.
+            // The synchronous shell recovery must restore those runtimes before returning control to the UI.
+            // 成功排空后若窗口关闭失败，全部 VCE 运行时已经被移除。同步壳层恢复必须在把控制权
+            // 交还界面前恢复这些运行时。
+            state.lock().expect("fixture state").service_runtime = Some(executor.clone());
+            let session_registry = Arc::clone(
+                &state
+                    .lock()
+                    .expect("fixture state")
+                    .session_runtime_registry,
+            );
+            session_registry
+                .begin_shutdown()
+                .expect("close root-turn admission for shutdown");
             manager.shutdown().await.expect("drain isolated VCE runtime");
+            assert!(!vce::vce_project_tool_enabled(&state, "project-a"));
+            // Make the retained source descriptor temporarily impossible to restore. Recovery must
+            // fail without reopening root-turn admission, then remain explicitly retryable.
+            // 暂时使保留的源码描述无法恢复。恢复必须在不重新开放根回合准入的情况下失败，随后仍可明确重试。
+            let unavailable_source = source.with_extension("shutdown-recovery-unavailable");
+            std::fs::rename(&source, &unavailable_source)
+                .expect("hide source root during failed recovery");
+            let failed_recovery_state = state.clone();
+            let recovery_error = tokio::task::spawn_blocking(move || {
+                crate::service_resume_after_failed_app_shutdown(&failed_recovery_state)
+            })
+            .await
+            .expect("join failed shutdown recovery")
+            .expect_err("missing source root must reject VCE recovery");
+            assert!(
+                recovery_error.contains("empty-vce-project"),
+                "{recovery_error}"
+            );
+            assert!(
+                !session_registry
+                    .accepts_root_turns_for_test()
+                    .expect("read failed-recovery admission"),
+                "session admission must remain closed until every VCE runtime is restored"
+            );
+            std::fs::rename(&unavailable_source, &source)
+                .expect("restore source root for explicit recovery retry");
+            let recovery_state = state.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::service_resume_after_failed_app_shutdown(&recovery_state)
+            })
+            .await
+            .expect("join shutdown recovery")
+            .expect("restore VCE after failed window close");
+            assert!(
+                session_registry
+                    .accepts_root_turns_for_test()
+                    .expect("read successful-recovery admission")
+            );
+            assert!(vce::vce_project_tool_enabled(&state, "project-a"));
+            let recovered_after_close: vulcan_service_api::VceRetrievalResponse =
+                serde_json::from_value(
+                    handler
+                        .retrieve("project-a".into(), "find cache code".into())
+                        .await
+                        .expect("retrieve after failed window-close recovery"),
+                )
+                .expect("typed recovered response after failed window close");
+            assert_eq!(
+                recovered_after_close.checkpoint_version,
+                baseline.checkpoint_version
+            );
+            manager.shutdown().await.expect("drain recovered VCE runtime");
         }).catch_unwind().await;
-        client.shutdown().await.expect("release isolated controller");
         if let Err(panic) = outcome { std::panic::resume_unwind(panic); }
     });
 }
@@ -593,11 +655,10 @@ fn real_controller_registered_configuration_revokes_existing_index_access() {
 /// Verify a hundred enabled cold projects remain metadata-only until one explicit initialization.
 /// 验证一百个启用冷态项目在其中一个被明确初始化前，始终只读取元数据。
 /// No input; uses a real isolated controller/watcher and credential-rejecting registered AI, never user data.
-/// 无输入；使用真实隔离控制器、监听器和拒绝凭据的注册模型，不使用用户数据。
+/// 无输入；使用真实隔离宿主存储、监听器和拒绝凭据的注册模型，不使用用户数据。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_hundred_cold_projects_only_initialize_explicit_target() {
-    use super::test_support::TestControllerRuntimeRoot;
+fn real_host_storage_hundred_cold_projects_only_initialize_explicit_target() {
+    use super::test_support::TestHostRuntimeRoot;
     use futures_util::FutureExt;
     use std::time::Duration;
     use vulcan_service_api::{VceProjectLifecycleState, VceProjectRequest};
@@ -615,9 +676,9 @@ fn real_controller_hundred_cold_projects_only_initialize_explicit_target() {
     );
     // This generic session/controller fixture is independent of all installed application roots.
     // 此通用会话及控制器夹具独立于全部已安装应用数据根。
-    let storage = TestControllerRuntimeRoot::new(uuid::Uuid::new_v4());
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
     executor.block_on(async {
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         let (state, runtime, configuration) = configured_state();
         let ai = Arc::clone(
             &state
@@ -833,7 +894,6 @@ fn real_controller_hundred_cold_projects_only_initialize_explicit_target() {
             .shutdown()
             .await
             .expect("release private data plane");
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);
         }

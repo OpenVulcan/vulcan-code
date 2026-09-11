@@ -356,7 +356,7 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
 pub(crate) fn spawn_agent_stream_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     request: ExecutionPreparationRequest,
     expected_kernel_generation: u64,
@@ -398,7 +398,7 @@ pub(crate) fn spawn_agent_stream_task(
 fn spawn_agent_stream_task_with_restart_state(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     request: ExecutionPreparationRequest,
     expected_kernel_generation: u64,
@@ -1536,7 +1536,7 @@ fn spawn_agent_stream_task_with_restart_state(
 #[allow(clippy::too_many_arguments)]
 async fn handle_v1_provider_request_telemetry(
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     event: ProviderRequestTelemetryEvent,
     active_provider_goal_id: &mut Option<String>,

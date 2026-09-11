@@ -1,0 +1,70 @@
+[package]
+name = "vulcan-sqlite-engine"
+description = "In-process SQLite engine with FTS5, Jieba tokenization and file ownership locking for Vulcan Code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# This crate deliberately does not inherit workspace lints.
+# 本 crate 刻意不继承工作区 lint。
+#
+# `unsafe_code` is relaxed to "allow" because the SQLite FTS5 Jieba tokenizer must register four
+# C callbacks through `rusqlite::ffi`. rusqlite exposes no safe wrapper for FTS5 tokenizer
+# registration, and a `forbid`-level lint cannot be relaxed inside the crate. The remaining lint
+# entries below are identical to the workspace set, so only `unsafe_code` differs.
+#
+# `unsafe_code` 放宽为 "allow"，因为 SQLite FTS5 Jieba 分词器必须通过 `rusqlite::ffi` 注册
+# 四个 C 回调；rusqlite 没有 FTS5 分词器注册的安全封装，而 `forbid` 级 lint 无法在 crate 内放宽。
+# 下列其余 lint 项与工作区集合完全一致，因此仅 `unsafe_code` 存在差异。
+#
+# This mirrors the established repository pattern in `vulcan-terminal-host` and
+# `vulcan-process-lifecycle`, which relax the same lint for unavoidable platform FFI.
+# 这与仓库既有先例一致：`vulcan-terminal-host` 与 `vulcan-process-lifecycle` 为不可避免的
+# 平台 FFI 放宽同一条 lint。
+#
+# Scope limit: the relaxation has exactly two scopes, and nothing outside them is authorized.
+#
+# 1. `src/tokenizer.rs` — the four `unsafe extern "C"` FTS5 tokenizer callbacks, the function-pointer
+#    type they are registered through, and the `unsafe` blocks that must call them. Nine `unsafe`
+#    sites in total.
+# 2. `src/lib.rs` — the `#[cfg(test)]` allocation accounting in `allocation_evidence`, which needs
+#    `unsafe impl GlobalAlloc` and two `unsafe fn`. Four `unsafe` sites in total, and because the
+#    module is `#[cfg(test)]` they are absent from every non-test build.
+#
+# Both scopes are enumerated because an earlier revision of this comment claimed the tokenizer was
+# the only one, which `src/lib.rs` already contradicted. A scope statement that the code disagrees
+# with is worse than no statement, since it is the sentence a reviewer would rely on.
+# 范围限制：本放宽恰好有两个范围，范围之外一律不授权。
+#
+# 1. `src/tokenizer.rs`——四个 `unsafe extern "C"` FTS5 分词器回调、注册它们所用的函数指针类型，
+#    以及必须调用它们的那几个 `unsafe` 块，合计九处 `unsafe`。
+# 2. `src/lib.rs`——`allocation_evidence` 中 `#[cfg(test)]` 的分配记账，需要 `unsafe impl
+#    GlobalAlloc` 与两个 `unsafe fn`，合计四处；由于该模块为 `#[cfg(test)]`，它们不存在于任何
+#    非测试构建中。
+#
+# 两个范围都被逐一列出，因为本注释的早期版本声称分词器是唯一的一个，而 `src/lib.rs` 早已与之
+# 矛盾。范围声明若与代码不一致，比没有声明更糟——因为审阅者依赖的正是那句话。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[dependencies]
+arrow.workspace = true
+fs4.workspace = true
+jieba-rs.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tempfile.workspace = true

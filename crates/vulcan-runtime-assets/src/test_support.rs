@@ -40,13 +40,3 @@ pub(super) fn isolated_user_root() -> Option<PathBuf> {
         .get()
         .map(|root| root.join("user-vulcan"))
 }
-
-/// Return the precise private controller configuration, keeping bundled resources read-only and shared.
-/// 返回精确私有控制器配置，同时保留内置资源只读共享。
-/// No arguments; returns a path only for an explicitly isolated test process.
-/// 无参数；仅为明确隔离的测试进程返回路径。
-pub(super) fn isolated_controller_configuration_path() -> Option<PathBuf> {
-    ISOLATED_PROCESS_ROOT
-        .get()
-        .map(|root| root.join("controller.json"))
-}

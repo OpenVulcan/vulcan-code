@@ -13,6 +13,7 @@ use super::{
     PreparedKnowledgeOperation, int, metadata_is_link_or_reparse, nonnegative_u64,
     queued_operation_summary, require_operation_not_cancelled, text, truncate_chars,
 };
+use crate::local_sql;
 use crate::runtime_assets;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,8 +24,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use vldb_controller_client::ControllerSqliteValue;
 use vulcan_runtime_assets::text_decode::decode_complete_user_text;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Maximum number of Markdown files accepted by one import.
 /// 单次导入允许的最大 Markdown 文件数量。
@@ -262,8 +263,8 @@ impl KnowledgeBaseRuntime {
             let _guard = self.library_mutation_guard(&operation.library_id).await?;
             require_operation_not_cancelled(&operation.cancellation)?;
             self.require_active_library(&operation.library_id).await?;
-            // BindingIdentity is the only controller route for the isolated library database.
-            // BindingIdentity 是隔离知识库数据库的唯一控制器路由。
+            // BindingIdentity is the only host route for the isolated library database.
+            // BindingIdentity 是隔离知识库数据库的唯一宿主路由。
             let (space_id, binding_id) = self.ensure_library_binding(&operation.library_id).await?;
             self.update_operation_phase(&operation.job_id, "running", "scanning")
                 .await?;
@@ -308,8 +309,8 @@ impl KnowledgeBaseRuntime {
     /// `library_id` 是本次导入的精确活动知识库。
     /// `canonical_root` is the canonical source root associated with this operation.
     /// `canonical_root` 是本次操作关联的规范来源根。
-    /// `space_id` is the resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确的权威 SQLite 绑定。
     /// `job_id` is the durable import job identity used for progress and staging.
@@ -376,15 +377,12 @@ impl KnowledgeBaseRuntime {
             .await?;
 
         self.clear_staging(space_id, binding_id).await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
                 "INSERT INTO knowledge_import_staging_context(singleton, job_id, source_id, committed_at_ms) VALUES (1, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET job_id = excluded.job_id, source_id = excluded.source_id, committed_at_ms = excluded.committed_at_ms;",
                 vec![text(job_id), text(&source_id), int(now)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("初始化知识库导入暂存上下文失败：{error}"))?;
 
         let mut warnings = Vec::new();
@@ -472,9 +470,7 @@ impl KnowledgeBaseRuntime {
                 text(&digest),
                 int(candidate.byte_size as i64),
                 int(line_count),
-                candidate
-                    .modified_at_ms
-                    .map_or(ControllerSqliteValue::Null, int),
+                candidate.modified_at_ms.map_or(SqliteValue::Null, int),
                 int(now),
                 int(now),
             ]);
@@ -624,8 +620,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确的权威 SQLite 绑定。
     /// `requested_source_id` is the optional existing identity explicitly selected for root remapping.
@@ -703,8 +699,8 @@ impl KnowledgeBaseRuntime {
     /// `source_id` 是明确保留或已解析的持久来源身份。
     /// `canonical_root` is the canonical source root associated with this operation.
     /// `canonical_root` 是本次操作关联的规范来源根。
-    /// `space_id` is the resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确的权威 SQLite 绑定。
     /// `now` is the fixed timestamp supplied by the prepared operation.
@@ -721,7 +717,7 @@ impl KnowledgeBaseRuntime {
     #[allow(clippy::too_many_arguments)]
     async fn persist_source(
         &self,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         source_id: &str,
         canonical_root: &str,
@@ -729,12 +725,10 @@ impl KnowledgeBaseRuntime {
         display_name: &str,
         now: i64,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                r#"INSERT INTO knowledge_sources(
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            r#"INSERT INTO knowledge_sources(
                        id, canonical_root, root_key, display_name, created_at_ms, last_scanned_at_ms
                    ) VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
@@ -742,17 +736,17 @@ impl KnowledgeBaseRuntime {
                        root_key = excluded.root_key,
                        display_name = excluded.display_name,
                        last_scanned_at_ms = excluded.last_scanned_at_ms;"#,
-                vec![
-                    text(source_id),
-                    text(canonical_root),
-                    text(root_key),
-                    text(display_name),
-                    int(now),
-                    int(now),
-                ],
-            )
-            .await
-            .map_err(|error| format!("保存知识库来源目录失败：{error}"))?;
+            vec![
+                text(source_id),
+                text(canonical_root),
+                text(root_key),
+                text(display_name),
+                int(now),
+                int(now),
+            ],
+        )
+        .await
+        .map_err(|error| format!("保存知识库来源目录失败：{error}"))?;
         Ok(())
     }
 
@@ -761,8 +755,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确的权威 SQLite 绑定。
     ///
@@ -770,16 +764,13 @@ impl KnowledgeBaseRuntime {
     /// 返回值
     /// Returns success after staging/storage completes, or an explicit storage error.
     /// 返回暂存/存储完成后的成功，或明确存储错误。
-    async fn clear_staging(&self, space_id: &str, binding_id: &str) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
+    async fn clear_staging(&self, _space_id: &str, binding_id: &str) -> Result<(), String> {
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
                 "DELETE FROM knowledge_staged_chunks; DELETE FROM knowledge_staged_documents; DELETE FROM knowledge_staged_paths; DELETE FROM knowledge_import_staging_context;",
                 Vec::new(),
-            )
-            .await
+            ).await
             .map_err(|error| format!("清理知识库导入暂存区失败：{error}"))?;
         Ok(())
     }
@@ -789,8 +780,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确的权威 SQLite 绑定。
     /// `paths` is the exact typed scanned-path staging rows.
@@ -808,9 +799,9 @@ impl KnowledgeBaseRuntime {
         &self,
         space_id: &str,
         binding_id: &str,
-        paths: Vec<Vec<ControllerSqliteValue>>,
-        documents: Vec<Vec<ControllerSqliteValue>>,
-        chunks: Vec<Vec<ControllerSqliteValue>>,
+        paths: Vec<Vec<SqliteValue>>,
+        documents: Vec<Vec<SqliteValue>>,
+        chunks: Vec<Vec<SqliteValue>>,
     ) -> Result<(), String> {
         if !paths.is_empty() {
             self.execute_library_batch(
@@ -856,8 +847,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确的权威 SQLite 绑定。
     ///
@@ -865,13 +856,11 @@ impl KnowledgeBaseRuntime {
     /// 返回值
     /// Returns success after staging/storage completes, or an explicit storage error.
     /// 返回暂存/存储完成后的成功，或明确存储错误。
-    async fn commit_staging(&self, space_id: &str, binding_id: &str) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                r#"
+    async fn commit_staging(&self, _space_id: &str, binding_id: &str) -> Result<(), String> {
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            r#"
 BEGIN IMMEDIATE;
 DELETE FROM knowledge_chunks
 WHERE document_id IN (SELECT id FROM knowledge_staged_documents);
@@ -914,10 +903,10 @@ UPDATE knowledge_metadata SET value = 'dirty' WHERE key = 'index_status';
 UPDATE knowledge_metadata SET value = '' WHERE key = 'last_index_error';
 COMMIT;
 "#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("提交知识库权威内容失败：{error}"))?;
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("提交知识库权威内容失败：{error}"))?;
         Ok(())
     }
 
@@ -952,8 +941,8 @@ COMMIT;
         // ProgressSender and ProgressReceiver relay throttled snapshots through the existing unbounded channel.
         // ProgressSender 与 ProgressReceiver 通过现有无界通道传递节流快照。
         let (progress_sender, mut progress_receiver) = mpsc::unbounded_channel();
-        // ScanTask keeps synchronous directory traversal off the async controller executor.
-        // ScanTask 将同步目录遍历移出异步控制器执行器。
+        // ScanTask keeps synchronous directory traversal off the async host executor.
+        // ScanTask 将同步目录遍历移出异步宿主执行器。
         let scan_task = tokio::task::spawn_blocking(move || {
             scan_markdown_files(&scan_root, &scan_cancellation, Some(&progress_sender))
         });

@@ -589,7 +589,7 @@ impl ExactPendingPromptDispatch {
 pub(crate) async fn maybe_prepare_webui_goal_continuation(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     authority: SessionGoalDispatchAuthority,
@@ -611,7 +611,7 @@ pub(crate) async fn maybe_prepare_webui_goal_continuation(
 pub(crate) async fn maybe_prepare_webui_queued_successor(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     authority: SessionQueuedDispatchAuthority,
@@ -633,7 +633,7 @@ pub(crate) async fn maybe_prepare_webui_queued_successor(
 pub(crate) async fn maybe_prepare_webui_user_root(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     authority: SessionUserRootDispatchAuthority,
@@ -655,7 +655,7 @@ pub(crate) async fn maybe_prepare_webui_user_root(
 pub(crate) async fn maybe_prepare_webui_subagent_return_continuation(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     authority: SessionSubagentReturnDispatchAuthority,
@@ -706,7 +706,7 @@ pub(crate) async fn maybe_prepare_webui_subagent_return_continuation(
 pub(crate) async fn maybe_prepare_webui_pending_in_turn_continuation(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     authority: SessionPendingInTurnDispatchAuthority,
@@ -772,7 +772,7 @@ fn exact_goal_continuation_prompt_entry(
 async fn prepare_webui_pending_prompt(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     exact_dispatch: ExactPendingPromptDispatch,

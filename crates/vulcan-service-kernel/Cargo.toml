@@ -26,7 +26,6 @@ tempfile.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
 tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
-vldb-controller-client.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-context-engine = { workspace = true, features = ["host-ai-contract"] }
@@ -46,6 +45,9 @@ vulcan-file-watcher.workspace = true
 vulcan-core.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true
+# In-process LanceDB engine that serves plugin and VMM vector storage without a controller process.
+# 在无控制器进程的情况下服务插件与 VMM 向量存储的进程内 LanceDB 引擎。
+vulcan-lancedb-engine.workspace = true
 vulcan-luaskills-config.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-plugin-runtime.workspace = true
@@ -57,6 +59,9 @@ vulcan-service-host.workspace = true
 vulcan-service-runtime.workspace = true
 vulcan-session-boundary.workspace = true
 vulcan-session-core.workspace = true
+# In-process SQLite engine that serves plugin relational storage without a controller process.
+# 在无控制器进程的情况下服务插件关系存储的进程内 SQLite 引擎。
+vulcan-sqlite-engine.workspace = true
 vulcan-subagent-core.workspace = true
 vulcan-task-session.workspace = true
 vulcan-tools-manager.workspace = true

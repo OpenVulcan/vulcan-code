@@ -420,8 +420,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `limit` is the requested result/page bound limited by this API.
     /// `limit` 是由当前接口限制的请求结果或分页上限。
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已派生的控制器空间身份。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已派生的存储空间身份。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确权威 SQLite 绑定。
     /// `query` is the caller query used by the selected retrieval policy.
@@ -470,8 +470,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `chunk_id` is the immutable authoritative chunk identity.
     /// `chunk_id` 是不可变的权威切片身份。
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已派生的控制器空间身份。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已派生的存储空间身份。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确权威 SQLite 绑定。
     ///
@@ -509,8 +509,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `chunk_ids` is the exact bounded identifiers selected for bulk materialization.
     /// `chunk_ids` 是选定进行批量物化的精确有界身份集合。
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已派生的控制器空间身份。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已派生的存储空间身份。
     /// `binding_id` is the exact authoritative SQLite binding.
     /// `binding_id` 是精确权威 SQLite 绑定。
     ///
@@ -553,8 +553,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///

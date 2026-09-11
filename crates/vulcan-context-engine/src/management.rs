@@ -421,6 +421,104 @@ pub struct VcePhysicalTableStatistics {
     pub fragment_rows: VcePhysicalFragmentSummary,
 }
 
+/// Lifecycle state of one in-process physical compaction operation.
+/// 一项进程内物理整理操作的生命周期状态。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VcePhysicalCompactionState {
+    /// No valid lifecycle state was supplied.
+    /// 未提供有效的生命周期状态。
+    Unspecified,
+    /// The operation is accepted and waiting to start.
+    /// 操作已受理，正在等待开始。
+    Queued,
+    /// The physical compaction step is running.
+    /// 物理整理步骤正在执行。
+    Running,
+    /// The operation completed successfully.
+    /// 操作已成功完成。
+    Succeeded,
+    /// The operation failed with a recorded error.
+    /// 操作失败并记录了错误。
+    Failed,
+    /// The operation was cancelled before mutation started.
+    /// 操作在变更开始前已取消。
+    Cancelled,
+}
+
+impl VcePhysicalCompactionState {
+    /// Whether this state is final and admits no further progress.
+    /// 此状态是否为终态、不再接受任何后续进展。
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+    }
+}
+
+/// Physical work performed by one completed compaction step.
+/// 一次已完成整理步骤所执行的物理工作量。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VcePhysicalCompactionMetrics {
+    /// Physical fragments removed by compaction.
+    /// 整理移除的物理片段数。
+    pub fragments_removed: u64,
+    /// Physical fragments written by compaction.
+    /// 整理写入的物理片段数。
+    pub fragments_added: u64,
+    /// Data files removed by compaction.
+    /// 整理移除的数据文件数。
+    pub files_removed: u64,
+    /// Data files written by compaction.
+    /// 整理写入的数据文件数。
+    pub files_added: u64,
+}
+
+/// Authoritative snapshot of one physical compaction operation.
+/// 一项物理整理操作的权威快照。
+///
+/// `before` and `after` carry already-projected statistics so that every consumer observes the same
+/// maintenance contract regardless of which storage engine produced the numbers.
+/// `before` 与 `after` 携带已投影的统计信息，使每个消费者观察到同一份维护契约，而不论数字由哪个存储引擎产生。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VcePhysicalCompactionOperation {
+    /// Caller-supplied stable operation identifier.
+    /// 调用方提供的稳定操作标识。
+    pub operation_id: String,
+    /// Logical table being compacted.
+    /// 正在整理的逻辑表。
+    pub table_name: String,
+    /// Current lifecycle state.
+    /// 当前生命周期状态。
+    pub state: VcePhysicalCompactionState,
+    /// Whether cancellation was requested.
+    /// 是否已请求取消。
+    pub cancel_requested: bool,
+    /// Human-readable operation status.
+    /// 人类可读的操作状态。
+    pub message: String,
+    /// Terminal failure details when present.
+    /// 存在时的终态失败详情。
+    pub error: Option<String>,
+    /// Submission timestamp in Unix milliseconds.
+    /// 提交时刻的 Unix 毫秒时间戳。
+    pub submitted_at_unix_ms: u64,
+    /// Start timestamp in Unix milliseconds.
+    /// 开始时刻的 Unix 毫秒时间戳。
+    pub started_at_unix_ms: Option<u64>,
+    /// Completion timestamp in Unix milliseconds.
+    /// 完成时刻的 Unix 毫秒时间戳。
+    pub completed_at_unix_ms: Option<u64>,
+    /// Authoritative statistics captured before compaction.
+    /// 整理前捕获的权威统计信息。
+    pub before: Option<VcePhysicalTableStatistics>,
+    /// Authoritative statistics captured after compaction.
+    /// 整理后捕获的权威统计信息。
+    pub after: Option<VcePhysicalTableStatistics>,
+    /// Physical compaction metrics when execution completed.
+    /// 执行完成时的物理整理指标。
+    pub metrics: Option<VcePhysicalCompactionMetrics>,
+}
+
 /// Frozen bounded parameters for one native physical compaction operation.
 /// 一项原生物理整理操作的冻结有界参数。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

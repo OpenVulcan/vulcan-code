@@ -19,7 +19,7 @@ use vulcan_workspace_store::workspace_store::{ProjectResourceUploadReceipt, Prov
 async fn project_prompt_pending_draft_handoff_uses_actual_project_owner() {
     // The existing real controller fixture owns session creation, project storage and final shutdown.
     // 既有真实控制器夹具持有会话创建、项目存储及最终关闭。
-    let fixture = LifecycleControllerFixture::start().await;
+    let fixture = LifecycleStorageFixture::start().await;
     let registry = SessionRuntimeRegistry::default();
     let resources = ProjectResourceCatalogRegistry::default();
     let workspace = tempfile::tempdir().expect("workspace");

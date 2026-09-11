@@ -62,11 +62,6 @@ import {
   VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
 } from "./vce-observer-timeouts";
 
-// Stable host diagnostic returned when the bundled controller predates physical compaction RPCs.
-// 打包控制器早于物理整理 RPC 时返回的稳定宿主诊断。
-const VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED =
-  "VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED";
-
 // loadAuthoritativeVceOverview reads and validates the current host-owned project snapshot.
 // loadAuthoritativeVceOverview 读取并校验当前由宿主持有的项目快照。
 //
@@ -240,16 +235,6 @@ export function CodeContextArea(props: {
   const [managementError, setManagementError] = React.useState<string | null>(
     null,
   );
-  // localizedManagementError translates known capability states while retaining unknown diagnostics verbatim.
-  // localizedManagementError 翻译已知能力状态，同时原样保留未知诊断。
-  const localizedManagementError = managementError?.startsWith(
-    VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED,
-  )
-    ? copy(
-        "当前 VLDB 控制器版本不支持物理索引整理，请升级到 vldb-controller 0.2.4 或更高版本。现有索引与查询不受影响。",
-        "The current VLDB controller does not support physical index compaction. Upgrade to vldb-controller 0.2.4 or newer. Existing indexes and queries remain available.",
-      )
-    : managementError;
   // managementRequestVersion invalidates stale asynchronous responses after project or page changes.
   // managementRequestVersion 在项目或分页变化后使陈旧异步响应失效。
   const managementRequestVersion = React.useRef(0);
@@ -1052,7 +1037,7 @@ export function CodeContextArea(props: {
                   active={indexing.active}
                   busy={managementBusy}
                   copy={copy}
-                  error={localizedManagementError}
+                  error={managementError}
                   onExecute={(confirmation) =>
                     void executeMaintenance(confirmation)
                   }
@@ -1200,7 +1185,7 @@ export function CodeContextArea(props: {
                   active={indexing.active}
                   busy={managementBusy}
                   copy={copy}
-                  error={localizedManagementError}
+                  error={managementError}
                   onExecute={(confirmation) =>
                     void executeMaintenance(confirmation)
                   }
@@ -1647,7 +1632,7 @@ export function CodeContextArea(props: {
                 active={indexing.active}
                 busy={managementBusy}
                 copy={copy}
-                error={localizedManagementError}
+                error={managementError}
                 onExecute={(confirmation) =>
                   void executeMaintenance(confirmation)
                 }
@@ -1697,9 +1682,9 @@ export function CodeContextArea(props: {
           {copy("正在加载管理数据…", "Loading management data…")}
         </p>
       ) : null}
-      {localizedManagementError ? (
+      {managementError ? (
         <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          {localizedManagementError}
+          {managementError}
         </p>
       ) : null}
     </div>

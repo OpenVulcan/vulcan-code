@@ -23,7 +23,7 @@ use vulcan_session_core::v1::document::{FlushCandidate, GenerationBuildOutput};
 use vulcan_session_core::v1::event::ConversationEvent;
 use vulcan_session_core::v1::ids::Seq;
 
-use crate::data_plane::ControllerRuntimeHandle;
+use crate::data_plane::HostRuntimeHandle;
 
 pub use super::session_index_v1::{SessionIndexV1ConflictField, SessionIndexV1Error};
 pub use super::session_v1::errors::{
@@ -569,8 +569,8 @@ pub struct CreateSessionV1Request<'a> {
     /// Owning project id stored only in the lightweight index.
     /// 仅存于轻量索引中的所属项目 ID。
     pub project_id: &'a str,
-    /// Relative storage partition below the controller data root.
-    /// Controller 数据根目录下的相对存储分区。
+    /// Relative storage partition below the host data root.
+    /// 宿主数据根目录下的相对存储分区。
     pub storage_partition: &'a str,
     /// Human-readable date bucket used by the immutable directory name.
     /// 不可变目录名使用的人类可读日期桶。
@@ -756,8 +756,8 @@ pub struct SessionV1FlushResult {
 ///
 /// # Parameters / 参数
 ///
-/// - `data_root`: Absolute application data root retained by the controller.
-///   `data_root`：控制器保留的应用数据绝对根目录。
+/// - `data_root`: Absolute application data root retained by the runtime handle.
+///   `data_root`：宿主运行时保留的应用数据绝对根目录。
 /// - `storage_partition`: Exact V1 storage partition `sessions` below `data_root`.
 ///   `storage_partition`：位于 `data_root` 下的精确 V1 存储分区 `sessions`。
 /// - `project_partition`: Exact project partition stored in V1 metadata/index.
@@ -795,9 +795,9 @@ pub fn project_resource_directory_v1(
 /// Prepares the V1 lightweight locator table.
 /// 准备 V1 轻量定位索引表。
 pub async fn ensure_session_v1_storage_schema(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<(), SessionV1StoreError> {
-    ensure_session_index_v1_schema(controller)
+    ensure_session_index_v1_schema(host_runtime)
         .await
         .map_err(SessionV1StoreError::from)
 }
@@ -809,14 +809,14 @@ pub async fn ensure_session_v1_storage_schema(
 /// facade neither scans for it nor deletes, repairs, or imports it.
 /// 索引插入失败时会有意保留未索引目录；本门面既不扫描它，也不删除、修复或导入它。
 pub async fn create_indexed_session_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     request: &CreateSessionV1Request<'_>,
 ) -> Result<CreatedSessionV1, SessionV1StoreError> {
-    ensure_session_index_v1_schema(controller).await?;
+    ensure_session_index_v1_schema(host_runtime).await?;
     let row = create_index_row(request)?;
-    validate_new_session_index_v1(controller, &row).await?;
-    create_indexed_session_v1_with_insert(&controller.data_root, request, row, |row| async move {
-        insert_session_index_v1(controller, &row).await
+    validate_new_session_index_v1(host_runtime, &row).await?;
+    create_indexed_session_v1_with_insert(&host_runtime.data_root, request, row, |row| async move {
+        insert_session_index_v1(host_runtime, &row).await
     })
     .await
 }
@@ -917,36 +917,36 @@ pub fn locate_embedded_task_session_v1(
 /// Resolves one session id through SQLite without touching session directories.
 /// 仅通过 SQLite 解析一个会话 ID，不接触会话目录。
 pub async fn locate_session_v1_storage(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
 ) -> Result<SessionV1StorageLocator, SessionV1StoreError> {
-    let row = locate_session_index_v1(controller, session_id)
+    let row = locate_session_index_v1(host_runtime, session_id)
         .await?
         .ok_or_else(|| SessionIndexV1Error::Missing {
             session_id: session_id.to_string(),
         })?;
-    storage_locator_from_row(&controller.data_root, row).map_err(SessionV1StoreError::from)
+    storage_locator_from_row(&host_runtime.data_root, row).map_err(SessionV1StoreError::from)
 }
 
 /// Resolves one optional session id through SQLite without touching session directories.
 /// 仅通过 SQLite 解析一个可选会话 ID，不接触会话目录。
 ///
 /// # Parameters / 参数
-/// `controller` owns the exact list index and `session_id` is the stable cross-system identity.
-/// `controller` 持有精确列表索引，`session_id` 是稳定的跨系统身份。
+/// `host_runtime` owns the exact list index and `session_id` is the stable cross-system identity.
+/// `host_runtime` 持有精确列表索引，`session_id` 是稳定的跨系统身份。
 ///
 /// # Returns / 返回值
 /// Returns the validated locator when the row exists, `None` when it does not, or a structured
 /// index failure. No directory scan, repair, or fallback participates.
 /// 索引行存在时返回已校验定位器，不存在时返回 `None`，否则返回结构化索引失败；不执行目录扫描、修复或回退。
 pub async fn locate_optional_session_v1_storage(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
 ) -> Result<Option<SessionV1StorageLocator>, SessionV1StoreError> {
-    let Some(row) = locate_session_index_v1(controller, session_id).await? else {
+    let Some(row) = locate_session_index_v1(host_runtime, session_id).await? else {
         return Ok(None);
     };
-    storage_locator_from_row(&controller.data_root, row)
+    storage_locator_from_row(&host_runtime.data_root, row)
         .map(Some)
         .map_err(SessionV1StoreError::from)
 }
@@ -954,24 +954,24 @@ pub async fn locate_optional_session_v1_storage(
 /// Lists active V1 sessions from SQLite rows only.
 /// 只从 SQLite 记录列出活动 V1 会话。
 pub async fn list_active_sessions_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
-    list_active_session_index_v1(controller, project_id)
+    list_active_session_index_v1(host_runtime, project_id)
         .await
-        .map(|rows| current_partition_list_entries(&controller.data_root, rows))
+        .map(|rows| current_partition_list_entries(&host_runtime.data_root, rows))
         .map_err(SessionV1StoreError::from)
 }
 
 /// Lists archived V1 sessions from SQLite rows only.
 /// 只从 SQLite 记录列出归档 V1 会话。
 pub async fn list_archived_sessions_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
-    list_archived_session_index_v1(controller, project_id)
+    list_archived_session_index_v1(host_runtime, project_id)
         .await
-        .map(|rows| current_partition_list_entries(&controller.data_root, rows))
+        .map(|rows| current_partition_list_entries(&host_runtime.data_root, rows))
         .map_err(SessionV1StoreError::from)
 }
 
@@ -997,17 +997,17 @@ fn current_partition_list_entries(
 /// directory scan, compatibility load, or automatic file repair is attempted.
 /// 文件缺失时删除陈旧记录并返回可报告结果；不执行目录扫描、兼容加载或自动文件修复。
 pub async fn preflight_session_v1_storage(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
 ) -> Result<SessionV1StoragePreflightOutcome, SessionV1StoreError> {
-    let row = locate_session_index_v1(controller, session_id)
+    let row = locate_session_index_v1(host_runtime, session_id)
         .await?
         .ok_or_else(|| SessionIndexV1Error::Missing {
             session_id: session_id.to_string(),
         })?;
-    let locator = storage_locator_from_row(&controller.data_root, row)?;
+    let locator = storage_locator_from_row(&host_runtime.data_root, row)?;
     if !exact_metadata_file_exists(&locator)? {
-        delete_session_index_v1(controller, session_id).await?;
+        delete_session_index_v1(host_runtime, session_id).await?;
         return Ok(
             SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved {
                 session_id: session_id.to_string(),
@@ -1026,18 +1026,18 @@ pub async fn preflight_session_v1_storage(
 /// for an alternative directory and never touches project resources.
 /// 缺失记录或目录视为已经删除；本函数绝不搜索替代目录，也绝不触碰项目资源。
 pub async fn delete_session_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
 ) -> Result<DeleteSessionV1Outcome, SessionV1StoreError> {
-    let Some(row) = locate_session_index_v1(controller, session_id).await? else {
+    let Some(row) = locate_session_index_v1(host_runtime, session_id).await? else {
         return Ok(DeleteSessionV1Outcome {
             index_existed: false,
             directory_removed: false,
         });
     };
-    let locator = storage_locator_from_row(&controller.data_root, row)?;
+    let locator = storage_locator_from_row(&host_runtime.data_root, row)?;
     let directory_removed = remove_exact_session_directory(&locator)?;
-    delete_session_index_v1(controller, session_id).await?;
+    delete_session_index_v1(host_runtime, session_id).await?;
     Ok(DeleteSessionV1Outcome {
         index_existed: true,
         directory_removed,
@@ -1049,8 +1049,8 @@ pub async fn delete_session_v1(
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Controller runtime owning the application SQLite binding.
-///   `controller`：持有应用 SQLite 绑定的 Controller 运行时。
+/// - `host_runtime`: Host runtime runtime owning the application SQLite binding.
+///   `host_runtime`：持有应用 SQLite 绑定的 Host runtime 运行时。
 /// - `session_id`: Stable session identity whose list projection is updated.
 ///   `session_id`：其列表投影需要更新的稳定会话身份。
 /// - `unread`: Exact unread state to persist.
@@ -1061,11 +1061,11 @@ pub async fn delete_session_v1(
 /// Success after the exact SQLite row accepts the projection.
 /// 在精确 SQLite 记录接受投影后返回成功。
 pub async fn set_session_unread_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
     unread: bool,
 ) -> Result<(), SessionV1StoreError> {
-    set_session_index_unread_v1(controller, session_id, unread)
+    set_session_index_unread_v1(host_runtime, session_id, unread)
         .await
         .map_err(SessionV1StoreError::from)
 }
@@ -1075,8 +1075,8 @@ pub async fn set_session_unread_v1(
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Controller runtime owning the application SQLite binding.
-///   `controller`：持有应用 SQLite 绑定的 Controller 运行时。
+/// - `host_runtime`: Host runtime runtime owning the application SQLite binding.
+///   `host_runtime`：持有应用 SQLite 绑定的 Host runtime 运行时。
 /// - `locator`: Immutable exact locator owned by the session handle.
 ///   `locator`：由会话句柄持有的不可变精确定位器。
 /// - `metadata`: Authoritative metadata read after the V1 flush completed.
@@ -1087,7 +1087,7 @@ pub async fn set_session_unread_v1(
 /// Success only after the exact row mirrors the durable title, update time, and archive state.
 /// 仅在精确记录镜像可靠标题、更新时间与归档状态后返回成功。
 pub async fn project_session_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     locator: &SessionV1StorageLocator,
     metadata: &MetadataDocument,
 ) -> Result<(), SessionV1StoreError> {
@@ -1102,7 +1102,7 @@ pub async fn project_session_lifecycle_v1(
         .into());
     }
     project_session_lifecycle_index_v1(
-        controller,
+        host_runtime,
         locator.session_id(),
         locator.relative_path(),
         &metadata.title,
@@ -1239,8 +1239,8 @@ pub fn flush_session_v1_candidate(
 /// 使用注入的最终索引发布器创建一个会话。
 ///
 /// The injection point exists only to prove publication order and failure
-/// semantics without starting the external controller in unit tests.
-/// 该注入点仅用于在单元测试中无需启动外部 Controller 即可证明发布顺序与失败语义。
+/// semantics without touching a real database in unit tests.
+/// 该注入点仅用于在单元测试中无需触及真实数据库即可证明发布顺序与失败语义。
 async fn create_indexed_session_v1_with_insert<F, Fut>(
     data_root: &Path,
     request: &CreateSessionV1Request<'_>,
@@ -1412,9 +1412,9 @@ fn validate_production_storage_partition(
 /// Creates one exact physical V1 session tree for downstream persistence tests.
 /// 为下游持久化测试创建一棵精确的 V1 会话物理目录树。
 ///
-/// This fixture bypasses only the external SQLite controller. It still uses the production
+/// This fixture bypasses only the relational index. It still uses the production
 /// locator validation and complete V1 file publisher, and is unavailable in production builds.
-/// 该夹具仅绕过外部 SQLite Controller；仍使用生产定位校验与完整 V1 文件发布器，并且在
+/// 该夹具仅绕过关系索引；仍使用生产定位校验与完整 V1 文件发布器，并且在
 /// 生产构建中不可用。
 ///
 /// # Parameters
@@ -1853,16 +1853,14 @@ mod tests {
             before
         );
     }
-    use crate::data_plane::ControllerRuntimeMetadata;
+    use crate::data_plane::HostRuntimeMetadata;
+    use crate::local_database_runtime::LogicalDatabase;
+    use crate::local_sql;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use uuid::Uuid;
-    use vldb_controller_client::{
-        ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-        ControllerSqliteEnableRequest, ControllerSqliteValue, SpaceKind, SpaceRegistration,
-    };
+    use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
     /// Owns one external SQLite transaction used to prove real lock conflicts.
     /// 持有一个用于证明真实锁冲突的外部 SQLite 事务。
@@ -1948,8 +1946,8 @@ mod tests {
     ///
     /// # Parameters
     /// 参数
-    /// `sqlite_path` is the exact database used by the controller-backed session index.
-    /// `sqlite_path` 是控制器会话索引使用的精确数据库。
+    /// `sqlite_path` is the exact database used by the in-process session index.
+    /// `sqlite_path` 是宿主运行时会话索引使用的精确数据库。
     ///
     /// # Returns
     /// 返回值
@@ -2472,221 +2470,192 @@ connection.close()
         );
     }
 
-    /// A disconnected Controller is surfaced as an index schema failure.
-    /// 未连接 Controller 会显式返回索引结构失败。
+    /// An unusable database is surfaced as an explicit index schema failure.
+    /// 不可用的数据库会显式返回索引结构失败。
+    ///
+    /// This replaces an earlier assertion that a *disconnected host_runtime* produced the failure. That
+    /// premise no longer exists: the session index now executes against an already-open in-process
+    /// database, so the transport cannot be the reason. What survives, and is what this checks, is
+    /// that a database this layer cannot use is reported explicitly instead of being treated as a
+    /// successfully prepared schema.
+    ///
+    /// 本测试取代了先前"*未连接宿主运行时*导致失败"的断言。该前提已不存在：会话索引现在针对一个已打开的
+    /// 进程内数据库执行，因此传输层不可能是原因。保留下来的、也是本测试所检查的，是本层无法使用的数据库
+    /// 会被显式报告，而不是被当作已成功准备好的结构。
     #[tokio::test]
-    async fn disconnected_controller_is_an_explicit_index_failure() {
+    async fn unusable_database_is_an_explicit_index_schema_failure() {
         let temporary = tempfile::tempdir().expect("temporary data root");
-        let endpoint = "http://127.0.0.1:1".to_string();
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: false,
-                connect_timeout_secs: 1,
-                startup_timeout_secs: 1,
-                ..ControllerClientConfig::default()
-            },
-            ClientRegistration {
-                client_name: format!("session-v1-disconnected-{}", Uuid::new_v4()),
-                host_kind: "test".to_string(),
-                process_id: std::process::id(),
-                process_name: "vulcan-workspace-store-test".to_string(),
-                lease_ttl_secs: Some(1),
-            },
+
+        // A regular file where the database's parent directory belongs makes the open fail
+        // deterministically, and the assertion below pins that the reported reason names that path —
+        // which is only possible if the failure came from the local engine.
+        // 在本应是数据库父目录的位置放一个普通文件会使打开确定性地失败，下方断言固定报告的原因会指明该
+        // 路径——只有失败来自本地引擎时才可能如此。
+        let blocker = temporary.path().join("blocked-parent");
+        fs::write(&blocker, b"not a directory").expect("write blocking file");
+
+        let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: temporary.path().to_path_buf(),
+            sqlite_path: blocker.join("app.sqlite3"),
+            sqlite_binding_id: "unusable".to_string(),
+            system_statistics_sqlite_path: temporary.path().join("statistics.sqlite3"),
+            system_statistics_sqlite_binding_id: "unusable-statistics".to_string(),
+        });
+
+        match ensure_session_v1_storage_schema(&host_runtime).await {
+            Err(SessionV1StoreError::Index(SessionIndexV1Error::Schema { detail })) => {
+                assert!(
+                    detail.contains("blocked-parent"),
+                    "the failure must name the database path rather than the transport: {detail}"
+                );
+            }
+            other => panic!("expected an explicit index schema failure, got {other:?}"),
+        }
+
+        // Nothing may have been created next to the blocker: a refused open is not a partial setup.
+        // 阻塞物旁不得有任何东西被创建：被拒绝的打开不是部分完成的初始化。
+        assert_eq!(
+            fs::read_dir(temporary.path())
+                .expect("list temporary root")
+                .count(),
+            1,
+            "the refused database must not have created any file"
         );
-        let sqlite_path = temporary.path().join("app.sqlite3");
-        let controller = ControllerRuntimeHandle::new(
-            client,
-            ControllerRuntimeMetadata {
-                endpoint,
-                executable: String::new(),
-                data_root: temporary.path().to_path_buf(),
-                sqlite_path: sqlite_path.clone(),
-                sqlite_binding_id: "disconnected".to_string(),
-                system_statistics_sqlite_path: sqlite_path,
-                system_statistics_sqlite_binding_id: "disconnected-statistics".to_string(),
-            },
-        );
-        assert!(matches!(
-            ensure_session_v1_storage_schema(&controller).await,
-            Err(SessionV1StoreError::Index(
-                SessionIndexV1Error::Schema { .. }
-            ))
-        ));
     }
 
-    /// Exercises the V1 index lifecycle, row failure, transaction failure, and lock conflict against a real Controller/SQLite runtime.
-    /// 使用真实 Controller/SQLite 运行时验证 V1 索引生命周期、记录失败、事务失败与锁冲突。
+    /// Exercises the V1 index lifecycle, row failure, transaction failure, and lock conflict.
+    /// 验证 V1 索引生命周期、记录失败、事务失败与锁冲突。
+    ///
+    /// The relational work needs no host_runtime: the database is opened directly through the same
+    /// in-process helpers production code uses, and the handle's client is never connected, so any
+    /// code that reached the transport would fail rather than silently succeed. The external SQLite
+    /// lock holder still needs the managed Python runtime, which is what the ignore reason names.
+    ///
+    /// 关系侧工作不需要宿主运行时：数据库通过生产代码所用的同一批进程内辅助函数直接打开，且句柄的客户端从未
+    /// 连接，因此任何触达传输层的代码都会失败而不是静默成功。外部 SQLite 锁持有者仍需托管 Python 运行时，
+    /// 这正是忽略原因所指。
     #[tokio::test(flavor = "current_thread")]
-    #[ignore = "requires the bundled output/bin/vldb-controller.exe"]
-    async fn real_controller_session_v1_lifecycle_and_failures() {
-        let temporary = tempfile::tempdir().expect("temporary V1 controller root");
+    #[ignore = "requires the managed Python runtime for the external SQLite lock holder"]
+    async fn in_process_session_v1_lifecycle_and_failures() {
+        let temporary = tempfile::tempdir().expect("temporary V1 root");
         let data_root = temporary.path().join("data");
         let sqlite_path = data_root.join("sqlite/app-workspace.sqlite3");
         fs::create_dir_all(sqlite_path.parent().expect("SQLite parent"))
             .expect("create SQLite parent");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve controller port");
-        let port = listener.local_addr().expect("controller address").port();
-        drop(listener);
-        let executable = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("output/bin/vldb-controller.exe");
-        assert!(executable.is_file(), "bundled controller must exist");
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            ClientRegistration {
-                client_name: format!("session-v1-e2e-{}", Uuid::new_v4()),
-                host_kind: "test".to_string(),
-                process_id: std::process::id(),
-                process_name: "vulcan-workspace-store-test".to_string(),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client.connect().await.expect("connect real controller");
-        let binding_id = format!("session-v1-{}", Uuid::new_v4());
-        client
-            .attach_space(SpaceRegistration {
-                space_id: crate::data_plane::APP_SPACE_ID.to_string(),
-                space_label: "APP".to_string(),
-                space_kind: SpaceKind::User,
-                space_root: crate::runtime_assets::native_host_path_text_from_path(&data_root),
-            })
-            .await
-            .expect("attach app space");
-        client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: crate::data_plane::APP_SPACE_ID.to_string(),
-                binding_id: binding_id.clone(),
-                db_path: crate::runtime_assets::native_host_path_text_from_path(&sqlite_path),
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .expect("enable V1 SQLite binding");
-        client
-            .execute_sqlite_script_typed(
-                crate::data_plane::APP_SPACE_ID,
-                &binding_id,
-                r#"
-CREATE TABLE projects (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    pinned INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
-    icon_pack TEXT,
-    icon_key TEXT,
-    codebase_memory_enabled INTEGER NOT NULL,
-    archived INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-CREATE TABLE app_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-"#,
-                Vec::new(),
-            )
-            .await
-            .expect("create legacy workspace tables without the V1 session index");
-        client
-            .execute_sqlite_batch_typed(
-                crate::data_plane::APP_SPACE_ID,
-                &binding_id,
-                r#"
+
+        let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: data_root.clone(),
+            sqlite_path: sqlite_path.clone(),
+            sqlite_binding_id: "session-v1-lifecycle".to_string(),
+            system_statistics_sqlite_path: sqlite_path.clone(),
+            system_statistics_sqlite_binding_id: "session-v1-lifecycle-statistics".to_string(),
+        });
+        let app = host_runtime.local.as_ref();
+        // Seed the production v1 schema, then drop the V1 session index. That makes this fixture an
+        // old profile in the exact sense the loading path must tolerate: every other table is
+        // current and only the index it must survive without is absent.
+        //
+        // 播种生产 v1 结构，然后删除 V1 会话索引。这使该夹具成为加载路径必须容忍的确切意义上的旧配置：
+        // 其他表都是当前的，只有它必须在其缺失下存活的索引不存在。
+        //
+        // A hand-written minimal schema was used before, and it had already rotted: it lacked
+        // `project_vce_settings`, which the project query joins, so this fixture could not have
+        // loaded even before the migration. Seeding the real schema is what keeps it from rotting
+        // again, because a new table arrives here automatically.
+        //
+        // 此前使用的是手写极简结构，而它已经腐坏：它缺少项目查询要连接的 `project_vce_settings`，因此
+        // 该夹具在迁移之前就已无法加载。播种真实结构正是防止它再次腐坏的办法，因为新增的表会自动出现在这里。
+        local_sql::execute_script(
+            app,
+            LogicalDatabase::AppState,
+            &crate::data_plane::build_application_schema_script(),
+            &[],
+        )
+        .expect("create the production application schema");
+        local_sql::execute_script(
+            app,
+            LogicalDatabase::AppState,
+            "DROP TABLE IF EXISTS session_index_v1;",
+            &[],
+        )
+        .expect("drop the V1 session index to model an old profile");
+        local_sql::execute_batch(
+            app,
+            LogicalDatabase::AppState,
+            r#"
 INSERT INTO projects (
     id, name, root_path, pinned, sort_order, icon_pack, icon_key,
-    codebase_memory_enabled, archived, updated_at
-) VALUES (?1, ?2, ?3, 0, 0, NULL, NULL, 0, 0, 1);
+    codebase_memory_enabled, archived, created_at, updated_at
+) VALUES (?1, ?2, ?3, 0, 0, NULL, NULL, 0, 0, '1', '1');
 "#,
-                vec![vec![
-                    ControllerSqliteValue::String("project-id".to_string()),
-                    ControllerSqliteValue::String("Project".to_string()),
-                    ControllerSqliteValue::String(
-                        crate::runtime_assets::native_host_path_text_from_path(&data_root),
-                    ),
-                ]],
-            )
-            .await
-            .expect("insert legacy workspace project")
-            .success
-            .then_some(())
-            .expect("legacy workspace project insert must succeed");
-        let controller = ControllerRuntimeHandle::new(
-            client.clone(),
-            ControllerRuntimeMetadata {
-                endpoint,
-                executable: executable.display().to_string(),
-                data_root: data_root.clone(),
-                sqlite_path: sqlite_path.clone(),
-                sqlite_binding_id: binding_id.clone(),
-                system_statistics_sqlite_path: sqlite_path.clone(),
-                system_statistics_sqlite_binding_id: binding_id.clone(),
-            },
-        );
+            &[vec![
+                SqliteValue::Text("project-id".to_string()),
+                SqliteValue::Text("Project".to_string()),
+                SqliteValue::Text(crate::runtime_assets::native_host_path_text_from_path(
+                    &data_root,
+                )),
+            ]],
+        )
+        .expect("insert legacy workspace project")
+        .success
+        .then_some(())
+        .expect("legacy workspace project insert must succeed");
+        // The project query inner-joins these settings, so the row is part of a loadable profile.
+        // 项目查询内连接这些设置，因此该行是可加载配置的一部分。
+        local_sql::execute_batch(
+            app,
+            LogicalDatabase::AppState,
+            "INSERT INTO project_vce_settings (project_id, updated_at) VALUES (?1, '1');",
+            &[vec![SqliteValue::Text("project-id".to_string())]],
+        )
+        .expect("insert legacy project VCE settings")
+        .success
+        .then_some(())
+        .expect("legacy project VCE settings insert must succeed");
+
         let startup_snapshot =
-            super::super::loading::load_workspace_index_snapshot(controller.clone())
+            super::super::loading::load_workspace_index_snapshot(host_runtime.clone())
                 .await
                 .expect("old profile without V1 session index must still load");
         assert!(startup_snapshot.sessions.is_empty());
         assert!(startup_snapshot.archived_sessions.is_empty());
-        client
-            .execute_sqlite_batch_typed(
-                crate::data_plane::APP_SPACE_ID,
-                &binding_id,
-                r#"
+        local_sql::execute_batch(
+            app,
+            LogicalDatabase::AppState,
+            r#"
 INSERT INTO session_index_v1 (
     session_id, project_id, project_tag, storage_partition, relative_path,
     title, created_at_ms, updated_at_ms, archived_at_ms, unread
 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1, NULL, 0);
 "#,
-                vec![vec![
-                    ControllerSqliteValue::String("not-a-session-uuid".to_string()),
-                    ControllerSqliteValue::String("project-id".to_string()),
-                    ControllerSqliteValue::String("project-tag".to_string()),
-                    ControllerSqliteValue::String(SESSION_V1_STORAGE_PARTITION.to_string()),
-                    ControllerSqliteValue::String(
-                        "project-tag/2026-08-28-not-a-session-uuid".to_string(),
-                    ),
-                    ControllerSqliteValue::String("Unsupported session".to_string()),
-                ]],
-            )
-            .await
-            .expect("insert unsupported session row")
-            .success
-            .then_some(())
-            .expect("unsupported session row insert must succeed");
+            &[vec![
+                SqliteValue::Text("not-a-session-uuid".to_string()),
+                SqliteValue::Text("project-id".to_string()),
+                SqliteValue::Text("project-tag".to_string()),
+                SqliteValue::Text(SESSION_V1_STORAGE_PARTITION.to_string()),
+                SqliteValue::Text("project-tag/2026-08-28-not-a-session-uuid".to_string()),
+                SqliteValue::Text("Unsupported session".to_string()),
+            ]],
+        )
+        .expect("insert unsupported session row")
+        .success
+        .then_some(())
+        .expect("unsupported session row insert must succeed");
         let unsupported_snapshot =
-            super::super::loading::load_workspace_index_snapshot(controller.clone())
+            super::super::loading::load_workspace_index_snapshot(host_runtime.clone())
                 .await
                 .expect("unsupported session row must not block workspace startup");
         assert!(unsupported_snapshot.sessions.is_empty());
-        client
-            .execute_sqlite_batch_typed(
-                crate::data_plane::APP_SPACE_ID,
-                &binding_id,
-                "DELETE FROM session_index_v1 WHERE session_id = ?1;",
-                vec![vec![ControllerSqliteValue::String(
-                    "not-a-session-uuid".to_string(),
-                )]],
-            )
-            .await
-            .expect("delete unsupported session row")
-            .success
-            .then_some(())
-            .expect("unsupported session row deletion must succeed");
+        local_sql::execute_batch(
+            app,
+            LogicalDatabase::AppState,
+            "DELETE FROM session_index_v1 WHERE session_id = ?1;",
+            &[vec![SqliteValue::Text("not-a-session-uuid".to_string())]],
+        )
+        .expect("delete unsupported session row")
+        .success
+        .then_some(())
+        .expect("unsupported session row deletion must succeed");
 
         let metadata = MetadataDocument::new("session-e2e", "project-tag", "title", 1);
         let runtime_lock = RuntimeLock {
@@ -2696,19 +2665,19 @@ INSERT INTO session_index_v1 (
             locked_sources: Vec::new(),
         };
         let request = creation_fixture(&metadata, &runtime_lock);
-        let created = create_indexed_session_v1(&controller, &request)
+        let created = create_indexed_session_v1(&host_runtime, &request)
             .await
             .expect("create indexed V1 session");
         assert!(created.locator.layout.metadata_path().is_file());
         assert_eq!(
-            list_active_sessions_v1(&controller, "project-id")
+            list_active_sessions_v1(&host_runtime, "project-id")
                 .await
                 .expect("list active sessions")
                 .len(),
             1
         );
         assert!(matches!(
-            create_indexed_session_v1(&controller, &request).await,
+            create_indexed_session_v1(&host_runtime, &request).await,
             Err(SessionV1StoreError::Index(
                 SessionIndexV1Error::Conflict { .. }
             ))
@@ -2719,47 +2688,47 @@ INSERT INTO session_index_v1 (
         let mut archived_metadata = metadata.clone();
         archived_metadata.archived_at_ms = Some(2);
         archived_metadata.updated_at_ms = 2;
-        project_session_lifecycle_v1(&controller, &created.locator, &archived_metadata)
+        project_session_lifecycle_v1(&host_runtime, &created.locator, &archived_metadata)
             .await
             .expect("archive V1 session");
         assert_eq!(
-            list_archived_sessions_v1(&controller, "project-id")
+            list_archived_sessions_v1(&host_runtime, "project-id")
                 .await
                 .expect("list archived sessions")
                 .len(),
             1
         );
         assert!(matches!(
-            preflight_session_v1_storage(&controller, "session-e2e")
+            preflight_session_v1_storage(&host_runtime, "session-e2e")
                 .await
                 .expect("preflight V1 session restore"),
             SessionV1StoragePreflightOutcome::Ready { .. }
         ));
-        project_session_lifecycle_v1(&controller, &created.locator, &metadata)
+        project_session_lifecycle_v1(&host_runtime, &created.locator, &metadata)
             .await
             .expect("project authoritative unarchived metadata");
-        set_session_unread_v1(&controller, "session-e2e", true)
+        set_session_unread_v1(&host_runtime, "session-e2e", true)
             .await
             .expect("mark indexed V1 session unread");
         assert_eq!(
-            list_active_sessions_v1(&controller, "project-id")
+            list_active_sessions_v1(&host_runtime, "project-id")
                 .await
                 .expect("list unread active session")[0]
                 .unread,
             1
         );
-        set_session_unread_v1(&controller, "session-e2e", false)
+        set_session_unread_v1(&host_runtime, "session-e2e", false)
             .await
             .expect("mark indexed V1 session read");
         assert_eq!(
-            list_active_sessions_v1(&controller, "project-id")
+            list_active_sessions_v1(&host_runtime, "project-id")
                 .await
                 .expect("list read active session")[0]
                 .unread,
             0
         );
         assert!(matches!(
-            set_session_unread_v1(&controller, "missing-session", false).await,
+            set_session_unread_v1(&host_runtime, "missing-session", false).await,
             Err(SessionV1StoreError::Index(
                 SessionIndexV1Error::Missing { .. }
             ))
@@ -2769,25 +2738,23 @@ INSERT INTO session_index_v1 (
         let mut renamed_metadata = metadata.clone();
         renamed_metadata.title = "renamed".to_string();
         renamed_metadata.updated_at_ms = 4;
-        project_session_lifecycle_v1(&controller, &created.locator, &renamed_metadata)
+        project_session_lifecycle_v1(&host_runtime, &created.locator, &renamed_metadata)
             .await
             .expect("rename V1 session");
 
-        client
-            .execute_sqlite_script_typed(
-                crate::data_plane::APP_SPACE_ID,
-                &binding_id,
-                r#"
+        local_sql::execute_script(
+            app,
+            LogicalDatabase::AppState,
+            r#"
 CREATE TRIGGER fail_v1_archive
 BEFORE UPDATE OF archived_at_ms ON session_index_v1
 BEGIN
     SELECT RAISE(ABORT, 'injected V1 transaction failure');
 END;
 "#,
-                Vec::new(),
-            )
-            .await
-            .expect("install transaction failure trigger");
+            &[],
+        )
+        .expect("install transaction failure trigger");
         assert!(matches!(
             {
                 // failed_archive_metadata carries the exact projection rejected by the trigger.
@@ -2796,7 +2763,7 @@ END;
                 failed_archive_metadata.archived_at_ms = Some(5);
                 failed_archive_metadata.updated_at_ms = 5;
                 project_session_lifecycle_v1(
-                    &controller,
+                    &host_runtime,
                     &created.locator,
                     &failed_archive_metadata,
                 )
@@ -2806,15 +2773,13 @@ END;
                 SessionIndexV1Error::Write { .. }
             ))
         ));
-        client
-            .execute_sqlite_script_typed(
-                crate::data_plane::APP_SPACE_ID,
-                &binding_id,
-                "DROP TRIGGER fail_v1_archive;",
-                Vec::new(),
-            )
-            .await
-            .expect("drop transaction failure trigger");
+        local_sql::execute_script(
+            app,
+            LogicalDatabase::AppState,
+            "DROP TRIGGER fail_v1_archive;",
+            &[],
+        )
+        .expect("drop transaction failure trigger");
 
         let lock_holder = start_sqlite_lock_holder(&sqlite_path);
         assert!(matches!(
@@ -2825,7 +2790,7 @@ END;
                 locked_archive_metadata.archived_at_ms = Some(6);
                 locked_archive_metadata.updated_at_ms = 6;
                 project_session_lifecycle_v1(
-                    &controller,
+                    &host_runtime,
                     &created.locator,
                     &locked_archive_metadata,
                 )
@@ -2842,13 +2807,13 @@ END;
         let mut final_archive_metadata = renamed_metadata;
         final_archive_metadata.archived_at_ms = Some(7);
         final_archive_metadata.updated_at_ms = 7;
-        project_session_lifecycle_v1(&controller, &created.locator, &final_archive_metadata)
+        project_session_lifecycle_v1(&host_runtime, &created.locator, &final_archive_metadata)
             .await
             .expect("archive before missing-file restore");
         fs::remove_file(created.locator.layout.metadata_path())
             .expect("remove exact metadata fixture");
         assert_eq!(
-            preflight_session_v1_storage(&controller, "session-e2e")
+            preflight_session_v1_storage(&host_runtime, "session-e2e")
                 .await
                 .expect("clean missing restore row"),
             SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved {
@@ -2856,7 +2821,7 @@ END;
             }
         );
         assert!(
-            list_archived_sessions_v1(&controller, "project-id")
+            list_archived_sessions_v1(&host_runtime, "project-id")
                 .await
                 .expect("list after stale-row cleanup")
                 .is_empty()
@@ -2864,11 +2829,11 @@ END;
 
         let delete_metadata = MetadataDocument::new("session-delete", "project-tag", "title", 9);
         let delete_request = creation_fixture(&delete_metadata, &runtime_lock);
-        create_indexed_session_v1(&controller, &delete_request)
+        create_indexed_session_v1(&host_runtime, &delete_request)
             .await
             .expect("create deletion fixture");
         assert_eq!(
-            delete_session_v1(&controller, "session-delete")
+            delete_session_v1(&host_runtime, "session-delete")
                 .await
                 .expect("delete V1 session"),
             DeleteSessionV1Outcome {
@@ -2877,7 +2842,7 @@ END;
             }
         );
         assert_eq!(
-            delete_session_v1(&controller, "session-delete")
+            delete_session_v1(&host_runtime, "session-delete")
                 .await
                 .expect("repeat V1 deletion"),
             DeleteSessionV1Outcome {
@@ -2885,6 +2850,5 @@ END;
                 directory_removed: false,
             }
         );
-        client.shutdown().await.expect("shutdown controller client");
     }
 }

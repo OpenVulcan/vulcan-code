@@ -76,7 +76,7 @@ fn v1_api_terminal_satisfies_report(
 pub(super) async fn handle_finished_stream_event(
     app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     active_stream_task_id: Uuid,
     stream_task_started_at: i128,

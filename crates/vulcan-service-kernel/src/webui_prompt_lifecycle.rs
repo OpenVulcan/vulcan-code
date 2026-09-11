@@ -15,9 +15,7 @@ use vulcan_session_core::ActiveTurnKind;
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionRunPhase, SessionState,
 };
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
-};
+use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::WorkspaceSnapshot};
 
 use super::pending_prompts::{
     agent_runtime_for_pending_prompt, emit_pending_prompts_changed_delta,

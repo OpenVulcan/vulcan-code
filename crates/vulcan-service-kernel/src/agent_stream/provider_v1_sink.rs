@@ -3458,7 +3458,7 @@ mod tests {
             ProviderTelemetryHookGuard, handle_webui_detached_subagent_task_event,
         };
         use crate::tests::test_support::{
-            TestControllerRuntimeRoot, seed_test_live_subagent_registry_from_panel_states,
+            TestHostRuntimeRoot, seed_test_live_subagent_registry_from_panel_states,
             test_service_state_with_parent_session,
         };
         use vulcan_agent_runtime::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
@@ -3544,8 +3544,8 @@ mod tests {
         .unwrap();
         // controller_root owns isolated offline storage; it never touches the user's session files.
         // controller_root 持有隔离离线存储，不接触用户会话文件。
-        let controller_root = TestControllerRuntimeRoot::new(parent_handle.session_id());
-        let controller = controller_root.controller_runtime_handle();
+        let controller_root = TestHostRuntimeRoot::new(parent_handle.session_id());
+        let controller = controller_root.host_runtime_handle();
         let mut telemetry =
             ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
         let event = RuntimeEvent::new(RuntimeEventKind::DelegateFinished, "Child finished", "Completed").with_metadata(Some(json!({

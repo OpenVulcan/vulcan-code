@@ -2,6 +2,7 @@
 //! 独立于已发布项目绑定的首次分配持久归属。
 
 use super::*;
+use vulcan_lancedb_engine::types::LanceDbDropTableInput;
 
 /// Exact receipt retained before either initial vector table can be created.
 /// 创建任一首次向量表之前保留的精确回执。
@@ -143,8 +144,8 @@ impl VceDataPlaneHandle {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<InitialAllocation, String>> + Send + 'a>,
     > {
-        // Keep the controller allocation/cleanup state machine off every enclosing host future's stack.
-        // 将控制器分配／清理状态机移出各层宿主任务的栈，避免沿初始化调用链放大。
+        // Keep the storage allocation/cleanup state machine off every enclosing host future's stack.
+        // 将存储分配／清理状态机移出各层宿主任务的栈，避免沿初始化调用链放大。
         Box::pin(async move {
             self.validate_project_owner(&config.project_id)?;
             config.validate()?;
@@ -279,8 +280,11 @@ impl VceDataPlaneHandle {
             if created == 0 {
                 continue;
             }
-            self.client
-                .drop_lancedb_table(VCE_SPACE_ID, &self.lancedb_binding_id, table)
+            let engine = self.vector_engine().await?;
+            engine
+                .drop_table(LanceDbDropTableInput {
+                    table_name: table.clone(),
+                })
                 .await
                 .map_err(|error| format!("Drop owned initial VCE table `{table}`: {error}"))?;
             self.execute(
@@ -316,15 +320,15 @@ ON vce_initial_allocations(project_id) WHERE state != 'published';
 "#
 }
 
-/// Verify exact rollback, durable cleanup retry and published-table protection with a private controller.
-/// 使用私有控制器验证精确回滚、持久清理重试与已发布表保护。
-/// `controller` owns temporary storage, `config` is the isolated target, and `interrupt_cleanup` disables only its vector binding.
-/// `controller` 持有临时存储，`config` 为隔离目标，`interrupt_cleanup` 仅禁用其向量绑定。
+/// Verify exact rollback, durable cleanup retry and published-table protection with a private host runtime.
+/// 使用私有宿主运行时验证精确回滚、持久清理重试与已发布表保护。
+/// `host_runtime` owns temporary storage, `config` is the isolated target, and `interrupt_cleanup` disables only its vector binding.
+/// `host_runtime` 持有临时存储，`config` 为隔离目标，`interrupt_cleanup` 仅禁用其向量绑定。
 /// Returns after assertions and closes all fixture bindings; this does not exercise unknown-success recovery.
 /// 断言后返回并关闭全部夹具绑定；不验证未知成功恢复。
 #[cfg(test)]
 pub(super) fn verify_initial_allocation_failures(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     config: VceProjectIndexConfig,
     interrupt_cleanup: bool,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -333,7 +337,7 @@ pub(super) fn verify_initial_allocation_failures(
     Box::pin(async move {
         // Catalog paths are actual host allocations, not guessed storage locations.
         // 目录路径来自实际宿主分配，不猜测存储位置。
-        let catalog = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(controller)
+        let catalog = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(host_runtime)
             .await
             .expect("open initial failure catalog");
         // A distinct stable project keeps all injected faults inside this fixture.
@@ -342,15 +346,11 @@ pub(super) fn verify_initial_allocation_failures(
             .allocate_project(&config.project_id)
             .await
             .expect("allocate initial failure paths");
-        // Only this project's schema and private controller bindings are prepared.
-        // 仅准备此项目的结构及私有控制器绑定。
-        let store = prepare_vce_storage_binding(
-            controller.client.clone(),
-            paths.root,
-            config.project_id.clone(),
-            true,
-        )
-        .expect("prepare initial failure store");
+        // Only this project's schema and private host bindings are prepared.
+        // 仅准备此项目的结构及私有宿主绑定。
+        let store =
+            prepare_vce_storage_binding(&host_runtime, paths.root, config.project_id.clone(), true)
+                .expect("prepare initial failure store");
         store
             .activate_bindings(true)
             .await
@@ -378,13 +378,39 @@ pub(super) fn verify_initial_allocation_failures(
                 .allocate_initial_tables(&config, &tables[0], &tables[1])
                 .await
                 .expect("allocate tables before cleanup interruption");
+            // The in-process equivalent of the former controller-side binding disable. Cleanup refuses to
+            // delete tables that a project binding references, and it performs that check *before* touching
+            // the vectors, so one temporary reference makes the cleanup fail while leaving both tables and
+            // the committed ownership flags exactly as they were. The reference is withdrawn again below,
+            // because the retry needs a clean state — which is why this is a fixture injection and not a
+            // change to the production rule. The acknowledged-failure message prefix is unchanged, so the
+            // assertion below still observes the same property it always did.
+            // 原先"停用控制器侧绑定"的进程内等价做法。清理会拒绝删除被项目绑定引用的表，且该检查发生在
+            // **触碰向量之前**，故一条临时引用即可让清理失败，同时让两张表与已提交的归属标志保持原样。
+            // 该引用在下方撤销，因为重试需要干净状态——这也正是"夹具注入"而非"改动生产规则"的原因。
+            // 失败消息前缀未变，故下方断言观察到的仍是它一向观察的那个属性。
+            let blocker = format!(
+                "INSERT INTO vce_project_bindings (namespace_id, project_id, root_path, root_hash, checkpoint_chain_id, schema_version, vector_space_id, physical_fingerprint, preprocessing_version, chunker_version, dimension, content_table, path_table, config_revision, active, lifecycle_state, created_at_unix_ms, updated_at_unix_ms) VALUES ('{}', '{}', 'fixture', '{}', '{}', 1, '{}', '{}', '{}', '{}', {}, '{}', '{}', 1, 0, 'orphaned', 0, 0);",
+                format!("fixture-cleanup-blocker-{}", uuid::Uuid::new_v4()),
+                config.project_id,
+                "0".repeat(64),
+                format!("fixture-chain-{}", uuid::Uuid::new_v4()),
+                format!("fixture-space-{}", uuid::Uuid::new_v4()),
+                config.physical_fingerprint,
+                config.preprocessing_version,
+                config.chunker_version,
+                config.dimension,
+                tables[0],
+                tables[1],
+            );
             store
-                .client
-                .disable_lancedb(VCE_SPACE_ID, &store.lancedb_binding_id)
+                .execute(
+                    &blocker,
+                    Vec::new(),
+                    "Inject fixture-only binding reference",
+                )
                 .await
-                .expect("disable only fixture vector binding");
-            // The real deletion request fails while SQLite retains the exact positive ownership flags.
-            // 真实删除请求失败时，SQLite 保留精确的正向归属标志。
+                .expect("install fixture-only binding reference");
             let failure = store
                 .fail_initial_allocation(
                     &allocation,
@@ -393,6 +419,30 @@ pub(super) fn verify_initial_allocation_failures(
                 .await;
             assert!(failure.contains("fixture: known allocation failure"));
             assert!(failure.contains("acknowledged initial table cleanup failed"));
+            // The property the injection exists to prove: the cleanup failed, and the owned tables are
+            // still there. A drop either succeeds and the table is gone, or it never ran — there is no
+            // third outcome, so this is the exact statement of what the old controller-side disable bought.
+            // 注入存在的意义即在于证明这一属性：清理失败了，而自有表仍在。删除要么成功（表消失），要么
+            // 根本没执行——不存在第三种结果，故这句正是"旧的控制器侧停用"所买到的东西的精确表述。
+            for table in &tables {
+                assert!(
+                    store
+                        .ensure_vector_table(table, config.dimension)
+                        .await
+                        .is_err(),
+                    "an interrupted cleanup must leave its owned table in place"
+                );
+            }
+            // Withdraw the reference so the retry below sees the clean state it needs.
+            // 撤销该引用，使下方重试看到它所需要的干净状态。
+            store
+                .execute(
+                    "DELETE FROM vce_project_bindings WHERE namespace_id LIKE 'fixture-cleanup-blocker-%';",
+                    Vec::new(),
+                    "Withdraw fixture-only binding reference",
+                )
+                .await
+                .expect("remove fixture-only binding reference");
         } else {
             store.execute(
             "CREATE TRIGGER fixture_reject_initial_binding BEFORE INSERT ON vce_project_bindings BEGIN SELECT RAISE(ROLLBACK, 'fixture: reject initial binding'); END;",
@@ -400,7 +450,7 @@ pub(super) fn verify_initial_allocation_failures(
         ).await.expect("install initial registration failure");
             // Public factory owns the real writer lease and executes both physical creates and SQL publication.
             // 公开工厂持有真实写入租约，并执行两次物理创建及 SQL 发布。
-            let factory = bootstrap_vce_data_plane(controller)
+            let factory = bootstrap_vce_data_plane(host_runtime)
                 .await
                 .expect("open registration failure factory");
             // The injected transaction rollback must be returned, never translated into initialization success.
@@ -465,7 +515,7 @@ pub(super) fn verify_initial_allocation_failures(
             .expect("release initial recovery inspection owner");
         // Retrying through the public factory must clean its own tables, assign a new attempt, and publish atomically.
         // 通过公开工厂重试必须清理自有表、分配新尝试，并原子发布。
-        let retry_factory = bootstrap_vce_data_plane(controller)
+        let retry_factory = bootstrap_vce_data_plane(host_runtime)
             .await
             .expect("open initial recovery factory");
         // A first physical binding is not a completed content index or an engine checkpoint.

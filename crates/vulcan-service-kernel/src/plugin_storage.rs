@@ -1,5 +1,5 @@
-//! Controller-backed isolated storage service for authorized Vulcan Plugins.
-//! 面向已授权 Vulcan 插件的 Controller 后端隔离存储服务。
+//! In-process isolated storage service for authorized Vulcan Plugins.
+//! 面向已授权 Vulcan 插件的进程内隔离存储服务。
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::Deserialize;
@@ -7,19 +7,26 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
-use vldb_controller_client::{
-    ControllerClient, ControllerLanceDbColumnDef, ControllerLanceDbColumnType,
-    ControllerLanceDbEnableRequest, ControllerLanceDbInputFormat, ControllerLanceDbOutputFormat,
-    ControllerSqliteEnableRequest, ControllerSqliteValue, SpaceKind, SpaceRegistration,
+use vulcan_lancedb_engine::engine::LanceDbEngine;
+use vulcan_lancedb_engine::types::{
+    LanceDbColumnDef, LanceDbColumnType, LanceDbCreateTableInput, LanceDbDeleteInput,
+    LanceDbDropTableInput, LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput,
+    LanceDbUpsertInput,
 };
 use vulcan_plugin_runtime::{
     VulcanPluginStorageOperation, VulcanPluginStorageRequest, VulcanPluginStorageService,
 };
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
+use vulcan_workspace_store::local_database_runtime::{
+    LanceDbDirectoryBinding, LocalDatabaseRuntime, SqliteFileBinding, SqliteHardeningOptions,
+    SqliteOpenOptions, SqlitePragmaOptions,
+};
+use vulcan_workspace_store::local_sql;
 
 /// Maximum SQLite rows returned by one plugin query.
 /// 单次插件 SQLite 查询允许返回的最大行数。
@@ -40,10 +47,6 @@ const PLUGIN_LANCEDB_MAX_SEARCH_LIMIT: u32 = 5_000;
 /// Maximum active and queued storage operations accepted for one plugin.
 /// 单个插件允许接收的活动与排队存储操作上限。
 const PLUGIN_STORAGE_MAX_PENDING_OPERATIONS: usize = 64;
-
-/// Monotonic in-process sequence preventing same-millisecond binding collisions.
-/// 防止同一毫秒内绑定冲突的进程内单调序列。
-static PLUGIN_STORAGE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Per-plugin bounded serial lane that preserves migration and write ordering.
 /// 按插件隔离的有界串行通道，用于保持迁移与写入顺序。
@@ -72,21 +75,18 @@ impl PluginStorageOperationLane {
     }
 }
 
-/// Controller-backed storage adapter that derives every path and binding from plugin identity.
-/// 根据插件身份派生全部路径与绑定的 Controller 后端存储适配器。
-pub(crate) struct ControllerPluginStorageService {
-    /// Shared Controller client bootstrapped by the application data plane.
-    /// 由应用数据平面引导的共享 Controller 客户端。
-    client: ControllerClient,
-    /// Runtime handle used to bridge synchronous Lua host callbacks into async Controller calls.
-    /// 用于把同步 Lua 宿主回调桥接到异步 Controller 调用的运行时句柄。
+/// In-process storage adapter that derives every path and binding from plugin identity.
+/// 根据插件身份派生全部路径与绑定的进程内存储适配器。
+pub(crate) struct PluginStorageService {
+    /// In-process database runtime that serves plugin storage.
+    /// 服务插件存储的进程内数据库运行时。
+    local: Arc<LocalDatabaseRuntime>,
+    /// Runtime handle used to bridge synchronous Lua host callbacks into asynchronous engine calls.
+    /// 用于把同步 Lua 宿主回调桥接到异步引擎调用的运行时句柄。
     runtime: Handle,
     /// User-owned plugin state root.
     /// 用户持有的插件状态根目录。
     plugin_state_root: PathBuf,
-    /// Bootstrap-scoped suffix ensuring Controller bindings belong only to this client.
-    /// 确保 Controller 绑定仅属于当前客户端的引导作用域后缀。
-    binding_scope: String,
     /// Plugin identities whose SQLite binding has been enabled in this process.
     /// 当前进程中已启用 SQLite 绑定的插件身份集合。
     initialized_sqlite_plugins: Mutex<BTreeSet<String>>,
@@ -98,9 +98,9 @@ pub(crate) struct ControllerPluginStorageService {
     operation_lanes: Mutex<BTreeMap<String, Arc<PluginStorageOperationLane>>>,
 }
 
-impl ControllerPluginStorageService {
-    /// Creates one adapter over the already-connected application Controller client.
-    /// 基于已连接的应用 Controller 客户端创建一个适配器。
+impl PluginStorageService {
+    /// Creates one adapter over the host-owned in-process database runtime.
+    /// 基于宿主持有的进程内数据库运行时创建一个适配器。
     ///
     /// # Parameters
     /// 参数
@@ -112,19 +112,48 @@ impl ControllerPluginStorageService {
     /// Returns an uninitialized lazy storage adapter.
     /// 返回一个尚未初始化且按需启用的存储适配器。
     pub(crate) fn new(
-        client: ControllerClient,
+        host_runtime: &HostRuntimeHandle,
         runtime: Handle,
         plugin_state_root: PathBuf,
     ) -> Self {
         Self {
-            client,
+            local: host_runtime.local.clone(),
             runtime,
             plugin_state_root,
-            binding_scope: build_plugin_storage_binding_scope(),
             initialized_sqlite_plugins: Mutex::new(BTreeSet::new()),
             initialized_lancedb_plugins: Mutex::new(BTreeSet::new()),
             operation_lanes: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Declares the LanceDB limits one plugin's vector store runs with.
+    /// 声明某个插件向量存储使用的 LanceDB 限制。
+    ///
+    /// Every knob the controller's enable request stated is carried over, because the engine has an exact
+    /// equivalent for each and a plugin's limits are part of its isolation contract.
+    /// 旧边界声明的每一项限制都被沿用，因为引擎对每一项都有精确等价物，而插件限制属于其隔离契约。
+    fn plugin_lancedb_binding(&self, plugin_id: &str) -> LanceDbDirectoryBinding {
+        LanceDbDirectoryBinding {
+            directory: plugin_data_root(&self.plugin_state_root, plugin_id).join("lancedb"),
+            read_consistency_interval_ms: Some(250),
+            max_upsert_payload: 16 * 1024 * 1024,
+            max_search_limit: PLUGIN_LANCEDB_MAX_SEARCH_LIMIT as usize,
+            max_concurrent_requests: 32,
+        }
+    }
+
+    /// Returns the in-process LanceDB engine holding one plugin's vector tables.
+    /// 返回保存某个插件向量表的进程内 LanceDB 引擎。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an explicit error when the plugin's vector directory cannot be opened.
+    /// 插件向量目录无法打开时返回显式错误。
+    async fn vector_engine(&self, plugin_id: &str) -> Result<LanceDbEngine, String> {
+        self.local
+            .lance_engine(self.plugin_lancedb_binding(plugin_id))
+            .await
+            .map_err(|error| format!("Failed to open plugin LanceDB engine: {error}"))
     }
 
     /// Resolves the stable bounded operation lane for one authenticated plugin.
@@ -153,8 +182,8 @@ impl ControllerPluginStorageService {
         ))
     }
 
-    /// Executes one request on the async Controller client after lazy backend initialization.
-    /// 在按需初始化后端后，通过异步 Controller 客户端执行一条请求。
+    /// Executes one request on the in-process engines after lazy backend initialization.
+    /// 在按需初始化后端后，通过进程内引擎执行一条请求。
     ///
     /// # Parameters
     /// 参数
@@ -180,8 +209,8 @@ impl ControllerPluginStorageService {
                     request.plugin_id, PLUGIN_STORAGE_MAX_PENDING_OPERATIONS
                 )
             })?;
-        // serialGuard remains held through lazy initialization and the complete Controller operation.
-        // serialGuard 在按需初始化与完整 Controller 操作期间保持持有。
+        // serialGuard remains held through lazy initialization and the complete engine operation.
+        // serialGuard 在按需初始化与完整引擎操作期间保持持有。
         let _serial_guard = operation_lane.serial_gate.lock().await;
         if request.operation.is_sqlite() {
             self.ensure_sqlite(&request.plugin_id).await?;
@@ -251,47 +280,54 @@ impl ControllerPluginStorageService {
         {
             return Ok(());
         }
-        // pluginDataRoot is the only physical root exposed to the Controller for this plugin.
-        // pluginDataRoot 是为当前插件暴露给 Controller 的唯一物理根目录。
+        // pluginDataRoot is the only physical root plugin SQLite storage can reach.
+        // pluginDataRoot 是插件 SQLite 存储可触达的唯一物理根目录。
         let plugin_data_root = plugin_data_root(&self.plugin_state_root, plugin_id);
-        // sqlitePath is host-derived and cannot be influenced by the plugin payload.
-        // sqlitePath 由宿主派生，插件载荷无法影响。
-        let sqlite_path = plugin_data_root.join("plugin.sqlite3");
+
         fs::create_dir_all(&plugin_data_root).map_err(|error| {
             format!(
                 "Failed to create plugin data directory `{}`: {error}",
                 plugin_data_root.display()
             )
         })?;
-        self.attach_plugin_space(plugin_id, &plugin_data_root)
-            .await?;
-        self.client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: plugin_space_id(plugin_id),
-                binding_id: plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                db_path: vulcan_runtime_assets::native_host_path_text_from_path(&sqlite_path),
-                connection_pool_size: 2,
-                busy_timeout_ms: 10_000,
-                journal_mode: "WAL".to_string(),
-                synchronous: "NORMAL".to_string(),
-                foreign_keys: true,
-                temp_store: "MEMORY".to_string(),
-                wal_autocheckpoint_pages: 1_000,
-                cache_size_kib: 16_384,
-                mmap_size_bytes: 64 * 1024 * 1024,
-                enforce_db_file_lock: true,
-                read_only: false,
-                allow_uri_filenames: false,
-                trusted_schema: false,
-                defensive: true,
-            })
-            .await
-            .map_err(|error| format!("Failed to enable plugin SQLite binding: {error}"))?;
+        // The engine opens the file on the first statement and keeps it open for the process, because a
+        // plugin's binding has no teardown in this adapter.
+        // 引擎在第一条语句时打开该文件并为进程保持打开，因为本适配器中插件的绑定没有拆除路径。
         self.initialized_sqlite_plugins
             .lock()
             .map_err(|_| "Plugin SQLite initialization lock is poisoned.".to_string())?
             .insert(plugin_id.to_string());
         Ok(())
+    }
+
+    /// Builds one plugin's exact in-process SQLite binding.
+    /// 构建某个插件精确的进程内 SQLite 绑定。
+    ///
+    /// The binding declares only options enforced by the in-process engine. Host-side runtime
+    /// serialization provides the concurrency boundary instead of exposing a fictitious pool size.
+    /// 此绑定只声明进程内引擎实际执行的选项。并发边界由宿主运行时串行化提供，不再暴露虚假的连接池大小。
+    fn plugin_sqlite_binding(&self, plugin_id: &str) -> SqliteFileBinding {
+        SqliteFileBinding {
+            path: plugin_data_root(&self.plugin_state_root, plugin_id).join("plugin.sqlite3"),
+            options: SqliteOpenOptions {
+                busy_timeout_ms: 10_000,
+                pragmas: SqlitePragmaOptions {
+                    journal_mode: String::from("WAL"),
+                    synchronous: String::from("NORMAL"),
+                    foreign_keys: true,
+                    temp_store: String::from("MEMORY"),
+                    wal_autocheckpoint_pages: 1_000,
+                    cache_size_kib: 16_384,
+                    mmap_size_bytes: 64 * 1024 * 1024,
+                },
+                hardening: SqliteHardeningOptions {
+                    enforce_db_file_lock: true,
+                    read_only: false,
+                    trusted_schema: false,
+                    defensive: true,
+                },
+            },
+        }
     }
 
     /// Ensures the plugin LanceDB space and binding exist exactly once per process.
@@ -315,8 +351,8 @@ impl ControllerPluginStorageService {
         {
             return Ok(());
         }
-        // pluginDataRoot is the only physical root exposed to the Controller for this plugin.
-        // pluginDataRoot 是为当前插件暴露给 Controller 的唯一物理根目录。
+        // pluginDataRoot is the only physical root this plugin's vector storage can reach.
+        // pluginDataRoot 是当前插件向量存储可触达的唯一物理根目录。
         let plugin_data_root = plugin_data_root(&self.plugin_state_root, plugin_id);
         // lancedbRoot is host-derived and cannot be influenced by the plugin payload.
         // lancedbRoot 由宿主派生，插件载荷无法影响。
@@ -327,60 +363,10 @@ impl ControllerPluginStorageService {
                 lancedb_root.display()
             )
         })?;
-        self.attach_plugin_space(plugin_id, &plugin_data_root)
-            .await?;
-        self.client
-            .enable_lancedb(ControllerLanceDbEnableRequest {
-                space_id: plugin_space_id(plugin_id),
-                binding_id: plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                default_db_path: vulcan_runtime_assets::native_host_path_text_from_path(
-                    &lancedb_root,
-                ),
-                db_root: Some(vulcan_runtime_assets::native_host_path_text_from_path(
-                    &lancedb_root,
-                )),
-                read_consistency_interval_ms: Some(250),
-                max_upsert_payload: 16 * 1024 * 1024,
-                max_search_limit: PLUGIN_LANCEDB_MAX_SEARCH_LIMIT as usize,
-                max_concurrent_requests: 32,
-            })
-            .await
-            .map_err(|error| format!("Failed to enable plugin LanceDB binding: {error}"))?;
         self.initialized_lancedb_plugins
             .lock()
             .map_err(|_| "Plugin LanceDB initialization lock is poisoned.".to_string())?
             .insert(plugin_id.to_string());
-        Ok(())
-    }
-
-    /// Attaches one host-derived plugin data space to the shared Controller client.
-    /// 将一个宿主派生的插件数据空间附着到共享 Controller 客户端。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` selects the stable space and `plugin_data_root` is its physical root.
-    /// `plugin_id` 选择稳定空间，`plugin_data_root` 是其物理根。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns unit after attachment.
-    /// 附着完成后返回空值。
-    async fn attach_plugin_space(
-        &self,
-        plugin_id: &str,
-        plugin_data_root: &Path,
-    ) -> Result<(), String> {
-        self.client
-            .attach_space(SpaceRegistration {
-                space_id: plugin_space_id(plugin_id),
-                space_label: format!("PLUGIN {plugin_id}"),
-                space_kind: SpaceKind::User,
-                space_root: vulcan_runtime_assets::native_host_path_text_from_path(
-                    plugin_data_root,
-                ),
-            })
-            .await
-            .map_err(|error| format!("Failed to attach plugin data space: {error}"))?;
         Ok(())
     }
 
@@ -397,54 +383,40 @@ impl ControllerPluginStorageService {
         // migrationTableSql is host-owned metadata and cannot be replaced by plugin SQL.
         // migrationTableSql 是宿主持有的元数据，不能被插件 SQL 替换。
         let migration_table_sql = "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL, plugin_version TEXT NOT NULL)";
-        self.client
-            .execute_sqlite_script_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                migration_table_sql,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("Failed to initialize plugin migration table: {error}"))?;
+        local_sql::execute_script_async(
+            &self.local,
+            self.plugin_sqlite_binding(plugin_id),
+            migration_table_sql,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("Failed to initialize plugin migration table: {error}"))?;
         // existingVersionQuery prevents reapplying an already committed migration.
         // existingVersionQuery 防止重复应用已提交迁移。
-        let existing_version_query = self
-            .client
-            .query_sqlite_json_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                "SELECT version FROM schema_migrations WHERE version = ?1 LIMIT 1",
-                vec![ControllerSqliteValue::Int64(migration.version)],
-            )
-            .await
-            .map_err(|error| format!("Failed to inspect plugin migration version: {error}"))?;
+        let existing_version_query = local_sql::query_json_async(
+            &self.local,
+            self.plugin_sqlite_binding(plugin_id),
+            "SELECT version FROM schema_migrations WHERE version = ?1 LIMIT 1",
+            vec![SqliteValue::Integer(migration.version)],
+        )
+        .await
+        .map_err(|error| format!("Failed to inspect plugin migration version: {error}"))?;
         if existing_version_query.row_count > 0 {
             return Ok(json!({ "applied": false, "version": migration.version }));
         }
-        for statement in migration.statements {
-            self.client
-                .execute_sqlite_script_typed(
-                    plugin_space_id(plugin_id),
-                    plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                    statement,
-                    Vec::new(),
-                )
-                .await
-                .map_err(|error| format!("Failed to apply plugin SQLite migration: {error}"))?;
-        }
-        self.client
-            .execute_sqlite_script_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                "INSERT INTO schema_migrations(version, applied_at_ms, plugin_version) VALUES (?1, ?2, ?3)",
-                vec![
-                    ControllerSqliteValue::Int64(migration.version),
-                    ControllerSqliteValue::Int64(migration.applied_at_ms),
-                    ControllerSqliteValue::String(migration.plugin_version),
-                ],
-            )
-            .await
-            .map_err(|error| format!("Failed to record plugin SQLite migration: {error}"))?;
+        local_sql::execute_scripts_transaction_async(
+            &self.local,
+            self.plugin_sqlite_binding(plugin_id),
+            migration.statements,
+            "INSERT INTO schema_migrations(version, applied_at_ms, plugin_version) VALUES (?1, ?2, ?3)",
+            vec![
+                SqliteValue::Integer(migration.version),
+                SqliteValue::Integer(migration.applied_at_ms),
+                SqliteValue::Text(migration.plugin_version),
+            ],
+        )
+        .await
+        .map_err(|error| format!("Failed to apply plugin SQLite migration atomically: {error}"))?;
         Ok(json!({ "applied": true, "version": migration.version }))
     }
 
@@ -459,24 +431,31 @@ impl ControllerPluginStorageService {
         // params uses the explicit tagged scalar protocol.
         // params 使用显式标记的标量协议。
         let params = decode_sqlite_params(request.params)?;
-        // result is serialized directly from the typed Controller response.
-        // result 直接从类型化 Controller 响应序列化。
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                request.sql,
-                params,
-            )
-            .await
-            .map_err(|error| format!("Plugin SQLite execute failed: {error}"))?;
-        serde_json::to_value(result)
-            .map_err(|error| format!("Failed to encode plugin SQLite execute result: {error}"))
+        // result is projected from the typed in-process engine response.
+        // result 从类型化进程内引擎响应投影。
+        let result = local_sql::execute_script_async(
+            &self.local,
+            self.plugin_sqlite_binding(plugin_id),
+            request.sql,
+            params,
+        )
+        .await
+        .map_err(|error| format!("Plugin SQLite execute failed: {error}"))?;
+        // The plugin-visible JSON is built here rather than derived from the engine's result type, because
+        // the engine deliberately knows nothing about JSON: a host adapter is the only place allowed to
+        // cross that boundary. The field names and types are the ones plugins already receive.
+        // 插件可见的 JSON 在此构造，而不是从引擎结果类型派生，因为引擎刻意对 JSON 一无所知：宿主适配器是唯一
+        // 允许跨越该边界的地方。字段名与类型正是插件已经收到的那些。
+        Ok(json!({
+            "success": result.success,
+            "message": result.message,
+            "rows_changed": result.rows_changed,
+            "last_insert_rowid": result.last_insert_rowid,
+        }))
     }
 
-    /// Executes one homogeneous parameter batch through the Controller transaction API.
-    /// 通过 Controller 事务 API 执行一组同构参数批次。
+    /// Executes one homogeneous parameter batch through the in-process transaction API.
+    /// 通过进程内事务 API 执行一组同构参数批次。
     async fn sqlite_execute_batch(&self, plugin_id: &str, payload: Value) -> Result<Value, String> {
         // request is strictly decoded so file or binding fields cannot be smuggled through.
         // request 使用严格解码，不能夹带文件或绑定字段。
@@ -490,20 +469,25 @@ impl ControllerPluginStorageService {
             .into_iter()
             .map(decode_sqlite_params)
             .collect::<Result<Vec<_>, _>>()?;
-        // result is serialized directly from the typed Controller response.
-        // result 直接从类型化 Controller 响应序列化。
-        let result = self
-            .client
-            .execute_sqlite_batch_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                request.sql,
-                items,
-            )
-            .await
-            .map_err(|error| format!("Plugin SQLite batch execute failed: {error}"))?;
-        serde_json::to_value(result)
-            .map_err(|error| format!("Failed to encode plugin SQLite batch result: {error}"))
+        // result is projected from the typed in-process engine response.
+        // result 从类型化进程内引擎响应投影。
+        let result = local_sql::execute_batch_async(
+            &self.local,
+            self.plugin_sqlite_binding(plugin_id),
+            request.sql,
+            items,
+        )
+        .await
+        .map_err(|error| format!("Plugin SQLite batch execute failed: {error}"))?;
+        // Same boundary rule as the single-statement result, plus the batch's executed-group count.
+        // 与单语句结果相同的边界规则，另外加上批次实际执行的参数组数量。
+        Ok(json!({
+            "success": result.success,
+            "message": result.message,
+            "rows_changed": result.rows_changed,
+            "last_insert_rowid": result.last_insert_rowid,
+            "statements_executed": result.statements_executed,
+        }))
     }
 
     /// Executes one bounded parameterized SQLite query.
@@ -517,13 +501,13 @@ impl ControllerPluginStorageService {
         // params uses the explicit tagged scalar protocol.
         // params 使用显式标记的标量协议。
         let params = decode_sqlite_params(request.params)?;
-        // result carries Controller-reported row count and encoded JSON data.
-        // result 携带 Controller 报告的行数与编码 JSON 数据。
+        // result carries the engine-reported row count and encoded JSON data.
+        // result 携带引擎报告的行数与编码 JSON 数据。
         let result = tokio::time::timeout(
             PLUGIN_SQLITE_QUERY_TIMEOUT,
-            self.client.query_sqlite_json_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
+            local_sql::query_json_async(
+                &self.local,
+                self.plugin_sqlite_binding(plugin_id),
                 request.sql,
                 params,
             ),
@@ -552,7 +536,7 @@ impl ControllerPluginStorageService {
         // rows is decoded once at the host boundary so Lua receives ordinary JSON-safe values.
         // rows 在宿主边界只解码一次，使 Lua 接收普通 JSON 安全值。
         let rows = serde_json::from_str::<Value>(&result.json_data)
-            .map_err(|error| format!("Controller returned invalid SQLite JSON rows: {error}"))?;
+            .map_err(|error| format!("SQLite engine returned invalid JSON rows: {error}"))?;
         Ok(json!({ "rows": rows, "row_count": result.row_count }))
     }
 
@@ -561,16 +545,14 @@ impl ControllerPluginStorageService {
     async fn sqlite_flush(&self, plugin_id: &str) -> Result<Value, String> {
         // result is returned for diagnostics while the plugin sees no physical path.
         // result 用于诊断，同时插件不会看到物理路径。
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                plugin_space_id(plugin_id),
-                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                "PRAGMA wal_checkpoint(PASSIVE)",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("Plugin SQLite flush failed: {error}"))?;
+        let result = local_sql::query_json_async(
+            &self.local,
+            self.plugin_sqlite_binding(plugin_id),
+            "PRAGMA wal_checkpoint(PASSIVE)",
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("Plugin SQLite flush failed: {error}"))?;
         Ok(json!({ "flushed": true, "row_count": result.row_count }))
     }
 
@@ -582,28 +564,26 @@ impl ControllerPluginStorageService {
         let request = serde_json::from_value::<LanceDbCreateTablePayload>(payload)
             .map_err(|error| format!("Invalid plugin LanceDB create-table payload: {error}"))?;
         validate_lancedb_identifier(&request.table_name, "table_name")?;
-        // columns maps the public JSON protocol to the typed Controller contract.
-        // columns 将公开 JSON 协议映射到类型化 Controller 契约。
+        // columns maps the public JSON protocol to the typed in-process engine contract.
+        // columns 将公开 JSON 协议映射到类型化进程内引擎契约。
         let columns = request
             .columns
             .into_iter()
             .map(decode_lancedb_column)
             .collect::<Result<Vec<_>, _>>()?;
-        // result is serialized directly from the typed Controller response.
-        // result 直接从类型化 Controller 响应序列化。
+        // result is projected from the typed in-process engine response.
+        // result 从类型化进程内引擎响应投影。
         let result = self
-            .client
-            .create_lancedb_table_typed(
-                plugin_space_id(plugin_id),
-                plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                request.table_name,
+            .vector_engine(plugin_id)
+            .await?
+            .create_table(LanceDbCreateTableInput {
+                table_name: request.table_name,
                 columns,
-                request.overwrite_if_exists,
-            )
+                overwrite_if_exists: request.overwrite_if_exists,
+            })
             .await
             .map_err(|error| format!("Plugin LanceDB create table failed: {error}"))?;
-        serde_json::to_value(result)
-            .map_err(|error| format!("Failed to encode LanceDB create result: {error}"))
+        Ok(json!({ "message": result.message }))
     }
 
     /// Upserts JSON rows into one isolated plugin LanceDB table.
@@ -617,26 +597,31 @@ impl ControllerPluginStorageService {
         for key_column in &request.key_columns {
             validate_lancedb_identifier(key_column, "key_columns")?;
         }
-        // data is encoded at the host boundary using the Controller JSON-rows contract.
-        // data 在宿主边界按 Controller JSON 行契约编码。
+        // data is encoded at the host boundary using the engine JSON-rows contract.
+        // data 在宿主边界按引擎 JSON 行契约编码。
         let data = serde_json::to_vec(&request.rows)
             .map_err(|error| format!("Failed to encode LanceDB JSON rows: {error}"))?;
-        // result is serialized directly from the typed Controller response.
-        // result 直接从类型化 Controller 响应序列化。
+        // result is projected from the typed in-process engine response.
+        // result 从类型化进程内引擎响应投影。
         let result = self
-            .client
-            .upsert_lancedb_typed(
-                plugin_space_id(plugin_id),
-                plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                request.table_name,
-                ControllerLanceDbInputFormat::JsonRows,
+            .vector_engine(plugin_id)
+            .await?
+            .vector_upsert(LanceDbUpsertInput {
+                table_name: request.table_name,
+                input_format: LanceDbInputFormat::JsonRows,
                 data,
-                request.key_columns,
-            )
+                key_columns: request.key_columns,
+            })
             .await
             .map_err(|error| format!("Plugin LanceDB upsert failed: {error}"))?;
-        serde_json::to_value(result)
-            .map_err(|error| format!("Failed to encode LanceDB upsert result: {error}"))
+        Ok(json!({
+            "message": result.message,
+            "version": result.version,
+            "input_rows": result.input_rows,
+            "inserted_rows": result.inserted_rows,
+            "updated_rows": result.updated_rows,
+            "deleted_rows": result.deleted_rows,
+        }))
     }
 
     /// Searches one isolated plugin LanceDB table with a bounded result count.
@@ -657,25 +642,24 @@ impl ControllerPluginStorageService {
         // result uses JSON rows so no opaque Arrow payload crosses into Lua.
         // result 使用 JSON 行，避免不透明 Arrow 载荷进入 Lua。
         let result = self
-            .client
-            .search_lancedb_typed(
-                plugin_space_id(plugin_id),
-                plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                request.table_name,
-                request.vector,
-                request.limit,
-                request.filter,
-                request.vector_column,
-                ControllerLanceDbOutputFormat::JsonRows,
-            )
+            .vector_engine(plugin_id)
+            .await?
+            .vector_search(LanceDbSearchInput {
+                table_name: request.table_name,
+                vector: request.vector,
+                limit: request.limit,
+                filter: request.filter,
+                vector_column: request.vector_column,
+                output_format: LanceDbOutputFormat::JsonRows,
+            })
             .await
             .map_err(|error| format!("Plugin LanceDB search failed: {error}"))?;
         // rows is decoded at the host boundary to keep the plugin protocol JSON-safe.
         // rows 在宿主边界解码，以保持插件协议 JSON 安全。
         let rows = serde_json::from_slice::<Value>(&result.data)
-            .map_err(|error| format!("Controller returned invalid LanceDB JSON rows: {error}"))?;
+            .map_err(|error| format!("LanceDB returned invalid JSON rows: {error}"))?;
         Ok(
-            json!({ "message": result.message, "format": result.format, "row_count": result.rows, "rows": rows }),
+            json!({ "message": result.message, "format": result.format.as_str(), "row_count": result.rows, "rows": rows }),
         )
     }
 
@@ -690,20 +674,22 @@ impl ControllerPluginStorageService {
         if request.condition.trim().is_empty() {
             return Err("Plugin LanceDB delete requires a non-empty condition.".to_string());
         }
-        // result is serialized directly from the typed Controller response.
-        // result 直接从类型化 Controller 响应序列化。
+        // result is projected from the typed in-process engine response.
+        // result 从类型化进程内引擎响应投影。
         let result = self
-            .client
-            .delete_lancedb_typed(
-                plugin_space_id(plugin_id),
-                plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                request.table_name,
-                request.condition,
-            )
+            .vector_engine(plugin_id)
+            .await?
+            .delete(LanceDbDeleteInput {
+                table_name: request.table_name,
+                condition: request.condition,
+            })
             .await
             .map_err(|error| format!("Plugin LanceDB delete failed: {error}"))?;
-        serde_json::to_value(result)
-            .map_err(|error| format!("Failed to encode LanceDB delete result: {error}"))
+        Ok(json!({
+            "message": result.message,
+            "version": result.version,
+            "deleted_rows": result.deleted_rows,
+        }))
     }
 
     /// Drops one isolated plugin LanceDB table.
@@ -714,23 +700,21 @@ impl ControllerPluginStorageService {
         let request = serde_json::from_value::<LanceDbDropTablePayload>(payload)
             .map_err(|error| format!("Invalid plugin LanceDB drop-table payload: {error}"))?;
         validate_lancedb_identifier(&request.table_name, "table_name")?;
-        // result is serialized directly from the typed Controller response.
-        // result 直接从类型化 Controller 响应序列化。
+        // result is projected from the typed in-process engine response.
+        // result 从类型化进程内引擎响应投影。
         let result = self
-            .client
-            .drop_lancedb_table(
-                plugin_space_id(plugin_id),
-                plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                request.table_name,
-            )
+            .vector_engine(plugin_id)
+            .await?
+            .drop_table(LanceDbDropTableInput {
+                table_name: request.table_name,
+            })
             .await
             .map_err(|error| format!("Plugin LanceDB drop table failed: {error}"))?;
-        serde_json::to_value(result)
-            .map_err(|error| format!("Failed to encode LanceDB drop result: {error}"))
+        Ok(json!({ "message": result.message }))
     }
 }
 
-impl VulcanPluginStorageService for ControllerPluginStorageService {
+impl VulcanPluginStorageService for PluginStorageService {
     /// Executes one authenticated request on the retained service runtime.
     /// 在保留的服务运行时上执行一条已认证请求。
     ///
@@ -801,8 +785,8 @@ struct SqliteExecuteBatchPayload {
     /// Parameterized SQL statement reused for every item.
     /// 为每个条目复用的参数化 SQL 语句。
     sql: String,
-    /// Ordered parameter groups executed in one Controller transaction.
-    /// 在单个 Controller 事务中执行的有序参数组。
+    /// Ordered parameter groups executed in one in-process SQLite transaction.
+    /// 在单个进程内 SQLite 事务中执行的有序参数组。
     items: Vec<Vec<SqliteValuePayload>>,
 }
 
@@ -914,8 +898,8 @@ struct LanceDbSearchPayload {
     /// Bounded result count.
     /// 有界结果数量。
     limit: u32,
-    /// Controller-supported predicate expression.
-    /// Controller 支持的谓词表达式。
+    /// LanceDB-supported predicate expression.
+    /// LanceDB 支持的谓词表达式。
     #[serde(default)]
     filter: String,
     /// Stable vector column identifier.
@@ -931,8 +915,8 @@ struct LanceDbDeletePayload {
     /// Stable table identifier.
     /// 稳定表标识。
     table_name: String,
-    /// Required Controller-supported predicate expression.
-    /// 必填的 Controller 支持谓词表达式。
+    /// Required LanceDB-supported predicate expression.
+    /// 必填的 LanceDB 支持谓词表达式。
     condition: String,
 }
 
@@ -946,8 +930,8 @@ struct LanceDbDropTablePayload {
     table_name: String,
 }
 
-/// Converts tagged plugin parameters into the typed Controller SQLite contract.
-/// 将标记插件参数转换为类型化 Controller SQLite 契约。
+/// Converts tagged plugin parameters into the typed in-process SQLite contract.
+/// 将标记插件参数转换为类型化进程内 SQLite 契约。
 ///
 /// # Parameters
 /// 参数
@@ -960,25 +944,25 @@ struct LanceDbDropTablePayload {
 /// 返回类型化 SQLite 值或明确的 Base64 诊断。
 pub(crate) fn decode_sqlite_params(
     params: Vec<SqliteValuePayload>,
-) -> Result<Vec<ControllerSqliteValue>, String> {
+) -> Result<Vec<SqliteValue>, String> {
     params
         .into_iter()
         .map(|value| match value {
-            SqliteValuePayload::Int64(value) => Ok(ControllerSqliteValue::Int64(value)),
-            SqliteValuePayload::Float64(value) => Ok(ControllerSqliteValue::Float64(value)),
-            SqliteValuePayload::String(value) => Ok(ControllerSqliteValue::String(value)),
+            SqliteValuePayload::Int64(value) => Ok(SqliteValue::Integer(value)),
+            SqliteValuePayload::Float64(value) => Ok(SqliteValue::Real(value)),
+            SqliteValuePayload::String(value) => Ok(SqliteValue::Text(value)),
             SqliteValuePayload::Bytes(value) => BASE64_STANDARD
                 .decode(value)
-                .map(ControllerSqliteValue::Bytes)
+                .map(SqliteValue::Blob)
                 .map_err(|error| format!("Invalid Base64 SQLite byte parameter: {error}")),
-            SqliteValuePayload::Bool(value) => Ok(ControllerSqliteValue::Bool(value)),
-            SqliteValuePayload::Null => Ok(ControllerSqliteValue::Null),
+            SqliteValuePayload::Bool(value) => Ok(SqliteValue::Integer(i64::from(value))),
+            SqliteValuePayload::Null => Ok(SqliteValue::Null),
         })
         .collect()
 }
 
-/// Converts one public LanceDB column payload into the typed Controller contract.
-/// 将一个公开 LanceDB 列载荷转换为类型化 Controller 契约。
+/// Converts one public LanceDB column payload into the typed engine contract.
+/// 将一个公开 LanceDB 列载荷转换为类型化引擎契约。
 ///
 /// # Parameters
 /// 参数
@@ -989,28 +973,26 @@ pub(crate) fn decode_sqlite_params(
 /// 返回值
 /// Returns a validated typed column definition.
 /// 返回一份已校验的类型化列定义。
-fn decode_lancedb_column(
-    column: LanceDbColumnPayload,
-) -> Result<ControllerLanceDbColumnDef, String> {
+fn decode_lancedb_column(column: LanceDbColumnPayload) -> Result<LanceDbColumnDef, String> {
     validate_lancedb_identifier(&column.name, "column.name")?;
     // columnType accepts only the exact public protocol keys.
     // columnType 仅接受公开协议中的精确键。
     let column_type = match column.column_type.as_str() {
-        "string" => ControllerLanceDbColumnType::String,
-        "int64" => ControllerLanceDbColumnType::Int64,
-        "float64" => ControllerLanceDbColumnType::Float64,
-        "bool" => ControllerLanceDbColumnType::Bool,
-        "vector_float32" => ControllerLanceDbColumnType::VectorFloat32,
-        "float32" => ControllerLanceDbColumnType::Float32,
-        "uint64" => ControllerLanceDbColumnType::Uint64,
-        "int32" => ControllerLanceDbColumnType::Int32,
-        "uint32" => ControllerLanceDbColumnType::Uint32,
+        "string" => LanceDbColumnType::String,
+        "int64" => LanceDbColumnType::Int64,
+        "float64" => LanceDbColumnType::Float64,
+        "bool" => LanceDbColumnType::Bool,
+        "vector_float32" => LanceDbColumnType::VectorFloat32,
+        "float32" => LanceDbColumnType::Float32,
+        "uint64" => LanceDbColumnType::Uint64,
+        "int32" => LanceDbColumnType::Int32,
+        "uint32" => LanceDbColumnType::Uint32,
         unsupported => return Err(format!("Unsupported LanceDB column type `{unsupported}`.")),
     };
-    if column_type == ControllerLanceDbColumnType::VectorFloat32 && column.vector_dim == 0 {
+    if column_type == LanceDbColumnType::VectorFloat32 && column.vector_dim == 0 {
         return Err("LanceDB vector_float32 columns require positive vector_dim.".to_string());
     }
-    Ok(ControllerLanceDbColumnDef {
+    Ok(LanceDbColumnDef {
         name: column.name,
         column_type,
         vector_dim: column.vector_dim,
@@ -1037,7 +1019,18 @@ fn validate_sqlite_statement(sql: &str, access: SqliteStatementAccess) -> Result
     if tokens.is_empty() {
         return Err("Plugin SQLite statement must not be empty.".to_string());
     }
-    for forbidden in ["ATTACH", "DETACH", "VACUUM", "LOAD_EXTENSION"] {
+    for forbidden in [
+        "ATTACH",
+        "DETACH",
+        "VACUUM",
+        "LOAD_EXTENSION",
+        "BEGIN",
+        "COMMIT",
+        "END",
+        "ROLLBACK",
+        "SAVEPOINT",
+        "RELEASE",
+    ] {
         if tokens.iter().any(|token| token == forbidden) {
             return Err(format!("Plugin SQLite statement cannot use `{forbidden}`."));
         }
@@ -1216,49 +1209,10 @@ fn plugin_data_root(plugin_state_root: &Path, plugin_id: &str) -> PathBuf {
     plugin_state_root.join(plugin_id).join("data")
 }
 
-/// Returns the stable Controller space identifier for one plugin.
-/// 返回单个插件的稳定 Controller 空间标识。
-fn plugin_space_id(plugin_id: &str) -> String {
-    format!("plugin-{plugin_id}")
-}
-
-/// Builds one bootstrap-scoped Controller binding suffix.
-/// 构建一个引导作用域内唯一的 Controller 绑定后缀。
-///
-/// # Returns
-/// 返回值
-/// Returns a process, timestamp, and sequence tuple matching Controller client ownership lifetime.
-/// 返回与 Controller 客户端所有权生命周期一致的进程、时间戳与序列元组。
-fn build_plugin_storage_binding_scope() -> String {
-    // epochMillis is only an identity component and never a persisted business timestamp.
-    // epochMillis 仅作为身份组成部分，绝不是持久化业务时间戳。
-    let epoch_millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    // sequence closes the collision window for multiple adapters created in one millisecond.
-    // sequence 关闭同一毫秒内创建多个适配器时的冲突窗口。
-    let sequence = PLUGIN_STORAGE_BINDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{epoch_millis}-{sequence}", std::process::id())
-}
-
-/// Returns the bootstrap-scoped Controller SQLite binding identifier for one plugin.
-/// 返回单个插件的引导作用域 Controller SQLite 绑定标识。
-fn plugin_sqlite_binding_id(plugin_id: &str, binding_scope: &str) -> String {
-    format!("plugin-{plugin_id}-sqlite@{binding_scope}")
-}
-
-/// Returns the bootstrap-scoped Controller LanceDB binding identifier for one plugin.
-/// 返回单个插件的引导作用域 Controller LanceDB 绑定标识。
-fn plugin_lancedb_binding_id(plugin_id: &str, binding_scope: &str) -> String {
-    format!("plugin-{plugin_id}-lancedb@{binding_scope}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        SqliteStatementAccess, build_plugin_storage_binding_scope, plugin_lancedb_binding_id,
-        plugin_sqlite_binding_id, sqlite_policy_tokens, validate_lancedb_identifier,
+        SqliteStatementAccess, sqlite_policy_tokens, validate_lancedb_identifier,
         validate_plugin_storage_identity, validate_sqlite_statement,
     };
 
@@ -1288,6 +1242,10 @@ mod tests {
             validate_sqlite_statement("PRAGMA writable_schema = ON", SqliteStatementAccess::Read)
                 .is_err()
         );
+        assert!(
+            validate_sqlite_statement("BEGIN IMMEDIATE", SqliteStatementAccess::Write).is_err()
+        );
+        assert!(validate_sqlite_statement("ROLLBACK", SqliteStatementAccess::Write).is_err());
     }
 
     /// Verifies plugin and LanceDB identifiers cannot escape their host-derived namespace.
@@ -1298,24 +1256,5 @@ mod tests {
         assert!(validate_plugin_storage_identity("../outside").is_err());
         assert!(validate_lancedb_identifier("usage_vectors", "table").is_ok());
         assert!(validate_lancedb_identifier("usage/vectors", "table").is_err());
-    }
-
-    /// Verifies every adapter bootstrap receives client-owned SQLite and LanceDB bindings.
-    /// 验证每次适配器引导都会获得客户端自有的 SQLite 与 LanceDB 绑定。
-    #[test]
-    fn plugin_bindings_are_bootstrap_scoped() {
-        // firstScope and secondScope model two adapters created by separate bootstrap attempts.
-        // firstScope 与 secondScope 模拟由两次独立引导创建的适配器。
-        let first_scope = build_plugin_storage_binding_scope();
-        let second_scope = build_plugin_storage_binding_scope();
-        assert_ne!(first_scope, second_scope);
-        assert_ne!(
-            plugin_sqlite_binding_id("vulcan-statistics", &first_scope),
-            plugin_sqlite_binding_id("vulcan-statistics", &second_scope)
-        );
-        assert_ne!(
-            plugin_lancedb_binding_id("vulcan-statistics", &first_scope),
-            plugin_lancedb_binding_id("vulcan-statistics", &second_scope)
-        );
     }
 }

@@ -21,7 +21,7 @@ use vulcan_workspace_store::vce_data_plane::{VceDataPlaneFactory, VceJobKind, Vc
 /// 返回完成 Hook、V1 投影及精确代际发布后的生产请求。
 async fn prepare_request(
     state: &SharedServiceBridgeState,
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     root: &str,
     source: PendingSessionPromptSource,
     continuation_action_id: Option<ClientActionId>,
@@ -229,10 +229,9 @@ async fn admit_continue(
 /// Verify actual request construction respects all prerequisites without creating an index.
 /// 验证实际请求构建遵循全部前提，且不创建索引。
 /// No input; a private controller and registered credential-rejecting AI isolate user storage and billing.
-/// 无输入；私有控制器及拒绝凭据的已注册 AI 隔离用户存储与计费。
+/// 无输入；私有宿主存储及拒绝凭据的已注册 AI 隔离用户存储与计费。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_prompt_preparation_obeys_vce_prerequisites() {
+fn real_host_storage_prompt_preparation_obeys_vce_prerequisites() {
     // Bound asynchronous work independently of a running user service.
     // 独立于正在运行的用户服务约束异步工作。
     let executor = Arc::new(
@@ -256,11 +255,11 @@ fn real_controller_prompt_preparation_obeys_vce_prerequisites() {
         .selected_session;
     // The fixture owns exact temporary controller and session paths.
     // 夹具持有精确临时控制器及会话路径。
-    let storage = TestControllerRuntimeRoot::new(session_id);
+    let storage = TestHostRuntimeRoot::new(session_id);
     executor.block_on(async {
         // Attach only private application storage.
         // 只附着私有应用存储。
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         // Release the controller even if setup or a service assertion panics.
         // 即使准备或服务断言发生异常，也释放控制器。
         let outer = std::panic::AssertUnwindSafe(async {
@@ -583,7 +582,6 @@ fn real_controller_prompt_preparation_obeys_vce_prerequisites() {
         })
         .catch_unwind()
         .await;
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = outer {
             std::panic::resume_unwind(panic);
         }

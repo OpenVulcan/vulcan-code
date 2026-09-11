@@ -75,10 +75,10 @@ impl VceDataPlaneHandle {
                     sqlite_text(&original.binding.namespace_id),
                     sqlite_text(&original.physical_fingerprint),
                     sqlite_text(&original.root_hash),
-                    ControllerSqliteValue::Int64(i64::from(original.dimension)),
+                    SqliteValue::Integer(i64::from(original.dimension)),
                     sqlite_text(&original.preprocessing_version),
                     sqlite_text(&original.chunker_version),
-                    ControllerSqliteValue::Int64(i64::from(original.binding.schema_version)),
+                    SqliteValue::Integer(i64::from(original.binding.schema_version)),
                 ],
             )
             .await?;

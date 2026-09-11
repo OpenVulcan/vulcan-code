@@ -7,19 +7,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-    ControllerSqliteEnableRequest, SpaceKind, SpaceRegistration,
-};
 use vulcan_provider_adapters::PublicAiRuntime;
 use vulcan_vmm::{
     ApplyProfileInstructionRequest, DEFAULT_NATIVE_USER_ID, GetProfileBundleRequest,
     PostActionRequest, PreCheckRecallMode, PreCheckRequest, ProfileBundleMode, ProfileTarget,
     VmmClient,
 };
-use vulcan_workspace_store::data_plane::{
-    APP_SPACE_ID, ControllerRuntimeHandle, ControllerRuntimeMetadata,
-};
+use vulcan_workspace_store::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 use vulcan_workspace_store::vmm_data_plane::bootstrap_vmm_data_plane;
 
 /// Runs the real native VMM flow only after explicit billed-call authorization.
@@ -53,35 +47,6 @@ fn live_saved_routes_execute_native_vmm_contract_and_lifecycle() {
     let temporary = tempfile::tempdir().expect("isolated native VMM directory");
     let data_root = temporary.path().join("data");
     std::fs::create_dir_all(&data_root).expect("temporary native VMM data root");
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve controller port");
-    let port = listener.local_addr().expect("controller address").port();
-    drop(listener);
-    let executable = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../output/bin/vldb-controller.exe");
-    assert!(executable.is_file(), "managed VLDB controller is required");
-    let endpoint = format!("http://127.0.0.1:{port}");
-    let controller_client = ControllerClient::new(
-        ControllerClientConfig {
-            endpoint: endpoint.clone(),
-            auto_spawn: true,
-            spawn_executable: Some(executable.display().to_string()),
-            spawn_process_mode: ControllerProcessMode::Managed,
-            minimum_uptime_secs: 0,
-            idle_timeout_secs: 1,
-            default_lease_ttl_secs: 30,
-            connect_timeout_secs: 30,
-            startup_timeout_secs: 15,
-            startup_retry_interval_ms: 100,
-            lease_renew_interval_secs: 10,
-        },
-        ClientRegistration {
-            client_name: format!("native-vmm-live-{}", uuid::Uuid::new_v4()),
-            host_kind: "test".into(),
-            process_id: std::process::id(),
-            process_name: "native-vmm-live-acceptance".into(),
-            lease_ttl_secs: Some(30),
-        },
-    );
 
     let executor = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -89,45 +54,26 @@ fn live_saved_routes_execute_native_vmm_contract_and_lifecycle() {
         .build()
         .expect("isolated live VMM executor");
     executor.block_on(async {
-        controller_client
-            .connect()
-            .await
-            .expect("connect private live controller");
         let outcome = std::panic::AssertUnwindSafe(async {
-            // Resolve the same saved credential database as production, but attach it read-only.
-            // 解析与生产相同的已保存凭据数据库，但强制以只读方式附着。
+            // Resolve the same saved credential database as production, against a private copy.
+            // The controller used to attach the user's file read-only; the in-process runtime has no
+            // per-binding read-only mode, so the copy is what keeps this acceptance test from opening a
+            // database the user owns. Saved routes live in the file, so a copy preserves what is validated.
+            // 解析与生产相同的已保存凭据数据库，但针对其私有副本。控制器过去以只读方式附着用户的文件；
+            // 进程内运行时没有按绑定的只读模式，因此正是这份副本使本验收测试不会打开用户拥有的数据库。
+            // 已保存路由就在该文件里，故副本保留了被验证的内容。
             let user_root = config_path.parent().expect("configuration parent");
-            let sqlite_path = user_root.join("sqlite/app-workspace.sqlite3");
+            let saved_sqlite_path = user_root.join("sqlite/app-workspace.sqlite3");
             assert!(
-                sqlite_path.is_file(),
+                saved_sqlite_path.is_file(),
                 "saved credential database is required"
             );
+            let sqlite_path = data_root.join("saved-credentials.sqlite3");
+            std::fs::copy(&saved_sqlite_path, &sqlite_path)
+                .expect("copy saved credential database");
             let credential_binding_id = format!("native-vmm-live-{}", uuid::Uuid::new_v4());
-            controller_client
-                .attach_space(SpaceRegistration {
-                    space_id: APP_SPACE_ID.into(),
-                    space_label: "APP".into(),
-                    space_kind: SpaceKind::User,
-                    space_root: user_root.display().to_string(),
-                })
-                .await
-                .expect("attach saved credential space");
-            controller_client
-                .enable_sqlite(ControllerSqliteEnableRequest {
-                    space_id: APP_SPACE_ID.into(),
-                    binding_id: credential_binding_id.clone(),
-                    db_path: sqlite_path.display().to_string(),
-                    read_only: true,
-                    connection_pool_size: 1,
-                    ..ControllerSqliteEnableRequest::default()
-                })
-                .await
-                .expect("open saved credentials read-only");
-            let controller = ControllerRuntimeHandle::new(
-                controller_client.clone(),
-                ControllerRuntimeMetadata {
-                    endpoint,
-                    executable: executable.display().to_string(),
+            let controller = HostRuntimeHandle::new_for_test(
+                HostRuntimeMetadata {
                     data_root: data_root.clone(),
                     sqlite_path,
                     sqlite_binding_id: credential_binding_id,
@@ -366,10 +312,6 @@ fn live_saved_routes_execute_native_vmm_contract_and_lifecycle() {
         })
         .catch_unwind()
         .await;
-        controller_client
-            .shutdown()
-            .await
-            .expect("release private live controller");
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);
         }

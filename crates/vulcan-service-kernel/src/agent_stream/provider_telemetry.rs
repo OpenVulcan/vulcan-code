@@ -26,21 +26,21 @@ impl ProviderTelemetryHookGuard {
     /// 参数
     /// `state` owns the authoritative workspace runtime state.
     /// `state` 持有权威工作区运行时状态。
-    /// `controller_runtime` stores optional redacted native usage diagnostics independently of the session ledger.
-    /// `controller_runtime` 独立于会话账本保存可选的脱敏原生用量诊断。
+    /// `storage_runtime` stores optional redacted native usage diagnostics independently of the session ledger.
+    /// `storage_runtime` 独立于会话账本保存可选的脱敏原生用量诊断。
     pub(crate) fn new_with_persistence(
         state: SharedServiceBridgeState,
-        controller_runtime: Option<ControllerRuntimeHandle>,
+        storage_runtime: Option<HostRuntimeHandle>,
     ) -> Self {
-        let native_usage_controller = controller_runtime.clone();
+        let native_usage_storage = storage_runtime.clone();
         // sender and receiver form one bounded low-frequency Effect queue per execution stream.
         // sender 与 receiver 为每条执行流构成一个有界低频 Effect 队列。
         let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
         spawn_service_task(async move {
             while let Some(event) = receiver.recv().await {
-                if let Some(controller_runtime) = native_usage_controller.as_ref()
+                if let Some(storage_runtime) = native_usage_storage.as_ref()
                     && let Err(error) =
-                        persist_native_provider_usage_attempt(controller_runtime, &event).await
+                        persist_native_provider_usage_attempt(storage_runtime, &event).await
                 {
                     eprintln!("[webui-service] native provider usage persistence failed: {error}");
                 }

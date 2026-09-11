@@ -51,7 +51,7 @@ fn trace_workbench_refresh_if_slow(
 pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Controller runtime used for command-session and runtime module summaries.
     /// 用于命令会话与运行时模块摘要的控制器运行时。
-    pub(crate) controller: &'a ControllerRuntimeHandle,
+    pub(crate) controller: &'a HostRuntimeHandle,
     /// Optional command session runtime for live terminal state projection.
     /// 用于实时终端状态投影的可选命令会话运行时。
     pub(crate) command_session_runtime: Option<&'a CommandSessionRuntime>,
@@ -1219,7 +1219,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         .collect::<Vec<_>>();
     // projected_command_sessions is shared by continuation gating and the final workbench payload.
     // projected_command_sessions 由 Continue 门禁与最终工作台载荷共享。
-    let projected_command_sessions = command_sessions(controller, command_session_runtime);
+    let projected_command_sessions = command_sessions(command_session_runtime);
     WorkbenchSnapshot {
         revision: 0,
         app_version: env!("CARGO_PKG_VERSION").to_string(),

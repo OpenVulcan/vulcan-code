@@ -16,7 +16,7 @@ use crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1;
 pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     parent_session_id: SessionId,
     event: &RuntimeEvent,
@@ -275,7 +275,7 @@ fn append_exact_v1_subagent_return(
 pub(crate) async fn handle_webui_detached_subagent_task_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     task_id: SessionId,
     execution_id: &str,

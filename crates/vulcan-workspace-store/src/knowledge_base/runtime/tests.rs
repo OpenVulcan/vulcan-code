@@ -1,5 +1,5 @@
-//! Cross-domain restart-state and real-controller knowledge runtime regressions.
-//! 跨领域重启状态与真实控制器知识库运行时回归。
+//! Cross-domain restart-state and real in-process knowledge runtime regressions.
+//! 跨领域重启状态与真实进程内知识库运行时回归。
 
 use super::package_lifecycle::{
     KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION, KNOWLEDGE_REPLACEMENT_PHASE_COMMITTED,
@@ -7,23 +7,18 @@ use super::package_lifecycle::{
 };
 
 use super::package_archive::tests::write_identity_mismatch_package;
+use super::text;
 use super::*;
-use crate::data_plane::{
-    ControllerRuntimeMetadata, build_application_schema_script,
-    ensure_application_schema_migrations,
-};
+use crate::data_plane::{HostRuntimeMetadata, build_application_schema_script};
 use crate::knowledge_base::models::{
     KnowledgeDisplayIndexStatus, KnowledgeOperationKind, KnowledgeVectorIndexStatus,
 };
+use crate::local_sql;
 use crate::runtime_assets;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-    ControllerSqliteEnableRequest, SpaceKind, SpaceRegistration,
-};
 
 /// Verifies restart recovery preserves published generations and releases abandoned building flags.
 /// 验证重启恢复会保留已发布代次并释放遗留构建中标记。
@@ -51,11 +46,10 @@ fn interrupted_derived_index_statuses_become_actionable() {
     );
 }
 
-/// Exercises create, Markdown import, Jieba BM25 search, incremental deletion, and safe removal against a real controller.
-/// 使用真实控制器验证创建、Markdown 导入、Jieba BM25 检索、增量删除与安全移除。
+/// Exercises create, Markdown import, Jieba BM25 search, incremental deletion, and safe removal against the in-process engine.
+/// 使用进程内引擎验证创建、Markdown 导入、Jieba BM25 检索、增量删除与安全移除。
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "requires the bundled output/bin/vldb-controller.exe"]
-async fn real_controller_markdown_bm25_end_to_end() {
+async fn in_process_markdown_bm25_end_to_end() {
     let temporary = tempdir().expect("create knowledge end-to-end root");
     let data_root = temporary.path().join("data");
     let source_root = temporary.path().join("source");
@@ -67,87 +61,30 @@ async fn real_controller_markdown_bm25_end_to_end() {
     .expect("write Chinese Markdown fixture");
     fs::write(source_root.join("ignored.txt"), "must not import").expect("write ignored fixture");
 
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("reserve an ephemeral controller port");
-    let port = listener.local_addr().expect("read controller port").port();
-    drop(listener);
-    let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("output")
-        .join("bin")
-        .join("vldb-controller.exe");
-    assert!(executable.is_file(), "bundled controller must exist");
-    let endpoint = format!("http://127.0.0.1:{port}");
-    let client = ControllerClient::new(
-        ControllerClientConfig {
-            endpoint: endpoint.clone(),
-            auto_spawn: true,
-            spawn_executable: Some(executable.display().to_string()),
-            spawn_process_mode: ControllerProcessMode::Managed,
-            minimum_uptime_secs: 0,
-            idle_timeout_secs: 1,
-            default_lease_ttl_secs: 30,
-            connect_timeout_secs: 30,
-            startup_timeout_secs: 15,
-            startup_retry_interval_ms: 100,
-            lease_renew_interval_secs: 10,
-        },
-        ClientRegistration {
-            client_name: format!("knowledge-e2e-{}", Uuid::new_v4()),
-            host_kind: String::from("test"),
-            process_id: std::process::id(),
-            process_name: String::from("vulcan-workspace-store-test"),
-            lease_ttl_secs: Some(30),
-        },
-    );
-    client.connect().await.expect("connect real controller");
     let app_path = data_root.join("sqlite").join("app-workspace.sqlite3");
     fs::create_dir_all(app_path.parent().expect("app database parent"))
         .expect("create app database parent");
-    let app_binding_id = format!("knowledge-e2e-app-{}", Uuid::new_v4());
-    client
-        .attach_space(SpaceRegistration {
-            space_id: String::from(APP_SPACE_ID),
-            space_label: String::from("APP"),
-            space_kind: SpaceKind::User,
-            space_root: runtime_assets::native_host_path_text_from_path(&data_root),
-        })
-        .await
-        .expect("attach app space");
-    client
-        .enable_sqlite(ControllerSqliteEnableRequest {
-            space_id: String::from(APP_SPACE_ID),
-            binding_id: app_binding_id.clone(),
-            db_path: runtime_assets::native_host_path_text_from_path(&app_path),
-            ..ControllerSqliteEnableRequest::default()
-        })
-        .await
-        .expect("enable app database");
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            &app_binding_id,
-            build_application_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .expect("initialize app schema");
-    ensure_application_schema_migrations(&client, &app_binding_id)
-        .await
-        .expect("apply app schema migrations");
-    let runtime = KnowledgeBaseRuntime::new(ControllerRuntimeHandle::new(
-        client.clone(),
-        ControllerRuntimeMetadata {
-            endpoint,
-            executable: executable.display().to_string(),
-            data_root,
-            sqlite_path: app_path.clone(),
-            sqlite_binding_id: app_binding_id.clone(),
-            system_statistics_sqlite_path: app_path,
-            system_statistics_sqlite_binding_id: app_binding_id,
-        },
-    ));
+
+    // The application database is opened by the in-process runtime through the real host handle.
+    // The fixture exercises the same exclusive `<db>.vldb.lock` and binding registry as production,
+    // without a fake data plane or an external process.
+    // 应用数据库由进程内运行时通过真实宿主句柄打开。夹具验证与生产一致的独占
+    // `<db>.vldb.lock` 与绑定注册表，不使用伪造数据面或外部进程。
+    let runtime = KnowledgeBaseRuntime::new(HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+        data_root: data_root.clone(),
+        sqlite_path: app_path.clone(),
+        sqlite_binding_id: String::from("knowledge-e2e-app"),
+        system_statistics_sqlite_path: app_path,
+        system_statistics_sqlite_binding_id: String::from("knowledge-e2e-app-statistics"),
+    }));
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        LogicalDatabase::AppState,
+        &build_application_schema_script(),
+        Vec::new(),
+    )
+    .await
+    .expect("initialize app schema");
 
     // abandonedExtraction simulates a package TempDir left behind by process termination.
     // abandonedExtraction 模拟进程终止后遗留的知识库包临时解压目录。
@@ -223,21 +160,31 @@ async fn real_controller_markdown_bm25_end_to_end() {
         .search(std::slice::from_ref(&library.id), "火山知识库", 10)
         .await
         .expect("search Chinese content");
+    // A per-library error is reported as a failure with empty hits rather than as an Err, so asserting
+    // only on hits turns a broken query into a misleading "no results" message. Asserting the failure
+    // list is empty keeps the real cause visible.
+    // 逐库错误会以"失败条目 + 空命中"而非 Err 的形式报告，因此只断言命中会把查询损坏变成误导性的
+    // "无结果"消息。断言失败列表为空可让真正原因保持可见。
+    assert!(
+        search.failures.is_empty(),
+        "per-library search failures: {:?}",
+        search.failures
+    );
     assert!(!search.hits.is_empty());
     assert!(!search.fts_queries[0].expression.is_empty());
-    // independentRuntime reproduces the native AI tool path that reconstructs the runtime from the same controller handle.
-    // independentRuntime 复现原生 AI 工具使用同一控制器句柄重新构造运行时的路径。
-    let independent_runtime = KnowledgeBaseRuntime::new(runtime.controller.clone());
-    // independentSearch must reuse the controller binding instead of reopening the locked SQLite file.
-    // independentSearch 必须复用控制器绑定，而不是重新打开已经锁定的 SQLite 文件。
+    // independentRuntime reproduces the native AI tool path that reconstructs the runtime from the same host handle.
+    // independentRuntime 复现原生 AI 工具使用同一宿主句柄重新构造运行时的路径。
+    let independent_runtime = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
+    // independentSearch must reuse the host binding instead of reopening the locked SQLite file.
+    // independentSearch 必须复用宿主绑定，而不是重新打开已经锁定的 SQLite 文件。
     let independent_search = independent_runtime
         .search(std::slice::from_ref(&library.id), "火山知识库", 10)
         .await
         .expect("search Chinese content through independent runtime");
     assert!(!independent_search.hits.is_empty());
-    // thirdRuntime exposes controller state corruption after one same-binding re-enable.
-    // thirdRuntime 用于暴露同一绑定重复启用一次后的控制器状态损坏。
-    let third_runtime = KnowledgeBaseRuntime::new(runtime.controller.clone());
+    // thirdRuntime exposes host-registry state corruption after one same-binding re-enable.
+    // thirdRuntime 用于暴露同一绑定重复启用一次后的宿主注册表状态损坏。
+    let third_runtime = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
     // thirdSearch must remain idempotent even after the binding has already been enabled twice.
     // thirdSearch 必须在绑定已经启用两次后仍保持幂等。
     let third_search = third_runtime
@@ -318,19 +265,19 @@ async fn real_controller_markdown_bm25_end_to_end() {
 
     // KnowledgeBinding identifies the exact physical database used by the recovery fixture.
     // KnowledgeBinding 标识恢复夹具使用的准确物理数据库。
-    let (knowledge_space_id, knowledge_binding_id) = runtime
+    let (_knowledge_space_id, knowledge_binding_id) = runtime
         .ensure_library_binding(&library.id)
         .await
         .expect("resolve library binding for recovery fixture");
-    client
-        .execute_sqlite_script_typed(
-            &knowledge_space_id,
-            &knowledge_binding_id,
-            "UPDATE knowledge_metadata SET value = 'dirty' WHERE key = 'index_status'; UPDATE knowledge_metadata SET value = '0' WHERE key = 'indexed_content_revision';",
-            Vec::new(),
-        )
-        .await
-        .expect("mark index dirty for recovery import");
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        runtime
+            .resolve_library_binding(&knowledge_binding_id)
+            .expect("resolve library binding for recovery fixture"),
+        "UPDATE knowledge_metadata SET value = 'dirty' WHERE key = 'index_status'; UPDATE knowledge_metadata SET value = '0' WHERE key = 'indexed_content_revision';",
+        Vec::new(),
+    ).await
+    .expect("mark index dirty for recovery import");
     // RecoveryImport must detect unchanged documents while repairing only derived FTS state.
     // RecoveryImport 必须识别未变化文档，同时仅修复派生 FTS 状态。
     let recovery_import = runtime
@@ -367,19 +314,20 @@ async fn real_controller_markdown_bm25_end_to_end() {
         .expect("export complete ready library");
     // tamperedIndexBinding keeps ready metadata while removing every physical FTS row.
     // tamperedIndexBinding 在保留 ready 元数据的同时删除全部物理 FTS 记录。
-    let (tampered_index_space_id, tampered_index_binding_id) = runtime
+    let (_tampered_index_space_id, tampered_index_binding_id) = runtime
         .ensure_library_binding(&library.id)
         .await
         .expect("activate library for FTS integrity fixture");
-    client
-        .execute_sqlite_script_typed(
-            &tampered_index_space_id,
-            &tampered_index_binding_id,
-            format!("DELETE FROM {KNOWLEDGE_FTS_INDEX};"),
-            Vec::new(),
-        )
-        .await
-        .expect("remove FTS rows without changing ready metadata");
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        runtime
+            .resolve_library_binding(&tampered_index_binding_id)
+            .expect("resolve tampered index binding"),
+        format!("DELETE FROM {KNOWLEDGE_FTS_INDEX};"),
+        Vec::new(),
+    )
+    .await
+    .expect("remove FTS rows without changing ready metadata");
     assert!(
         runtime
             .export_package(&library.id, &package_directory)
@@ -410,17 +358,17 @@ async fn real_controller_markdown_bm25_end_to_end() {
     );
     // DuplicateFixture proves integrity accounting and repair operate on physical row cardinality.
     // DuplicateFixture 证明完整性计数与补全会处理物理记录基数。
-    client
-        .execute_sqlite_script_typed(
-            &tampered_index_space_id,
-            &tampered_index_binding_id,
-            format!(
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        runtime
+            .resolve_library_binding(&tampered_index_binding_id)
+            .expect("resolve tampered index binding"),
+        format!(
                 "INSERT INTO {KNOWLEDGE_FTS_INDEX}(id, file_path, title, content) SELECT id, file_path, title, content FROM {KNOWLEDGE_FTS_INDEX} LIMIT 1;"
             ),
-            Vec::new(),
-        )
-        .await
-        .expect("insert one duplicate physical FTS row");
+        Vec::new(),
+    ).await
+    .expect("insert one duplicate physical FTS row");
     let duplicate_integrity = runtime
         .inspect_index_integrity(&library.id)
         .await
@@ -517,30 +465,29 @@ async fn real_controller_markdown_bm25_end_to_end() {
         .create_library("覆盖目标知识库", "", &[])
         .await
         .expect("create replacement target");
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            &runtime.controller.sqlite_binding_id,
-            r#"INSERT INTO projects(
-                    id, name, root_path, pinned, archived, sort_order, created_at, updated_at
-                ) VALUES (?, ?, ?, 0, 0, 0, ?, ?);"#,
-            vec![
-                text("package-replacement-project"),
-                text("Package replacement project"),
-                text(
-                    runtime
-                        .controller
-                        .data_root
-                        .join("replacement-project")
-                        .display()
-                        .to_string(),
-                ),
-                text("2026-07-21T00:00:00Z"),
-                text("2026-07-21T00:00:00Z"),
-            ],
-        )
-        .await
-        .expect("insert replacement project fixture");
+    local_sql::execute_batch_async(
+        &runtime.host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"INSERT INTO projects(
+                id, name, root_path, pinned, archived, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, 0, 0, ?, ?);"#,
+        vec![vec![
+            text("package-replacement-project"),
+            text("Package replacement project"),
+            text(
+                runtime
+                    .host_runtime
+                    .data_root
+                    .join("replacement-project")
+                    .display()
+                    .to_string(),
+            ),
+            text("2026-07-21T00:00:00Z"),
+            text("2026-07-21T00:00:00Z"),
+        ]],
+    )
+    .await
+    .expect("insert replacement project fixture");
     runtime
         .set_project_binding(
             &replacement_target.id,
@@ -608,9 +555,9 @@ async fn real_controller_markdown_bm25_end_to_end() {
         .expect("resolve prepared crash target root");
     fs::rename(&prepared_crash_root, &prepared_crash_backup)
         .expect("simulate prepared crash after backup rename");
-    // preparedRecovery exercises durable recovery through a new wrapper sharing the same controller binding state.
-    // preparedRecovery 通过共享同一控制器绑定状态的新包装实例验证持久恢复。
-    let prepared_recovery = KnowledgeBaseRuntime::new(runtime.controller.clone());
+    // preparedRecovery exercises durable recovery through a new wrapper sharing the same host binding state.
+    // preparedRecovery 通过共享同一宿主绑定状态的新包装实例验证持久恢复。
+    let prepared_recovery = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
     prepared_recovery
         .recover_interrupted_jobs()
         .await
@@ -641,19 +588,20 @@ async fn real_controller_markdown_bm25_end_to_end() {
         .get_library(&replacement_target.id)
         .await
         .expect("load replacement target before committed crash");
-    let (committed_space_id, committed_binding_id) = runtime
+    let (_committed_space_id, committed_binding_id) = runtime
         .ensure_library_binding(&replacement_target.id)
         .await
         .expect("activate replacement target before committed crash");
-    client
-        .execute_sqlite_script_typed(
-            &committed_space_id,
-            &committed_binding_id,
-            "PRAGMA wal_checkpoint(TRUNCATE);",
-            Vec::new(),
-        )
-        .await
-        .expect("checkpoint replacement target before committed crash");
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        runtime
+            .resolve_library_binding(&committed_binding_id)
+            .expect("resolve committed binding"),
+        "PRAGMA wal_checkpoint(TRUNCATE);",
+        Vec::new(),
+    )
+    .await
+    .expect("checkpoint replacement target before committed crash");
     runtime
         .release_library_binding(&replacement_target.id)
         .await
@@ -684,7 +632,7 @@ async fn real_controller_markdown_bm25_end_to_end() {
     runtime
         .write_replacement_journal_atomic(&committed_crash_journal_path, &committed_crash_journal)
         .expect("persist committed crash journal");
-    let committed_recovery = KnowledgeBaseRuntime::new(runtime.controller.clone());
+    let committed_recovery = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
     committed_recovery
         .recover_interrupted_jobs()
         .await
@@ -953,5 +901,4 @@ async fn real_controller_markdown_bm25_end_to_end() {
         .delete_library(&multi_source_library.id)
         .await
         .expect("delete multi-source library");
-    client.shutdown().await.expect("shutdown controller client");
 }

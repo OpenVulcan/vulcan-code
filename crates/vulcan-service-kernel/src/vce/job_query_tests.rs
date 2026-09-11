@@ -312,8 +312,8 @@ pub(super) async fn verify_nonempty_query_interleaving(
     project_root: PathBuf,
     executor: Arc<tokio::runtime::Runtime>,
 ) {
-    // Capabilities and identity are the same explicit fixture used by the existing real-controller suite.
-    // 能力与身份使用既有真实控制器测试组的相同明确夹具。
+    // Capabilities and identity are the same explicit fixture used by the existing real-engine suite.
+    // 能力与身份使用既有真实引擎测试组的相同明确夹具。
     let capabilities = job_test_capabilities();
     let fingerprint = crate::vce::vce_embedding_physical_fingerprint(&capabilities, 3)
         .expect("fixture fingerprint");
@@ -1156,7 +1156,7 @@ async fn verify_manual_admission_and_watcher_source_events(
     let seeded_calls = ai.embedding_calls.load(Ordering::Relaxed);
     assert!(seeded_calls > calls_before);
     // The exact control belongs to isolated scans and does not simulate durable writer admission.
-    // 精确控制器属于隔离扫描，不模拟持久写入者准入。
+    // 精确控制信号属于隔离扫描，不模拟持久写入者准入。
     let active = VceActiveRefresh {
         request_id: String::from("watcher-source-evidence"),
         embedding_max_concurrency: settings.embedding_max_concurrency,

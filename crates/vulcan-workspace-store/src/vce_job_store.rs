@@ -2,8 +2,8 @@
 //! 持久项目作业回执，独立于核心检查点操作与界面事件投递。
 
 use super::{
-    ControllerSqliteValue, CountRow, VceDataPlaneHandle, VceProjectIndexConfig,
-    VceRebuildCandidateBase, sqlite_string_literal, sqlite_text,
+    CountRow, SqliteValue, VceDataPlaneHandle, VceProjectIndexConfig, VceRebuildCandidateBase,
+    sqlite_string_literal, sqlite_text,
 };
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,26 +11,27 @@ use vulcan_context_engine::{VcePhysicalTablePlan, VcePhysicalTableStatistics, Vc
 
 /// Current durable receipt format written by this runtime.
 /// 当前运行时写入的持久回执格式。
+///
+/// This is the only version this build accepts, in the same sense as the pinned Lance file version: a receipt
+/// carrying any other value is rejected rather than interpreted. There is deliberately no "oldest readable
+/// version" constant beside it — such a constant is the dual-read path, expressed as a range.
+/// 这是本构建唯一接受的版本，与固定的 Lance 文件版本同理：携带任何其他值的回执会被拒绝而不是被解释。此处刻意不
+/// 在其旁保留"最旧可读版本"常量——那种常量就是双读路径，只是写成了区间形式。
 pub const VCE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 3;
 
-/// Oldest receipt format that remains readable without rewriting user storage.
-/// 无需改写用户存储即可继续读取的最旧回执格式。
-const VCE_MIN_READABLE_JOB_RECEIPT_SCHEMA_VERSION: u32 = 2;
-
-/// Bound storage confirmation retries so a transient controller transport fault cannot strand a live owner.
-/// 限制存储确认重试次数，避免短暂的控制器传输故障把活动作业所有权永久卡住。
+/// Bound storage confirmation retries so a transient SQLite busy state cannot strand a live owner.
+/// 限制存储确认重试次数，避免短暂的 SQLite 忙状态把活动作业所有权永久卡住。
 const VCE_RECEIPT_CONFIRM_RETRIES: usize = 7;
 
-/// Base delay for bounded receipt reconciliation after a controller busy response.
-/// 控制器返回忙状态后进行有界回执收敛时使用的基础延迟。
+/// Base delay for bounded receipt reconciliation after a SQLite busy response.
+/// SQLite 返回忙状态后进行有界回执收敛时使用的基础延迟。
 const VCE_RECEIPT_CONFIRM_RETRY_BASE_MS: u64 = 250;
 
-/// Identify controller failures that are safe to reconcile after an ambiguous receipt operation.
-/// 识别可以在回执操作结果不明确时收敛处理的控制器错误。
-fn is_retryable_receipt_transport_error(error: &str) -> bool {
+/// Identify SQLite busy failures that are safe to reconcile after an ambiguous receipt operation.
+/// 识别可以在回执操作结果不明确时收敛处理的 SQLite 忙错误。
+fn is_retryable_receipt_storage_error(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
-    normalized.contains("transport error")
-        || normalized.contains("database is locked")
+    normalized.contains("database is locked")
         || normalized.contains("database busy")
         || normalized.contains("sqlite_busy")
 }
@@ -169,14 +170,14 @@ pub struct VceCompletedJobUpdate {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VceCompactionTableState {
-    /// The table is admitted but no controller operation has been submitted.
-    /// 表已准入，但尚未提交控制器操作。
+    /// The table is admitted but no storage operation has been submitted.
+    /// 表已准入，但尚未提交存储操作。
     Pending,
-    /// The controller accepted the current bounded operation.
-    /// 控制器已受理当前有界操作。
+    /// The in-process engine accepted the current bounded operation.
+    /// 进程内引擎已受理当前有界操作。
     Queued,
-    /// The controller is executing the current atomic operation.
-    /// 控制器正在执行当前原子操作。
+    /// The in-process engine is executing the current atomic operation.
+    /// 进程内引擎正在执行当前原子操作。
     Running,
     /// The table no longer requires compaction under the frozen policy.
     /// 表在冻结策略下已不再需要整理。
@@ -184,11 +185,11 @@ pub enum VceCompactionTableState {
     /// The table operation failed with an explicit diagnostic.
     /// 表操作失败并带有明确诊断。
     Failed,
-    /// Cancellation completed at a safe controller boundary.
-    /// 取消已在控制器安全边界完成。
+    /// Cancellation completed at a safe storage-operation boundary.
+    /// 取消已在存储操作的安全边界完成。
     Cancelled,
-    /// Controller restart or history expiry made the submitted operation unknowable.
-    /// 控制器重启或历史过期导致已提交操作状态不可知。
+    /// Runtime restart or history expiry made the submitted operation unknowable.
+    /// 运行时重启或历史过期导致已提交操作状态不可知。
     StateLost,
     /// The owning host ended before a later bounded round could be submitted.
     /// 所属宿主在后续有界轮次提交前结束。
@@ -196,8 +197,8 @@ pub enum VceCompactionTableState {
 }
 
 impl VceCompactionTableState {
-    /// Return whether no more controller work may be attached to this table receipt.
-    /// 返回此表回执是否已不能再附加控制器工作。
+    /// Return whether no more storage work may be attached to this table receipt.
+    /// 返回此表回执是否已不能再附加存储工作。
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -263,8 +264,8 @@ pub struct VceCompactionMetrics {
     pub files_added: u64,
 }
 
-/// Durable receipt for one table and its current bounded controller operation.
-/// 一张表及其当前有界控制器操作的持久回执。
+/// Durable receipt for one table and its current bounded storage operation.
+/// 一张表及其当前有界存储操作的持久回执。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct VceCompactionTableReceipt {
@@ -280,14 +281,14 @@ pub struct VceCompactionTableReceipt {
     /// One-based submitted operation round; zero means pending.
     /// 从一开始的已提交操作轮次；零表示待处理。
     pub round: u32,
-    /// Stable identifier of the current or latest controller operation.
-    /// 当前或最近一次控制器操作的稳定标识。
+    /// Stable identifier of the current or latest storage operation.
+    /// 当前或最近一次存储操作的稳定标识。
     pub operation_id: Option<String>,
     /// Exact physical version supplied to the current operation.
     /// 提交给当前操作的精确物理版本。
     pub operation_expected_version: Option<u64>,
-    /// Latest authoritative statistics acknowledged from the controller.
-    /// 最近一次从控制器确认的权威统计信息。
+    /// Latest authoritative statistics acknowledged from the in-process engine.
+    /// 最近一次从进程内引擎确认的权威统计信息。
     pub latest_statistics: VcePhysicalTableStatistics,
     /// Cumulative metrics from every acknowledged successful round.
     /// 所有已确认成功轮次的累计指标。
@@ -308,8 +309,8 @@ pub struct VceCompactionJobReceipt {
 }
 
 impl VceCompactionTableReceipt {
-    /// Validate one table receipt without consulting mutable controller state.
-    /// 在不查询可变控制器状态的情况下校验一张表的回执。
+    /// Validate one table receipt without consulting mutable runtime state.
+    /// 在不查询可变运行时状态的情况下校验一张表的回执。
     fn validate(&self) -> Result<(), String> {
         let plan_statistics = &self.plan.statistics;
         let latest = &self.latest_statistics;
@@ -452,8 +453,8 @@ impl VceCompactionJobReceipt {
         Ok(())
     }
 
-    /// Validate a monotonic durable successor without consulting controller memory.
-    /// 在不查询控制器内存的情况下校验单调持久后继。
+    /// Validate a monotonic durable successor without consulting runtime memory.
+    /// 在不查询运行时内存的情况下校验单调持久后继。
     ///
     /// `next` is the proposed next receipt. Returns unit only when immutable plans and every
     /// table lifecycle advance without rewriting acknowledged physical facts.
@@ -546,8 +547,8 @@ fn validate_compaction_table_transition(
         ));
     }
 
-    // Controller observations cannot rewrite statistics unless the active round has settled.
-    // 控制器观察不能改写统计信息；只有活动轮次结算时才可更新。
+    // Runtime observations cannot rewrite statistics unless the active round has settled.
+    // 运行时观察不能改写统计信息；只有活动轮次结算时才可更新。
     let physical_facts_changed =
         next.latest_statistics != previous.latest_statistics || next.metrics != previous.metrics;
     let may_acknowledge_physical_result = matches!(
@@ -651,8 +652,7 @@ impl VceStoredJob {
     /// Takes no parameters. Returns explicit malformed-contract diagnostics.
     /// 无参数。返回明确的契约格式错误诊断。
     pub fn validate(&self) -> Result<(), String> {
-        if !(VCE_MIN_READABLE_JOB_RECEIPT_SCHEMA_VERSION..=VCE_JOB_RECEIPT_SCHEMA_VERSION)
-            .contains(&self.schema_version)
+        if self.schema_version != VCE_JOB_RECEIPT_SCHEMA_VERSION
             || self.sequence == 0
             || self.admitted_settings_revision == 0
             || self.created_at_unix_ms == 0
@@ -875,8 +875,8 @@ fn job_state_transition_permitted(previous: &VceStoredJob, next: &VceStoredJob) 
 /// 由宿主工厂提供的精确物理项目持久作业仓库。
 #[derive(Clone)]
 pub struct VceProjectJobStore {
-    /// Host-owned controller bindings with a counted lifetime lease.
-    /// 带计数生命周期租约的宿主持有控制器绑定。
+    /// Host-owned storage bindings with a counted lifetime lease.
+    /// 带计数生命周期租约的宿主持有存储绑定。
     data_plane: VceDataPlaneHandle,
     /// Stable project owner; callers cannot select an arbitrary namespace or path.
     /// 稳定项目所有者；调用方不能选择任意命名空间或路径。
@@ -933,9 +933,9 @@ impl VceProjectJobStore {
     /// 仅为下游确定性故障测试执行一条有界项目存储脚本。
     ///
     /// `sql` is test-owned schema instrumentation and never accepts user input. Returns the real
-    /// controller result through the same process-wide SQLite mutation gate as production writes.
+    /// storage result through the same process-wide SQLite mutation gate as production writes.
     /// `sql` 是测试持有的结构插桩，绝不接收用户输入。通过与生产写入相同的进程级 SQLite
-    /// 变更闸门返回真实控制器结果。
+    /// 变更闸门返回真实存储结果。
     #[cfg(any(test, feature = "test-support"))]
     pub async fn execute_test_storage_script(&self, sql: &str) -> Result<(), String> {
         if sql.trim().is_empty() || sql.len() > 65_536 {
@@ -971,7 +971,7 @@ impl VceProjectJobStore {
         // serialized 有界且绝不包含模型凭据或代码正文。
         let serialized = serde_json::to_string(job)
             .map_err(|error| format!("Encode VCE job receipt: {error}"))?;
-        self.data_plane.execute("INSERT INTO vce_host_jobs(project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, snapshot_json, created_at_unix_ms, updated_at_unix_ms) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT(project_id, idempotency_key) DO NOTHING;", vec![sqlite_text(&job.project_id), sqlite_text(&job.job_id), sqlite_text(&job.owner_run_id), sqlite_text(&job.idempotency_key), sqlite_text(&job.request_fingerprint), sqlite_text(serialized), ControllerSqliteValue::Int64(job.created_at_unix_ms as i64), ControllerSqliteValue::Int64(job.updated_at_unix_ms as i64)], "Register VCE job receipt").await?;
+        self.data_plane.execute("INSERT INTO vce_host_jobs(project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, snapshot_json, created_at_unix_ms, updated_at_unix_ms) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT(project_id, idempotency_key) DO NOTHING;", vec![sqlite_text(&job.project_id), sqlite_text(&job.job_id), sqlite_text(&job.owner_run_id), sqlite_text(&job.idempotency_key), sqlite_text(&job.request_fingerprint), sqlite_text(serialized), SqliteValue::Integer(job.created_at_unix_ms as i64), SqliteValue::Integer(job.updated_at_unix_ms as i64)], "Register VCE job receipt").await?;
         // persisted is authoritative for idempotency, including a replay whose original job finished.
         // persisted 是幂等性的权威值，包括原始作业已经完成的重放。
         let persisted = self
@@ -1007,7 +1007,7 @@ impl VceProjectJobStore {
     ///
     /// `job_id` selects one project-owned receipt; returns the latest validated value or absence.
     /// `job_id` 选择项目所有的一个回执；返回最新已校验值或明确不存在。
-    pub async fn get_after_transport_retry(
+    pub async fn get_after_storage_retry(
         &self,
         job_id: &str,
     ) -> Result<Option<VceStoredJob>, String> {
@@ -1015,7 +1015,7 @@ impl VceProjectJobStore {
             match self.get(job_id).await {
                 Ok(receipt) => return Ok(receipt),
                 Err(error)
-                    if is_retryable_receipt_transport_error(&error)
+                    if is_retryable_receipt_storage_error(&error)
                         && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
                 {
                     tokio::time::sleep(receipt_retry_delay(attempt)).await;
@@ -1102,7 +1102,7 @@ impl VceProjectJobStore {
             // 联接三个原子发布事实；存储操作完成计数不足以证明发布。
             let publications: Vec<VceCompletedJobUpdate> = self.data_plane.query_rows(
                 "SELECT c.checkpoint_version, c.committed_at_unix_ms AS at_unix_ms FROM vce_read_checkpoints c JOIN vce_project_bindings b ON b.namespace_id = c.namespace_id JOIN vce_generations g ON g.namespace_id = c.namespace_id AND g.refresh_id = c.refresh_id AND g.generation = c.generation AND g.state = 'committed' JOIN vce_commit_receipts r ON r.namespace_id = g.namespace_id AND r.operation_id = g.operation_id WHERE b.project_id = ? AND c.refresh_id = ? AND g.operation_id = ? AND (? IS NULL OR c.namespace_id = ?) LIMIT 2;",
-                vec![sqlite_text(&self.project_id), sqlite_text(&refresh.operation_id), sqlite_text(format!("{}:commit", refresh.operation_id)), previous.replacement.as_ref().map_or(ControllerSqliteValue::Null, |replacement| sqlite_text(&replacement.target.binding.namespace_id)), previous.replacement.as_ref().map_or(ControllerSqliteValue::Null, |replacement| sqlite_text(&replacement.target.binding.namespace_id))],
+                vec![sqlite_text(&self.project_id), sqlite_text(&refresh.operation_id), sqlite_text(format!("{}:commit", refresh.operation_id)), previous.replacement.as_ref().map_or(SqliteValue::Null, |replacement| sqlite_text(&replacement.target.binding.namespace_id)), previous.replacement.as_ref().map_or(SqliteValue::Null, |replacement| sqlite_text(&replacement.target.binding.namespace_id))],
             ).await?;
             if publications.len() > 1 {
                 return Err(String::from(
@@ -1172,8 +1172,11 @@ impl VceProjectJobStore {
             }
             return Ok(Some(job));
         }
-        // Presence is read-only; old job repositories need no migration merely to display receipts.
-        // 表存在性检查只读；旧作业仓库无需为显示回执而迁移。
+        // Absence of the alias table means this database has never had a job submitted, so there is no alias
+        // to find. This is a read-only lookup for that ordinary state — it is not a migration path, and it
+        // deliberately does not create the table as a side effect of a read.
+        // 别名表不存在意味着该数据库从未提交过作业，因此没有别名可找。这是一次针对该正常状态的只读查找——它不是
+        // 迁移路径，也刻意不因一次读取而顺带创建该表。
         let tables: Vec<CountRow> = self.data_plane.query_rows("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'vce_host_job_requests';", Vec::new()).await?;
         if !tables.first().is_some_and(|row| row.count == 1) {
             return Ok(None);
@@ -1392,7 +1395,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         // current guards against stale same-sequence receipts before the database compare-and-swap.
         // current 在数据库比较交换前防止相同序号的过期回执。
         let current = self
-            .get_after_transport_retry(&previous.job_id)
+            .get_after_storage_retry(&previous.job_id)
             .await?
             .ok_or_else(|| String::from("VCE job to update does not exist"))?;
         if current != *previous {
@@ -1401,12 +1404,12 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         let serialized = serde_json::to_string(next)
             .map_err(|error| format!("Encode VCE job update: {error}"))?;
         let update_params = vec![
-            ControllerSqliteValue::Int64(next.sequence as i64),
+            SqliteValue::Integer(next.sequence as i64),
             sqlite_text(serialized),
-            ControllerSqliteValue::Int64(next.updated_at_unix_ms as i64),
+            SqliteValue::Integer(next.updated_at_unix_ms as i64),
             sqlite_text(&self.project_id),
             sqlite_text(&previous.job_id),
-            ControllerSqliteValue::Int64(previous.sequence as i64),
+            SqliteValue::Integer(previous.sequence as i64),
             sqlite_text(&previous.owner_run_id),
         ];
         for attempt in 0..=VCE_RECEIPT_CONFIRM_RETRIES {
@@ -1420,10 +1423,10 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
                 .await
             {
                 Ok(()) => break,
-                Err(error) if is_retryable_receipt_transport_error(&error) => {
+                Err(error) if is_retryable_receipt_storage_error(&error) => {
                     // The write may already have committed; reconcile before attempting it again.
                     // 写入可能已经提交，重试写入前先读取并收敛到已提交结果。
-                    match self.get_after_transport_retry(&next.job_id).await {
+                    match self.get_after_storage_retry(&next.job_id).await {
                         Ok(Some(receipt)) if receipt == *next => return Ok(receipt),
                         Ok(Some(receipt))
                             if receipt == *previous && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
@@ -1436,7 +1439,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
                         }
                         Ok(None) => return Err(String::from("VCE job to update does not exist")),
                         Err(read_error)
-                            if is_retryable_receipt_transport_error(&read_error)
+                            if is_retryable_receipt_storage_error(&read_error)
                                 && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
                         {
                             tokio::time::sleep(receipt_retry_delay(attempt)).await;
@@ -1448,7 +1451,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
             }
         }
         let persisted = self
-            .get_after_transport_retry(&next.job_id)
+            .get_after_storage_retry(&next.job_id)
             .await?
             .ok_or_else(|| String::from("VCE updated job receipt is missing"))?;
         if persisted != *next {
@@ -1498,7 +1501,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
     async fn read_receipt(
         &self,
         sql: &str,
-        params: Vec<ControllerSqliteValue>,
+        params: Vec<SqliteValue>,
     ) -> Result<Option<VceStoredJob>, String> {
         let rows: Vec<JobRow> = self.data_plane.query_rows(sql, params).await?;
         if rows.len() > 1 {
@@ -1654,17 +1657,17 @@ mod tests {
         }
     }
 
-    // SQLite lock conflicts and transport failures both require receipt reconciliation, not blind duplicate writes.
-    // SQLite 锁冲突与传输失败都必须走回执收敛，而不是盲目重复写入。
+    // SQLite lock conflicts require receipt reconciliation, not blind duplicate writes.
+    // SQLite 锁冲突必须走回执收敛，而不是盲目重复写入。
     #[test]
     fn receipt_reconciliation_recognizes_sqlite_lock_conflicts() {
-        assert!(is_retryable_receipt_transport_error(
+        assert!(is_retryable_receipt_storage_error(
             "Update VCE job receipt: sqlite execute failed: database is locked"
         ));
-        assert!(is_retryable_receipt_transport_error(
-            "transport error: connection reset"
+        assert!(!is_retryable_receipt_storage_error(
+            "storage engine returned an invalid receipt"
         ));
-        assert!(!is_retryable_receipt_transport_error(
+        assert!(!is_retryable_receipt_storage_error(
             "VCE job receipt has invalid ownership"
         ));
     }
@@ -1819,10 +1822,16 @@ mod tests {
         assert!(serde_json::from_value::<VceStoredJob>(unknown).is_err());
     }
 
-    /// Verify schema-v2 non-compaction history remains readable without an eager storage migration.
-    /// 验证 v2 非整理历史无需立即迁移存储即可继续读取。
+    /// Verify a pre-plan receipt format is refused rather than read as though it were current.
+    /// 验证前代回执格式被拒绝，而不是被当作当前格式读取。
+    ///
+    /// A receipt that decodes is not a receipt this build may act on: the version marker is what separates
+    /// "readable JSON" from "a contract this runtime understands". Accepting version 2 would mean acting on a
+    /// compaction-free contract that predates the plan, which is the dual-read path the plan forbids.
+    /// 能解码的回执并不等于本构建可以据以行动的回执：版本标记正是"可读的 JSON"与"本运行时可理解的契约"之间的界线。
+    /// 接受版本 2 意味着依据一份早于本方案、且不含整理信息的契约行动，而这正是方案禁止的双读路径。
     #[test]
-    fn version_two_job_receipts_remain_readable_without_compaction_fields() {
+    fn a_pre_plan_job_receipt_version_is_refused() {
         let root = std::env::current_dir()
             .expect("read absolute fixture root")
             .display()
@@ -1861,6 +1870,15 @@ mod tests {
                 job_id: String::from("legacy-job"),
             },
         );
+        // The control: the fixture as written by this runtime is valid, so the rejection below is about the
+        // version marker and not about a malformed fixture.
+        // 对照：本运行时写出的夹具本身有效，因此下方的拒绝只关乎版本标记，而与夹具格式错误无关。
+        receipt
+            .validate()
+            .expect("the current-version fixture must be valid");
+
+        // The exact pre-plan shape: version 2 with the compaction field absent.
+        // 前代的确切形态：版本 2 且缺少整理字段。
         receipt.schema_version = 2;
         let mut encoded = serde_json::to_value(&receipt).expect("legacy receipt should encode");
         encoded
@@ -1869,12 +1887,18 @@ mod tests {
             .remove("compaction");
 
         let decoded = serde_json::from_value::<VceStoredJob>(encoded)
-            .expect("v2 receipt without the new field should decode");
-        decoded
-            .validate()
-            .expect("v2 non-compaction receipt should remain valid");
+            .expect("the pre-plan receipt is still structurally decodable");
         assert_eq!(decoded.schema_version, 2);
         assert!(decoded.compaction.is_none());
+        // Decodable is not the same as acceptable: the marker must stop it here.
+        // 可解码不等于可接受：版本标记必须在此拦住它。
+        let error = decoded
+            .validate()
+            .expect_err("a pre-plan receipt version must be refused, not read");
+        assert!(
+            error.contains("invalid version"),
+            "unexpected rejection reason: {error}"
+        );
     }
 
     /// Verify table and host terminal states preserve the checkpoint and reject false success.
@@ -1972,9 +1996,9 @@ mod tests {
         table.round = 1;
         table.operation_id = Some(String::from("lost-operation"));
         table.operation_expected_version = Some(9);
-        table.error = Some(String::from("controller operation history was lost"));
+        table.error = Some(String::from("storage operation history was lost"));
         lost_state.state = VceJobState::Interrupted;
-        lost_state.error = Some(String::from("controller operation history was lost"));
+        lost_state.error = Some(String::from("storage operation history was lost"));
         lost_state.sequence += 1;
         lost_state.updated_at_unix_ms += 1;
         lost_state
@@ -1986,8 +2010,8 @@ mod tests {
     /// 验证持久整理更新不能改写计划、操作身份或已确认事实。
     #[test]
     fn compaction_receipt_transition_is_monotonic() {
-        // Pending plan and its valid first controller admission.
-        // 待处理计划及其合法的首次控制器准入。
+        // Pending plan and its valid first storage admission.
+        // 待处理计划及其合法的首次存储准入。
         let pending = compaction_test_receipt()
             .compaction
             .expect("pending compaction payload");
@@ -2024,7 +2048,7 @@ mod tests {
         let mut rewritten_operation = running.clone();
         rewritten_operation.tables[0].state = VceCompactionTableState::Failed;
         rewritten_operation.tables[0].operation_id = Some(String::from("replacement-operation"));
-        rewritten_operation.tables[0].error = Some(String::from("controller failure"));
+        rewritten_operation.tables[0].error = Some(String::from("storage failure"));
         rewritten_operation
             .validate()
             .expect("rewritten operation is standalone valid");

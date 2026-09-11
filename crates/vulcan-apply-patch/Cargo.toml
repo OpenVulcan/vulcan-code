@@ -9,3 +9,6 @@ license = "MIT AND Apache-2.0"
 
 [lints]
 workspace = true
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

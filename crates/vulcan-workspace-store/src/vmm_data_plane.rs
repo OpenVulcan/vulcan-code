@@ -1,35 +1,43 @@
-//! Controller-backed native VMM data-plane bootstrap and schema.
-//! 基于控制器的原生 VMM 数据平面引导与数据结构。
+//! In-process native VMM data-plane bootstrap and schema.
+//! 进程内原生 VMM 数据平面引导与数据结构。
 
-use crate::data_plane::ControllerRuntimeHandle;
-use crate::runtime_assets;
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::{
+    LanceDbDirectoryBinding, LocalDatabaseRuntime, LogicalDatabase,
+};
+use crate::local_sql;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use vldb_controller_client::{
-    ControllerClient, ControllerLanceDbColumnDef, ControllerLanceDbColumnType,
-    ControllerLanceDbEnableRequest, ControllerLanceDbInputFormat, ControllerLanceDbOutputFormat,
-    ControllerSqliteEnableRequest, ControllerSqliteValue, SpaceKind, SpaceRegistration,
+use vulcan_lancedb_engine::engine::LanceDbEngine;
+use vulcan_lancedb_engine::types::{
+    LanceDbColumnDef, LanceDbColumnType, LanceDbCreateTableInput, LanceDbDeleteInput,
+    LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput, LanceDbUpsertInput,
 };
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 mod lexical;
 pub use lexical::{VmmLexicalDocument, VmmLexicalHit, VmmLexicalIndexCounts};
 
-/// Stable controller space identifier reserved for native VMM data.
-/// 为原生 VMM 数据保留的稳定控制器空间标识符。
-pub const VMM_SPACE_ID: &str = "vmm";
-
 /// Stable SQLite binding tag reserved for native VMM relational state.
 /// 为原生 VMM 关系状态保留的稳定 SQLite 绑定标签。
+///
+/// Retained as a diagnostic label only: bindings are now keyed by the logical database and its
+/// physical path, so nothing resolves a database from this string.
+///
+/// 仅作为诊断标签保留：绑定现在以逻辑数据库与其物理路径为键，因此没有任何东西再从这个字符串解析数据库。
 pub const VMM_SQLITE_BINDING_TAG: &str = "vmm-state";
 
 /// Stable LanceDB binding tag reserved for native VMM vectors.
 /// 为原生 VMM 向量保留的稳定 LanceDB 绑定标签。
+///
+/// Retained as a diagnostic label only, for the same reason as [`VMM_SQLITE_BINDING_TAG`].
+/// 仅作为诊断标签保留，理由同 [`VMM_SQLITE_BINDING_TAG`]。
 pub const VMM_LANCEDB_BINDING_TAG: &str = "vmm-memory";
 
 /// Stable identifier of the protected fallback VMM project.
@@ -88,17 +96,21 @@ const COMPLETE_CORE_MUTATION_SQL: &str = "UPDATE vmm_core_mutations SET state = 
 /// 在 Core 精确可见性过滤前从 LanceDB 请求的最大候选行数。
 pub const VMM_VECTOR_SEARCH_LIMIT: u32 = 10_000;
 
-/// Process-local sequence used to keep repeated bootstrap bindings distinct.
-/// 用于保证重复引导绑定互不冲突的进程内序列。
-static VMM_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+/// Read-consistency window the native VMM vector store runs with, in milliseconds.
+/// 原生 VMM 向量存储使用的读一致性窗口，单位为毫秒。
+const VMM_LANCEDB_READ_CONSISTENCY_MS: u64 = 250;
 
-/// Long-lived controller bindings for the native VMM SQLite and LanceDB stores.
-/// 原生 VMM SQLite 与 LanceDB 存储使用的长生命周期控制器绑定。
+/// Long-lived in-process bindings for the native VMM SQLite and LanceDB stores.
+/// 原生 VMM SQLite 与 LanceDB 存储使用的长生命周期进程内绑定。
 #[derive(Clone)]
 pub struct VmmDataPlaneHandle {
-    /// Shared controller client owned by the VulcanCode host.
-    /// 由 VulcanCode 宿主持有的共享控制器客户端。
-    pub client: ControllerClient,
+    /// Shared host-local database runtime that owns this VMM's SQLite and LanceDB stores.
+    /// 持有本 VMM SQLite 与 LanceDB 存储的共享宿主本地数据库运行时。
+    ///
+    /// The handle owns only the local runtime, so this sub-plane cannot reach an external storage process.
+    ///
+    /// 本句柄只持有本地运行时，因此该子平面无法触及外部存储进程。
+    pub local: Arc<LocalDatabaseRuntime>,
     /// Root directory dedicated to native VMM state.
     /// 原生 VMM 状态专用根目录。
     pub data_root: PathBuf,
@@ -108,12 +120,6 @@ pub struct VmmDataPlaneHandle {
     /// LanceDB directory containing memory vectors.
     /// 保存记忆向量的 LanceDB 目录。
     pub lancedb_path: PathBuf,
-    /// Bootstrap-scoped SQLite binding identifier.
-    /// 单次引导作用域内的 SQLite 绑定标识符。
-    pub sqlite_binding_id: String,
-    /// Bootstrap-scoped LanceDB binding identifier.
-    /// 单次引导作用域内的 LanceDB 绑定标识符。
-    pub lancedb_binding_id: String,
 }
 
 /// Durable native Core maintenance mutation used to resume cross-backend commits.
@@ -318,38 +324,66 @@ pub struct NativeVmmProjectUsage {
 }
 
 impl fmt::Debug for VmmDataPlaneHandle {
-    /// Formats one native VMM data-plane handle without exposing client internals.
-    /// 格式化原生 VMM 数据平面句柄而不暴露客户端内部状态。
+    /// Formats one native VMM data-plane handle without exposing its runtime internals.
+    /// 格式化原生 VMM 数据平面句柄而不暴露其运行时内部状态。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VmmDataPlaneHandle")
             .field("data_root", &self.data_root)
             .field("sqlite_path", &self.sqlite_path)
             .field("lancedb_path", &self.lancedb_path)
-            .field("sqlite_binding_id", &self.sqlite_binding_id)
-            .field("lancedb_binding_id", &self.lancedb_binding_id)
             .finish()
     }
 }
 
 impl VmmDataPlaneHandle {
+    /// Declares the LanceDB limits the native VMM vector store runs with.
+    /// 声明原生 VMM 向量存储使用的 LanceDB 限制。
+    ///
+    /// These are the values the VMM's own storage binding declares, kept here because the
+    /// subsystem that owns the bound is the place that knows why they are what they are.
+    ///
+    /// 这些是 VMM 自身存储绑定声明的值，保留在此是因为拥有该边界的子系统才是知道其取值理由的地方。
+    fn vector_store_binding(&self) -> LanceDbDirectoryBinding {
+        LanceDbDirectoryBinding {
+            directory: self.lancedb_path.clone(),
+            read_consistency_interval_ms: Some(VMM_LANCEDB_READ_CONSISTENCY_MS),
+            max_upsert_payload: 16 * 1024 * 1024,
+            max_search_limit: VMM_VECTOR_SEARCH_LIMIT as usize,
+            max_concurrent_requests: 16,
+        }
+    }
+
+    /// Returns the LanceDB engine holding this VMM's memory vectors.
+    /// 返回保存本 VMM 记忆向量的 LanceDB 引擎。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an explicit error when the vector directory cannot be opened, or when it is already
+    /// open with different limits.
+    /// 向量目录无法打开，或已以不同限制打开时返回显式错误。
+    async fn vector_engine(&self) -> Result<LanceDbEngine, String> {
+        self.local
+            .lance_engine(self.vector_store_binding())
+            .await
+            .map_err(|error| format!("打开原生 VMM LanceDB 数据库失败：{error}"))
+    }
+
     /// Lists all one-level native VMM projects in stable identity order.
     /// 按稳定身份顺序列出全部单层原生 VMM 项目。
     ///
     /// # Errors
-    /// Returns a controller, JSON, or persisted-data validation error.
-    /// 返回控制器、JSON 或持久数据校验错误。
+    /// Returns a storage, JSON, or persisted-data validation error.
+    /// 返回存储、JSON 或持久数据校验错误。
     pub async fn list_projects(&self) -> Result<Vec<NativeVmmProject>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "SELECT id, scope_id, name, tag, protected FROM vmm_projects ORDER BY id ASC;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("读取原生 VMM 项目列表失败：{error}"))?;
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "SELECT id, scope_id, name, tag, protected FROM vmm_projects ORDER BY id ASC;",
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("读取原生 VMM 项目列表失败：{error}"))?;
         let rows: Vec<NativeProjectRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 项目列表失败：{error}"))?;
         rows.into_iter().map(native_project_from_row).collect()
@@ -359,20 +393,18 @@ impl VmmDataPlaneHandle {
     /// 按稳定数字身份解析一个原生 VMM 项目。
     ///
     /// # Errors
-    /// Returns a validation, controller, JSON, or cardinality error.
-    /// 返回校验、控制器、JSON 或基数错误。
+    /// Returns a validation, storage, JSON, or cardinality error.
+    /// 返回校验、存储、JSON 或基数错误。
     pub async fn project_by_id(&self, project_id: u64) -> Result<Option<NativeVmmProject>, String> {
         let project_id = project_id_i64(project_id)?;
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "SELECT id, scope_id, name, tag, protected FROM vmm_projects WHERE id = ? LIMIT 1;",
-                vec![ControllerSqliteValue::Int64(project_id)],
-            )
-            .await
-            .map_err(|error| format!("读取原生 VMM 项目失败：{error}"))?;
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "SELECT id, scope_id, name, tag, protected FROM vmm_projects WHERE id = ? LIMIT 1;",
+            vec![SqliteValue::Integer(project_id)],
+        )
+        .await
+        .map_err(|error| format!("读取原生 VMM 项目失败：{error}"))?;
         one_native_project(result.json_data.as_str())
     }
 
@@ -380,30 +412,28 @@ impl VmmDataPlaneHandle {
     /// 创建一个带不可变稳定标签的单层原生 VMM 项目。
     ///
     /// # Errors
-    /// Returns a validation, uniqueness, controller, or readback error.
-    /// 返回校验、唯一性、控制器或回读错误。
+    /// Returns a validation, uniqueness, storage, or readback error.
+    /// 返回校验、唯一性、存储或回读错误。
     pub async fn create_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
         let name = validate_native_project_text(name, "VMM 项目名称", 512)?;
         let tag = validate_native_project_text(tag, "VMM 项目标签", 256)?;
         let now = current_unix_epoch_millis_i64()?;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"INSERT INTO vmm_projects(
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"INSERT INTO vmm_projects(
     scope_id, name, tag, protected, created_at_unix_ms, updated_at_unix_ms
 ) VALUES ('pending:' || ?, ?, ?, 0, ?, ?);"#,
-                vec![
-                    sqlite_text(tag),
-                    sqlite_text(name),
-                    sqlite_text(tag),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
-                ],
-            )
-            .await
-            .map_err(|error| format!("创建原生 VMM 项目失败：{error}"))?;
+            vec![
+                sqlite_text(tag),
+                sqlite_text(name),
+                sqlite_text(tag),
+                SqliteValue::Integer(now),
+                SqliteValue::Integer(now),
+            ],
+        )
+        .await
+        .map_err(|error| format!("创建原生 VMM 项目失败：{error}"))?;
         if !result.success {
             return Err(format!("创建原生 VMM 项目失败：{}", result.message));
         }
@@ -422,8 +452,8 @@ impl VmmDataPlaneHandle {
     /// `tag` 是用于可重试重新绑定的不可变 VulcanCode 项目标签。
     ///
     /// # Errors
-    /// Returns a controller, validation, or catalog consistency error.
-    /// 返回控制器、校验或目录一致性错误。
+    /// Returns a storage, validation, or catalog consistency error.
+    /// 返回存储、校验或目录一致性错误。
     pub async fn ensure_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
         let tag = validate_native_project_text(tag, "VMM 项目标签", 256)?;
         if let Some(project) = self.project_by_tag(tag).await? {
@@ -439,8 +469,8 @@ impl VmmDataPlaneHandle {
     /// 重命名一个原生 VMM 项目，且不改变身份、作用域、标签或绑定。
     ///
     /// # Errors
-    /// Returns a validation, missing-project, or controller error.
-    /// 返回校验、项目缺失或控制器错误。
+    /// Returns a validation, missing-project, or storage error.
+    /// 返回校验、项目缺失或存储错误。
     pub async fn rename_project(
         &self,
         project_id: u64,
@@ -448,20 +478,18 @@ impl VmmDataPlaneHandle {
     ) -> Result<NativeVmmProject, String> {
         let project_id_i64 = project_id_i64(project_id)?;
         let name = validate_native_project_text(name, "VMM 项目名称", 512)?;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "UPDATE vmm_projects SET name = ?, updated_at_unix_ms = ? WHERE id = ?;",
-                vec![
-                    sqlite_text(name),
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                    ControllerSqliteValue::Int64(project_id_i64),
-                ],
-            )
-            .await
-            .map_err(|error| format!("重命名原生 VMM 项目失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "UPDATE vmm_projects SET name = ?, updated_at_unix_ms = ? WHERE id = ?;",
+            vec![
+                sqlite_text(name),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+                SqliteValue::Integer(project_id_i64),
+            ],
+        )
+        .await
+        .map_err(|error| format!("重命名原生 VMM 项目失败：{error}"))?;
         if !result.success {
             return Err(format!("重命名原生 VMM 项目失败：{}", result.message));
         }
@@ -474,18 +502,16 @@ impl VmmDataPlaneHandle {
     /// 列出当前绑定到一个原生记忆项目的全部 VulcanCode 项目。
     ///
     /// # Errors
-    /// Returns a validation, controller, or JSON error.
-    /// 返回校验、控制器或 JSON 错误。
+    /// Returns a validation, storage, or JSON error.
+    /// 返回校验、存储或 JSON 错误。
     pub async fn bound_vulcan_project_ids(&self, project_id: u64) -> Result<Vec<String>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vulcan_project_id FROM vmm_project_bindings WHERE vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
-                vec![ControllerSqliteValue::Int64(project_id_i64(project_id)?)],
-            )
-            .await
+                vec![SqliteValue::Integer(project_id_i64(project_id)?)],
+            ).await
             .map_err(|error| format!("读取原生 VMM 项目绑定失败：{error}"))?;
         let rows: Vec<VulcanProjectIdRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 项目绑定失败：{error}"))?;
@@ -496,29 +522,25 @@ impl VmmDataPlaneHandle {
     /// 解析一个原生 VMM 项目的全部归属与连带查询关联。
     ///
     /// # Errors
-    /// Returns a validation, controller, or JSON error.
-    /// 返回校验、控制器或 JSON 错误。
+    /// Returns a validation, storage, or JSON error.
+    /// 返回校验、存储或 JSON 错误。
     pub async fn project_usage(&self, project_id: u64) -> Result<NativeVmmProjectUsage, String> {
         let project_id = project_id_i64(project_id)?;
-        let owner_result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let owner_result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vulcan_project_id FROM vmm_project_bindings WHERE vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
-                vec![ControllerSqliteValue::Int64(project_id)],
-            )
-            .await
+                vec![SqliteValue::Integer(project_id)],
+            ).await
             .map_err(|error| format!("读取原生 VMM 项目归属关联失败：{error}"))?;
-        let linked_result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let linked_result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vulcan_project_id FROM vmm_project_query_links WHERE linked_vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
-                vec![ControllerSqliteValue::Int64(project_id)],
-            )
-            .await
+                vec![SqliteValue::Integer(project_id)],
+            ).await
             .map_err(|error| format!("读取原生 VMM 项目连带查询关联失败：{error}"))?;
         let owner_rows: Vec<VulcanProjectIdRow> = serde_json::from_str(&owner_result.json_data)
             .map_err(|error| format!("解析原生 VMM 项目归属关联失败：{error}"))?;
@@ -541,30 +563,26 @@ impl VmmDataPlaneHandle {
     /// 列出每条原生项目绑定及其有序的仅召回连带项目。
     ///
     /// # Errors
-    /// Returns a controller, JSON, or persisted-identity validation error.
-    /// 返回控制器、JSON 或持久身份校验错误。
+    /// Returns a storage, JSON, or persisted-identity validation error.
+    /// 返回存储、JSON 或持久身份校验错误。
     pub async fn list_project_bindings(
         &self,
     ) -> Result<Vec<NativeVmmProjectBindingAccess>, String> {
-        let binding_result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let binding_result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vulcan_project_id, vmm_project_id FROM vmm_project_bindings ORDER BY vulcan_project_id ASC;",
-                Vec::new(),
-            )
-            .await
+                vec![],
+            ).await
             .map_err(|error| format!("读取原生 VMM 项目绑定列表失败：{error}"))?;
-        let link_result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let link_result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vulcan_project_id, linked_vmm_project_id, position FROM vmm_project_query_links ORDER BY vulcan_project_id ASC, position ASC, linked_vmm_project_id ASC;",
-                Vec::new(),
-            )
-            .await
+                vec![],
+            ).await
             .map_err(|error| format!("读取原生 VMM 连带查询列表失败：{error}"))?;
         let bindings: Vec<NativeProjectBindingRow> =
             serde_json::from_str(&binding_result.json_data)
@@ -601,8 +619,8 @@ impl VmmDataPlaneHandle {
     /// 删除一个未绑定且不受保护的原生 VMM 项目记录。
     ///
     /// # Errors
-    /// Returns an explicit protected/bound/missing or controller error.
-    /// 返回明确的受保护、已绑定、缺失或控制器错误。
+    /// Returns an explicit protected, bound, missing, or storage error.
+    /// 返回明确的受保护、已绑定、缺失或存储错误。
     pub async fn delete_unbound_project(&self, project_id: u64) -> Result<(), String> {
         let project = self
             .project_by_id(project_id)
@@ -620,16 +638,14 @@ impl VmmDataPlaneHandle {
                 usage.linked_vulcan_project_ids.join(", ")
             ));
         }
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "DELETE FROM vmm_projects WHERE id = ? AND protected = 0;",
-                vec![ControllerSqliteValue::Int64(project_id_i64(project_id)?)],
-            )
-            .await
-            .map_err(|error| format!("删除原生 VMM 项目失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "DELETE FROM vmm_projects WHERE id = ? AND protected = 0;",
+            vec![SqliteValue::Integer(project_id_i64(project_id)?)],
+        )
+        .await
+        .map_err(|error| format!("删除原生 VMM 项目失败：{error}"))?;
         if !result.success {
             return Err(format!("删除原生 VMM 项目失败：{}", result.message));
         }
@@ -651,8 +667,8 @@ impl VmmDataPlaneHandle {
     /// 返回准确解除的关联；若先前尝试已经删除该项目则返回空值。
     ///
     /// # Errors
-    /// Returns when an existing project is protected or the controller transaction fails.
-    /// 已存在项目受保护或控制器事务失败时返回错误。
+    /// Returns when an existing project is protected or the storage transaction fails.
+    /// 已存在项目受保护或存储事务失败时返回错误。
     pub async fn delete_project_with_bindings(
         &self,
         project_id: u64,
@@ -668,16 +684,14 @@ impl VmmDataPlaneHandle {
         let script = format!(
             "BEGIN IMMEDIATE;\nDELETE FROM vmm_project_query_links WHERE linked_vmm_project_id = {project_id_i64};\nDELETE FROM vmm_project_bindings WHERE vmm_project_id = {project_id_i64};\nDELETE FROM vmm_projects WHERE id = {project_id_i64} AND protected = 0;\nCOMMIT;"
         );
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                script.as_str(),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("删除原生 VMM 项目并解除绑定失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            script.as_str(),
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("删除原生 VMM 项目并解除绑定失败：{error}"))?;
         if !result.success {
             return Err(format!(
                 "删除原生 VMM 项目并解除绑定失败：{}",
@@ -694,8 +708,8 @@ impl VmmDataPlaneHandle {
     /// 按稳定项目身份创建或替换一条 VulcanCode 项目绑定。
     ///
     /// # Errors
-    /// Returns a validation, missing-target, or controller error.
-    /// 返回校验、目标缺失或控制器错误。
+    /// Returns a validation, missing-target, or storage error.
+    /// 返回校验、目标缺失或存储错误。
     pub async fn bind_vulcan_project(
         &self,
         vulcan_project_id: &str,
@@ -722,16 +736,14 @@ WHERE vulcan_project_id = '{escaped_project_id}'
   AND linked_vmm_project_id = {vmm_project_id_i64};
 COMMIT;"#
         );
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                script.as_str(),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("保存原生 VMM 项目绑定失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            script.as_str(),
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("保存原生 VMM 项目绑定失败：{error}"))?;
         if !result.success {
             return Err(format!("保存原生 VMM 项目绑定失败：{}", result.message));
         }
@@ -745,8 +757,8 @@ COMMIT;"#
     /// 原子替换一个 VulcanCode 项目的写入所有者与有序仅召回连带项目。
     ///
     /// # Errors
-    /// Returns duplicate, owner-link, missing-project, validation, or controller errors.
-    /// 返回重复、所有者链接、项目缺失、校验或控制器错误。
+    /// Returns duplicate, owner-link, missing-project, validation, or storage errors.
+    /// 返回重复、所有者链接、项目缺失、校验或存储错误。
     pub async fn set_project_access(
         &self,
         vulcan_project_id: &str,
@@ -770,16 +782,14 @@ COMMIT;"#
             linked_project_ids,
             current_unix_epoch_millis_i64()?,
         )?;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                script.as_str(),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("保存原生 VMM 项目访问配置失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            script.as_str(),
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("保存原生 VMM 项目访问配置失败：{error}"))?;
         if !result.success {
             return Err(format!("保存原生 VMM 项目访问配置失败：{}", result.message));
         }
@@ -790,21 +800,19 @@ COMMIT;"#
     /// 移除一条 VulcanCode 项目绑定及其查询链接。
     ///
     /// # Errors
-    /// Returns a validation or controller error.
-    /// 返回校验或控制器错误。
+    /// Returns a validation or storage error.
+    /// 返回校验或存储错误。
     pub async fn unbind_vulcan_project(&self, vulcan_project_id: &str) -> Result<(), String> {
         let vulcan_project_id =
             validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "DELETE FROM vmm_project_bindings WHERE vulcan_project_id = ?;",
-                vec![sqlite_text(vulcan_project_id)],
-            )
-            .await
-            .map_err(|error| format!("移除原生 VMM 项目绑定失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "DELETE FROM vmm_project_bindings WHERE vulcan_project_id = ?;",
+            vec![sqlite_text(vulcan_project_id)],
+        )
+        .await
+        .map_err(|error| format!("移除原生 VMM 项目绑定失败：{error}"))?;
         if !result.success {
             return Err(format!("移除原生 VMM 项目绑定失败：{}", result.message));
         }
@@ -815,45 +823,41 @@ COMMIT;"#
     /// 解析一个 VulcanCode 项目的所有者及有序连带查询项目。
     ///
     /// # Errors
-    /// Returns a validation, missing-binding, controller, JSON, or referential error.
-    /// 返回校验、绑定缺失、控制器、JSON 或引用完整性错误。
+    /// Returns a validation, missing-binding, storage, JSON, or referential error.
+    /// 返回校验、绑定缺失、存储、JSON 或引用完整性错误。
     pub async fn resolve_project_access(
         &self,
         vulcan_project_id: &str,
     ) -> Result<NativeVmmProjectAccess, String> {
         let vulcan_project_id =
             validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
-        let owner_result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT p.id, p.scope_id, p.name, p.tag, p.protected
+        let owner_result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT p.id, p.scope_id, p.name, p.tag, p.protected
 FROM vmm_project_bindings b
 JOIN vmm_projects p ON p.id = b.vmm_project_id
 WHERE b.vulcan_project_id = ?
 LIMIT 1;"#,
-                vec![sqlite_text(vulcan_project_id)],
-            )
-            .await
-            .map_err(|error| format!("解析原生 VMM 所有者项目失败：{error}"))?;
+            vec![sqlite_text(vulcan_project_id)],
+        )
+        .await
+        .map_err(|error| format!("解析原生 VMM 所有者项目失败：{error}"))?;
         let owner = one_native_project(owner_result.json_data.as_str())?.ok_or_else(|| {
             format!("VulcanCode 项目 `{vulcan_project_id}` 尚未绑定原生 VMM 项目")
         })?;
-        let linked_result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT p.id, p.scope_id, p.name, p.tag, p.protected
+        let linked_result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT p.id, p.scope_id, p.name, p.tag, p.protected
 FROM vmm_project_query_links l
 JOIN vmm_projects p ON p.id = l.linked_vmm_project_id
 WHERE l.vulcan_project_id = ?
 ORDER BY l.position ASC, p.id ASC;"#,
-                vec![sqlite_text(vulcan_project_id)],
-            )
-            .await
-            .map_err(|error| format!("解析原生 VMM 连带查询项目失败：{error}"))?;
+            vec![sqlite_text(vulcan_project_id)],
+        )
+        .await
+        .map_err(|error| format!("解析原生 VMM 连带查询项目失败：{error}"))?;
         let linked_rows: Vec<NativeProjectRow> = serde_json::from_str(&linked_result.json_data)
             .map_err(|error| format!("解析原生 VMM 连带查询项目失败：{error}"))?;
         let linked = linked_rows
@@ -867,8 +871,8 @@ ORDER BY l.position ASC, p.id ASC;"#,
     /// 原子替换一个已绑定 VulcanCode 项目的有序连带查询项目。
     ///
     /// # Errors
-    /// Returns duplicate, owner-link, missing-target, binding, or controller errors.
-    /// 返回重复、所有者链接、目标缺失、绑定或控制器错误。
+    /// Returns duplicate, owner-link, missing-target, binding, or storage errors.
+    /// 返回重复、所有者链接、目标缺失、绑定或存储错误。
     pub async fn replace_query_links(
         &self,
         vulcan_project_id: &str,
@@ -908,16 +912,14 @@ ORDER BY l.position ASC, p.id ASC;"#,
             );
         }
         script.push_str("COMMIT;");
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                script.as_str(),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("保存原生 VMM 连带查询项目失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            script.as_str(),
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("保存原生 VMM 连带查询项目失败：{error}"))?;
         if !result.success {
             return Err(format!("保存原生 VMM 连带查询项目失败：{}", result.message));
         }
@@ -927,16 +929,14 @@ ORDER BY l.position ASC, p.id ASC;"#,
     /// Resolves one native VMM project by immutable tag.
     /// 按不可变标签解析一个原生 VMM 项目。
     async fn project_by_tag(&self, tag: &str) -> Result<Option<NativeVmmProject>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "SELECT id, scope_id, name, tag, protected FROM vmm_projects WHERE tag = ? LIMIT 1;",
-                vec![sqlite_text(tag)],
-            )
-            .await
-            .map_err(|error| format!("按标签读取原生 VMM 项目失败：{error}"))?;
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "SELECT id, scope_id, name, tag, protected FROM vmm_projects WHERE tag = ? LIMIT 1;",
+            vec![sqlite_text(tag)],
+        )
+        .await
+        .map_err(|error| format!("按标签读取原生 VMM 项目失败：{error}"))?;
         one_native_project(result.json_data.as_str())
     }
 
@@ -959,15 +959,13 @@ ORDER BY l.position ASC, p.id ASC;"#,
         if vector_space_id.trim().is_empty() {
             return Err(String::from("VMM 向量空间标识不能为空"));
         }
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vector_space_id, table_name, dimension, physical_fingerprint_json FROM vmm_vector_spaces WHERE vector_space_id = ? LIMIT 1;",
                 vec![sqlite_text(vector_space_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("读取 VMM 向量空间失败：{error}"))?;
         let rows: Vec<VectorSpaceRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析 VMM 向量空间查询结果失败：{error}"))?;
@@ -994,19 +992,17 @@ ORDER BY l.position ASC, p.id ASC;"#,
     ///
     /// # Returns
     /// 返回值
-    /// The stored JSON document, no value on first use, or a controlled controller/JSON error.
-    /// 返回已存 JSON 文档；首次使用时返回空；控制器或 JSON 异常时返回受控错误。
+    /// The stored JSON document, no value on first use, or a controlled storage/JSON error.
+    /// 返回已存 JSON 文档；首次使用时返回空；存储或 JSON 异常时返回受控错误。
     pub async fn load_core_snapshot_json(&self) -> Result<Option<String>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "SELECT snapshot_json FROM vmm_core_snapshots WHERE snapshot_key = ? LIMIT 1;",
-                vec![sqlite_text(VMM_CORE_SNAPSHOT_KEY)],
-            )
-            .await
-            .map_err(|error| format!("读取原生 VMM Core 快照失败：{error}"))?;
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "SELECT snapshot_json FROM vmm_core_snapshots WHERE snapshot_key = ? LIMIT 1;",
+            vec![sqlite_text(VMM_CORE_SNAPSHOT_KEY)],
+        )
+        .await
+        .map_err(|error| format!("读取原生 VMM Core 快照失败：{error}"))?;
         let rows: Vec<SnapshotJsonRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM Core 快照查询结果失败：{error}"))?;
         match rows.as_slice() {
@@ -1026,27 +1022,25 @@ ORDER BY l.position ASC, p.id ASC;"#,
     ///
     /// # Returns
     /// 返回值
-    /// Success after the controller commits the row, or a controlled persistence error.
-    /// 控制器提交记录后返回成功，否则返回受控持久化错误。
+    /// Success after the local transaction commits the row, or a controlled persistence error.
+    /// 本地事务提交记录后返回成功，否则返回受控持久化错误。
     pub async fn persist_core_snapshot_json(&self, snapshot_json: &str) -> Result<(), String> {
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"INSERT INTO vmm_core_snapshots(snapshot_key, snapshot_json, updated_at_unix_ms)
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"INSERT INTO vmm_core_snapshots(snapshot_key, snapshot_json, updated_at_unix_ms)
 VALUES (?, ?, ?)
 ON CONFLICT(snapshot_key) DO UPDATE SET
     snapshot_json = excluded.snapshot_json,
     updated_at_unix_ms = excluded.updated_at_unix_ms;"#,
-                vec![
-                    sqlite_text(VMM_CORE_SNAPSHOT_KEY),
-                    sqlite_text(snapshot_json),
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                ],
-            )
-            .await
-            .map_err(|error| format!("保存原生 VMM Core 快照失败：{error}"))?;
+            vec![
+                sqlite_text(VMM_CORE_SNAPSHOT_KEY),
+                sqlite_text(snapshot_json),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+            ],
+        )
+        .await
+        .map_err(|error| format!("保存原生 VMM Core 快照失败：{error}"))?;
         if !result.success {
             return Err(format!("保存原生 VMM Core 快照失败：{}", result.message));
         }
@@ -1083,27 +1077,25 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
             return Err(String::from("原生 VMM 待分析作业初始字段无效"));
         }
         let now = current_unix_epoch_millis_i64()?;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"INSERT OR IGNORE INTO vmm_pending_analysis_jobs(
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"INSERT OR IGNORE INTO vmm_pending_analysis_jobs(
                        operation_id, request_fingerprint, payload_json,
                        intake_mutation_operation_id, turn_id, state, attempt_count,
                        next_attempt_at_unix_ms, last_error, created_at_unix_ms, updated_at_unix_ms
                    ) VALUES (?, ?, ?, ?, NULL, 'intaking', 0, 0, NULL, ?, ?);"#,
-                vec![
-                    sqlite_text(&job.operation_id),
-                    sqlite_text(&job.request_fingerprint),
-                    sqlite_text(&job.payload_json),
-                    sqlite_text(&job.intake_mutation_operation_id),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
-                ],
-            )
-            .await
-            .map_err(|error| format!("登记原生 VMM 待分析作业失败：{error}"))?;
+            vec![
+                sqlite_text(&job.operation_id),
+                sqlite_text(&job.request_fingerprint),
+                sqlite_text(&job.payload_json),
+                sqlite_text(&job.intake_mutation_operation_id),
+                SqliteValue::Integer(now),
+                SqliteValue::Integer(now),
+            ],
+        )
+        .await
+        .map_err(|error| format!("登记原生 VMM 待分析作业失败：{error}"))?;
         if !result.success {
             return Err(format!("登记原生 VMM 待分析作业失败：{}", result.message));
         }
@@ -1138,21 +1130,19 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         &self,
         operation_id: &str,
     ) -> Result<Option<NativeVmmPendingAnalysisJob>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT operation_id, request_fingerprint, payload_json,
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT operation_id, request_fingerprint, payload_json,
                           intake_mutation_operation_id, turn_id, state, attempt_count,
                           next_attempt_at_unix_ms, last_error
                    FROM vmm_pending_analysis_jobs
                    WHERE operation_id = ?
                    LIMIT 1;"#,
-                vec![sqlite_text(operation_id)],
-            )
-            .await
-            .map_err(|error| format!("读取原生 VMM 待分析作业失败：{error}"))?;
+            vec![sqlite_text(operation_id)],
+        )
+        .await
+        .map_err(|error| format!("读取原生 VMM 待分析作业失败：{error}"))?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 待分析作业失败：{error}"))?;
         match rows.as_slice() {
@@ -1184,12 +1174,10 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT operation_id, request_fingerprint, payload_json,
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT operation_id, request_fingerprint, payload_json,
                           intake_mutation_operation_id, turn_id, state, attempt_count,
                           next_attempt_at_unix_ms, last_error
                    FROM vmm_pending_analysis_jobs
@@ -1198,13 +1186,13 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
                      AND next_attempt_at_unix_ms <= ?
                    ORDER BY next_attempt_at_unix_ms, created_at_unix_ms, operation_id
                    LIMIT ?;"#,
-                vec![
-                    ControllerSqliteValue::Int64(now_unix_ms),
-                    ControllerSqliteValue::Int64(i64::from(limit)),
-                ],
-            )
-            .await
-            .map_err(|error| format!("列出原生 VMM 待分析作业失败：{error}"))?;
+            vec![
+                SqliteValue::Integer(now_unix_ms),
+                SqliteValue::Integer(i64::from(limit)),
+            ],
+        )
+        .await
+        .map_err(|error| format!("列出原生 VMM 待分析作业失败：{error}"))?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 待分析作业列表失败：{error}"))?;
         rows.into_iter()
@@ -1227,21 +1215,19 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
     pub async fn list_active_pending_analysis_jobs(
         &self,
     ) -> Result<Vec<NativeVmmPendingAnalysisJob>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT operation_id, request_fingerprint, payload_json,
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT operation_id, request_fingerprint, payload_json,
                           intake_mutation_operation_id, turn_id, state, attempt_count,
                           next_attempt_at_unix_ms, last_error
                    FROM vmm_pending_analysis_jobs
                    WHERE state IN ('intaking', 'ready')
                    ORDER BY created_at_unix_ms, operation_id;"#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("列出活动原生 VMM 待分析作业失败：{error}"))?;
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("列出活动原生 VMM 待分析作业失败：{error}"))?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析活动原生 VMM 待分析作业失败：{error}"))?;
         rows.into_iter()
@@ -1264,20 +1250,18 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
     pub async fn list_analysis_jobs_for_audit(
         &self,
     ) -> Result<Vec<NativeVmmPendingAnalysisJob>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT operation_id, request_fingerprint, payload_json,
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT operation_id, request_fingerprint, payload_json,
                           intake_mutation_operation_id, turn_id, state, attempt_count,
                           next_attempt_at_unix_ms, last_error
                    FROM vmm_pending_analysis_jobs
                    ORDER BY created_at_unix_ms, operation_id;"#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("列出原生 VMM 分析审计作业失败：{error}"))?;
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("列出原生 VMM 分析审计作业失败：{error}"))?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 分析审计作业失败：{error}"))?;
         rows.into_iter()
@@ -1339,16 +1323,14 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
                 .iter()
                 .map(sqlite_text)
                 .collect::<Vec<_>>();
-            let result = self
-                .client
-                .execute_sqlite_script_typed(
-                    VMM_SPACE_ID,
-                    self.sqlite_binding_id.as_str(),
-                    sql.as_str(),
-                    parameters,
-                )
-                .await
-                .map_err(|error| format!("删除原生 VMM 终态分析审计作业失败：{error}"))?;
+            let result = local_sql::execute_script_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
+                sql.as_str(),
+                parameters.clone(),
+            )
+            .await
+            .map_err(|error| format!("删除原生 VMM 终态分析审计作业失败：{error}"))?;
             if !result.success {
                 return Err(format!(
                     "删除原生 VMM 终态分析审计作业失败：{}",
@@ -1392,26 +1374,24 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         if last_error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT {
             return Err(String::from("原生 VMM 分析失败诊断超过持久化长度限制"));
         }
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"UPDATE vmm_pending_analysis_jobs
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"UPDATE vmm_pending_analysis_jobs
                    SET attempt_count = attempt_count + 1,
                        next_attempt_at_unix_ms = ?,
                        last_error = ?,
                        updated_at_unix_ms = ?
                    WHERE operation_id = ? AND state = 'ready';"#,
-                vec![
-                    ControllerSqliteValue::Int64(next_attempt_at_unix_ms),
-                    sqlite_text(last_error),
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                    sqlite_text(operation_id),
-                ],
-            )
-            .await
-            .map_err(|error| format!("记录原生 VMM 分析失败失败：{error}"))?;
+            vec![
+                SqliteValue::Integer(next_attempt_at_unix_ms),
+                sqlite_text(last_error),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+                sqlite_text(operation_id),
+            ],
+        )
+        .await
+        .map_err(|error| format!("记录原生 VMM 分析失败失败：{error}"))?;
         if !result.success {
             return Err(format!("记录原生 VMM 分析失败失败：{}", result.message));
         }
@@ -1450,25 +1430,23 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         {
             return Err(String::from("原生 VMM 分析作业最终诊断为空或超过长度限制"));
         }
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"UPDATE vmm_pending_analysis_jobs
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"UPDATE vmm_pending_analysis_jobs
                    SET state = ?, payload_json = '', attempt_count = attempt_count + 1,
                        next_attempt_at_unix_ms = 0, last_error = ?, updated_at_unix_ms = ?
                    WHERE operation_id = ? AND request_fingerprint = ? AND state = 'ready';"#,
-                vec![
-                    sqlite_text(terminal_state),
-                    sqlite_text(last_error),
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                    sqlite_text(operation_id),
-                    sqlite_text(request_fingerprint),
-                ],
-            )
-            .await
-            .map_err(|error| format!("终结原生 VMM 失败分析作业失败：{error}"))?;
+            vec![
+                sqlite_text(terminal_state),
+                sqlite_text(last_error),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+                sqlite_text(operation_id),
+                sqlite_text(request_fingerprint),
+            ],
+        )
+        .await
+        .map_err(|error| format!("终结原生 VMM 失败分析作业失败：{error}"))?;
         if !result.success {
             return Err(format!("终结原生 VMM 失败分析作业失败：{}", result.message));
         }
@@ -1487,23 +1465,21 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         operation_id: &str,
         request_fingerprint: &str,
     ) -> Result<(), String> {
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"UPDATE vmm_pending_analysis_jobs
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"UPDATE vmm_pending_analysis_jobs
                    SET state = 'completed', payload_json = '', last_error = NULL,
                        updated_at_unix_ms = ?
                    WHERE operation_id = ? AND request_fingerprint = ?;"#,
-                vec![
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                    sqlite_text(operation_id),
-                    sqlite_text(request_fingerprint),
-                ],
-            )
-            .await
-            .map_err(|error| format!("完成原生 VMM 分析作业失败：{error}"))?;
+            vec![
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+                sqlite_text(operation_id),
+                sqlite_text(request_fingerprint),
+            ],
+        )
+        .await
+        .map_err(|error| format!("完成原生 VMM 分析作业失败：{error}"))?;
         if !result.success {
             return Err(format!("完成原生 VMM 分析作业失败：{}", result.message));
         }
@@ -1518,16 +1494,14 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
     /// Success after every unbound intake row and payload is erased.
     /// 全部未绑定登记记录及载荷被擦除后返回成功。
     pub async fn delete_abandoned_pending_analysis_intakes(&self) -> Result<(), String> {
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                "DELETE FROM vmm_pending_analysis_jobs WHERE state = 'intaking' AND turn_id IS NULL;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("删除原生 VMM 未完成登记作业失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            "DELETE FROM vmm_pending_analysis_jobs WHERE state = 'intaking' AND turn_id IS NULL;",
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("删除原生 VMM 未完成登记作业失败：{error}"))?;
         if !result.success {
             return Err(format!(
                 "删除原生 VMM 未完成登记作业失败：{}",
@@ -1549,18 +1523,16 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         operation_id: &str,
         request_fingerprint: &str,
     ) -> Result<(), String> {
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"DELETE FROM vmm_pending_analysis_jobs
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"DELETE FROM vmm_pending_analysis_jobs
                    WHERE operation_id = ? AND request_fingerprint = ?
                      AND state = 'intaking' AND turn_id IS NULL;"#,
-                vec![sqlite_text(operation_id), sqlite_text(request_fingerprint)],
-            )
-            .await
-            .map_err(|error| format!("删除原生 VMM 未提交登记作业失败：{error}"))?;
+            vec![sqlite_text(operation_id), sqlite_text(request_fingerprint)],
+        )
+        .await
+        .map_err(|error| format!("删除原生 VMM 未提交登记作业失败：{error}"))?;
         if !result.success {
             return Err(format!(
                 "删除原生 VMM 未提交登记作业失败：{}",
@@ -1586,20 +1558,18 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         &self,
         operation_id: &str,
     ) -> Result<Option<NativeVmmCoreMutation>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT operation_id, mutation_kind, state, before_snapshot_json,
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT operation_id, mutation_kind, state, before_snapshot_json,
                           after_snapshot_json, result_json
                    FROM vmm_core_mutations
                    WHERE operation_id = ?
                    LIMIT 1;"#,
-                vec![sqlite_text(operation_id)],
-            )
-            .await
-            .map_err(|error| format!("读取原生 VMM 维护变更失败：{error}"))?;
+            vec![sqlite_text(operation_id)],
+        )
+        .await
+        .map_err(|error| format!("读取原生 VMM 维护变更失败：{error}"))?;
         let rows: Vec<NativeVmmCoreMutationRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 维护变更失败：{error}"))?;
         match rows.as_slice() {
@@ -1619,20 +1589,18 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
     pub async fn list_unfinished_core_mutations(
         &self,
     ) -> Result<Vec<NativeVmmCoreMutation>, String> {
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"SELECT operation_id, mutation_kind, state, before_snapshot_json,
+        let result = local_sql::query_json_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"SELECT operation_id, mutation_kind, state, before_snapshot_json,
                           after_snapshot_json, result_json
                    FROM vmm_core_mutations
                    WHERE state != 'completed'
                    ORDER BY created_at_unix_ms, operation_id;"#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("读取未完成原生 VMM 维护变更失败：{error}"))?;
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("读取未完成原生 VMM 维护变更失败：{error}"))?;
         let rows: Vec<NativeVmmCoreMutationRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析未完成原生 VMM 维护变更失败：{error}"))?;
         Ok(rows
@@ -1660,27 +1628,25 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
         if mutation.state != VMM_CORE_MUTATION_PREPARED {
             return Err(String::from("原生 VMM 维护变更必须以 prepared 状态写入"));
         }
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"INSERT INTO vmm_core_mutations(
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"INSERT INTO vmm_core_mutations(
                        operation_id, mutation_kind, state, before_snapshot_json,
                        after_snapshot_json, result_json, created_at_unix_ms, updated_at_unix_ms
                    ) VALUES (?, ?, 'prepared', ?, ?, ?, ?, ?);"#,
-                vec![
-                    sqlite_text(&mutation.operation_id),
-                    sqlite_text(&mutation.mutation_kind),
-                    sqlite_text(&mutation.before_snapshot_json),
-                    sqlite_text(&mutation.after_snapshot_json),
-                    sqlite_text(&mutation.result_json),
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                ],
-            )
-            .await
-            .map_err(|error| format!("准备原生 VMM 维护变更失败：{error}"))?;
+            vec![
+                sqlite_text(&mutation.operation_id),
+                sqlite_text(&mutation.mutation_kind),
+                sqlite_text(&mutation.before_snapshot_json),
+                sqlite_text(&mutation.after_snapshot_json),
+                sqlite_text(&mutation.result_json),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+            ],
+        )
+        .await
+        .map_err(|error| format!("准备原生 VMM 维护变更失败：{error}"))?;
         if !result.success {
             return Err(format!("准备原生 VMM 维护变更失败：{}", result.message));
         }
@@ -1754,16 +1720,14 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             committed = VMM_CORE_MUTATION_COMMITTED,
             prepared = VMM_CORE_MUTATION_PREPARED,
         );
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                script.as_str(),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("提交原生 VMM 维护关系状态失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            script.as_str(),
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("提交原生 VMM 维护关系状态失败：{error}"))?;
         if !result.success {
             return Err(format!("提交原生 VMM 维护关系状态失败：{}", result.message));
         }
@@ -1783,19 +1747,17 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     /// Success after the completed marker and compacted recovery payload are durable.
     /// 完成标记与压缩后的恢复载荷耐久化后返回成功。
     pub async fn complete_core_mutation(&self, operation_id: &str) -> Result<(), String> {
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                COMPLETE_CORE_MUTATION_SQL,
-                vec![
-                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
-                    sqlite_text(operation_id),
-                ],
-            )
-            .await
-            .map_err(|error| format!("完成原生 VMM 维护变更对账失败：{error}"))?;
+        let result = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            COMPLETE_CORE_MUTATION_SQL,
+            vec![
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
+                sqlite_text(operation_id),
+            ],
+        )
+        .await
+        .map_err(|error| format!("完成原生 VMM 维护变更对账失败：{error}"))?;
         if !result.success {
             return Err(format!("完成原生 VMM 维护变更对账失败：{}", result.message));
         }
@@ -1814,8 +1776,8 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     ///
     /// # Returns
     /// 返回值
-    /// A stable physical binding, or a dimension/schema/controller error.
-    /// 返回稳定物理绑定，或维度、结构、控制器错误。
+    /// A stable physical binding, or a dimension, schema, or storage error.
+    /// 返回稳定物理绑定，或维度、结构、存储错误。
     pub async fn ensure_vector_space(
         &self,
         vector_space_id: &str,
@@ -1828,15 +1790,13 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         {
             return Err(String::from("VMM 向量空间标识、维度与物理指纹必须有效"));
         }
-        let result = self
-            .client
-            .query_sqlite_json_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
+        let result =
+            local_sql::query_json_async(
+                &self.local,
+                LogicalDatabase::VmmMetadata,
                 "SELECT vector_space_id, table_name, dimension, physical_fingerprint_json FROM vmm_vector_spaces WHERE vector_space_id = ? LIMIT 1;",
                 vec![sqlite_text(vector_space_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("读取 VMM 向量空间失败：{error}"))?;
         let rows: Vec<VectorSpaceRow> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析 VMM 向量空间查询结果失败：{error}"))?;
@@ -1862,37 +1822,34 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         }
 
         let table_name = vector_table_name(vector_space_id, dimension);
-        self.client
-            .create_lancedb_table_typed(
-                VMM_SPACE_ID,
-                self.lancedb_binding_id.as_str(),
-                table_name.as_str(),
-                vector_table_columns(dimension),
-                true,
-            )
+        self.vector_engine()
+            .await?
+            .create_table(LanceDbCreateTableInput {
+                table_name: table_name.clone(),
+                columns: vector_table_columns(dimension),
+                overwrite_if_exists: true,
+            })
             .await
             .map_err(|error| format!("创建 VMM LanceDB 向量表失败：{error}"))?;
         let now = current_unix_epoch_millis_i64()?;
-        let inserted = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"INSERT INTO vmm_vector_spaces(
+        let inserted = local_sql::execute_script_async(
+            &self.local,
+            LogicalDatabase::VmmMetadata,
+            r#"INSERT INTO vmm_vector_spaces(
     vector_space_id, table_name, dimension, physical_fingerprint_json,
     created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, ?, ?, ?, ?);"#,
-                vec![
-                    sqlite_text(vector_space_id),
-                    sqlite_text(table_name.as_str()),
-                    ControllerSqliteValue::Int64(i64::from(dimension)),
-                    sqlite_text(physical_fingerprint_json),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
-                ],
-            )
-            .await
-            .map_err(|error| format!("登记 VMM 向量空间失败：{error}"))?;
+            vec![
+                sqlite_text(vector_space_id),
+                sqlite_text(table_name.as_str()),
+                SqliteValue::Integer(i64::from(dimension)),
+                sqlite_text(physical_fingerprint_json),
+                SqliteValue::Integer(now),
+                SqliteValue::Integer(now),
+            ],
+        )
+        .await
+        .map_err(|error| format!("登记 VMM 向量空间失败：{error}"))?;
         if !inserted.success {
             return Err(format!("登记 VMM 向量空间失败：{}", inserted.message));
         }
@@ -1914,8 +1871,8 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     ///
     /// # Returns
     /// 返回值
-    /// Success after every row is accepted, or a controlled validation/controller error.
-    /// 全部记录被接受后返回成功，否则返回受控校验或控制器错误。
+    /// Success after every row is accepted, or a controlled validation/storage error.
+    /// 全部记录被接受后返回成功，否则返回受控校验或存储错误。
     pub async fn upsert_vectors(
         &self,
         binding: &VmmVectorSpaceBinding,
@@ -1949,15 +1906,14 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             .collect::<Vec<_>>();
         let data = serde_json::to_vec(&rows)
             .map_err(|error| format!("编码 VMM LanceDB 向量批次失败：{error}"))?;
-        self.client
-            .upsert_lancedb_typed(
-                VMM_SPACE_ID,
-                self.lancedb_binding_id.as_str(),
-                binding.table_name.as_str(),
-                ControllerLanceDbInputFormat::JsonRows,
+        self.vector_engine()
+            .await?
+            .vector_upsert(LanceDbUpsertInput {
+                table_name: binding.table_name.clone(),
+                input_format: LanceDbInputFormat::JsonRows,
                 data,
-                vec![String::from("id")],
-            )
+                key_columns: vec![String::from("id")],
+            })
             .await
             .map_err(|error| format!("写入 VMM LanceDB 向量批次失败：{error}"))?;
         Ok(())
@@ -1973,16 +1929,17 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     ///
     /// # Returns
     /// 返回值
-    /// The actual deleted row total after all bounded chunks complete, or a controller/count error.
-    /// 全部有界分块完成后返回实际删除行数总计，否则返回控制器或计数错误。
+    /// The actual deleted row total after all bounded chunks complete, or a storage/count error.
+    /// 全部有界分块完成后返回实际删除行数总计，否则返回存储或计数错误。
     pub async fn delete_vectors(
         &self,
         binding: &VmmVectorSpaceBinding,
         memory_ids: &[String],
     ) -> Result<u64, String> {
-        // Count controller receipts, not requested identities, since rows may already be absent.
-        // 统计控制器回执而非请求身份数，因为记录可能已经不存在。
+        // Count engine receipts, not requested identities, since rows may already be absent.
+        // 统计引擎回执而非请求身份数，因为记录可能已经不存在。
         let mut deleted_rows = 0_u64;
+        let engine = self.vector_engine().await?;
         for chunk in memory_ids.chunks(200) {
             if chunk.is_empty() {
                 continue;
@@ -1994,14 +1951,11 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 .join(", ");
             // Each successful chunk reports its own physical table mutation.
             // 每个成功分块报告自身的物理表变更。
-            let deletion = self
-                .client
-                .delete_lancedb_typed(
-                    VMM_SPACE_ID,
-                    self.lancedb_binding_id.as_str(),
-                    binding.table_name.as_str(),
-                    format!("id IN ({identities})"),
-                )
+            let deletion = engine
+                .delete(LanceDbDeleteInput {
+                    table_name: binding.table_name.clone(),
+                    condition: format!("id IN ({identities})"),
+                })
                 .await
                 .map_err(|error| format!("删除 VMM LanceDB 向量失败：{error}"))?;
             deleted_rows = deleted_rows
@@ -2039,6 +1993,7 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         let mut probe_vector = vec![0.0_f32; expected_dimension];
         probe_vector[0] = 1.0;
         let mut loaded = Vec::with_capacity(memory_ids.len());
+        let engine = self.vector_engine().await?;
         for chunk in memory_ids.chunks(200) {
             let expected_ids = chunk.iter().map(String::as_str).collect::<BTreeSet<_>>();
             let identities = chunk
@@ -2048,18 +2003,15 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 .join(", ");
             let limit = u32::try_from(chunk.len())
                 .map_err(|_| String::from("VMM LanceDB 向量回填批次过大"))?;
-            let result = self
-                .client
-                .search_lancedb_typed(
-                    VMM_SPACE_ID,
-                    self.lancedb_binding_id.as_str(),
-                    binding.table_name.as_str(),
-                    probe_vector.clone(),
+            let result = engine
+                .vector_search(LanceDbSearchInput {
+                    table_name: binding.table_name.clone(),
+                    vector: probe_vector.clone(),
                     limit,
-                    format!("id IN ({identities})"),
-                    "vector",
-                    ControllerLanceDbOutputFormat::JsonRows,
-                )
+                    filter: format!("id IN ({identities})"),
+                    vector_column: String::from("vector"),
+                    output_format: LanceDbOutputFormat::JsonRows,
+                })
                 .await
                 .map_err(|error| format!("回填 VMM LanceDB 向量失败：{error}"))?;
             let rows: Vec<VectorCandidateRow> = serde_json::from_slice(&result.data)
@@ -2095,8 +2047,8 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     ///
     /// # Returns
     /// 返回值
-    /// Raw ordered candidates for exact Core materialization, or a validation/controller error.
-    /// 返回供 Core 精确物化的原始有序候选，或校验、控制器错误。
+    /// Raw ordered candidates for exact Core materialization, or a validation/storage error.
+    /// 返回供 Core 精确物化的原始有序候选，或校验、存储错误。
     pub async fn search_vectors(
         &self,
         binding: &VmmVectorSpaceBinding,
@@ -2114,17 +2066,16 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         }
         let predicate = build_vector_filter(filter)?;
         let result = self
-            .client
-            .search_lancedb_typed(
-                VMM_SPACE_ID,
-                self.lancedb_binding_id.as_str(),
-                binding.table_name.as_str(),
-                query_vector,
-                VMM_VECTOR_SEARCH_LIMIT,
-                predicate,
-                "vector",
-                ControllerLanceDbOutputFormat::JsonRows,
-            )
+            .vector_engine()
+            .await?
+            .vector_search(LanceDbSearchInput {
+                table_name: binding.table_name.clone(),
+                vector: query_vector,
+                limit: VMM_VECTOR_SEARCH_LIMIT,
+                filter: predicate,
+                vector_column: String::from("vector"),
+                output_format: LanceDbOutputFormat::JsonRows,
+            })
             .await
             .map_err(|error| format!("检索 VMM LanceDB 向量失败：{error}"))?;
         let rows: Vec<VectorCandidateRow> = serde_json::from_slice(&result.data)
@@ -2380,14 +2331,23 @@ struct VectorCandidateRow {
 /// Bootstraps the isolated native VMM space below `.vulcan/code/vmm`.
 /// 在 `.vulcan/code/vmm` 下引导隔离的原生 VMM 空间。
 ///
-/// `controller` supplies the already connected VulcanCode-owned VLDB client.
-/// The returned handle owns no child VMM process and reuses only that controller session.
-/// `controller` 提供已连接且由 VulcanCode 持有的 VLDB 客户端。
-/// 返回句柄不持有任何 VMM 子进程，只复用该控制器会话。
+/// `host_runtime` supplies the host's already-open in-process database runtime. The returned handle
+/// owns no child process and reaches no external service: the VMM's relational state is a file the host
+/// already opened, and its vectors are a directory the engine opens on first use.
+///
+/// `host_runtime` 提供宿主已打开的进程内数据库运行时。返回句柄不持有任何子进程，也不访问外部服务：VMM 的
+/// 关系状态是宿主已打开的文件，其向量是引擎在首次使用时打开的目录。
+///
+/// This bootstrap is the authoritative place for the VMM's own paths — the VMM knows where its state
+/// lives and the application bootstrap does not — so it registers them into the one shared runtime
+/// rather than opening a second runtime with a second health check.
+///
+/// 本引导是 VMM 自身路径的权威位置——VMM 知道自己的状态在哪里，而应用引导不知道——因此它把路径注册进
+/// 唯一的共享运行时，而不是另开一个带有第二次健康检查的运行时。
 pub async fn bootstrap_vmm_data_plane(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<VmmDataPlaneHandle, String> {
-    let data_root = controller.data_root.join("vmm");
+    let data_root = host_runtime.data_root.join("vmm");
     let sqlite_root = data_root.join("sqlite");
     let lancedb_path = data_root.join("lancedb");
     let sqlite_path = sqlite_root.join("vmm.sqlite3");
@@ -2396,56 +2356,19 @@ pub async fn bootstrap_vmm_data_plane(
     ensure_trusted_directory(&sqlite_root)?;
     ensure_trusted_directory(&lancedb_path)?;
 
-    let binding_suffix = build_binding_suffix();
-    let sqlite_binding_id = format!("{VMM_SQLITE_BINDING_TAG}-{binding_suffix}");
-    let lancedb_binding_id = format!("{VMM_LANCEDB_BINDING_TAG}-{binding_suffix}");
-    let client = controller.client.clone();
+    let local = Arc::clone(&host_runtime.local);
+    local
+        .bind(LogicalDatabase::VmmMetadata, sqlite_path.clone())
+        .map_err(|error| format!("绑定原生 VMM SQLite 数据库失败：{error}"))?;
 
-    client
-        .attach_space(SpaceRegistration {
-            space_id: String::from(VMM_SPACE_ID),
-            space_label: String::from("VMM"),
-            space_kind: SpaceKind::User,
-            space_root: runtime_assets::native_host_path_text_from_path(&data_root),
-        })
-        .await
-        .map_err(|error| format!("附着原生 VMM 数据空间失败：{error}"))?;
-
-    client
-        .enable_sqlite(ControllerSqliteEnableRequest {
-            space_id: String::from(VMM_SPACE_ID),
-            binding_id: sqlite_binding_id.clone(),
-            db_path: runtime_assets::native_host_path_text_from_path(&sqlite_path),
-            ..ControllerSqliteEnableRequest::default()
-        })
-        .await
-        .map_err(|error| format!("启用原生 VMM SQLite 数据库失败：{error}"))?;
-
-    client
-        .enable_lancedb(ControllerLanceDbEnableRequest {
-            space_id: String::from(VMM_SPACE_ID),
-            binding_id: lancedb_binding_id.clone(),
-            default_db_path: runtime_assets::native_host_path_text_from_path(&lancedb_path),
-            db_root: Some(runtime_assets::native_host_path_text_from_path(
-                &lancedb_path,
-            )),
-            read_consistency_interval_ms: Some(250),
-            max_upsert_payload: 16 * 1024 * 1024,
-            max_search_limit: 10_000,
-            max_concurrent_requests: 16,
-        })
-        .await
-        .map_err(|error| format!("启用原生 VMM LanceDB 数据库失败：{error}"))?;
-
-    let schema_result = client
-        .execute_sqlite_script_typed(
-            VMM_SPACE_ID,
-            sqlite_binding_id.as_str(),
-            build_vmm_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("初始化原生 VMM 数据结构失败：{error}"))?;
+    let schema_result = local_sql::execute_script_async(
+        &local,
+        LogicalDatabase::VmmMetadata,
+        build_vmm_schema_script(),
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("初始化原生 VMM 数据结构失败：{error}"))?;
     if !schema_result.success {
         return Err(format!(
             "初始化原生 VMM 数据结构失败：{}",
@@ -2453,16 +2376,15 @@ pub async fn bootstrap_vmm_data_plane(
         ));
     }
 
-    // handle owns the VMM-only bindings; initialize its lexical index before publishing readiness.
-    // handle 持有 VMM 专属绑定；在发布就绪状态前初始化其全文索引。
     let handle = VmmDataPlaneHandle {
-        client,
+        local,
         data_root,
         sqlite_path,
         lancedb_path,
-        sqlite_binding_id,
-        lancedb_binding_id,
     };
+    // Initialize the lexical index before publishing readiness, so a caller that receives the
+    // handle can rely on the FTS surface already existing.
+    // 在发布就绪状态前初始化全文索引，使收到句柄的调用方可以依赖全文检索面已经存在。
     handle.ensure_lexical_index().await?;
     Ok(handle)
 }
@@ -2643,41 +2565,41 @@ CREATE TABLE IF NOT EXISTS vmm_vector_spaces (
 
 /// Builds the fixed LanceDB schema shared by all native VMM vector-space tables.
 /// 构建全部原生 VMM 向量空间表共享的固定 LanceDB 结构。
-fn vector_table_columns(dimension: u32) -> Vec<ControllerLanceDbColumnDef> {
+fn vector_table_columns(dimension: u32) -> Vec<LanceDbColumnDef> {
     vec![
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("access_class"),
-            column_type: ControllerLanceDbColumnType::Uint32,
+            column_type: LanceDbColumnType::Uint32,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("source_subject_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: true,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("scope_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("origin_session_source_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: true,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("vector"),
-            column_type: ControllerLanceDbColumnType::VectorFloat32,
+            column_type: LanceDbColumnType::VectorFloat32,
             vector_dim: dimension,
             nullable: false,
         },
@@ -2738,8 +2660,8 @@ fn vector_table_name(vector_space_id: &str, dimension: u32) -> String {
 
 /// Converts text into one typed SQLite parameter.
 /// 将文本转换为一条类型化 SQLite 参数。
-fn sqlite_text(value: impl Into<String>) -> ControllerSqliteValue {
-    ControllerSqliteValue::String(value.into())
+fn sqlite_text(value: impl Into<String>) -> SqliteValue {
+    SqliteValue::Text(value.into())
 }
 
 /// Validates one complete owner-plus-recall project identity set before persistence.
@@ -2893,17 +2815,6 @@ fn ensure_trusted_directory(path: &Path) -> Result<(), String> {
             path.display()
         )),
     }
-}
-
-/// Builds one process-local binding suffix for both native VMM backends.
-/// 为两个原生 VMM 后端构建一个进程内绑定后缀。
-fn build_binding_suffix() -> String {
-    let sequence = VMM_BINDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "{}-{}-{sequence}",
-        std::process::id(),
-        current_unix_epoch_millis()
-    )
 }
 
 /// Returns the current Unix epoch in milliseconds for binding identity only.

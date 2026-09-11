@@ -776,7 +776,7 @@ pub(crate) fn open_registered_session_vmm_controller(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::test_support::TestControllerRuntimeRoot;
+    use crate::tests::test_support::TestHostRuntimeRoot;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use vulcan_agent_runtime::agent_runtime::vmm_hooks::{
         VmmHookConfigSnapshot, VmmHookRuntimeHandle,
@@ -799,7 +799,7 @@ mod tests {
         ];
         let roots = ids[..4]
             .iter()
-            .map(|id| TestControllerRuntimeRoot::new(*id))
+            .map(|id| TestHostRuntimeRoot::new(*id))
             .collect::<Vec<_>>();
         let registry = SessionVmmControllerRegistry::default();
         let old = vulcan_vmm::VmmMemoryReadSource::new(
@@ -938,7 +938,7 @@ mod tests {
             let session_id = Uuid::new_v4();
             // Only this test accesses the private storage tree.
             // 仅本测试访问私有存储目录树。
-            let controller_root = TestControllerRuntimeRoot::new(session_id);
+            let controller_root = TestHostRuntimeRoot::new(session_id);
             // The registry remains the sole durable writer for this session.
             // 注册表始终是本会话唯一持久写入方。
             let registry = SessionVmmControllerRegistry::default();
@@ -1083,7 +1083,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // The fixture uses the same locator-based storage as production.
         // 夹具使用与生产相同的定位器存储。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // One registry controls persistence and the later lifecycle-safe reopen.
         // 同一注册表控制持久化和后续生命周期安全重开。
         let registry = SessionVmmControllerRegistry::default();
@@ -1212,7 +1212,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root owns a valid isolated segmented session directory.
         // controller_root 持有一个有效的隔离分段会话目录。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // registry is the process-local owner under test.
         // registry 是被测的进程内所有者。
         let registry = SessionVmmControllerRegistry::default();
@@ -1259,7 +1259,7 @@ mod tests {
         // This root contains the validated V1 locator used by the production cache owner.
         // 此根包含生产缓存归属方使用的已验证 V1 定位器。
         let session_id = Uuid::new_v4();
-        let root = TestControllerRuntimeRoot::new(session_id);
+        let root = TestHostRuntimeRoot::new(session_id);
         let registry = SessionVmmControllerRegistry::default();
         let controller = registry
             .get_or_open(root.v1_storage_locator(), session_id, "1")
@@ -1385,7 +1385,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root owns the production-shaped isolated session directory.
         // controller_root 持有生产结构的隔离会话目录。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // session_dir is the exact directory created by the shared test fixture.
         // session_dir 是共享测试夹具创建的精确目录。
         let session_dir = controller_root.v1_session_directory();
@@ -1419,7 +1419,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root owns the production-shaped isolated conversation directory.
         // controller_root 持有生产结构的隔离会话目录。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // session_dir is the exact conversation directory whose transcript stays independent.
         // session_dir 是转录保持独立的精确会话目录。
         let session_dir = controller_root.v1_session_directory();
@@ -1454,10 +1454,10 @@ mod tests {
         let session_id = Uuid::new_v4();
         // registered_root owns the durable state used for the first controller publication.
         // registered_root 持有首次发布控制器所使用的持久状态。
-        let registered_root = TestControllerRuntimeRoot::new(session_id);
+        let registered_root = TestHostRuntimeRoot::new(session_id);
         // conflicting_root provides a distinct valid data root for the same session identity.
         // conflicting_root 为同一个会话身份提供另一个不同且有效的数据根目录。
-        let conflicting_root = TestControllerRuntimeRoot::new(session_id);
+        let conflicting_root = TestHostRuntimeRoot::new(session_id);
         // registry owns the process-local session-to-controller identity mapping.
         // registry 持有进程内会话到控制器的身份映射。
         let registry = SessionVmmControllerRegistry::default();
@@ -1501,7 +1501,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root owns the isolated durable session directory.
         // controller_root 拥有隔离的持久会话目录。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // registry owns the only controller and lifecycle fence state.
         // registry 持有唯一控制器与生命周期栅栏状态。
         let registry = SessionVmmControllerRegistry::default();
@@ -1549,7 +1549,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root owns a valid isolated segmented session directory.
         // controller_root 持有一个有效的隔离分段会话目录。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // controller is the sole state owner for both attempts.
         // controller 是两次尝试的唯一状态所有者。
         let controller = SessionVmmControllerRegistry::default()
@@ -1595,7 +1595,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root owns the shared durable session directory.
         // controller_root 持有共享的持久会话目录。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         // registry supplies the one process-wide controller instance.
         // registry 提供唯一的进程级控制器实例。
         let registry = SessionVmmControllerRegistry::default();
@@ -1660,7 +1660,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         // controller_root supplies a valid locator whose exact V1 tree is then removed.
         // controller_root 提供一个有效定位器，随后移除其精确 V1 目录树。
-        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        let controller_root = TestHostRuntimeRoot::new(session_id);
         let storage_locator = controller_root.v1_storage_locator();
         let missing_session_directory = controller_root.v1_session_directory().to_path_buf();
         std::fs::remove_dir_all(&missing_session_directory)

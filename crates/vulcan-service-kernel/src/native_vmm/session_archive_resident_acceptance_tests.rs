@@ -143,10 +143,10 @@ pub(super) async fn verify(
     };
     // Each resident controller has its own private, real V1 document.
     // 每个驻留控制器都有自身私有的真实 V1 文档。
-    let root = crate::tests::test_support::TestControllerRuntimeRoot::new(session_id);
+    let root = crate::tests::test_support::TestHostRuntimeRoot::new(session_id);
     // The unrelated consumer's complete persisted VMM state must remain unchanged.
     // 无关消费方的完整持久 VMM 状态必须保持不变。
-    let other_root = crate::tests::test_support::TestControllerRuntimeRoot::new(other_id);
+    let other_root = crate::tests::test_support::TestHostRuntimeRoot::new(other_id);
     // Start from the existing service fixture, then install only explicitly declared runtime owners.
     // 从既有服务夹具开始，随后仅安装明确声明的运行时归属方。
     let mut service =

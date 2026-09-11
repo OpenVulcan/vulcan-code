@@ -68,8 +68,7 @@ fn clear_vmm_cards(snapshot: &mut ContextInjectionSnapshot) {
 #[test]
 fn global_memory_mode_clears_resident_and_retained_caches_without_hydration() {
     use crate::tests::test_support::{
-        TestControllerRuntimeRoot, test_agent_runtime_bridge,
-        test_service_state_with_parent_session,
+        TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
     };
     use vulcan_context_injection::{InjectionInsert, InjectionKind};
     use vulcan_vmm::{VmmBackendMode, VmmConfigLayer, VmmMemoryReadSource, VmmMemorySource};
@@ -78,7 +77,7 @@ fn global_memory_mode_clears_resident_and_retained_caches_without_hydration() {
     // The only durable cache belongs to an explicitly created isolated session root.
     // 唯一持久缓存属于明确创建的隔离会话目录。
     let session_id = SessionId::new_v4();
-    let root = TestControllerRuntimeRoot::new(session_id);
+    let root = TestHostRuntimeRoot::new(session_id);
     let mut service = test_service_state_with_parent_session(session_id);
     let controller = service
         .vmm_controller_registry

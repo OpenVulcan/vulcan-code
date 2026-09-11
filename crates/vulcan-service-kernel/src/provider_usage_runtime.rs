@@ -12,24 +12,24 @@ use vulcan_workspace_store::workspace_store::{
     persist_provider_usage_attempt_and_rebuild_daily,
 };
 
-/// Loads the native Provider usage dashboard through the service-owned VLDB controller.
-/// 通过服务持有的 VLDB 控制器加载原生 Provider 用量仪表盘。
+/// Loads the native Provider usage dashboard through the service-owned storage runtime.
+/// 通过服务持有的存储运行时加载原生 Provider 用量仪表盘。
 pub(crate) async fn service_provider_usage_dashboard(
     state: SharedServiceBridgeState,
 ) -> Result<ProviderUsageDashboard, String> {
-    let controller = state
+    let storage = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .controller_runtime
         .clone()
-        .ok_or_else(|| String::from("VLDB controller runtime is not ready"))?;
-    load_provider_usage_dashboard(&controller).await
+        .ok_or_else(|| String::from("Host database runtime is not ready"))?;
+    load_provider_usage_dashboard(&storage).await
 }
 
 /// Persists supported account-usage observations independently from session history.
 /// 独立于会话历史持久化受支持的账户用量观测。
 pub(crate) async fn persist_native_account_usage_snapshots(
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     snapshots: &BTreeMap<String, AccountUsageSnapshot>,
@@ -121,10 +121,10 @@ fn current_provider_usage_unix_millis() -> i64 {
     i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
 }
 
-/// Persists one terminal physical Provider attempt in the controller-backed diagnostics ledger.
-/// 将一次终态物理 Provider 尝试持久化到控制器承载的诊断账本。
+/// Persists one terminal physical Provider attempt in the host-owned diagnostics ledger.
+/// 将一次终态物理 Provider 尝试持久化到宿主持有的诊断账本。
 pub(crate) async fn persist_native_provider_usage_attempt(
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     event: &ProviderRequestTelemetryEvent,
 ) -> Result<(), String> {
     if !matches!(event.kind, ProviderRequestTelemetryEventKind::Completed) {

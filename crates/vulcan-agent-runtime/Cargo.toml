@@ -37,7 +37,6 @@ tempfile.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs"] }
 uuid.workspace = true
-vldb-controller-client.workspace = true
 vulcan-context.workspace = true
 vulcan-context-engine.workspace = true
 vulcan-ai-contract.workspace = true
@@ -72,3 +71,6 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Enables the explicit staged-source seam for immutable catalog activation tests.
 # 为不可变目录激活测试启用显式暂存来源接缝。
 vulcan-provider-adapters = { workspace = true, features = ["test-support"] }
+# Enables the fixture handle constructor for tests that only need a runtime handle carrying paths.
+# 为仅需一个携带路径的运行时句柄的测试启用夹具句柄构造函数。
+vulcan-workspace-store = { workspace = true, features = ["test-support"] }

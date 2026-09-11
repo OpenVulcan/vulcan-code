@@ -9,7 +9,7 @@ use vulcan_workbench_model::{SessionPendingModelSelection, SessionRuntimeStateEn
 use crate::session_runtime_registry_v1::{
     SessionLifecycleTransitionGuard, SessionRuntimeError, SessionRuntimeRegistry,
 };
-use crate::{ControllerRuntimeHandle, SessionId};
+use crate::{HostRuntimeHandle, SessionId};
 
 /// Read-only session request facts retained through navigation or snapshot publication.
 /// 贯穿导航或快照发布过程保留的只读会话请求事实。
@@ -35,7 +35,7 @@ pub(crate) struct SessionModelProjectionV1 {
 /// Returns a read-only projection guard, or an explicit configuration error; never falls back to a global model.
 /// 返回只读投影守卫或显式配置错误，绝不回退全局模型。
 pub(crate) async fn read_session_model_projection_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<SessionModelProjectionV1, String> {

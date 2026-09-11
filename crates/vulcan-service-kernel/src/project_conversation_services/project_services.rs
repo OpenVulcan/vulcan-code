@@ -740,7 +740,7 @@ fn project_removal_default_project_effect_from_snapshot(
 /// 返回控制器运行时以及按当前持久化展示顺序排列的活动项目。
 fn controller_runtime_and_project_layout_from_state(
     state: &SharedServiceBridgeState,
-) -> Result<(ControllerRuntimeHandle, Vec<RetainedProjectLayoutEntry>), String> {
+) -> Result<(HostRuntimeHandle, Vec<RetainedProjectLayoutEntry>), String> {
     // guard provides one coherent read of the runtime and retained workspace projection.
     // guard 提供对运行时与保留工作区投影的一致读取。
     let guard = state
@@ -790,7 +790,7 @@ pub(super) fn controller_runtime_and_active_project_from_state(
     state: &SharedServiceBridgeState,
     project_id: &str,
     action_label: &str,
-) -> Result<(ControllerRuntimeHandle, TaskProjectSummary), String> {
+) -> Result<(HostRuntimeHandle, TaskProjectSummary), String> {
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;

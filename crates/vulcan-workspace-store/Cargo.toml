@@ -11,23 +11,27 @@ license.workspace = true
 workspace = true
 
 [features]
-# Exposes exact V1 storage fixtures only to downstream crate tests.
-# 仅向下游 crate 测试暴露精确 V1 存储夹具。
+# Exposes exact fixture constructors for downstream crate tests only.
+# 仅向下游 crate 测试暴露精确夹具构造函数。
 test-support = []
 
 [dependencies]
 dirs.workspace = true
 futures-util.workspace = true
 serde.workspace = true
+base64.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 sha2.workspace = true
 pulldown-cmark.workspace = true
+rusqlite.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 zip.workspace = true
-vldb-controller-client.workspace = true
+vulcan-sqlite-engine.workspace = true
+vulcan-lancedb-engine.workspace = true
 vulcan-change-set.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-session-boundary.workspace = true
@@ -43,4 +47,5 @@ vulcan-vmm.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
+arrow-ipc.workspace = true
 encoding_rs.workspace = true

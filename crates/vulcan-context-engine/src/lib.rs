@@ -56,6 +56,7 @@ pub use management::{
     VceMaintenanceMode, VceMaintenancePlan, VceManagementContractError, VceManagementQuery,
     VceManagementQueryRequest, VceManagementQueryResponse, VceManagementQueryResult,
     VceOperationKind, VceOperationPhase, VceOperationSummary, VcePage, VcePageRequest,
+    VcePhysicalCompactionMetrics, VcePhysicalCompactionOperation, VcePhysicalCompactionState,
     VcePhysicalFragmentSummary, VcePhysicalTablePlan, VcePhysicalTableRole,
     VcePhysicalTableStatistics, validate_management_query, validate_management_response,
 };

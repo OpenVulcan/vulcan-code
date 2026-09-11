@@ -48,7 +48,7 @@ use vulcan_provider_adapters::{
     ResolvedPublicAiSelection,
 };
 use vulcan_provider_config::config::PersistedProviderRetryConfiguration;
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
 use crate::provider_usage_runtime::persist_native_provider_usage_attempt;
 
@@ -1323,9 +1323,9 @@ pub struct ConfiguredInferenceService {
     /// Optional host plugin runtime used for privacy-safe inference accounting.
     /// 用于隐私安全推理计量的可选宿主插件运行时。
     telemetry_runtime: Option<VulcanPluginRuntimeManager>,
-    /// Optional existing VLDB controller used by native provider accounting.
-    /// 原生供应商计量使用的可选现有 VLDB 控制器。
-    usage_controller: Option<ControllerRuntimeHandle>,
+    /// Optional host storage runtime used by native provider accounting.
+    /// 原生供应商计量使用的可选宿主存储运行时。
+    usage_storage: Option<HostRuntimeHandle>,
     /// Live host retry policy shared with the ordinary provider settings page.
     /// 与普通供应商设置页共享的实时宿主重试策略。
     provider_retry_policy: std::sync::RwLock<ProviderRetryPolicy>,
@@ -1363,7 +1363,7 @@ impl ConfiguredInferenceService {
             in_flight_embeddings: Mutex::new(BTreeMap::new()),
             in_flight_reranks: Mutex::new(BTreeMap::new()),
             telemetry_runtime: None,
-            usage_controller: None,
+            usage_storage: None,
             provider_retry_policy: std::sync::RwLock::new(ProviderRetryPolicy::from_config(
                 &PersistedProviderRetryConfiguration::default(),
             )),
@@ -1390,10 +1390,10 @@ impl ConfiguredInferenceService {
         self
     }
 
-    /// Enables native provider accounting through the existing application VLDB controller.
-    /// 通过现有应用 VLDB 控制器启用原生供应商计量。
-    pub fn with_native_usage_controller(mut self, controller: ControllerRuntimeHandle) -> Self {
-        self.usage_controller = Some(controller);
+    /// Enables native provider accounting through the existing application storage runtime.
+    /// 通过现有应用存储运行时启用原生供应商计量。
+    pub fn with_native_usage_storage(mut self, storage: HostRuntimeHandle) -> Self {
+        self.usage_storage = Some(storage);
         self
     }
 
@@ -1826,12 +1826,12 @@ impl ConfiguredInferenceService {
                 payload.clone(),
             );
         }
-        if let Some(controller) = self.usage_controller.clone() {
+        if let Some(storage) = self.usage_storage.clone() {
             match internal_inference_native_usage_event(&facts, payload) {
                 Ok(event) => {
                     tokio::spawn(async move {
                         if let Err(error) =
-                            persist_native_provider_usage_attempt(&controller, &event).await
+                            persist_native_provider_usage_attempt(&storage, &event).await
                         {
                             eprintln!(
                                 "[webui-service] native configured-inference usage persistence failed: {error}"

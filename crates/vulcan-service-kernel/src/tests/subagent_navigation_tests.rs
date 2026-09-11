@@ -104,14 +104,13 @@ async fn closed_subagent_panel_reopens_exact_embedded_task_file() {
     let task_session_id = SessionId::new_v4();
     // controller_root owns production-shaped root storage and removes it after the test.
     // controller_root 持有生产形态的根存储，并在测试结束后将其移除。
-    let controller_root = TestControllerRuntimeRoot::new(parent_session_id);
+    let controller_root = TestHostRuntimeRoot::new(parent_session_id);
     // service_state intentionally has no AgentRuntime, proving open-task registry membership is not required.
     // service_state 故意不包含 AgentRuntime，以证明无需属于开放任务注册表。
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
     // controller_client keeps the isolated attached APP space alive through exact locator lookup.
     // controller_client 在精确定位查询期间保持隔离的已挂接 APP 空间存活。
-    let (_controller_client, controller_runtime) =
-        controller_root.attached_controller_runtime_handle().await;
+    let controller_runtime = controller_root.attached_host_runtime_handle().await;
     service_state.controller_runtime = Some(controller_runtime);
     // root_handle publishes the exact parent locator required to create the deterministic child file.
     // root_handle 发布创建确定性子文件所需的精确父定位器。
@@ -227,6 +226,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,
+        host_database_providers: None,
         cached_luaskills_catalog: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,

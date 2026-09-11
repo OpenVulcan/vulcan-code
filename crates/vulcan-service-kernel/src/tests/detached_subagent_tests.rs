@@ -153,6 +153,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,
+        host_database_providers: None,
         cached_luaskills_catalog: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
@@ -239,7 +240,7 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
     let session_id = SessionId::new_v4();
     // controller_root keeps this test's isolated VMM files alive through every assertion.
     // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
-    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    let controller_root = TestHostRuntimeRoot::new(session_id);
     // service_state starts with one registered V1 session so projection preconditions are real.
     // service_state 以一个已注册 V1 会话开始，使投影前置条件真实成立。
     let service_state = test_service_state_with_parent_session(session_id);
@@ -262,7 +263,7 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
         // guard initializes the exact pre-commit workspace facts under one service-state lock.
         // guard 在同一服务状态锁内初始化精确的提交前工作区事实。
         let mut guard = state.lock().expect("lock regular session fixture");
-        guard.controller_runtime = Some(controller_root.controller_runtime_handle());
+        guard.controller_runtime = Some(controller_root.host_runtime_handle());
         guard
             .workspace_snapshot
             .as_mut()
@@ -358,7 +359,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
     let session_id = SessionId::new_v4();
     // controller_root keeps this test's isolated VMM files alive through every assertion.
     // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
-    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    let controller_root = TestHostRuntimeRoot::new(session_id);
     // service_state keeps the VMM hook unavailable while retaining one stale controller lease.
     // service_state 保持 VMM Hook 不可用，同时保留一条陈旧控制器租约。
     let service_state = test_service_state_with_parent_session(session_id);
@@ -380,7 +381,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
     state
         .lock()
         .expect("lock VMM mismatch controller fixture")
-        .controller_runtime = Some(controller_root.controller_runtime_handle());
+        .controller_runtime = Some(controller_root.host_runtime_handle());
     // controller_context supplies the process registry without retaining the service lock.
     // controller_context 在不保留服务锁的情况下提供进程注册表。
     let vmm_controller_registry = {
@@ -508,11 +509,11 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
     )));
     // controller_root keeps this test's isolated VMM files alive through every assertion.
     // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
-    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    let controller_root = TestHostRuntimeRoot::new(session_id);
     state
         .lock()
         .expect("lock compaction fallback controller fixture")
-        .controller_runtime = Some(controller_root.controller_runtime_handle());
+        .controller_runtime = Some(controller_root.host_runtime_handle());
     // active_stream_task_id proves the fallback commit belongs to the current parent stream.
     // active_stream_task_id 证明回退提交属于当前父流。
     let active_stream_task_id = register_pending_context_compaction_test_stream(&state, session_id);

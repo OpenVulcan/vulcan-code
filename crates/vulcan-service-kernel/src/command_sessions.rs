@@ -43,9 +43,6 @@ fn command_session_display_subscriptions()
 /// Runtime and identity context shared by command-session mutating actions.
 /// 命令会话变更类动作共享的运行时与身份上下文。
 struct CommandSessionActionContext {
-    /// Controller runtime used to project command-session summaries.
-    /// 用于投影命令会话摘要的控制器运行时。
-    controller_runtime: ControllerRuntimeHandle,
     /// Agent runtime that owns the live command-session runtime.
     /// 持有实时命令会话运行时的 Agent runtime。
     agent_runtime: AgentRuntimeBridge,
@@ -81,12 +78,7 @@ pub(super) async fn service_stop_command_session(
             Some(1500),
         )
         .await?;
-    emit_command_sessions_changed_delta(
-        &app,
-        &state,
-        &context.controller_runtime,
-        &context.agent_runtime,
-    )
+    emit_command_sessions_changed_delta(&app, &state, &context.agent_runtime)
 }
 
 /// Reads one live command-session snapshot without rebuilding the full WebUI workbench.
@@ -436,11 +428,10 @@ fn load_service_command_session_action_context(
     command_session_id: String,
     owner_session_id: Option<String>,
 ) -> Result<CommandSessionActionContext, String> {
-    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(state)?;
+    let (_, agent_runtime, _, _, _) = runtime_parts_from_state(state)?;
     let (command_session_id, owner_session_id) =
         resolve_service_command_session_ids(&agent_runtime, command_session_id, owner_session_id)?;
     Ok(CommandSessionActionContext {
-        controller_runtime,
         agent_runtime,
         command_session_id,
         owner_session_id,
@@ -523,12 +514,7 @@ pub(super) async fn service_send_command_session_input(
             request.inputs,
         )
         .await?;
-    emit_command_sessions_changed_delta(
-        &app,
-        &state,
-        &context.controller_runtime,
-        &context.agent_runtime,
-    )
+    emit_command_sessions_changed_delta(&app, &state, &context.agent_runtime)
 }
 
 /// Resizes one live command session and emits a command-session delta.
@@ -553,12 +539,7 @@ pub(super) async fn service_resize_command_session(
             request.cols,
         )
         .await?;
-    emit_command_sessions_changed_delta(
-        &app,
-        &state,
-        &context.controller_runtime,
-        &context.agent_runtime,
-    )
+    emit_command_sessions_changed_delta(&app, &state, &context.agent_runtime)
 }
 
 /// Emits the current command-session summaries without rebuilding the full workbench snapshot.
@@ -566,13 +547,9 @@ pub(super) async fn service_resize_command_session(
 fn emit_command_sessions_changed_delta(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
 ) -> Result<Vec<CommandSessionSummary>, String> {
-    let command_sessions = command_sessions(
-        controller_runtime,
-        Some(agent_runtime.command_session_runtime.as_ref()),
-    );
+    let command_sessions = command_sessions(Some(agent_runtime.command_session_runtime.as_ref()));
     let event = {
         let mut guard = state
             .lock()
@@ -614,8 +591,8 @@ pub(crate) fn emit_live_command_sessions_changed_delta(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
 ) -> Result<Vec<CommandSessionSummary>, String> {
-    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(state)?;
-    emit_command_sessions_changed_delta(app, state, &controller_runtime, &agent_runtime)
+    let (_, agent_runtime, _, _, _) = runtime_parts_from_state(state)?;
+    emit_command_sessions_changed_delta(app, state, &agent_runtime)
 }
 
 /// Reprojects the authoritative command-session runtime for an explicit WebUI recovery request.

@@ -1,7 +1,9 @@
-//! Controller-backed persistence helpers for projects, sessions, transcript history, and hidden context nodes.
-//! 项目、会话、转录历史与隐藏上下文节点的控制器持久化辅助模块。
+//! In-process persistence helpers for projects, sessions, transcript history, and hidden context nodes.
+//! 项目、会话、转录历史与隐藏上下文节点的进程内持久化辅助模块。
 
-use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use crate::model::{
     ProjectVceSettings, SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, TaskProjectSummary,
@@ -15,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use vldb_controller_client::ControllerSqliteValue;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 mod ai_credentials;
 mod git_preferences;
@@ -80,9 +82,8 @@ pub use provider_usage::{
     ProviderAccountUsageSummary, ProviderRateLimitSnapshotRecord, ProviderUsageAttemptRecord,
     ProviderUsageAttemptSummary, ProviderUsageDailySummary, ProviderUsageDashboard,
     ensure_provider_usage_schema, load_provider_usage_dashboard, lock_provider_usage_writes,
-    migrate_application_provider_usage, persist_provider_account_usage_snapshot,
-    persist_provider_rate_limit_snapshot, persist_provider_usage_attempt,
-    persist_provider_usage_attempt_and_rebuild_daily,
+    persist_provider_account_usage_snapshot, persist_provider_rate_limit_snapshot,
+    persist_provider_usage_attempt, persist_provider_usage_attempt_and_rebuild_daily,
     persist_provider_usage_attempt_batch_and_rebuild_daily, rebuild_provider_usage_daily,
 };
 /// App metadata key used to persist collapsed task-project identifiers.
@@ -120,10 +121,10 @@ static VCE_DIAGNOSTIC_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Parameters
 /// 参数
-/// `data_root` is the controller-managed Vulcan data root; `consumer_profile_id` is the exact
+/// `data_root` is the host_runtime-managed Vulcan data root; `consumer_profile_id` is the exact
 /// authenticated internal consumer; `slot_index` is the deterministic bounded slot; and
 /// `trace` is the complete secret-free diagnostic document.
-/// `data_root` 是控制器管理的 Vulcan 数据根目录；`consumer_profile_id` 是精确的
+/// `data_root` 是宿主运行时管理的 Vulcan 数据根目录；`consumer_profile_id` 是精确的
 /// 已认证内部消费者；`slot_index` 是确定性有界槽位；`trace` 是完整的
 /// 不含秘密诊断文档。
 ///
@@ -171,9 +172,9 @@ pub fn persist_configured_inference_provider_request_trace(
 /// Persists one bounded VCE diagnostic document without exposing the project identifier in its path.
 /// 持久化一份有界 VCE 诊断文档，且不在路径中暴露项目标识。
 ///
-/// `data_root` is the controller-managed data root, `project_id` scopes the rotating slots, and
+/// `data_root` is the host_runtime-managed data root, `project_id` scopes the rotating slots, and
 /// `trace` contains the complete secret-free failure or request evidence.
-/// `data_root` 是控制器管理的数据根目录，`project_id` 用于划分轮转槽位，`trace` 包含完整且脱敏的失败或请求证据。
+/// `data_root` 是宿主运行时管理的数据根目录，`project_id` 用于划分轮转槽位，`trace` 包含完整且脱敏的失败或请求证据。
 pub fn persist_vce_diagnostic(
     data_root: &Path,
     project_id: &str,

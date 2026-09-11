@@ -2,9 +2,12 @@
 //! 显式项目授权与继承默认绑定查询。
 
 use super::super::models::KnowledgeProjectBinding;
-use super::{APP_SPACE_ID, KnowledgeBaseRuntime, int, text, unix_epoch_millis};
+use super::{KnowledgeBaseRuntime, unix_epoch_millis};
+use super::{int, text};
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use serde::Deserialize;
-use vldb_controller_client::ControllerSqliteValue;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// One project binding row decoded from the application database.
 /// 从应用数据库解码的一条项目绑定记录。
@@ -51,37 +54,32 @@ impl KnowledgeBaseRuntime {
         self.require_active_library(library_id).await?;
         let now = unix_epoch_millis()?;
         if authorized {
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    self.controller.sqlite_binding_id.as_str(),
-                    r#"INSERT INTO knowledge_library_project_bindings(
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                LogicalDatabase::AppState,
+                r#"INSERT INTO knowledge_library_project_bindings(
                             library_id, project_id, default_enabled, created_at_ms, updated_at_ms
                         ) VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(library_id, project_id) DO UPDATE SET
                             default_enabled = excluded.default_enabled,
                             updated_at_ms = excluded.updated_at_ms;"#,
-                    vec![
-                        text(library_id),
-                        text(project_id),
-                        bool_value(default_enabled),
-                        int(now),
-                        int(now),
-                    ],
-                )
-                .await
-                .map_err(|error| format!("保存知识库项目授权失败：{error}"))?;
+                vec![
+                    text(library_id),
+                    text(project_id),
+                    bool_value(default_enabled),
+                    int(now),
+                    int(now),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存知识库项目授权失败：{error}"))?;
         } else {
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    self.controller.sqlite_binding_id.as_str(),
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                LogicalDatabase::AppState,
                     "DELETE FROM knowledge_library_project_bindings WHERE library_id = ? AND project_id = ?;",
                     vec![text(library_id), text(project_id)],
-                )
-                .await
+                ).await
                 .map_err(|error| format!("移除知识库项目授权失败：{error}"))?;
         }
         Ok(())
@@ -107,7 +105,7 @@ impl KnowledgeBaseRuntime {
         let rows: Vec<ProjectBindingRow> = self
             .query_app_rows(
                 "SELECT library_id, project_id, default_enabled FROM knowledge_library_project_bindings WHERE library_id = ? ORDER BY project_id;",
-                vec![text(library_id)],
+                &[text(library_id)],
             )
             .await?;
         Ok(rows
@@ -143,7 +141,7 @@ impl KnowledgeBaseRuntime {
                    INNER JOIN knowledge_libraries l ON l.id = b.library_id
                    WHERE b.project_id = ? AND l.lifecycle_state = 'active'
                    ORDER BY l.name_key ASC;"#,
-                vec![text(project_id)],
+                &[text(project_id)],
             )
             .await?;
         Ok(rows
@@ -183,8 +181,7 @@ impl KnowledgeBaseRuntime {
         let sql = format!(
             "SELECT b.library_id, b.project_id, b.default_enabled FROM knowledge_library_project_bindings b INNER JOIN knowledge_libraries l ON l.id = b.library_id WHERE b.project_id = ? AND l.lifecycle_state = 'active'{predicate} ORDER BY b.library_id;"
         );
-        let rows: Vec<ProjectBindingRow> =
-            self.query_app_rows(&sql, vec![text(project_id)]).await?;
+        let rows: Vec<ProjectBindingRow> = self.query_app_rows(&sql, &[text(project_id)]).await?;
         Ok(rows.into_iter().map(|row| row.library_id).collect())
     }
 }
@@ -194,13 +191,13 @@ impl KnowledgeBaseRuntime {
 ///
 /// # Parameters
 /// 参数
-/// `value` is the boolean represented by the controller typed SQL value.
-/// `value` 是待表示为控制器类型化 SQL 值的布尔值。
+/// `value` is the boolean represented by the engine-typed SQL value.
+/// `value` 是待表示为引擎类型化 SQL 值的布尔值。
 ///
 /// # Returns
 /// 返回值
 /// Returns the typed SQLite boolean preserving the exact input.
 /// 返回保留精确输入的类型化 SQLite 布尔值。
-fn bool_value(value: bool) -> ControllerSqliteValue {
-    ControllerSqliteValue::Bool(value)
+fn bool_value(value: bool) -> SqliteValue {
+    SqliteValue::Integer(i64::from(value))
 }

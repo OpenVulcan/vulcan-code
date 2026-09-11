@@ -1,17 +1,18 @@
-//! Controller-backed provider attempt, token-usage, quota, and rate-limit facts.
-//! 由控制器承载的供应商 attempt、Token 用量、额度与限流事实。
+//! Provider attempt, token-usage, quota, and rate-limit facts in the host's own in-process databases.
+//! 宿主自身进程内数据库中的供应商 attempt、Token 用量、额度与限流事实。
 
 use super::decode_query_rows;
-use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle, SYSTEM_STATISTICS_SPACE_ID};
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
-use vldb_controller_client::ControllerSqliteValue;
 use vulcan_ai_contract::UsageBillingDetail;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Current native provider-usage schema revision.
 /// 当前原生供应商用量 Schema 修订号。
@@ -33,39 +34,6 @@ pub async fn lock_provider_usage_writes() -> tokio::sync::MutexGuard<'static, ()
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await
-}
-
-/// Metadata key proving that native usage facts were copied out of the application database.
-/// 证明原生用量事实已经从应用数据库迁出的元数据键。
-const APPLICATION_PROVIDER_USAGE_MIGRATION_KEY: &str = "application_database_migration_completed";
-
-/// Maximum rows copied from one legacy application table per Controller batch.
-/// 每个 Controller 批次从旧应用表复制的最大行数。
-const APPLICATION_PROVIDER_USAGE_MIGRATION_PAGE_SIZE: i64 = 500;
-
-/// Tables copied byte-for-value before daily aggregates are rebuilt in the independent database.
-/// 在独立数据库中重建每日聚合前按值复制的表。
-const APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES: &[&str] = &[
-    "provider_usage_attempts_v3",
-    "provider_account_usage_snapshots_v1",
-    "provider_rate_limit_snapshots_v1",
-    "provider_usage_meta",
-];
-
-/// Returns the bootstrap-scoped binding for the independent system-statistics database.
-/// 返回独立系统统计数据库的单次引导作用域绑定。
-///
-/// # Parameters
-/// 参数
-/// `controller` is the active application Controller handle.
-/// `controller` 是当前活动的应用 Controller 句柄。
-///
-/// # Returns
-/// 返回值
-/// Returns the exact binding identifier enabled during data-plane bootstrap.
-/// 返回数据平面引导期间启用的精确绑定标识符。
-fn system_statistics_sqlite_binding_id(controller: &ControllerRuntimeHandle) -> &str {
-    controller.system_statistics_sqlite_binding_id.as_str()
 }
 
 /// Persists one physical provider attempt independently from a logical request.
@@ -458,41 +426,36 @@ pub struct ProviderUsageDashboard {
 
 /// Ensures all native provider usage tables exist in the system-statistics binding.
 /// 确保系统统计绑定中存在全部原生供应商用量表。
-pub async fn ensure_provider_usage_schema(
-    controller: &ControllerRuntimeHandle,
-) -> Result<(), String> {
-    ensure_provider_usage_schema_at(
-        controller,
-        SYSTEM_STATISTICS_SPACE_ID,
-        system_statistics_sqlite_binding_id(controller),
-    )
-    .await
+pub async fn ensure_provider_usage_schema(host_runtime: &HostRuntimeHandle) -> Result<(), String> {
+    ensure_provider_usage_schema_at(host_runtime, LogicalDatabase::SystemStatistics).await
 }
 
-/// Ensures the Provider usage schema at one exact host-owned Controller binding.
-/// 在一个精确的宿主持有 Controller 绑定上确保 Provider 用量 Schema。
+/// Ensures the Provider usage tables and indexes exist in one exact host-owned database.
+/// 在一个精确的宿主持有数据库中确保 Provider 用量表与索引存在。
 ///
 /// # Parameters
 /// 参数
-/// `controller` supplies the connected Controller client, while `space_id` and `binding_id`
-/// identify the exact database initialized by the host.
-/// `controller` 提供已连接的 Controller 客户端，`space_id` 与 `binding_id` 标识宿主初始化的精确数据库。
+/// `host_runtime` carries the in-process database runtime this host opened. The name is inherited from the
+/// retired host_runtime client that used to occupy this position; the value is a purely in-process handle
+/// with no client, no endpoint and no port behind it.
+/// `logical` selects which of the host's own databases owns the schema.
+/// `host_runtime` 携带宿主打开的进程内数据库运行时。该名称继承自已退役、此前占据此位置的宿主运行时客户端；其值是一个
+/// 纯进程内句柄，背后没有客户端、没有端点、也没有端口。
+/// `logical` 选择该结构属于宿主自身的哪个数据库。
 ///
 /// # Returns
 /// 返回值
-/// Returns unit after schema creation and additive migrations complete.
-/// Schema 创建和增量迁移完成后返回空值。
+/// Returns unit after the tables and indexes exist. No `ALTER` runs here: the v1 schema is created whole,
+/// and pre-v1 layouts are neither detected nor upgraded.
+/// 表与索引存在后返回空值。此处不执行任何 `ALTER`：v1 结构被整体创建，v1 之前的布局既不被探测也不被升级。
 async fn ensure_provider_usage_schema_at(
-    controller: &ControllerRuntimeHandle,
-    space_id: &str,
-    binding_id: &str,
+    host_runtime: &HostRuntimeHandle,
+    logical: LogicalDatabase,
 ) -> Result<(), String> {
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            space_id,
-            binding_id,
-            r#"
+    local_sql::execute_script_async(
+        &host_runtime.local,
+        logical,
+        r#"
 CREATE TABLE IF NOT EXISTS provider_usage_attempts_v3 (
     attempt_id TEXT PRIMARY KEY,
     logical_request_id TEXT NOT NULL,
@@ -609,578 +572,56 @@ INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('aggregate_revision', '0', 0);
 INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('health_status', 'ready', 0);
-INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
-VALUES ('application_database_migration_completed', '0', 0);
 "#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
-    migrate_provider_usage_v2_to_v3(controller, space_id, binding_id).await?;
-    ensure_provider_usage_attempt_columns(controller, space_id, binding_id).await?;
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
+    write_provider_usage_schema_revision(host_runtime, logical).await?;
     Ok(())
 }
 
-/// Migrates legacy price-bearing usage tables into the token-only v3 schema and removes them.
-/// 将旧版含价格用量表迁移到仅含 Token 的 v3 Schema，并删除旧表。
+/// Writes the current provider-usage schema revision into the metadata table.
+/// 将当前供应商用量结构修订号写入元数据表。
 ///
-/// # Parameters
-/// 参数
-/// `controller`, `space_id`, and `binding_id` identify one exact initialized SQLite binding.
-/// `controller`、`space_id` 与 `binding_id` 标识一个精确且已初始化的 SQLite Binding。
+/// This is the only part of the former additive-migration function that is not legacy machinery.
+/// The `CREATE` statement seeds `schema_revision` as `'0'`, and this advances it to
+/// [`PROVIDER_USAGE_SCHEMA_REVISION`], so the two are not redundant.
 ///
-/// # Returns
-/// 返回值
-/// Returns after non-price facts are copied transactionally and every price-bearing table is gone.
-/// 在非价格事实完成事务复制且全部含价格表被删除后返回。
-async fn migrate_provider_usage_v2_to_v3(
-    controller: &ControllerRuntimeHandle,
-    space_id: &str,
-    binding_id: &str,
+/// 这是原追加式迁移函数中唯一不属于遗留机械的部分。`CREATE` 把 `schema_revision` 初始化为 `'0'`，而
+/// 本函数将其推进到 [`PROVIDER_USAGE_SCHEMA_REVISION`]，因此二者并不重复。
+async fn write_provider_usage_schema_revision(
+    host_runtime: &HostRuntimeHandle,
+    logical: LogicalDatabase,
 ) -> Result<(), String> {
-    let table_result = controller
-        .client
-        .query_sqlite_json_typed(
-            space_id,
-            binding_id,
-            "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type = 'table' AND name = 'provider_usage_attempts_v2';",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("检查旧版供应商用量表失败：{error}"))?;
-    let source_exists = decode_query_rows::<ProviderUsageTableCountRow>(&table_result.json_data)?
-        .into_iter()
-        .next()
-        .is_some_and(|row| row.table_count == 1);
-    if !source_exists {
-        controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                "DROP TABLE IF EXISTS provider_usage_daily_v2; DROP TABLE IF EXISTS provider_pricing_profiles_v1;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("清理旧版供应商价格表失败：{error}"))?;
-        return Ok(());
-    }
-
-    let column_result = controller
-        .client
-        .query_sqlite_json_typed(
-            space_id,
-            binding_id,
-            "PRAGMA table_info(provider_usage_attempts_v2);",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取旧版供应商用量列失败：{error}"))?;
-    let columns = decode_query_rows::<ProviderUsageColumnRow>(&column_result.json_data)?
-        .into_iter()
-        .map(|column| column.name)
-        .collect::<BTreeSet<_>>();
-    let required_columns = [
-        "attempt_id",
-        "logical_request_id",
-        "attempt_index",
-        "consumer_id",
-        "operation",
-        "provider_id",
-        "service_entry_id",
-        "connection_id",
-        "protocol_profile_id",
-        "requested_model",
-        "mapped_model",
-        "terminal_at_ms",
-        "status",
-        "dispatched",
-        "semantic_output_observed",
-        "usage_availability",
-        "calendar_date",
-    ];
-    for required_column in required_columns {
-        if !columns.contains(required_column) {
-            return Err(format!(
-                "旧版供应商用量表缺少必需列 `{required_column}`，拒绝猜测迁移"
-            ));
-        }
-    }
-    let optional_column = |name: &str, fallback: &str| {
-        if columns.contains(name) {
-            name.to_string()
-        } else {
-            fallback.to_string()
-        }
-    };
-    let migration = format!(
-        r#"
-BEGIN IMMEDIATE;
-INSERT OR IGNORE INTO provider_usage_attempts_v3 (
-    attempt_id, logical_request_id, attempt_index, failover_index,
-    consumer_id, operation, provider_id, service_entry_id, connection_id,
-    route_id, protocol_profile_id, route_revision, transport,
-    requested_model, mapped_model, response_model, response_id, provider_request_id,
-    dispatched_at_ms, headers_at_ms, first_semantic_at_ms, terminal_at_ms,
-    status, dispatched, dispatched_known, semantic_output_observed,
-    semantic_output_observed_known, replay_safe, http_status, websocket_close_code,
-    error_category, error_code, usage_availability, input_tokens,
-    uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
-    reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
-    usage_profile_id, usage_profile_revision, usage_source_paths_json,
-    usage_validation_flags_json, provider_billing_details_json, calendar_date
-)
-SELECT
-    attempt_id, logical_request_id, attempt_index, failover_index,
-    consumer_id, operation, provider_id, service_entry_id, connection_id,
-    route_id, protocol_profile_id, route_revision, transport,
-    requested_model, mapped_model, response_model, response_id, {provider_request_id},
-    dispatched_at_ms, headers_at_ms, first_semantic_at_ms, terminal_at_ms,
-    status, dispatched, {dispatched_known}, semantic_output_observed,
-    {semantic_output_observed_known}, replay_safe, http_status, websocket_close_code,
-    error_category, error_code, usage_availability, input_tokens,
-    uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
-    reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
-    usage_profile_id, usage_profile_revision, usage_source_paths_json,
-    usage_validation_flags_json, {provider_billing_details_json}, calendar_date
-FROM provider_usage_attempts_v2;
-DROP TABLE provider_usage_attempts_v2;
-DROP TABLE IF EXISTS provider_usage_daily_v2;
-DROP TABLE IF EXISTS provider_pricing_profiles_v1;
-COMMIT;
-"#,
-        provider_request_id = optional_column("provider_request_id", "NULL"),
-        dispatched_known = optional_column("dispatched_known", "1"),
-        semantic_output_observed_known = optional_column("semantic_output_observed_known", "1"),
-        provider_billing_details_json = optional_column("provider_billing_details_json", "NULL"),
-    );
-    controller
-        .client
-        .execute_sqlite_script_typed(space_id, binding_id, migration.as_str(), Vec::new())
-        .await
-        .map_err(|error| format!("迁移 Token-only 供应商用量表失败：{error}"))?;
-    Ok(())
-}
-
-/// Decodes one SQLite table-existence count.
-/// 解码一个 SQLite 表存在性计数。
-#[derive(Debug, Deserialize)]
-struct ProviderUsageTableCountRow {
-    /// Number of tables matching the exact queried name.
-    /// 与精确查询名称匹配的表数量。
-    table_count: i64,
-}
-
-/// Applies additive attempt-table migrations after inspecting the live Controller binding.
-/// 检查实时控制器绑定后应用 attempt 表的增量迁移。
-async fn ensure_provider_usage_attempt_columns(
-    controller: &ControllerRuntimeHandle,
-    space_id: &str,
-    binding_id: &str,
-) -> Result<(), String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            space_id,
-            binding_id,
-            "PRAGMA table_info(provider_usage_attempts_v3);",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取原生供应商用量列失败：{error}"))?;
-    let columns = decode_query_rows::<ProviderUsageColumnRow>(&result.json_data)?;
-    if !columns
-        .iter()
-        .any(|column| column.name == "provider_request_id")
-    {
-        controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN provider_request_id TEXT;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移供应商请求标识列失败：{error}"))?;
-    }
-    if !columns
-        .iter()
-        .any(|column| column.name == "dispatched_known")
-    {
-        controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN dispatched_known INTEGER NOT NULL DEFAULT 1;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移供应商分派事实状态列失败：{error}"))?;
-    }
-    if !columns
-        .iter()
-        .any(|column| column.name == "semantic_output_observed_known")
-    {
-        controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN semantic_output_observed_known INTEGER NOT NULL DEFAULT 1;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移供应商语义输出事实状态列失败：{error}"))?;
-    }
-    if !columns
-        .iter()
-        .any(|column| column.name == "provider_billing_details_json")
-    {
-        controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN provider_billing_details_json TEXT;",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移供应商计费明细列失败：{error}"))?;
-    }
-    // revision_update derives the persisted schema value from the public constant to prevent drift.
-    // revision_update 从公开常量生成持久化 Schema 值，防止两处版本漂移。
+    // Derived from the public constant so the persisted value cannot drift from the declared one.
+    // 由公开常量生成，使持久化值无法与声明值漂移。
     let revision_update = format!(
         "UPDATE provider_usage_meta SET meta_value = '{}' WHERE meta_key = 'schema_revision';",
         PROVIDER_USAGE_SCHEMA_REVISION
     );
-    controller
-        .client
-        .execute_sqlite_script_typed(space_id, binding_id, revision_update.as_str(), Vec::new())
-        .await
-        .map_err(|error| format!("更新供应商用量 Schema 修订失败：{error}"))?;
+
+    local_sql::execute_script_async(
+        &host_runtime.local,
+        logical,
+        revision_update.as_str(),
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("更新供应商用量 Schema 修订失败：{error}"))?;
     Ok(())
-}
-
-/// Decodes one SQLite table-info row used by additive schema migrations.
-/// 解码增量 Schema 迁移使用的一行 SQLite 表信息。
-#[derive(Debug, Deserialize)]
-struct ProviderUsageColumnRow {
-    /// Exact column name returned by SQLite.
-    /// SQLite 返回的精确列名。
-    name: String,
-}
-
-/// Migrates native Provider usage facts from the historical application database exactly once.
-/// 将原生 Provider 用量事实从历史应用数据库精确迁移一次。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns both the historical application binding and the new system-statistics binding.
-/// `controller` 同时持有历史应用绑定和新的系统统计绑定。
-///
-/// # Returns
-/// 返回值
-/// Returns unit after all durable facts are copied, aggregates are rebuilt, and the cutover marker is saved.
-/// 所有持久事实复制、聚合重建并保存切换标记后返回空值。
-pub async fn migrate_application_provider_usage(
-    controller: &ControllerRuntimeHandle,
-) -> Result<(), String> {
-    ensure_provider_usage_schema(controller).await?;
-    if application_provider_usage_cutover_completed(controller).await? {
-        return Ok(());
-    }
-    let source_exists = application_provider_usage_source_exists(controller).await?;
-    if source_exists {
-        // source_schema is upgraded in place before copying so every declared current column has deterministic semantics.
-        // source_schema 在复制前原地升级，使每个当前声明列都具有确定语义。
-        ensure_provider_usage_schema_at(
-            controller,
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
-        )
-        .await?;
-        for table in APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES {
-            migrate_application_provider_usage_table(controller, table).await?;
-        }
-        // schema_revision is host-owned and must not remain at an older source value after metadata copying.
-        // schema_revision 由宿主持有，复制元数据后不得停留在旧来源值。
-        ensure_provider_usage_schema(controller).await?;
-        rebuild_provider_usage_daily(controller, current_provider_usage_unix_millis()).await?;
-    }
-    persist_application_provider_usage_cutover_completed(controller).await
-}
-
-/// Reads the durable cutover marker from the independent system-statistics database.
-/// 从独立系统统计数据库读取持久切换标记。
-async fn application_provider_usage_cutover_completed(
-    controller: &ControllerRuntimeHandle,
-) -> Result<bool, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            "SELECT CAST(meta_value AS INTEGER) AS completed FROM provider_usage_meta WHERE meta_key = ?;",
-            vec![ControllerSqliteValue::String(String::from(
-                APPLICATION_PROVIDER_USAGE_MIGRATION_KEY,
-            ))],
-        )
-        .await
-        .map_err(|error| format!("读取应用统计数据库迁移状态失败：{error}"))?;
-    Ok(
-        decode_query_rows::<ProviderUsageMigrationCompletedRow>(&result.json_data)?
-            .into_iter()
-            .next()
-            .map(|row| row.completed == 1)
-            .unwrap_or(false),
-    )
-}
-
-/// Reports whether the historical application database contains native Provider usage tables.
-/// 报告历史应用数据库是否包含原生 Provider 用量表。
-async fn application_provider_usage_source_exists(
-    controller: &ControllerRuntimeHandle,
-) -> Result<bool, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
-            "SELECT COUNT(*) AS completed FROM sqlite_master WHERE type = 'table' AND name IN ('provider_usage_attempts_v2', 'provider_usage_attempts_v3');",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("检查应用统计数据库迁移来源失败：{error}"))?;
-    Ok(
-        decode_query_rows::<ProviderUsageMigrationCompletedRow>(&result.json_data)?
-            .into_iter()
-            .next()
-            .map(|row| row.completed > 0)
-            .unwrap_or(false),
-    )
-}
-
-/// Copies one allowlisted Provider usage table by stable SQLite rowid pages.
-/// 按稳定 SQLite rowid 分页复制一张允许列表中的 Provider 用量表。
-async fn migrate_application_provider_usage_table(
-    controller: &ControllerRuntimeHandle,
-    table: &str,
-) -> Result<(), String> {
-    if !APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES.contains(&table) {
-        return Err(format!("拒绝迁移未声明的 Provider 用量表 `{table}`。"));
-    }
-    let source_columns = load_provider_usage_table_columns(
-        controller,
-        APP_SPACE_ID,
-        controller.sqlite_binding_id.as_str(),
-        table,
-    )
-    .await?;
-    let target_columns = load_provider_usage_table_columns(
-        controller,
-        SYSTEM_STATISTICS_SPACE_ID,
-        system_statistics_sqlite_binding_id(controller),
-        table,
-    )
-    .await?;
-    let source_column_names = source_columns
-        .into_iter()
-        .map(|column| column.name)
-        .collect::<BTreeSet<_>>();
-    let columns = target_columns
-        .into_iter()
-        .map(|column| column.name)
-        .filter(|column| source_column_names.contains(column))
-        .collect::<Vec<_>>();
-    if columns.is_empty() {
-        return Err(format!("Provider 用量表 `{table}` 没有可迁移列。"));
-    }
-    let quoted_table = quote_sqlite_identifier(table)?;
-    let quoted_columns = columns
-        .iter()
-        .map(|column| quote_sqlite_identifier(column))
-        .collect::<Result<Vec<_>, _>>()?;
-    let select_sql = format!(
-        "SELECT rowid AS __source_rowid, {} FROM {} WHERE rowid > ? ORDER BY rowid LIMIT ?;",
-        quoted_columns.join(", "),
-        quoted_table
-    );
-    let placeholders = std::iter::repeat_n("?", columns.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let insert_sql = if table == "provider_usage_meta" {
-        format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at_ms = excluded.updated_at_ms;",
-            quoted_table,
-            quoted_columns.join(", "),
-            placeholders
-        )
-    } else {
-        format!(
-            "INSERT OR IGNORE INTO {} ({}) VALUES ({});",
-            quoted_table,
-            quoted_columns.join(", "),
-            placeholders
-        )
-    };
-    let mut source_rowid = 0_i64;
-    loop {
-        let result = controller
-            .client
-            .query_sqlite_json_typed(
-                APP_SPACE_ID,
-                controller.sqlite_binding_id.as_str(),
-                select_sql.as_str(),
-                vec![
-                    ControllerSqliteValue::Int64(source_rowid),
-                    ControllerSqliteValue::Int64(APPLICATION_PROVIDER_USAGE_MIGRATION_PAGE_SIZE),
-                ],
-            )
-            .await
-            .map_err(|error| format!("读取应用 Provider 用量表 `{table}` 失败：{error}"))?;
-        let rows = serde_json::from_str::<Vec<Map<String, Value>>>(&result.json_data)
-            .map_err(|error| format!("解析应用 Provider 用量表 `{table}` 分页失败：{error}"))?;
-        if rows.is_empty() {
-            break;
-        }
-        let mut parameter_sets = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let rowid = row
-                .get("__source_rowid")
-                .and_then(Value::as_i64)
-                .ok_or_else(|| format!("应用 Provider 用量表 `{table}` 缺少有效 rowid。"))?;
-            source_rowid = rowid;
-            parameter_sets.push(
-                columns
-                    .iter()
-                    .map(|column| {
-                        row.get(column).ok_or_else(|| {
-                            format!("应用 Provider 用量表 `{table}` 缺少列 `{column}`。")
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(json_value_to_controller_sqlite_value)
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
-        }
-        controller
-            .client
-            .execute_sqlite_batch_typed(
-                SYSTEM_STATISTICS_SPACE_ID,
-                system_statistics_sqlite_binding_id(controller),
-                insert_sql.as_str(),
-                parameter_sets,
-            )
-            .await
-            .map_err(|error| format!("写入独立 Provider 用量表 `{table}` 失败：{error}"))?;
-    }
-    Ok(())
-}
-
-/// Loads ordered column metadata for one allowlisted migration table.
-/// 加载一张允许列表迁移表的有序列元数据。
-async fn load_provider_usage_table_columns(
-    controller: &ControllerRuntimeHandle,
-    space_id: &str,
-    binding_id: &str,
-    table: &str,
-) -> Result<Vec<ProviderUsageColumnRow>, String> {
-    let quoted_table = quote_sqlite_identifier(table)?;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            space_id,
-            binding_id,
-            format!("PRAGMA table_info({quoted_table});"),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取 Provider 用量表 `{table}` 列失败：{error}"))?;
-    decode_query_rows::<ProviderUsageColumnRow>(&result.json_data)
-}
-
-/// Persists the completed native application-database migration boundary.
-/// 持久化原生应用数据库迁移完成边界。
-async fn persist_application_provider_usage_cutover_completed(
-    controller: &ControllerRuntimeHandle,
-) -> Result<(), String> {
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            "UPDATE provider_usage_meta SET meta_value = '1', updated_at_ms = ? WHERE meta_key = ?;",
-            vec![
-            ControllerSqliteValue::Int64(current_provider_usage_unix_millis()),
-                ControllerSqliteValue::String(String::from(
-                    APPLICATION_PROVIDER_USAGE_MIGRATION_KEY,
-                )),
-            ],
-        )
-        .await
-        .map_err(|error| format!("保存应用统计数据库迁移状态失败：{error}"))?;
-    Ok(())
-}
-
-/// Converts one Controller JSON row scalar back into the typed SQLite parameter protocol.
-/// 将一个 Controller JSON 行标量转换回类型化 SQLite 参数协议。
-fn json_value_to_controller_sqlite_value(value: &Value) -> Result<ControllerSqliteValue, String> {
-    match value {
-        Value::Null => Ok(ControllerSqliteValue::Null),
-        Value::Bool(value) => Ok(ControllerSqliteValue::Bool(*value)),
-        Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                Ok(ControllerSqliteValue::Int64(value))
-            } else if let Some(value) = value.as_f64() {
-                Ok(ControllerSqliteValue::Float64(value))
-            } else {
-                Err(String::from("SQLite JSON 数值超出受支持范围。"))
-            }
-        }
-        Value::String(value) => Ok(ControllerSqliteValue::String(value.clone())),
-        Value::Array(_) | Value::Object(_) => {
-            Err(String::from("SQLite 行包含不受支持的复合 JSON 值。"))
-        }
-    }
-}
-
-/// Quotes one verified portable SQLite identifier.
-/// 引用一个经过验证的可移植 SQLite 标识符。
-fn quote_sqlite_identifier(identifier: &str) -> Result<String, String> {
-    if identifier.is_empty()
-        || !identifier
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return Err(format!("SQLite 标识符 `{identifier}` 无效。"));
-    }
-    Ok(format!("\"{identifier}\""))
-}
-
-/// One persisted legacy-migration completion row.
-/// 一条持久化的旧迁移完成状态行。
-#[derive(Debug, Deserialize)]
-struct ProviderUsageMigrationCompletedRow {
-    /// Exact zero-or-one completion flag.
-    /// 精确的零或一完成标记。
-    completed: i64,
 }
 
 /// Loads the bounded native provider usage dashboard from the application VLDB binding.
 /// 从应用 VLDB 绑定加载有界原生供应商用量仪表盘。
 pub async fn load_provider_usage_dashboard(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<ProviderUsageDashboard, String> {
-    ensure_provider_usage_schema(controller).await?;
-    let daily_result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
+    ensure_provider_usage_schema(host_runtime).await?;
+    let daily_result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        r#"
 SELECT calendar_date AS calendarDate, provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
        model_id AS modelId, attempt_count AS attemptCount,
@@ -1194,17 +635,15 @@ SELECT calendar_date AS calendarDate, provider_id AS providerId,
  ORDER BY calendar_date DESC, provider_id, service_entry_id, consumer_id, operation, model_id
 LIMIT 500;
 "#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取原生供应商每日用量失败：{error}"))?;
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("读取原生供应商每日用量失败：{error}"))?;
     let daily = decode_query_rows::<ProviderUsageDailySummary>(&daily_result.json_data)?;
-    let recent_attempts_result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
+    let recent_attempts_result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        r#"
 SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
        attempts.provider_id, attempts.service_entry_id,
        attempts.mapped_model AS model_id, attempts.transport,
@@ -1220,30 +659,27 @@ SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
 ORDER BY attempts.terminal_at_ms DESC, attempts.attempt_id DESC
 LIMIT 200;
 "#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取原生供应商近期 attempt 失败：{error}"))?;
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("读取原生供应商近期 attempt 失败：{error}"))?;
     let recent_attempt_rows =
         decode_query_rows::<ProviderUsageAttemptDashboardRow>(&recent_attempts_result.json_data)?;
     let recent_attempts = recent_attempt_rows
         .into_iter()
         .map(ProviderUsageAttemptDashboardRow::decode)
         .collect::<Result<Vec<_>, _>>()?;
-    let meta_result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
+    let meta_result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
             r#"
 SELECT
     COALESCE(MAX(CASE WHEN meta_key = 'aggregate_revision' THEN CAST(meta_value AS INTEGER) END), 0) AS aggregate_revision,
     COALESCE(MAX(CASE WHEN meta_key = 'health_status' THEN meta_value END), 'unknown') AS health_status
 FROM provider_usage_meta;
 "#,
-            Vec::new(),
-        )
-        .await
+        vec![],
+    ).await
         .map_err(|error| format!("读取原生供应商用量元数据失败：{error}"))?;
     let meta = decode_query_rows::<ProviderUsageDashboardMetaRow>(&meta_result.json_data)?
         .into_iter()
@@ -1252,12 +688,10 @@ FROM provider_usage_meta;
             aggregate_revision: 0,
             health_status: String::from("unknown"),
         });
-    let accounts_result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
+    let accounts_result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        r#"
 SELECT provider_id, connection_id, snapshot_kind, endpoint_profile_revision,
        payload_json, observed_at_ms
 FROM (
@@ -1273,10 +707,10 @@ WHERE row_number = 1
 ORDER BY provider_id, connection_id, snapshot_kind
 LIMIT 200;
 "#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取原生供应商账户用量失败：{error}"))?;
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("读取原生供应商账户用量失败：{error}"))?;
     let account_rows =
         decode_query_rows::<ProviderAccountUsageDashboardRow>(&accounts_result.json_data)?;
     let accounts = account_rows
@@ -1447,12 +881,12 @@ fn current_provider_usage_unix_millis() -> i64 {
 /// Persists one physical attempt idempotently with unknown values stored as SQL NULL.
 /// 将一次物理 attempt 幂等持久化，并将未知值保存为 SQL NULL。
 pub async fn persist_provider_usage_attempt(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &ProviderUsageAttemptRecord,
 ) -> Result<(), String> {
     validate_attempt(record)?;
-    ensure_provider_usage_schema(controller).await?;
-    persist_provider_usage_attempt_rows(controller, std::slice::from_ref(record)).await
+    ensure_provider_usage_schema(host_runtime).await?;
+    persist_provider_usage_attempt_rows(host_runtime, std::slice::from_ref(record)).await
 }
 
 /// Persists an idempotent batch of physical attempts and rebuilds daily aggregates once.
@@ -1460,15 +894,15 @@ pub async fn persist_provider_usage_attempt(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the system-statistics binding, `records` are immutable attempt facts, and `updated_at_ms` timestamps the aggregate revision.
-/// `controller` 持有系统统计绑定，`records` 是不可变 attempt 事实，`updated_at_ms` 标记聚合修订时间。
+/// `host_runtime` owns the system-statistics binding, `records` are immutable attempt facts, and `updated_at_ms` timestamps the aggregate revision.
+/// `host_runtime` 持有系统统计绑定，`records` 是不可变 attempt 事实，`updated_at_ms` 标记聚合修订时间。
 ///
 /// # Returns
 /// 返回值
 /// Success only after every validated row and the exact aggregate rebuild complete.
 /// 仅在所有已校验行与精确聚合重建均完成后返回成功。
 pub async fn persist_provider_usage_attempt_batch_and_rebuild_daily(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     records: &[ProviderUsageAttemptRecord],
     updated_at_ms: i64,
 ) -> Result<(), String> {
@@ -1479,32 +913,30 @@ pub async fn persist_provider_usage_attempt_batch_and_rebuild_daily(
         validate_attempt(record)?;
     }
     let _guard = lock_provider_usage_writes().await;
-    ensure_provider_usage_schema(controller).await?;
-    persist_provider_usage_attempt_rows(controller, records).await?;
-    rebuild_provider_usage_daily(controller, updated_at_ms).await
+    ensure_provider_usage_schema(host_runtime).await?;
+    persist_provider_usage_attempt_rows(host_runtime, records).await?;
+    rebuild_provider_usage_daily(host_runtime, updated_at_ms).await
 }
 
-/// Writes already validated attempt rows through one Controller batch.
-/// 通过单个 Controller 批次写入已经校验的 attempt 行。
+/// Writes already validated attempt rows through one Host runtime batch.
+/// 通过单个 Host runtime 批次写入已经校验的 attempt 行。
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the system-statistics binding and `records` contains validated immutable rows.
-/// `controller` 持有系统统计绑定，`records` 包含已校验的不可变行。
+/// `host_runtime` owns the system-statistics binding and `records` contains validated immutable rows.
+/// `host_runtime` 持有系统统计绑定，`records` 包含已校验的不可变行。
 ///
 /// # Returns
 /// 返回值
 /// Success after the idempotent batch statement completes.
 /// 幂等批处理语句完成后返回成功。
 async fn persist_provider_usage_attempt_rows(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     records: &[ProviderUsageAttemptRecord],
 ) -> Result<(), String> {
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
+    local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
             r#"
 INSERT OR IGNORE INTO provider_usage_attempts_v3 (
     attempt_id, logical_request_id, attempt_index, failover_index, consumer_id,
@@ -1580,9 +1012,8 @@ WHERE NOT EXISTS (
                 optional_text(record.usage_validation_flags_json.clone()),
                 optional_text(record.provider_billing_details_json.clone()),
                 text(record.calendar_date.clone()),
-            ]).collect(),
-        )
-        .await
+            ]).collect::<Vec<Vec<SqliteValue>>>(),
+    ).await
         .map_err(|error| format!("写入供应商 attempt 事实失败：{error}"))?;
     Ok(())
 }
@@ -1592,27 +1023,27 @@ WHERE NOT EXISTS (
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the existing system-statistics SQLite binding, `record` is the immutable attempt, and `updated_at_ms` timestamps the aggregate revision.
-/// `controller` 持有既有系统统计 SQLite 绑定，`record` 是不可变 attempt，`updated_at_ms` 标记聚合修订时间。
+/// `host_runtime` owns the existing system-statistics SQLite binding, `record` is the immutable attempt, and `updated_at_ms` timestamps the aggregate revision.
+/// `host_runtime` 持有既有系统统计 SQLite 绑定，`record` 是不可变 attempt，`updated_at_ms` 标记聚合修订时间。
 ///
 /// # Returns
 /// 返回值
 /// Success only after both the idempotent fact write and exact aggregate rebuild complete.
 /// 仅在幂等事实写入与精确聚合重建均完成后返回成功。
 pub async fn persist_provider_usage_attempt_and_rebuild_daily(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &ProviderUsageAttemptRecord,
     updated_at_ms: i64,
 ) -> Result<(), String> {
     let _guard = lock_provider_usage_writes().await;
-    persist_provider_usage_attempt(controller, record).await?;
-    rebuild_provider_usage_daily(controller, updated_at_ms).await
+    persist_provider_usage_attempt(host_runtime, record).await?;
+    rebuild_provider_usage_daily(host_runtime, updated_at_ms).await
 }
 
 /// Persists one account usage snapshot independently from request token usage.
 /// 独立于请求 Token 用量持久化一条账户用量快照。
 pub async fn persist_provider_account_usage_snapshot(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &ProviderAccountUsageSnapshotRecord,
 ) -> Result<(), String> {
     validate_non_empty_fields(&[
@@ -1626,13 +1057,11 @@ pub async fn persist_provider_account_usage_snapshot(
         ),
         ("payload_json", &record.payload_json),
     ])?;
-    ensure_provider_usage_schema(controller).await?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
+    ensure_provider_usage_schema(host_runtime).await?;
+    local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        r#"
 INSERT OR IGNORE INTO provider_account_usage_snapshots_v1 (
     snapshot_id, provider_id, connection_id, snapshot_kind,
     endpoint_profile_revision, payload_json, observed_at_ms
@@ -1652,25 +1081,25 @@ WHERE NOT EXISTS (
       AND latest.payload_json = ?6
 );
 "#,
-            vec![vec![
-                text(record.snapshot_id.clone()),
-                text(record.provider_id.clone()),
-                text(record.connection_id.clone()),
-                text(record.snapshot_kind.clone()),
-                text(record.endpoint_profile_revision.clone()),
-                text(record.payload_json.clone()),
-                integer(record.observed_at_ms),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("写入供应商账户用量快照失败：{error}"))?;
+        vec![vec![
+            text(record.snapshot_id.clone()),
+            text(record.provider_id.clone()),
+            text(record.connection_id.clone()),
+            text(record.snapshot_kind.clone()),
+            text(record.endpoint_profile_revision.clone()),
+            text(record.payload_json.clone()),
+            integer(record.observed_at_ms),
+        ]],
+    )
+    .await
+    .map_err(|error| format!("写入供应商账户用量快照失败：{error}"))?;
     Ok(())
 }
 
 /// Persists one allowlisted rate-limit snapshot independently from usage.
 /// 独立于用量持久化一条允许列表内的限流快照。
 pub async fn persist_provider_rate_limit_snapshot(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &ProviderRateLimitSnapshotRecord,
 ) -> Result<(), String> {
     validate_non_empty_fields(&[
@@ -1678,27 +1107,25 @@ pub async fn persist_provider_rate_limit_snapshot(
         ("attempt_id", &record.attempt_id),
         ("headers_json", &record.headers_json),
     ])?;
-    ensure_provider_usage_schema(controller).await?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
+    ensure_provider_usage_schema(host_runtime).await?;
+    local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        r#"
 INSERT OR IGNORE INTO provider_rate_limit_snapshots_v1 (
     snapshot_id, attempt_id, headers_json, retry_after_ms, observed_at_ms
 ) VALUES (?1, ?2, ?3, ?4, ?5);
 "#,
-            vec![vec![
-                text(record.snapshot_id.clone()),
-                text(record.attempt_id.clone()),
-                text(record.headers_json.clone()),
-                optional_integer(record.retry_after_ms),
-                integer(record.observed_at_ms),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("写入供应商限流快照失败：{error}"))?;
+        vec![vec![
+            text(record.snapshot_id.clone()),
+            text(record.attempt_id.clone()),
+            text(record.headers_json.clone()),
+            optional_integer(record.retry_after_ms),
+            integer(record.observed_at_ms),
+        ]],
+    )
+    .await
+    .map_err(|error| format!("写入供应商限流快照失败：{error}"))?;
     Ok(())
 }
 
@@ -1970,16 +1397,14 @@ fn sql_optional_i64(value: Option<i64>) -> String {
 /// Rebuilds daily aggregates transactionally from immutable attempt facts.
 /// 从不可变 attempt 事实事务性重建每日聚合。
 pub async fn rebuild_provider_usage_daily(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     updated_at_ms: i64,
 ) -> Result<(), String> {
-    ensure_provider_usage_schema(controller).await?;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
+    ensure_provider_usage_schema(host_runtime).await?;
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        r#"
 SELECT
     calendar_date, provider_id, service_entry_id, consumer_id, operation,
     mapped_model, status, usage_availability,
@@ -1989,10 +1414,10 @@ FROM provider_usage_attempts_v3
 ORDER BY calendar_date, provider_id, service_entry_id, consumer_id, operation,
          mapped_model, attempt_id;
 "#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取供应商 attempt 聚合事实失败：{error}"))?;
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("读取供应商 attempt 聚合事实失败：{error}"))?;
     let rows = decode_query_rows::<ProviderUsageAggregateInputRow>(&result.json_data)?;
     let aggregates = aggregate_provider_usage_rows(rows)?;
     let mut script = String::from("BEGIN IMMEDIATE;\nDELETE FROM provider_usage_daily_v3;\n");
@@ -2012,16 +1437,14 @@ COMMIT;
         )
         .as_str(),
     );
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            script.as_str(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("重建供应商每日用量聚合失败：{error}"))?;
+    local_sql::execute_script_async(
+        &host_runtime.local,
+        LogicalDatabase::SystemStatistics,
+        script.as_str(),
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("重建供应商每日用量聚合失败：{error}"))?;
     Ok(())
 }
 
@@ -2068,40 +1491,40 @@ fn validate_non_empty_fields(fields: &[(&str, &String)]) -> Result<(), String> {
     Ok(())
 }
 
-/// Converts one string into a controller SQLite value.
-/// 将一个字符串转换为控制器 SQLite 值。
-fn text(value: String) -> ControllerSqliteValue {
-    ControllerSqliteValue::String(value)
+/// Converts one string into an engine SQLite value.
+/// 将一个字符串转换为引擎 SQLite 值。
+fn text(value: String) -> SqliteValue {
+    SqliteValue::Text(value)
 }
 
-/// Converts one integer into a controller SQLite value.
-/// 将一个整数转换为控制器 SQLite 值。
-fn integer(value: i64) -> ControllerSqliteValue {
-    ControllerSqliteValue::Int64(value)
+/// Converts one integer into an engine SQLite value.
+/// 将一个整数转换为引擎 SQLite 值。
+fn integer(value: i64) -> SqliteValue {
+    SqliteValue::Integer(value)
 }
 
 /// Converts one boolean into an integer SQLite value.
 /// 将一个布尔值转换为整数 SQLite 值。
-fn boolean(value: bool) -> ControllerSqliteValue {
-    ControllerSqliteValue::Int64(i64::from(value))
+fn boolean(value: bool) -> SqliteValue {
+    SqliteValue::Integer(i64::from(value))
 }
 
 /// Converts one optional integer into SQL NULL or an integer value.
 /// 将一个可选整数转换为 SQL NULL 或整数值。
-fn optional_integer(value: Option<i64>) -> ControllerSqliteValue {
-    value.map(integer).unwrap_or(ControllerSqliteValue::Null)
+fn optional_integer(value: Option<i64>) -> SqliteValue {
+    value.map(integer).unwrap_or(SqliteValue::Null)
 }
 
 /// Converts one optional boolean into SQL NULL or an integer value.
 /// 将一个可选布尔值转换为 SQL NULL 或整数值。
-fn optional_boolean(value: Option<bool>) -> ControllerSqliteValue {
-    value.map(boolean).unwrap_or(ControllerSqliteValue::Null)
+fn optional_boolean(value: Option<bool>) -> SqliteValue {
+    value.map(boolean).unwrap_or(SqliteValue::Null)
 }
 
 /// Converts one optional string into SQL NULL or a text value.
 /// 将一个可选字符串转换为 SQL NULL 或文本值。
-fn optional_text(value: Option<String>) -> ControllerSqliteValue {
-    value.map(text).unwrap_or(ControllerSqliteValue::Null)
+fn optional_text(value: Option<String>) -> SqliteValue {
+    value.map(text).unwrap_or(SqliteValue::Null)
 }
 
 #[cfg(test)]

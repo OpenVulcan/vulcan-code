@@ -17,7 +17,7 @@ use vulcan_session_core::v1::errors::DomainError;
 use vulcan_session_core::v1::event::{EventBody, TurnOutcome};
 use vulcan_session_core::v1::ids::{ClientActionId, ResourceId, Seq};
 use vulcan_workbench_model::SessionId;
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::workspace_store::{
     CreateEmbeddedTaskSessionV1Request, CreateSessionV1Request, ProjectResourceCatalogError,
     ProjectResourceCatalogRegistry, SESSION_V1_STORAGE_PARTITION, SessionV1ListEntry,
@@ -341,7 +341,7 @@ impl From<DomainError> for SessionV1LifecycleError {
 /// failure before root session creation is allowed to start.
 /// 有序项目级资源 ID，或在允许开始根会话创建前返回显式附件/目录失败。
 pub(crate) fn register_project_attachments_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &ProjectResourceCatalogRegistry,
     project_id: &str,
     attachments: &[ConversationAttachment],
@@ -383,7 +383,7 @@ pub(crate) enum PromptAttachmentOrigin {
 /// The exact controller/project owner validates all existing catalog identities before any staged registration and returns IDs in input order.
 /// 精确控制器及项目所有者在暂存注册之前校验全部既有目录身份，按输入顺序返回ID。
 pub(crate) fn register_project_attachment_occurrences_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &ProjectResourceCatalogRegistry,
     project_id: &str,
     attachments: &[ConversationAttachment],
@@ -477,7 +477,7 @@ pub(crate) fn register_project_attachment_occurrences_v1(
 /// Private receipts are appended before a new prompt is published; `accepted_input` instead restores an exact retry's original admission proof.
 /// 新提示词发布前追加私有回执；`accepted_input`则恢复精确重试的原准入证明。
 pub(crate) fn register_project_prompt_attachments_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &ProjectResourceCatalogRegistry,
     project_id: &str,
     attachments: &[ConversationAttachment],
@@ -611,7 +611,7 @@ pub(crate) fn register_project_prompt_attachments_v1(
 /// Creates, fully publishes, and only then registers one root-input V1 session.
 /// 创建并完整发布一个带根输入的 V1 会话，随后才把它注册到内存。
 pub(crate) async fn create_and_register_root_session_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     request: CreateRootSessionV1Request,
 ) -> Result<Arc<SessionHandle>, SessionV1LifecycleError> {
@@ -695,7 +695,7 @@ pub(crate) async fn create_and_register_root_session_v1(
 /// Exact retries return the already-published child after immutable origin validation.
 /// 仅在子文件、SQLite 行、严格重载与注册表发布一致后返回；精确重试在校验不可变来源后返回已发布子会话。
 pub(crate) async fn create_or_get_forked_session_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     request: CreateForkSessionV1Request,
 ) -> Result<CreatedForkSessionV1, SessionV1LifecycleError> {
@@ -1019,7 +1019,7 @@ pub(crate) fn create_or_load_embedded_task_session_v1(
 /// Resolves SQLite first, then loads or reuses the unique process-local handle.
 /// 先通过 SQLite 定位，再加载或复用进程内唯一句柄。
 pub(crate) async fn get_or_load_session_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<Arc<SessionHandle>, SessionV1LifecycleError> {
@@ -1078,7 +1078,7 @@ pub(crate) async fn get_or_load_session_v1(
 /// Success only after both durable metadata and its exact list projection agree.
 /// 仅当可靠 metadata 与其精确列表投影一致后返回成功。
 pub(crate) async fn rename_session_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
     title: String,
@@ -1119,7 +1119,7 @@ pub(crate) async fn rename_session_lifecycle_v1(
 /// Success after metadata and SQLite agree; the active registry owner is then detached.
 /// metadata 与 SQLite 一致后返回成功，随后移除活动注册表 owner。
 pub(crate) async fn archive_session_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
     now_ms: i64,
@@ -1213,7 +1213,7 @@ fn parse_project_session_ids_v1(
 /// Returns the complete authoritative archived session set after the transition.
 /// 杩斿洖杞崲鍚庡畬鏁寸殑鏉冨▉褰掓。浼氳瘽闆嗗悎銆?
 pub(crate) async fn archive_project_sessions_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     project_id: &str,
     now_ms: i64,
@@ -1262,7 +1262,7 @@ pub(crate) async fn archive_project_sessions_lifecycle_v1(
 /// Returns the complete authoritative active session set after the transition.
 /// 杩斿洖杞崲鍚庡畬鏁寸殑鏉冨▉娲诲姩浼氳瘽闆嗗悎銆?
 pub(crate) async fn restore_project_sessions_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     project_id: &str,
     now_ms: i64,
@@ -1307,7 +1307,7 @@ pub(crate) async fn restore_project_sessions_lifecycle_v1(
 /// Success only after the durable metadata archive marker is clear and SQLite mirrors it.
 /// 仅在可靠 metadata 的归档标记已清除且 SQLite 完成镜像后返回成功。
 pub(crate) async fn restore_session_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
     now_ms: i64,
@@ -1359,7 +1359,7 @@ pub(crate) async fn restore_session_lifecycle_v1(
 /// are never touched.
 /// 精确目录不存在且定位记录删除后返回成功；项目资源绝不会被触碰。
 pub(crate) async fn delete_session_lifecycle_v1(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<(), SessionV1LifecycleError> {
@@ -1374,7 +1374,7 @@ pub(crate) async fn delete_session_lifecycle_v1(
 /// Projects one durable metadata snapshot and preserves projection lag as a structured error.
 /// 投影一份可靠 metadata 快照，并把投影滞后保留为结构化错误。
 async fn project_lifecycle_metadata_or_report(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     session_id: SessionId,
     operation: &'static str,
     locator: &vulcan_workspace_store::workspace_store::SessionV1StorageLocator,
@@ -1421,10 +1421,6 @@ mod tests {
     use std::sync::Arc;
 
     use uuid::Uuid;
-    use vldb_controller_client::{
-        ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-        ControllerSqliteEnableRequest, SpaceKind, SpaceRegistration,
-    };
     use vulcan_core::types::ConversationAttachmentKind;
     use vulcan_session_core::v1::context::{LockedBaselineProjection, RuntimeInitializationState};
     use vulcan_session_core::v1::document::PrepareAndStartApiInput;
@@ -1434,7 +1430,7 @@ mod tests {
     };
     use vulcan_session_core::v1::ids::Seq;
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
-    use vulcan_workspace_store::data_plane::{APP_SPACE_ID, ControllerRuntimeMetadata};
+    use vulcan_workspace_store::data_plane::HostRuntimeMetadata;
     use vulcan_workspace_store::workspace_store::{
         ProjectResourceCatalogRegistry, list_active_sessions_v1, list_archived_sessions_v1,
         load_project_resource_catalog, project_resource_directory_v1,
@@ -1444,26 +1440,19 @@ mod tests {
 
     mod draft_handoff;
 
-    /// Real isolated controller fixture used by lifecycle integration tests.
-    /// 生命周期集成测试使用的真实隔离控制器夹具。
-    struct LifecycleControllerFixture {
+    /// Isolated storage fixture used by lifecycle integration tests.
+    /// 生命周期集成测试使用的隔离存储夹具。
+    struct LifecycleStorageFixture {
         /// Keeps the isolated data root alive for the entire test.
         /// 在整个测试期间保持隔离数据根存活。
         _temporary: tempfile::TempDir,
-        /// Client owning the managed controller process lease.
-        /// 持有托管控制器进程租约的客户端。
-        client: ControllerClient,
         /// Production-shaped controller runtime handle under test.
         /// 被测的生产形态控制器运行时句柄。
-        controller: ControllerRuntimeHandle,
-        /// Exact APP SQLite binding used for fault injection.
-        /// 用于故障注入的精确 APP SQLite 绑定。
-        sqlite_binding_id: String,
+        controller: HostRuntimeHandle,
     }
-
-    impl LifecycleControllerFixture {
-        /// Starts one isolated real controller and attaches the APP SQLite space.
-        /// 启动一个隔离真实控制器并挂接 APP SQLite 空间。
+    impl LifecycleStorageFixture {
+        /// Creates one isolated data root with its APP SQLite binding.
+        /// 创建一个隔离数据根及其 APP SQLite 绑定。
         async fn start() -> Self {
             // temporary owns every file written by this fixture.
             // temporary 拥有该夹具写入的全部文件。
@@ -1472,93 +1461,31 @@ mod tests {
             let sqlite_path = data_root.join("sqlite/app-workspace.sqlite3");
             std::fs::create_dir_all(sqlite_path.parent().expect("SQLite parent"))
                 .expect("create SQLite parent");
-            // port is reserved and released immediately before managed startup.
-            // port 在托管启动前被短暂保留并立即释放。
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("reserve lifecycle controller port");
-            let port = listener.local_addr().expect("controller address").port();
-            drop(listener);
-            let executable = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join("output/bin/vldb-controller.exe");
-            assert!(executable.is_file(), "bundled controller must exist");
-            let endpoint = format!("http://127.0.0.1:{port}");
-            let client = ControllerClient::new(
-                ControllerClientConfig {
-                    endpoint: endpoint.clone(),
-                    auto_spawn: true,
-                    spawn_executable: Some(executable.display().to_string()),
-                    spawn_process_mode: ControllerProcessMode::Managed,
-                    minimum_uptime_secs: 0,
-                    idle_timeout_secs: 1,
-                    default_lease_ttl_secs: 30,
-                    connect_timeout_secs: 30,
-                    startup_timeout_secs: 15,
-                    startup_retry_interval_ms: 100,
-                    lease_renew_interval_secs: 10,
-                },
-                ClientRegistration {
-                    client_name: format!("session-v1-lifecycle-{}", Uuid::new_v4()),
-                    host_kind: String::from("test"),
-                    process_id: std::process::id(),
-                    process_name: String::from("vulcan-service-kernel-test"),
-                    lease_ttl_secs: Some(30),
-                },
-            );
-            client.connect().await.expect("connect real controller");
             let binding_id = format!("session-v1-lifecycle-{}", Uuid::new_v4());
-            client
-                .attach_space(SpaceRegistration {
-                    space_id: APP_SPACE_ID.to_string(),
-                    space_label: String::from("APP"),
-                    space_kind: SpaceKind::User,
-                    space_root: data_root.to_string_lossy().into_owned(),
-                })
-                .await
-                .expect("attach APP space");
-            client
-                .enable_sqlite(ControllerSqliteEnableRequest {
-                    space_id: APP_SPACE_ID.to_string(),
-                    binding_id: binding_id.clone(),
-                    db_path: sqlite_path.to_string_lossy().into_owned(),
-                    ..ControllerSqliteEnableRequest::default()
-                })
-                .await
-                .expect("enable lifecycle SQLite binding");
-            let controller = ControllerRuntimeHandle::new(
-                client.clone(),
-                ControllerRuntimeMetadata {
-                    endpoint,
-                    executable: executable.display().to_string(),
-                    data_root,
-                    sqlite_path: sqlite_path.clone(),
-                    sqlite_binding_id: binding_id.clone(),
-                    system_statistics_sqlite_path: sqlite_path,
-                    system_statistics_sqlite_binding_id: binding_id.clone(),
-                },
-            );
+            let controller = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+                data_root,
+                sqlite_path: sqlite_path.clone(),
+                sqlite_binding_id: binding_id.clone(),
+                system_statistics_sqlite_path: sqlite_path,
+                system_statistics_sqlite_binding_id: binding_id.clone(),
+            });
             Self {
                 _temporary: temporary,
-                client,
                 controller,
-                sqlite_binding_id: binding_id,
             }
         }
 
-        /// Releases the managed controller process after one test.
-        /// 在一次测试后释放托管控制器进程。
+        /// Releases the exclusive database file lock after one test.
+        /// 在一次测试后释放独占数据库文件锁。
         async fn shutdown(self) {
-            self.client
-                .shutdown()
-                .await
-                .expect("shutdown lifecycle controller");
+            self.controller.local.shutdown();
         }
     }
 
     /// Creates one fully published root session with deterministic facts.
     /// 使用确定性事实创建一个完整发布的根会话。
     async fn create_fixture_session(
-        fixture: &LifecycleControllerFixture,
+        fixture: &LifecycleStorageFixture,
         registry: &SessionRuntimeRegistry,
         session_id: SessionId,
     ) -> Arc<SessionHandle> {
@@ -1599,7 +1526,7 @@ mod tests {
     /// 分叉创建只发布一个精确子会话，并使响应丢失后的重试保持幂等。
     #[tokio::test]
     async fn fork_creation_and_exact_retry_preserve_one_immutable_origin() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let registry = SessionRuntimeRegistry::default();
         let source_session_id = SessionId::from_u128(0x72_01);
         let child_session_id = SessionId::from_u128(0x72_02);
@@ -1701,7 +1628,7 @@ mod tests {
     /// 陈旧父 generation 不能发布任何子会话索引或目录 owner。
     #[tokio::test]
     async fn fork_creation_rejects_stale_source_generation_before_child_publication() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let registry = SessionRuntimeRegistry::default();
         let source_session_id = SessionId::from_u128(0x72_11);
         let child_session_id = SessionId::from_u128(0x72_12);
@@ -1822,7 +1749,7 @@ mod tests {
 
         // The isolated real controller owns resource files, session metadata and event segments.
         // 隔离真实控制器持有资源文件、会话元数据及事件分片。
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         // Two occurrences intentionally reuse identical source bytes but carry different original modes/models.
         // 两次出现故意复用相同源字节，但携带不同原方式及模型。
         let path = fixture.controller.data_root.join("prompt-original.bin");
@@ -2244,7 +2171,7 @@ mod tests {
     /// 附件注册保持顺序与精确逻辑 ID 复用。
     #[tokio::test]
     async fn project_attachment_bridge_preserves_order_and_reuse() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let managed_dir = fixture.controller.data_root.join("managed-attachments");
         std::fs::create_dir_all(&managed_dir).expect("create managed attachment directory");
         let first_path = managed_dir.join("first.bin");
@@ -2280,7 +2207,7 @@ mod tests {
     /// 托管字节变化会在发布任何项目资源行前失败。
     #[tokio::test]
     async fn project_attachment_bridge_rejects_changed_managed_bytes() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let managed_path = fixture.controller.data_root.join("managed-changed.bin");
         std::fs::write(&managed_path, b"before").expect("write original managed attachment");
         let attachment =
@@ -2314,7 +2241,7 @@ mod tests {
     /// 初始发布包含根输入，并在精确重载后保持一致。
     #[tokio::test]
     async fn root_creation_is_durable_and_exact_reload_preserves_frontiers() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let session_id = SessionId::new_v4();
         let registry = SessionRuntimeRegistry::default();
         let handle = create_fixture_session(&fixture, &registry, session_id).await;
@@ -2400,7 +2327,7 @@ mod tests {
     /// 内嵌任务发布始终由父定位器寻址，精确执行重放保持幂等。
     #[tokio::test]
     async fn embedded_task_creation_has_no_index_row_and_exact_replay_is_idempotent() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let root_session_id = SessionId::new_v4();
         let child_session_id = SessionId::new_v4();
         let create_registry = SessionRuntimeRegistry::default();
@@ -2500,7 +2427,7 @@ mod tests {
     /// 续跑子执行会先停止先前仍开放的回合，再准入其不同的根输入。
     #[tokio::test]
     async fn embedded_task_resume_replaces_open_turn_before_new_root_input() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let root_session_id = SessionId::new_v4();
         let child_session_id = SessionId::new_v4();
         let registry = SessionRuntimeRegistry::default();
@@ -2612,7 +2539,7 @@ mod tests {
     /// 重启投影会中断活动 API 事实并先完成发布。
     #[tokio::test]
     async fn restart_interruption_is_durable_before_handle_publication() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let session_id = SessionId::new_v4();
         let create_registry = SessionRuntimeRegistry::default();
         let handle = create_fixture_session(&fixture, &create_registry, session_id).await;
@@ -2695,7 +2622,7 @@ mod tests {
     /// 并发精确加载会收敛到一个进程内物理句柄。
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_exact_loads_publish_one_handle() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let session_id = SessionId::new_v4();
         let create_registry = SessionRuntimeRegistry::default();
         create_fixture_session(&fixture, &create_registry, session_id).await;
@@ -2731,7 +2658,7 @@ mod tests {
     /// 严格索引失败会让接收注册表保持完全为空。
     #[tokio::test]
     async fn indexed_creation_failure_never_registers_a_handle() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let session_id = SessionId::new_v4();
         let first_registry = SessionRuntimeRegistry::default();
         create_fixture_session(&fixture, &first_registry, session_id).await;
@@ -2771,7 +2698,7 @@ mod tests {
     /// 相同 ID 创建器会在 I/O 前预留，因此失败方无法覆盖文件。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_same_id_creation_publishes_only_the_reserved_winner() {
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         let session_id = SessionId::new_v4();
         let registry = Arc::new(SessionRuntimeRegistry::default());
         let barrier = Arc::new(tokio::sync::Barrier::new(2));
@@ -2867,7 +2794,7 @@ mod tests {
     async fn lifecycle_projection_failure_retries_from_durable_metadata_without_revision_drift() {
         // fixture owns the real controller and fault-injection binding.
         // fixture 持有真实控制器与故障注入绑定。
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         // registry owns the one mutable in-process document.
         // registry 持有唯一可变进程内文档。
         let registry = SessionRuntimeRegistry::default();
@@ -2877,22 +2804,20 @@ mod tests {
         // handle observes the authoritative revision across the failed projection.
         // handle 跨越失败投影观察权威修订。
         let handle = create_fixture_session(&fixture, &registry, session_id).await;
-        fixture
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                &fixture.sqlite_binding_id,
-                r#"
+        vulcan_workspace_store::local_sql::execute_script_async(
+            &fixture.controller.local,
+            vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
+            r#"
 CREATE TRIGGER fail_session_v1_lifecycle_projection
 BEFORE UPDATE OF title ON session_index_v1
 BEGIN
     SELECT RAISE(ABORT, 'injected lifecycle projection failure');
 END;
 "#,
-                Vec::new(),
-            )
-            .await
-            .expect("install lifecycle projection failure trigger");
+            Vec::new(),
+        )
+        .await
+        .expect("install lifecycle projection failure trigger");
 
         // first_error proves the metadata flush completed before SQLite failed.
         // first_error 证明 metadata flush 在 SQLite 失败前已经完成。
@@ -2921,16 +2846,14 @@ END;
             })
             .expect("read durable metadata after projection failure");
 
-        fixture
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                &fixture.sqlite_binding_id,
-                "DROP TRIGGER fail_session_v1_lifecycle_projection;",
-                Vec::new(),
-            )
-            .await
-            .expect("remove lifecycle projection failure trigger");
+        vulcan_workspace_store::local_sql::execute_script_async(
+            &fixture.controller.local,
+            vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
+            "DROP TRIGGER fail_session_v1_lifecycle_projection;",
+            Vec::new(),
+        )
+        .await
+        .expect("remove lifecycle projection failure trigger");
         rename_session_lifecycle_v1(
             &fixture.controller,
             &registry,
@@ -2963,7 +2886,7 @@ END;
     async fn archive_retry_preserves_timestamp_and_restore_is_metadata_first() {
         // fixture isolates the authoritative files and SQLite projection.
         // fixture 隔离权威文件与 SQLite 投影。
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         // registry serializes both lifecycle operations for the session.
         // registry 为该会话串行化两个生命周期操作。
         let registry = SessionRuntimeRegistry::default();
@@ -3024,7 +2947,7 @@ END;
     async fn restore_missing_metadata_removes_stale_index_and_reports_failure() {
         // fixture owns the exact indexed directory used by the missing-file scenario.
         // fixture 持有缺失文件场景使用的精确索引目录。
-        let fixture = LifecycleControllerFixture::start().await;
+        let fixture = LifecycleStorageFixture::start().await;
         // registry owns the root handle until archive detaches it.
         // registry 持有根句柄直到归档将其移除。
         let registry = SessionRuntimeRegistry::default();

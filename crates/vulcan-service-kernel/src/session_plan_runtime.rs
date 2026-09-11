@@ -17,7 +17,7 @@ use vulcan_session_core::v1::event::{EventBody, SystemContextOperation};
 pub(crate) fn session_plan_context_for_prompt_from_state(
     _app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    _controller_runtime: &ControllerRuntimeHandle,
+    _controller_runtime: &HostRuntimeHandle,
     session_id: SessionId,
 ) -> Result<Option<String>, String> {
     let handle = registered_session_v1_handle_from_state(state, session_id)?;

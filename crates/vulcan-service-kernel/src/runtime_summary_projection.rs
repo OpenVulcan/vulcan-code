@@ -25,7 +25,6 @@ pub(crate) fn tool_calls() -> Vec<ToolCallSummary> {
 /// Creates command-session summaries for currently retained service backends.
 /// 为当前保留的服务后端创建命令会话摘要。
 pub(crate) fn command_sessions(
-    controller: &ControllerRuntimeHandle,
     command_session_runtime: Option<&CommandSessionRuntime>,
 ) -> Vec<CommandSessionSummary> {
     let mut summaries = command_session_runtime
@@ -43,29 +42,6 @@ pub(crate) fn command_sessions(
                 .cmp(&right.command)
                 .then(left.id.cmp(&right.id)),
         )
-    });
-    summaries.push(CommandSessionSummary {
-        id: String::from("vldb-controller"),
-        name: Some(String::from("VLDB Controller")),
-        command: controller.executable.clone(),
-        status: String::from("running"),
-        preview: format!(
-            "endpoint={} sqlite={}",
-            controller.endpoint,
-            controller.sqlite_path.display()
-        ),
-        owner_session_id: None,
-        cwd: None,
-        shell_label: None,
-        backend: None,
-        screen_frame_seq: None,
-        screen_rows: None,
-        screen_cols: None,
-        screen_text: None,
-        dropped_before_seq: 0,
-        exit_code: None,
-        failure_reason: None,
-        lost: false,
     });
     summaries
 }
@@ -105,7 +81,7 @@ pub(crate) fn command_session_summary_from_snapshot(
 /// Creates runtime module cards shown by the dashboard.
 /// 创建仪表盘展示的运行时模块卡片。
 pub(crate) fn runtime_modules(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     luaskills_catalog: &TauriLuaSkillsCatalog,
     mcp_catalog: &TauriMcpRuntimeCatalog,
 ) -> Vec<RuntimeModuleSnapshot> {
@@ -120,11 +96,7 @@ pub(crate) fn runtime_modules(
             "vldb",
             "VLDB",
             StartupStepStatus::Ready,
-            &format!(
-                "{} · {}",
-                controller.endpoint,
-                controller.sqlite_path.display()
-            ),
+            &format!("进程内引擎 · {}", controller.sqlite_path.display()),
         ),
         runtime_module(
             "luaskills",

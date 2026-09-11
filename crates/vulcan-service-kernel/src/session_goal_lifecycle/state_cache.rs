@@ -494,7 +494,7 @@ pub(crate) fn conversation_attachments_from_resource_ids(
 /// 从精确 V1 metadata 重建选中会话 Goal 与阶段内 WebUI 运行态投影。
 pub(crate) async fn sync_selected_session_v1_projection_from_store(
     state: &SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     selected_session_id: SessionId,
     refreshed_snapshot: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
 ) -> Result<BTreeMap<SessionId, SessionGoalSummary>, String> {

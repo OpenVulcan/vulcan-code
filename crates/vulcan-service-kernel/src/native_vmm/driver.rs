@@ -1907,7 +1907,7 @@ impl NativeVmmHostDriver {
         Ok(HostEffectResult::Rerank(entries))
     }
 
-    /// Executes semantic reads with controller-backed vector and lexical producers.
+    /// Executes semantic reads with host-owned vector and lexical producers.
     /// 通过控制器支持的向量及词法生产者执行语义读取。
     async fn execute_storage_query(
         &self,

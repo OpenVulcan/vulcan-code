@@ -10,9 +10,11 @@
 
 ## 构建模式与本地服务端口
 
-通过 `make build`、`make br` 或 `make run` 使用 Debug 模式时，构建与运行脚本会自动把 `output/config/controller.json` 的 Controller endpoint 更新为 `http://127.0.0.1:19802`。通过 `make release`、`make build release`、`make br release` 或 `make run release` 使用 Release 模式时，对应 endpoint 自动更新为 `http://127.0.0.1:19801`。更新过程只修改 `endpoint`，保留同一配置中的进程模式、超时、租约与其他设置。
+数据库引擎随 VulcanCode 进程内建运行，不再有独立的控制器进程、端点或配置文件。构建与运行脚本因此不再按 Debug/Release 改写任何数据库端点：`make build`、`make br`、`make run`、`make release` 及其 `release` 变体在这一点上行为一致，也不存在需要保留或迁移的 `output/config/controller.json`。原先的 VLDB 端口 `19802`（Debug）与 `19801`（Release）已随该配置一并移除。
 
-Vite 仅在 Debug/Tauri 开发期间使用 `17601`，不参与 VLDB 端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的 profile 配置规则。
+Vite 仅在 Debug/Tauri 开发期间使用 `17601`，不参与数据库端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的构建规则。
+
+> **关于 `protoc`。** `.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向仓库随附的 `protoc`，使那些构建脚本直接调用 `protoc` 的第三方 crate（例如 `lancedb` 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。这里刻意使用绝对路径：`[env]` 条目中的相对路径不会按配置文件位置解析。
 
 ## 新环境初始化
 
@@ -27,6 +29,7 @@ make init-system
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
 3. 安装 LuaSkills 运行时依赖；原生 VMM 与原生代码语义索引都在 VulcanCode 进程内运行，不需要独立运行时安装。
+4. 取得 LanceDB 依赖闭包构建所需的随仓库 `protoc`（`protoc 31.1`）。`lancedb` 引入的 `lance-encoding` 会在其构建脚本中直接调用 `protoc`，因此没有它工作区无法编译；`.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向 `.cargo/protoc/` 下的该副本，开发机无需系统级 protobuf 安装。已存在且版本与摘要匹配的安装会被保留，脚本不会删除可用安装；下载产物与钉定的版本和 SHA256 不符时会直接报错，不会静默接受。该目录属于构建输入，已被 git 忽略，因此不随仓库提交。
 
 已满足版本要求的工具会被保留，不会重复安装。
 

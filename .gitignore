@@ -53,3 +53,7 @@ TASK_LOG.md
 # Local Reasonix runtime state.
 # 本地 Reasonix 运行时状态。
 /.reasonix/
+
+# Vendored protoc provisioned by make init-system; required by lance-encoding via lancedb.
+# 由 make init-system 取得的随仓库 protoc；lancedb 经 lance-encoding 需要它。
+.cargo/protoc/

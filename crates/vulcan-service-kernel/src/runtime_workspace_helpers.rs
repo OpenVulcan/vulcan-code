@@ -273,7 +273,7 @@ pub(crate) fn runtime_parts_from_state(
     state: &SharedServiceBridgeState,
 ) -> Result<
     (
-        ControllerRuntimeHandle,
+        HostRuntimeHandle,
         AgentRuntimeBridge,
         TauriLuaSkillsCatalog,
         TauriMcpRuntimeCatalog,

@@ -1,8 +1,11 @@
-//! Controller-backed application data-plane bootstrap helpers.
-//! 基于控制器的应用数据平面引导辅助模块。
+//! In-process application data-plane bootstrap helpers.
+//! 进程内应用数据平面引导辅助模块。
 
 use crate::knowledge_base::KnowledgeBaseRuntimeSharedState;
-use crate::provider_config::{PersistedControllerConfiguration, PersistedControllerProcessMode};
+use crate::local_database_runtime::{
+    LanceDbDirectoryBinding, LocalDatabaseRuntime, LogicalDatabase,
+};
+#[cfg(not(test))]
 use crate::runtime_assets;
 use std::fmt;
 use std::fs;
@@ -10,21 +13,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-    ControllerSqliteEnableRequest, ControllerStatusSnapshot, SpaceKind, SpaceRegistration,
-};
 
-/// Stable application-level controller space identifier.
-/// 稳定的应用级控制器空间标识符。
+/// Stable application-level logical space identifier.
+/// 稳定的应用级逻辑空间标识符。
 pub const APP_SPACE_ID: &str = "app-workspace";
 
 /// Stable application-level SQLite binding tag.
 /// 稳定的应用级 SQLite 绑定标签。
 pub const APP_SQLITE_BINDING_TAG: &str = "app-state";
 
-/// Stable controller space identifier for host-owned system statistics.
-/// 宿主持有的系统统计稳定控制器空间标识符。
+/// Stable logical space identifier for host-owned system statistics.
+/// 宿主持有的系统统计稳定逻辑空间标识符。
 pub const SYSTEM_STATISTICS_SPACE_ID: &str = "system-statistics";
 
 /// Stable SQLite binding tag for host-owned system statistics.
@@ -39,31 +38,32 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
 static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Shared schema version stored in the application metadata table.
-/// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 18;
+/// Schema version written by the single v1 initialization.
+/// 由唯一 v1 初始化写入的结构版本号。
+///
+/// The plan fixes v1 at `user_version = 1` and forbids compatibility branches and migration logic.
+/// The previous value was 18, reflecting eighteen accumulated additive migrations; folding those
+/// into one initialization is what makes a single version correct rather than merely convenient.
+///
+/// 方案把 v1 固定为 `user_version = 1`，并禁止兼容分支与迁移逻辑。此前的值是 18，反映十八次累积的追加式
+/// 迁移；正是把它们折入一次初始化，才使单一版本号成为正确而非仅仅便利的选择。
+pub const APP_SCHEMA_VERSION: i64 = 1;
 
-/// Long-lived controller handle kept by the host runtime after startup succeeds.
-/// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
+/// Long-lived host runtime handle kept by the host runtime after startup succeeds.
+/// 启动成功后由宿主运行时持有的长生命周期宿主运行时句柄。
 #[derive(Clone)]
-pub struct ControllerRuntimeHandle {
-    /// Shared controller client proxy reused by later data operations.
-    /// 供后续数据操作复用的共享控制器客户端代理。
-    pub client: ControllerClient,
-    /// Normalized controller endpoint URL used by the SDK.
-    /// SDK 使用的标准化控制器端点 URL。
-    pub endpoint: String,
-    /// Resolved controller executable path or command name.
-    /// 已解析的控制器可执行文件路径或命令名。
-    pub executable: String,
+pub struct HostRuntimeHandle {
+    /// In-process database runtime that replaces the controller's process, endpoint and client.
+    /// 取代控制器进程、端点与客户端的进程内数据库运行时。
+    pub local: Arc<LocalDatabaseRuntime>,
     /// Local data root reserved for the application data plane.
     /// 为应用数据平面保留的本地数据根目录。
     pub data_root: PathBuf,
     /// SQLite file path used by the application state space.
     /// 应用状态空间使用的 SQLite 文件路径。
     pub sqlite_path: PathBuf,
-    /// Bootstrap-scoped SQLite binding identifier used by the current controller runtime handle.
-    /// 当前控制器运行时句柄使用的单次引导作用域 SQLite 绑定标识符。
+    /// Bootstrap-scoped SQLite binding identifier used by the current host runtime handle.
+    /// 当前宿主运行时句柄使用的单次引导作用域 SQLite 绑定标识符。
     pub sqlite_binding_id: String,
     /// SQLite file path used by the independent system-statistics binding.
     /// 独立系统统计绑定使用的 SQLite 文件路径。
@@ -76,16 +76,10 @@ pub struct ControllerRuntimeHandle {
     pub(crate) knowledge_runtime_state: Arc<KnowledgeBaseRuntimeSharedState>,
 }
 
-/// Immutable location and binding metadata retained by one controller runtime.
-/// 单个控制器运行时保留的不可变位置与绑定元数据。
+/// Immutable location and binding metadata retained by one host runtime.
+/// 单个宿主运行时保留的不可变位置与绑定元数据。
 #[derive(Debug, Clone)]
-pub struct ControllerRuntimeMetadata {
-    /// Normalized controller endpoint URL used by the SDK.
-    /// SDK 使用的标准化控制器端点 URL。
-    pub endpoint: String,
-    /// Resolved controller executable path or command name.
-    /// 已解析的控制器可执行文件路径或命令名。
-    pub executable: String,
+pub struct HostRuntimeMetadata {
     /// Local data root reserved for the application data plane.
     /// 为应用数据平面保留的本地数据根目录。
     pub data_root: PathBuf,
@@ -103,14 +97,12 @@ pub struct ControllerRuntimeMetadata {
     pub system_statistics_sqlite_binding_id: String,
 }
 
-impl fmt::Debug for ControllerRuntimeHandle {
-    /// Formats one controller runtime handle without dumping the opaque client internals.
-    /// 在不输出不透明客户端内部状态的前提下格式化控制器运行时句柄。
+impl fmt::Debug for HostRuntimeHandle {
+    /// Formats one host runtime handle without dumping the in-process runtime internals.
+    /// 在不输出进程内运行时内部状态的前提下格式化宿主运行时句柄。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ControllerRuntimeHandle")
-            .field("endpoint", &self.endpoint)
-            .field("executable", &self.executable)
+            .debug_struct("HostRuntimeHandle")
             .field("data_root", &self.data_root)
             .field("sqlite_path", &self.sqlite_path)
             .field("sqlite_binding_id", &self.sqlite_binding_id)
@@ -126,20 +118,17 @@ impl fmt::Debug for ControllerRuntimeHandle {
     }
 }
 
-impl ControllerRuntimeHandle {
-    /// Builds one long-lived controller handle and initializes its shared knowledge runtime state.
-    /// 构建一个长生命周期控制器句柄，并初始化其共享知识库运行时状态。
+impl HostRuntimeHandle {
+    /// Builds one long-lived host runtime handle and initializes its shared knowledge runtime state.
+    /// 构建一个长生命周期宿主运行时句柄，并初始化其共享知识库运行时状态。
     ///
-    /// `client` is the connected controller proxy and `metadata` is the complete,
-    /// already-resolved location and binding identity retained by the handle.
-    /// The returned handle shares one knowledge activation and mutation state across every clone.
-    /// `client` 是已连接的控制器代理，`metadata` 是句柄保留的完整且已解析的位置与绑定身份。
-    /// 返回的句柄会在所有克隆之间共享同一份知识库激活与变更状态。
-    pub fn new(client: ControllerClient, metadata: ControllerRuntimeMetadata) -> Self {
+    /// `local` is the in-process database runtime that supersedes the controller's process,
+    /// endpoint and client duties.
+    ///
+    /// `local` 是取代控制器进程、端点与客户端职责的进程内数据库运行时。
+    pub fn new(local: Arc<LocalDatabaseRuntime>, metadata: HostRuntimeMetadata) -> Self {
         Self {
-            client,
-            endpoint: metadata.endpoint,
-            executable: metadata.executable,
+            local,
             data_root: metadata.data_root,
             sqlite_path: metadata.sqlite_path,
             sqlite_binding_id: metadata.sqlite_binding_id,
@@ -148,140 +137,114 @@ impl ControllerRuntimeHandle {
             knowledge_runtime_state: Arc::new(KnowledgeBaseRuntimeSharedState::default()),
         }
     }
+
+    /// Fixture constructor that derives an in-process runtime from the metadata's own paths.
+    /// 夹具构造函数：由元数据自身的路径派生进程内运行时。
+    ///
+    /// Production code must not use this: the bootstrap entry point is the single authoritative
+    /// place allowed to derive storage paths, and it opens the runtime once for the whole process.
+    /// This exists so the numerous storage fixtures that only need a handle carrying paths do not
+    /// each have to rebuild a binding set.
+    ///
+    /// 生产代码不得使用本函数：引导入口是唯一被允许派生存储路径的权威位置，且它为整个进程只打开一次
+    /// 运行时。本函数的存在只是为了让众多仅需一个携带路径的句柄的存储夹具不必各自重建绑定集合。
+    ///
+    /// Every call opens its own runtime, deliberately: a downstream fixture that isolates itself with
+    /// a unique temporary data root must not collide with another fixture in the same test process.
+    ///
+    /// 每次调用都打开自己的运行时，这是刻意的：用唯一临时数据根隔离自身的下游夹具不得与同进程内另一个
+    /// 夹具冲突。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_test(metadata: HostRuntimeMetadata) -> Self {
+        let mut bindings = std::collections::HashMap::new();
+        bindings.insert(LogicalDatabase::AppState, metadata.sqlite_path.clone());
+        bindings.insert(
+            LogicalDatabase::SystemStatistics,
+            metadata.system_statistics_sqlite_path.clone(),
+        );
+
+        let local = LocalDatabaseRuntime::open(bindings)
+            .expect("fixture local database runtime should open");
+
+        Self::new(Arc::new(local), metadata)
+    }
 }
 
-/// Summary returned after one controller bootstrap completes.
-/// 单次控制器引导完成后返回的摘要信息。
+/// Summary returned after one application data plane bootstrap completes.
+/// 单次应用数据平面引导完成后返回的摘要信息。
 #[derive(Debug, Clone)]
-pub struct ControllerBootstrapReport {
-    /// Long-lived controller handle retained by the application.
-    /// 应用保留的长生命周期控制器句柄。
-    pub handle: ControllerRuntimeHandle,
-    /// Optional controller status snapshot fetched after connect.
-    /// 在连接后拉取到的可选控制器状态快照。
-    pub status: Option<ControllerStatusSnapshot>,
+pub struct DataPlaneBootstrapReport {
+    /// Long-lived host runtime handle retained by the application.
+    /// 应用保留的长生命周期宿主运行时句柄。
+    pub handle: HostRuntimeHandle,
 }
 
-impl ControllerBootstrapReport {
+impl DataPlaneBootstrapReport {
     /// Builds one concise human-readable summary row for status bars and logs.
     /// 为状态栏与日志构建一条简洁的人类可读摘要。
     pub fn summary_text(&self) -> String {
-        let process_mode = self
-            .status
-            .as_ref()
-            .map(|status| match status.process_mode {
-                ControllerProcessMode::Service => "Service",
-                ControllerProcessMode::Managed => "Managed",
-            })
-            .unwrap_or("Unknown");
-
         format!(
-            "vldb 数据平面已就绪：{} · 模式 {} · SQLite {}",
-            self.handle.endpoint,
-            process_mode,
+            "vldb 数据平面已就绪：SQLite {}",
             self.handle.sqlite_path.display()
         )
     }
 }
 
-/// Bootstraps the shared controller, the application space, and the primary SQLite schema.
-/// 引导共享控制器、应用空间以及主 SQLite 结构。
-pub async fn bootstrap_application_data_plane(
-    controller: PersistedControllerConfiguration,
-) -> Result<ControllerBootstrapReport, String> {
-    let config = build_controller_client_config(&controller)?;
-    let endpoint = config
-        .endpoint_url()
-        .map_err(|error| format!("解析 vldb 控制器端点失败：{error}"))?;
-    let executable = config.spawn_executable().to_string();
+/// Bootstraps the in-process application data plane and the primary SQLite schema.
+/// 引导进程内应用数据平面以及主 SQLite 结构。
+pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapReport, String> {
     let data_root = application_data_root();
     let sqlite_path = data_root.join("sqlite").join("app-workspace.sqlite3");
     let system_statistics_root = data_root.join("statistics");
     let system_statistics_sqlite_path = system_statistics_root.join("provider-usage.sqlite3");
-    let started_at_ms = current_unix_epoch_millis();
 
     ensure_parent_directory(&sqlite_path)?;
     ensure_parent_directory(&system_statistics_sqlite_path)?;
 
-    let registration = ClientRegistration {
-        client_name: format!("vulcan-code-{}-{}", std::process::id(), started_at_ms),
-        host_kind: String::from("vulcan-code"),
-        process_id: std::process::id(),
-        process_name: String::from("vulcan-code"),
-        lease_ttl_secs: Some(controller.default_lease_ttl_secs),
-    };
-    let client = ControllerClient::new(config, registration);
+    // The authoritative path derivation stays exactly here, in the single host entry point. The
+    // bindings below hand the already-derived paths to the engines, which never derive a storage
+    // location themselves.
+    // 权威路径派生就留在此处，即唯一宿主入口。下方绑定把已派生的路径交给引擎，引擎自身绝不派生存储位置。
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert(LogicalDatabase::AppState, sqlite_path.clone());
+    bindings.insert(
+        LogicalDatabase::SystemStatistics,
+        system_statistics_sqlite_path.clone(),
+    );
+    let local = Arc::new(
+        LocalDatabaseRuntime::open(bindings)
+            .map_err(|error| format!("打开本地数据库运行时失败：{error}"))?,
+    );
 
     let bootstrap_result = async {
-        client
-            .connect()
-            .await
-            .map_err(|error| format!("连接或唤起 vldb-controller 失败：{error}"))?;
-
         let sqlite_binding_id = build_application_sqlite_binding_id();
         let system_statistics_sqlite_binding_id = build_system_statistics_sqlite_binding_id();
 
-        client
-            .attach_space(SpaceRegistration {
-                space_id: String::from(APP_SPACE_ID),
-                space_label: String::from("APP"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(&data_root),
-            })
-            .await
-            .map_err(|error| format!("附着应用数据空间失败：{error}"))?;
+        // The binding identifiers stay in the runtime metadata because plugin and VCE LanceDB paths use
+        // them to address the host's own in-process databases.
+        // 绑定标识符保留在运行期元数据中，因为插件与 VCE 的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
+        // Single v1 initialization. The script creates every v1 object and writes
+        // `user_version = 1`; there is no migration chain, no additive ALTER, no legacy data copy
+        // and no branch that detects an older database. The version check immediately afterwards is
+        // what turns "we ran the script" into "the database is at v1".
+        // 唯一 v1 初始化。脚本创建全部 v1 对象并写入 `user_version = 1`；没有迁移链、没有追加式 ALTER、
+        // 没有旧数据拷贝，也没有检测旧数据库的分支。紧随其后的版本校验把"我们运行了脚本"变成
+        // "数据库处于 v1"。
+        {
+            let connection = local
+                .connect(LogicalDatabase::AppState)
+                .map_err(|error| format!("打开应用数据库失败：{error}"))?;
+            connection
+                .execute_batch(&build_application_schema_script())
+                .map_err(|error| format!("初始化应用数据结构失败：{error}"))?;
+        }
+        local
+            .verify_app_schema_version()
+            .map_err(|error| format!("应用数据结构版本校验失败：{error}"))?;
 
-        client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: String::from(APP_SPACE_ID),
-                binding_id: sqlite_binding_id.clone(),
-                db_path: runtime_assets::native_host_path_text_from_path(&sqlite_path),
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .map_err(|error| format!("启用应用 SQLite 数据库失败：{error}"))?;
-
-        client
-            .attach_space(SpaceRegistration {
-                space_id: String::from(SYSTEM_STATISTICS_SPACE_ID),
-                space_label: String::from("SYSTEM STATISTICS"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(
-                    &system_statistics_root,
-                ),
-            })
-            .await
-            .map_err(|error| format!("附着系统统计数据空间失败：{error}"))?;
-
-        client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: String::from(SYSTEM_STATISTICS_SPACE_ID),
-                binding_id: system_statistics_sqlite_binding_id.clone(),
-                db_path: runtime_assets::native_host_path_text_from_path(
-                    &system_statistics_sqlite_path,
-                ),
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .map_err(|error| format!("启用系统统计 SQLite 数据库失败：{error}"))?;
-
-        client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                sqlite_binding_id.as_str(),
-                build_application_schema_script(),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("初始化应用数据结构失败：{error}"))?;
-
-        ensure_application_schema_migrations(&client, &sqlite_binding_id).await?;
-
-        let runtime_handle = ControllerRuntimeHandle::new(
-            client.clone(),
-            ControllerRuntimeMetadata {
-                endpoint: endpoint.clone(),
-                executable: executable.clone(),
+        let runtime_handle = HostRuntimeHandle::new(
+            Arc::clone(&local),
+            HostRuntimeMetadata {
                 data_root: data_root.clone(),
                 sqlite_path: sqlite_path.clone(),
                 sqlite_binding_id,
@@ -289,89 +252,43 @@ pub async fn bootstrap_application_data_plane(
                 system_statistics_sqlite_binding_id,
             },
         );
+        // The v1 provider-usage schema is created here and nowhere else. There is deliberately no call
+        // that looks for usage facts in an older application database, copies them across or marks a
+        // cutover: pre-v1 storage is not scanned, not identified and not migrated at runtime.
+        // v1 供应商用量结构只在此处创建，别无他处。此处刻意不存在任何调用去在旧应用数据库中查找用量事实、把它们
+        // 复制过来或标记切换：v1 之前的存储在运行时既不被扫描、也不被识别、更不被迁移。
         crate::workspace_store::ensure_provider_usage_schema(&runtime_handle).await?;
-        crate::workspace_store::migrate_application_provider_usage(&runtime_handle).await?;
 
-        Ok::<_, String>((client.get_status().await.ok(), runtime_handle))
+        Ok::<_, String>(runtime_handle)
     }
     .await;
 
-    match bootstrap_result {
-        Ok((status, handle)) => Ok(ControllerBootstrapReport { handle, status }),
-        Err(error) => {
-            cleanup_failed_controller_bootstrap(&client, &error).await?;
-            Err(error)
-        }
-    }
+    bootstrap_result.map(|handle| DataPlaneBootstrapReport { handle })
 }
 
-/// Prepare the production application schema on an already attached, caller-owned test controller.
-/// 在已经附着且由调用方持有的测试控制器上准备生产应用数据结构。
-/// The controller supplies exact private bindings. Returns initialization errors without creating a controller
-/// or resolving the user's application directory; available only to explicitly enabled test fixtures.
-/// 控制器提供精确私有绑定。返回初始化错误，不创建控制器或解析用户应用目录；仅供明确启用的测试夹具使用。
+/// Prepare the production application schema on an already open caller-owned runtime handle.
+/// 在已经打开且由调用方持有的运行时句柄上准备生产应用数据结构。
+/// The handle supplies the exact application database. Returns initialization errors without creating a
+/// runtime or resolving the user's application directory; available only to explicitly enabled test
+/// fixtures.
+/// 句柄提供精确的应用数据库。返回初始化错误，不创建运行时或解析用户应用目录；仅供明确启用的测试夹具使用。
 #[cfg(feature = "test-support")]
 pub async fn prepare_application_schema_for_test(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<(), String> {
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            &controller.sqlite_binding_id,
-            build_application_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("Initialize private application schema: {error}"))?;
-    ensure_application_schema_migrations(&controller.client, &controller.sqlite_binding_id).await
-}
-
-/// Builds one controller client config from the persisted application configuration.
-/// 根据持久化应用配置构建控制器客户端配置。
-fn build_controller_client_config(
-    controller: &PersistedControllerConfiguration,
-) -> Result<ControllerClientConfig, String> {
-    let mut config = ControllerClientConfig {
-        endpoint: runtime_assets::default_vldb_controller_endpoint(),
-        ..ControllerClientConfig::default()
-    };
-
-    if let Some(endpoint) = controller.endpoint.as_deref() {
-        let trimmed = endpoint.trim();
-        if !trimmed.is_empty() {
-            config.endpoint = trimmed.to_string();
-        }
-    }
-
-    config.auto_spawn = controller.auto_spawn;
-    config.spawn_executable = controller
-        .executable_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(runtime_assets::native_host_path_text)
-        .or_else(|| {
-            runtime_assets::resolve_bundled_controller_executable_path()
-                .map(|path| runtime_assets::native_host_path_text_from_path(&path))
-        });
-    config.spawn_process_mode = match controller.process_mode {
-        PersistedControllerProcessMode::Service => ControllerProcessMode::Service,
-        PersistedControllerProcessMode::Managed => ControllerProcessMode::Managed,
-    };
-    config.minimum_uptime_secs = controller.minimum_uptime_secs;
-    config.idle_timeout_secs = controller.idle_timeout_secs;
-    config.default_lease_ttl_secs = controller.default_lease_ttl_secs;
-    config.connect_timeout_secs = controller.connect_timeout_secs;
-    config.startup_timeout_secs = controller.startup_timeout_secs;
-    config.startup_retry_interval_ms = controller.startup_retry_interval_ms;
-    config.lease_renew_interval_secs = controller.lease_renew_interval_secs;
-
-    config
-        .endpoint_url()
-        .map_err(|error| format!("控制器端点格式不合法：{error}"))?;
-
-    Ok(config)
+    // The path is fully qualified because this function only exists under the `test-support`
+    // feature, so importing `local_sql` at module scope would leave it unused in every other build.
+    // 使用全限定路径是因为本函数仅在 `test-support` 特性下存在，在模块作用域导入 `local_sql` 会让它在
+    // 其他所有构建中无人使用。
+    crate::local_sql::execute_script_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        &build_application_schema_script(),
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("Initialize private application schema: {error}"))?;
+    Ok(())
 }
 
 /// Builds one bootstrap-scoped application SQLite binding identifier while preserving the stable app-level tag for diagnostics.
@@ -386,422 +303,6 @@ fn build_application_sqlite_binding_id() -> String {
         bootstrap_scope_ms,
         bootstrap_sequence
     )
-}
-
-/// Shuts down one partially initialized controller client after bootstrap failure so the next retry starts cleanly.
-/// 在引导失败后关闭部分初始化的控制器客户端，确保下一次重试从干净状态开始。
-async fn cleanup_failed_controller_bootstrap(
-    client: &ControllerClient,
-    bootstrap_error: &str,
-) -> Result<(), String> {
-    client.shutdown().await.map_err(|cleanup_error| {
-        format!("{bootstrap_error}；另外清理失败的 vldb 会话也失败：{cleanup_error}")
-    })
-}
-
-/// Additive migration that keeps every existing project disabled by default.
-/// 使所有既有项目保持默认关闭的追加式迁移。
-const ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL: &str =
-    "ALTER TABLE projects ADD COLUMN codebase_memory_enabled INTEGER NOT NULL DEFAULT 0;";
-
-/// Applies additive schema migrations required by newer application builds.
-/// 应用较新应用版本所需的追加式结构迁移。
-pub(crate) async fn ensure_application_schema_migrations(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-) -> Result<(), String> {
-    ensure_optional_project_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE projects ADD COLUMN icon_pack TEXT;",
-    )
-    .await?;
-    ensure_optional_project_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE projects ADD COLUMN icon_key TEXT;",
-    )
-    .await?;
-    ensure_optional_project_column(
-        client,
-        sqlite_binding_id,
-        ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
-    )
-    .await?;
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE TABLE IF NOT EXISTS project_vce_settings (
-    project_id TEXT PRIMARY KEY,
-    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
-    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
-    migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0
-        CHECK(migrated_from_codebase_memory IN (0, 1)),
-    max_file_bytes INTEGER NOT NULL DEFAULT 1048576 CHECK(max_file_bytes > 0),
-    extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]',
-    allow_query_rewrite INTEGER NOT NULL DEFAULT 0 CHECK(allow_query_rewrite IN (0, 1)),
-    allow_rerank INTEGER NOT NULL DEFAULT 1 CHECK(allow_rerank IN (0, 1)),
-    embedding_max_concurrency INTEGER NOT NULL DEFAULT 4 CHECK(embedding_max_concurrency > 0),
-    query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
-    max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
-    max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
-    update_mode TEXT CHECK(update_mode IN ('manual', 'automatic')),
-    auto_update_min_interval_seconds INTEGER CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400),
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
-
-INSERT INTO project_vce_settings (
-    project_id,
-    enabled,
-    revision,
-    migrated_from_codebase_memory,
-    max_file_bytes,
-    extra_ignore_patterns_json,
-    allow_query_rewrite,
-    allow_rerank,
-    embedding_max_concurrency,
-    query_max_concurrency,
-    max_results,
-    max_context_chars,
-    updated_at
-)
-SELECT
-    id,
-    codebase_memory_enabled,
-    1,
-    1,
-    1048576,
-    '[]',
-    0,
-    1,
-    4,
-    3,
-    10,
-    32000,
-    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-FROM projects
-WHERE 1 = 1
-ON CONFLICT(project_id) DO NOTHING;
-"#,
-    )
-    .await?;
-    // Nullable additions preserve legacy policy absence until the user explicitly saves.
-    // 可空的追加字段保留旧策略缺省状态，直到用户明确保存。
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE project_vce_settings ADD COLUMN update_mode TEXT CHECK(update_mode IN ('manual', 'automatic'));",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE project_vce_settings ADD COLUMN auto_update_min_interval_seconds INTEGER CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400);",
-    )
-    .await?;
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE TABLE IF NOT EXISTS project_git_review_preferences (
-    project_id TEXT NOT NULL,
-    repository_key TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (project_id, repository_key),
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_project_git_review_preferences_project
-ON project_git_review_preferences(project_id, repository_key ASC);
-"#,
-    )
-    .await?;
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE TABLE IF NOT EXISTS ai_credential_secrets (
-    secret_reference TEXT PRIMARY KEY,
-    format_version INTEGER NOT NULL CHECK(format_version > 0),
-    revision INTEGER NOT NULL CHECK(revision > 0),
-    material_kind TEXT NOT NULL CHECK(material_kind IN (
-        'api_key',
-        'static_bearer',
-        'open_ai_codex_oauth',
-        'claude_code_oauth',
-        'google_oauth',
-        'mini_max_oauth',
-        'kimi_coding_plan_oauth'
-    )),
-    secret_value TEXT,
-    access_token TEXT,
-    refresh_token TEXT,
-    issued_at_unix_ms INTEGER,
-    expires_at_unix_ms INTEGER,
-    scope_text TEXT NOT NULL DEFAULT '',
-    account_subject TEXT,
-    authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback')),
-    provider_username TEXT,
-    credential_label TEXT,
-    email TEXT,
-    id_token TEXT,
-    account_id TEXT,
-    oauth_client_id TEXT,
-    oauth_client_secret TEXT,
-    project_id TEXT,
-    quota_project_id TEXT,
-    provider_region TEXT,
-    resource_url TEXT,
-    provider_device_id TEXT,
-    created_at_unix_ms INTEGER NOT NULL,
-    updated_at_unix_ms INTEGER NOT NULL,
-    CHECK(
-        (material_kind = 'api_key' AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0)
-        OR (material_kind = 'static_bearer' AND access_token IS NOT NULL AND length(trim(access_token)) > 0)
-        OR (
-            material_kind IN (
-                'open_ai_codex_oauth',
-                'claude_code_oauth',
-                'google_oauth',
-                'mini_max_oauth',
-                'kimi_coding_plan_oauth'
-            )
-            AND access_token IS NOT NULL
-            AND length(trim(access_token)) > 0
-            AND refresh_token IS NOT NULL
-            AND length(trim(refresh_token)) > 0
-            AND issued_at_unix_ms IS NOT NULL
-            AND issued_at_unix_ms >= 0
-            AND expires_at_unix_ms IS NOT NULL
-            AND expires_at_unix_ms > issued_at_unix_ms
-        )
-    ),
-    CHECK(
-        material_kind != 'google_oauth'
-        OR (oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0)
-    ),
-    CHECK(
-        material_kind != 'mini_max_oauth'
-        OR (
-            provider_region IS NOT NULL
-            AND length(trim(provider_region)) > 0
-            AND resource_url IS NOT NULL
-            AND length(trim(resource_url)) > 0
-        )
-    ),
-    CHECK(
-        material_kind != 'kimi_coding_plan_oauth'
-        OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
-    ),
-    CHECK(
-        authorization_kind IS NULL
-        OR (
-            material_kind IN ('api_key', 'static_bearer')
-            AND authorization_kind = 'browser_callback'
-            AND account_subject IS NOT NULL
-            AND length(trim(account_subject)) > 0
-            AND provider_username IS NOT NULL
-            AND length(trim(provider_username)) > 0
-            AND credential_label IS NOT NULL
-            AND length(trim(credential_label)) > 0
-        )
-    )
-);
-"#,
-    )
-    .await?;
-    // browserAuthorizationColumns extend the unreleased credential schema additively.
-    // browserAuthorizationColumns 以增量方式扩展尚未发布的凭据结构。
-    for statement in [
-        "ALTER TABLE ai_credential_secrets ADD COLUMN authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback'));",
-        "ALTER TABLE ai_credential_secrets ADD COLUMN provider_username TEXT;",
-        "ALTER TABLE ai_credential_secrets ADD COLUMN credential_label TEXT;",
-    ] {
-        ensure_optional_schema_column(client, sqlite_binding_id, statement).await?;
-    }
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE TABLE IF NOT EXISTS workspace_session_index (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    project_tag TEXT NOT NULL,
-    title TEXT,
-    title_source TEXT,
-    archived INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-"#,
-    )
-    .await?;
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE INDEX IF NOT EXISTS idx_workspace_session_index_project
-ON workspace_session_index(project_id, archived, sort_order ASC, updated_at DESC);
-"#,
-    )
-    .await?;
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE TABLE IF NOT EXISTS thread_goals (
-    thread_id TEXT PRIMARY KEY,
-    goal_id TEXT NOT NULL,
-    objective TEXT NOT NULL,
-    status TEXT NOT NULL,
-    token_budget INTEGER,
-    tokens_used INTEGER NOT NULL DEFAULT 0,
-    uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
-    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
-    time_used_seconds INTEGER NOT NULL DEFAULT 0,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-);
-"#,
-    )
-    .await?;
-    // goalUsageColumns are additive cumulative counters introduced for per-request goal accounting.
-    // goalUsageColumns 是为逐请求目标记账引入的可累加累计计数列。
-    for statement in [
-        "ALTER TABLE thread_goals ADD COLUMN uncached_input_tokens INTEGER NOT NULL DEFAULT 0;",
-        "ALTER TABLE thread_goals ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0;",
-        "ALTER TABLE thread_goals ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;",
-        "ALTER TABLE thread_goals ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;",
-        "ALTER TABLE thread_goals ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;",
-    ] {
-        ensure_optional_schema_column(client, sqlite_binding_id, statement).await?;
-    }
-    ensure_optional_schema_statement(
-        client,
-        sqlite_binding_id,
-        r#"
-CREATE INDEX IF NOT EXISTS idx_thread_goals_status
-ON thread_goals(status, updated_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS knowledge_libraries (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    name_key TEXT NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    lifecycle_state TEXT NOT NULL DEFAULT 'active'
-        CHECK(lifecycle_state IN ('active', 'deleting', 'error')),
-    document_count INTEGER NOT NULL DEFAULT 0,
-    chunk_count INTEGER NOT NULL DEFAULT 0,
-    index_status TEXT NOT NULL DEFAULT 'empty',
-    last_completed_import_at_ms INTEGER,
-    settings_json TEXT NOT NULL DEFAULT '{}',
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_library_project_bindings (
-    library_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
-    default_enabled INTEGER NOT NULL DEFAULT 0,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    PRIMARY KEY (library_id, project_id),
-    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_library_project_bindings_project
-ON knowledge_library_project_bindings(project_id, default_enabled DESC, library_id);
-
-CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
-    id TEXT PRIMARY KEY,
-    library_id TEXT NOT NULL,
-    source_root TEXT NOT NULL,
-    operation_kind TEXT NOT NULL DEFAULT 'import',
-    state TEXT NOT NULL,
-    phase TEXT NOT NULL,
-    scanned_files INTEGER NOT NULL DEFAULT 0,
-    total_files INTEGER NOT NULL DEFAULT 0,
-    processed_files INTEGER NOT NULL DEFAULT 0,
-    total_index_items INTEGER NOT NULL DEFAULT 0,
-    processed_index_items INTEGER NOT NULL DEFAULT 0,
-    current_file TEXT,
-    changed_files INTEGER NOT NULL DEFAULT 0,
-    unchanged_files INTEGER NOT NULL DEFAULT 0,
-    deleted_files INTEGER NOT NULL DEFAULT 0,
-    skipped_files INTEGER NOT NULL DEFAULT 0,
-    processed_bytes INTEGER NOT NULL DEFAULT 0,
-    warnings_json TEXT NOT NULL DEFAULT '[]',
-    observability_json TEXT NOT NULL DEFAULT '{}',
-    error_message TEXT,
-    created_at_ms INTEGER NOT NULL,
-    started_at_ms INTEGER,
-    finished_at_ms INTEGER,
-    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_import_jobs_library
-ON knowledge_import_jobs(library_id, created_at_ms DESC);
-"#,
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_libraries ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN operation_kind TEXT NOT NULL DEFAULT 'import';",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN total_files INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN processed_files INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN current_file TEXT;",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN total_index_items INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN processed_index_items INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_schema_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE knowledge_import_jobs ADD COLUMN observability_json TEXT NOT NULL DEFAULT '{}';",
-    )
-    .await?;
-    Ok(())
 }
 
 /// Builds one process-scoped system-statistics SQLite binding identifier.
@@ -824,55 +325,8 @@ fn build_system_statistics_sqlite_binding_id() -> String {
     )
 }
 
-/// Applies one idempotent project column migration and ignores duplicate-column failures.
-/// 执行一条幂等项目列迁移，并忽略重复列失败。
-async fn ensure_optional_project_column(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    ensure_optional_schema_column(client, sqlite_binding_id, statement).await
-}
-
-/// Applies one idempotent optional column migration and ignores duplicate-column failures.
-/// 执行一条幂等可选列迁移，并忽略重复列失败。
-async fn ensure_optional_schema_column(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    ensure_optional_schema_statement(client, sqlite_binding_id, statement).await
-}
-
-/// Applies one idempotent optional schema statement and ignores already-applied failures.
-/// 执行一条幂等可选结构语句，并忽略已经应用过的失败。
-async fn ensure_optional_schema_statement(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    let migration_result = client
-        .execute_sqlite_script_typed(APP_SPACE_ID, sqlite_binding_id, statement, Vec::new())
-        .await;
-
-    match migration_result {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            let detail = error.to_string();
-            if detail.contains("duplicate column name")
-                || detail.contains("already exists")
-                || detail.contains("duplicate column")
-            {
-                Ok(())
-            } else {
-                Err(format!("执行应用结构迁移失败：{detail}"))
-            }
-        }
-    }
-}
-
-/// Returns one best-effort Unix epoch timestamp in milliseconds for controller client naming.
-/// 返回一个尽力获取的 Unix 纪元毫秒时间戳，用于控制器客户端命名。
+/// Returns one best-effort Unix epoch timestamp in milliseconds for bootstrap-scoped binding naming.
+/// 返回一个尽力获取的 Unix 纪元毫秒时间戳，用于单次引导作用域绑定命名。
 fn current_unix_epoch_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -880,8 +334,8 @@ fn current_unix_epoch_millis() -> u128 {
         .unwrap_or_default()
 }
 
-/// Returns the stable application data root used for controller-backed state files.
-/// 返回控制器承载状态文件使用的稳定应用数据根目录。
+/// Returns the stable application data root used for host-owned state files.
+/// 返回宿主持有状态文件使用的稳定应用数据根目录。
 pub fn application_data_root() -> PathBuf {
     #[cfg(test)]
     {
@@ -899,6 +353,33 @@ pub fn application_data_root() -> PathBuf {
         });
 
         runtime_assets::user_vulcan_code_root_for_home(&home)
+    }
+}
+
+/// Builds the LanceDB directory binding rooted under the application data root.
+/// 构建以应用数据根为根的 LanceDB 目录绑定。
+///
+/// The vector store lives beside the SQLite files rather than in the operating system's temporary
+/// directory, so every artefact the application creates stays inside the one root the host owns and
+/// authorizes.
+///
+/// 向量存储位于 SQLite 文件旁，而不是操作系统的临时目录中，使应用创建的每个产物都留在宿主拥有并授权的
+/// 唯一根目录内。
+///
+/// The limits are the engine's defaults, which is what the application-level store ran with before
+/// the controller was removed; a subsystem with a genuine reason to bound itself more tightly
+/// declares its own binding in its own module.
+///
+/// 限制采用引擎默认值，也就是移除控制器前应用级存储实际使用的值；有真实理由收紧边界的子系统在自己的
+/// 模块里声明自己的绑定。
+pub fn application_lancedb_binding(data_root: &Path) -> LanceDbDirectoryBinding {
+    let options = vulcan_lancedb_engine::engine::LanceDbEngineOptions::default();
+    LanceDbDirectoryBinding {
+        directory: data_root.join("lancedb"),
+        read_consistency_interval_ms: None,
+        max_upsert_payload: options.max_upsert_payload,
+        max_search_limit: options.max_search_limit,
+        max_concurrent_requests: options.max_concurrent_requests,
     }
 }
 
@@ -1116,6 +597,81 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
         )
     )
 );
+
+CREATE TABLE IF NOT EXISTS project_git_review_preferences (
+    project_id TEXT NOT NULL,
+    repository_key TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, repository_key),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_git_review_preferences_project
+ON project_git_review_preferences(project_id, repository_key ASC);
+
+CREATE TABLE IF NOT EXISTS knowledge_libraries (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+        CHECK(lifecycle_state IN ('active', 'deleting', 'error')),
+    document_count INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    index_status TEXT NOT NULL DEFAULT 'empty',
+    last_completed_import_at_ms INTEGER,
+    settings_json TEXT NOT NULL DEFAULT '{{}}',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_library_project_bindings (
+    library_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    default_enabled INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (library_id, project_id),
+    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_library_project_bindings_project
+ON knowledge_library_project_bindings(project_id, default_enabled DESC, library_id);
+
+CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
+    id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL,
+    source_root TEXT NOT NULL,
+    operation_kind TEXT NOT NULL DEFAULT 'import',
+    state TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    scanned_files INTEGER NOT NULL DEFAULT 0,
+    total_files INTEGER NOT NULL DEFAULT 0,
+    processed_files INTEGER NOT NULL DEFAULT 0,
+    total_index_items INTEGER NOT NULL DEFAULT 0,
+    processed_index_items INTEGER NOT NULL DEFAULT 0,
+    current_file TEXT,
+    changed_files INTEGER NOT NULL DEFAULT 0,
+    unchanged_files INTEGER NOT NULL DEFAULT 0,
+    deleted_files INTEGER NOT NULL DEFAULT 0,
+    skipped_files INTEGER NOT NULL DEFAULT 0,
+    processed_bytes INTEGER NOT NULL DEFAULT 0,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    observability_json TEXT NOT NULL DEFAULT '{{}}',
+    error_message TEXT,
+    created_at_ms INTEGER NOT NULL,
+    started_at_ms INTEGER,
+    finished_at_ms INTEGER,
+    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_import_jobs_library
+ON knowledge_import_jobs(library_id, created_at_ms DESC);
+
+PRAGMA user_version = {schema_version};
 "#,
         schema_version = APP_SCHEMA_VERSION,
     )
@@ -1124,26 +680,6 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-    use uuid::Uuid;
-
-    /// One persisted VCE migration row used by the real-controller matrix test.
-    /// 真实控制器迁移矩阵测试使用的一条 VCE 持久化迁移记录。
-    #[derive(Debug, serde::Deserialize, PartialEq, Eq)]
-    struct VceMigrationRow {
-        /// Stable project identity.
-        /// 稳定项目身份。
-        project_id: String,
-        /// Migrated VCE enablement value.
-        /// 迁移后的 VCE 启用值。
-        enabled: i64,
-        /// Persisted optimistic-concurrency revision.
-        /// 已持久化的乐观并发修订号。
-        revision: i64,
-        /// One-time legacy migration marker.
-        /// 一次性旧设置迁移标记。
-        migrated_from_codebase_memory: i64,
-    }
 
     /// Verifies that the base schema no longer creates legacy SQLite transcript tables.
     /// 验证基础结构不再创建旧版 SQLite 转录表。
@@ -1221,7 +757,10 @@ mod tests {
     fn base_schema_includes_relational_ai_credential_storage() {
         let schema = build_application_schema_script();
 
-        assert_eq!(APP_SCHEMA_VERSION, 18);
+        assert_eq!(
+            APP_SCHEMA_VERSION, 1,
+            "v1 has exactly one schema version; the migration chain is gone"
+        );
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS ai_credential_secrets"));
         assert!(schema.contains("provider_device_id TEXT"));
         assert!(
@@ -1235,16 +774,124 @@ mod tests {
         assert!(!schema.contains("credential_json"));
     }
 
-    /// Verifies both new and upgraded databases default Codebase Memory to disabled.
-    /// 验证新建与升级数据库都会把 Codebase Memory 默认设为关闭。
+    /// Verifies the single initialization creates every v1 object and writes the v1 version.
+    /// 验证唯一初始化创建全部 v1 对象并写入 v1 版本号。
+    ///
+    /// This is the test that makes "one initialization replaces the migration chain" a verified
+    /// claim rather than an assertion: the object set below is the union of what the previous base
+    /// script and the deleted additive migrations produced, so a missing table or index fails here.
+    ///
+    /// 本测试使"一次初始化取代迁移链"成为被验证的结论而非断言：下方对象集是此前基础脚本与被删除的追加式
+    /// 迁移共同产出的并集，因此任何缺失的表或索引都会在此失败。
     #[test]
-    fn project_schema_and_migration_default_codebase_memory_to_disabled() {
+    fn v1_initialization_creates_every_object_and_writes_version_one() {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
+        connection
+            .execute_batch(&build_application_schema_script())
+            .expect("the single v1 initialization must apply cleanly to an empty database");
+
+        let mut statement = connection
+            .prepare(
+                "SELECT type, name FROM sqlite_master
+                 WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_vulcan_%'
+                 ORDER BY type, name",
+            )
+            .expect("prepare schema query");
+
+        let observed = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("query schema")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect schema");
+
+        let mut expected: Vec<(String, String)> = [
+            ("table", "ai_credential_secrets"),
+            ("table", "app_metadata"),
+            ("table", "knowledge_import_jobs"),
+            ("table", "knowledge_libraries"),
+            ("table", "knowledge_library_project_bindings"),
+            ("table", "project_git_review_preferences"),
+            ("table", "project_vce_settings"),
+            ("table", "projects"),
+            ("table", "thread_goals"),
+            ("table", "workspace_session_index"),
+            ("index", "idx_knowledge_import_jobs_library"),
+            ("index", "idx_knowledge_library_project_bindings_project"),
+            ("index", "idx_project_git_review_preferences_project"),
+            ("index", "idx_projects_sort"),
+            ("index", "idx_thread_goals_status"),
+            ("index", "idx_workspace_session_index_project"),
+        ]
+        .into_iter()
+        .map(|(kind, name)| (kind.to_string(), name.to_string()))
+        .collect();
+        expected.sort();
+
+        // `session_messages`, `session_message_chunks` and `workspace_history_search_docs` are
+        // deliberately absent: they belong to a separate schema, and sibling tests in this module
+        // assert this script does not create them. An earlier draft of this list wrongly included
+        // them, and the exact-set comparison is what caught it.
+        // `session_messages`、`session_message_chunks` 与 `workspace_history_search_docs` 刻意不在其中：
+        // 它们属于另一套结构，且本模块的同类测试断言本脚本不创建它们。本清单的早期草稿错误地包含了它们，
+        // 正是精确集合比较捕捉到了这一点。
+
+        let observed_sorted = {
+            let mut sorted = observed.clone();
+            sorted.sort();
+            sorted
+        };
+        assert_eq!(
+            observed_sorted, expected,
+            "the v1 initialization must create exactly the expected object set"
+        );
+
+        let user_version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user_version");
+        assert_eq!(
+            user_version, 1,
+            "v1 initialization must write user_version = 1"
+        );
+
+        let recorded_version: String = connection
+            .query_row(
+                "SELECT value FROM app_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read recorded schema version");
+        assert_eq!(recorded_version, "1");
+
+        // Applying the initialization twice must be a no-op, because the script is the only entry
+        // point and a host may re-run it against an existing database.
+        // 重复应用初始化必须是无操作，因为该脚本是唯一入口，且宿主可能对既有数据库再次运行它。
+        connection
+            .execute_batch(&build_application_schema_script())
+            .expect("re-applying the v1 initialization must be idempotent");
+    }
+
+    /// Verifies the v1 schema defines Codebase Memory as disabled by default.
+    /// 验证 v1 结构把 Codebase Memory 默认定义为关闭。
+    ///
+    /// The column arrives as part of the single initialization rather than through an additive
+    /// migration, so this asserts the folded schema directly. The previous form of this test also
+    /// asserted the `ALTER TABLE` migration constant, which no longer exists.
+    ///
+    /// 该列作为唯一初始化的一部分出现，而不是经追加式迁移加入，因此此处直接断言折入后的结构。本测试先前
+    /// 的形式还会断言 `ALTER TABLE` 迁移常量，而它已不存在。
+    #[test]
+    fn v1_schema_defaults_codebase_memory_to_disabled() {
         let schema = build_application_schema_script();
 
-        assert!(schema.contains("codebase_memory_enabled INTEGER NOT NULL DEFAULT 0"));
-        assert_eq!(
-            ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
-            "ALTER TABLE projects ADD COLUMN codebase_memory_enabled INTEGER NOT NULL DEFAULT 0;"
+        assert!(
+            schema.contains("codebase_memory_enabled INTEGER NOT NULL DEFAULT 0"),
+            "the v1 schema must carry the column directly"
+        );
+        assert!(
+            !schema.contains("ALTER TABLE"),
+            "v1 has no additive migrations, so the script must contain no ALTER TABLE"
         );
     }
 
@@ -1260,254 +907,6 @@ mod tests {
         assert!(
             schema.contains("FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE")
         );
-    }
-
-    /// Verifies empty, true, false, new-project, and repeated VCE migrations against SQLite.
-    /// 使用 SQLite 验证空库、真值、假值、新项目和重复 VCE 迁移。
-    #[tokio::test(flavor = "current_thread")]
-    #[ignore = "requires the bundled output/bin/vldb-controller.exe"]
-    async fn real_controller_vce_project_migration_matrix_is_idempotent() {
-        let temporary = tempdir().expect("create VCE migration root");
-        let data_root = temporary.path().join("data");
-        let sqlite_root = data_root.join("sqlite");
-        fs::create_dir_all(&sqlite_root).expect("create VCE migration SQLite root");
-        let sqlite_path = sqlite_root.join("app-workspace.sqlite3");
-        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("output")
-            .join("bin")
-            .join("vldb-controller.exe");
-        assert!(executable.is_file(), "bundled controller must exist");
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve VCE migration port");
-        let port = listener
-            .local_addr()
-            .expect("read VCE migration port")
-            .port();
-        drop(listener);
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let binding_id = format!("vce-migration-{}", Uuid::new_v4());
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint,
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            ClientRegistration {
-                client_name: format!("vce-migration-{}", Uuid::new_v4()),
-                host_kind: String::from("test"),
-                process_id: std::process::id(),
-                process_name: String::from("vulcan-workspace-store-test"),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client
-            .connect()
-            .await
-            .expect("connect VCE migration controller");
-        client
-            .attach_space(SpaceRegistration {
-                space_id: String::from(APP_SPACE_ID),
-                space_label: String::from("APP"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(&data_root),
-            })
-            .await
-            .expect("attach VCE migration app space");
-        client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: String::from(APP_SPACE_ID),
-                binding_id: binding_id.clone(),
-                db_path: runtime_assets::native_host_path_text_from_path(&sqlite_path),
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .expect("enable VCE migration app database");
-        client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                &binding_id,
-                &format!(
-                    "{}\nDROP TABLE project_vce_settings;",
-                    build_application_schema_script()
-                ),
-                Vec::new(),
-            )
-            .await
-            .expect("initialize legacy application schema");
-
-        ensure_application_schema_migrations(&client, &binding_id)
-            .await
-            .expect("migrate empty project set");
-        let empty_result = client
-            .query_sqlite_json_typed(
-                APP_SPACE_ID,
-                &binding_id,
-                "SELECT project_id, enabled, revision, migrated_from_codebase_memory FROM project_vce_settings ORDER BY project_id;",
-                Vec::new(),
-            )
-            .await
-            .expect("query empty VCE migration result");
-        let empty_rows: Vec<VceMigrationRow> = serde_json::from_str(&empty_result.json_data)
-            .expect("decode empty VCE migration result");
-        assert!(empty_rows.is_empty());
-
-        client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                &binding_id,
-                r#"
-INSERT INTO projects (id, name, root_path, codebase_memory_enabled, created_at, updated_at)
-VALUES
-    ('legacy-false', 'Legacy False', 'D:/fixtures/legacy-false', 0, '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z'),
-    ('legacy-true', 'Legacy True', 'D:/fixtures/legacy-true', 1, '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z');
-"#,
-                Vec::new(),
-            )
-            .await
-            .expect("seed legacy CBM project switches");
-        ensure_application_schema_migrations(&client, &binding_id)
-            .await
-            .expect("migrate true and false legacy switches");
-        let migrated_rows = load_vce_migration_rows(&client, &binding_id).await;
-        assert_eq!(
-            migrated_rows,
-            vec![
-                VceMigrationRow {
-                    project_id: String::from("legacy-false"),
-                    enabled: 0,
-                    revision: 1,
-                    migrated_from_codebase_memory: 1,
-                },
-                VceMigrationRow {
-                    project_id: String::from("legacy-true"),
-                    enabled: 1,
-                    revision: 1,
-                    migrated_from_codebase_memory: 1,
-                },
-            ]
-        );
-
-        client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                &binding_id,
-                r#"
-UPDATE project_vce_settings SET enabled = 0, revision = 9,
-    update_mode = 'automatic', auto_update_min_interval_seconds = 600
-WHERE project_id = 'legacy-true';
-INSERT INTO projects (id, name, root_path, codebase_memory_enabled, created_at, updated_at)
-VALUES ('new-project', 'New Project', 'D:/fixtures/new-project', 1, '2026-09-04T00:00:01Z', '2026-09-04T00:00:01Z');
-"#,
-                Vec::new(),
-            )
-            .await
-            .expect("seed post-migration project and authoritative VCE edit");
-        ensure_application_schema_migrations(&client, &binding_id)
-            .await
-            .expect("repeat VCE project migration");
-        ensure_application_schema_migrations(&client, &binding_id)
-            .await
-            .expect("repeat VCE project migration twice");
-        let repeated_rows = load_vce_migration_rows(&client, &binding_id).await;
-        assert_eq!(repeated_rows.len(), 3);
-        assert_eq!(
-            repeated_rows
-                .iter()
-                .find(|row| row.project_id == "legacy-true")
-                .expect("legacy true VCE row remains present"),
-            &VceMigrationRow {
-                project_id: String::from("legacy-true"),
-                enabled: 0,
-                revision: 9,
-                migrated_from_codebase_memory: 1,
-            }
-        );
-        assert_eq!(
-            repeated_rows
-                .iter()
-                .find(|row| row.project_id == "new-project")
-                .expect("new project VCE row is created"),
-            &VceMigrationRow {
-                project_id: String::from("new-project"),
-                enabled: 1,
-                revision: 1,
-                migrated_from_codebase_memory: 1,
-            }
-        );
-        // policies verify migrations preserve explicit choices and leave missing values null.
-        // policies 验证迁移保留明确选择，并让缺失值继续保持空值。
-        let policies = client.query_sqlite_json_typed(
-            APP_SPACE_ID,
-            &binding_id,
-            "SELECT project_id, update_mode, auto_update_min_interval_seconds FROM project_vce_settings ORDER BY project_id;",
-            Vec::new(),
-        ).await.expect("query policies after repeated migration");
-        // policy_rows uses the controller's verified JSON row-array contract.
-        // policy_rows 使用已验证的控制器 JSON 行数组契约。
-        let policy_rows: Vec<serde_json::Value> =
-            serde_json::from_str(&policies.json_data).expect("decode policies");
-        assert_eq!(policy_rows[1]["project_id"], "legacy-true");
-        assert_eq!(policy_rows[1]["update_mode"], "automatic");
-        assert_eq!(policy_rows[1]["auto_update_min_interval_seconds"], 600);
-        assert!(policy_rows[0]["update_mode"].is_null());
-        assert!(policy_rows[0]["auto_update_min_interval_seconds"].is_null());
-        assert!(policy_rows[2]["update_mode"].is_null());
-        // Removing only the two new columns models a genuine pre-policy schema in this fixture.
-        // 仅移除两个新列，在本测试夹具中模拟真正的旧策略表结构。
-        client.execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            &binding_id,
-            "ALTER TABLE project_vce_settings DROP COLUMN update_mode; ALTER TABLE project_vce_settings DROP COLUMN auto_update_min_interval_seconds;",
-            Vec::new(),
-        ).await.expect("simulate prior policy schema");
-        ensure_application_schema_migrations(&client, &binding_id)
-            .await
-            .expect("migrate prior policy schema");
-        // migrated_policy proves the migration adds nullable fields, not persisted defaults.
-        // migrated_policy 证明迁移追加可空字段而不写入持久化默认值。
-        let migrated_policy = client.query_sqlite_json_typed(
-            APP_SPACE_ID,
-            &binding_id,
-            "SELECT COUNT(*) AS missing FROM project_vce_settings WHERE update_mode IS NULL AND auto_update_min_interval_seconds IS NULL;",
-            Vec::new(),
-        ).await.expect("query absent policies");
-        // missing_rows contains the one aggregate row returned by the exact query.
-        // missing_rows 包含精确查询返回的唯一聚合行。
-        let missing_rows: Vec<serde_json::Value> =
-            serde_json::from_str(&migrated_policy.json_data).expect("decode count");
-        assert_eq!(missing_rows[0]["missing"], 3);
-        client
-            .shutdown()
-            .await
-            .expect("shutdown VCE migration controller");
-    }
-
-    /// Loads every VCE migration row in stable project order.
-    /// 按稳定项目顺序加载全部 VCE 迁移记录。
-    async fn load_vce_migration_rows(
-        client: &ControllerClient,
-        binding_id: &str,
-    ) -> Vec<VceMigrationRow> {
-        let result = client
-            .query_sqlite_json_typed(
-                APP_SPACE_ID,
-                binding_id,
-                "SELECT project_id, enabled, revision, migrated_from_codebase_memory FROM project_vce_settings ORDER BY project_id;",
-                Vec::new(),
-            )
-            .await
-            .expect("query VCE migration rows");
-        serde_json::from_str(&result.json_data).expect("decode VCE migration rows")
     }
 
     /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.
@@ -1542,19 +941,6 @@ VALUES ('new-project', 'New Project', 'D:/fixtures/new-project', 1, '2026-09-04T
         assert_eq!(
             application_luaskills_config_root().expect("resolve LuaSkills config root"),
             application_data_root().join("luaskills-config")
-        );
-    }
-
-    /// Verifies an empty persisted controller endpoint resolves to the compiled profile default.
-    /// 验证持久化控制器端点为空时会解析为当前编译配置的默认端点。
-    #[test]
-    fn controller_client_config_uses_profile_default_endpoint() {
-        let config = build_controller_client_config(&PersistedControllerConfiguration::default())
-            .expect("build default controller client config");
-
-        assert_eq!(
-            config.endpoint,
-            runtime_assets::default_vldb_controller_endpoint()
         );
     }
 }

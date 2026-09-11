@@ -43,7 +43,7 @@ use vulcan_vmm::{
     VmmBackendMode, VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
     VmmTransportConfig, WriteMemoriesRequest, WriteMemoryItem, process_native_vmm_client,
 };
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
 /// Stable identifier for the universal session todolist update tool.
 /// 通用会话 todolist 更新工具的稳定标识。
@@ -349,7 +349,7 @@ pub struct NativeToolExecutionRequest {
     pub workspace_root: Option<PathBuf>,
     /// Optional controller runtime used by native tools that persist workspace state.
     /// 持久化工作区状态的原生工具使用的可选控制器运行时。
-    pub controller_runtime: Option<ControllerRuntimeHandle>,
+    pub controller_runtime: Option<HostRuntimeHandle>,
     /// Optional host-injected V1 Goal domain port bound to this execution.
     /// 绑定到本次执行的可选宿主注入 V1 Goal 领域端口。
     pub goal_runtime: Option<Arc<dyn NativeGoalRuntime>>,

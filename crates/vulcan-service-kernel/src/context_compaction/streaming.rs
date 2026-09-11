@@ -58,7 +58,7 @@ pub(crate) struct WebuiContextCompactionExecution {
 pub(crate) async fn stream_webui_context_compaction_execution(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     request: PromptCompactionJobRequest,
     session_id: SessionId,
     retained_from_seq: Seq,
@@ -191,7 +191,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
 pub(crate) fn spawn_webui_context_compaction_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     session_id: SessionId,
     previous_phase: SessionRunPhase,

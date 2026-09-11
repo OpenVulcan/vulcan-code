@@ -144,8 +144,7 @@ async fn finish_index(manager: &vce::VceRuntimeManager, project: &str, job: &str
 /// No input; all model HTTP traffic and storage use isolated local fixtures, without user credentials.
 /// 无输入；全部模型 HTTP 流量及存储使用隔离本地夹具，不使用用户凭据。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_stream_and_tools_continue_during_index_update() {
+fn real_host_storage_stream_and_tools_continue_during_index_update() {
     run_stream_interleaving_fixture(true);
 }
 
@@ -154,8 +153,7 @@ fn real_controller_stream_and_tools_continue_during_index_update() {
 /// No inputs; uses only private local model and storage fixtures.
 /// 无输入；仅使用私有本地模型和存储夹具。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_stream_and_tools_complete_during_index_update() {
+fn real_host_storage_stream_and_tools_complete_during_index_update() {
     run_stream_interleaving_fixture(false);
 }
 
@@ -176,9 +174,9 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
         // Select the exact matching test entry, never a broad filter that might recurse into sibling tests.
         // 选择精确匹配的测试入口，不使用可能递归进入其他用例的宽泛筛选。
         let test_name = if exercise_continue {
-            "tests::vce_stream_interleaving_tests::real_controller_stream_and_tools_continue_during_index_update"
+            "tests::vce_stream_interleaving_tests::real_host_storage_stream_and_tools_continue_during_index_update"
         } else {
-            "tests::vce_stream_interleaving_tests::real_controller_stream_and_tools_complete_during_index_update"
+            "tests::vce_stream_interleaving_tests::real_host_storage_stream_and_tools_complete_during_index_update"
         };
         command
             .args([
@@ -236,9 +234,9 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
         .as_ref()
         .expect("workspace")
         .selected_session;
-    // This object owns the exact private controller data root.
-    // 此对象持有精确私有控制器数据根。
-    let storage = TestControllerRuntimeRoot::new(session_id);
+    // This object owns the exact private host-storage data root.
+    // 此对象持有精确私有宿主存储数据根。
+    let storage = TestHostRuntimeRoot::new(session_id);
     // Keep generated Lance filenames below the platform path limit without changing production paths.
     // 保持生成的 Lance 文件名低于平台路径限制，不改变生产路径。
     let index_root = tempfile::tempdir().expect("short private index root");
@@ -272,7 +270,7 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
         );
         // Attach only the fixture's application binding.
         // 只附着夹具应用绑定。
-        let (client, mut controller) = storage.attached_controller_runtime_handle().await;
+        let mut controller = storage.attached_host_runtime_handle().await;
         // Cleanup covers both initialization and stream assertions.
         // 清理同时覆盖初始化及流断言。
         let outer = std::panic::AssertUnwindSafe(async {
@@ -282,27 +280,6 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
             fs::create_dir_all(&statistics_root).expect("private statistics directory");
             controller.system_statistics_sqlite_path = statistics_root.join("usage.sqlite3");
             controller.system_statistics_sqlite_binding_id = "stream-statistics".into();
-            client
-                .attach_space(vldb_controller_client::SpaceRegistration {
-                    space_id: vulcan_workspace_store::data_plane::SYSTEM_STATISTICS_SPACE_ID.into(),
-                    space_label: "PRIVATE STREAM STATISTICS".into(),
-                    space_kind: vldb_controller_client::SpaceKind::User,
-                    space_root: statistics_root.display().to_string(),
-                })
-                .await
-                .expect("attach private statistics space");
-            client
-                .enable_sqlite(vldb_controller_client::ControllerSqliteEnableRequest {
-                    space_id: vulcan_workspace_store::data_plane::SYSTEM_STATISTICS_SPACE_ID.into(),
-                    binding_id: controller.system_statistics_sqlite_binding_id.clone(),
-                    db_path: controller
-                        .system_statistics_sqlite_path
-                        .display()
-                        .to_string(),
-                    ..Default::default()
-                })
-                .await
-                .expect("enable private statistics binding");
             vulcan_workspace_store::data_plane::prepare_application_schema_for_test(&controller)
                 .await
                 .expect("private application tables");
@@ -707,7 +684,6 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
         })
         .catch_unwind()
         .await;
-        client.shutdown().await.expect("release private controller");
         server.shutdown().await;
         if let Err(panic) = outer {
             std::panic::resume_unwind(panic);

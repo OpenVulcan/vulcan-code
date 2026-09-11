@@ -2,6 +2,7 @@
 //! 精确候选表分配回执及所属宿主排空写入后的清理。
 
 use super::*;
+use vulcan_lancedb_engine::types::LanceDbDropTableInput;
 
 /// One of the two vector tables whose creation must be acknowledged independently.
 /// 需要独立确认创建的两张向量表之一。
@@ -107,13 +108,11 @@ impl VceProjectIndex {
                     "VCE candidate allocation receipt contains an invalid creation flag",
                 ));
             }
-            self.data_plane
-                .client
-                .drop_lancedb_table(
-                    VCE_SPACE_ID,
-                    self.data_plane.lancedb_binding_id.as_str(),
-                    name,
-                )
+            let engine = self.data_plane.vector_engine().await?;
+            engine
+                .drop_table(LanceDbDropTableInput {
+                    table_name: name.to_string(),
+                })
                 .await
                 .map_err(|error| {
                     format!("Drop acknowledged VCE candidate table `{name}`: {error}")
@@ -294,12 +293,12 @@ pub(super) async fn verify_partial_candidate_allocation(
     // 这两张表现在仅属于夹具；明确删除限定在其临时物理绑定内。
     for table in [&content, &path] {
         data_plane
-            .client
-            .drop_lancedb_table(
-                VCE_SPACE_ID,
-                data_plane.lancedb_binding_id.as_str(),
-                table.as_str(),
-            )
+            .vector_engine()
+            .await
+            .expect("open fixture vector engine")
+            .drop_table(LanceDbDropTableInput {
+                table_name: table.to_string(),
+            })
             .await
             .expect("release fixture-owned table");
     }

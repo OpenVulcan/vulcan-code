@@ -9,11 +9,10 @@ async fn selecting_active_session_does_not_require_lifecycle_quiescence() {
     let session_id = SessionId::from_u128(0x51ec7100);
     // controller_root owns a production-shaped local V1 storage fixture for selection preflight.
     // controller_root 为选择预检持有生产形态的本地 V1 存储夹具。
-    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    let controller_root = TestHostRuntimeRoot::new(session_id);
     // controller_client keeps the real isolated controller alive throughout selection.
-    // controller_client 在整个选择过程维持真实隔离控制器存活。
-    let (_controller_client, controller_runtime) =
-        controller_root.attached_controller_runtime_handle().await;
+    // controller_runtime 在整个选择过程维持真实隔离宿主存储存活。
+    let controller_runtime = controller_root.attached_host_runtime_handle().await;
     // service_state combines the retained session, V1 controller, and one active kernel Turn.
     // service_state 组合保留会话、V1 控制器与一个活动 kernel Turn。
     let mut service_state = test_service_state_with_parent_session(session_id);

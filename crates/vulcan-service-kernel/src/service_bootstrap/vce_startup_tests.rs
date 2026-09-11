@@ -33,7 +33,7 @@ fn real_browser_vce_lifecycle_host() {
 /// No inputs; one explicit empty index is created, and ninety-nine absent source roots stay untouched.
 /// 无输入；只明确创建一个空索引，其余九十九个不存在的源码根保持不变。
 #[test]
-#[ignore = "requires the bundled local controller, plugins and LuaSkills runtime"]
+#[ignore = "requires plugins, the LuaSkills runtime and two spawned service processes"]
 fn real_startup_and_restart_leave_uninitialized_projects_cold() {
     // Only child commands receive this task-specific environment; the parent profile is never redirected.
     // 仅子命令接收本任务专用环境；父进程配置目录不会被重定向。
@@ -96,9 +96,7 @@ fn real_startup_and_restart_leave_uninitialized_projects_cold() {
 /// `root` owns both phases; `phase` selects explicit initialization or read-only process restoration.
 /// `root` 持有两个阶段；`phase` 选择明确初始化或只读进程恢复。
 fn run_bootstrap_phase(root: &Path, phase: &str) {
-    use vulcan_provider_config::config::{
-        PersistedControllerConfiguration, ProviderConfigurationFile,
-    };
+    use vulcan_provider_config::config::ProviderConfigurationFile;
     use vulcan_workbench_model::{ProjectVceSettings, ProjectVceUpdateMode, TaskProjectSummary};
     // Install before creating any service state or reading any configuration.
     // 在创建任何服务状态或读取任何配置之前安装。
@@ -111,33 +109,8 @@ fn run_bootstrap_phase(root: &Path, phase: &str) {
     runtime_assets::test_support::install_isolated_process_root(root)
         .expect("isolate startup paths");
     assert!(runtime_assets::test_support::install_isolated_process_root(root).is_err());
-    // Every phase uses a fresh exact port, while database files deliberately survive between processes.
-    // 每个阶段使用新的精确端口，数据库文件则刻意跨进程保留。
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("private controller port");
-    let address = listener.local_addr().unwrap();
-    let executable =
-        runtime_assets::resolve_bundled_controller_executable_path().expect("bundled controller");
-    let controller_configuration = PersistedControllerConfiguration {
-        endpoint: Some(format!("http://{address}")),
-        auto_spawn: true,
-        executable_path: Some(executable.display().to_string()),
-        minimum_uptime_secs: 0,
-        idle_timeout_secs: 1,
-        default_lease_ttl_secs: 30,
-        connect_timeout_secs: 30,
-        startup_timeout_secs: 15,
-        startup_retry_interval_ms: 100,
-        lease_renew_interval_secs: 10,
-        ..Default::default()
-    };
-    std::fs::write(
-        runtime_assets::resolve_controller_config_file_path(),
-        serde_json::to_vec(&controller_configuration).unwrap(),
-    )
-    .unwrap();
-    drop(listener);
-    // The application data root must be exactly inside the installed private namespace.
-    // 应用数据根必须精确位于已安装的私有命名空间中。
+    // Database files deliberately survive between the two phases of this acceptance.
+    // 数据库文件在两个验收阶段之间刻意保留。
     let data_root = vulcan_workspace_store::data_plane::application_data_root();
     assert_eq!(
         data_root,
@@ -167,11 +140,9 @@ fn run_bootstrap_phase(root: &Path, phase: &str) {
             .build()
             .unwrap();
         seed_runtime.block_on(async {
-            let report = vulcan_workspace_store::data_plane::bootstrap_application_data_plane(
-                controller_configuration.clone(),
-            )
-            .await
-            .expect("seed data plane");
+            let report = vulcan_workspace_store::data_plane::bootstrap_application_data_plane()
+                .await
+                .expect("seed data plane");
             for index in 0..project_count {
                 let project = TaskProjectSummary::new(
                     format!("startup-project-{index}"),
@@ -199,12 +170,6 @@ fn run_bootstrap_phase(root: &Path, phase: &str) {
                 .await
                 .expect("persist cold project");
             }
-            report
-                .handle
-                .client
-                .shutdown()
-                .await
-                .expect("release seed controller lease");
         });
     }
     // Capture configuration bytes before full startup, including across the second process.
@@ -227,7 +192,7 @@ fn run_bootstrap_phase(root: &Path, phase: &str) {
     let bootstrap_elapsed_ms = boot_started.elapsed().as_millis();
     // Only clone existing owners; all subsequent work uses the services installed by the real bootstrap.
     // 仅克隆既有所有者；后续全部操作使用真实引导安装的服务。
-    let (executor, controller, manager) = {
+    let (executor, _controller, manager) = {
         let guard = state.lock().unwrap();
         assert!(guard.startup.ready, "startup: {:?}", guard.startup);
         assert_eq!(
@@ -325,19 +290,6 @@ fn run_bootstrap_phase(root: &Path, phase: &str) {
     })
     }));
     crate::service_prepare_for_app_shutdown(&state).expect("actual service shutdown preparation");
-    executor
-        .block_on(controller.client.shutdown())
-        .expect("release own controller lease");
-    // Wait only on the exact private endpoint; never terminate a process selected by name or broad scan.
-    // 仅等待精确私有端点，绝不按名称或宽泛扫描终止进程。
-    let shutdown_started = Instant::now();
-    while std::net::TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
-        assert!(
-            shutdown_started.elapsed() < Duration::from_secs(10),
-            "private controller did not stop"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

@@ -37,10 +37,6 @@ $ProjectDir = Split-Path $PSScriptRoot -Parent
 # 加载两个 Cargo 模式共用的成功构建制品跟踪器。
 . (Join-Path $PSScriptRoot 'cargo_artifact_cleanup.ps1')
 
-# ControllerProfileScriptPath points at the build-profile-aware generated Controller configuration updater.
-# ControllerProfileScriptPath 指向按构建模式更新 Controller 生成配置的脚本。
-$ControllerProfileScriptPath = Join-Path $PSScriptRoot "configure_controller_profile.ps1"
-
 # WebAppDir points at the Vite React WebUI project.
 # WebAppDir 指向 Vite React WebUI 工程。
 $WebAppDir = Join-Path $ProjectDir "apps\vulcan-code-web"
@@ -54,19 +50,6 @@ $TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-tauri"
 $IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 
 Set-Location $ProjectDir
-
-if (-not (Test-Path -LiteralPath $ControllerProfileScriptPath -PathType Leaf)) {
-    throw "Missing Controller profile configuration script: $ControllerProfileScriptPath"
-}
-if ($Release) {
-    & $ControllerProfileScriptPath -Release
-}
-else {
-    & $ControllerProfileScriptPath
-}
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
 
 # Test whether one PowerShell file-operation failure is a Windows sharing or lock violation.
 # 判断一次 PowerShell 文件操作失败是否属于 Windows 共享冲突或锁冲突。

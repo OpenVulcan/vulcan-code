@@ -1,7 +1,7 @@
 use super::*;
 
-/// Stable in-memory snapshot hydrated from the controller-backed workspace database.
-/// 从控制器承载的工作台数据库中还原出的稳定内存快照。
+/// Stable in-memory snapshot hydrated from the host-owned workspace database.
+/// 从宿主持有的工作台数据库中还原出的稳定内存快照。
 #[derive(Debug, Clone)]
 pub struct WorkspaceSnapshot {
     /// Visible project nodes shown in the task tree.
@@ -36,8 +36,8 @@ pub struct WorkspaceSnapshot {
     pub hydrated_session_ids: BTreeSet<SessionId>,
 }
 
-/// Raw project row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始项目行。
+/// Raw project row decoded from the host_runtime SQLite query payload.
+/// 从宿主运行时 SQLite 查询载荷中解码出的原始项目行。
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct StoredProjectRow {
     /// Stable project identifier persisted in SQLite.
@@ -108,8 +108,8 @@ pub(super) struct StoredProjectRow {
     pub(super) archived: i64,
 }
 
-/// Raw application metadata row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始应用元数据行。
+/// Raw application metadata row decoded from the host_runtime SQLite query payload.
+/// 从宿主运行时 SQLite 查询载荷中解码出的原始应用元数据行。
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct StoredAppMetadataRow {
     /// Persisted metadata value.

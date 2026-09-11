@@ -283,7 +283,7 @@ fn synchronize_continue_controller_state_from_v1(
 pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     start: SharedPromptTurnStart,
     expected_kernel_generation: u64,
@@ -952,7 +952,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
 pub(crate) fn spawn_webui_prompt_prepare_continue_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     start: SharedPromptTurnStart,
     expected_kernel_generation: u64,
@@ -1097,7 +1097,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
 pub(crate) fn start_webui_precheck_or_continue(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     start: SharedPromptTurnStart,
     precheck_plan: SharedPromptPrecheckPlan,

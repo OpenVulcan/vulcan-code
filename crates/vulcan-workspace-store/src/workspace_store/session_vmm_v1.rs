@@ -25,8 +25,8 @@ const SESSION_VMM_DOCUMENT_KIND: &str = "session_vmm";
 static SESSION_VMM_FILE_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Mutex<()>>>>> =
     OnceLock::new();
 
-/// Strict durable envelope owned by one V1 session VMM controller.
-/// 由单个 V1 会话 VMM 控制器持有的严格持久化信封。
+/// Strict durable envelope owned by one V1 session VMM host_runtime.
+/// 由单个 V1 会话 VMM 宿主运行时持有的严格持久化信封。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionVmmDocument {
@@ -39,8 +39,8 @@ struct SessionVmmDocument {
     /// Exact V1 session identity owning this document.
     /// 持有该文档的精确 V1 会话身份。
     session_id: String,
-    /// Complete controller-owned VMM domain state.
-    /// 控制器持有的完整 VMM 领域状态。
+    /// Complete host_runtime-owned VMM domain state.
+    /// 宿主运行时持有的完整 VMM 领域状态。
     state: VmmSessionMemoryState,
 }
 
@@ -76,8 +76,8 @@ pub fn load_session_vmm_state(
 /// 参数
 /// `locator` is the exact SQLite-derived V1 storage owner.
 /// `locator` 是由 SQLite 精确派生的 V1 存储所有者。
-/// `state` is the complete candidate serialized by the session controller.
-/// `state` 是由会话控制器串行化的完整候选状态。
+/// `state` is the complete candidate serialized by the session host_runtime.
+/// `state` 是由会话宿主运行时串行化的完整候选状态。
 ///
 /// # Returns
 /// 返回值
@@ -286,8 +286,8 @@ mod tests {
     }
 
     impl TestVmmFixture {
-        /// Creates one fully published V1 session without using an external SQLite controller.
-        /// 在不使用外部 SQLite Controller 的情况下创建一个完整发布的 V1 会话。
+        /// Creates one fully published V1 session without using an external SQLite host_runtime.
+        /// 在不使用外部 SQLite Host runtime 的情况下创建一个完整发布的 V1 会话。
         ///
         /// # Returns
         /// 返回值

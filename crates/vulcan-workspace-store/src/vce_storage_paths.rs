@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 mod writer_lease;
 pub use writer_lease::VceProjectWriterLease;
 
-/// Validated VCE root derived only from the controller's resolved application data root.
-/// 仅从控制器已解析应用数据根派生的已验证 VCE 根目录。
+/// Validated VCE root derived only from the host runtime's resolved application data root.
+/// 仅从宿主运行时已解析应用数据根派生的已验证 VCE 根目录。
 #[derive(Clone, Debug)]
 pub(crate) struct VceStoragePaths {
     /// Canonical host application root; this module never changes sibling memory storage.
@@ -46,9 +46,9 @@ impl VceStoragePaths {
     /// Resolve the dedicated root without creating files or choosing environment-variable fallbacks.
     /// 解析专用根目录，不创建文件，也不选择环境变量兜底路径。
     ///
-    /// `application_root` is the existing absolute controller data root. Returns validated
+    /// `application_root` is the existing absolute host data root. Returns validated
     /// path ownership or an explicit error for a missing root, link, or conflicting file type.
-    /// `application_root` 是控制器现有的绝对数据根。返回已验证路径归属；
+    /// `application_root` 是宿主现有的绝对数据根。返回已验证路径归属；
     /// 根缺失、链接或文件类型冲突时返回明确错误。
     pub(crate) fn resolve(application_root: &Path) -> Result<Self, String> {
         if !application_root.is_absolute() {
@@ -78,6 +78,11 @@ impl VceStoragePaths {
     ///
     /// Takes no extra parameters and returns the borrowed authoritative root path.
     /// 无额外参数，返回借用的权威根路径。
+    ///
+    /// Test-only: production code names the exact subdirectory it needs, so this accessor exists to let
+    /// tests assert on the root without re-deriving it.
+    /// 仅测试使用：生产代码会指名它需要的精确子目录，故此访问器只为让测试无需重新派生即可断言根目录。
+    #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }

@@ -6,12 +6,10 @@ use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, watch};
-use vldb_controller_client::{
-    ControllerLanceDbCompactionOperation, ControllerLanceDbCompactionState,
-};
 use vulcan_context_engine::{
-    VcePhysicalTableRole, VcePhysicalTableStatistics, VceRefreshFailure, VceRefreshPhase,
-    VceRefreshProgress, VceRefreshUnit,
+    VcePhysicalCompactionOperation, VcePhysicalCompactionState, VcePhysicalTableRole,
+    VcePhysicalTableStatistics, VceRefreshFailure, VceRefreshPhase, VceRefreshProgress,
+    VceRefreshUnit,
 };
 use vulcan_workspace_store::vce_data_plane::{
     VceCompactionJobReceipt, VceCompactionMetrics, VceCompactionTableReceipt,
@@ -31,8 +29,8 @@ const VCE_PROGRESS_PERSIST_RETRY_BASE_MS: u64 = 250;
 /// 关闭期间等待终态持久化的最长宽限时间，超时后中止卡住的工作任务。
 const VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Polling interval for one already-submitted controller compaction operation.
-/// 已提交控制器整理操作的轮询间隔。
+/// Polling interval for one already-submitted storage compaction operation.
+/// 已提交存储整理操作的轮询间隔。
 const VCE_COMPACTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Identify storage failures that may clear without cancelling the admitted refresh.
@@ -142,8 +140,8 @@ enum VceCompactionJobOutcome {
     /// One table failed with a deterministic execution error.
     /// 一张表因确定性执行错误失败。
     Failed(String),
-    /// Execution failed after one controller result that must not be lost from the terminal receipt.
-    /// 控制器已返回一份不能从终态回执中丢失的结果，随后执行失败。
+    /// Execution failed after one engine result that must not be lost from the terminal receipt.
+    /// 引擎已返回一份不能从终态回执中丢失的结果，随后执行失败。
     FailedWithTableUpdate {
         /// Bounded job-level failure diagnostic.
         /// 有界的作业级失败诊断。
@@ -155,11 +153,11 @@ enum VceCompactionJobOutcome {
     /// User or shutdown cancellation settled at a safe boundary.
     /// 用户或退出取消已在安全边界确定。
     Cancelled,
-    /// Cancellation settled after an atomic controller round completed and returned authoritative facts.
-    /// 一轮控制器原子操作完成并返回权威事实后，取消才进入确定状态。
+    /// Cancellation settled after an atomic storage round completed and returned authoritative facts.
+    /// 一轮存储原子操作完成并返回权威事实后，取消才进入确定状态。
     CancelledWithTableUpdate(Box<VceCompactionTableTerminalUpdate>),
-    /// The host or controller lost authority needed to continue safely.
-    /// 宿主或控制器丢失了安全继续所需的权威状态。
+    /// The host runtime lost authority needed to continue safely.
+    /// 宿主运行时丢失了安全继续所需的权威状态。
     Interrupted(String),
     /// Authority was lost after a table-local terminal condition that must remain queryable.
     /// 表级终止条件已经确定后丢失继续执行所需权限，该事实必须保持可查询。
@@ -185,17 +183,17 @@ struct VceCompactionTableTerminalUpdate {
     /// Submitted round that produced this terminal observation.
     /// 产生本次终止观察的已提交轮次。
     round: u32,
-    /// Stable controller operation identity, absent only before controller admission.
-    /// 稳定的控制器操作身份，仅在控制器准入前缺失。
+    /// Stable storage-operation identity, absent only before engine admission.
+    /// 稳定的存储操作身份，仅在引擎准入前缺失。
     operation_id: Option<String>,
-    /// Frozen physical version for the operation, absent only before controller admission.
-    /// 操作冻结的物理版本，仅在控制器准入前缺失。
+    /// Frozen physical version for the operation, absent only before engine admission.
+    /// 操作冻结的物理版本，仅在引擎准入前缺失。
     operation_expected_version: Option<u64>,
-    /// Latest controller statistics known to be authoritative.
-    /// 最近一份已确认权威的控制器统计。
+    /// Latest engine statistics known to be authoritative.
+    /// 最近一份已确认权威的引擎统计。
     latest_statistics: VcePhysicalTableStatistics,
-    /// Cumulative metrics including the completed controller round when one exists.
-    /// 累计指标；存在已完成控制器轮次时包含该轮结果。
+    /// Cumulative metrics including the completed storage round when one exists.
+    /// 累计指标；存在已完成存储轮次时包含该轮结果。
     metrics: VceCompactionMetrics,
     /// Terminal table state represented by this update.
     /// 本次更新表示的表终态。
@@ -205,14 +203,14 @@ struct VceCompactionTableTerminalUpdate {
     error: Option<String>,
 }
 
-/// Acquire the process-wide compaction budget without abandoning an admitted controller operation.
-/// 获取进程级整理预算，同时不得遗弃已被控制器准入的操作。
+/// Acquire the process-wide compaction budget without abandoning an admitted storage operation.
+/// 获取进程级整理预算，同时不得遗弃已被存储引擎准入的操作。
 ///
 /// `writer_budget` serializes host writers, `cancel_wake` wakes host-only queued work, and
-/// `has_admitted_operation` preserves controller ownership across host recovery. Returns a permit,
-/// an immediate safe cancellation before controller admission, or an explicit closed-budget error.
+/// `has_admitted_operation` preserves operation ownership across host recovery. Returns a permit,
+/// an immediate safe cancellation before engine admission, or an explicit closed-budget error.
 /// `writer_budget` 串行化宿主写入，`cancel_wake` 唤醒仅在宿主排队的工作，
-/// `has_admitted_operation` 在宿主恢复期间保留控制器所有权。返回预算许可、控制器准入前的即时安全取消，
+/// `has_admitted_operation` 在宿主恢复期间保留操作所有权。返回预算许可、引擎准入前的即时安全取消，
 /// 或明确的预算关闭错误。
 async fn acquire_compaction_writer_budget(
     writer_budget: Arc<tokio::sync::Semaphore>,
@@ -235,17 +233,17 @@ async fn acquire_compaction_writer_budget(
     }
 }
 
-/// Settled result of one controller-owned bounded compaction operation.
-/// 一项控制器持有的有界整理操作的确定结果。
+/// Settled result of one engine-owned bounded compaction operation.
+/// 一项引擎持有的有界整理操作的确定结果。
 enum VceCompactionStepOutcome {
-    /// Controller returned complete before/after statistics and metrics.
-    /// 控制器返回了完整的前后统计与指标。
-    Succeeded(Box<ControllerLanceDbCompactionOperation>),
-    /// Controller recorded an execution failure.
-    /// 控制器记录了执行失败。
+    /// Engine returned complete before/after statistics and metrics.
+    /// 引擎返回了完整的前后统计与指标。
+    Succeeded(Box<VcePhysicalCompactionOperation>),
+    /// Engine recorded an execution failure.
+    /// 引擎记录了执行失败。
     Failed(String),
-    /// Controller confirmed cancellation before mutation.
-    /// 控制器确认在变更前取消。
+    /// Engine confirmed cancellation before mutation.
+    /// 引擎确认在变更前取消。
     Cancelled,
     /// A previously admitted operation is no longer queryable.
     /// 先前已准入的操作已无法查询。
@@ -699,7 +697,7 @@ impl VceManagedJob {
         let _persistence = self.persistence_gate.lock().await;
         let current = self
             .store
-            .get_after_transport_retry(&self.job_id)
+            .get_after_storage_retry(&self.job_id)
             .await?
             .ok_or_else(|| String::from("VCE drained job receipt does not exist"))?;
         if current.state.is_terminal() {
@@ -1791,7 +1789,7 @@ impl VceRuntimeManager {
         let _persistence = job.persistence_gate.lock().await;
         let current = job
             .store
-            .get_after_transport_retry(&job.job_id)
+            .get_after_storage_retry(&job.job_id)
             .await?
             .ok_or_else(|| String::from("VCE recovery job receipt does not exist"))?;
         if current.state.is_terminal() {
@@ -1808,9 +1806,9 @@ impl VceRuntimeManager {
             return Ok(current);
         }
 
-        // Retry the exact successor built from authoritative controller facts before considering
+        // Retry the exact successor built from authoritative engine facts before considering
         // any generic settlement. Reconstructing this receipt would lose a completed physical round.
-        // 在考虑任何通用收敛前重试由权威控制器事实构建的精确后继。重新构造该回执会丢失已完成物理轮次。
+        // 在考虑任何通用收敛前重试由权威引擎事实构建的精确后继。重新构造该回执会丢失已完成物理轮次。
         let pending_terminal_receipt = job.pending_terminal_receipt.lock().await.clone();
         if let Some(candidate) = pending_terminal_receipt {
             let expected_sequence = current
@@ -1932,10 +1930,10 @@ impl VceRuntimeManager {
     ///
     /// `index` is the exact admitted storage target and `job` owns every lease. A recovered table
     /// with an operation identity is queried only; a pending table has provably never been submitted
-    /// because identity persistence precedes controller admission. Returns after terminal persistence
+    /// because identity persistence precedes engine admission. Returns after terminal persistence
     /// or an explicitly retained persistence error.
     /// `index` 是精确准入存储目标，`job` 持有全部租约。恢复后带操作身份的表仅执行查询；
-    /// 待处理表由于身份持久化先于控制器准入，可证明从未提交。终态持久化完成或明确保留持久化错误后返回。
+    /// 待处理表由于身份持久化先于引擎准入，可证明从未提交。终态持久化完成或明确保留持久化错误后返回。
     async fn run_physical_compaction_job(&self, index: VceProjectIndex, job: Arc<VceManagedJob>) {
         let outcome = AssertUnwindSafe(self.execute_physical_compaction_job(&index, &job))
             .catch_unwind()
@@ -1974,9 +1972,9 @@ impl VceRuntimeManager {
         index: &VceProjectIndex,
         job: &Arc<VceManagedJob>,
     ) -> VceCompactionJobOutcome {
-        // A recovered cancellation must still reach an already-admitted controller operation;
+        // A recovered cancellation must still reach an already-admitted storage operation;
         // a pending host-only job can finish immediately without creating physical work.
-        // 恢复后的取消仍必须送达已经准入的控制器操作；仅在宿主中待处理的作业可直接结束，
+        // 恢复后的取消仍必须送达已经准入的存储操作；仅在宿主中待处理的作业可直接结束，
         // 且不会创建物理工作。
         let has_admitted_operation = compaction_has_admitted_operation(job).await;
         if job.control.check().is_err() && !has_admitted_operation {
@@ -2046,9 +2044,9 @@ impl VceRuntimeManager {
                     | VceCompactionTableState::Queued
                     | VceCompactionTableState::Running => {}
                 }
-                // Cancellation before controller admission settles every remaining pending table;
+                // Cancellation before engine admission settles every remaining pending table;
                 // queued or running operations continue below so cancellation reaches their owner.
-                // 控制器准入前的取消会确定全部剩余待处理表；排队或运行中的操作继续向下执行，
+                // 引擎准入前的取消会确定全部剩余待处理表；排队或运行中的操作继续向下执行，
                 // 使取消请求能够送达其所有者。
                 if job.control.check().is_err() && table.state == VceCompactionTableState::Pending {
                     return VceCompactionJobOutcome::Cancelled;
@@ -2249,7 +2247,7 @@ impl VceRuntimeManager {
                             },
                             None => {
                                 let error = String::from(
-                                    "VCE controller omitted pre-compaction statistics",
+                                    "VCE storage engine omitted pre-compaction statistics",
                                 );
                                 return VceCompactionJobOutcome::FailedWithTableUpdate {
                                     table_update: compaction_table_terminal_update(
@@ -2282,7 +2280,7 @@ impl VceRuntimeManager {
                             },
                             None => {
                                 let error = String::from(
-                                    "VCE controller omitted post-compaction statistics",
+                                    "VCE storage engine omitted post-compaction statistics",
                                 );
                                 return VceCompactionJobOutcome::FailedWithTableUpdate {
                                     table_update: compaction_table_terminal_update(
@@ -2296,7 +2294,8 @@ impl VceRuntimeManager {
                             }
                         };
                         let Some(metrics) = operation.metrics else {
-                            let error = String::from("VCE controller omitted compaction metrics");
+                            let error =
+                                String::from("VCE storage engine omitted compaction metrics");
                             return VceCompactionJobOutcome::FailedWithTableUpdate {
                                 table_update: compaction_table_terminal_update(
                                     table_index,
@@ -2456,8 +2455,8 @@ impl VceRuntimeManager {
         }
     }
 
-    /// Poll one controller operation while forwarding cancellation at its real safe boundary.
-    /// 轮询一项控制器操作，同时在其真实安全边界转发取消请求。
+    /// Poll one storage operation while forwarding cancellation at its real safe boundary.
+    /// 轮询一项存储操作，同时在其真实安全边界转发取消请求。
     async fn wait_physical_compaction_operation(
         &self,
         index: &VceProjectIndex,
@@ -2465,7 +2464,7 @@ impl VceRuntimeManager {
         table_index: usize,
         table_count: usize,
         role: VcePhysicalTableRole,
-        mut operation: ControllerLanceDbCompactionOperation,
+        mut operation: VcePhysicalCompactionOperation,
     ) -> VceCompactionStepOutcome {
         let mut cancellation_forwarded = false;
         // Observation persistence is advisory after the operation identity has been durably admitted.
@@ -2493,28 +2492,28 @@ impl VceRuntimeManager {
                     }
                 }
                 // A successful query does not acknowledge a failed cancellation RPC. Keep retrying
-                // until the controller reports the durable flag or the operation has already settled.
-                // 查询成功并不能确认失败的取消 RPC 已送达。仅当控制器报告持久取消标记，或操作已经
+                // until the engine reports the durable flag or the operation has already settled.
+                // 查询成功并不能确认失败的取消请求已送达。仅当引擎报告持久取消标记，或操作已经
                 // 进入终态时，才停止后续取消重试。
                 cancellation_forwarded = compaction_cancellation_acknowledged(&operation);
             }
             let table_state = match operation.state {
-                ControllerLanceDbCompactionState::Queued => VceCompactionTableState::Queued,
-                ControllerLanceDbCompactionState::Running => VceCompactionTableState::Running,
-                ControllerLanceDbCompactionState::Succeeded => {
+                VcePhysicalCompactionState::Queued => VceCompactionTableState::Queued,
+                VcePhysicalCompactionState::Running => VceCompactionTableState::Running,
+                VcePhysicalCompactionState::Succeeded => {
                     return VceCompactionStepOutcome::Succeeded(Box::new(operation));
                 }
-                ControllerLanceDbCompactionState::Failed => {
+                VcePhysicalCompactionState::Failed => {
                     return VceCompactionStepOutcome::Failed(
                         operation.error.unwrap_or(operation.message),
                     );
                 }
-                ControllerLanceDbCompactionState::Cancelled => {
+                VcePhysicalCompactionState::Cancelled => {
                     return VceCompactionStepOutcome::Cancelled;
                 }
-                ControllerLanceDbCompactionState::Unspecified => {
+                VcePhysicalCompactionState::Unspecified => {
                     return VceCompactionStepOutcome::StateLost(String::from(
-                        "VCE controller returned an unspecified compaction state",
+                        "VCE storage engine returned an unspecified compaction state",
                     ));
                 }
             };
@@ -2537,12 +2536,12 @@ impl VceRuntimeManager {
                 })
                 .await
             {
-                // The durable receipt already contains the stable controller operation ID. Abandoning
-                // polling here would release host ownership while the controller may still be mutating
+                // The durable receipt already contains the stable storage-operation ID. Abandoning
+                // polling here would release host ownership while the engine may still be mutating
                 // the table. Continue querying the same operation and let its authoritative terminal
                 // result share the final compare-and-swap; a terminal persistence failure keeps the
                 // project lease and exact recovery candidate instead of creating an orphan operation.
-                // 持久回执已经保存稳定控制器操作 ID。此处放弃轮询会在控制器仍可能修改表时释放宿主
+                // 持久回执已经保存稳定存储操作 ID。此处放弃轮询会在引擎仍可能修改表时释放宿主
                 // 所有权。继续查询同一操作，并让权威终态结果进入最终比较交换；若终态持久化失败，
                 // 则继续保留项目租约和精确恢复候选，而不是产生孤儿操作。
                 if !observation_persistence_failure_logged {
@@ -2607,7 +2606,7 @@ impl VceRuntimeManager {
     }
 
     /// Run coalesced batches serially under one durable job, renewing one-shot controls between batches.
-    /// 在一个持久作业内串行运行合并批次，在批次之间更新一次性控制器。
+    /// 在一个持久作业内串行运行合并批次，在批次之间更新一次性控制信号。
     /// `runtime` owns the writer lease, `job` owns the receipt, and `work` is the initial source scope.
     /// `runtime` 持有写入租约，`job` 持有回执，`work` 为初始源码范围。
     /// Returns after a terminal acknowledgement or an explicitly retained persistence failure.
@@ -3318,9 +3317,9 @@ async fn validate_rebuild_confirmation(
 /// 校验仅供物理整理准入使用的有界人为命令结构。
 ///
 /// `command` supplies the exact observed project state and `action_ids` supplies the confirmed
-/// table actions. Returns an explicit error before any storage lease or controller request.
+/// table actions. Returns an explicit error before any storage lease or engine request.
 /// `command` 提供精确观察到的项目状态，`action_ids` 提供已确认表操作。
-/// 在取得任何存储租约或发送控制器请求前返回明确错误。
+/// 在取得任何存储租约或发送引擎请求前返回明确错误。
 fn validate_compaction_command(
     command: &VceJobAdmission,
     action_ids: &BTreeSet<String>,
@@ -3405,8 +3404,8 @@ fn compaction_request_fingerprint(
     Ok(hex::encode(Sha256::digest(identity)))
 }
 
-/// Determine whether a durable receipt already owns a queryable controller operation.
-/// 判断持久回执是否已经持有可查询的控制器操作。
+/// Determine whether a durable receipt already owns a queryable storage operation.
+/// 判断持久回执是否已经持有可查询的存储操作。
 ///
 /// `job` supplies the acknowledged receipt. Returns true only for a queued or running table with
 /// both stable operation identity and expected physical version.
@@ -3428,8 +3427,8 @@ async fn compaction_has_admitted_operation(job: &VceManagedJob) -> bool {
         })
 }
 
-/// Clone one table receipt without retaining the job receipt lock across controller I/O.
-/// 克隆一份表回执，避免在控制器输入输出期间持续持有作业回执锁。
+/// Clone one table receipt without retaining the job receipt lock across engine I/O.
+/// 克隆一份表回执，避免在引擎输入输出期间持续持有作业回执锁。
 ///
 /// `job` owns the acknowledged snapshot and `table_index` selects its deterministic table slot.
 /// Returns absence only when the durable compaction payload or slot is missing.
@@ -3475,8 +3474,8 @@ fn compaction_table_terminal_update(
     })
 }
 
-/// Freeze one completed controller round together with its authoritative statistics and metrics.
-/// 将一轮已完成控制器操作与其权威统计及指标一并冻结。
+/// Freeze one completed storage round together with its authoritative statistics and metrics.
+/// 将一轮已完成存储操作与其权威统计及指标一并冻结。
 ///
 /// `table_index` and `table` identify the admitted operation; `latest_statistics` and `metrics`
 /// are already validated cumulative facts. `state` and `error` describe the terminal host decision.
@@ -3500,9 +3499,9 @@ fn completed_compaction_table_terminal_update(
 /// Merge one retained table update only into its exact frozen slot and operation identity.
 /// 仅将一份保留的表更新合并进其精确冻结槽位及操作身份。
 ///
-/// `receipt` is the proposed durable successor and `update` contains controller-authoritative facts.
+/// `receipt` is the proposed durable successor and `update` contains engine-authoritative facts.
 /// Returns an explicit error rather than applying a result to a changed plan or operation.
-/// `receipt` 是拟议持久后继，`update` 包含控制器权威事实。计划或操作已经变化时返回明确错误，
+/// `receipt` 是拟议持久后继，`update` 包含引擎权威事实。计划或操作已经变化时返回明确错误，
 /// 绝不把结果应用到错误目标。
 fn apply_compaction_table_terminal_update(
     receipt: &mut VceStoredJob,
@@ -3533,9 +3532,9 @@ fn apply_compaction_table_terminal_update(
 /// Apply a physical compaction outcome as one complete terminal receipt transition.
 /// 将物理整理结果作为一次完整终态回执转换应用。
 ///
-/// `receipt` is cloned from the latest acknowledged state and `outcome` may carry one controller
+/// `receipt` is cloned from the latest acknowledged state and `outcome` may carry one engine
 /// result not yet persisted. Returns only after every selected table has a truthful terminal state.
-/// `receipt` 从最近确认状态克隆，`outcome` 可携带一份尚未持久化的控制器结果。
+/// `receipt` 从最近确认状态克隆，`outcome` 可携带一份尚未持久化的引擎结果。
 /// 仅当每张已选表均具有真实终态后返回。
 fn apply_physical_compaction_terminal_outcome(
     receipt: &mut VceStoredJob,
@@ -3688,9 +3687,9 @@ fn compaction_progress(
 /// Identify submit failures whose server-side admission may have succeeded before reply loss.
 /// 识别服务端可能已准入、但回复丢失的提交失败。
 ///
-/// `error` is the controller error projected through the data plane. Returns true only for the
-/// typed controller transport prefix rather than interpreting domain validation failures.
-/// `error` 是经数据面投影的控制器错误。仅对类型化控制器传输前缀返回真，
+/// `error` is the engine error projected through the data plane. Returns true only for the
+/// typed uncertain-admission prefix rather than interpreting domain validation failures.
+/// `error` 是经数据面投影的引擎错误。仅对类型化不确定准入前缀返回真，
 /// 不会把领域校验失败解释为不确定结果。
 fn is_uncertain_compaction_error(error: &str) -> bool {
     error
@@ -3699,14 +3698,14 @@ fn is_uncertain_compaction_error(error: &str) -> bool {
         .starts_with("transport error:")
 }
 
-/// Report whether the controller has durably acknowledged cancellation or already settled the work.
-/// 判断控制器是否已持久确认取消，或相关工作是否已经进入终态。
-fn compaction_cancellation_acknowledged(operation: &ControllerLanceDbCompactionOperation) -> bool {
+/// Report whether the engine has durably acknowledged cancellation or already settled the work.
+/// 判断引擎是否已持久确认取消，或相关工作是否已经进入终态。
+fn compaction_cancellation_acknowledged(operation: &VcePhysicalCompactionOperation) -> bool {
     operation.cancel_requested || operation.state.is_terminal()
 }
 
-/// Add one acknowledged controller round to cumulative metrics with overflow checks.
-/// 通过溢出检查将一轮已确认控制器结果加入累计指标。
+/// Add one acknowledged storage round to cumulative metrics with overflow checks.
+/// 通过溢出检查将一轮已确认存储结果加入累计指标。
 ///
 /// `current` is the prior durable total and the remaining values are the new round metrics.
 /// Returns the exact accumulated metrics or an explicit integer-overflow error.
@@ -3742,10 +3741,10 @@ fn accumulate_compaction_metrics(
 /// Validate that one native compaction round preserves logical table contents and exact admission facts.
 /// 校验一轮原生整理会保留逻辑表内容及精确准入事实。
 ///
-/// `admitted` is the latest durable snapshot, `expected_version` is the frozen controller guard,
+/// `admitted` is the latest durable snapshot, `expected_version` is the frozen engine guard,
 /// `before` and `after` are untrusted operation boundaries, and fragment metrics describe the
 /// physical rewrite. Returns success only for one internally consistent, data-preserving transition.
-/// `admitted` 是最近的持久快照，`expected_version` 是冻结的控制器保护值，`before` 与 `after`
+/// `admitted` 是最近的持久快照，`expected_version` 是冻结的引擎保护值，`before` 与 `after`
 /// 是不受信任的操作边界，片段指标描述物理改写。仅对内部一致且保留数据的转换返回成功。
 fn validate_compaction_statistics_transition(
     admitted: &VcePhysicalTableStatistics,
@@ -3942,8 +3941,8 @@ mod tests {
         }
     }
 
-    /// Reject controller success projections that alter logical contents or contradict rewrite metrics.
-    /// 拒绝会改变逻辑内容或与改写指标矛盾的控制器成功投影。
+    /// Reject engine success projections that alter logical contents or contradict rewrite metrics.
+    /// 拒绝会改变逻辑内容或与改写指标矛盾的引擎成功投影。
     #[test]
     fn compaction_transition_requires_data_preservation_and_exact_metrics() {
         let admitted = compaction_statistics_fixture(9, 32, 2, 8);
@@ -3976,28 +3975,16 @@ mod tests {
         );
     }
 
-    /// Resolve the explicitly built test controller, falling back to the packaged debug binary.
-    /// 解析显式构建的测试控制器；未指定时回退到打包的调试二进制。
-    fn test_controller_executable() -> std::path::PathBuf {
-        std::env::var_os("VLDB_CONTROLLER_TEST_EXECUTABLE")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../..")
-                    .join("output/bin/vldb-controller.exe")
-            })
-    }
-
     /// Verify a successful lookup cannot masquerade as cancellation acknowledgement.
     /// 验证一次成功查询不能冒充取消确认。
     #[test]
     fn cancellation_acknowledgement_requires_flag_or_terminal_state() {
-        // operation starts as an unacknowledged controller-owned running step.
-        // operation 初始表示一项尚未确认取消、由控制器持有的运行中步骤。
-        let mut operation = ControllerLanceDbCompactionOperation {
+        // operation starts as an unacknowledged engine-owned running step.
+        // operation 初始表示一项尚未确认取消、由引擎持有的运行中步骤。
+        let mut operation = VcePhysicalCompactionOperation {
             operation_id: String::from("compact-content-round-1"),
             table_name: String::from("content"),
-            state: ControllerLanceDbCompactionState::Running,
+            state: VcePhysicalCompactionState::Running,
             cancel_requested: false,
             message: String::from("running"),
             error: None,
@@ -4013,12 +4000,12 @@ mod tests {
         operation.cancel_requested = true;
         assert!(compaction_cancellation_acknowledged(&operation));
         operation.cancel_requested = false;
-        operation.state = ControllerLanceDbCompactionState::Succeeded;
+        operation.state = VcePhysicalCompactionState::Succeeded;
         assert!(compaction_cancellation_acknowledged(&operation));
     }
 
-    /// Verify cancellation wakes host-only work but cannot release an admitted controller operation.
-    /// 验证取消会唤醒仅在宿主排队的工作，但不能释放已准入的控制器操作。
+    /// Verify cancellation wakes host-only work but cannot release an admitted storage operation.
+    /// 验证取消会唤醒仅在宿主排队的工作，但不能释放已准入的存储操作。
     #[tokio::test]
     async fn admitted_compaction_cancellation_retains_the_writer_budget_wait() {
         let writer_budget = Arc::new(tokio::sync::Semaphore::new(1));
@@ -4065,9 +4052,9 @@ mod tests {
     ///
     /// `index` is an isolated writable fixture, `label` separates attempts, and the numeric range
     /// creates unique canonical Blobs. The function returns only after every physical write is
-    /// acknowledged by the real controller.
+    /// acknowledged by the real in-process engine.
     /// `index` 是隔离的可写夹具，`label` 区分不同尝试，数字范围用于创建唯一规范 Blob。
-    /// 该函数仅在真实控制器确认全部物理写入后返回。
+    /// 该函数仅在真实进程内引擎确认全部物理写入后返回。
     async fn stage_real_compaction_fragments(
         index: &VceProjectIndex,
         label: &str,
@@ -4125,13 +4112,13 @@ mod tests {
         }
     }
 
-    /// Wait until a host compaction receipt durably records one controller-owned operation.
-    /// 等待宿主整理回执持久记录一项由控制器持有的操作。
+    /// Wait until a host compaction receipt durably records one engine-owned operation.
+    /// 等待宿主整理回执持久记录一项由引擎持有的操作。
     ///
     /// `manager`, `project_id`, and `job_id` identify the exact fixture job; `index` queries the
-    /// matching controller binding. Returns the table role and stable operation identity only
+    /// matching storage binding. Returns the table role and stable operation identity only
     /// after both durable owners acknowledge it.
-    /// `manager`、`project_id` 与 `job_id` 标识精确夹具作业；`index` 查询匹配的控制器绑定。
+    /// `manager`、`project_id` 与 `job_id` 标识精确夹具作业；`index` 查询匹配的存储绑定。
     /// 仅在两个持久所有者均确认后返回表角色与稳定操作身份。
     async fn await_admitted_compaction_operation(
         manager: &VceRuntimeManager,
@@ -4160,9 +4147,9 @@ mod tests {
                     })
                 }) {
                     // The host records the stable identity before submission so an uncertain reply
-                    // can be queried safely. Wait for controller acknowledgement before injecting
+                    // can be queried safely. Wait for engine acknowledgement before injecting
                     // host loss; an absent operation at that earlier boundary is a different fault.
-                    // 宿主在提交前记录稳定身份，以便安全查询不确定响应。注入宿主丢失前等待控制器确认；
+                    // 宿主在提交前记录稳定身份，以便安全查询不确定响应。注入宿主丢失前等待引擎确认；
                     // 更早边界上的操作缺失属于另一种故障。
                     if index
                         .physical_compaction_operation(role, &operation_id)
@@ -4176,15 +4163,15 @@ mod tests {
             }
         })
         .await
-        .expect("controller operation must be durably admitted before deadline")
+        .expect("storage operation must be durably admitted before deadline")
     }
 
     /// Drop only the fixture host worker and its in-memory owner while preserving durable state.
     /// 仅丢弃夹具宿主工作任务及其内存所有者，同时保留持久状态。
     ///
     /// `state` is the exact project job slot. The function returns after the task and writer lease
-    /// are gone, reproducing a host restart without stopping the external controller.
-    /// `state` 是精确项目作业槽位。该函数在任务与写入租约释放后返回，以复现不停止外部控制器的宿主重启。
+    /// are gone, reproducing a host restart while preserving in-process durable state.
+    /// `state` 是精确项目作业槽位。该函数在任务与写入租约释放后返回，以复现保留进程内持久状态的宿主重启。
     async fn abandon_fixture_host_worker(state: &Arc<VceProjectJobState>) {
         let worker = state
             .worker_handle
@@ -4208,75 +4195,29 @@ mod tests {
         drop(active);
     }
 
-    /// Verify real physical compaction recovery and explicit controller-state loss end to end.
-    /// 端到端验证真实物理整理恢复及明确的控制器状态丢失。
+    /// Verify real physical compaction recovery and explicit operation-state loss end to end.
+    /// 端到端验证真实物理整理恢复及明确的操作状态丢失。
     ///
     /// `executor` owns all fixture workers. Every database and vector table lives under one
     /// temporary directory; no user project, provider, or billed inference request is involved.
     /// `executor` 持有全部夹具任务。所有数据库与向量表均位于同一临时目录，不涉及用户项目、供应商或计费推理请求。
     async fn verify_real_compaction_host_recovery(executor: Arc<tokio::runtime::Runtime>) {
-        use vldb_controller_client::{
-            ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-        };
         use vulcan_ai_contract::test_support::MockHostAiPort;
-        use vulcan_workspace_store::data_plane::{
-            ControllerRuntimeHandle, ControllerRuntimeMetadata,
-        };
+        use vulcan_workspace_store::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 
         let temporary = tempfile::tempdir().expect("create isolated compaction fixture");
         let project_root = temporary.path().join("source");
         let data_root = temporary.path().join("data");
         std::fs::create_dir_all(&project_root).expect("create compaction source root");
         std::fs::create_dir_all(&data_root).expect("create compaction data root");
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve compaction endpoint");
-        let port = listener
-            .local_addr()
-            .expect("read compaction controller port")
-            .port();
-        drop(listener);
-        let executable = test_controller_executable();
-        assert!(executable.is_file(), "test controller must exist");
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            ClientRegistration {
-                client_name: format!("vce-compaction-recovery-{}", Uuid::new_v4()),
-                host_kind: String::from("test"),
-                process_id: std::process::id(),
-                process_name: String::from("vce-compaction-recovery-test"),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client
-            .connect()
-            .await
-            .expect("connect isolated compaction controller");
-        let controller = ControllerRuntimeHandle::new(
-            client.clone(),
-            ControllerRuntimeMetadata {
-                endpoint,
-                executable: executable.display().to_string(),
-                data_root: data_root.clone(),
-                sqlite_path: data_root.join("unused.sqlite3"),
-                sqlite_binding_id: Uuid::new_v4().to_string(),
-                system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
-                system_statistics_sqlite_binding_id: Uuid::new_v4().to_string(),
-            },
-        );
-        let factory = VceDataPlaneFactory::bootstrap(&controller)
+        let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: data_root.clone(),
+            sqlite_path: data_root.join("unused.sqlite3"),
+            sqlite_binding_id: Uuid::new_v4().to_string(),
+            system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
+            system_statistics_sqlite_binding_id: Uuid::new_v4().to_string(),
+        });
+        let factory = VceDataPlaneFactory::bootstrap(&host_runtime)
             .await
             .expect("bootstrap compaction fixture storage");
         let capabilities = job_test_capabilities();
@@ -4457,9 +4398,9 @@ mod tests {
             assert!(table.metrics.fragments_removed > 0);
         }
 
-        // A second fragmented layout supplies an unfinished receipt whose controller operation is
-        // deliberately absent, reproducing controller restart state loss without killing a process.
-        // 第二组碎片布局提供控制器操作被刻意移除的未完成回执，在不终止进程的情况下复现控制器重启状态丢失。
+        // A second fragmented layout supplies an unfinished receipt whose storage operation is
+        // deliberately absent, reproducing runtime-restart state loss without killing a process.
+        // 第二组碎片布局提供存储操作被刻意移除的未完成回执，在不终止进程的情况下复现运行时重启状态丢失。
         stage_real_compaction_fragments(&runtime.index, "state_lost", 100, 8, 3).await;
         let target = manager
             .stored_maintenance_target(
@@ -4495,7 +4436,7 @@ mod tests {
                 &executor,
             )
             .await
-            .expect("queue controller state-loss fixture");
+            .expect("queue storage state-loss fixture");
         assert_eq!(queued.state, VceJobState::Queued);
         let state = manager.project_job_state("compaction-project").await;
         let active = state
@@ -4511,7 +4452,7 @@ mod tests {
         admitted.updated_at_unix_ms = job_time()
             .expect("read state-loss fixture time")
             .max(admitted.updated_at_unix_ms);
-        let fake_operation_id = format!("{}:lost-controller-operation", admitted.job_id);
+        let fake_operation_id = format!("{}:lost-storage-operation", admitted.job_id);
         let table_count = admitted
             .compaction
             .as_ref()
@@ -4541,7 +4482,7 @@ mod tests {
         let admitted = store
             .update(&queued, &admitted)
             .await
-            .expect("persist missing controller operation admission");
+            .expect("persist missing storage operation admission");
         let mut running = admitted.clone();
         running.sequence += 1;
         running.updated_at_unix_ms = job_time()
@@ -4561,7 +4502,7 @@ mod tests {
         store
             .update(&admitted, &running)
             .await
-            .expect("persist running but missing controller operation");
+            .expect("persist running but missing storage operation");
         abandon_fixture_host_worker(&state).await;
         drop(active);
         drop(budget);
@@ -4569,7 +4510,7 @@ mod tests {
         manager
             .get_job("compaction-project", Some(&queued.job_id))
             .await
-            .expect("reattach missing controller operation")
+            .expect("reattach missing storage operation")
             .expect("state-loss receipt exists");
         let interrupted = await_test_job(&manager, "compaction-project", &queued.job_id).await;
         assert_eq!(interrupted.state, VceJobState::Interrupted);
@@ -4660,11 +4601,11 @@ mod tests {
         assert!(recovered.error.is_none());
         assert!(state.active.lock().await.is_none());
 
-        // The controller contract returns a queued snapshot immediately after admission. Reject every
+        // The engine contract returns a queued snapshot immediately after admission. Reject every
         // subsequent non-terminal observation update and prove the host still polls the same durable
-        // operation to its authoritative terminal result instead of orphaning controller work.
-        // 控制器合约在准入后立即返回排队快照。拒绝后续每次非终态观察更新，并证明宿主仍会轮询同一
-        // 持久操作直至权威终态，而不是遗弃控制器工作。
+        // operation to its authoritative terminal result instead of orphaning storage work.
+        // 引擎合约在准入后立即返回排队快照。拒绝后续每次非终态观察更新，并证明宿主仍会轮询同一
+        // 持久操作直至权威终态，而不是遗弃存储工作。
         stage_real_compaction_fragments(&runtime.index, "observation_failure", 250, 8, 5).await;
         let target = manager
             .stored_maintenance_target(
@@ -4729,12 +4670,27 @@ mod tests {
             await_test_job(&manager, "compaction-project", &observation_recovery.job_id).await;
         assert_eq!(observation_recovered.state, VceJobState::Succeeded);
         assert!(observation_recovered.error.is_none());
-        assert!(
+        // The armed trigger above rejects every non-terminal observation update, and this asserts that it never
+        // fired. That is the correct expectation for an in-process engine, not a weakened one:
+        //
+        // The in-process engine answered `submit` with a queued snapshot and the host then polled it, which is
+        // the only window in which an advisory observation receipt is ever written. The in-process step is
+        // synchronous, so `submit` returns an authoritative terminal result directly and no polling window
+        // exists — there is no storage work that a failed observation could orphan. Keeping the trigger
+        // armed turns this into a guard: if any future change reintroduces advisory observation writes, the
+        // trigger aborts them and this assertion fails.
+        //
+        // 上方已武装的触发器会拒绝每次非终态观察更新，而本断言要求它从未触发。对进程内引擎而言这是正确的期望，
+        // 而不是被削弱的期望：进程内引擎对 `submit` 回答排队快照、宿主随后轮询它，那是唯一会写入"观察回执"的
+        // 窗口。进程内步骤是同步的，故 `submit` 直接返回权威终态，不存在轮询窗口——也就没有"失败的观察会使其
+        // 成为孤儿"的存储工作。保持触发器武装使本断言成为护栏：若将来有任何改动重新引入观察写入，触发器会
+        // 中止它们并使本断言失败。
+        assert_eq!(
             observation_active
                 .compaction_observation_persistence_failures
-                .load(std::sync::atomic::Ordering::SeqCst)
-                > 0,
-            "fixture must reject at least one advisory observation receipt"
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a synchronous in-process step must never attempt an advisory observation receipt"
         );
         observation_active
             .store
@@ -4865,20 +4821,15 @@ mod tests {
             .shutdown()
             .await
             .expect("close compaction fixture bindings");
-        client
-            .shutdown()
-            .await
-            .expect("stop isolated compaction controller");
     }
 
-    /// Exercise host reattachment and controller state-loss handling through real temporary storage.
-    /// 通过真实临时存储验证宿主重新附着与控制器状态丢失处理。
+    /// Exercise host reattachment and operation state-loss handling through real temporary storage.
+    /// 通过真实临时存储验证宿主重新附着与操作状态丢失处理。
     ///
     /// Takes no parameters and uses an isolated production-sized runtime stack.
     /// 无参数，并使用隔离且与生产规模相当的运行时栈。
     #[test]
-    #[ignore = "requires a vldb-controller 0.2.4 test executable"]
-    fn real_controller_compaction_recovers_without_duplicate_submission() {
+    fn in_process_compaction_recovers_without_duplicate_submission() {
         let executor = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -5239,15 +5190,11 @@ mod tests {
     /// Takes no parameters. Uses isolated temporary storage and a local mock AI with no billed calls.
     /// 无参数。使用独立临时存储与无计费请求的本地模拟人工智能。
     #[test]
-    #[ignore = "requires the bundled local VLDB controller executable"]
     #[rustfmt::skip]
-    fn real_controller_human_jobs_are_durable_cancellable_and_nonblocking() {
-        use vldb_controller_client::{
-            ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-        };
+    fn real_host_storage_human_jobs_are_durable_cancellable_and_nonblocking() {
         use vulcan_ai_contract::test_support::MockHostAiPort;
         use vulcan_workspace_store::data_plane::{
-            ControllerRuntimeHandle, ControllerRuntimeMetadata,
+            HostRuntimeHandle, HostRuntimeMetadata,
         };
         let executor = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -5269,41 +5216,8 @@ mod tests {
             let data_root = temporary.path().join("data");
             std::fs::create_dir_all(&project_root).expect("create empty source root");
             std::fs::create_dir_all(&data_root).expect("create host data root");
-            let listener =
-                std::net::TcpListener::bind("127.0.0.1:0").expect("reserve controller endpoint");
-            let port = listener.local_addr().expect("read controller port").port();
-            drop(listener);
-            let executable = test_controller_executable();
-            assert!(executable.is_file(), "bundled controller must exist");
-            let endpoint = format!("http://127.0.0.1:{port}");
-            let client = ControllerClient::new(
-                ControllerClientConfig {
-                    endpoint: endpoint.clone(),
-                    auto_spawn: true,
-                    spawn_executable: Some(executable.display().to_string()),
-                    spawn_process_mode: ControllerProcessMode::Managed,
-                    minimum_uptime_secs: 0,
-                    idle_timeout_secs: 1,
-                    default_lease_ttl_secs: 30,
-                    connect_timeout_secs: 30,
-                    startup_timeout_secs: 15,
-                    startup_retry_interval_ms: 100,
-                    lease_renew_interval_secs: 10,
-                },
-                ClientRegistration {
-                    client_name: format!("vce-job-test-{}", Uuid::new_v4()),
-                    host_kind: String::from("test"),
-                    process_id: std::process::id(),
-                    process_name: String::from("vce-job-test"),
-                    lease_ttl_secs: Some(30),
-                },
-            );
-            client.connect().await.expect("connect isolated controller");
-            let controller = ControllerRuntimeHandle::new(
-                client.clone(),
-                ControllerRuntimeMetadata {
-                    endpoint,
-                    executable: executable.display().to_string(),
+            let host_runtime = HostRuntimeHandle::new_for_test(
+                HostRuntimeMetadata {
                     data_root: data_root.clone(),
                     sqlite_path: data_root.join("unused.sqlite3"),
                     sqlite_binding_id: Uuid::new_v4().to_string(),
@@ -5311,7 +5225,7 @@ mod tests {
                     system_statistics_sqlite_binding_id: Uuid::new_v4().to_string(),
                 },
             );
-            let factory = VceDataPlaneFactory::bootstrap(&controller)
+            let factory = VceDataPlaneFactory::bootstrap(&host_runtime)
                 .await
                 .expect("bootstrap lazy job storage");
             let capabilities = job_test_capabilities();
@@ -5515,7 +5429,7 @@ mod tests {
                 Some("fixture receipt failure")
             );
             // Cancellation must recover a finished owner instead of sending a no-op signal to its finished control.
-            // 取消必须恢复已结束的所有者，而不是向已结束的控制器发送无效信号。
+            // 取消必须恢复已结束的所有者，而不是向已结束的引擎操作发送无效信号。
             let recovered_cancelled = manager
                 .cancel_job("job-project", &queued.job_id)
                 .await
@@ -6612,7 +6526,6 @@ mod tests {
                 .shutdown()
                 .await
                 .expect("close exact fixture bindings");
-            client.shutdown().await.expect("stop isolated controller");
                 })
             })
             .expect("spawn isolated job fixture thread")

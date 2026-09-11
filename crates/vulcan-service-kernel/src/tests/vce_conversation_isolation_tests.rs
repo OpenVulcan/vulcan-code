@@ -96,8 +96,8 @@ pub(crate) async fn verify_stop_and_index_cancellation(
 ) {
     // The fixture owns its controller and session files, independently of all user data and the VCE storage.
     // 夹具持有独立控制器与会话文件，与全部用户数据和 VCE 存储分离。
-    let fixture = TestControllerRuntimeRoot::new(SessionId::new_v4());
-    let (client, controller) = fixture.attached_controller_runtime_handle().await;
+    let fixture = TestHostRuntimeRoot::new(SessionId::new_v4());
+    let controller = fixture.attached_host_runtime_handle().await;
     let session_id = SessionId::new_v4();
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
@@ -243,10 +243,6 @@ pub(crate) async fn verify_stop_and_index_cancellation(
         let _ = task.abort_and_wait().await;
     }
     drop(state);
-    client
-        .shutdown()
-        .await
-        .expect("release isolated conversation controller");
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

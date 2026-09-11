@@ -46,6 +46,8 @@ members = [
     "crates/vulcan-provider-adapters",
     "crates/vulcan-hello",
     "crates/vulcan-provider-manifest-cli",
+    "crates/vulcan-sqlite-engine",
+    "crates/vulcan-lancedb-engine",
     "workspace-hack",
 ]
 exclude = [
@@ -103,6 +105,21 @@ vulcan-memorymesh-core-engine = { path = "crates/vulcan-memorymesh-core-engine" 
 vulcan-memorymesh-core = { path = "crates/vulcan-memorymesh-core" }
 vulcan-llm-core = { path = "crates/vulcan-llm-core" }
 vulcan-provider-adapters = { path = "crates/vulcan-provider-adapters" }
+# In-process database engines migrated from vldb-sqlite and vldb-lancedb.
+# 从 vldb-sqlite 与 vldb-lancedb 迁入的进程内数据库引擎。
+vulcan-sqlite-engine = { path = "crates/vulcan-sqlite-engine" }
+vulcan-lancedb-engine = { path = "crates/vulcan-lancedb-engine" }
+# Unified database dependency generation. These are declared once here; the two engine crates
+# inherit them and must not pin an alternative version locally.
+# 统一数据库依赖代际：只在此声明一次，两个引擎 crate 继承声明，不得自行固定其他版本。
+arrow = { version = "58.1.0", features = ["ipc"] }
+arrow-array = "58.1.0"
+arrow-ipc = "58.1.0"
+arrow-schema = "58.1.0"
+fs4 = "1.1.0"
+jieba-rs = "0.10.3"
+lancedb = { version = "0.38.0", features = ["remote"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype", "pointer"] }
 async-stream = "0.3.6"
 async-trait = "0.1.92"
 axum = "0.8.9"
@@ -171,7 +188,6 @@ tower = "0.5.3"
 tower-http = "0.7.0"
 tracing = "0.1.44"
 uuid = { version = "1.24.1", features = ["v4", "serde"] }
-vldb-controller-client = { version = "0.2.4", path = "../../projects/vldb-controller/client" }
 vt100 = "0.16.2"
 windows-sys = "0.61.2"
 xz2 = { version = "0.1.7", features = ["static"] }

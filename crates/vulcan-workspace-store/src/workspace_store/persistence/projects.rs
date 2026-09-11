@@ -5,8 +5,8 @@ use super::*;
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Controller runtime owning the application SQLite binding.
-///   `controller`：持有应用 SQLite 绑定的 Controller 运行时。
+/// - `host_runtime`: Host runtime owning the application SQLite binding.
+///   `host_runtime`：持有应用 SQLite 绑定的宿主运行时。
 /// - `project`: Complete active project projection to persist.
 ///   `project`：需要持久化的完整活动项目投影。
 ///
@@ -15,7 +15,7 @@ use super::*;
 /// Success after the project and its initial semantic settings commit together, or an explicit error.
 /// 项目及其初始语义设置共同提交后返回成功，否则返回显式错误。
 async fn upsert_active_project(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project: &TaskProjectSummary,
 ) -> Result<(), String> {
     // now is shared by created_at and updated_at for a newly inserted project row.
@@ -25,8 +25,8 @@ async fn upsert_active_project(
     // sort_order 使用受检查转换，避免项目顺序在宽 usize 宿主上发生截断。
     let sort_order = i64::try_from(project.order)
         .map_err(|_| String::from("写入活动项目失败：项目顺序超出 SQLite 整数范围。"))?;
-    // Validate and encode both rows before the controller can commit any project metadata.
-    // 在控制器可能提交任何项目元数据之前，完成两条记录的校验和编码。
+    // Validate and encode both rows before the engine can commit any project metadata.
+    // 在宿主运行时可能提交任何项目元数据之前，完成两条记录的校验和编码。
     let vce_values = project_persistence_sql_values(&project_vce_settings_params(
         &project.id,
         &project.vce,
@@ -35,17 +35,17 @@ async fn upsert_active_project(
     // Preserve the existing typed field order, including SQL NULL for absent icon overrides.
     // 保持既有强类型字段顺序，包括缺失图标覆盖对应的 SQL NULL。
     let project_values = project_persistence_sql_values(&[
-        ControllerSqliteValue::String(project.id.clone()),
-        ControllerSqliteValue::String(project.title.clone()),
-        ControllerSqliteValue::String(project.path.clone()),
-        ControllerSqliteValue::Int64(i64::from(project.pinned)),
-        ControllerSqliteValue::Int64(0),
-        ControllerSqliteValue::Int64(sort_order),
+        SqliteValue::Text(project.id.clone()),
+        SqliteValue::Text(project.title.clone()),
+        SqliteValue::Text(project.path.clone()),
+        SqliteValue::Integer(i64::from(project.pinned)),
+        SqliteValue::Integer(0),
+        SqliteValue::Integer(sort_order),
         optional_sqlite_string(&project.icon_pack),
         optional_sqlite_string(&project.icon_key),
-        ControllerSqliteValue::Int64(i64::from(project.codebase_memory_enabled)),
-        ControllerSqliteValue::String(now.clone()),
-        ControllerSqliteValue::String(now),
+        SqliteValue::Integer(i64::from(project.codebase_memory_enabled)),
+        SqliteValue::Text(now.clone()),
+        SqliteValue::Text(now),
     ])?;
     // Client 0.2.3 binds parameters to one statement only; this script owns the entire transaction.
     // 客户端 0.2.3 仅向单条语句绑定参数；此脚本持有整个事务。
@@ -96,16 +96,14 @@ ON CONFLICT(project_id) DO NOTHING;
 COMMIT;
 "#,
     );
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            statement,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("写入活动项目及 VCE 设置事务失败：{error}"))?;
+    local_sql::execute_script_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        statement.as_str(),
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("写入活动项目及 VCE 设置事务失败：{error}"))?;
 
     Ok(())
 }
@@ -114,23 +112,21 @@ COMMIT;
 /// 编码项目及 VCE 参数构建器产生的精确标量子集。
 /// `parameters` contains ordered integers, text, or NULL; returns SQL values or an explicit type error.
 /// `parameters` 包含有序整数、文本或 NULL；返回 SQL 值，或明确的类型错误。
-fn project_persistence_sql_values(parameters: &[ControllerSqliteValue]) -> Result<String, String> {
+fn project_persistence_sql_values(parameters: &[SqliteValue]) -> Result<String, String> {
     parameters
         .iter()
         .map(|parameter| match parameter {
-            ControllerSqliteValue::Int64(value) => Ok(value.to_string()),
-            ControllerSqliteValue::Null => Ok(String::from("NULL")),
+            SqliteValue::Integer(value) => Ok(value.to_string()),
+            SqliteValue::Null => Ok(String::from("NULL")),
             // Escape quotes before introducing literal NUL concatenation; source text never becomes SQL syntax.
             // 先转义引号，再引入字面空字符拼接；源文本绝不成为 SQL 语法。
             // Preserve text as text regardless of the database encoding.
             // 无论数据库编码如何，都将文本保留为文本类型。
-            ControllerSqliteValue::String(value) => Ok(format!(
+            SqliteValue::Text(value) => Ok(format!(
                 "'{}'",
                 value.replace('\'', "''").replace('\0', "' || char(0) || '")
             )),
-            ControllerSqliteValue::Float64(_)
-            | ControllerSqliteValue::Bytes(_)
-            | ControllerSqliteValue::Bool(_) => {
+            SqliteValue::Real(_) | SqliteValue::Blob(_) => {
                 Err(String::from("项目持久化参数只能使用整数、文本或 NULL。"))
             }
         })
@@ -144,7 +140,7 @@ fn project_vce_settings_params(
     project_id: &str,
     settings: &ProjectVceSettings,
     updated_at: String,
-) -> Result<Vec<ControllerSqliteValue>, String> {
+) -> Result<Vec<SqliteValue>, String> {
     settings.validate()?;
     let revision = i64::try_from(settings.revision)
         .map_err(|_| String::from("VCE 设置修订号超出 SQLite 整数范围。"))?;
@@ -161,24 +157,24 @@ fn project_vce_settings_params(
     let ignore_patterns = serde_json::to_string(&settings.extra_ignore_patterns)
         .map_err(|error| format!("序列化 VCE 忽略规则失败：{error}"))?;
     Ok(vec![
-        ControllerSqliteValue::String(project_id.to_owned()),
-        ControllerSqliteValue::Int64(i64::from(settings.enabled)),
-        ControllerSqliteValue::Int64(revision),
-        ControllerSqliteValue::Int64(i64::from(settings.migrated_from_codebase_memory)),
-        ControllerSqliteValue::Int64(max_file_bytes),
-        ControllerSqliteValue::String(ignore_patterns),
-        ControllerSqliteValue::Int64(i64::from(settings.allow_query_rewrite)),
-        ControllerSqliteValue::Int64(i64::from(settings.allow_rerank)),
-        ControllerSqliteValue::Int64(embedding_max_concurrency),
-        ControllerSqliteValue::Int64(query_max_concurrency),
-        ControllerSqliteValue::Int64(max_results),
-        ControllerSqliteValue::Int64(max_context_chars),
-        ControllerSqliteValue::String(updated_at),
-        ControllerSqliteValue::String(match settings.update_mode {
+        SqliteValue::Text(project_id.to_owned()),
+        SqliteValue::Integer(i64::from(settings.enabled)),
+        SqliteValue::Integer(revision),
+        SqliteValue::Integer(i64::from(settings.migrated_from_codebase_memory)),
+        SqliteValue::Integer(max_file_bytes),
+        SqliteValue::Text(ignore_patterns),
+        SqliteValue::Integer(i64::from(settings.allow_query_rewrite)),
+        SqliteValue::Integer(i64::from(settings.allow_rerank)),
+        SqliteValue::Integer(embedding_max_concurrency),
+        SqliteValue::Integer(query_max_concurrency),
+        SqliteValue::Integer(max_results),
+        SqliteValue::Integer(max_context_chars),
+        SqliteValue::Text(updated_at),
+        SqliteValue::Text(match settings.update_mode {
             vulcan_workbench_model::ProjectVceUpdateMode::Manual => String::from("manual"),
             vulcan_workbench_model::ProjectVceUpdateMode::Automatic => String::from("automatic"),
         }),
-        ControllerSqliteValue::Int64(i64::from(settings.auto_update_min_interval_seconds)),
+        SqliteValue::Integer(i64::from(settings.auto_update_min_interval_seconds)),
     ])
 }
 
@@ -526,8 +522,8 @@ fn validate_project_layout_mutation_rows(
         .iter()
         .map(|entry| (entry.id.as_str(), (entry.pinned, entry.sort_order)))
         .collect::<BTreeMap<_, _>>();
-    // returned_project_ids rejects duplicate or fabricated controller response rows.
-    // returned_project_ids 用于拒绝控制器响应中的重复或伪造行。
+    // returned_project_ids rejects duplicate or fabricated engine response rows.
+    // returned_project_ids 用于拒绝 SQLite 结果中的重复或伪造行。
     let mut returned_project_ids = BTreeSet::new();
     for row in rows {
         let Some((expected_pinned, expected_sort_order)) =
@@ -575,8 +571,8 @@ fn validate_project_layout_mutation_rows(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `entries` contains every active project with expected and resulting layout states.
 /// `entries` 包含每个活动项目的预期与结果布局状态。
 /// `action_description` describes the mutation in user-facing diagnostics.
@@ -587,7 +583,7 @@ fn validate_project_layout_mutation_rows(
 /// Returns success only after SQLite atomically returns the complete requested result layout.
 /// 仅在 SQLite 原子返回完整请求结果布局后成功。
 async fn persist_project_layout_mutation(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     entries: &[ProjectLayoutMutationEntry],
     action_description: &str,
 ) -> Result<(), String> {
@@ -605,26 +601,22 @@ async fn persist_project_layout_mutation(
     // parameters 严格遵循上面生成的编号占位符顺序。
     let mut parameters = Vec::with_capacity(parameter_capacity);
     for entry in entries {
-        parameters.push(ControllerSqliteValue::String(entry.id.clone()));
-        parameters.push(ControllerSqliteValue::Int64(i64::from(
-            entry.expected_pinned,
-        )));
-        parameters.push(ControllerSqliteValue::Int64(i64::from(entry.pinned)));
-        parameters.push(ControllerSqliteValue::Int64(entry.sort_order));
+        parameters.push(SqliteValue::Text(entry.id.clone()));
+        parameters.push(SqliteValue::Integer(i64::from(entry.expected_pinned)));
+        parameters.push(SqliteValue::Integer(i64::from(entry.pinned)));
+        parameters.push(SqliteValue::Integer(entry.sort_order));
     }
-    parameters.push(ControllerSqliteValue::String(current_unix_millis_text()));
+    parameters.push(SqliteValue::Text(current_unix_millis_text()));
     // result proves the full guarded layout statement updated every requested active project.
     // result 证明完整受保护布局语句更新了每个请求的活动项目。
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            &statement,
-            parameters,
-        )
-        .await
-        .map_err(|error| format!("{action_description}失败：{error}"))?;
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        &statement,
+        parameters.clone(),
+    )
+    .await
+    .map_err(|error| format!("{action_description}失败：{error}"))?;
     // rows retain the authoritative result state instead of trusting write completion alone.
     // rows 保留权威结果状态，而不是只相信写入调用完成。
     let rows = decode_query_rows::<ProjectLayoutMutationRow>(&result.json_data)?;
@@ -634,10 +626,10 @@ async fn persist_project_layout_mutation(
 /// Persists one newly visible project row without rewriting unrelated workspace rows.
 /// 持久化单个新出现的可见项目行，不重写无关工作区行。
 pub async fn persist_new_project(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project: &TaskProjectSummary,
 ) -> Result<(), String> {
-    upsert_active_project(&controller, project).await
+    upsert_active_project(&host_runtime, project).await
 }
 
 /// Updates the archived flag for one project row without changing its metadata.
@@ -645,8 +637,8 @@ pub async fn persist_new_project(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `project_id` is the exact project identity to transition.
 /// `project_id` 是需要转换的精确项目身份。
 /// `expected_archived` is the lifecycle state that must still exist before the update.
@@ -659,7 +651,7 @@ pub async fn persist_new_project(
 /// Returns success only after one exact expected-state row is returned by SQLite.
 /// 仅在 SQLite 返回一条精确预期状态行后成功。
 pub(super) async fn update_project_archive_flag(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
     expected_archived: bool,
     archived: bool,
@@ -672,26 +664,24 @@ pub(super) async fn update_project_archive_flag(
     }
     // result proves the exact expected lifecycle transition changed one project row.
     // result 证明精确的预期生命周期转换变更了一条项目行。
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 UPDATE projects
 SET archived = ?1, updated_at = ?2
 WHERE id = ?3 AND archived = ?4
 RETURNING id;
 "#,
-            vec![
-                ControllerSqliteValue::Int64(i64::from(archived)),
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id.to_string()),
-                ControllerSqliteValue::Int64(i64::from(expected_archived)),
-            ],
-        )
-        .await
-        .map_err(|error| format!("更新项目归档状态失败：{error}"))?;
+        vec![
+            SqliteValue::Integer(i64::from(archived)),
+            SqliteValue::Text(current_unix_millis_text()),
+            SqliteValue::Text(project_id.to_string()),
+            SqliteValue::Integer(i64::from(expected_archived)),
+        ],
+    )
+    .await
+    .map_err(|error| format!("更新项目归档状态失败：{error}"))?;
     // rows must contain the one project whose lifecycle predicate matched.
     // rows 必须包含生命周期谓词命中的唯一项目。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
@@ -703,8 +693,8 @@ RETURNING id;
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `project_id` is the exact active project identity to delete.
 /// `project_id` 是需要删除的精确活动项目身份。
 ///
@@ -713,22 +703,20 @@ RETURNING id;
 /// Returns success only after SQLite returns the deleted active identity.
 /// 仅在 SQLite 返回已删除活动身份后成功。
 pub(super) async fn delete_active_project_row(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<(), String> {
     validate_project_mutation_id(project_id, "移除项目记录")?;
     // result proves the active project row still existed at deletion time.
     // result 证明活动项目行在删除时仍然存在。
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "DELETE FROM projects WHERE id = ?1 AND archived = 0 RETURNING id;",
-            vec![ControllerSqliteValue::String(project_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("移除项目记录失败：{error}"))?;
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        "DELETE FROM projects WHERE id = ?1 AND archived = 0 RETURNING id;",
+        vec![SqliteValue::Text(project_id.to_string())],
+    )
+    .await
+    .map_err(|error| format!("移除项目记录失败：{error}"))?;
     // rows must contain the one active identity deleted by SQLite.
     // rows 必须包含 SQLite 删除的唯一活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
@@ -740,8 +728,8 @@ pub(super) async fn delete_active_project_row(
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Authoritative APP SQLite runtime.
-///   `controller`：权威 APP SQLite 运行时。
+/// - `host_runtime`: Authoritative APP SQLite runtime.
+///   `host_runtime`：权威 APP SQLite 运行时。
 /// - `project_id`: Exact archived project identity.
 ///   `project_id`：精确的归档项目身份。
 ///
@@ -750,10 +738,10 @@ pub(super) async fn delete_active_project_row(
 /// Success only when the guarded archived-to-active transition returns the exact row.
 /// 仅在受保护的归档到活动转换返回精确行时成功。
 pub async fn restore_archived_project_row_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<(), String> {
-    update_project_archive_flag(controller, project_id, true, false).await
+    update_project_archive_flag(host_runtime, project_id, true, false).await
 }
 
 /// Deletes one exact active project row after every child V1 session has been archived.
@@ -761,8 +749,8 @@ pub async fn restore_archived_project_row_v1(
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Authoritative APP SQLite runtime.
-///   `controller`：权威 APP SQLite 运行时。
+/// - `host_runtime`: Authoritative APP SQLite runtime.
+///   `host_runtime`：权威 APP SQLite 运行时。
 /// - `project_id`: Exact active project identity.
 ///   `project_id`：精确的活动项目身份。
 ///
@@ -771,10 +759,10 @@ pub async fn restore_archived_project_row_v1(
 /// Success only when SQLite deletes and returns the exact active row.
 /// 仅在 SQLite 删除并返回精确活动行时成功。
 pub async fn delete_active_project_row_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<(), String> {
-    delete_active_project_row(controller, project_id).await
+    delete_active_project_row(host_runtime, project_id).await
 }
 
 /// Atomically persists one pin transition and both complete project-section orders.
@@ -782,8 +770,8 @@ pub async fn delete_active_project_row_v1(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `project_id` is the one project expected to cross section boundaries.
 /// `project_id` 是预期跨越分区边界的唯一项目。
 /// `pinned` is that project's resulting pinned state.
@@ -798,7 +786,7 @@ pub async fn delete_active_project_row_v1(
 /// Returns success only after one atomic full-layout transition returns every active project.
 /// 仅在一次原子完整布局转换返回每个活动项目后成功。
 pub async fn persist_project_pinned_and_order_update(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project_id: &str,
     pinned: bool,
     pinned_project_ids: &[String],
@@ -812,7 +800,7 @@ pub async fn persist_project_pinned_and_order_update(
         regular_project_ids,
         Some((project_id, pinned)),
     )?;
-    persist_project_layout_mutation(controller, &entries, "切换项目置顶状态").await
+    persist_project_layout_mutation(host_runtime, &entries, "切换项目置顶状态").await
 }
 
 /// Persists one active project's display name without touching its sessions.
@@ -820,8 +808,8 @@ pub async fn persist_project_pinned_and_order_update(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `project_id` is the exact active project identity to rename.
 /// `project_id` 是需要重命名的精确活动项目身份。
 /// `name` is the requested display name or an empty reset request.
@@ -832,33 +820,31 @@ pub async fn persist_project_pinned_and_order_update(
 /// Returns success only after the normalized name is returned for one exact active identity.
 /// 仅在规范化名称对应的一条精确活动身份返回后成功。
 pub async fn rename_project(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project_id: &str,
     name: &str,
 ) -> Result<(), String> {
-    let normalized_name = resolve_project_rename_target(&controller, project_id, name).await?;
+    let normalized_name = resolve_project_rename_target(&host_runtime, project_id, name).await?;
 
     // result proves the normalized name was committed to the exact active project row.
     // result 证明规范化名称已提交到精确活动项目行。
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 UPDATE projects
 SET name = ?1, updated_at = ?2
 WHERE id = ?3 AND archived = 0
 RETURNING id;
 "#,
-            vec![
-                ControllerSqliteValue::String(normalized_name.to_string()),
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id.to_string()),
-            ],
-        )
-        .await
-        .map_err(|error| format!("重命名项目失败：{error}"))?;
+        vec![
+            SqliteValue::Text(normalized_name.to_string()),
+            SqliteValue::Text(current_unix_millis_text()),
+            SqliteValue::Text(project_id.to_string()),
+        ],
+    )
+    .await
+    .map_err(|error| format!("重命名项目失败：{error}"))?;
     // rows must contain the exact active identity renamed by SQLite.
     // rows 必须包含 SQLite 重命名的精确活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
@@ -870,8 +856,8 @@ RETURNING id;
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative application SQLite binding.
-/// `controller` 持有权威应用 SQLite 绑定。
+/// `host_runtime` owns the authoritative application SQLite binding.
+/// `host_runtime` 持有权威应用 SQLite 绑定。
 /// `project_id` is the exact active project identity.
 /// `project_id` 是精确的活动项目身份。
 /// `expected_revision` is the currently observed project settings revision.
@@ -884,7 +870,7 @@ RETURNING id;
 /// Success only after one exact active project row is updated.
 /// 仅在一个精确活动项目记录完成更新后返回成功。
 pub async fn persist_project_vce_settings(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project_id: &str,
     expected_revision: u64,
     settings: &ProjectVceSettings,
@@ -899,16 +885,14 @@ pub async fn persist_project_vce_settings(
     }
     let mut parameters =
         project_vce_settings_params(project_id, settings, current_unix_millis_text())?;
-    parameters.push(ControllerSqliteValue::Int64(
+    parameters.push(SqliteValue::Integer(
         i64::try_from(expected_revision)
             .map_err(|_| String::from("VCE 预期修订号超出 SQLite 整数范围。"))?,
     ));
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 UPDATE project_vce_settings
 SET enabled = ?2,
     revision = ?3,
@@ -932,10 +916,10 @@ WHERE project_id = ?1
   )
 RETURNING project_id AS id;
 "#,
-            parameters,
-        )
-        .await
-        .map_err(|error| format!("更新 VCE 项目设置失败：{error}"))?;
+        parameters.clone(),
+    )
+    .await
+    .map_err(|error| format!("更新 VCE 项目设置失败：{error}"))?;
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
     validate_project_mutation_identity_rows(project_id, &rows, "更新 VCE 项目设置")
 }
@@ -945,8 +929,8 @@ RETURNING project_id AS id;
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `project_id` is the exact active project identity to update.
 /// `project_id` 是需要更新的精确活动项目身份。
 /// `icon_pack` is the optional non-blank icon collection key.
@@ -959,7 +943,7 @@ RETURNING project_id AS id;
 /// Returns success only after one exact active project returns from the guarded update.
 /// 仅在受保护更新返回一个精确活动项目后成功。
 pub async fn persist_project_icon_update(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project_id: &str,
     icon_pack: Option<&str>,
     icon_key: Option<&str>,
@@ -971,26 +955,24 @@ pub async fn persist_project_icon_update(
         normalize_project_icon_pair(icon_pack, icon_key)?;
     // result proves the icon pair was committed to one exact active row.
     // result 证明图标对已提交到一个精确活动行。
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 UPDATE projects
 SET icon_pack = ?1, icon_key = ?2, updated_at = ?3
 WHERE id = ?4 AND archived = 0
 RETURNING id;
 "#,
-            vec![
-                optional_sqlite_string(&normalized_icon_pack),
-                optional_sqlite_string(&normalized_icon_key),
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id.to_string()),
-            ],
-        )
-        .await
-        .map_err(|error| format!("更新项目图标失败：{error}"))?;
+        vec![
+            optional_sqlite_string(&normalized_icon_pack),
+            optional_sqlite_string(&normalized_icon_key),
+            SqliteValue::Text(current_unix_millis_text()),
+            SqliteValue::Text(project_id.to_string()),
+        ],
+    )
+    .await
+    .map_err(|error| format!("更新项目图标失败：{error}"))?;
     // rows must contain the exact active identity whose icon pair changed.
     // rows 必须包含图标对发生变化的精确活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
@@ -1041,7 +1023,7 @@ fn normalize_project_icon_pair(
 /// Resolves an empty project rename into the owning folder name.
 /// 将空项目重命名解析为所属文件夹名称。
 pub(super) async fn resolve_project_rename_target(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
     name: &str,
 ) -> Result<String, String> {
@@ -1059,16 +1041,13 @@ pub(super) async fn resolve_project_rename_target(
         root_path: String,
     }
 
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT root_path FROM projects WHERE id = ?1 AND archived = 0 LIMIT 1;",
-            vec![ControllerSqliteValue::String(project_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询项目路径失败：{error}"))?;
+    let result = local_sql::query_json(
+        host_runtime.local.as_ref(),
+        LogicalDatabase::AppState,
+        "SELECT root_path FROM projects WHERE id = ?1 AND archived = 0 LIMIT 1;",
+        &[SqliteValue::Text(project_id.to_string())],
+    )
+    .map_err(|error| format!("查询项目路径失败：{error}"))?;
     let row = decode_query_rows::<ProjectPathRow>(&result.json_data)?
         .into_iter()
         .next()
@@ -1102,8 +1081,8 @@ pub(super) fn project_folder_name_from_path_text(path: &str) -> Option<String> {
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
+/// `host_runtime` owns the authoritative SQLite binding.
+/// `host_runtime` 持有权威 SQLite 绑定。
 /// `pinned_project_ids` is the complete resulting pinned-section order.
 /// `pinned_project_ids` 是完整的结果置顶分区顺序。
 /// `regular_project_ids` is the complete resulting regular-section order.
@@ -1114,41 +1093,39 @@ pub(super) fn project_folder_name_from_path_text(path: &str) -> Option<String> {
 /// Returns success only after one atomic expected-state update returns every active project.
 /// 仅在一次原子预期状态更新返回每个活动项目后成功。
 pub async fn persist_project_order_update(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     pinned_project_ids: &[String],
     regular_project_ids: &[String],
 ) -> Result<(), String> {
     // entries require every active project's current pin state and resulting section order.
     // entries 要求包含每个活动项目的当前置顶状态与结果分区顺序。
     let entries = project_layout_mutation_entries(pinned_project_ids, regular_project_ids, None)?;
-    persist_project_layout_mutation(controller, &entries, "重排项目").await
+    persist_project_layout_mutation(host_runtime, &entries, "重排项目").await
 }
 
 /// Persists the collapsed task-project identifiers as workspace-level UI state.
 /// 将已折叠任务项目标识作为工作台级 UI 状态持久化。
 pub async fn persist_collapsed_task_project_ids(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     collapsed_project_ids: &[String],
 ) -> Result<(), String> {
     let value = serde_json::to_string(collapsed_project_ids)
         .map_err(|error| format!("序列化工作台项目展开状态失败：{error}"))?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            r#"
+    local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 INSERT INTO app_metadata (key, value)
 VALUES (?1, ?2)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 "#,
-            vec![vec![
-                ControllerSqliteValue::String(COLLAPSED_TASK_PROJECTS_METADATA_KEY.to_string()),
-                ControllerSqliteValue::String(value),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("写入工作台项目展开状态失败：{error}"))?;
+        vec![vec![
+            SqliteValue::Text(COLLAPSED_TASK_PROJECTS_METADATA_KEY.to_string()),
+            SqliteValue::Text(value),
+        ]],
+    )
+    .await
+    .map_err(|error| format!("写入工作台项目展开状态失败：{error}"))?;
 
     Ok(())
 }
@@ -1184,22 +1161,21 @@ mod tests {
     fn project_persistence_values_preserve_exact_scalar_types() {
         assert_eq!(
             project_persistence_sql_values(&[
-                ControllerSqliteValue::Int64(i64::MIN),
-                ControllerSqliteValue::Int64(i64::MAX),
-                ControllerSqliteValue::Null,
-                ControllerSqliteValue::String(String::from("中文'\0;--")),
-                ControllerSqliteValue::String(String::new()),
+                SqliteValue::Integer(i64::MIN),
+                SqliteValue::Integer(i64::MAX),
+                SqliteValue::Null,
+                SqliteValue::Text(String::from("中文'\0;--")),
+                SqliteValue::Text(String::new()),
             ])
             .expect("project scalar subset"),
             "-9223372036854775808, 9223372036854775807, NULL, '中文''' || char(0) || ';--', ''",
         );
-        // These real protocol variants are not produced by either project parameter builder.
-        // 两个项目参数构建器都不会产生这些真实协议变体。
-        for unsupported in [
-            ControllerSqliteValue::Float64(1.5),
-            ControllerSqliteValue::Bytes(vec![1]),
-            ControllerSqliteValue::Bool(true),
-        ] {
+        // These variants are not produced by either project parameter builder. The engine has no
+        // boolean variant at all, so a boolean can only reach storage as an integer and there is
+        // nothing left to refuse.
+        // 两个项目参数构建器都不会产生这些变体。引擎根本没有布尔变体，因此布尔值只能作为整数进入存储，
+        // 已没有需要拒绝的东西。
+        for unsupported in [SqliteValue::Real(1.5), SqliteValue::Blob(vec![1])] {
             assert!(project_persistence_sql_values(&[unsupported]).is_err());
         }
     }
@@ -1235,21 +1211,21 @@ mod tests {
         assert_eq!(
             parameters,
             vec![
-                ControllerSqliteValue::String(String::from("project-a")),
-                ControllerSqliteValue::Int64(1),
-                ControllerSqliteValue::Int64(7),
-                ControllerSqliteValue::Int64(1),
-                ControllerSqliteValue::Int64(2_097_152),
-                ControllerSqliteValue::String(String::from("[\"generated/**\"]")),
-                ControllerSqliteValue::Int64(1),
-                ControllerSqliteValue::Int64(0),
-                ControllerSqliteValue::Int64(6),
-                ControllerSqliteValue::Int64(2),
-                ControllerSqliteValue::Int64(12),
-                ControllerSqliteValue::Int64(48_000),
-                ControllerSqliteValue::String(String::from("2026-09-04T00:00:00Z")),
-                ControllerSqliteValue::String(String::from("automatic")),
-                ControllerSqliteValue::Int64(600),
+                SqliteValue::Text(String::from("project-a")),
+                SqliteValue::Integer(1),
+                SqliteValue::Integer(7),
+                SqliteValue::Integer(1),
+                SqliteValue::Integer(2_097_152),
+                SqliteValue::Text(String::from("[\"generated/**\"]")),
+                SqliteValue::Integer(1),
+                SqliteValue::Integer(0),
+                SqliteValue::Integer(6),
+                SqliteValue::Integer(2),
+                SqliteValue::Integer(12),
+                SqliteValue::Integer(48_000),
+                SqliteValue::Text(String::from("2026-09-04T00:00:00Z")),
+                SqliteValue::Text(String::from("automatic")),
+                SqliteValue::Integer(600),
             ]
         );
     }
@@ -1263,8 +1239,8 @@ mod tests {
         let matching_rows = vec![ProjectMutationIdentityRow {
             id: String::from("project-a"),
         }];
-        // mismatched_rows model a corrupted or unrelated controller response.
-        // mismatched_rows 模拟损坏或无关的控制器响应。
+        // mismatched_rows model a corrupted or unrelated engine response.
+        // mismatched_rows 模拟损坏或无关的 SQLite 结果。
         let mismatched_rows = vec![ProjectMutationIdentityRow {
             id: String::from("project-b"),
         }];

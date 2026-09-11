@@ -6,10 +6,12 @@ use super::super::models::{
     KnowledgeOperationObservability,
 };
 use super::{
-    KnowledgeBaseRuntime, MAX_WARNING_CHARS, int, nonnegative_u64, text, truncate_chars,
-    unix_epoch_millis, validate_library_id,
+    KnowledgeBaseRuntime, MAX_WARNING_CHARS, nonnegative_u64, truncate_chars, unix_epoch_millis,
+    validate_library_id,
 };
-use crate::data_plane::APP_SPACE_ID;
+use super::{int, text};
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use crate::runtime_assets;
 use serde::Deserialize;
 use std::path::Path;
@@ -18,7 +20,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use uuid::Uuid;
-use vldb_controller_client::ControllerSqliteValue;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Exact internal marker used to distinguish cancellation from failures.
 /// 用于区分取消与失败的精确内部标记。
@@ -211,7 +213,7 @@ impl KnowledgeBaseRuntime {
         let rows: Vec<ImportJobRow> = self
             .query_app_rows(
                 "SELECT id, library_id, operation_kind, state, phase, scanned_files, total_files, processed_files, total_index_items, processed_index_items, current_file, processed_bytes, warnings_json, observability_json, error_message FROM knowledge_import_jobs WHERE library_id = ? ORDER BY created_at_ms DESC LIMIT 1;",
-                vec![text(library_id)],
+                &[text(library_id)],
             )
             .await?;
         rows.into_iter()
@@ -362,15 +364,12 @@ impl KnowledgeBaseRuntime {
         }
         let observability_json = serde_json::to_string(observability)
             .map_err(|error| format!("序列化知识库操作可观测状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET observability_json = ? WHERE id = ? AND state = 'running';",
                 vec![text(observability_json), text(job_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库操作可观测状态失败：{error}"))?;
         Ok(())
     }
@@ -528,24 +527,22 @@ impl KnowledgeBaseRuntime {
         let source_root_text = source_root
             .map(runtime_assets::native_host_path_text_from_path)
             .unwrap_or_default();
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                r#"INSERT INTO knowledge_import_jobs(
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            r#"INSERT INTO knowledge_import_jobs(
                     id, library_id, source_root, operation_kind, state, phase, created_at_ms
                 ) VALUES (?, ?, ?, ?, 'queued', 'queued', ?);"#,
-                vec![
-                    text(&operation.job_id),
-                    text(&operation.library_id),
-                    text(source_root_text),
-                    text(operation.operation_kind.as_str()),
-                    int(operation.created_at_ms),
-                ],
-            )
-            .await
-            .map_err(|error| format!("创建知识库操作任务失败：{error}"))?;
+            vec![
+                text(&operation.job_id),
+                text(&operation.library_id),
+                text(source_root_text),
+                text(operation.operation_kind.as_str()),
+                int(operation.created_at_ms),
+            ],
+        )
+        .await
+        .map_err(|error| format!("创建知识库操作任务失败：{error}"))?;
         Ok(())
     }
 
@@ -618,23 +615,20 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after the running-row update, or a controller persistence failure.
-    /// 更新运行记录后成功，或返回控制器持久化失败。
+    /// Success after the running-row update, or an engine persistence failure.
+    /// 更新运行记录后成功，或返回引擎持久化失败。
     pub(super) async fn update_import_scan_progress(
         &self,
         job_id: &str,
         discovered_files: u64,
         current_path: &str,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET scanned_files = ?, current_file = ? WHERE id = ? AND state = 'running';",
                 vec![int(discovered_files as i64), text(current_path), text(job_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库扫描进度失败：{error}"))?;
         Ok(())
     }
@@ -656,15 +650,12 @@ impl KnowledgeBaseRuntime {
         job_id: &str,
         total_files: u64,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET state = 'running', phase = 'parsing', scanned_files = ?, total_files = ?, processed_files = 0, current_file = NULL WHERE id = ?;",
                 vec![int(total_files as i64), int(total_files as i64), text(job_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("发布知识库文件总数失败：{error}"))?;
         Ok(())
     }
@@ -679,19 +670,17 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after the phase write, or an explicit clock/controller failure.
-    /// 写入阶段后成功，或返回明确时钟/控制器错误。
+    /// Success after the phase write, or an explicit clock/storage failure.
+    /// 写入阶段后成功，或返回明确时钟/存储错误。
     pub(super) async fn update_operation_phase(
         &self,
         job_id: &str,
         state: &str,
         phase: &str,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET state = ?, phase = ?, started_at_ms = CASE WHEN ? = 'running' THEN COALESCE(started_at_ms, ?) ELSE started_at_ms END WHERE id = ?;",
                 vec![
                     text(state),
@@ -700,8 +689,7 @@ impl KnowledgeBaseRuntime {
                     int(unix_epoch_millis()?),
                     text(job_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库操作阶段失败：{error}"))?;
         Ok(())
     }
@@ -716,8 +704,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after persisting the progress snapshot, or serialization/controller failure.
-    /// 持久化进度快照后成功，或返回序列化/控制器失败。
+    /// Success after persisting the progress snapshot, or serialization/storage failure.
+    /// 持久化进度快照后成功，或返回序列化/存储失败。
     pub(super) async fn update_import_progress(
         &self,
         job_id: &str,
@@ -728,21 +716,18 @@ impl KnowledgeBaseRuntime {
     ) -> Result<(), String> {
         let warnings_json = serde_json::to_string(warnings)
             .map_err(|error| format!("序列化知识库导入进度告警失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET processed_files = ?, processed_bytes = ?, current_file = ?, warnings_json = ? WHERE id = ? AND state = 'running';",
                 vec![
                     int(processed_files as i64),
                     int(processed_bytes as i64),
-                    current_file.map_or(ControllerSqliteValue::Null, text),
+                    current_file.map_or(SqliteValue::Null, text),
                     text(warnings_json),
                     text(job_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库导入进度失败：{error}"))?;
         Ok(())
     }
@@ -757,8 +742,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after persisting counters, or a controller failure.
-    /// 持久化计数后成功，或返回控制器错误。
+    /// Success after persisting counters, or a storage failure.
+    /// 持久化计数后成功，或返回存储错误。
     pub(super) async fn update_import_index_progress(
         &self,
         job_id: &str,
@@ -766,20 +751,17 @@ impl KnowledgeBaseRuntime {
         total_items: u64,
         current_file: Option<&str>,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET processed_index_items = ?, total_index_items = ?, current_file = ? WHERE id = ? AND state = 'running';",
                 vec![
                     int(processed_items as i64),
                     int(total_items as i64),
-                    current_file.map_or(ControllerSqliteValue::Null, text),
+                    current_file.map_or(SqliteValue::Null, text),
                     text(job_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库索引进度失败：{error}"))?;
         Ok(())
     }
@@ -794,8 +776,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after writing the completed import row, or a clock/serialization/controller failure.
-    /// 写入完成导入记录后成功，或返回时钟、序列化、控制器错误。
+    /// Success after writing the completed import row, or a clock/serialization/storage failure.
+    /// 写入完成导入记录后成功，或返回时钟、序列化、存储错误。
     pub(super) async fn finish_import_job(
         &self,
         report: &KnowledgeImportReport,
@@ -804,11 +786,9 @@ impl KnowledgeBaseRuntime {
         let now = unix_epoch_millis()?;
         let warnings_json = serde_json::to_string(&report.warnings)
             .map_err(|failure| format!("序列化知识库导入告警失败：{failure}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 r#"UPDATE knowledge_import_jobs SET
                     state = 'completed', phase = 'completed', scanned_files = ?, total_files = ?, processed_files = ?, current_file = NULL, changed_files = ?,
                     unchanged_files = ?, deleted_files = ?, skipped_files = ?, processed_bytes = ?, warnings_json = ?,
@@ -823,12 +803,11 @@ impl KnowledgeBaseRuntime {
                     int(report.skipped_files as i64),
                     int(report.processed_bytes as i64),
                     text(warnings_json),
-                    error.map_or(ControllerSqliteValue::Null, text),
+                    error.map_or(SqliteValue::Null, text),
                     int(now),
                     text(&report.job_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|failure| format!("完成知识库导入任务失败：{failure}"))?;
         Ok(())
     }
@@ -844,11 +823,9 @@ impl KnowledgeBaseRuntime {
         job_id: &str,
         processed_items: u64,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET state = 'completed', phase = 'completed', processed_index_items = ?, total_index_items = ?, current_file = NULL, error_message = NULL, finished_at_ms = ? WHERE id = ?;",
                 vec![
                     int(processed_items as i64),
@@ -856,8 +833,7 @@ impl KnowledgeBaseRuntime {
                     int(unix_epoch_millis()?),
                     text(job_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|failure| format!("完成知识库索引操作失败：{failure}"))?;
         Ok(())
     }
@@ -872,23 +848,20 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after writing the failed terminal state, or a clock/controller failure.
-    /// 写入失败终态后成功，或返回时钟/控制器错误。
+    /// Success after writing the failed terminal state, or a clock/storage failure.
+    /// 写入失败终态后成功，或返回时钟/存储错误。
     pub(super) async fn finish_failed_operation_job(
         &self,
         job_id: &str,
         error: &str,
     ) -> Result<(), String> {
         let bounded = truncate_chars(error, MAX_WARNING_CHARS);
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET state = 'failed', error_message = ?, finished_at_ms = ? WHERE id = ?;",
                 vec![text(bounded), int(unix_epoch_millis()?), text(job_id)],
-            )
-            .await
+            ).await
             .map_err(|failure| format!("记录知识库操作失败状态失败：{failure}"))?;
         Ok(())
     }
@@ -903,18 +876,15 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Success after writing the distinct cancelled terminal state, or a clock/controller failure.
-    /// 写入独立取消终态后成功，或返回时钟/控制器错误。
+    /// Success after writing the distinct cancelled terminal state, or a clock/storage failure.
+    /// 写入独立取消终态后成功，或返回时钟/存储错误。
     pub(super) async fn finish_cancelled_operation_job(&self, job_id: &str) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET state = 'cancelled', phase = 'cancelled', error_message = NULL, finished_at_ms = ? WHERE id = ?;",
                 vec![int(unix_epoch_millis()?), text(job_id)],
-            )
-            .await
+            ).await
             .map_err(|failure| format!("记录知识库操作取消状态失败：{failure}"))?;
         Ok(())
     }

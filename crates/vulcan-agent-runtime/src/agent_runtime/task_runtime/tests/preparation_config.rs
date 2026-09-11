@@ -1,7 +1,6 @@
 use super::*;
 use crate::{ExecutionKnowledgeAccessContext, ExecutionSessionGoalContext};
-use vldb_controller_client::{ClientRegistration, ControllerClient, ControllerClientConfig};
-use vulcan_workspace_store::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
+use vulcan_workspace_store::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 
 /// Builds a resolved TaskSession configuration for controller-config tests.
 /// 为控制器配置测试构建已解析 TaskSession 配置。
@@ -1350,24 +1349,8 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
         None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
-    let controller_client = ControllerClient::new(
-        ControllerClientConfig {
-            auto_spawn: false,
-            ..ControllerClientConfig::default()
-        },
-        ClientRegistration {
-            client_name: String::from("knowledge-child-test"),
-            host_kind: String::from("test"),
-            process_id: std::process::id(),
-            process_name: String::from("vulcan-agent-runtime-test"),
-            lease_ttl_secs: Some(60),
-        },
-    );
-    parent_request.controller_runtime = Some(ControllerRuntimeHandle::new(
-        controller_client,
-        ControllerRuntimeMetadata {
-            endpoint: String::from("http://127.0.0.1:1"),
-            executable: String::from("unused"),
+    parent_request.controller_runtime =
+        Some(HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
             data_root: std::env::temp_dir(),
             sqlite_path: std::env::temp_dir().join("unused.sqlite3"),
             sqlite_binding_id: String::from("knowledge-child-test-binding"),
@@ -1375,8 +1358,7 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
             system_statistics_sqlite_binding_id: String::from(
                 "knowledge-child-test-statistics-binding",
             ),
-        },
-    ));
+        }));
     parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
         library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],

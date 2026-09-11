@@ -4,35 +4,38 @@
 use super::{VceProjectIndex, port_failed, port_invalid, port_rejected, sqlite_text};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use vldb_controller_client::ControllerSqliteValue;
 use vulcan_context_engine::{
     VceCodeNodeSnapshot, VceEmbeddingBatchRecord, VceEmbeddingBatchResult, VceEmbeddingBatchState,
     VceEmbeddingRunContract, VceEmbeddingRunManifest, VceEmbeddingRunState, VcePortError,
     VcePortOperation,
 };
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
-/// Legacy single-row manifest layout retained for lazy migration.
-/// 为惰性迁移保留的旧版单行清单布局。
-const VCE_EMBEDDING_MANIFEST_LAYOUT_LEGACY: i64 = 1;
-
-/// Current manifest layout with an envelope, node chunks, reused Blobs, and batch rows.
-/// 当前清单布局，将概要、节点分片、复用 Blob 及批次记录分别保存。
+/// The one manifest layout: an envelope, node chunks, reused Blobs, and batch rows.
+/// 唯一的清单布局：概要、节点分片、复用 Blob 及批次记录。
+///
+/// This is the pinned v1 storage format, in the same sense as the pinned Lance file version: a database
+/// carrying any other value is rejected rather than decoded, because this build has no other layout to
+/// decode it with. There is deliberately no constant for a predecessor layout — naming one would be the
+/// first step back to a dual-read path.
+/// 这是固定的 v1 存储格式，与固定的 Lance 文件版本同理：携带任何其他值的数据库会被拒绝而不是被解码，因为本构建
+/// 没有别的布局可以解码它。此处刻意不为前代布局保留常量——命名它就是退回双读路径的第一步。
 const VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED: i64 = 2;
 
 /// Maximum UTF-8 bytes stored in one node JSON chunk.
 /// 单个节点 JSON 分片保存的最大 UTF-8 字节数。
 const VCE_EMBEDDING_NODE_CHUNK_BYTES: usize = 32 * 1024;
 
-/// Maximum node chunks sent in one controller write or read page.
-/// 单次控制器写入或读取页允许的最大节点分片数。
+/// Maximum node chunks sent in one storage engine write or read page.
+/// 单次存储引擎写入或读取页允许的最大节点分片数。
 const VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE: usize = 8;
 
-/// Maximum reused Blob identities sent in one controller write or read page.
-/// 单次控制器写入或读取页允许的最大复用 Blob 身份数。
+/// Maximum reused Blob identities sent in one storage engine write or read page.
+/// 单次存储引擎写入或读取页允许的最大复用 Blob 身份数。
 const VCE_EMBEDDING_REUSED_PAGE_SIZE: usize = 64;
 
-/// Maximum batch records sent in one controller write or read page.
-/// 单次控制器写入或读取页允许的最大批次记录数。
+/// Maximum batch records sent in one storage engine write or read page.
+/// 单次存储引擎写入或读取页允许的最大批次记录数。
 const VCE_EMBEDDING_BATCH_PAGE_SIZE: usize = 4;
 
 /// Maximum serialized bytes accepted for the sharded manifest envelope.
@@ -150,8 +153,8 @@ impl StoredEmbeddingManifestEnvelope {
     }
 }
 
-/// Parent run row used to select legacy or sharded decoding.
-/// 用于选择旧版或分片解码路径的父运行记录。
+/// Parent run row describing one persisted embedding manifest.
+/// 描述一份持久化向量清单的父运行记录。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct EmbeddingRunStorageRow {
     /// Persisted workspace generation.
@@ -160,17 +163,17 @@ struct EmbeddingRunStorageRow {
     /// Persisted run lifecycle text.
     /// 已持久化运行生命周期文本。
     state: String,
-    /// Legacy full manifest or current bounded envelope JSON.
-    /// 旧版完整清单或当前有界概要 JSON。
+    /// Bounded run envelope JSON, never a whole-project manifest payload.
+    /// 有界运行概要 JSON，绝不是整个项目规模的清单负载。
     manifest_json: String,
-    /// Physical manifest storage layout.
-    /// 清单物理存储布局。
+    /// Physical manifest storage layout; always the pinned v1 value.
+    /// 清单物理存储布局；始终是固定的 v1 值。
     layout_version: i64,
     /// Whether every child row is fully published.
     /// 全部子记录是否已经完整发布。
     manifest_complete: i64,
-    /// Optional immutable plan fingerprint; absent only for legacy rows.
-    /// 可选不可变计划指纹；仅旧版记录允许缺失。
+    /// Immutable plan fingerprint required of every v1 row.
+    /// 每条 v1 记录都必须具备的不可变计划指纹。
     plan_fingerprint: Option<String>,
     /// Original run creation timestamp.
     /// 原始运行创建时间戳。
@@ -313,12 +316,12 @@ impl VceProjectIndex {
                 vec![
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&manifest.run_id),
-                    ControllerSqliteValue::Int64(generation),
+                    SqliteValue::Integer(generation),
                     sqlite_text(embedding_run_state_text(manifest.state)),
                     sqlite_text(&envelope_json),
                     sqlite_text(&plan_fingerprint),
-                    ControllerSqliteValue::Int64(created_at),
-                    ControllerSqliteValue::Int64(updated_at),
+                    SqliteValue::Integer(created_at),
+                    SqliteValue::Integer(updated_at),
                 ],
                 "Persist VCE embedding manifest parent",
             )
@@ -391,7 +394,7 @@ impl VceProjectIndex {
         .await
     }
 
-    /// Load one complete legacy or sharded plan without exposing partial child writes.
+    /// Load one complete v1 plan without exposing partial child writes.
     /// 读取一份完整旧版或分片计划，不暴露部分子记录写入。
     ///
     /// `run_id` selects one exact plan. Returns a consistent complete plan, absence for unpublished data, or an error.
@@ -405,9 +408,6 @@ impl VceProjectIndex {
             let Some(row) = self.load_embedding_run_storage_row(&run_id).await? else {
                 return Ok(None);
             };
-            if row.layout_version == VCE_EMBEDDING_MANIFEST_LAYOUT_LEGACY {
-                return self.decode_legacy_manifest(&run_id, &row).map(Some);
-            }
             if row.layout_version != VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED {
                 return Err(port_invalid(
                     VcePortOperation::EmbeddingManifest,
@@ -424,9 +424,9 @@ impl VceProjectIndex {
                 ));
             }
 
-            // Child pages may yield between controller calls; the second parent read proves that
+            // Child pages may yield between storage engine calls; the second parent read proves that
             // every reconstructed batch belongs to one stable revision.
-            // 子记录分页会在控制器调用之间让出执行权；第二次父记录读取证明全部重建批次属于同一稳定修订。
+            // 子记录分页会在存储引擎调用之间让出执行权；第二次父记录读取证明全部重建批次属于同一稳定修订。
             let loaded = self
                 .load_complete_sharded_manifest(&run_id, row.clone())
                 .await;
@@ -498,10 +498,10 @@ impl VceProjectIndex {
                       AND revision = ?;"#,
                 vec![
                     sqlite_text(embedding_run_state_text(state)),
-                    ControllerSqliteValue::Int64(updated_at),
+                    SqliteValue::Integer(updated_at),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&run_id),
-                    ControllerSqliteValue::Int64(existing.revision),
+                    SqliteValue::Integer(existing.revision),
                 ],
                 "Persist VCE embedding run state",
             )
@@ -653,14 +653,14 @@ impl VceProjectIndex {
                       );"#,
                 vec![
                     sqlite_text(&batch_json),
-                    ControllerSqliteValue::Int64(updated_at),
+                    SqliteValue::Integer(updated_at),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&run_id),
                     sqlite_text(&batch.batch_id),
                     sqlite_text(&identity_fingerprint),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&run_id),
-                    ControllerSqliteValue::Int64(parent.revision),
+                    SqliteValue::Integer(parent.revision),
                 ],
                 "Persist VCE embedding batch state",
             )
@@ -712,8 +712,8 @@ impl VceProjectIndex {
         Ok(())
     }
 
-    /// Require one exact batch to belong to a completely published legacy or current-layout plan.
-    /// 要求一个精确批次属于已经完整发布的旧版或当前布局计划。
+    /// Require one exact batch to belong to a completely published v1 plan.
+    /// 要求一个精确批次属于已经完整发布的 v1 计划。
     ///
     /// `run_id` and `batch_id` select the exact persisted membership; returns unit only for a validated complete plan.
     /// `run_id` 与 `batch_id` 选择精确持久成员；仅对已校验完整计划返回成功。
@@ -731,8 +731,8 @@ impl VceProjectIndex {
     /// 读取授权一条供应商结果记录的精确已校验批次。
     ///
     /// `run_id` and `batch_id` select frozen plan membership. Returns that batch only when its
-    /// complete legacy or current-layout parent is published.
-    /// `run_id` 与 `batch_id` 选择冻结计划成员。仅当其完整旧版或当前布局父记录已发布时返回该批次。
+    /// complete v1 parent is published.
+    /// `run_id` 与 `batch_id` 选择冻结计划成员。仅当其完整 v1 父记录已发布时返回该批次。
     pub(super) async fn load_published_embedding_batch(
         &self,
         run_id: &str,
@@ -756,21 +756,6 @@ impl VceProjectIndex {
                     "embedding manifest run does not exist",
                 )
             })?;
-        if parent.layout_version == VCE_EMBEDDING_MANIFEST_LAYOUT_LEGACY {
-            // Validated legacy plan retained during its first-write conversion.
-            // 首次写入转换期间保留的已校验旧版计划。
-            let legacy = self.decode_legacy_manifest(run_id, &parent)?;
-            return legacy
-                .batches
-                .into_iter()
-                .find(|batch| batch.batch_id == batch_id)
-                .ok_or_else(|| {
-                    port_rejected(
-                        VcePortOperation::EmbeddingManifest,
-                        "embedding batch does not belong to the published legacy plan",
-                    )
-                });
-        }
         require_complete_sharded_parent(&parent)?;
         // Exact persisted row selected by the current namespace and stable run identity.
         // 按当前命名空间和稳定运行身份选出的精确持久记录。
@@ -801,17 +786,15 @@ impl VceProjectIndex {
         Ok(())
     }
 
-    /// Load the exact update target, lazily converting a complete legacy plan on its first write.
-    /// 读取精确更新目标，并在首次写入时惰性转换完整旧版计划。
+    /// Load the exact update target, refusing any parent that is not the pinned v1 layout.
+    /// 读取精确更新目标，并拒绝任何不是固定 v1 布局的父记录。
     ///
-    /// `run_id` identifies an existing run; returns its current sharded parent or a storage error.
-    /// `run_id` 标识现有运行；返回当前分片父记录，失败时返回存储错误。
+    /// `run_id` identifies an existing run; returns its v1 parent or a storage error.
+    /// `run_id` 标识现有运行；返回其 v1 父记录，失败时返回存储错误。
     async fn prepare_embedding_parent_for_update(
         &self,
         run_id: &str,
     ) -> Result<EmbeddingRunStorageRow, VcePortError> {
-        // The original parent is read before deciding whether a physical conversion is required.
-        // 先读取原始父记录，再决定是否需要物理转换。
         let parent = self
             .load_embedding_run_storage_row(run_id)
             .await?
@@ -821,57 +804,16 @@ impl VceProjectIndex {
                     "embedding manifest run does not exist",
                 )
             })?;
-        if parent.layout_version != VCE_EMBEDDING_MANIFEST_LAYOUT_LEGACY {
-            return Ok(parent);
-        }
-        // Conversion preserves the frozen plan and result rows while enabling granular updates.
-        // 转换保留冻结计划和结果记录，同时启用细粒度更新。
-        let legacy = self.decode_legacy_manifest(run_id, &parent)?;
-        self.persist_embedding_manifest_sharded(legacy).await?;
-        self.load_embedding_run_storage_row(run_id)
-            .await?
-            .ok_or_else(|| {
-                port_invalid(
-                    VcePortOperation::EmbeddingManifest,
-                    "converted embedding manifest disappeared",
-                )
-            })
-    }
-
-    /// Decode legacy payloads using the parent lifecycle updated by atomic checkpoint commits.
-    /// 使用原子检查点提交更新的父记录生命周期解码旧版负载。
-    ///
-    /// `run_id` and `row` must identify the same complete legacy plan; returns validated core data.
-    /// `run_id` 与 `row` 必须标识同一完整旧版计划；返回已校验的核心数据。
-    fn decode_legacy_manifest(
-        &self,
-        run_id: &str,
-        row: &EmbeddingRunStorageRow,
-    ) -> Result<VceEmbeddingRunManifest, VcePortError> {
-        if row.manifest_complete != 1 || row.revision <= 0 {
+        // No conversion and no repair. A row that is not the pinned layout is reported, not rewritten:
+        // silently converting it in place would be exactly the runtime migration this build does not do.
+        // 不转换、不修补。不是固定布局的记录会被报出，而不是被改写：原地静默转换正是本构建所不做的运行时迁移。
+        if parent.layout_version != VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED {
             return Err(port_invalid(
                 VcePortOperation::EmbeddingManifest,
-                "legacy embedding manifest completion marker or revision is invalid",
+                "persisted embedding manifest layout is unsupported",
             ));
         }
-        // Legacy commit SQL updates the parent state without rewriting the project-sized JSON.
-        // 旧版提交 SQL 更新父记录状态，不会重写整个项目规模的 JSON。
-        let mut manifest: VceEmbeddingRunManifest = serde_json::from_str(&row.manifest_json)
-            .map_err(|error| {
-                port_invalid(VcePortOperation::EmbeddingManifest, error.to_string())
-            })?;
-        if u64::try_from(row.generation).ok() != Some(manifest.generation)
-            || u64::try_from(row.created_at_unix_ms).ok() != Some(manifest.created_at_unix_ms)
-        {
-            return Err(port_invalid(
-                VcePortOperation::EmbeddingManifest,
-                "legacy embedding manifest identity disagrees with its parent",
-            ));
-        }
-        manifest.state = parse_embedding_run_state(&row.state)?;
-        manifest.updated_at_unix_ms =
-            sqlite_manifest_timestamp(row.updated_at_unix_ms, "VCE manifest update time")?;
-        self.validate_loaded_manifest(run_id, manifest)
+        Ok(parent)
     }
 
     /// Read one exact parent row under this index namespace.
@@ -883,8 +825,8 @@ impl VceProjectIndex {
         &self,
         run_id: &str,
     ) -> Result<Option<EmbeddingRunStorageRow>, VcePortError> {
-        // One bounded controller result page, scoped to the exact manifest identity.
-        // 范围限定到精确清单身份的一页有界控制器结果。
+        // One bounded storage engine result page, scoped to the exact manifest identity.
+        // 范围限定到精确清单身份的一页有界存储引擎结果。
         let rows: Vec<EmbeddingRunStorageRow> = self
             .data_plane
             .query_rows(
@@ -942,22 +884,6 @@ impl VceProjectIndex {
             ));
         }
         match existing.layout_version {
-            VCE_EMBEDDING_MANIFEST_LAYOUT_LEGACY => {
-                // Validated legacy plan retained during its first-write conversion.
-                // 首次写入转换期间保留的已校验旧版计划。
-                let legacy = self.decode_legacy_manifest(&manifest.run_id, existing)?;
-                // Frozen-plan digest calculated from the original legacy payload.
-                // 根据原始旧版负载计算的冻结计划摘要。
-                let legacy_fingerprint = legacy
-                    .plan_fingerprint()
-                    .map_err(|error| port_invalid(VcePortOperation::EmbeddingManifest, error))?;
-                if legacy_fingerprint != plan_fingerprint {
-                    return Err(port_rejected(
-                        VcePortOperation::EmbeddingManifest,
-                        "legacy embedding manifest does not match the frozen source plan",
-                    ));
-                }
-            }
             VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED => {
                 if existing.plan_fingerprint.as_deref() != Some(plan_fingerprint) {
                     return Err(port_rejected(
@@ -989,11 +915,11 @@ impl VceProjectIndex {
         Ok(())
     }
 
-    /// Delete only unpublished or legacy-conversion child rows for one verified run.
-    /// 仅删除一个已校验运行中尚未发布或旧版转换产生的子记录。
+    /// Delete the replaceable child rows of one verified run before republishing it.
+    /// 在重新发布一个已校验运行前删除其可替换的子记录。
     ///
-    /// `run_id` must name an unpublished or legacy-conversion run; returns after its replaceable children are removed.
-    /// `run_id` 必须标识未发布或旧版转换运行；其可替换子记录移除后返回。
+    /// `run_id` must name a verified run; returns after its replaceable children are removed.
+    /// `run_id` 必须标识一个已校验运行；其可替换子记录移除后返回。
     async fn clear_embedding_manifest_children(&self, run_id: &str) -> Result<(), VcePortError> {
         for (table, context) in [
             (
@@ -1024,8 +950,8 @@ impl VceProjectIndex {
         Ok(())
     }
 
-    /// Persist reused Blob identities in bounded controller batches and stable order.
-    /// 以有界控制器批次和稳定顺序持久化复用 Blob 身份。
+    /// Persist reused Blob identities in bounded storage engine batches and stable order.
+    /// 以有界存储引擎批次和稳定顺序持久化复用 Blob 身份。
     ///
     /// Persists ordered `blob_names` for `run_id`; returns after every bounded page succeeds.
     /// 为 `run_id` 持久化有序 `blob_names`；所有有界分页成功后返回。
@@ -1048,8 +974,8 @@ impl VceProjectIndex {
                         "VCE reused Blob index overflowed",
                     )
                 })?;
-            // Bounded typed row parameters sent through a single controller batch.
-            // 通过一次控制器批次发送的有界类型化行参数。
+            // Bounded typed row parameters sent through a single storage engine batch.
+            // 通过一次存储引擎批次发送的有界类型化行参数。
             let mut items = Vec::with_capacity(page.len());
             for (page_offset, blob_name) in page.iter().enumerate() {
                 // Checked stable position of the reused Blob within the frozen plan.
@@ -1063,7 +989,7 @@ impl VceProjectIndex {
                 items.push(vec![
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(run_id),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         reused_index,
                         "VCE reused Blob index",
                     )?),
@@ -1094,8 +1020,8 @@ impl VceProjectIndex {
         run_id: &str,
         nodes: &[VceCodeNodeSnapshot],
     ) -> Result<(), VcePortError> {
-        // Bounded typed row parameters sent through a single controller batch.
-        // 通过一次控制器批次发送的有界类型化行参数。
+        // Bounded typed row parameters sent through a single storage engine batch.
+        // 通过一次存储引擎批次发送的有界类型化行参数。
         let mut items = Vec::with_capacity(VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE);
         for (node_index, node) in nodes.iter().enumerate() {
             // One source-node JSON body split into bounded UTF-8 fragments.
@@ -1107,11 +1033,11 @@ impl VceProjectIndex {
                 items.push(vec![
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(run_id),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         node_index,
                         "VCE embedding node index",
                     )?),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         chunk_index,
                         "VCE embedding node chunk index",
                     )?),
@@ -1127,14 +1053,14 @@ impl VceProjectIndex {
         self.flush_embedding_node_chunks(items).await
     }
 
-    /// Flush one bounded collection of node fragments through the controller.
-    /// 通过控制器写入一组有界节点分片。
+    /// Flush one bounded collection of node fragments through the storage engine.
+    /// 通过存储引擎写入一组有界节点分片。
     ///
-    /// `items` contains one bounded typed parameter page; returns the controller write result.
-    /// `items` 包含一页有界类型化参数；返回控制器写入结果。
+    /// `items` contains one bounded typed parameter page; returns the storage engine write result.
+    /// `items` 包含一页有界类型化参数；返回存储引擎写入结果。
     async fn flush_embedding_node_chunks(
         &self,
-        items: Vec<Vec<ControllerSqliteValue>>,
+        items: Vec<Vec<SqliteValue>>,
     ) -> Result<(), VcePortError> {
         self.data_plane
             .execute_batch(
@@ -1174,8 +1100,8 @@ impl VceProjectIndex {
                         "VCE embedding batch index overflowed",
                     )
                 })?;
-            // Bounded typed row parameters sent through a single controller batch.
-            // 通过一次控制器批次发送的有界类型化行参数。
+            // Bounded typed row parameters sent through a single storage engine batch.
+            // 通过一次存储引擎批次发送的有界类型化行参数。
             let mut items = Vec::with_capacity(page.len());
             for (page_offset, batch) in page.iter().enumerate() {
                 batch
@@ -1202,14 +1128,14 @@ impl VceProjectIndex {
                 items.push(vec![
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(run_id),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         batch_index,
                         "VCE embedding batch index",
                     )?),
                     sqlite_text(&batch.batch_id),
                     sqlite_text(identity_fingerprint),
                     sqlite_text(batch_json),
-                    ControllerSqliteValue::Int64(updated_at),
+                    SqliteValue::Integer(updated_at),
                 ]);
             }
             self.data_plane
@@ -1256,7 +1182,7 @@ impl VceProjectIndex {
                         revision = revision + 1
                     WHERE namespace_id = ? AND run_id = ?
                       AND revision = ?
-                      AND (layout_version = 1 OR plan_fingerprint = ?)
+                      AND plan_fingerprint = ?
                      AND (SELECT COUNT(DISTINCT node_index)
                           FROM vce_embedding_run_node_chunks
                           WHERE namespace_id = ? AND run_id = ?) = ?
@@ -1265,36 +1191,36 @@ impl VceProjectIndex {
                      AND (SELECT COUNT(*) FROM vce_embedding_run_batches
                           WHERE namespace_id = ? AND run_id = ?) = ?;"#,
                 vec![
-                    ControllerSqliteValue::Int64(sqlite_manifest_u64(
+                    SqliteValue::Integer(sqlite_manifest_u64(
                         manifest.generation,
                         "VCE manifest generation",
                     )?),
                     sqlite_text(embedding_run_state_text(manifest.state)),
                     sqlite_text(envelope_json),
                     sqlite_text(plan_fingerprint),
-                    ControllerSqliteValue::Int64(sqlite_manifest_u64(
+                    SqliteValue::Integer(sqlite_manifest_u64(
                         manifest.updated_at_unix_ms,
                         "VCE manifest update time",
                     )?),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&manifest.run_id),
-                    ControllerSqliteValue::Int64(current_revision),
+                    SqliteValue::Integer(current_revision),
                     sqlite_text(plan_fingerprint),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&manifest.run_id),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         manifest.nodes.len(),
                         "VCE embedding node count",
                     )?),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&manifest.run_id),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         manifest.reused_blob_names.len(),
                         "VCE reused Blob count",
                     )?),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&manifest.run_id),
-                    ControllerSqliteValue::Int64(sqlite_manifest_usize(
+                    SqliteValue::Integer(sqlite_manifest_usize(
                         manifest.batches.len(),
                         "VCE embedding batch count",
                     )?),
@@ -1453,8 +1379,8 @@ impl VceProjectIndex {
         // 最近消费的稳定键；负一使第一页包含零号位置。
         let mut cursor = -1_i64;
         loop {
-            // One bounded controller result page, scoped to the exact manifest identity.
-            // 范围限定到精确清单身份的一页有界控制器结果。
+            // One bounded storage engine result page, scoped to the exact manifest identity.
+            // 范围限定到精确清单身份的一页有界存储引擎结果。
             let rows: Vec<ReusedBlobRow> = self
                 .data_plane
                 .query_rows(
@@ -1465,7 +1391,7 @@ impl VceProjectIndex {
                     vec![
                         sqlite_text(&self.binding.namespace_id),
                         sqlite_text(run_id),
-                        ControllerSqliteValue::Int64(cursor),
+                        SqliteValue::Integer(cursor),
                     ],
                 )
                 .await
@@ -1524,8 +1450,8 @@ impl VceProjectIndex {
         // Last consumed fragment index inside the cursor node.
         // 游标节点内最近消费的分片索引。
         let mut cursor_chunk = -1_i64;
-        // Node currently being assembled across controller page boundaries.
-        // 当前跨控制器分页边界组装的节点。
+        // Node currently being assembled across storage engine page boundaries.
+        // 当前跨存储引擎分页边界组装的节点。
         let mut current_node_index = None;
         // Blob identity required to match every fragment of the current node.
         // 要求当前节点的每个分片一致的 Blob 身份。
@@ -1537,8 +1463,8 @@ impl VceProjectIndex {
         // 当前节点内下一个连续分片位置。
         let mut expected_chunk_index = 0_i64;
         loop {
-            // One bounded controller result page, scoped to the exact manifest identity.
-            // 范围限定到精确清单身份的一页有界控制器结果。
+            // One bounded storage engine result page, scoped to the exact manifest identity.
+            // 范围限定到精确清单身份的一页有界存储引擎结果。
             let rows: Vec<EmbeddingNodeChunkRow> = self
                 .data_plane
                 .query_rows(
@@ -1550,9 +1476,9 @@ impl VceProjectIndex {
                     vec![
                         sqlite_text(&self.binding.namespace_id),
                         sqlite_text(run_id),
-                        ControllerSqliteValue::Int64(cursor_node),
-                        ControllerSqliteValue::Int64(cursor_node),
-                        ControllerSqliteValue::Int64(cursor_chunk),
+                        SqliteValue::Integer(cursor_node),
+                        SqliteValue::Integer(cursor_node),
+                        SqliteValue::Integer(cursor_chunk),
                     ],
                 )
                 .await
@@ -1648,8 +1574,8 @@ impl VceProjectIndex {
         // 最近消费的稳定键；负一使第一页包含零号位置。
         let mut cursor = -1_i64;
         loop {
-            // One bounded controller result page, scoped to the exact manifest identity.
-            // 范围限定到精确清单身份的一页有界控制器结果。
+            // One bounded storage engine result page, scoped to the exact manifest identity.
+            // 范围限定到精确清单身份的一页有界存储引擎结果。
             let rows: Vec<EmbeddingBatchStorageRow> = self
                 .data_plane
                 .query_rows(
@@ -1661,7 +1587,7 @@ impl VceProjectIndex {
                     vec![
                         sqlite_text(&self.binding.namespace_id),
                         sqlite_text(run_id),
-                        ControllerSqliteValue::Int64(cursor),
+                        SqliteValue::Integer(cursor),
                     ],
                 )
                 .await
@@ -1706,8 +1632,8 @@ impl VceProjectIndex {
         run_id: &str,
         batch_id: &str,
     ) -> Result<Option<EmbeddingBatchStorageRow>, VcePortError> {
-        // One bounded controller result page, scoped to the exact manifest identity.
-        // 范围限定到精确清单身份的一页有界控制器结果。
+        // One bounded storage engine result page, scoped to the exact manifest identity.
+        // 范围限定到精确清单身份的一页有界存储引擎结果。
         let rows: Vec<EmbeddingBatchStorageRow> = self
             .data_plane
             .query_rows(

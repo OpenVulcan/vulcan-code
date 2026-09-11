@@ -310,7 +310,7 @@ fn context_injection_exact_session_emitter_supports_background_sessions() {
     service_state.workbench.selected_conversation_id = Some(selected_session_id.to_string());
     // The background emitter reads its exact V1 owner even when the visible surface stays selected elsewhere.
     // 后台发送器即使不占据当前可见界面，也必须读取自身精确的 V1 owner。
-    let background_storage = TestControllerRuntimeRoot::new(background_session_id);
+    let background_storage = TestHostRuntimeRoot::new(background_session_id);
     let background_handle = crate::session_runtime_registry_v1::SessionHandle::new(
         background_session_id,
         background_storage.v1_storage_locator(),

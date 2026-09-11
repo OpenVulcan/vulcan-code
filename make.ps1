@@ -1,4 +1,4 @@
-﻿# make.ps1 provides the PowerShell-native task entry for local build and run workflows.
+# make.ps1 provides the PowerShell-native task entry for local build and run workflows.
 # make.ps1 用于提供本地构建与运行工作流的 PowerShell 原生入口。
 # CommandMode selects the top-level command such as sync, vite, build, run, release, or deps.
 # CommandMode 用于选择顶层命令，例如 sync、vite、build、run、release 或 deps。
@@ -74,6 +74,9 @@ $LuaDepsScriptPath = Join-Path $ScriptDir "scripts\install_lua_deps.ps1"
 # RustDevToolsScriptPath points at the Rust workspace maintenance-tool installer.
 # RustDevToolsScriptPath 用于指向 Rust 工作区维护工具安装器。
 $RustDevToolsScriptPath = Join-Path $ScriptDir "scripts\install_rust_dev_tools.ps1"
+# The LanceDB dependency closure invokes protoc from a build script, so a fresh environment must provision it.
+# LanceDB 依赖闭包会在构建脚本中调用 protoc，因此新环境必须取得它。
+$ProtocDepsScriptPath = Join-Path $ScriptDir "scripts\install_protoc.ps1"
 
 # RustNoticesScriptPath points at the dedicated PowerShell notice-generation script for the About page.
 # RustNoticesScriptPath 用于指向关于页面专用的 Rust 许可证声明生成脚本。
@@ -202,17 +205,17 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("rust-tools", "host", "vldb", "rtk", "tools", "lua")]
+        [ValidateSet("rust-tools", "host", "rtk", "tools", "lua", "protoc")]
         [string]$DependencyKind
     )
 
     $ScriptPath = switch ($DependencyKind) {
         "rust-tools" { $RustDevToolsScriptPath }
         "host" { $HostDepsScriptPath }
-        "vldb" { $HostDepsScriptPath }
         "rtk"  { $HostDepsScriptPath }
         "tools" { $BundledToolsDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
+        "protoc" { $ProtocDepsScriptPath }
         default { throw "Unsupported dependency kind: $DependencyKind" }
     }
 
@@ -222,7 +225,7 @@ function Invoke-DependencyInstall {
 
     $PowerShellCommand = Get-Command "pwsh" -ErrorAction SilentlyContinue
     $ScriptArguments = @()
-    if ($DependencyKind -eq "vldb" -or $DependencyKind -eq "rtk") {
+    if ($DependencyKind -eq "rtk") {
         $ScriptArguments += $DependencyKind
     }
 
@@ -254,6 +257,7 @@ function Invoke-SystemInitialization {
     Invoke-DependencyInstall -DependencyKind "host"
     Invoke-DependencyInstall -DependencyKind "tools"
     Invoke-DependencyInstall -DependencyKind "lua"
+    Invoke-DependencyInstall -DependencyKind "protoc"
 
     Write-Host "==> System initialization completed."
 }
@@ -305,7 +309,6 @@ function Show-Usage {
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
-    Write-Host "  ./make deps vldb   # install vldb-controller host dependency only"
     Write-Host "  ./make deps rtk    # install RTK host dependency only"
     Write-Host "  ./make deps tools  # install the latest bundled sg and rg tools"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
@@ -413,9 +416,6 @@ switch ($NormalizedMode) {
             }
             "host" {
                 Invoke-DependencyInstall -DependencyKind "host"
-            }
-            "vldb" {
-                Invoke-DependencyInstall -DependencyKind "vldb"
             }
             "rtk" {
                 Invoke-DependencyInstall -DependencyKind "rtk"

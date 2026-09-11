@@ -1,10 +1,13 @@
-//! Native VMM-only Jieba FTS storage using the existing controller-managed SQLite binding.
-//! 使用现有控制器托管 SQLite 绑定的原生 VMM 专用 Jieba 全文存储。
+//! Native VMM-only Jieba FTS storage inside the VMM's own in-process SQLite database.
+//! 原生 VMM 专用 Jieba 全文存储，位于 VMM 自身的进程内 SQLite 数据库中。
 
 use serde::{Deserialize, Serialize};
-use vldb_controller_client::{ControllerSqliteTokenizerMode, ControllerSqliteValue};
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
+use vulcan_sqlite_engine::tokenizer::TokenizerMode;
 
-use super::{VMM_SPACE_ID, VmmDataPlaneHandle, sqlite_string_literal, sqlite_text};
+use super::{VmmDataPlaneHandle, sqlite_string_literal, sqlite_text};
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 
 #[cfg(test)]
 #[path = "lexical_tests.rs"]
@@ -85,16 +88,18 @@ END;
 impl VmmDataPlaneHandle {
     /// Reads exact document counts from this VMM binding without initializing or changing it.
     /// 从当前 VMM 绑定读取准确文档计数，不初始化或改变它。
-    /// Returns one typed aggregate row or an explicit controller/shape error.
-    /// 返回一条强类型聚合记录，或明确的控制器/形状错误。
+    /// Returns one typed aggregate row or an explicit engine/shape error.
+    /// 返回一条强类型聚合记录，或明确的引擎/形状错误。
     pub async fn lexical_index_counts(&self) -> Result<VmmLexicalIndexCounts, String> {
         // Both aggregates share the same SQLite statement snapshot.
         // 两个聚合共用同一条 SQLite 语句快照。
-        let result = self.client.query_sqlite_json_typed(
-            VMM_SPACE_ID, &self.sqlite_binding_id,
+        let result = local_sql::query_json(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
             "SELECT (SELECT COUNT(*) FROM vmm_lexical_documents) AS document_count, (SELECT COUNT(*) FROM vmm_memory_fts) AS indexed_row_count;",
-            Vec::new(),
-        ).await.map_err(|error| format!("读取原生 VMM 全文索引计数失败：{error}"))?;
+            &[],
+        )
+        .map_err(|error| format!("读取原生 VMM 全文索引计数失败：{error}"))?;
         let mut rows: Vec<VmmLexicalIndexCounts> = serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析原生 VMM 全文索引计数失败：{error}"))?;
         if rows.len() != 1 {
@@ -130,11 +135,13 @@ impl VmmDataPlaneHandle {
         let script = format!(
             "BEGIN IMMEDIATE;\nDELETE FROM vmm_lexical_documents;\nDELETE FROM vmm_memory_fts;\nINSERT OR ROLLBACK INTO vmm_lexical_documents(memory_id, summary, details) SELECT json_extract(value, '$.memory_id'), json_extract(value, '$.summary'), json_extract(value, '$.details') FROM json_each('{escaped}');\nCOMMIT;"
         );
-        let result = self
-            .client
-            .execute_sqlite_script_typed(VMM_SPACE_ID, &self.sqlite_binding_id, &script, Vec::new())
-            .await
-            .map_err(|error| format!("替换原生 VMM 全文派生文档失败：{error}"))?;
+        let result = local_sql::execute_script(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
+            &script,
+            &[],
+        )
+        .map_err(|error| format!("替换原生 VMM 全文派生文档失败：{error}"))?;
         if !result.success {
             return Err(format!("替换原生 VMM 全文派生文档失败：{}", result.message));
         }
@@ -143,39 +150,33 @@ impl VmmDataPlaneHandle {
 
     /// Creates the isolated VMM Jieba index and its transactional text-maintenance triggers.
     /// 创建隔离的 VMM Jieba 索引及其事务性文本维护触发器。
-    /// Returns an explicit controller error; it never switches to substring or another tokenizer.
-    /// 返回明确控制器错误；绝不切换到子串匹配或其他分词器。
+    /// Returns an explicit engine error; it never switches to substring or another tokenizer.
+    /// 返回明确引擎错误；绝不切换到子串匹配或其他分词器。
     pub async fn ensure_lexical_index(&self) -> Result<(), String> {
         // ensured comes from the same upstream capability already used by knowledge libraries.
         // ensured 来自知识库已使用的同一上游能力。
-        let ensured = self
-            .client
-            .ensure_sqlite_fts_index(
-                VMM_SPACE_ID,
-                &self.sqlite_binding_id,
-                VMM_LEXICAL_INDEX,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("初始化原生 VMM 全文索引失败：{error}"))?;
+        let ensured = local_sql::ensure_fts_index(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
+            VMM_LEXICAL_INDEX,
+            TokenizerMode::Jieba,
+        )
+        .map_err(|error| format!("初始化原生 VMM 全文索引失败：{error}"))?;
         if !ensured.success
             || ensured.index_name != VMM_LEXICAL_INDEX
             || ensured.tokenizer_mode != "jieba"
         {
             return Err("原生 VMM 全文索引未返回声明的 Jieba 索引".to_owned());
         }
-        // schema contains no user values and is safe for the controller's unparameterized script API.
-        // schema 不含用户值，可安全使用控制器的无参数脚本 API。
-        let schema = self
-            .client
-            .execute_sqlite_script_typed(
-                VMM_SPACE_ID,
-                &self.sqlite_binding_id,
-                LEXICAL_SCHEMA,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("初始化原生 VMM 全文文档表失败：{error}"))?;
+        // schema contains no user values and is safe for the unparameterized script path.
+        // schema 不含用户值，可安全使用无参数脚本路径。
+        let schema = local_sql::execute_script(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
+            LEXICAL_SCHEMA,
+            &[],
+        )
+        .map_err(|error| format!("初始化原生 VMM 全文文档表失败：{error}"))?;
         if !schema.success {
             return Err("原生 VMM 全文文档表初始化未成功".to_owned());
         }
@@ -189,18 +190,15 @@ impl VmmDataPlaneHandle {
     /// Neither memory identities, vectors nor authoritative text are changed or regenerated.
     /// 不改变或重新生成记忆身份、向量及权威文本。
     pub async fn rebuild_lexical_index(&self) -> Result<u64, String> {
-        // rebuilt is the actual controller receipt, not a count inferred from a Core snapshot.
-        // rebuilt 是实际控制器回执，而不是从 Core 快照推断的数量。
-        let rebuilt = self
-            .client
-            .rebuild_sqlite_fts_index(
-                VMM_SPACE_ID,
-                &self.sqlite_binding_id,
-                VMM_LEXICAL_INDEX,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("重建原生 VMM 全文索引失败：{error}"))?;
+        // rebuilt is the actual engine receipt, not a count inferred from a Core snapshot.
+        // rebuilt 是实际引擎回执，而不是从 Core 快照推断的数量。
+        let rebuilt = local_sql::rebuild_fts_index(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
+            VMM_LEXICAL_INDEX,
+            TokenizerMode::Jieba,
+        )
+        .map_err(|error| format!("重建原生 VMM 全文索引失败：{error}"))?;
         if !rebuilt.success
             || rebuilt.index_name != VMM_LEXICAL_INDEX
             || rebuilt.tokenizer_mode != "jieba"
@@ -235,13 +233,17 @@ impl VmmDataPlaneHandle {
             .map_err(|error| format!("序列化原生 VMM 全文文档失败：{error}"))?;
         // result updates only text changes, avoiding needless reindexing on recall-counter updates.
         // result 仅更新文本变化，避免召回计数更新引发无谓重建索引。
-        let result = self.client.execute_sqlite_script_typed(VMM_SPACE_ID, &self.sqlite_binding_id,
+        let result = local_sql::execute_script(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
             r#"INSERT INTO vmm_lexical_documents(memory_id, summary, details)
                SELECT json_extract(value, '$.memory_id'), json_extract(value, '$.summary'), json_extract(value, '$.details')
                FROM json_each(?) WHERE 1
                ON CONFLICT(memory_id) DO UPDATE SET summary = excluded.summary, details = excluded.details
                WHERE summary != excluded.summary OR details != excluded.details;"#,
-            vec![sqlite_text(serialized)]).await.map_err(|error| format!("更新原生 VMM 全文文档失败：{error}"))?;
+            &[sqlite_text(serialized)],
+        )
+        .map_err(|error| format!("更新原生 VMM 全文文档失败：{error}"))?;
         if !result.success {
             return Err("原生 VMM 全文文档更新未成功".to_owned());
         }
@@ -260,9 +262,13 @@ impl VmmDataPlaneHandle {
             .map_err(|error| format!("序列化原生 VMM 全文删除列表失败：{error}"))?;
         // result includes the trigger-driven deletion of the associated FTS rows.
         // result 包含触发器驱动的关联全文行删除。
-        let result = self.client.execute_sqlite_script_typed(VMM_SPACE_ID, &self.sqlite_binding_id,
+        let result = local_sql::execute_script(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
             "DELETE FROM vmm_lexical_documents WHERE memory_id IN (SELECT value FROM json_each(?));",
-            vec![sqlite_text(serialized)]).await.map_err(|error| format!("删除原生 VMM 全文文档失败：{error}"))?;
+            &[sqlite_text(serialized)],
+        )
+        .map_err(|error| format!("删除原生 VMM 全文文档失败：{error}"))?;
         if !result.success {
             return Err("原生 VMM 全文文档删除未成功".to_owned());
         }
@@ -289,17 +295,14 @@ impl VmmDataPlaneHandle {
         }
         // tokenized provides the upstream safe MATCH expression, not raw user query syntax.
         // tokenized 提供上游安全 MATCH 表达式，而不是原始用户查询语法。
-        let tokenized = self
-            .client
-            .tokenize_sqlite_text(
-                VMM_SPACE_ID,
-                &self.sqlite_binding_id,
-                ControllerSqliteTokenizerMode::Jieba,
-                query,
-                true,
-            )
-            .await
-            .map_err(|error| format!("原生 VMM 全文查询分词失败：{error}"))?;
+        let tokenized = local_sql::tokenize(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
+            TokenizerMode::Jieba,
+            query,
+            true,
+        )
+        .map_err(|error| format!("原生 VMM 全文查询分词失败：{error}"))?;
         if tokenized.tokenizer_mode != "jieba" {
             return Err("原生 VMM 全文查询未使用声明的 Jieba 分词器".to_owned());
         }
@@ -308,10 +311,17 @@ impl VmmDataPlaneHandle {
         }
         // result uses the exact upstream BM25 expression without fabricated similarity conversion.
         // result 使用精确上游 BM25 表达式，不伪造相似度换算。
-        let result = self.client.query_sqlite_json_typed(VMM_SPACE_ID, &self.sqlite_binding_id,
+        let result = local_sql::query_json(
+            self.local.as_ref(),
+            LogicalDatabase::VmmMetadata,
             "SELECT id AS memory_id, bm25(vmm_memory_fts, 2.0, 1.0) AS raw_score FROM vmm_memory_fts WHERE vmm_memory_fts MATCH ? ORDER BY raw_score ASC, id ASC LIMIT ? OFFSET ?;",
-            vec![sqlite_text(tokenized.fts_query), ControllerSqliteValue::Int64(i64::from(limit)), ControllerSqliteValue::Int64(i64::from(offset))])
-            .await.map_err(|error| format!("查询原生 VMM 全文索引失败：{error}"))?;
+            &[
+                sqlite_text(tokenized.fts_query),
+                SqliteValue::Integer(i64::from(limit)),
+                SqliteValue::Integer(i64::from(offset)),
+            ],
+        )
+        .map_err(|error| format!("查询原生 VMM 全文索引失败：{error}"))?;
         // hits retain original negative BM25 values and exact physical ordering.
         // hits 保留原始负 BM25 值及精确物理顺序。
         let hits: Vec<VmmLexicalHit> = serde_json::from_str(&result.json_data)

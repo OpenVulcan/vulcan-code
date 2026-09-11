@@ -24,7 +24,7 @@ use crate::{
 pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     active_stream_task_id: Uuid,
     request: &ExecutionPreparationRequest,
@@ -48,7 +48,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
 pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     active_stream_task_id: Uuid,
     request: &ExecutionPreparationRequest,
@@ -72,7 +72,7 @@ pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
 async fn maybe_auto_compact_webui_session_with_mode(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     active_stream_task_id: Uuid,
     request: &ExecutionPreparationRequest,
@@ -831,7 +831,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
 pub(crate) async fn persist_failed_webui_context_compaction(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    _controller_runtime: &ControllerRuntimeHandle,
+    _controller_runtime: &HostRuntimeHandle,
     active_stream_task_id: Uuid,
     session_id: SessionId,
     previous_phase: SessionRunPhase,

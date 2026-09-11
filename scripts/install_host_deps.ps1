@@ -1,11 +1,11 @@
-﻿# install_host_deps.ps1 - Install host dependencies and bundled plugin artifacts.
+# install_host_deps.ps1 - Install host dependencies and bundled plugin artifacts.
 # install_host_deps.ps1 - 安装宿主依赖与内建插件制品。
 # Developer/build use only. End users do not need to invoke this manually.
 # 仅供开发与构建使用，最终用户无需手动调用。
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_host_deps.ps1
 
 param(
-    [ValidateSet("all", "vldb", "rtk")]
+    [ValidateSet("all", "rtk")]
     [string]$Kind = "all"
 )
 
@@ -18,14 +18,6 @@ $script:IsMacOSPlatform   = [System.Runtime.InteropServices.RuntimeInformation]:
 $script:IsLinuxPlatform   = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
 
 $ThirdParty = Join-Path $ProjectDir "third_party"
-$VldbControllerDir = Join-Path $ThirdParty "vldb_controller"
-$VldbControllerBinDir = Join-Path $VldbControllerDir "bin"
-# VldbControllerOutputBinDir is the runtime directory preferred by packaged and debug launches.
-# VldbControllerOutputBinDir 是打包运行与调试启动优先使用的运行时目录。
-$VldbControllerOutputBinDir = Join-Path $ProjectDir "output\bin"
-$VldbControllerRepo = "OpenVulcan/vldb-controller"
-$VldbControllerTag = "v0.2.4"
-
 # RtkPluginDir is the real RTK plugin package owned and distributed by Vulcan Code.
 # RtkPluginDir 是由 Vulcan Code 持有并分发的真实 RTK 插件包。
 $RtkPluginDir = Join-Path $ProjectDir "plugins\vulcan-rtk"
@@ -156,67 +148,6 @@ function Get-ReleaseByTagOrNull {
     }
 }
 
-function Get-VldbControllerAssetInfo {
-    $archKey = Get-CurrentArchitectureKey
-
-    if ($script:IsWindowsPlatform) {
-        if ($archKey -ne "x86_64") {
-            throw "vldb-controller prebuilt host binary currently supports Windows x86_64 only. Current arch: $archKey"
-        }
-        return @{
-            target = "x86_64-pc-windows-msvc"
-            archive_ext = ".zip"
-            binary_name = "vldb-controller.exe"
-        }
-    }
-
-    if ($script:IsLinuxPlatform) {
-        $target = "x86_64-unknown-linux-gnu"
-        if ($archKey -eq "aarch64") {
-            $target = "aarch64-unknown-linux-gnu"
-        }
-        return @{
-            target = $target
-            archive_ext = ".tar.gz"
-            binary_name = "vldb-controller"
-        }
-    }
-
-    if ($script:IsMacOSPlatform) {
-        $target = "x86_64-apple-darwin"
-        if ($archKey -eq "aarch64") {
-            $target = "aarch64-apple-darwin"
-        }
-        return @{
-            target = $target
-            archive_ext = ".tar.gz"
-            binary_name = "vldb-controller"
-        }
-    }
-
-    throw "Unsupported platform for vldb-controller bootstrap"
-}
-
-# Sync-VldbControllerRuntimeBinary copies the installed controller into the runtime-preferred output directory.
-# Sync-VldbControllerRuntimeBinary 将已安装控制器复制到运行时优先使用的 output 目录。
-# SourcePath identifies the exact verified executable installed under third_party; BinaryName is its platform filename.
-# SourcePath 指向 third_party 下已安装的准确可执行文件；BinaryName 是对应平台文件名。
-# This function returns no value and throws when the runtime copy cannot be completed.
-# 此函数不返回值，并在运行时副本无法完成同步时抛出错误。
-function Sync-VldbControllerRuntimeBinary {
-    param(
-        [string]$SourcePath,
-        [string]$BinaryName
-    )
-
-    Ensure-Dir $VldbControllerOutputBinDir
-    # runtimeBinaryPath is the exact executable path resolved first by Vulcan Code launches.
-    # runtimeBinaryPath 是 Vulcan Code 启动时优先解析的准确可执行文件路径。
-    $runtimeBinaryPath = Join-Path $VldbControllerOutputBinDir $BinaryName
-    Copy-Item -LiteralPath $SourcePath -Destination $runtimeBinaryPath -Force
-    Write-Host "==> vldb-controller runtime binary synchronized: $runtimeBinaryPath"
-}
-
 # Get-RtkAssetInfo resolves the RTK release asset for the current host platform and architecture.
 function Get-RtkAssetInfo {
     $archKey = Get-CurrentArchitectureKey
@@ -275,106 +206,6 @@ function Get-RtkAssetInfo {
     }
 
     throw "Unsupported platform for RTK bootstrap"
-}
-
-function Install-VldbControllerBinary {
-    Ensure-Dir $VldbControllerDir
-    Ensure-Dir $VldbControllerBinDir
-
-    $assetInfo = Get-VldbControllerAssetInfo
-    $tarPath = Get-AvailableTarPath
-    $release = $null
-    $tagName = $null
-    $assetName = $null
-    $markerFile = $null
-    $localArchivePath = $null
-
-    $localPattern = "vldb-controller-v*-$($assetInfo.target)$($assetInfo.archive_ext)"
-    $localArchive = Get-ChildItem -Path $ThirdParty -File -Filter $localPattern -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending |
-        Select-Object -First 1
-    if (-not $localArchive) {
-        $localArchive = Get-ChildItem -Path $ThirdParty -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Get-ChildItem -Path $_.FullName -File -Filter $localPattern -ErrorAction SilentlyContinue } |
-            Sort-Object Name -Descending |
-            Select-Object -First 1
-    }
-
-    if ($localArchive) {
-        $assetName = $localArchive.Name
-        if ($assetName -match '^vldb-controller-(v.+)-[^-]+(?:-[^-]+){2,3}(\.zip|\.tar\.gz)$') {
-            $tagName = $Matches[1]
-        } else {
-            throw "Unable to parse vldb-controller tag from local archive name: $assetName"
-        }
-        $markerFile = Join-Path $VldbControllerDir ".installed-$tagName-$($assetInfo.target)"
-        $localArchivePath = $localArchive.FullName
-    } else {
-        $tagName = $VldbControllerTag
-        $assetName = "vldb-controller-$tagName-$($assetInfo.target)$($assetInfo.archive_ext)"
-        $markerFile = Join-Path $VldbControllerDir ".installed-$tagName-$($assetInfo.target)"
-        $localArchivePath = Find-LocalArchive -AssetName $assetName
-    }
-
-    $binaryDest = Join-Path $VldbControllerBinDir $assetInfo.binary_name
-
-    if ((Test-Path -LiteralPath $markerFile) -and (Test-Path -LiteralPath $binaryDest)) {
-        Write-Host "==> vldb-controller host binary already installed ($assetName)."
-        Sync-VldbControllerRuntimeBinary -SourcePath $binaryDest -BinaryName $assetInfo.binary_name
-        return
-    }
-
-    if (-not $localArchivePath) {
-        $release = Get-ReleaseByTagOrNull -Repo $VldbControllerRepo -TagName $tagName
-        if (-not $release) {
-            throw ("vldb-controller tag '{0}' currently has no GitHub Release host binary asset. Please download the artifact '{1}' manually and place it under third_party (or one direct child directory) before rerunning. Existing local binaries are not reused for a different target tag because their version cannot be proven from this install path." -f $tagName, $assetName)
-        }
-
-        $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-        if (-not $asset) {
-            $available = ($release.assets | ForEach-Object { $_.name }) -join ", "
-            throw ("vldb-controller asset '{0}' not found in release '{1}'. Available assets: {2}" -f $assetName, $tagName, $available)
-        }
-    }
-
-    $tempDir = Join-Path $env:TEMP ('vldb_controller_{0}' -f $PID)
-    if (Test-Path -LiteralPath $tempDir) {
-        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    Ensure-Dir $tempDir
-
-    try {
-        $archivePath = Join-Path $tempDir $assetName
-        if ($localArchivePath) {
-            Write-Host "==> Using local vldb-controller package: $localArchivePath"
-            Copy-Item -LiteralPath $localArchivePath -Destination $archivePath -Force
-        } else {
-            Write-Host "==> Downloading vldb-controller package: $assetName"
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath -UseBasicParsing
-        }
-
-        if ($assetInfo.archive_ext -eq ".zip") {
-            Expand-Archive -Path $archivePath -DestinationPath $tempDir -Force
-        } else {
-            & $tarPath -xzf $archivePath -C $tempDir
-        }
-
-        $binarySource = Get-ChildItem -Path $tempDir -Recurse -File -Filter $assetInfo.binary_name -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if (-not $binarySource) {
-            throw ("Executable '{0}' not found after extracting {1}" -f $assetInfo.binary_name, $assetName)
-        }
-
-        Copy-Item -LiteralPath $binarySource.FullName -Destination $binaryDest -Force
-
-        Get-ChildItem -Path $VldbControllerDir -Filter ".installed-*" -File -ErrorAction SilentlyContinue |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-        New-Item -ItemType File -Path $markerFile -Force | Out-Null
-        Write-Host "==> vldb-controller host binary installed successfully."
-        Sync-VldbControllerRuntimeBinary -SourcePath $binaryDest -BinaryName $assetInfo.binary_name
-    } finally {
-        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
 }
 
 # Install-RtkBinary installs the pinned RTK executable into the target-specific plugin bin directory.
@@ -490,12 +321,8 @@ function Install-RtkLicense {
 
 switch ($Kind) {
     "all" {
-        Install-VldbControllerBinary
         Install-RtkBinary
         Install-RtkLicense
-    }
-    "vldb" {
-        Install-VldbControllerBinary
     }
     "rtk" {
         Install-RtkBinary

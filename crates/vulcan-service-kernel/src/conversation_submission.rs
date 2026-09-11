@@ -42,7 +42,7 @@ use crate::session_v1_lifecycle::{
 };
 
 use super::{
-    ControllerRuntimeHandle, ExistingSubmissionAdmissionAuthorization, MaterializedPromptSession,
+    ExistingSubmissionAdmissionAuthorization, HostRuntimeHandle, MaterializedPromptSession,
     PromptSessionMaterializationKind, SharedServiceBridgeState, active_kernel_session_ids,
     capture_preserved_workspace_run_state, capture_webui_prompt_preparation_generation,
     capture_webui_prompt_preparation_workspace, composer_attachment_draft_scope,
@@ -2054,7 +2054,7 @@ struct ExistingSubmissionV1Authority {
 /// 定位或加载不一致错误。
 async fn load_existing_submission_v1_authority(
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     session_id: SessionId,
 ) -> Result<ExistingSubmissionV1Authority, String> {
     // locator is queried explicitly because the queue must bind resource registration to SQLite's
@@ -2109,7 +2109,7 @@ async fn load_existing_submission_v1_authority(
 /// 唯一注册槽后返回。
 async fn materialize_submission_session_v1(
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     materialized_session: &MaterializedPromptSession,
     client_submission_id: &str,
     root_text: &str,

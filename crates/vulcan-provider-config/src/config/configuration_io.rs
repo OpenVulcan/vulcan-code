@@ -150,13 +150,6 @@ pub struct ProviderConfigurationFile {
     /// 持久化的 MCP 服务器配置块。
     #[serde(default, skip_serializing_if = "PersistedMcpConfiguration::is_empty")]
     pub mcp: PersistedMcpConfiguration,
-    /// Persisted controller bootstrap configuration.
-    /// 持久化的控制器引导配置。
-    #[serde(
-        default,
-        skip_serializing_if = "PersistedControllerConfiguration::is_default"
-    )]
-    pub controller: PersistedControllerConfiguration,
     /// Persisted prompt-composer configuration.
     /// 持久化的提示词组合配置。
     #[serde(
@@ -585,25 +578,6 @@ pub fn save_project_configuration_file(
     }
     crate::atomic_file::write_file_atomically(&path, content.as_bytes())
         .map_err(|error| format!("写入项目配置失败：{error}。"))
-}
-
-/// Loads the shared controller bootstrap configuration from the runtime configuration directory.
-/// 从运行时配置目录加载共享控制器引导配置。
-pub fn load_controller_configuration_file() -> Result<PersistedControllerConfiguration, String> {
-    let path = runtime_assets::resolve_controller_config_file_path();
-
-    // path_exists preserves access/probe failures instead of treating them as an absent optional file.
-    // path_exists 保留访问与探测失败，不把它们误当成可选文件缺失。
-    let path_exists = path
-        .try_exists()
-        .map_err(|error| format!("探测控制器配置文件失败（{}）：{error}。", path.display()))?;
-    if !path_exists {
-        return Ok(PersistedControllerConfiguration::default());
-    }
-
-    let text = read_bounded_configuration_text(&path, "控制器配置文件")?;
-
-    serde_json::from_str(&text).map_err(|error| format!("解析控制器配置文件失败：{}。", error))
 }
 
 /// Loads the persisted provider configuration file from disk.

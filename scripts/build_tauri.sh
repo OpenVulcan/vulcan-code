@@ -12,10 +12,6 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # ProjectDir 保存仓库根目录，确保子命令路径稳定。
 ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
 
-# ControllerProfileScriptPath points at the build-profile-aware generated Controller configuration updater.
-# ControllerProfileScriptPath 指向按构建模式更新 Controller 生成配置的脚本。
-ControllerProfileScriptPath="$ScriptDir/configure_controller_profile.sh"
-
 # Release stores whether this build should target Cargo release output.
 # Release 保存本次构建是否面向 Cargo release 产物。
 Release=0
@@ -42,16 +38,6 @@ case "$(uname -s 2>/dev/null || printf unknown)" in
 esac
 
 cd "$ProjectDir"
-
-if [ ! -f "$ControllerProfileScriptPath" ]; then
-    echo "Missing Controller profile configuration script: $ControllerProfileScriptPath" >&2
-    exit 1
-fi
-if [ "$Release" = "1" ]; then
-    sh "$ControllerProfileScriptPath" --release
-else
-    sh "$ControllerProfileScriptPath"
-fi
 
 if [ "$Release" = "1" ]; then
     if [ ! -d "$WebAppDir/node_modules" ]; then

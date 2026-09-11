@@ -9,12 +9,14 @@ use super::super::models::{
 use super::super::schema::{KNOWLEDGE_DISPLAY_FTS_INDEX_PREFIX, display_schema_script};
 use super::vector::vector_table_name;
 use super::{
-    APP_SPACE_ID, CountRow, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT, RRF_K, int, nonnegative_u64,
-    text, unix_epoch_millis, validate_generation_id,
+    CountRow, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT, RRF_K, int, nonnegative_u64, text,
+    unix_epoch_millis, validate_generation_id,
 };
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use vldb_controller_client::ControllerSqliteTokenizerMode;
+use vulcan_sqlite_engine::tokenizer::TokenizerMode;
 
 /// One display-document count returned by a generation aggregate query.
 /// 一次显示库代次聚合查询返回的文档计数。
@@ -225,17 +227,15 @@ impl KnowledgeBaseRuntime {
     /// 返回显示结构初始化成功，或其明确错误。
     pub async fn ensure_display_storage(&self, library_id: &str) -> Result<(), String> {
         self.require_active_library(library_id).await?;
-        let (space_id, binding_id) = self.activate_display_binding(library_id, true).await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                &display_schema_script(library_id),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("初始化知识库显示库 SQLite 结构失败：{error}"))?;
+        let (_space_id, binding_id) = self.activate_display_binding(library_id, true).await?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            display_schema_script(library_id),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("初始化知识库显示库 SQLite 结构失败：{error}"))?;
         Ok(())
     }
 
@@ -260,38 +260,32 @@ impl KnowledgeBaseRuntime {
     ) -> Result<String, String> {
         validate_generation_id(generation)?;
         self.ensure_display_storage(library_id).await?;
-        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let (_space_id, binding_id) = self.ensure_display_binding(library_id).await?;
         let fts_index = display_fts_index_name(generation)?;
-        self.controller
-            .client
-            .ensure_sqlite_fts_index(
-                &space_id,
-                &binding_id,
-                &fts_index,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("初始化显示库 Jieba FTS 索引失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "DELETE FROM display_chunks WHERE generation = ?;",
-                vec![text(generation)],
-            )
-            .await
-            .map_err(|error| format!("清理显示库代次切片失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "DELETE FROM display_documents WHERE generation = ?;",
-                vec![text(generation)],
-            )
-            .await
-            .map_err(|error| format!("清理显示库代次文档失败：{error}"))?;
+        local_sql::ensure_fts_index_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            &fts_index,
+            TokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("初始化显示库 Jieba FTS 索引失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "DELETE FROM display_chunks WHERE generation = ?;",
+            vec![text(generation)],
+        )
+        .await
+        .map_err(|error| format!("清理显示库代次切片失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "DELETE FROM display_documents WHERE generation = ?;",
+            vec![text(generation)],
+        )
+        .await
+        .map_err(|error| format!("清理显示库代次文档失败：{error}"))?;
         Ok(fts_index)
     }
 
@@ -316,18 +310,16 @@ impl KnowledgeBaseRuntime {
     ) -> Result<String, String> {
         validate_generation_id(generation)?;
         self.ensure_display_storage(library_id).await?;
-        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let (_space_id, binding_id) = self.ensure_display_binding(library_id).await?;
         let fts_index = display_fts_index_name(generation)?;
-        self.controller
-            .client
-            .ensure_sqlite_fts_index(
-                &space_id,
-                &binding_id,
-                &fts_index,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("恢复显示库 Jieba FTS 索引失败：{error}"))?;
+        local_sql::ensure_fts_index_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            &fts_index,
+            TokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("恢复显示库 Jieba FTS 索引失败：{error}"))?;
         Ok(fts_index)
     }
 
@@ -371,19 +363,16 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化显示库待完成状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&settings_json),
                     int(unix_epoch_millis()?),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存显示库待完成状态失败：{error}"))?;
         self.get_library(library_id).await
     }
@@ -461,40 +450,33 @@ impl KnowledgeBaseRuntime {
     ) -> Result<(), String> {
         validate_generation_id(generation)?;
         validate_display_fts_index(fts_index)?;
-        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let (_space_id, binding_id) = self.ensure_display_binding(library_id).await?;
         let delete_fts_sql = format!(
             "DELETE FROM {fts_index} WHERE id IN (SELECT c.id FROM display_chunks AS c JOIN display_documents AS d ON d.id = c.display_document_id WHERE d.source_document_id = ? AND d.generation = ? AND c.generation = ?);"
         );
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                &delete_fts_sql,
-                vec![text(source_document_id), text(generation), text(generation)],
-            )
-            .await
-            .map_err(|error| format!("清理显示库旧 FTS 切片失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            &delete_fts_sql,
+            vec![text(source_document_id), text(generation), text(generation)],
+        )
+        .await
+        .map_err(|error| format!("清理显示库旧 FTS 切片失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
                 "DELETE FROM display_chunks WHERE display_document_id IN (SELECT id FROM display_documents WHERE source_document_id = ? AND generation = ?);",
                 vec![text(source_document_id), text(generation)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("清理显示库旧切片失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "DELETE FROM display_documents WHERE source_document_id = ? AND generation = ?;",
-                vec![text(source_document_id), text(generation)],
-            )
-            .await
-            .map_err(|error| format!("清理显示库旧文档失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "DELETE FROM display_documents WHERE source_document_id = ? AND generation = ?;",
+            vec![text(source_document_id), text(generation)],
+        )
+        .await
+        .map_err(|error| format!("清理显示库旧文档失败：{error}"))?;
         Ok(())
     }
 
@@ -533,86 +515,80 @@ impl KnowledgeBaseRuntime {
         {
             return Err(String::from("显示库文档与切片代次不一致"));
         }
-        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let (_space_id, binding_id) = self.ensure_display_binding(library_id).await?;
         let keywords_json = serde_json::to_string(&document.keywords)
             .map_err(|error| format!("序列化显示库关键词失败：{error}"))?;
         let symbols_json = serde_json::to_string(&document.symbols)
             .map_err(|error| format!("序列化显示库符号失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                r#"INSERT INTO display_documents(
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            r#"INSERT INTO display_documents(
                     id, source_document_id, source_sha256, relative_path, folder_path, title,
                     summary, keywords_json, symbols_json, embedding_text, markdown, generation,
                     generated_at_ms
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
-                vec![
-                    text(&document.id),
-                    text(&document.source_document_id),
-                    text(&document.source_sha256),
-                    text(&document.relative_path),
-                    text(&document.folder_path),
-                    text(&document.title),
-                    text(&document.summary),
-                    text(&keywords_json),
-                    text(&symbols_json),
-                    text(&document.embedding_text),
-                    text(&document.markdown),
-                    text(&document.generation),
-                    int(document.generated_at_ms),
-                ],
-            )
-            .await
-            .map_err(|error| format!("写入显示库文档失败：{error}"))?;
+            vec![
+                text(&document.id),
+                text(&document.source_document_id),
+                text(&document.source_sha256),
+                text(&document.relative_path),
+                text(&document.folder_path),
+                text(&document.title),
+                text(&document.summary),
+                text(&keywords_json),
+                text(&symbols_json),
+                text(&document.embedding_text),
+                text(&document.markdown),
+                text(&document.generation),
+                int(document.generated_at_ms),
+            ],
+        )
+        .await
+        .map_err(|error| format!("写入显示库文档失败：{error}"))?;
         for chunk in chunks {
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    &space_id,
-                    &binding_id,
-                    r#"INSERT INTO display_chunks(
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding_id)?,
+                r#"INSERT INTO display_chunks(
                         id, display_document_id, ordinal, heading_path, start_line, end_line,
                         content, embedding_text, generation
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
-                    vec![
-                        text(&chunk.id),
-                        text(&chunk.display_document_id),
-                        int(i64::try_from(chunk.ordinal)
-                            .map_err(|_| String::from("显示库切片序号超出 SQLite 整数范围"))?),
-                        text(&chunk.heading_path),
-                        int(i64::try_from(chunk.start_line)
-                            .map_err(|_| String::from("显示库切片起始行超出 SQLite 整数范围"))?),
-                        int(i64::try_from(chunk.end_line)
-                            .map_err(|_| String::from("显示库切片结束行超出 SQLite 整数范围"))?),
-                        text(&chunk.content),
-                        text(&chunk.embedding_text),
-                        text(&chunk.generation),
-                    ],
-                )
-                .await
-                .map_err(|error| format!("写入显示库切片失败：{error}"))?;
-            self.controller
-                .client
-                .upsert_sqlite_fts_document(
-                    &space_id,
-                    &binding_id,
-                    fts_index,
-                    ControllerSqliteTokenizerMode::Jieba,
-                    &chunk.id,
-                    &document.relative_path,
-                    &document.title,
-                    &format!(
-                        "{}\n{}\n{}\n{}",
-                        document.title,
-                        document.summary,
-                        document.keywords.join(" "),
-                        chunk.content
-                    ),
-                )
-                .await
-                .map_err(|error| format!("写入显示库 Jieba FTS 切片失败：{error}"))?;
+                vec![
+                    text(&chunk.id),
+                    text(&chunk.display_document_id),
+                    int(i64::try_from(chunk.ordinal)
+                        .map_err(|_| String::from("显示库切片序号超出 SQLite 整数范围"))?),
+                    text(&chunk.heading_path),
+                    int(i64::try_from(chunk.start_line)
+                        .map_err(|_| String::from("显示库切片起始行超出 SQLite 整数范围"))?),
+                    int(i64::try_from(chunk.end_line)
+                        .map_err(|_| String::from("显示库切片结束行超出 SQLite 整数范围"))?),
+                    text(&chunk.content),
+                    text(&chunk.embedding_text),
+                    text(&chunk.generation),
+                ],
+            )
+            .await
+            .map_err(|error| format!("写入显示库切片失败：{error}"))?;
+            local_sql::upsert_fts_document_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding_id)?,
+                fts_index,
+                TokenizerMode::Jieba,
+                &chunk.id,
+                &document.relative_path,
+                &document.title,
+                &format!(
+                    "{}\n{}\n{}\n{}",
+                    document.title,
+                    document.summary,
+                    document.keywords.join(" "),
+                    chunk.content
+                ),
+            )
+            .await
+            .map_err(|error| format!("写入显示库 Jieba FTS 切片失败：{error}"))?;
         }
         Ok(())
     }
@@ -666,35 +642,26 @@ impl KnowledgeBaseRuntime {
                 "原始库在显示库生成期间发生变化，已拒绝发布过期显示代次",
             ));
         }
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
                 "INSERT INTO display_metadata(key, value) VALUES ('active_generation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 vec![text(generation)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("发布显示库活动代次失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
                 "INSERT INTO display_metadata(key, value) VALUES ('active_fts_index', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 vec![text(fts_index)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("发布显示库活动 FTS 索引失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
                 "INSERT INTO display_metadata(key, value) VALUES ('source_content_revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 vec![int(source_content_revision)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("发布显示库来源修订失败：{error}"))?;
         Ok(document_count)
     }
@@ -757,19 +724,16 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化显示库成功状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&settings_json),
                     int(unix_epoch_millis()?),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存显示库成功状态失败：{error}"))?;
         self.get_library(library_id).await
     }
@@ -804,32 +768,29 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化显示库状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&settings_json),
                     int(unix_epoch_millis()?),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存显示库生命周期状态失败：{error}"))?;
         self.get_library(library_id).await
     }
 
-    /// Searches the active display generation with the controller-managed Jieba BM25 index.
-    /// 使用控制器管理的 Jieba BM25 索引检索当前活动显示库代次。
+    /// Searches the active display generation with the host-managed Jieba BM25 index.
+    /// 使用宿主管理的 Jieba BM25 索引检索当前活动显示库代次。
     ///
     /// # Parameters
     /// 参数
     /// `library_id` is the canonical UUID of the owning library.
     /// `library_id` 是所属知识库的规范 UUID。
-    /// `query` is the user query passed to controller-managed Jieba tokenization.
-    /// `query` 是交由控制器管理的 Jieba 分词器处理的用户查询。
+    /// `query` is the user query passed to host-managed Jieba tokenization.
+    /// `query` 是交由宿主管理的 Jieba 分词器处理的用户查询。
     /// `limit` is the requested result/page bound, clamped by this API.
     /// `limit` 是请求的结果或分页上限，由当前接口限制。
     ///
@@ -871,18 +832,15 @@ impl KnowledgeBaseRuntime {
             .ok_or_else(|| String::from("显示库活动 FTS 索引缺失。"))?;
         validate_generation_id(&generation)?;
         validate_display_fts_index(&fts_index)?;
-        let tokenized_query = self
-            .controller
-            .client
-            .tokenize_sqlite_text(
-                &space_id,
-                &binding_id,
-                ControllerSqliteTokenizerMode::Jieba,
-                query,
-                true,
-            )
-            .await
-            .map_err(|error| format!("构建显示库 Jieba FTS 查询失败：{error}"))?;
+        let tokenized_query = local_sql::tokenize_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            TokenizerMode::Jieba,
+            query,
+            true,
+        )
+        .await
+        .map_err(|error| format!("构建显示库 Jieba FTS 查询失败：{error}"))?;
         let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
         let sql = format!(
             r#"SELECT f.id, d.source_document_id, d.title, d.relative_path,
@@ -939,8 +897,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the canonical UUID of the owning library.
     /// `library_id` 是所属知识库的规范 UUID。
-    /// `query` is the user query passed to controller-managed Jieba tokenization.
-    /// `query` 是交由控制器管理的 Jieba 分词器处理的用户查询。
+    /// `query` is the user query passed to host-managed Jieba tokenization.
+    /// `query` 是交由宿主管理的 Jieba 分词器处理的用户查询。
     /// `query_vector` is the embedding computed for the query in the indexed model space.
     /// `query_vector` 是按已索引模型空间计算的查询向量。
     /// `limit` is the requested result/page bound, clamped by this API.

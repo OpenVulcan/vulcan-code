@@ -307,7 +307,7 @@ pub(super) async fn verify(
         .clone();
     // Each real V1 cache has its own isolated lifetime and declared storage locator.
     // 每个真实 V1 缓存拥有独立隔离生命周期及声明存储定位器。
-    let root = crate::tests::test_support::TestControllerRuntimeRoot::new(session_id);
+    let root = crate::tests::test_support::TestHostRuntimeRoot::new(session_id);
     // Service metadata uses the same real host binding as intake.
     // 服务元数据使用与入库相同的真实宿主绑定。
     let mut service =

@@ -7,7 +7,7 @@ use vulcan_session_core::v1::document::{
 };
 use vulcan_session_core::v1::event::EventBody;
 use vulcan_workbench_model::{PendingSessionPromptEntry, PendingSessionPromptSource, SessionId};
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::workspace_store::{
     load_project_resource_catalog, locate_session_v1_storage,
 };
@@ -56,7 +56,7 @@ use super::{
 pub(super) async fn maybe_start_webui_turn_chain_after_finished(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     finished_session_id: SessionId,
     receipt: SessionMutationReceipt<TurnCompletionTransition>,
@@ -154,7 +154,7 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
 pub(crate) async fn start_exact_v1_queued_turn(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     authority: SessionQueuedDispatchAuthority,
@@ -241,7 +241,7 @@ pub(crate) async fn start_exact_v1_queued_turn(
 pub(crate) async fn start_exact_v1_pending_in_turn(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     receipt: ApiGroupCompletionReceipt,
@@ -355,7 +355,7 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
 pub(crate) async fn start_exact_v1_user_root_turn(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     input_seq: vulcan_session_core::v1::ids::Seq,
@@ -453,7 +453,7 @@ pub(crate) async fn start_exact_v1_user_root_turn(
 pub(crate) async fn start_exact_v1_subagent_return_turn(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     receipt: SubagentReturnReceipt,
@@ -524,7 +524,7 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
 pub(super) async fn maybe_start_session_goal_continuation_if_idle(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
 ) -> Result<bool, String> {

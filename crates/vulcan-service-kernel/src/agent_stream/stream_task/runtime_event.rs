@@ -102,7 +102,7 @@ struct RuntimeEventPhaseTransition {
 pub(super) async fn handle_runtime_stream_event(
     app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     request_trace_state: &mut StreamRequestTraceState,
     hook_policy: &RuntimeEventHookPolicy,

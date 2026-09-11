@@ -165,7 +165,7 @@ pub(crate) fn commit_prepared_stream_failure(
 pub(super) async fn handle_prepared_stream_event(
     app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     request: &ExecutionPreparationRequest,
     preparation: ExecutionPreparation,

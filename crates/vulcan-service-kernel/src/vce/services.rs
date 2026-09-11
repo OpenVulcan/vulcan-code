@@ -484,16 +484,16 @@ pub(crate) async fn service_update_vce_project_settings(
     // Hold the existing publication transaction through authoritative snapshot replacement, not runtime drain.
     // 持有现有发布事务直到权威快照替换，不跨运行时排空持有。
     let publication_guard = crate::begin_public_ai_configuration_transaction().await;
-    let (project, controller_runtime) = {
+    let (project, host_runtime) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let project = active_project_from_guard(&guard, &project_id)?;
-        let controller = guard
+        let host_runtime = guard
             .controller_runtime
             .clone()
-            .ok_or_else(|| String::from("控制器运行时尚未就绪。"))?;
-        (project, controller)
+            .ok_or_else(|| String::from("宿主存储运行时尚未就绪。"))?;
+        (project, host_runtime)
     };
     if project.vce.revision != request.expected_revision {
         return Err(format!(
@@ -512,7 +512,7 @@ pub(crate) async fn service_update_vce_project_settings(
     );
     next.validate()?;
     vulcan_workspace_store::workspace_store::persist_project_vce_settings(
-        controller_runtime,
+        host_runtime,
         &project_id,
         request.expected_revision,
         &next,

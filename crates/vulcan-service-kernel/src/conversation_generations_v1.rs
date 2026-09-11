@@ -179,7 +179,7 @@ fn root_input_resource_ids(
 async fn start_exact_generation_root(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller: &vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
+    controller: &vulcan_workspace_store::data_plane::HostRuntimeHandle,
     agent_runtime: &crate::AgentRuntimeBridge,
     handle: &SessionHandle,
     target_seq: Seq,

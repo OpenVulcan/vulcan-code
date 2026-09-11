@@ -9,41 +9,41 @@ const DEFAULT_WORKSPACE_PROJECT_ID_PREFIX: &str = "vulcanproject";
 ///
 /// # Parameters
 /// 参数
-/// `controller` provides access to the runtime data paths and shared controller services.
-/// `controller` 提供运行时数据路径与共享控制器服务访问能力。
+/// `host_runtime` provides access to the host-owned runtime data paths and in-process storage services.
+/// `host_runtime` 提供宿主持有的运行时数据路径与进程内存储服务访问能力。
 ///
 /// # Returns
 /// 返回值
 /// Returns the hydrated workspace snapshot, or a descriptive storage error.
 /// 返回已水合的工作区快照，或描述性的存储错误。
 pub async fn load_or_seed_workspace(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_snapshot(controller).await
+    load_workspace_snapshot(host_runtime).await
 }
 
 /// Loads the persisted workspace index without eagerly hydrating every session runtime state.
 /// 加载持久化工作区索引，但不急切水合每个会话运行态。
 pub async fn load_or_seed_workspace_index(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_index_snapshot(controller).await
+    load_workspace_index_snapshot(host_runtime).await
 }
 
 /// Loads the current persisted workspace snapshot from the project rows and V1 session index.
 /// 从项目记录与 V1 会话索引加载当前持久化工作台快照。
 pub async fn load_workspace_snapshot(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_snapshot_with_runtime_state(controller, true).await
+    load_workspace_snapshot_with_runtime_state(host_runtime, true).await
 }
 
 /// Loads the current persisted workspace index without full per-session runtime state.
 /// 加载当前持久化工作区索引，不包含每个会话的完整运行态。
 pub async fn load_workspace_index_snapshot(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_snapshot_with_runtime_state(controller, false).await
+    load_workspace_snapshot_with_runtime_state(host_runtime, false).await
 }
 
 /// Validated project row used by deterministic workspace loading and default-project decisions.
@@ -75,8 +75,8 @@ struct ValidatedProjectRow {
 ///
 /// # Parameters
 /// 参数
-/// `row` is the complete project row decoded from the Controller response.
-/// `row` 是从 Controller 响应解码出的完整项目行。
+/// `row` is the complete project row decoded from the in-process SQLite result.
+/// `row` 是从进程内 SQLite 结果解码出的完整项目行。
 ///
 /// # Returns
 /// 返回值
@@ -272,17 +272,17 @@ fn positive_project_usize(project_id: &str, field_name: &str, value: i64) -> Res
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the authoritative project SQLite binding.
-/// `controller` 持有权威项目 SQLite 绑定。
+/// `host_runtime` is the host runtime that owns the authoritative project SQLite binding.
+/// `host_runtime` 是持有权威项目 SQLite 绑定的宿主运行时。
 ///
 /// # Returns
 /// 返回值
 /// Returns all validated rows in query order or the first explicit corruption/query error.
 /// 按查询顺序返回全部已验证行，或返回首个显式损坏/查询错误。
 async fn query_validated_project_rows(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<Vec<ValidatedProjectRow>, String> {
-    query_project_rows(controller)
+    query_project_rows(host_runtime)
         .await?
         .into_iter()
         .map(validate_project_row)
@@ -357,15 +357,15 @@ fn descending_session_updated_at_key(
 /// Loads the current persisted workspace snapshot with an optional runtime-state pass.
 /// 按可选运行态加载过程读取当前持久化工作区快照。
 async fn load_workspace_snapshot_with_runtime_state(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     _load_runtime_state: bool,
 ) -> Result<WorkspaceSnapshot, String> {
     // project_rows are validated before their archive flags are allowed to trigger default seeding.
     // project_rows 在其归档标记获准触发默认播种前完成验证。
-    let mut project_rows = query_validated_project_rows(&controller).await?;
+    let mut project_rows = query_validated_project_rows(&host_runtime).await?;
     if workspace_requires_default_project(&project_rows) {
-        seed_default_workspace_project(&controller).await?;
-        project_rows = query_validated_project_rows(&controller).await?;
+        seed_default_workspace_project(&host_runtime).await?;
+        project_rows = query_validated_project_rows(&host_runtime).await?;
         if workspace_requires_default_project(&project_rows) {
             return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
         }
@@ -373,7 +373,7 @@ async fn load_workspace_snapshot_with_runtime_state(
     // Session-index bootstrap is non-essential to the desktop shell: an old profile without the
     // V1 table must start with an empty V1 index instead of failing the whole application.
     // 会话索引初始化并不是桌面壳启动的必要条件：缺少 V1 表的旧配置必须以空 V1 索引启动，不能让整个应用失败。
-    let session_index_available = match ensure_session_v1_storage_schema(&controller).await {
+    let session_index_available = match ensure_session_v1_storage_schema(&host_runtime).await {
         Ok(()) => true,
         Err(error) => {
             eprintln!(
@@ -386,7 +386,7 @@ async fn load_workspace_snapshot_with_runtime_state(
     if session_index_available {
         for validated_project in &project_rows {
             let project_id = validated_project.stored.id.as_str();
-            match list_active_sessions_v1(&controller, project_id).await {
+            match list_active_sessions_v1(&host_runtime, project_id).await {
                 Ok(sessions) => {
                     indexed_sessions.extend(sessions.into_iter().map(|session| (session, false)))
                 }
@@ -394,7 +394,7 @@ async fn load_workspace_snapshot_with_runtime_state(
                     "[workspace-store][session-index-v1-ignored] active list failed for project {project_id}; ignoring only that session list: {error}"
                 ),
             }
-            match list_archived_sessions_v1(&controller, project_id).await {
+            match list_archived_sessions_v1(&host_runtime, project_id).await {
                 Ok(sessions) => {
                     indexed_sessions.extend(sessions.into_iter().map(|session| (session, true)))
                 }
@@ -535,7 +535,7 @@ async fn load_workspace_snapshot_with_runtime_state(
         )
     });
 
-    let collapsed_task_projects = query_collapsed_task_project_ids(&controller)
+    let collapsed_task_projects = query_collapsed_task_project_ids(&host_runtime)
         .await?
         .unwrap_or_default();
     let expanded_task_projects = task_projects
@@ -571,16 +571,14 @@ async fn load_workspace_snapshot_with_runtime_state(
 ///
 /// # Parameters
 /// 参数
-/// `controller` is the controller-backed persistence handle used by workspace loading.
-/// `controller` 是工作区加载过程使用的控制器持久化句柄。
+/// `host_runtime` is the host-owned persistence handle used by workspace loading.
+/// `host_runtime` 是工作区加载过程使用的宿主持久化句柄。
 ///
 /// # Returns
 /// 返回值
 /// Returns `Ok(())` after the default directory and project row are ready.
 /// 默认目录与项目记录准备完成后返回 `Ok(())`。
-async fn seed_default_workspace_project(
-    controller: &ControllerRuntimeHandle,
-) -> Result<(), String> {
+async fn seed_default_workspace_project(host_runtime: &HostRuntimeHandle) -> Result<(), String> {
     let project_root = default_workspace_project_root()?;
     std::fs::create_dir_all(&project_root).map_err(|error| {
         format!(
@@ -600,7 +598,7 @@ async fn seed_default_workspace_project(
     // project 使用稳定标识生成与移除保护共享的逻辑默认根。
     let project =
         default_workspace_project_summary(workspace_project_path_text_from_path(&project_root));
-    persist_new_project(controller.clone(), &project).await
+    persist_new_project(host_runtime.clone(), &project).await
 }
 
 /// Ensures the workspace keeps at least one active project by restoring the default project when needed.
@@ -608,26 +606,26 @@ async fn seed_default_workspace_project(
 ///
 /// # Parameters
 /// 参数
-/// `controller` provides access to the controller-backed project index.
-/// `controller` 提供对控制器项目索引的访问能力。
+/// `host_runtime` provides access to the host-owned project index.
+/// `host_runtime` 提供对宿主持有项目索引的访问能力。
 ///
 /// # Returns
 /// 返回值
 /// Returns `Ok(())` after an active project exists or a storage error.
 /// 活动项目存在后返回 `Ok(())`，否则返回存储错误。
 pub async fn ensure_default_workspace_project(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
 ) -> Result<(), String> {
     // project_rows are validated before archive state can suppress or trigger seeding.
     // project_rows 在归档状态抑制或触发播种前完成验证。
-    let project_rows = query_validated_project_rows(&controller).await?;
+    let project_rows = query_validated_project_rows(&host_runtime).await?;
     if !workspace_requires_default_project(&project_rows) {
         return Ok(());
     }
-    seed_default_workspace_project(&controller).await?;
+    seed_default_workspace_project(&host_runtime).await?;
     // refreshed_rows prove the write actually published one active project.
     // refreshed_rows 证明写入实际发布了一个活动项目。
-    let refreshed_rows = query_validated_project_rows(&controller).await?;
+    let refreshed_rows = query_validated_project_rows(&host_runtime).await?;
     if workspace_requires_default_project(&refreshed_rows) {
         return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
     }

@@ -9,8 +9,8 @@ use std::path::Path;
 /// 跨准入、排队工作及持久终态处理保留的不可克隆操作系统句柄。
 /// Dropping the final owner closes the handle; the lock file is never removed or truncated.
 /// 最后持有者释放时关闭句柄；绝不删除或截断锁文件。
-/// This excludes cooperating hosts, but does not prove remote controller requests have drained.
-/// 此类型排斥协作宿主，但不证明远程控制器请求已经排空。
+/// This excludes cooperating hosts, but does not prove in-process storage operations have drained.
+/// 此类型排斥协作宿主，但不证明进程内存储操作已经排空。
 #[derive(Debug)]
 pub struct VceProjectWriterLease {
     /// Private handle cannot be cloned or explicitly unlocked through the public surface.

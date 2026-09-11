@@ -1,23 +1,21 @@
 //! Lightweight host-owned directory for project-isolated VCE storage.
 //! 项目隔离 VCE 存储使用的轻量宿主自有目录。
 
-use crate::data_plane::ControllerRuntimeHandle;
-use crate::runtime_assets;
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::SqliteFileBinding;
+use crate::local_sql;
 use crate::vce_data_plane::{
-    VCE_SPACE_ID, VceDataPlaneHandle, VceEmbeddingProvenance, VceJobKind, VceProjectIndex,
-    VceProjectIndexConfig, VceProjectJobStore, VceRebuildCandidateBase, VceStoredJob,
-    prepare_vce_storage_binding,
+    VceDataPlaneHandle, VceEmbeddingProvenance, VceJobKind, VceProjectIndex, VceProjectIndexConfig,
+    VceProjectJobStore, VceRebuildCandidateBase, VceStoredJob, prepare_vce_storage_binding,
 };
 use crate::vce_storage_paths::{VceProjectStoragePaths, VceProjectWriterLease, VceStoragePaths};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use vldb_controller_client::{
-    ControllerClient, ControllerSqliteEnableRequest, ControllerSqliteValue, SpaceKind,
-    SpaceRegistration,
-};
+use vulcan_sqlite_engine::runtime::{SqliteOpenOptions, SqlitePragmaOptions};
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Current catalog layout format; independent from engine checkpoints and vector schema versions.
 /// 当前目录布局格式；独立于引擎检查点与向量结构版本。
@@ -42,8 +40,8 @@ pub struct VceDataPlaneFactory {
 /// One cached binding, including incomplete closure that must finish before it can be reused.
 /// 一个缓存绑定，包含必须先完成才能复用的不完整关闭状态。
 struct CachedVceStore {
-    /// Exact controller handles with externally counted query/write leases.
-    /// 具有外部查询与写入租约计数的精确控制器句柄。
+    /// Exact data-plane handles with externally counted query/write leases.
+    /// 具有外部查询与写入租约计数的精确数据面句柄。
     handle: VceDataPlaneHandle,
     /// Whether partial teardown prohibits handing out this handle again.
     /// 部分拆卸是否禁止再次发放此句柄。
@@ -160,14 +158,14 @@ impl VceDataPlaneFactory {
         }
     }
 
-    /// Bootstrap only the lightweight catalog through the existing host controller.
-    /// 通过现有宿主控制器仅引导轻量目录。
+    /// Bootstraps only the lightweight catalog through the existing host runtime.
+    /// 通过现有宿主运行时仅引导轻量目录。
     ///
-    /// `controller` owns the resolved root and registration. Returns an empty lazy binding cache.
-    /// `controller` 持有已解析根与注册。返回空的惰性绑定缓存。
-    pub async fn bootstrap(controller: &ControllerRuntimeHandle) -> Result<Self, String> {
+    /// `host_runtime` owns the resolved root and registration. Returns an empty lazy binding cache.
+    /// `host_runtime` 持有已解析根与注册。返回空的惰性绑定缓存。
+    pub async fn bootstrap(host_runtime: &HostRuntimeHandle) -> Result<Self, String> {
         Ok(Self {
-            catalog: VceStorageCatalog::bootstrap(controller).await?,
+            catalog: VceStorageCatalog::bootstrap(host_runtime).await?,
             stores: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
@@ -327,8 +325,8 @@ impl VceDataPlaneFactory {
     /// 在一个写者租约下，用新的当前契约命名空间替换一个未初始化绑定。
     ///
     /// `previous` is the exact active or explicitly orphaned identity; `replacement` must use a
-    /// distinct namespace so stale controller requests cannot write the new binding.
-    /// 必须使用不同的命名空间，避免旧控制器请求写入新绑定。
+    /// distinct namespace so stale runtime requests cannot write the new binding.
+    /// 必须使用不同的命名空间，避免旧运行时请求写入新绑定。
     /// The returned lease remains held so the caller can start the replacement job without a race.
     /// 返回的租约会继续持有，使调用方可以无竞态地启动替换作业。
     pub async fn reinitialize_uninitialized_project_index(
@@ -563,15 +561,41 @@ impl VceDataPlaneFactory {
         // stores is held only for binding lifecycle, not by provider or vector query execution.
         // stores 仅用于绑定生命周期，不被供应商调用或向量查询执行持有。
         let mut stores = self.stores.lock().await;
+        // Preflight every lease before changing any binding. A rejected shutdown must leave the
+        // still-running application with the exact cache state it had before the attempt.
+        // 在修改任何绑定前预检全部租约。关闭被拒绝时，仍在运行的应用必须保留尝试前的精确缓存状态。
+        if stores
+            .values()
+            .any(|store| Arc::strong_count(&store.handle.lease) != 1)
+        {
+            return Err(String::from("VCE storage still has live project leases"));
+        }
         for store in stores.values_mut() {
-            if Arc::strong_count(&store.handle.lease) != 1 {
-                return Err(String::from("VCE storage still has live project leases"));
-            }
             store.closing = true;
             store.handle.close_bindings().await?;
         }
         stores.clear();
         Ok(())
+    }
+
+    /// Lists cached owners and closure state for lifecycle regression tests.
+    /// 为生命周期回归测试列出缓存所有者及关闭状态。
+    ///
+    /// Takes no parameters and returns entries in the cache's deterministic key order.
+    /// 无参数，按缓存的确定键顺序返回条目。
+    #[cfg(test)]
+    pub(crate) async fn cached_store_states(&self) -> Vec<(String, bool)> {
+        self.stores
+            .lock()
+            .await
+            .values()
+            .map(|store| {
+                (
+                    store.handle.project_owner_for_test().to_owned(),
+                    store.closing,
+                )
+            })
+            .collect()
     }
 
     /// Select only the catalog-published project store; no old-layout probing or adaptation.
@@ -651,7 +675,7 @@ impl VceDataPlaneFactory {
         // handle is opened only after location checks and cache admission succeeded.
         // handle 仅在位置检查与缓存准入成功后打开。
         let handle = prepare_vce_storage_binding(
-            self.catalog.client.clone(),
+            &self.catalog.host_runtime,
             root.to_path_buf(),
             owner,
             create,
@@ -684,15 +708,15 @@ impl VceDataPlaneFactory {
 /// 仅包含位置的宿主目录，绝不据此断言项目拥有可用索引。
 #[derive(Clone)]
 pub(crate) struct VceStorageCatalog {
-    /// Shared controller registration supplied by VulcanCode.
-    /// VulcanCode 提供的共享控制器注册。
-    client: ControllerClient,
+    /// Host runtime that owns the in-process engine serving this catalog.
+    /// 拥有服务本目录的进程内引擎的宿主运行时。
+    host_runtime: HostRuntimeHandle,
     /// Checked host data paths; no environment fallback is allowed here.
     /// 已检查的宿主数据路径；此处不允许环境变量兜底。
     paths: VceStoragePaths,
     /// Exact metadata-only SQLite binding, independent from every project binding.
     /// 精确的仅元数据 SQLite 绑定，独立于全部项目绑定。
-    binding_id: String,
+    binding: SqliteFileBinding,
 }
 
 /// Persisted ownership of one project directory, not code-index initialization state.
@@ -741,57 +765,50 @@ struct CatalogVersionRow {
     schema_version: u32,
 }
 
+/// Builds the catalog's exact in-process SQLite binding.
+/// 构建目录精确的进程内 SQLite 绑定。
+///
+/// The catalog declares only options enforced by the in-process engine. Host-side runtime
+/// serialization provides the concurrency boundary instead of exposing a fictitious pool size.
+/// 目录只声明进程内引擎实际执行的选项。并发边界由宿主运行时串行化提供，不再暴露虚假的连接池大小。
+fn catalog_sqlite_binding(path: PathBuf) -> SqliteFileBinding {
+    SqliteFileBinding {
+        path,
+        options: SqliteOpenOptions {
+            pragmas: SqlitePragmaOptions {
+                cache_size_kib: 4_096,
+                mmap_size_bytes: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    }
+}
 impl VceStorageCatalog {
-    /// Bootstrap only the catalog using the already registered host controller.
-    /// 使用已注册宿主控制器仅引导轻量目录。
+    /// Bootstraps only the catalog using the already registered host runtime.
+    /// 使用已注册宿主运行时仅引导轻量目录。
     ///
-    /// `controller` owns the resolved application root and client. Returns a metadata-only
+    /// `host_runtime` owns the resolved application root and local database runtime. Returns a metadata-only
     /// catalog handle; no historical project is opened and no vector database is created.
-    /// `controller` 持有已解析应用根与客户端。返回仅元数据目录句柄；
+    /// `host_runtime` 持有已解析应用根与本地数据库运行时。返回仅元数据目录句柄；
     /// 不打开任何历史项目，也不创建任何向量数据库。
-    pub(crate) async fn bootstrap(controller: &ControllerRuntimeHandle) -> Result<Self, String> {
-        // paths is derived exclusively from the verified controller-owned root.
-        // paths 仅从已验证的控制器自有根派生。
-        let paths = VceStoragePaths::resolve(&controller.data_root)?;
-        // catalog_path is checked before controller activation may open the file.
-        // catalog_path 在控制器激活可能打开文件前完成检查。
+    pub(crate) async fn bootstrap(host_runtime: &HostRuntimeHandle) -> Result<Self, String> {
+        // paths is derived exclusively from the verified host-owned root.
+        // paths 仅从已验证的宿主自有根派生。
+        let paths = VceStoragePaths::resolve(&host_runtime.data_root)?;
+        // catalog_path is checked before engine activation may open the file.
+        // catalog_path 在引擎激活可能打开文件前完成检查。
         let catalog_path = paths.prepare_catalog()?;
         // existed distinguishes a new catalog from an existing catalog requiring version validation.
         // existed 区分新目录与需要版本校验的现有目录。
         let existed = catalog_path.is_file();
-        // binding_id is process-instance scoped and cannot collide with a project SQLite binding.
-        // binding_id 按进程实例划定作用域，不会与项目 SQLite 绑定冲突。
-        let binding_id = format!("vce-catalog-{}", uuid::Uuid::new_v4().simple());
-        // client reuses the host registration and never starts a second controller service.
-        // client 复用宿主注册，绝不启动第二个控制器服务。
-        let client = controller.client.clone();
-        client
-            .attach_space(SpaceRegistration {
-                space_id: String::from(VCE_SPACE_ID),
-                space_label: String::from("VCE Code Context"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(paths.root()),
-            })
-            .await
-            .map_err(|error| format!("Attach VCE catalog space: {error}"))?;
-        client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: String::from(VCE_SPACE_ID),
-                binding_id: binding_id.clone(),
-                db_path: runtime_assets::native_host_path_text_from_path(&catalog_path),
-                connection_pool_size: 2,
-                cache_size_kib: 4_096,
-                mmap_size_bytes: 0,
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .map_err(|error| format!("Open VCE storage catalog: {error}"))?;
-        // catalog takes ownership of the exact binding before initialization can fail.
-        // catalog 在初始化可能失败之前接管精确绑定。
+        // The catalog database is served only by this host runtime, so no external process can open it.
+        // That keeps ownership local and makes its handle ours to close.
+        // 目录数据库只由本宿主运行时服务，因此外部进程无法打开它。这使所有权保持在本地，句柄也由我们关闭。
         let catalog = Self {
-            client,
+            host_runtime: host_runtime.clone(),
             paths,
-            binding_id,
+            binding: catalog_sqlite_binding(catalog_path),
         };
         if let Err(error) = catalog.initialize(existed).await {
             return match catalog.close().await {
@@ -820,7 +837,7 @@ impl VceStorageCatalog {
         // rows 仅限一个精确主键，无需全局项目扫描。
         let rows: Vec<VceProjectStorageLocation> = self.query(
             "SELECT project_id, project_key, relative_root, layout_version, location_version, layout_state FROM vce_storage_projects WHERE project_id = ?;",
-            vec![ControllerSqliteValue::String(project_id.to_owned())],
+            vec![SqliteValue::Text(project_id.to_owned())],
         ).await?;
         if rows.len() > 1 {
             return Err(String::from(
@@ -852,7 +869,7 @@ impl VceStorageCatalog {
         let project = self.paths.prepare_project(project_id)?;
         self.execute(
             "INSERT INTO vce_storage_projects(project_id, project_key, relative_root, layout_version, location_version, layout_state) VALUES (?, ?, ?, 1, 1, 'allocated') ON CONFLICT(project_id) DO NOTHING;",
-            vec![ControllerSqliteValue::String(project_id.to_owned()), ControllerSqliteValue::String(project.project_key.clone()), ControllerSqliteValue::String(format!("projects/{}", project.project_key))],
+            vec![SqliteValue::Text(project_id.to_owned()), SqliteValue::Text(project.project_key.clone()), SqliteValue::Text(format!("projects/{}", project.project_key))],
         ).await?;
         self.project_location(project_id)
             .await?
@@ -871,7 +888,7 @@ impl VceStorageCatalog {
             .ok_or_else(|| String::from("VCE allocation is missing"))?;
         self.execute(
             "UPDATE vce_storage_projects SET layout_state = 'published' WHERE project_id = ? AND layout_state = 'allocated';",
-            vec![ControllerSqliteValue::String(project_id.to_owned())],
+            vec![SqliteValue::Text(project_id.to_owned())],
         ).await?;
         // published verifies the durable location receipt; no checkpoint facts are duplicated here.
         // published 验证持久化位置回执；此处不重复保存检查点事实。
@@ -901,10 +918,14 @@ impl VceStorageCatalog {
     /// Takes no extra parameters and returns success when already absent or successfully closed.
     /// 无额外参数，已不存在或成功关闭时返回成功。
     pub(crate) async fn close(&self) -> Result<(), String> {
-        self.client
-            .disable_sqlite(VCE_SPACE_ID, &self.binding_id)
-            .await
-            .map_err(|error| format!("Close VCE catalog: {error}"))?;
+        // No external service owns this database, so there is no remote binding to disable. The in-process
+        // handle must be closed instead: the engine keeps every opened database alive until
+        // told otherwise, and on Windows an open file makes its containing directory undeletable, which
+        // is exactly what a VCE layout change needs to do.
+        // 没有外部服务持有该数据库，因此没有远程绑定需要停用。关闭进程内句柄：引擎会保持每个已打开的
+        // 数据库存活直到被告知关闭，而在 Windows 上打开的文件会使其所在目录无法删除——而 VCE 的布局变更正是
+        // 要删除它。
+        self.host_runtime.local.close_sqlite_file(&self.binding);
         Ok(())
     }
 
@@ -935,46 +956,32 @@ impl VceStorageCatalog {
         Ok(())
     }
 
-    /// Execute a bounded metadata mutation through the host controller and validate its receipt.
-    /// 通过宿主控制器执行有界元数据修改并校验回执。
+    /// Executes a bounded metadata mutation through the host runtime and validates its result.
+    /// 通过宿主运行时执行有界元数据修改并校验结果。
     ///
     /// `sql` and `parameters` are exact catalog-owned statements and bindings. Returns explicit errors.
     /// `sql` 与 `parameters` 是目录自有的精确语句和绑定值。失败时返回明确错误。
-    async fn execute(
-        &self,
-        sql: &str,
-        parameters: Vec<ControllerSqliteValue>,
-    ) -> Result<(), String> {
-        // result is the authoritative controller mutation receipt.
-        // result 是权威控制器修改回执。
-        let result = self
-            .client
-            .execute_sqlite_script_typed(VCE_SPACE_ID, &self.binding_id, sql, parameters)
+    async fn execute(&self, sql: &str, parameters: Vec<SqliteValue>) -> Result<(), String> {
+        local_sql::execute_script_async(&self.host_runtime.local, &self.binding, sql, parameters)
             .await
             .map_err(|error| format!("Write VCE storage catalog: {error}"))?;
-        if !result.success {
-            return Err(format!("Write VCE storage catalog: {}", result.message));
-        }
         Ok(())
     }
 
-    /// Decode an exact metadata query through the existing controller row-array contract.
-    /// 通过现有控制器行数组契约解码精确元数据查询。
+    /// Decodes an exact metadata query through the existing host row-array contract.
+    /// 通过现有宿主行数组契约解码精确元数据查询。
     ///
     /// `sql` and `parameters` select catalog-owned metadata; returns typed rows or an explicit error.
     /// `sql` 与 `parameters` 选择目录自有元数据；返回类型化行或明确错误。
     async fn query<T: for<'de> Deserialize<'de>>(
         &self,
         sql: &str,
-        parameters: Vec<ControllerSqliteValue>,
+        parameters: Vec<SqliteValue>,
     ) -> Result<Vec<T>, String> {
-        // result contains the controller's authoritative JSON row-array response.
-        // result 包含控制器的权威 JSON 行数组响应。
-        let result = self
-            .client
-            .query_sqlite_json_typed(VCE_SPACE_ID, &self.binding_id, sql, parameters)
-            .await
-            .map_err(|error| format!("Read VCE storage catalog: {error}"))?;
+        let result =
+            local_sql::query_json_async(&self.host_runtime.local, &self.binding, sql, parameters)
+                .await
+                .map_err(|error| format!("Read VCE storage catalog: {error}"))?;
         serde_json::from_str(&result.json_data)
             .map_err(|error| format!("Decode VCE storage catalog: {error}"))
     }

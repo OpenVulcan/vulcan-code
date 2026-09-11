@@ -41,7 +41,7 @@ pub(crate) fn context_compaction_usage_segment_from_execution(
 /// 自动续接路径会等待此函数，确保重建请求不会与建立新上下文边界的转录写入竞态。
 pub(crate) async fn persist_context_compaction_snapshot(
     state: SharedServiceBridgeState,
-    _controller_runtime: ControllerRuntimeHandle,
+    _controller_runtime: HostRuntimeHandle,
     workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     _section_id: String,
@@ -64,7 +64,7 @@ pub(crate) async fn persist_context_compaction_snapshot(
 /// 为不阻塞手动流程启动后台压缩持久化任务。
 pub(crate) fn spawn_context_compaction_persist_task(
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     section_id: String,

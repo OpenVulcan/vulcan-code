@@ -6,15 +6,9 @@ use crate::{ServiceEventEmitter, vce};
 use futures_util::FutureExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-    ControllerSqliteEnableRequest, SpaceKind, SpaceRegistration,
-};
 use vulcan_provider_adapters::PublicAiRuntime;
 use vulcan_workbench_model::ProjectVceSettings;
-use vulcan_workspace_store::data_plane::{
-    APP_SPACE_ID, ControllerRuntimeHandle, ControllerRuntimeMetadata,
-};
+use vulcan_workspace_store::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 use vulcan_workspace_store::vce_data_plane::{VceDataPlaneFactory, VceJobKind, VceJobState};
 
 /// Require explicit billed-call authorization and a numeric dimension; never runs in ordinary test suites.
@@ -71,80 +65,33 @@ fn live_saved_models_index_and_retrieve_temporary_project() {
     executor.block_on(async {
         // The isolated managed controller uses an ephemeral endpoint, not the application's controller.
         // 隔离托管控制器使用临时端点，而非应用控制器。
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve test port");
-        let port = listener.local_addr().expect("test address").port();
-        drop(listener);
-        let executable = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../output/bin/vldb-controller.exe");
-        assert!(executable.is_file());
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            ClientRegistration {
-                client_name: format!("vce-live-{}", uuid::Uuid::new_v4()),
-                host_kind: "test".into(),
-                process_id: std::process::id(),
-                process_name: "vce-live-acceptance".into(),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client.connect().await.expect("connect private controller");
         // Always release this controller even when a live provider or assertion fails.
         // 即使真实供应商调用或断言失败，也始终释放本测试控制器。
         let outcome = std::panic::AssertUnwindSafe(async {
-            // Credential reads use the production resolver with an enforced read-only database binding.
-            // 凭据读取使用生产解析器，并强制数据库绑定只读。
+            // Credential reads use the production resolver against a private copy of the saved database.
+            // The controller used to attach the user's file read-only; the in-process runtime has no
+            // per-binding read-only mode, so the copy is what keeps this acceptance test from opening a
+            // database the user owns. Saved routes live in the file, so a copy preserves what is validated.
+            // 凭据读取使用生产解析器，针对已保存数据库的私有副本。控制器过去以只读方式附着用户的文件；
+            // 进程内运行时没有按绑定的只读模式，因此正是这份副本使本验收测试不会打开用户拥有的数据库。
+            // 已保存路由就在该文件里，故副本保留了被验证的内容。
             let user_root = config_path.parent().expect("configuration parent");
-            let sqlite_path = user_root.join("sqlite/app-workspace.sqlite3");
+            let saved_sqlite_path = user_root.join("sqlite/app-workspace.sqlite3");
             assert!(
-                sqlite_path.is_file(),
+                saved_sqlite_path.is_file(),
                 "existing credential database required"
             );
+            let sqlite_path = data_root.join("saved-credentials.sqlite3");
+            std::fs::copy(&saved_sqlite_path, &sqlite_path)
+                .expect("copy saved credential database");
             let binding_id = format!("vce-live-credentials-{}", uuid::Uuid::new_v4());
-            client
-                .attach_space(SpaceRegistration {
-                    space_id: APP_SPACE_ID.into(),
-                    space_label: "APP".into(),
-                    space_kind: SpaceKind::User,
-                    space_root: user_root.display().to_string(),
-                })
-                .await
-                .expect("attach credential read space");
-            client
-                .enable_sqlite(ControllerSqliteEnableRequest {
-                    space_id: APP_SPACE_ID.into(),
-                    binding_id: binding_id.clone(),
-                    db_path: sqlite_path.display().to_string(),
-                    read_only: true,
-                    connection_pool_size: 1,
-                    ..ControllerSqliteEnableRequest::default()
-                })
-                .await
-                .expect("open read-only credentials");
-            let controller = ControllerRuntimeHandle::new(
-                client.clone(),
-                ControllerRuntimeMetadata {
-                    endpoint,
-                    executable: executable.display().to_string(),
-                    data_root: data_root.clone(),
-                    sqlite_path,
-                    sqlite_binding_id: binding_id,
-                    system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
-                    system_statistics_sqlite_binding_id: "unused-live-statistics".into(),
-                },
-            );
+            let controller = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+                data_root: data_root.clone(),
+                sqlite_path,
+                sqlite_binding_id: binding_id,
+                system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
+                system_statistics_sqlite_binding_id: "unused-live-statistics".into(),
+            });
             let runtime = Arc::new(
                 PublicAiRuntime::first_batch(Arc::new(
                     crate::ai_credential_secret_store::SqliteAiCredentialSecretStore::new(
@@ -301,7 +248,6 @@ fn live_saved_models_index_and_retrieve_temporary_project() {
         })
         .catch_unwind()
         .await;
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);
         }

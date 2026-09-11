@@ -3952,6 +3952,22 @@ impl SessionRuntimeRegistry {
             .shutting_down = false;
         Ok(())
     }
+
+    /// Reports whether the registry currently accepts new root turns in tests.
+    /// 在测试中报告注册表当前是否接纳新的根回合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact inverse of the registry shutdown fence.
+    /// 返回注册表关闭栅栏的精确反值。
+    #[cfg(test)]
+    pub(crate) fn accepts_root_turns_for_test(&self) -> Result<bool, SessionRuntimeError> {
+        Ok(!self
+            .state
+            .lock()
+            .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?
+            .shutting_down)
+    }
 }
 
 #[cfg(test)]

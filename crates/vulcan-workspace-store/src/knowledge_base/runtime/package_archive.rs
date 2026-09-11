@@ -148,8 +148,8 @@ pub(super) fn canonical_knowledge_package_path(path: &Path) -> Result<PathBuf, S
 ///
 /// # Returns
 /// 返回值
-/// Validated archive metadata and retained temporary files; controller-level SQLite checks remain with installation.
-/// 返回已校验归档元数据及生命周期受控的临时文件；控制器级 SQLite 检查仍由安装负责。
+/// Validated archive metadata and retained temporary files; host-level SQLite checks remain with installation.
+/// 返回已校验归档元数据及生命周期受控的临时文件；宿主级 SQLite 检查仍由安装负责。
 pub(super) fn prepare_knowledge_package(
     archive_path: &Path,
     temporary_parent: &Path,

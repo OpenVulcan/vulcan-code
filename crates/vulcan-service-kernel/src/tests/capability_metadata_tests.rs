@@ -13,10 +13,10 @@ use vulcan_session_core::v1::config::ProviderToolSelectionConfig;
 #[tokio::test(flavor = "current_thread")]
 async fn capability_metadata_rpc_does_not_load_turns_or_write_on_read() {
     // The isolated controller exercises the same SQLite locator path used by desktop RPCs.
-    // 隔离控制器验证与桌面 RPC 相同的 SQLite 定位路径。
+    // 隔离宿主存储验证与桌面 RPC 相同的 SQLite 定位路径。
     let session_id = SessionId::from_u128(0x62c2);
-    let fixture = TestControllerRuntimeRoot::new(session_id);
-    let (client, controller) = fixture.attached_controller_runtime_handle().await;
+    let fixture = TestHostRuntimeRoot::new(session_id);
+    let controller = fixture.attached_host_runtime_handle().await;
     let locator = fixture.v1_storage_locator();
     std::fs::remove_dir_all(fixture.v1_session_directory().join("segments")).unwrap();
     std::fs::remove_dir_all(fixture.v1_session_directory().join("context")).unwrap();
@@ -160,7 +160,6 @@ async fn capability_metadata_rpc_does_not_load_turns_or_write_on_read() {
             .session_runtime_state
             .is_empty()
     );
-    client.shutdown().await.unwrap();
 }
 
 /// A fresh process reads saved choices and can rebuild a malformed addon via the actual RPC router.
@@ -171,8 +170,8 @@ async fn capability_metadata_reopen_and_rebuild_rpc_preserves_conversation() {
     // scenario 固定在堆上，因为完整重开服务桥与RPC Future组合后会超过默认测试线程栈。
     Box::pin(async {
         let session_id = SessionId::from_u128(0x62c3);
-        let fixture = TestControllerRuntimeRoot::new(session_id);
-        let (client, controller) = Box::pin(fixture.attached_controller_runtime_handle()).await;
+        let fixture = TestHostRuntimeRoot::new(session_id);
+        let controller = Box::pin(fixture.attached_host_runtime_handle()).await;
         let locator = fixture.v1_storage_locator();
         let path = fixture.v1_session_directory().join("metadata.json");
         let initial: serde_json::Value =
@@ -278,7 +277,6 @@ async fn capability_metadata_reopen_and_rebuild_rpc_preserves_conversation() {
         }
         assert_eq!(final_metadata, expected);
         assert!(vulcan_workspace_store::workspace_store::load_session_v1_tail(&locator).is_ok());
-        Box::pin(client.shutdown()).await.unwrap();
     })
     .await;
 }

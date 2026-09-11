@@ -1,96 +1,31 @@
-//! Real isolated controller tests for VMM's dedicated Jieba/BM25 storage.
-//! VMM 独立 Jieba/BM25 存储的真实隔离控制器测试。
+//! Real isolated in-process tests for VMM's dedicated Jieba/BM25 storage.
+//! VMM 独立 Jieba/BM25 存储的真实隔离进程内测试。
 
 use super::*;
-use crate::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
+use crate::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 use crate::vmm_data_plane::bootstrap_vmm_data_plane;
-use std::path::PathBuf;
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-    ControllerSqliteEnableRequest, SpaceKind, SpaceRegistration,
-};
 
 /// Exercises actual bundled SQLite/Jieba, not a mocked tokenizer or a substring scoring function.
 /// 验证实际随附 SQLite/Jieba，而不是模拟分词器或子串评分函数。
 #[tokio::test]
-async fn real_controller_native_lexical_index_lifecycle() {
+async fn in_process_native_lexical_index_lifecycle() {
     // temporary owns every database used by this test; the user's memory directory is never opened.
     // temporary 拥有本测试的全部数据库；绝不打开用户记忆目录。
     let temporary = tempfile::tempdir().expect("isolated VMM FTS root");
-    // listener reserves an ephemeral endpoint independent of all other controller tests.
-    // listener 为本测试预留独立于其他控制器测试的临时端点。
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral port");
-    let port = listener.local_addr().expect("local port").port();
-    drop(listener);
-    // executable is the same bundled controller used by the existing knowledge-library acceptance.
-    // executable 与既有知识库验收使用同一个随附控制器。
-    let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("output/bin/vldb-controller.exe");
-    assert!(executable.is_file(), "bundled controller must exist");
-    // endpoint and client keep registration, leases and service state local to this test process.
-    // endpoint 和 client 将注册、租约及服务状态限定在本测试进程。
-    let endpoint = format!("http://127.0.0.1:{port}");
-    let client = ControllerClient::new(
-        ControllerClientConfig {
-            endpoint: endpoint.clone(),
-            auto_spawn: true,
-            spawn_executable: Some(executable.display().to_string()),
-            spawn_process_mode: ControllerProcessMode::Managed,
-            minimum_uptime_secs: 0,
-            idle_timeout_secs: 1,
-            default_lease_ttl_secs: 30,
-            connect_timeout_secs: 30,
-            startup_timeout_secs: 15,
-            startup_retry_interval_ms: 100,
-            lease_renew_interval_secs: 10,
-        },
-        ClientRegistration {
-            client_name: format!("vmm-fts-test-{}", uuid::Uuid::new_v4()),
-            host_kind: "test".to_owned(),
-            process_id: std::process::id(),
-            process_name: "vmm-fts-test".to_owned(),
-            lease_ttl_secs: Some(30),
-        },
-    );
-    client.connect().await.expect("real controller");
     // data_root and app_path are real test bindings for the standard VMM bootstrap owner.
     // data_root 与 app_path 是标准 VMM 引导宿主使用的真实测试绑定。
     let data_root = temporary.path().join("data");
     std::fs::create_dir_all(&data_root).expect("data root");
     let app_path = data_root.join("app.sqlite3");
-    client
-        .attach_space(SpaceRegistration {
-            space_id: "app".to_owned(),
-            space_label: "test app".to_owned(),
-            space_kind: SpaceKind::User,
-            space_root: data_root.display().to_string(),
-        })
-        .await
-        .expect("app space");
-    client
-        .enable_sqlite(ControllerSqliteEnableRequest {
-            space_id: "app".to_owned(),
-            binding_id: "test-app".to_owned(),
-            db_path: app_path.display().to_string(),
-            ..ControllerSqliteEnableRequest::default()
-        })
-        .await
-        .expect("app binding");
     // runtime uses the actual host bootstrap, including VMM's separate SQLite and LanceDB paths.
     // runtime 使用实际宿主引导，包含 VMM 分离的 SQLite 与 LanceDB 路径。
-    let runtime = ControllerRuntimeHandle::new(
-        client.clone(),
-        ControllerRuntimeMetadata {
-            endpoint,
-            executable: executable.display().to_string(),
-            data_root,
-            sqlite_path: app_path.clone(),
-            sqlite_binding_id: "test-app".to_owned(),
-            system_statistics_sqlite_path: app_path,
-            system_statistics_sqlite_binding_id: "test-app".to_owned(),
-        },
-    );
+    let runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+        data_root,
+        sqlite_path: app_path.clone(),
+        sqlite_binding_id: "test-app".to_owned(),
+        system_statistics_sqlite_path: app_path,
+        system_statistics_sqlite_binding_id: "test-app".to_owned(),
+    });
     let vmm = bootstrap_vmm_data_plane(&runtime)
         .await
         .expect("VMM bootstrap");
@@ -321,8 +256,4 @@ async fn real_controller_native_lexical_index_lifecycle() {
         0
     );
     assert_eq!(vmm.rebuild_lexical_index().await.expect("empty rebuild"), 0);
-    client
-        .shutdown()
-        .await
-        .expect("shutdown isolated controller");
 }

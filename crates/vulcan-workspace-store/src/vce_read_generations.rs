@@ -9,7 +9,7 @@ use super::{
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use vldb_controller_client::ControllerSqliteValue;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Exact immutable producer identity for one member of a committed checkpoint.
 /// 已提交检查点中一个成员的精确不可变生产身份。
@@ -248,7 +248,7 @@ impl VceProjectIndex {
     pub(super) async fn query_management_rows<T: for<'de> Deserialize<'de>>(
         &self,
         sql: &str,
-        params: Vec<ControllerSqliteValue>,
+        params: Vec<SqliteValue>,
     ) -> Result<Vec<T>, String> {
         // A lease retains all referenced versions; shadow only content views, never live job tables.
         // 租约保留全部引用版本；仅覆盖内容视图，不覆盖实时作业表。
@@ -420,7 +420,7 @@ impl VceProjectIndex {
         };
         self.data_plane.execute(
             "INSERT INTO vce_read_leases(namespace_id, lease_id, owner_run_id, checkpoint_version, created_at_unix_ms) SELECT namespace_id, ?, ?, checkpoint_version, ? FROM vce_checkpoints WHERE namespace_id = ? AND checkpoint_version = ? AND checkpoint_json = ?;",
-            vec![sqlite_text(&lease.lease_id), sqlite_text(owner_run_id), ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+            vec![sqlite_text(&lease.lease_id), sqlite_text(owner_run_id), SqliteValue::Integer(current_unix_epoch_millis_i64()?),
                 sqlite_text(&self.binding.namespace_id), version, sqlite_text(snapshot)],
             "固定 VCE 已发布检查点失败",
         ).await?;

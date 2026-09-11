@@ -1,9 +1,8 @@
-//! LuaSkills runtime bootstrap helpers layered on top of the shared controller client.
-//! 构建在共享控制器客户端之上的 LuaSkills 运行时引导辅助模块。
+//! LuaSkills runtime bootstrap helpers layered on top of the in-process storage engine.
+//! 构建在进程内存储引擎之上的 LuaSkills 运行时引导辅助模块。
 
 use crate::model::SessionId;
 use crate::project_temp_maintenance;
-use crate::provider_config::{PersistedControllerConfiguration, PersistedControllerProcessMode};
 use crate::runtime_assets;
 use crate::tool_result_format::{
     EffectiveBudgetScope, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
@@ -18,11 +17,11 @@ use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeCapabilityOptions,
     LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig,
-    LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeClientInfo,
-    RuntimeEntryDescriptor, RuntimeInvocationResult, RuntimeRequestContext,
-    RuntimeSkillOperationProgressEvent, RuntimeSkillRoot, SkillInstallRequest,
-    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
-    SkillUninstallOptions, ToolCacheConfig, set_skill_operation_progress_callback,
+    LuaVmPoolConfig, RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeInvocationResult,
+    RuntimeRequestContext, RuntimeSkillOperationProgressEvent, RuntimeSkillRoot,
+    SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority, SkillManager,
+    SkillManagerConfig, SkillMeta, SkillUninstallOptions, ToolCacheConfig,
+    set_skill_operation_progress_callback,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -33,6 +32,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
 
+pub mod database_bridge;
+pub mod database_callbacks;
+pub mod host_database_providers;
 mod runlua;
 
 /// Process-local sequence used to correlate all diagnostics from one LuaSkills host invocation.
@@ -58,21 +60,17 @@ use types::{
 /// 为宿主轮询快照保留的 LuaSkills 进度事件最大排队数量。
 const LUASKILLS_PROGRESS_EVENT_QUEUE_LIMIT: usize = 256;
 
-/// Bootstraps one minimal LuaSkills runtime after the controller data plane is ready.
-/// 在控制器数据平面就绪后引导一个最小化的 LuaSkills 运行时。
-pub async fn bootstrap_luaskills_runtime(
-    controller: PersistedControllerConfiguration,
-) -> Result<LuaSkillsBootstrapReport, String> {
+/// Bootstraps one minimal LuaSkills runtime after the in-process data plane is ready.
+/// 在进程内数据平面就绪后引导一个最小化的 LuaSkills 运行时。
+pub async fn bootstrap_luaskills_runtime() -> Result<LuaSkillsBootstrapReport, String> {
     run_luaskills_blocking_task("luaskills-bootstrap", move || {
-        bootstrap_luaskills_runtime_blocking(controller)
+        bootstrap_luaskills_runtime_blocking()
     })
 }
 
 /// Bootstraps one minimal LuaSkills runtime inside one blocking host thread.
 /// 在单个阻塞宿主线程内部引导一个最小化的 LuaSkills 运行时。
-fn bootstrap_luaskills_runtime_blocking(
-    controller: PersistedControllerConfiguration,
-) -> Result<LuaSkillsBootstrapReport, String> {
+fn bootstrap_luaskills_runtime_blocking() -> Result<LuaSkillsBootstrapReport, String> {
     let runtime_root = application_luaskills_runtime_root().ok_or_else(|| {
         String::from("未找到 LuaSkills 活动运行根，请先执行 make sync 并从 output 目录启动应用。")
     })?;
@@ -122,7 +120,6 @@ fn bootstrap_luaskills_runtime_blocking(
         &runtime_root,
         &managed_runtime_distribution_root,
         &skill_config_root,
-        controller,
         &runtime_settings,
     );
     let pool_config = LuaVmPoolConfig {
@@ -910,13 +907,12 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     ])
 }
 
-/// Builds one host option object that forces LuaSkills to route both databases through the controller.
-/// 构建一份宿主选项对象，强制 LuaSkills 通过控制器路由 SQLite 与 LanceDB。
+/// Builds one host option object that routes both LuaSkills databases through this process's own engine.
+/// 构建一份宿主选项对象，使 LuaSkills 的两个数据库都经由本进程自身的引擎。
 fn build_host_options(
     runtime_root: &Path,
     managed_runtime_distribution_root: &Path,
     skill_config_root: &Path,
-    controller: PersistedControllerConfiguration,
     runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
     // lua_runtime_root enforces the native-path invariant at the final LuaSkills HostOptions boundary.
@@ -973,35 +969,18 @@ fn build_host_options(
             .enable_skill_management_bridge,
         enable_managed_io_compat: runtime_settings.capabilities.enable_managed_io_compat,
     };
-    host_options.sqlite_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
-    host_options.lancedb_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
-    host_options.space_controller.endpoint = controller
-        .endpoint
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| Some(runtime_assets::default_vldb_controller_endpoint()));
-    host_options.space_controller.auto_spawn = controller.auto_spawn;
-    host_options.space_controller.executable_path = controller
-        .executable_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(runtime_assets::resolve_bundled_controller_executable_path)
-        .map(|path| runtime_assets::native_host_path(&path));
-    host_options.space_controller.process_mode = match controller.process_mode {
-        PersistedControllerProcessMode::Service => LuaRuntimeSpaceControllerProcessMode::Service,
-        PersistedControllerProcessMode::Managed => LuaRuntimeSpaceControllerProcessMode::Managed,
-    };
-    host_options.space_controller.minimum_uptime_secs = controller.minimum_uptime_secs;
-    host_options.space_controller.idle_timeout_secs = controller.idle_timeout_secs;
-    host_options.space_controller.default_lease_ttl_secs = controller.default_lease_ttl_secs;
-    host_options.space_controller.connect_timeout_secs = controller.connect_timeout_secs;
-    host_options.space_controller.startup_timeout_secs = controller.startup_timeout_secs;
-    host_options.space_controller.startup_retry_interval_ms = controller.startup_retry_interval_ms;
-    host_options.space_controller.lease_renew_interval_secs = controller.lease_renew_interval_secs;
+    // The mode comes from the host-provider policy rather than a local literal. It deliberately remains
+    // `HostCallback` even before installation, so a broken startup order fails loudly instead of selecting the
+    // retired external-controller path.
+    // 模式取自宿主 provider 策略而非本地字面量。它在安装前也刻意保持 `HostCallback`，使错误的启动顺序响亮
+    // 失败，而不是选择已退役的外部控制器路径。
+    //
+    // The LuaSkills `space_controller` options stay at their crate defaults. That mode talks to an external
+    // controller process, which Vulcan Code neither ships nor supports any more, so nothing fills them in.
+    // LuaSkills 的 `space_controller` 选项保持该 crate 的默认值。该模式与外部控制器进程通信，而 Vulcan Code
+    // 已不再随附也不再支持它，因此这里不填充它们。
+    host_options.sqlite_provider_mode = host_database_providers::provider_mode();
+    host_options.lancedb_provider_mode = host_database_providers::provider_mode();
     host_options
 }
 

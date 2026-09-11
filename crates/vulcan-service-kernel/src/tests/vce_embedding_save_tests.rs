@@ -2,7 +2,7 @@
 //! 针对两个独立已提交项目索引的真实向量决定保存验收。
 
 use super::public_ai_persistence_scope::PUBLIC_AI_CONFIGURATION_ROOT;
-use super::test_support::TestControllerRuntimeRoot;
+use super::test_support::TestHostRuntimeRoot;
 use super::vce_configuration_readiness_tests::configured_state;
 use crate::public_ai_settings::{
     PublicAiInferenceRouteSaveRequest, service_preflight_vce_embedding_route,
@@ -147,8 +147,7 @@ async fn assert_save_rejected(
 /// No input; uses two empty sources and credential-rejecting AI, with no user files or paid calls.
 /// 无输入；使用两个空源码目录及拒绝凭据的 AI，不访问用户文件或计费调用。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_embedding_decisions_are_project_scoped_and_revision_checked() {
+fn real_host_storage_embedding_decisions_are_project_scoped_and_revision_checked() {
     // Private bounded executor owns all index jobs and storage lifecycle.
     // 私有有界执行器持有所有索引作业及存储生命周期。
     let executor = Arc::new(
@@ -158,9 +157,9 @@ fn real_controller_embedding_decisions_are_project_scoped_and_revision_checked()
             .build()
             .expect("decision executor"),
     );
-    let storage = TestControllerRuntimeRoot::new(uuid::Uuid::new_v4());
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
     executor.block_on(async {
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         let (state, runtime, mut configuration) = configured_state();
         // The second account serves the identical named model but is a distinct execution identity.
         // 第二个账号提供名称完全相同的模型，但属于不同执行身份。
@@ -691,7 +690,6 @@ fn real_controller_embedding_decisions_are_project_scoped_and_revision_checked()
         .await;
         manager.shutdown().await.expect("drain private manager");
         factory.shutdown().await.expect("release private factory");
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);
         }

@@ -13,8 +13,8 @@ async fn goal_recovery_unblocks_draft_rpc_and_preserves_unsent_text() {
     // Isolated SQLite and session files exercise production loading without touching user data.
     // 隔离 SQLite 与会话文件验证生产加载路径，不触碰用户数据。
     let session_id = SessionId::from_u128(0x62d1);
-    let fixture = TestControllerRuntimeRoot::new(session_id);
-    let (client, controller) = fixture.attached_controller_runtime_handle().await;
+    let fixture = TestHostRuntimeRoot::new(session_id);
+    let controller = fixture.attached_host_runtime_handle().await;
     let locator = fixture.v1_storage_locator();
     let mut document = load_session_v1_tail(&locator).unwrap().document;
     document.create_goal("work", None, "work", 2).unwrap();
@@ -99,5 +99,4 @@ async fn goal_recovery_unblocks_draft_rpc_and_preserves_unsent_text() {
         })
         .unwrap();
     assert!(load_session_v1_tail(&locator).is_ok());
-    client.shutdown().await.unwrap();
 }

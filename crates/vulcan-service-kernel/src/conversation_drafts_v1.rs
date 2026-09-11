@@ -118,7 +118,7 @@ struct SessionDraftAuthority {
     locator: SessionV1StorageLocator,
     /// Shared controller used by project-resource publication.
     /// 项目资源发布使用的共享控制器。
-    controller: vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
+    controller: vulcan_workspace_store::data_plane::HostRuntimeHandle,
     /// Per-project serialized resource catalog owner.
     /// 按项目串行化的资源目录 owner。
     resource_registry: Arc<ProjectResourceCatalogRegistry>,

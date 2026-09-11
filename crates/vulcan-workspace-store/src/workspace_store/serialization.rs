@@ -15,13 +15,13 @@ pub(super) fn current_unix_millis_text() -> String {
     current_unix_millis().to_string()
 }
 
-/// Converts one optional string into the nullable SQLite value expected by the controller SDK.
-/// 将一个可选字符串转换为控制器 SDK 期望的可空 SQLite 值。
-pub(super) fn optional_sqlite_string(value: &Option<String>) -> ControllerSqliteValue {
+/// Converts one optional string into the nullable SQLite value expected by the engine.
+/// 将一个可选字符串转换为宿主运行时 SDK 期望的可空 SQLite 值。
+pub(super) fn optional_sqlite_string(value: &Option<String>) -> SqliteValue {
     value
         .as_ref()
-        .map(|value| ControllerSqliteValue::String(value.clone()))
-        .unwrap_or(ControllerSqliteValue::Null)
+        .map(|value| SqliteValue::Text(value.clone()))
+        .unwrap_or(SqliteValue::Null)
 }
 
 /// Builds one relative-time label from one Unix-milliseconds timestamp.

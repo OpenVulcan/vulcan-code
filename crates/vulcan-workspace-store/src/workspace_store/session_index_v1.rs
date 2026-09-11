@@ -10,11 +10,13 @@
 //! 归档/恢复只翻转 SQLite 中的归档状态，绝不移动会话目录。
 
 use serde::{Deserialize, Serialize};
-use vldb_controller_client::ControllerSqliteValue;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
-use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 
-use super::{app_sqlite_binding_id, decode_query_rows};
+use super::decode_query_rows;
 
 /// SQL used by the strict V1 session-index insertion.
 /// V1 会话索引严格插入使用的 SQL。
@@ -55,8 +57,8 @@ pub enum SessionIndexV1Error {
     /// The schema could not be prepared.
     /// 无法准备索引结构。
     Schema {
-        /// Controller or SQLite failure detail.
-        /// Controller 或 SQLite 失败详情。
+        /// Engine failure detail.
+        /// 引擎失败详情。
         detail: String,
     },
     /// One stored or proposed locator violates the exact path contract.
@@ -75,8 +77,8 @@ pub enum SessionIndexV1Error {
         /// Session id being located when known.
         /// 已知时正在定位的会话 ID。
         session_id: Option<String>,
-        /// Controller or SQLite failure detail.
-        /// Controller 或 SQLite 失败详情。
+        /// Engine failure detail.
+        /// 引擎失败详情。
         detail: String,
     },
     /// The requested session has no locator row.
@@ -105,8 +107,8 @@ pub enum SessionIndexV1Error {
         /// Session id being inserted.
         /// 正在插入的会话 ID。
         session_id: String,
-        /// Controller or SQLite failure detail.
-        /// Controller 或 SQLite 失败详情。
+        /// Engine failure detail.
+        /// 引擎失败详情。
         detail: String,
     },
 }
@@ -293,14 +295,12 @@ pub fn compose_relative_path(
 /// Creates the `session_index_v1` table when missing.
 /// 在缺失时创建 `session_index_v1` 表。
 pub async fn ensure_session_index_v1_schema(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<(), SessionIndexV1Error> {
-    let result = controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    let result = local_sql::execute_script_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 CREATE TABLE IF NOT EXISTS session_index_v1 (
     session_id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -314,17 +314,17 @@ CREATE TABLE IF NOT EXISTS session_index_v1 (
     unread INTEGER NOT NULL DEFAULT 0
 );
 "#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| SessionIndexV1Error::Schema {
-            detail: error.to_string(),
-        })?;
+        vec![],
+    )
+    .await
+    .map_err(|error| SessionIndexV1Error::Schema {
+        detail: error.to_string(),
+    })?;
     if result.success {
         Ok(())
     } else {
         Err(SessionIndexV1Error::Schema {
-            detail: format!("controller returned failure: {}", result.message),
+            detail: format!("engine returned failure: {}", result.message),
         })
     }
 }
@@ -333,42 +333,40 @@ CREATE TABLE IF NOT EXISTS session_index_v1 (
 /// this insert succeeds (files are published first).
 /// 插入一条 V1 会话索引行。只有该插入成功(文件已先发布)后会话才可见。
 pub async fn insert_session_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     row: &SessionIndexV1Row,
 ) -> Result<(), SessionIndexV1Error> {
-    let execution = controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            STRICT_INSERT_SESSION_INDEX_V1_SQL,
-            vec![vec![
-                ControllerSqliteValue::String(row.session_id.clone()),
-                ControllerSqliteValue::String(row.project_id.clone()),
-                ControllerSqliteValue::String(row.project_tag.clone()),
-                ControllerSqliteValue::String(row.storage_partition.clone()),
-                ControllerSqliteValue::String(row.relative_path.clone()),
-                ControllerSqliteValue::String(row.title.clone()),
-                ControllerSqliteValue::Int64(row.created_at_ms),
-                ControllerSqliteValue::Int64(row.updated_at_ms),
-                row.archived_at_ms
-                    .map(ControllerSqliteValue::Int64)
-                    .unwrap_or(ControllerSqliteValue::Null),
-                ControllerSqliteValue::Int64(row.unread),
-            ]],
-        )
-        .await;
+    let execution = local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        STRICT_INSERT_SESSION_INDEX_V1_SQL,
+        vec![vec![
+            SqliteValue::Text(row.session_id.clone()),
+            SqliteValue::Text(row.project_id.clone()),
+            SqliteValue::Text(row.project_tag.clone()),
+            SqliteValue::Text(row.storage_partition.clone()),
+            SqliteValue::Text(row.relative_path.clone()),
+            SqliteValue::Text(row.title.clone()),
+            SqliteValue::Integer(row.created_at_ms),
+            SqliteValue::Integer(row.updated_at_ms),
+            row.archived_at_ms
+                .map(SqliteValue::Integer)
+                .unwrap_or(SqliteValue::Null),
+            SqliteValue::Integer(row.unread),
+        ]],
+    )
+    .await;
     match execution {
         Ok(result) if result.success && result.rows_changed == 1 => Ok(()),
         Ok(result) => {
             let detail = format!(
-                "controller returned success={}, rows_changed={}, message={}",
+                "engine returned success={}, rows_changed={}, message={}",
                 result.success, result.rows_changed, result.message
             );
-            Err(classify_failed_session_index_v1_insert(controller, row, detail).await)
+            Err(classify_failed_session_index_v1_insert(host_runtime, row, detail).await)
         }
         Err(error) => {
-            Err(classify_failed_session_index_v1_insert(controller, row, error.to_string()).await)
+            Err(classify_failed_session_index_v1_insert(host_runtime, row, error.to_string()).await)
         }
     }
 }
@@ -376,7 +374,7 @@ pub async fn insert_session_index_v1(
 /// Validates one proposed row and rejects every existing unique-key owner.
 /// 校验一条待写入记录并拒绝所有已存在的唯一键占用者。
 pub async fn validate_new_session_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     row: &SessionIndexV1Row,
 ) -> Result<(), SessionIndexV1Error> {
     validate_relative_path(&row.storage_partition).map_err(|detail| {
@@ -391,7 +389,7 @@ pub async fn validate_new_session_index_v1(
             detail: format!("invalid relative_path: {detail}"),
         }
     })?;
-    if let Some(conflict) = find_session_index_v1_conflict(controller, row).await? {
+    if let Some(conflict) = find_session_index_v1_conflict(host_runtime, row).await? {
         return Err(conflict);
     }
     Ok(())
@@ -400,22 +398,20 @@ pub async fn validate_new_session_index_v1(
 /// Locates one V1 session row by session id (the exact address function).
 /// 按 session id 定位一条 V1 会话行(精确地址函数)。
 pub async fn locate_session_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
 ) -> Result<Option<SessionIndexV1Row>, SessionIndexV1Error> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT * FROM session_index_v1 WHERE session_id = ?1;",
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| SessionIndexV1Error::Read {
-            session_id: Some(session_id.to_string()),
-            detail: error.to_string(),
-        })?;
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        "SELECT * FROM session_index_v1 WHERE session_id = ?1;",
+        vec![SqliteValue::Text(session_id.to_string())],
+    )
+    .await
+    .map_err(|error| SessionIndexV1Error::Read {
+        session_id: Some(session_id.to_string()),
+        detail: error.to_string(),
+    })?;
     let rows = decode_query_rows::<SessionIndexV1Row>(&result.json_data).map_err(|detail| {
         SessionIndexV1Error::Read {
             session_id: Some(session_id.to_string()),
@@ -426,7 +422,7 @@ pub async fn locate_session_index_v1(
         return Err(SessionIndexV1Error::Read {
             session_id: Some(session_id.to_string()),
             detail: format!(
-                "locator cardinality mismatch: controller row_count={}, decoded_rows={}",
+                "locator cardinality mismatch: engine row_count={}, decoded_rows={}",
                 result.row_count,
                 rows.len()
             ),
@@ -438,28 +434,26 @@ pub async fn locate_session_index_v1(
 /// Finds a strict unique-key conflict for one proposed index row.
 /// 查找一条待插入索引记录的严格唯一键冲突。
 async fn find_session_index_v1_conflict(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     row: &SessionIndexV1Row,
 ) -> Result<Option<SessionIndexV1Error>, SessionIndexV1Error> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 SELECT * FROM session_index_v1
 WHERE session_id = ?1 OR relative_path = ?2;
 "#,
-            vec![
-                ControllerSqliteValue::String(row.session_id.clone()),
-                ControllerSqliteValue::String(row.relative_path.clone()),
-            ],
-        )
-        .await
-        .map_err(|error| SessionIndexV1Error::Read {
-            session_id: Some(row.session_id.clone()),
-            detail: error.to_string(),
-        })?;
+        vec![
+            SqliteValue::Text(row.session_id.clone()),
+            SqliteValue::Text(row.relative_path.clone()),
+        ],
+    )
+    .await
+    .map_err(|error| SessionIndexV1Error::Read {
+        session_id: Some(row.session_id.clone()),
+        detail: error.to_string(),
+    })?;
     let existing_rows =
         decode_query_rows::<SessionIndexV1Row>(&result.json_data).map_err(|detail| {
             SessionIndexV1Error::Read {
@@ -499,11 +493,11 @@ fn classify_session_index_v1_conflict(
 /// Preserves the primary insert failure while probing for a raced conflict.
 /// 在探测并发冲突时保留主要插入失败。
 async fn classify_failed_session_index_v1_insert(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     row: &SessionIndexV1Row,
     write_detail: String,
 ) -> SessionIndexV1Error {
-    match find_session_index_v1_conflict(controller, row).await {
+    match find_session_index_v1_conflict(host_runtime, row).await {
         Ok(Some(conflict)) => conflict,
         Ok(None) => SessionIndexV1Error::Write {
             session_id: row.session_id.clone(),
@@ -519,52 +513,48 @@ async fn classify_failed_session_index_v1_insert(
 /// Lists active V1 sessions without reading any session directory.
 /// 列出活动 V1 会话，不读取任何会话目录。
 pub async fn list_active_session_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<Vec<SessionIndexV1Row>, SessionIndexV1Error> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 SELECT * FROM session_index_v1
 WHERE archived_at_ms IS NULL AND project_id = ?1
 ORDER BY updated_at_ms DESC;
 "#,
-            vec![ControllerSqliteValue::String(project_id.to_string())],
-        )
-        .await
-        .map_err(|error| SessionIndexV1Error::Read {
-            session_id: None,
-            detail: format!("active list query failed for project {project_id}: {error}"),
-        })?;
+        vec![SqliteValue::Text(project_id.to_string())],
+    )
+    .await
+    .map_err(|error| SessionIndexV1Error::Read {
+        session_id: None,
+        detail: format!("active list query failed for project {project_id}: {error}"),
+    })?;
     decode_session_index_v1_list(project_id, "active", result.row_count, &result.json_data)
 }
 
 /// Lists archived V1 sessions reading only SQLite rows.
 /// 列出归档 V1 会话，只读取 SQLite 行。
 pub async fn list_archived_session_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<Vec<SessionIndexV1Row>, SessionIndexV1Error> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 SELECT * FROM session_index_v1
 WHERE archived_at_ms IS NOT NULL AND project_id = ?1
 ORDER BY archived_at_ms DESC;
 "#,
-            vec![ControllerSqliteValue::String(project_id.to_string())],
-        )
-        .await
-        .map_err(|error| SessionIndexV1Error::Read {
-            session_id: None,
-            detail: format!("archived list query failed for project {project_id}: {error}"),
-        })?;
+        vec![SqliteValue::Text(project_id.to_string())],
+    )
+    .await
+    .map_err(|error| SessionIndexV1Error::Read {
+        session_id: None,
+        detail: format!("archived list query failed for project {project_id}: {error}"),
+    })?;
     decode_session_index_v1_list(project_id, "archived", result.row_count, &result.json_data)
 }
 
@@ -573,15 +563,15 @@ ORDER BY archived_at_ms DESC;
 /// 删除一条 V1 会话索引行(目录由调用方先删除；row 删除失败时保留该行供
 /// 显式清理)。
 pub async fn delete_session_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
 ) -> Result<(), SessionIndexV1Error> {
     execute_session_index_v1_write(
-        controller,
+        host_runtime,
         "delete",
         session_id,
         "DELETE FROM session_index_v1 WHERE session_id = ?1;",
-        vec![ControllerSqliteValue::String(session_id.to_string())],
+        vec![SqliteValue::Text(session_id.to_string())],
         true,
     )
     .await
@@ -592,8 +582,8 @@ pub async fn delete_session_index_v1(
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Controller runtime owning the application SQLite binding.
-///   `controller`：持有应用 SQLite 绑定的 Controller 运行时。
+/// - `host_runtime`: Host runtime runtime owning the application SQLite binding.
+///   `host_runtime`：持有应用 SQLite 绑定的 Host runtime 运行时。
 /// - `session_id`: Stable session identity selected by the user interface.
 ///   `session_id`：用户界面选中的稳定会话身份。
 /// - `unread`: Exact list-projection value to persist.
@@ -604,18 +594,18 @@ pub async fn delete_session_index_v1(
 /// Success only when the exact row accepted the projection; a missing row remains explicit.
 /// 仅在精确记录接受投影后返回成功；记录缺失仍会显式报错。
 pub async fn set_session_index_unread_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
     unread: bool,
 ) -> Result<(), SessionIndexV1Error> {
     execute_session_index_v1_write(
-        controller,
+        host_runtime,
         "set_unread",
         session_id,
         "UPDATE session_index_v1 SET unread = ?1 WHERE session_id = ?2;",
         vec![
-            ControllerSqliteValue::Int64(i64::from(unread)),
-            ControllerSqliteValue::String(session_id.to_string()),
+            SqliteValue::Integer(i64::from(unread)),
+            SqliteValue::Text(session_id.to_string()),
         ],
         false,
     )
@@ -627,8 +617,8 @@ pub async fn set_session_index_unread_v1(
 ///
 /// # Parameters / 参数
 ///
-/// - `controller`: Controller runtime owning the application SQLite binding.
-///   `controller`：持有应用 SQLite 绑定的 Controller 运行时。
+/// - `host_runtime`: Host runtime runtime owning the application SQLite binding.
+///   `host_runtime`：持有应用 SQLite 绑定的 Host runtime 运行时。
 /// - `session_id`: Stable session identity already verified by the V1 owner.
 ///   `session_id`：已经由 V1 owner 校验的稳定会话身份。
 /// - `relative_path`: Immutable exact locator retained by the same owner.
@@ -643,7 +633,7 @@ pub async fn set_session_index_unread_v1(
 /// Success only when the exact session-and-path row accepted the projection.
 /// 仅当精确 session 与 path 记录接受该投影时返回成功。
 pub async fn project_session_lifecycle_index_v1(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     session_id: &str,
     relative_path: &str,
     title: &str,
@@ -657,7 +647,7 @@ pub async fn project_session_lifecycle_index_v1(
         }
     })?;
     execute_session_index_v1_write(
-        controller,
+        host_runtime,
         "lifecycle_projection",
         session_id,
         r#"
@@ -668,21 +658,21 @@ SET title = ?1,
 WHERE session_id = ?4 AND relative_path = ?5;
 "#,
         vec![
-            ControllerSqliteValue::String(title.to_string()),
-            ControllerSqliteValue::Int64(updated_at_ms),
+            SqliteValue::Text(title.to_string()),
+            SqliteValue::Integer(updated_at_ms),
             archived_at_ms
-                .map(ControllerSqliteValue::Int64)
-                .unwrap_or(ControllerSqliteValue::Null),
-            ControllerSqliteValue::String(session_id.to_string()),
-            ControllerSqliteValue::String(relative_path.to_string()),
+                .map(SqliteValue::Integer)
+                .unwrap_or(SqliteValue::Null),
+            SqliteValue::Text(session_id.to_string()),
+            SqliteValue::Text(relative_path.to_string()),
         ],
         false,
     )
     .await
 }
 
-/// Decodes one row-only list and verifies Controller cardinality and project ownership.
-/// 解码一个仅含记录的列表，并校验 Controller 基数与项目归属。
+/// Decodes one row-only list and verifies engine cardinality and project ownership.
+/// 解码一个仅含记录的列表，并校验引擎基数与项目归属。
 fn decode_session_index_v1_list(
     project_id: &str,
     list_kind: &str,
@@ -699,7 +689,7 @@ fn decode_session_index_v1_list(
         return Err(SessionIndexV1Error::Read {
             session_id: None,
             detail: format!(
-                "{list_kind} list cardinality mismatch for project {project_id}: controller row_count={reported_row_count}, decoded_rows={}",
+                "{list_kind} list cardinality mismatch for project {project_id}: engine row_count={reported_row_count}, decoded_rows={}",
                 rows.len()
             ),
         });
@@ -719,26 +709,24 @@ fn decode_session_index_v1_list(
 /// Executes one checked single-row write; delete alone treats a missing row as success.
 /// 执行一次受检单行写入；只有删除把缺失记录视为成功。
 async fn execute_session_index_v1_write(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     operation: &'static str,
     session_id: &str,
     sql: &str,
-    params: Vec<ControllerSqliteValue>,
+    params: Vec<SqliteValue>,
     missing_is_success: bool,
 ) -> Result<(), SessionIndexV1Error> {
-    let result = controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            sql,
-            vec![params],
-        )
-        .await
-        .map_err(|error| SessionIndexV1Error::Write {
-            session_id: session_id.to_string(),
-            detail: format!("{operation} request failed: {error}"),
-        })?;
+    let result = local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        sql,
+        vec![params],
+    )
+    .await
+    .map_err(|error| SessionIndexV1Error::Write {
+        session_id: session_id.to_string(),
+        detail: format!("{operation} request failed: {error}"),
+    })?;
     validate_session_index_v1_write_outcome(
         operation,
         session_id,
@@ -749,8 +737,8 @@ async fn execute_session_index_v1_write(
     )
 }
 
-/// Validates one Controller write result without trusting transport success alone.
-/// 校验一次 Controller 写入结果，不只信任传输层成功。
+/// Validates one engine write result rather than trusting the reported success flag alone.
+/// 校验一次引擎写入结果，不只信任其报告的成功标记。
 fn validate_session_index_v1_write_outcome(
     operation: &'static str,
     session_id: &str,
@@ -837,8 +825,8 @@ mod tests {
         assert!(validate_relative_path("a\\b").is_err());
     }
 
-    /// Row fields decode exactly from the controller JSON payload shape.
-    /// 行字段从控制器 JSON 载荷形态精确解码。
+    /// Row fields decode exactly from the engine JSON payload shape.
+    /// 行字段从宿主运行时 JSON 载荷形态精确解码。
     #[test]
     fn row_decode_round_trip() {
         let rows = vec![SessionIndexV1Row {
@@ -956,10 +944,10 @@ mod tests {
         ));
     }
 
-    /// Controller-declared failure is never accepted as a successful write.
-    /// Controller 声明的失败绝不会被接受为成功写入。
+    /// An engine-declared failure is never accepted as a successful write.
+    /// 引擎声明的失败绝不会被接受为成功写入。
     #[test]
-    fn controller_failure_is_an_explicit_write_error() {
+    fn engine_failure_is_an_explicit_write_error() {
         assert!(matches!(
             validate_session_index_v1_write_outcome(
                 "restore",

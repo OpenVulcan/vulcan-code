@@ -29,7 +29,7 @@ use vulcan_service_api::{
     ServiceEvent, ServiceEventEmitter, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
     WorkbenchSnapshot,
 };
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, WorkbenchRuntimeProjection,
@@ -48,9 +48,136 @@ mod startup_updates;
 #[path = "service_bootstrap/vce_startup_tests.rs"]
 mod vce_startup_tests;
 
+#[cfg(test)]
+mod host_database_provider_lifecycle_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use vulcan_agent_runtime::luaskills_runtime::host_database_providers;
+    use vulcan_workspace_store::local_database_runtime::LocalDatabaseRuntime;
+
+    /// Verifies failed bootstrap rolls back providers and committed service state releases them on drop.
+    /// 验证引导失败会回滚 provider，且已提交的服务状态会在销毁时释放 provider。
+    /// No inputs or return value; all resources are private to this isolated test process.
+    /// 无输入或返回值；所有资源均属于该隔离测试进程。
+    #[test]
+    #[ignore = "mutates the process-wide LuaSkills provider callback slots"]
+    fn pending_and_committed_provider_installations_have_exact_owners() {
+        host_database_providers::shutdown();
+        // tokio_runtime owns both short-lived provider execution channels in this test.
+        // tokio_runtime 持有本测试中两个短生命周期 provider 执行通道。
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build isolated provider lifecycle runtime");
+
+        // pending_runtime proves rollback does not require a published service state.
+        // pending_runtime 证明回滚不依赖已发布的服务状态。
+        let pending_runtime = Arc::new(
+            LocalDatabaseRuntime::open(HashMap::new())
+                .expect("open pending provider database runtime"),
+        );
+        // pending remains armed and therefore must remove the process-wide registration on drop.
+        // pending 保持启用，因此销毁时必须移除进程级注册。
+        let pending = PendingHostDatabaseProviderInstallation::new(
+            host_database_providers::install(pending_runtime, tokio_runtime.handle().clone())
+                .expect("install pending host database providers"),
+        );
+        assert!(host_database_providers::is_installed());
+        drop(pending);
+        assert!(!host_database_providers::is_installed());
+
+        // committed_runtime proves ownership transfers to the long-lived service state.
+        // committed_runtime 证明所有权会转移给长生命周期服务状态。
+        let committed_runtime = Arc::new(
+            LocalDatabaseRuntime::open(HashMap::new())
+                .expect("open committed provider database runtime"),
+        );
+        // committed is disarmed only when its exact installation is stored in service state.
+        // committed 仅在其精确安装写入服务状态时解除回滚。
+        let committed = PendingHostDatabaseProviderInstallation::new(
+            host_database_providers::install(committed_runtime, tokio_runtime.handle().clone())
+                .expect("install committed host database providers"),
+        );
+        // state is the sole long-lived owner outside the process-wide installation slot.
+        // state 是进程级安装槽位之外唯一的长生命周期所有者。
+        let state = crate::create_service_bridge_state(
+            crate::tests::test_support::test_service_shell_host(),
+        );
+        state
+            .lock()
+            .expect("lock isolated service state")
+            .host_database_providers = Some(committed.commit());
+        assert!(host_database_providers::is_installed());
+        drop(state);
+        assert!(!host_database_providers::is_installed());
+    }
+}
+
 pub(super) use error::*;
 pub(super) use startup_snapshot::*;
 pub(super) use startup_updates::*;
+
+/// Rollback guard for a host database provider installation that bootstrap has not published yet.
+/// 尚未由引导流程正式发布的宿主数据库 provider 安装回滚守卫。
+struct PendingHostDatabaseProviderInstallation {
+    /// Installation retained until startup either commits it to service state or fails.
+    /// 在启动流程提交到服务状态或失败之前保留的安装。
+    installation: Option<
+        Arc<
+            vulcan_agent_runtime::luaskills_runtime::host_database_providers::InstalledHostDatabaseProviders,
+        >,
+    >,
+}
+
+impl PendingHostDatabaseProviderInstallation {
+    /// Creates a rollback guard for one newly installed provider pair.
+    /// 为一对新安装的 provider 创建回滚守卫。
+    ///
+    /// # Parameters / 参数
+    /// `installation` is the exact process-wide provider installation created during bootstrap.
+    /// `installation` 是引导期间创建的精确进程级 provider 安装。
+    ///
+    /// # Returns / 返回值
+    /// Returns an armed guard that removes the process-wide registration on drop.
+    /// 返回一个已启用的守卫，其销毁时会移除进程级注册。
+    fn new(
+        installation: Arc<
+            vulcan_agent_runtime::luaskills_runtime::host_database_providers::InstalledHostDatabaseProviders,
+        >,
+    ) -> Self {
+        Self {
+            installation: Some(installation),
+        }
+    }
+
+    /// Transfers the installation into the long-lived service state.
+    /// 将安装转移给长生命周期服务状态。
+    ///
+    /// # Parameters / 参数
+    /// This method consumes the pending guard.
+    /// 本方法会消费待提交守卫。
+    ///
+    /// # Returns / 返回值
+    /// Returns the exact installation that the guard owned.
+    /// 返回守卫持有的精确安装。
+    fn commit(mut self) -> Arc<
+        vulcan_agent_runtime::luaskills_runtime::host_database_providers::InstalledHostDatabaseProviders,
+    >{
+        self.installation
+            .take()
+            .expect("pending host database provider installation must exist before commit")
+    }
+}
+
+impl Drop for PendingHostDatabaseProviderInstallation {
+    /// Rolls back the process-wide registration when bootstrap exits before publication.
+    /// 当引导流程在发布前退出时回滚进程级注册。
+    fn drop(&mut self) {
+        if self.installation.is_some() {
+            vulcan_agent_runtime::luaskills_runtime::host_database_providers::shutdown();
+        }
+    }
+}
 
 /// Starts one bounded startup-stage timer and emits its explicit entry boundary.
 /// 启动一个有界的启动阶段计时器，并输出其显式进入边界。
@@ -131,10 +258,6 @@ fn run_service_bootstrap(
         "[webui-service] workspace root: {}",
         normalized_workspace_path_text_from_path(&workspace_root())
     )];
-    let controller_configuration =
-        vulcan_provider_config::config::load_controller_configuration_file().map_err(|error| {
-            ServiceBootstrapError::new("service-process", "Core Service", error)
-        })?;
     let provider_configuration = vulcan_provider_config::config::load_configuration_file()
         .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?;
     let mut public_ai_configuration =
@@ -240,11 +363,7 @@ fn run_service_bootstrap(
     // data_plane_started_at 测量不包含工作区正文水合的 Controller 启动耗时。
     let data_plane_started_at = start_bootstrap_stage("controller_data_plane");
     let controller_report = bootstrap_step(
-        runtime.block_on(
-            vulcan_workspace_store::data_plane::bootstrap_application_data_plane(
-                controller_configuration.clone(),
-            ),
-        ),
+        runtime.block_on(vulcan_workspace_store::data_plane::bootstrap_application_data_plane()),
         "vldb",
         "VLDB",
     )?;
@@ -315,10 +434,28 @@ fn run_service_bootstrap(
     // LuaSkills 引导属于可选执行适配器；仅含内容的插件必须能在其失败时继续工作。
     // luaskills_started_at covers engine bootstrap plus the first exact catalog load.
     // luaskills_started_at 覆盖引擎引导与首次精确目录加载。
+    // Publish the host database providers before any LuaSkills engine exists. The ordering matters because the
+    // engine refuses to start in `HostCallback` mode with no callback registered. The pending owner rolls the
+    // process-wide registration back if any later bootstrap stage fails.
+    // 在任何 LuaSkills 引擎存在之前发布宿主数据库 provider。该顺序有两个原因：引擎在缺少回调时拒绝以
+    // `HostCallback` 模式启动。待提交所有者会在任一后续引导阶段失败时回滚进程级注册。
+    let pending_host_database_providers = PendingHostDatabaseProviderInstallation::new(
+        vulcan_agent_runtime::luaskills_runtime::host_database_providers::install(
+            std::sync::Arc::clone(&controller_runtime.local),
+            runtime.handle().clone(),
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "luaskills-database",
+                "LuaSkills Host Database",
+                format!("Failed to install the LuaSkills host database providers: {error}"),
+            )
+        })?,
+    );
+
     let luaskills_started_at = start_bootstrap_stage("luaskills");
     let (luaskills_runtime, luaskills_catalog, luaskills_step_status, luaskills_step_message) =
         match vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
-            controller_configuration.clone(),
             |message| update_luaskills_bootstrap_progress(state, event_emitter, &logs, message),
             |progress| {
                 update_managed_runtime_bootstrap_progress(state, event_emitter, &logs, progress)
@@ -942,7 +1079,7 @@ fn run_service_bootstrap(
         ))
         .with_retry_configuration(&provider_configuration.retry)
         .with_provider_request_trace_enabled(provider_configuration.provider_request_trace_enabled)
-        .with_native_usage_controller(controller_runtime.clone())
+        .with_native_usage_storage(controller_runtime.clone())
         .with_plugin_telemetry(vulcan_plugin_runtime.clone()),
     );
     let internal_ai_port: Arc<dyn HostAiPort> =
@@ -1419,6 +1556,7 @@ fn run_service_bootstrap(
                 format!("failed to lock service state while publishing startup readiness: {error}"),
             )
         })?;
+        guard.host_database_providers = Some(pending_host_database_providers.commit());
         guard.startup = startup.clone();
     }
     mark_webui_service_discovery_ready(state);
@@ -1545,7 +1683,7 @@ fn refresh_public_ai_catalogs_at_startup(
 fn prepare_vulcan_plugin_runtime(
     luaskills_runtime: Option<&vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle>,
     provider_configuration: &ProviderConfigurationFile,
-    controller_runtime: &ControllerRuntimeHandle,
+    controller_runtime: &HostRuntimeHandle,
     service_runtime: tokio::runtime::Handle,
     event_emitter: ServiceEventEmitter,
 ) -> Result<
@@ -1583,7 +1721,7 @@ fn prepare_vulcan_plugin_runtime(
             ),
         )
     })?;
-    // pluginStateRoot is shared by the manager metadata and Controller-backed data isolation.
+    // pluginStateRoot is shared by the manager metadata and in-process data isolation.
     // pluginStateRoot 由管理器元数据与 Controller 后端数据隔离共同使用。
     let plugin_state_root = runtime_assets::resolve_user_plugin_state_root().ok_or_else(|| {
         ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件状态根目录。")
@@ -1633,10 +1771,10 @@ fn prepare_vulcan_plugin_runtime(
                 )
             })?;
     }
-    // storageService routes plugin database calls through the already-connected shared Controller client.
+    // storageService routes plugin database calls through the already-open shared host runtime.
     // storageService 通过已连接的共享 Controller 客户端路由插件数据库调用。
-    let storage_service = Arc::new(crate::plugin_storage::ControllerPluginStorageService::new(
-        controller_runtime.client.clone(),
+    let storage_service = Arc::new(crate::plugin_storage::PluginStorageService::new(
+        controller_runtime,
         service_runtime.clone(),
         plugin_state_root,
     ));
@@ -1647,7 +1785,7 @@ fn prepare_vulcan_plugin_runtime(
     ));
     // vldbService exposes only host-registered logical bindings and never physical database paths.
     // vldbService 仅暴露宿主注册的逻辑绑定，绝不暴露物理数据库路径。
-    let vldb_service = Arc::new(crate::plugin_vldb::ControllerPluginVldbService::new(
+    let vldb_service = Arc::new(crate::plugin_vldb::PluginVldbService::new(
         controller_runtime.clone(),
         service_runtime,
     ));

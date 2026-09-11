@@ -288,6 +288,7 @@ pub(crate) fn test_service_state_with_parent_session(
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,
+        host_database_providers: None,
         cached_luaskills_catalog: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
@@ -311,26 +312,26 @@ pub(crate) fn test_service_state_with_parent_session(
     }
 }
 
-/// Owns one isolated controller data root for Core VMM service tests.
-/// 为 Core VMM 服务测试持有一个隔离的控制器数据根。
-pub(crate) struct TestControllerRuntimeRoot {
+/// Owns one isolated host database root for Core VMM service tests.
+/// 为 Core VMM 服务测试持有一个隔离的宿主数据库根。
+pub(crate) struct TestHostRuntimeRoot {
     /// Exact session identity owned by this isolated fixture.
     /// 当前隔离夹具拥有的精确会话身份。
     session_id: SessionId,
     /// Exact temporary data root removed when the fixture leaves scope.
     /// 夹具离开作用域时移除的精确临时数据根。
     data_root: std::path::PathBuf,
-    /// Exact production V1 locator used by VMM controller tests.
-    /// VMM 控制器测试使用的精确生产 V1 定位器。
+    /// Exact production V1 locator used by VMM storage tests.
+    /// VMM 存储测试使用的精确生产 V1 定位器。
     v1_storage_locator: vulcan_workspace_store::workspace_store::SessionV1StorageLocator,
     /// Exact V1 session directory retained only for corruption fault injection.
     /// 仅为损坏故障注入保留的精确 V1 会话目录。
     v1_session_directory: std::path::PathBuf,
 }
 
-impl TestControllerRuntimeRoot {
-    /// Creates an isolated segmented session directory and its offline controller source.
-    /// 创建隔离的分段会话目录及其离线控制器来源。
+impl TestHostRuntimeRoot {
+    /// Creates an isolated segmented session directory and its offline host-storage source.
+    /// 创建隔离的分段会话目录及其离线宿主存储来源。
     ///
     /// # Parameters
     /// 参数
@@ -344,8 +345,10 @@ impl TestControllerRuntimeRoot {
     pub(crate) fn new(session_id: SessionId) -> Self {
         // data_root is unique per test and remains outside every real application data root.
         // data_root 对每个测试均唯一，并且位于所有真实应用数据根之外。
-        let data_root =
-            std::env::temp_dir().join(format!("vulcan-service-kernel-vmm-test-{}", Uuid::new_v4()));
+        // The short prefix leaves room for Lance table, transaction and UUID suffixes below Win32's legacy
+        // path budget while the UUID still makes the root unique.
+        // 短前缀为 Lance 表名、事务目录与 UUID 后缀预留 Win32 传统路径预算，同时 UUID 仍保证根目录唯一。
+        let data_root = std::env::temp_dir().join(format!("vsk-{}", Uuid::new_v4()));
         let v1_storage_locator =
             vulcan_workspace_store::workspace_store::create_session_v1_storage_fixture(
                 &data_root,
@@ -365,36 +368,18 @@ impl TestControllerRuntimeRoot {
         }
     }
 
-    /// Builds an offline controller handle bound to this isolated data root.
-    /// 构建绑定到当前隔离数据根的离线控制器句柄。
+    /// Builds an offline host runtime handle bound to this isolated data root.
+    /// 构建绑定到当前隔离数据根的离线宿主运行时句柄。
     ///
     /// # Returns
     /// 返回值
-    /// A production-shaped handle that never connects to an external controller.
-    /// 返回不会连接外部控制器的生产形态句柄。
-    pub(crate) fn controller_runtime_handle(
+    /// A production-shaped handle that performs all storage work in process.
+    /// 返回在进程内完成全部存储工作的生产形态句柄。
+    pub(crate) fn host_runtime_handle(
         &self,
-    ) -> vulcan_workspace_store::data_plane::ControllerRuntimeHandle {
-        // registration supplies a complete local identity for the unused offline client proxy.
-        // registration 为不会联网的离线客户端代理提供完整本地身份。
-        let registration = vldb_controller_client::ClientRegistration {
-            client_name: format!("vulcan-service-kernel-test-{}", Uuid::new_v4()),
-            host_kind: String::from("vulcan-service-kernel-test"),
-            process_id: std::process::id(),
-            process_name: String::from("vulcan-service-kernel-test"),
-            lease_ttl_secs: None,
-        };
-        // client is retained only because ControllerRuntimeHandle owns the production data-plane shape.
-        // client 仅因 ControllerRuntimeHandle 持有生产数据平面结构而被保留。
-        let client = vldb_controller_client::ControllerClient::new(
-            vldb_controller_client::ControllerClientConfig::default(),
-            registration,
-        );
-        vulcan_workspace_store::data_plane::ControllerRuntimeHandle::new(
-            client,
-            vulcan_workspace_store::data_plane::ControllerRuntimeMetadata {
-                endpoint: String::from("http://127.0.0.1:0"),
-                executable: String::from("offline-test-controller"),
+    ) -> vulcan_workspace_store::data_plane::HostRuntimeHandle {
+        vulcan_workspace_store::data_plane::HostRuntimeHandle::new_for_test(
+            vulcan_workspace_store::data_plane::HostRuntimeMetadata {
                 data_root: self.data_root.clone(),
                 sqlite_path: self.data_root.join("sqlite").join("offline-test.sqlite3"),
                 sqlite_binding_id: format!("offline-test-{}", Uuid::new_v4()),
@@ -410,101 +395,26 @@ impl TestControllerRuntimeRoot {
         )
     }
 
-    /// Starts a real isolated controller and returns it with an APP-space runtime handle.
-    /// 启动真实的隔离控制器，并将其与已挂接 APP 空间的运行时句柄一并返回。
+    /// Builds an offline runtime handle bound to this fixture's isolated APP database.
+    /// 构建绑定到本夹具隔离 APP 数据库的离线运行时句柄。
     ///
     /// # Returns
     /// 返回值
-    /// The connected client that keeps the managed controller alive and its production-shaped runtime handle.
-    /// 返回用于维持托管控制器存活的已连接客户端，以及对应的生产形态运行时句柄。
-    pub(crate) async fn attached_controller_runtime_handle(
+    /// The production-shaped runtime handle the service fixtures consume.
+    /// 返回服务夹具所消费的生产形态运行时句柄。
+    pub(crate) async fn attached_host_runtime_handle(
         &self,
-    ) -> (
-        vldb_controller_client::ControllerClient,
-        vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
-    ) {
-        // listener reserves an exact free loopback port until the managed process is ready to bind.
-        // listener 在托管进程准备绑定前精确保留一个空闲回环端口。
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("reserve attached test controller port");
-        let port = listener
-            .local_addr()
-            .expect("attached test controller address")
-            .port();
-        drop(listener);
-        // executable accepts the same explicit upstream-test override as the VCE storage suites;
-        // without an override it still validates the bundled production-shaped controller.
-        // executable 接受与 VCE 存储测试相同的显式上游测试覆盖；未覆盖时仍验证生产形态内置控制器。
-        let executable = std::env::var_os("VLDB_CONTROLLER_TEST_EXECUTABLE")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../..")
-                    .join("output/bin/vldb-controller.exe")
-            });
-        assert!(executable.is_file(), "bundled controller must exist");
-        // endpoint isolates this fixture from every application and parallel test controller.
-        // endpoint 将该夹具与所有应用实例及并行测试控制器隔离。
-        let endpoint = format!("http://127.0.0.1:{port}");
-        // client owns the managed controller lease for the complete caller scope.
-        // client 在调用方完整作用域内持有托管控制器租约。
-        let client = vldb_controller_client::ControllerClient::new(
-            vldb_controller_client::ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: vldb_controller_client::ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            vldb_controller_client::ClientRegistration {
-                client_name: format!("vulcan-service-kernel-attached-test-{}", Uuid::new_v4()),
-                host_kind: String::from("vulcan-service-kernel-test"),
-                process_id: std::process::id(),
-                process_name: String::from("vulcan-service-kernel-test"),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client
-            .connect()
-            .await
-            .expect("connect attached test controller");
+    ) -> vulcan_workspace_store::data_plane::HostRuntimeHandle {
         // sqlite_path is the exact APP database already populated by the V1 fixture.
         // sqlite_path 是已由 V1 夹具填充的精确 APP 数据库。
         let sqlite_path = self.data_root.join("sqlite").join("app-workspace.sqlite3");
-        // sqlite_binding_id uniquely owns this fixture's controller binding.
-        // sqlite_binding_id 唯一标识该夹具的控制器绑定。
+        // sqlite_binding_id uniquely owns this fixture's runtime binding.
+        // sqlite_binding_id 唯一标识该夹具的运行时绑定。
         let sqlite_binding_id = format!("attached-test-{}", Uuid::new_v4());
-        client
-            .attach_space(vldb_controller_client::SpaceRegistration {
-                space_id: String::from(vulcan_workspace_store::data_plane::APP_SPACE_ID),
-                space_label: String::from("APP"),
-                space_kind: vldb_controller_client::SpaceKind::User,
-                space_root: self.data_root.to_string_lossy().into_owned(),
-            })
-            .await
-            .expect("attach APP space for service test");
-        client
-            .enable_sqlite(vldb_controller_client::ControllerSqliteEnableRequest {
-                space_id: String::from(vulcan_workspace_store::data_plane::APP_SPACE_ID),
-                binding_id: sqlite_binding_id.clone(),
-                db_path: sqlite_path.to_string_lossy().into_owned(),
-                ..vldb_controller_client::ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .expect("enable APP SQLite binding for service test");
-        // controller carries the exact metadata consumed by the service selection preflight.
-        // controller 携带服务选择预检所消费的精确元数据。
-        let controller = vulcan_workspace_store::data_plane::ControllerRuntimeHandle::new(
-            client.clone(),
-            vulcan_workspace_store::data_plane::ControllerRuntimeMetadata {
-                endpoint,
-                executable: executable.display().to_string(),
+        // host_runtime carries the exact metadata consumed by the service selection preflight.
+        // host_runtime 携带服务选择预检所消费的精确元数据。
+        let host_runtime = vulcan_workspace_store::data_plane::HostRuntimeHandle::new_for_test(
+            vulcan_workspace_store::data_plane::HostRuntimeMetadata {
                 data_root: self.data_root.clone(),
                 sqlite_path: sqlite_path.clone(),
                 sqlite_binding_id: sqlite_binding_id.clone(),
@@ -536,7 +446,7 @@ impl TestControllerRuntimeRoot {
             locked_sources: Vec::new(),
         };
         vulcan_workspace_store::workspace_store::create_indexed_session_v1(
-            &controller,
+            &host_runtime,
             &vulcan_workspace_store::workspace_store::CreateSessionV1Request {
                 project_id: "v1-test-project",
                 storage_partition:
@@ -550,7 +460,7 @@ impl TestControllerRuntimeRoot {
         )
         .await
         .expect("publish indexed V1 service fixture");
-        (client, controller)
+        host_runtime
     }
 
     /// Returns the exact isolated data root owned by this fixture.
@@ -558,8 +468,8 @@ impl TestControllerRuntimeRoot {
     ///
     /// # Returns
     /// 返回值
-    /// The borrowed controller data-root path.
-    /// 返回借用的控制器数据根路径。
+    /// The borrowed host data-root path.
+    /// 返回借用的宿主数据根路径。
     pub(crate) fn data_root(&self) -> &std::path::Path {
         &self.data_root
     }
@@ -569,8 +479,8 @@ impl TestControllerRuntimeRoot {
     ///
     /// # Returns
     /// 返回值
-    /// A cloned opaque locator suitable for controller ownership transfer.
-    /// 返回适合转移给控制器所有权的不透明定位器副本。
+    /// A cloned opaque locator suitable for host ownership transfer.
+    /// 返回适合转移给宿主所有权的不透明定位器副本。
     pub(crate) fn v1_storage_locator(
         &self,
     ) -> vulcan_workspace_store::workspace_store::SessionV1StorageLocator {
@@ -589,7 +499,7 @@ impl TestControllerRuntimeRoot {
     }
 }
 
-impl Drop for TestControllerRuntimeRoot {
+impl Drop for TestHostRuntimeRoot {
     /// Removes only the exact test-owned temporary data root.
     /// 仅移除测试持有的精确临时数据根。
     fn drop(&mut self) {
@@ -597,7 +507,7 @@ impl Drop for TestControllerRuntimeRoot {
             .data_root
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("vulcan-service-kernel-vmm-test-"))
+            .is_some_and(|name| name.starts_with("vsk-"))
         {
             let _ = std::fs::remove_dir_all(&self.data_root);
         }

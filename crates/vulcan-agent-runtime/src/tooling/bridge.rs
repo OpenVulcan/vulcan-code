@@ -37,7 +37,7 @@ use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
 mod descriptors;
 mod luaskills_dispatch;
@@ -69,7 +69,7 @@ pub fn build_vulcan_tools_manager(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     host_project_id: Option<String>,
-    controller_runtime: Option<ControllerRuntimeHandle>,
+    controller_runtime: Option<HostRuntimeHandle>,
     native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
     knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
     vce_retrieval_handler: Option<crate::agent_runtime::VceRetrievalHandler>,

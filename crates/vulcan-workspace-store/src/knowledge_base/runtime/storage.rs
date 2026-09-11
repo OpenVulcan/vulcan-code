@@ -1,18 +1,18 @@
-//! Shared controller bindings and host-owned knowledge storage artifacts.
-//! 共享控制器绑定与宿主持有的知识库存储产物。
+//! Shared in-process bindings and host-owned knowledge storage artifacts.
+//! 共享进程内绑定与宿主持有的知识库存储产物。
 
 use super::super::schema::library_schema_script;
-use super::{APP_SPACE_ID, KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT};
-use crate::runtime_assets;
+use super::{KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT};
+use crate::local_database_runtime::{LanceDbDirectoryBinding, LogicalDatabase, SqliteFileBinding};
+use crate::local_sql;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
-use vldb_controller_client::{
-    ControllerLanceDbEnableRequest, ControllerSqliteEnableRequest, ControllerSqliteValue,
-    SpaceKind, SpaceRegistration,
-};
+use vulcan_lancedb_engine::engine::LanceDbEngine;
+use vulcan_sqlite_engine::runtime::SqliteOpenOptions;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Portable manifest stored beside each isolated database.
 /// 存储在每个隔离数据库旁的可移植清单。
@@ -30,8 +30,8 @@ pub(super) struct KnowledgeManifest {
 }
 
 impl KnowledgeBaseRuntime {
-    /// Initializes the physical directory, manifest, controller binding, and authoritative schema.
-    /// 初始化物理目录、清单、控制器绑定与权威结构。
+    /// Initializes the physical directory, manifest, host binding, and authoritative schema.
+    /// 初始化物理目录、清单、宿主绑定与权威结构。
     ///
     /// # Parameters
     /// 参数
@@ -58,16 +58,14 @@ impl KnowledgeBaseRuntime {
             schema_version: KNOWLEDGE_SCHEMA_VERSION,
         })?;
         let (space_id, binding_id) = self.activate_library_binding(library_id, true).await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                library_schema_script(library_id),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("初始化知识库 SQLite 结构失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            library_schema_script(library_id),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("初始化知识库 SQLite 结构失败：{error}"))?;
         self.validate_bound_library_metadata(library_id, &space_id, &binding_id)
             .await?;
         Ok(())
@@ -83,8 +81,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) async fn ensure_library_binding(
         &self,
         library_id: &str,
@@ -105,8 +103,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) async fn ensure_display_binding(
         &self,
         library_id: &str,
@@ -117,8 +115,8 @@ impl KnowledgeBaseRuntime {
         Ok(identities)
     }
 
-    /// Serializes content binding activation and reuses the controller-shared active cache.
-    /// 串行化内容绑定激活并复用控制器共享的活动缓存。
+    /// Serializes content binding activation and reuses the host-shared active cache.
+    /// 串行化内容绑定激活并复用宿主共享的活动缓存。
     ///
     /// # Parameters
     /// 参数
@@ -129,8 +127,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) async fn activate_library_binding(
         &self,
         library_id: &str,
@@ -167,12 +165,17 @@ impl KnowledgeBaseRuntime {
         {
             let _activation_guard = self.binding_activation_lock.lock().await;
             if self.active_bindings.lock().await.contains(library_id) {
-                let (space_id, binding_id) = self.library_binding_identity(library_id)?;
-                self.controller
-                    .client
-                    .disable_sqlite(&space_id, &binding_id)
+                // The boundary waits for accepted SQLite work before the handle and its file lock are removed.
+                // 该边界会等待已接纳的 SQLite 工作完成，再移除句柄及其文件锁。
+                let (_space_id, binding_id) = self.library_binding_identity(library_id)?;
+                let binding = self.library_database_binding(library_id, false)?;
+                local_sql::close_database_file_async(&self.host_runtime.local, &binding)
                     .await
-                    .map_err(|error| format!("停用知识库 SQLite 绑定失败：{error}"))?;
+                    .map_err(|error| format!("关闭知识库内容数据库失败：{error}"))?;
+                self.host_runtime
+                    .local
+                    .unregister_named_binding(&binding_id, &binding)
+                    .map_err(|error| format!("注销知识库内容绑定失败：{error}"))?;
                 self.active_bindings.lock().await.remove(library_id);
             }
         }
@@ -202,12 +205,15 @@ impl KnowledgeBaseRuntime {
         {
             return Ok(());
         }
-        let (space_id, binding_id) = self.display_binding_identity(library_id)?;
-        self.controller
-            .client
-            .disable_sqlite(&space_id, &binding_id)
+        let (_space_id, binding_id) = self.display_binding_identity(library_id)?;
+        let binding = self.display_database_binding(library_id, false)?;
+        local_sql::close_database_file_async(&self.host_runtime.local, &binding)
             .await
-            .map_err(|error| format!("停用知识库显示库 SQLite 绑定失败：{error}"))?;
+            .map_err(|error| format!("关闭知识库显示数据库失败：{error}"))?;
+        self.host_runtime
+            .local
+            .unregister_named_binding(&binding_id, &binding)
+            .map_err(|error| format!("注销知识库显示绑定失败：{error}"))?;
         self.active_display_bindings.lock().await.remove(library_id);
         Ok(())
     }
@@ -234,18 +240,22 @@ impl KnowledgeBaseRuntime {
         {
             return Ok(());
         }
-        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
-        self.controller
-            .client
-            .disable_lancedb(&space_id, &binding_id)
-            .await
-            .map_err(|error| format!("停用知识库 LanceDB 绑定失败：{error}"))?;
+        let (_space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        let binding = self.vector_directory_binding(library_id, false)?;
+        self.host_runtime
+            .local
+            .close_lance_directory(&binding)
+            .map_err(|error| format!("关闭知识库 LanceDB 目录失败：{error}"))?;
+        self.host_runtime
+            .local
+            .unregister_named_lance_binding(&binding_id, &binding)
+            .map_err(|error| format!("注销知识库 LanceDB 绑定失败：{error}"))?;
         self.active_vector_bindings.lock().await.remove(library_id);
         Ok(())
     }
 
-    /// Serializes LanceDB binding activation and reuses the controller-shared active cache.
-    /// 串行化 LanceDB 绑定激活并复用控制器共享的活动缓存。
+    /// Serializes LanceDB binding activation and reuses the host-shared active cache.
+    /// 串行化 LanceDB 绑定激活并复用宿主共享的活动缓存。
     ///
     /// # Parameters
     /// 参数
@@ -256,8 +266,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) async fn activate_vector_binding(
         &self,
         library_id: &str,
@@ -295,73 +305,27 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) async fn enable_vector_binding(
         &self,
         library_id: &str,
         allow_database_creation: bool,
     ) -> Result<(String, String), String> {
         let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
-        let root = self.library_root(library_id)?;
-        let lancedb_root = root.join("lancedb");
-        match fs::symlink_metadata(&lancedb_root) {
-            Ok(metadata) => {
-                if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
-                    return Err(format!(
-                        "知识库 LanceDB 目录不是可信普通目录：{}",
-                        lancedb_root.display()
-                    ));
-                }
-            }
-            Err(error)
-                if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                fs::create_dir_all(&lancedb_root).map_err(|create_error| {
-                    format!(
-                        "创建知识库 LanceDB 目录失败（{}）：{create_error}",
-                        lancedb_root.display()
-                    )
-                })?;
-            }
-            Err(error) => {
-                return Err(format!(
-                    "读取知识库 LanceDB 目录失败（{}）：{error}",
-                    lancedb_root.display()
-                ));
-            }
-        }
-        self.controller
-            .client
-            .attach_space(SpaceRegistration {
-                space_id: space_id.clone(),
-                space_label: format!("Knowledge {library_id}"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(&root),
-            })
-            .await
-            .map_err(|error| format!("附着知识库 LanceDB 控制器空间失败：{error}"))?;
-        self.controller
-            .client
-            .enable_lancedb(ControllerLanceDbEnableRequest {
-                space_id: space_id.clone(),
-                binding_id: binding_id.clone(),
-                default_db_path: runtime_assets::native_host_path_text_from_path(&lancedb_root),
-                db_root: Some(runtime_assets::native_host_path_text_from_path(
-                    &lancedb_root,
-                )),
-                read_consistency_interval_ms: Some(250),
-                max_upsert_payload: 16 * 1024 * 1024,
-                max_search_limit: MAX_SEARCH_LIMIT as usize,
-                max_concurrent_requests: 16,
-            })
-            .await
-            .map_err(|error| format!("启用知识库 LanceDB 失败：{error}"))?;
+        // Register the derived directory without opening it eagerly. Consumers resolve the binding by
+        // identity and the host opens the engine only for the lifetime of the actual operation.
+        // 登记派生目录但不提前打开。消费者按身份解析绑定，宿主仅在真实操作生命周期内打开引擎。
+        let directory = self.vector_directory_binding(library_id, allow_database_creation)?;
+        self.host_runtime
+            .local
+            .register_named_lance_binding(&binding_id, &directory)
+            .map_err(|error| format!("登记知识库 LanceDB 绑定失败：{error}"))?;
         Ok((space_id, binding_id))
     }
 
-    /// Serializes display binding activation and reuses the controller-shared active cache.
-    /// 串行化显示库绑定激活并复用控制器共享的活动缓存。
+    /// Serializes display binding activation and reuses the host-shared active cache.
+    /// 串行化显示库绑定激活并复用宿主共享的活动缓存。
     ///
     /// # Parameters
     /// 参数
@@ -372,8 +336,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) async fn activate_display_binding(
         &self,
         library_id: &str,
@@ -411,55 +375,19 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     async fn enable_display_binding(
         &self,
         library_id: &str,
         allow_database_creation: bool,
     ) -> Result<(String, String), String> {
         let (space_id, binding_id) = self.display_binding_identity(library_id)?;
-        let root = self.library_root(library_id)?;
-        let database_path = root.join("display.sqlite3");
-        match fs::symlink_metadata(&database_path) {
-            Ok(metadata) => {
-                if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-                    return Err(format!(
-                        "知识库显示库不是可信普通文件：{}",
-                        database_path.display()
-                    ));
-                }
-            }
-            Err(error)
-                if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "读取知识库显示库失败（{}）：{error}",
-                    database_path.display()
-                ));
-            }
-        }
-        self.controller
-            .client
-            .attach_space(SpaceRegistration {
-                space_id: space_id.clone(),
-                space_label: format!("Knowledge {library_id}"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(&root),
-            })
-            .await
-            .map_err(|error| format!("附着知识库显示库控制器空间失败：{error}"))?;
-        self.controller
-            .client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: space_id.clone(),
-                binding_id: binding_id.clone(),
-                db_path: runtime_assets::native_host_path_text_from_path(&database_path),
-                busy_timeout_ms: 10_000,
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .map_err(|error| format!("启用知识库显示库 SQLite 失败：{error}"))?;
+        // Register the derived database path without holding an eager connection. Identity-addressed
+        // helpers open it through the host engine only for the lifetime of each operation.
+        // 登记派生数据库路径但不持有提前打开的连接。按身份寻址的助手仅在每次操作生命周期内通过宿主引擎打开它。
+        let database = self.display_database_binding(library_id, allow_database_creation)?;
+        self.register_library_binding(&binding_id, &database)?;
         Ok((space_id, binding_id))
     }
 
@@ -470,10 +398,10 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the canonical lowercase UUID of the physical library.
     /// `library_id` 是物理知识库的规范小写 UUID。
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已经派生的控制器空间身份。
-    /// `binding_id` is the exact SQLite binding within that controller space.
-    /// `binding_id` 是该控制器空间内的精确 SQLite 绑定。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已经派生的存储空间身份。
+    /// `binding_id` is the exact SQLite binding within that storage space.
+    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
     ///
     /// # Returns
     /// 返回值
@@ -529,43 +457,19 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     async fn enable_library_binding(
         &self,
         library_id: &str,
         allow_database_creation: bool,
     ) -> Result<(String, String), String> {
         let (space_id, binding_id) = self.library_binding_identity(library_id)?;
-        let root = self.library_root(library_id)?;
-        let database_path = root.join("content.sqlite3");
-        self.validate_library_artifacts(
-            library_id,
-            &root,
-            &database_path,
-            allow_database_creation,
-        )?;
-        self.controller
-            .client
-            .attach_space(SpaceRegistration {
-                space_id: space_id.clone(),
-                space_label: format!("Knowledge {library_id}"),
-                space_kind: SpaceKind::User,
-                space_root: runtime_assets::native_host_path_text_from_path(&root),
-            })
-            .await
-            .map_err(|error| format!("附着知识库控制器空间失败：{error}"))?;
-        self.controller
-            .client
-            .enable_sqlite(ControllerSqliteEnableRequest {
-                space_id: space_id.clone(),
-                binding_id: binding_id.clone(),
-                db_path: runtime_assets::native_host_path_text_from_path(&database_path),
-                busy_timeout_ms: 10_000,
-                ..ControllerSqliteEnableRequest::default()
-            })
-            .await
-            .map_err(|error| format!("启用知识库 SQLite 失败：{error}"))?;
+        // Register the derived database path without holding an eager connection. Identity-addressed
+        // helpers open it through the host engine only for the lifetime of each operation.
+        // 登记派生数据库路径但不持有提前打开的连接。按身份寻址的助手仅在每次操作生命周期内通过宿主引擎打开它。
+        let database = self.library_database_binding(library_id, allow_database_creation)?;
+        self.register_library_binding(&binding_id, &database)?;
         Ok((space_id, binding_id))
     }
 
@@ -576,10 +480,10 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the canonical lowercase UUID of the physical library.
     /// `library_id` 是物理知识库的规范小写 UUID。
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已经派生的控制器空间身份。
-    /// `binding_id` is the exact SQLite binding within that controller space.
-    /// `binding_id` 是该控制器空间内的精确 SQLite 绑定。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已经派生的存储空间身份。
+    /// `binding_id` is the exact SQLite binding within that storage space.
+    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
     ///
     /// # Returns
     /// 返回值
@@ -631,10 +535,10 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已经派生的控制器空间身份。
-    /// `binding_id` is the exact SQLite binding within that controller space.
-    /// `binding_id` 是该控制器空间内的精确 SQLite 绑定。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已经派生的存储空间身份。
+    /// `binding_id` is the exact SQLite binding within that storage space.
+    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
     ///
     /// # Returns
     /// 返回值
@@ -679,8 +583,8 @@ impl KnowledgeBaseRuntime {
         Ok(())
     }
 
-    /// Validates the manifest, canonical root, and database file before controller attachment.
-    /// 在控制器附着前校验清单、规范根目录与数据库文件。
+    /// Validates the manifest, canonical root, and database file before host attachment.
+    /// 在宿主附着前校验清单、规范根目录与数据库文件。
     ///
     /// # Parameters
     /// 参数
@@ -761,8 +665,8 @@ impl KnowledgeBaseRuntime {
         Ok(())
     }
 
-    /// Returns validated controller identities derived only from the library UUID.
-    /// 返回仅从知识库 UUID 派生的已验证控制器身份。
+    /// Returns validated storage identities derived only from the library UUID.
+    /// 返回仅从知识库 UUID 派生的已验证存储身份。
     ///
     /// # Parameters
     /// 参数
@@ -771,8 +675,82 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
+    /// Registers a per-library binding under the identity helpers are addressed with.
+    /// 以助手寻址所用的身份登记按资料库绑定。
+    ///
+    /// The identity is generated by the knowledge base itself and the binding is derived from the library
+    /// identifier alone, so this needs no open connection. Registering here lets a helper that only
+    /// holds the identity reach the engine without eagerly taking the database lock.
+    /// 身份由知识库自行生成，绑定仅从资料库标识符派生，因此不需要打开连接。在此登记使只持有身份的助手
+    /// 无需提前取得数据库锁即可抵达引擎。
+    fn register_library_binding(
+        &self,
+        binding_id: &str,
+        binding: &SqliteFileBinding,
+    ) -> Result<(), String> {
+        self.host_runtime
+            .local
+            .register_named_binding(binding_id, binding)
+            .map_err(|error| format!("登记知识库绑定失败：{error}"))
+    }
+    /// Resolves the per-library binding an addressing identity names.
+    /// 解析寻址身份所指的按资料库绑定。
+    ///
+    /// Helpers are addressed by the identity pair rather than by a binding, so this is how a helper
+    /// reaches the engine. It resolves through the runtime registry without eagerly opening the
+    /// database or holding its file lock.
+    /// 助手以身份二元组而非绑定来寻址，因此这是助手抵达引擎的方式。它通过运行时注册表解析，
+    /// 不会提前打开数据库或持有其文件锁。
+    ///
+    /// # Parameters / 参数
+    /// `binding_id` is the identity the caller was addressed with, as `String` or `&str`.
+    /// `binding_id` 是调用方被寻址时所用的身份，形式为 `String` 或 `&str`。
+    ///
+    /// # Returns / 返回值
+    /// Returns the registered binding, or an error naming the identity that was never registered.
+    /// 返回已登记的绑定，或指明那个从未被登记的身份的错误。
+    pub(super) fn resolve_library_binding(
+        &self,
+        binding_id: impl AsRef<str>,
+    ) -> Result<SqliteFileBinding, String> {
+        self.host_runtime
+            .local
+            .named_binding(binding_id.as_ref())
+            .map_err(|error| format!("解析知识库绑定失败：{error}"))
+    }
+    /// Resolves the LanceDB engine for the directory an addressing identity names.
+    /// 解析寻址身份所指目录的 LanceDB 引擎。
+    ///
+    /// The runtime caches one engine per directory, so this is a cheap lookup after the first call and
+    /// one directory still has exactly one engine, which the engine's own invariant requires because a
+    /// second engine would hold a second set of per-table locks.
+    /// 运行时按目录缓存一个引擎，因此首次调用之后这是廉价查找，且一个目录仍恰好只有一个引擎——这是引擎自身
+    /// 不变量所要求的，因为第二个引擎会持有第二套表级锁。
+    ///
+    /// # Parameters / 参数
+    /// `binding_id` is the identity the caller was addressed with.
+    /// `binding_id` 是调用方被寻址时所用的身份。
+    ///
+    /// # Returns / 返回值
+    /// Returns the cached engine, or an error naming the identity that was never registered.
+    /// 返回已缓存的引擎，或指明那个从未被登记的身份的错误。
+    pub(super) async fn resolve_vector_engine(
+        &self,
+        binding_id: impl AsRef<str>,
+    ) -> Result<LanceDbEngine, String> {
+        let directory = self
+            .host_runtime
+            .local
+            .named_lance_binding(binding_id.as_ref())
+            .map_err(|error| format!("解析知识库向量绑定失败：{error}"))?;
+        self.host_runtime
+            .local
+            .lance_engine(directory)
+            .await
+            .map_err(|error| format!("打开知识库 LanceDB 引擎失败：{error}"))
+    }
     pub(super) fn library_binding_identity(
         &self,
         library_id: &str,
@@ -782,13 +760,13 @@ impl KnowledgeBaseRuntime {
             format!("knowledge-{library_id}"),
             format!(
                 "knowledge-{}-{library_id}",
-                self.controller.sqlite_binding_id
+                self.host_runtime.sqlite_binding_id
             ),
         ))
     }
 
-    /// Returns the stable controller identities for one derived display database.
-    /// 返回一个派生显示库数据库使用的稳定控制器身份。
+    /// Returns the stable storage identities for one derived display database.
+    /// 返回一个派生显示库数据库使用的稳定存储身份。
     ///
     /// # Parameters
     /// 参数
@@ -797,21 +775,21 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     fn display_binding_identity(&self, library_id: &str) -> Result<(String, String), String> {
         validate_library_id(library_id)?;
         Ok((
             format!("knowledge-{library_id}"),
             format!(
                 "knowledge-display-{}-{library_id}",
-                self.controller.sqlite_binding_id
+                self.host_runtime.sqlite_binding_id
             ),
         ))
     }
 
-    /// Returns the stable controller identities for one derived vector backend.
-    /// 返回一个派生向量后端使用的稳定控制器身份。
+    /// Returns the stable storage identities for one derived vector backend.
+    /// 返回一个派生向量后端使用的稳定存储身份。
     ///
     /// # Parameters
     /// 参数
@@ -820,8 +798,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/controller error.
-    /// 返回精确空间与后端绑定身份，或校验/控制器错误。
+    /// Returns the exact space and backend binding identities, or the validation/storage error.
+    /// 返回精确空间与后端绑定身份，或校验/存储错误。
     pub(super) fn vector_binding_identity(
         &self,
         library_id: &str,
@@ -831,9 +809,115 @@ impl KnowledgeBaseRuntime {
             format!("knowledge-{library_id}"),
             format!(
                 "knowledge-vector-{}-{library_id}",
-                self.controller.sqlite_binding_id
+                self.host_runtime.sqlite_binding_id
             ),
         ))
+    }
+
+    /// Returns the in-process binding for one library's content database.
+    /// 返回一个资料库内容数据库的进程内绑定。
+    ///
+    /// This is the single source of truth for the path and the artifact checks. The host enable
+    /// paths below are built on it so that the two backends can never disagree about which file a
+    /// library owns, and so that migrating a caller cannot silently change the path it reads.
+    ///
+    /// 这是路径与产物检查的唯一权威来源。下方宿主启用路径建立在它之上，使两种后端绝不会对某个资料库
+    /// 拥有哪个文件产生分歧，也使迁移调用方不会静默改变它所读取的路径。
+    ///
+    /// # Parameters / 参数
+    /// `library_id` is the canonical lowercase UUID of the physical library.
+    /// `library_id` 是物理知识库的规范小写 UUID。
+    /// `allow_database_creation` is whether this explicit creation path may accept a missing artifact.
+    /// `allow_database_creation` 是当前明确创建路径是否允许后端产物尚不存在。
+    ///
+    /// # Returns / 返回值
+    /// Returns the validated content-database binding, or the validation error.
+    /// 返回已验证的内容数据库绑定，或校验错误。
+    pub(super) fn library_database_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<SqliteFileBinding, String> {
+        let root = self.library_root(library_id)?;
+        let database_path = root.join("content.sqlite3");
+        self.validate_library_artifacts(
+            library_id,
+            &root,
+            &database_path,
+            allow_database_creation,
+        )?;
+        Ok(library_sqlite_binding(database_path))
+    }
+
+    /// Returns the in-process binding for one library's derived display database.
+    /// 返回一个资料库派生显示库的进程内绑定。
+    ///
+    /// # Parameters / 参数
+    /// `library_id` is the canonical lowercase UUID of the physical library.
+    /// `library_id` 是物理知识库的规范小写 UUID。
+    /// `allow_database_creation` is whether this explicit creation path may accept a missing artifact.
+    /// `allow_database_creation` 是当前明确创建路径是否允许后端产物尚不存在。
+    ///
+    /// # Returns / 返回值
+    /// Returns the validated display-database binding, or the validation error.
+    /// 返回已验证的显示库数据库绑定，或校验错误。
+    pub(super) fn display_database_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<SqliteFileBinding, String> {
+        let root = self.library_root(library_id)?;
+        let database_path = root.join("display.sqlite3");
+        validate_trusted_database_file(&database_path, allow_database_creation)?;
+        Ok(library_sqlite_binding(database_path))
+    }
+
+    /// Returns the in-process binding for one library's derived vector directory.
+    /// 返回一个资料库派生向量目录的进程内绑定。
+    ///
+    /// # Parameters / 参数
+    /// `library_id` is the canonical lowercase UUID of the physical library.
+    /// `library_id` 是物理知识库的规范小写 UUID。
+    /// `allow_database_creation` is whether this explicit creation path may accept a missing artifact.
+    /// `allow_database_creation` 是当前明确创建路径是否允许后端产物尚不存在。
+    ///
+    /// # Returns / 返回值
+    /// Returns the validated vector-directory binding, or the validation/creation error.
+    /// 返回已验证的向量目录绑定，或校验／创建错误。
+    pub(super) fn vector_directory_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<LanceDbDirectoryBinding, String> {
+        let root = self.library_root(library_id)?;
+        let lancedb_root = root.join("lancedb");
+        match fs::symlink_metadata(&lancedb_root) {
+            Ok(metadata) => {
+                if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
+                    return Err(format!(
+                        "知识库 LanceDB 目录不是可信普通目录：{}",
+                        lancedb_root.display()
+                    ));
+                }
+            }
+            Err(error)
+                if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                fs::create_dir_all(&lancedb_root).map_err(|create_error| {
+                    format!(
+                        "创建知识库 LanceDB 目录失败（{}）：{create_error}",
+                        lancedb_root.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "读取知识库 LanceDB 目录失败（{}）：{error}",
+                    lancedb_root.display()
+                ));
+            }
+        }
+        Ok(vector_directory_binding(lancedb_root))
     }
 
     /// Returns the immutable knowledge root under the established application data root.
@@ -849,7 +933,7 @@ impl KnowledgeBaseRuntime {
     /// Returns the established application data root joined with the knowledge directory.
     /// 返回既有应用数据根拼接后的知识库目录。
     pub(super) fn knowledge_root(&self) -> PathBuf {
-        self.controller.data_root.join("knowledge-bases")
+        self.host_runtime.data_root.join("knowledge-bases")
     }
 
     /// Derives and validates one physical library root.
@@ -988,24 +1072,21 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the decoded typed rows, or the controller/decoding error.
-    /// 返回已解码的类型化记录，或控制器/解码错误。
+    /// Returns the decoded typed rows, or the storage/decoding error.
+    /// 返回已解码的类型化记录，或存储/解码错误。
     pub(super) async fn query_app_rows<T: DeserializeOwned>(
         &self,
         sql: &str,
-        params: Vec<ControllerSqliteValue>,
+        params: &[SqliteValue],
     ) -> Result<Vec<T>, String> {
-        let result = self
-            .controller
-            .client
-            .query_sqlite_json_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                sql,
-                params,
-            )
-            .await
-            .map_err(|error| format!("查询知识库中央注册表失败：{error}"))?;
+        let result = local_sql::query_json_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            sql,
+            params.to_vec(),
+        )
+        .await
+        .map_err(|error| format!("查询知识库中央注册表失败：{error}"))?;
         decode_rows(&result.json_data)
     }
 
@@ -1014,10 +1095,10 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已经派生的控制器空间身份。
-    /// `binding_id` is the exact SQLite binding within that controller space.
-    /// `binding_id` 是该控制器空间内的精确 SQLite 绑定。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已经派生的存储空间身份。
+    /// `binding_id` is the exact SQLite binding within that storage space.
+    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
     /// `sql` is the existing parameterized SQL statement.
     /// `sql` 是现有参数化 SQL 语句。
     /// `params` is the ordered typed SQL parameter values.
@@ -1025,21 +1106,23 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the decoded typed rows, or the controller/decoding error.
-    /// 返回已解码的类型化记录，或控制器/解码错误。
+    /// Returns the decoded typed rows, or the storage/decoding error.
+    /// 返回已解码的类型化记录，或存储/解码错误。
     pub(super) async fn query_library_rows<T: DeserializeOwned>(
         &self,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         sql: &str,
-        params: Vec<ControllerSqliteValue>,
+        params: Vec<SqliteValue>,
     ) -> Result<Vec<T>, String> {
-        let result = self
-            .controller
-            .client
-            .query_sqlite_json_typed(space_id, binding_id, sql, params)
-            .await
-            .map_err(|error| format!("查询知识库 SQLite 失败：{error}"))?;
+        let result = local_sql::query_json_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            sql,
+            params,
+        )
+        .await
+        .map_err(|error| format!("查询知识库 SQLite 失败：{error}"))?;
         decode_rows(&result.json_data)
     }
 
@@ -1048,10 +1131,10 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already derived controller space identity.
-    /// `space_id` 是已经派生的控制器空间身份。
-    /// `binding_id` is the exact SQLite binding within that controller space.
-    /// `binding_id` 是该控制器空间内的精确 SQLite 绑定。
+    /// `space_id` is the already derived storage-space identity.
+    /// `space_id` 是已经派生的存储空间身份。
+    /// `binding_id` is the exact SQLite binding within that storage space.
+    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
     /// `sql` is the existing parameterized SQL statement.
     /// `sql` 是现有参数化 SQL 语句。
     /// `items` is the ordered parameter rows for repeated statement execution.
@@ -1065,17 +1148,20 @@ impl KnowledgeBaseRuntime {
     /// 返回所述操作完成后的成功结果，或其明确错误。
     pub(super) async fn execute_library_batch(
         &self,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         sql: &str,
-        items: Vec<Vec<ControllerSqliteValue>>,
+        items: Vec<Vec<SqliteValue>>,
         context: &str,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_batch_typed(space_id, binding_id, sql, items)
-            .await
-            .map_err(|error| format!("{context}：{error}"))?;
+        local_sql::execute_batch_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            sql,
+            items,
+        )
+        .await
+        .map_err(|error| format!("{context}：{error}"))?;
         Ok(())
     }
 }
@@ -1132,6 +1218,75 @@ pub(super) fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     }
 }
 
+/// Builds one per-library SQLite binding with the knowledge base's declared options.
+/// 使用知识库声明的选项构建一个按资料库的 SQLite 绑定。
+///
+/// The knowledge base raised `busy_timeout_ms` to 10 s because a knowledge import holds a write
+/// transaction while a concurrent reader may still be running; the engine's 5 s default is the
+/// application-wide value, not this subsystem's. Passing it explicitly keeps that deliberate
+/// difference visible instead of silently reverting it to the default.
+///
+/// 知识库把 `busy_timeout_ms` 提高到 10 秒，因为一次知识导入持有写事务时仍可能有并发读取；引擎的 5 秒
+/// 默认值是应用级取值，而不是本子系统的。显式传入使这一有意差异保持可见，而不是静默回退为默认值。
+fn library_sqlite_binding(path: PathBuf) -> SqliteFileBinding {
+    SqliteFileBinding {
+        path,
+        options: SqliteOpenOptions {
+            busy_timeout_ms: 10_000,
+            ..SqliteOpenOptions::default()
+        },
+    }
+}
+
+/// Builds one per-library LanceDB binding with the knowledge base's declared limits.
+/// 使用知识库声明的限制构建一个按资料库的 LanceDB 绑定。
+///
+/// `MAX_SEARCH_LIMIT` belongs to the knowledge base rather than to the engine's defaults, so it is
+/// passed explicitly for the same reason as the SQLite timeout above.
+/// `MAX_SEARCH_LIMIT` 属于知识库而非引擎默认值，因此与上述 SQLite 超时同理，被显式传入。
+fn vector_directory_binding(directory: PathBuf) -> LanceDbDirectoryBinding {
+    LanceDbDirectoryBinding {
+        directory,
+        read_consistency_interval_ms: Some(250),
+        max_upsert_payload: 16 * 1024 * 1024,
+        max_search_limit: MAX_SEARCH_LIMIT as usize,
+        max_concurrent_requests: 16,
+    }
+}
+
+/// Requires one derived database file to be absent or a trusted ordinary file.
+/// 要求一个派生数据库文件不存在，或是可信的普通文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is the host-derived database path that may or may not exist.
+/// `path` 是可能存在或不存在的宿主派生数据库路径。
+/// `allow_creation` is whether a missing file is acceptable on this explicit creation path.
+/// `allow_creation` 是当前明确创建路径上文件缺失是否可接受。
+///
+/// # Returns
+/// 返回值
+/// Returns success for a trusted file or an allowed absence, or an explicit trust/read error.
+/// 对可信文件或允许的缺失返回成功，否则返回明确的信任／读取错误。
+fn validate_trusted_database_file(path: &Path, allow_creation: bool) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+                return Err(format!(
+                    "知识库派生数据库不是可信普通文件：{}",
+                    path.display()
+                ));
+            }
+            Ok(())
+        }
+        Err(error) if allow_creation && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "读取知识库派生数据库失败（{}）：{error}",
+            path.display()
+        )),
+    }
+}
+
 /// Validates that a library identifier is one canonical lowercase UUID.
 /// 验证知识库标识符是一个规范小写 UUID。
 ///
@@ -1153,18 +1308,18 @@ pub(super) fn validate_library_id(library_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Decodes one controller JSON row set into typed rows.
-/// 将一份控制器 JSON 行集解码为类型化记录。
+/// Decodes one storage-engine JSON row set into typed rows.
+/// 将一份存储引擎 JSON 行集解码为类型化记录。
 ///
 /// # Parameters
 /// 参数
-/// `json` is the controller JSON row-set response to decode into T.
-/// `json` 是控制器返回的待解码为 T 的 JSON 行集。
+/// `json` is the storage-engine JSON row-set response to decode into T.
+/// `json` 是存储引擎返回的待解码为 T 的 JSON 行集。
 ///
 /// # Returns
 /// 返回值
-/// Returns the decoded typed rows, or the controller/decoding error.
-/// 返回已解码的类型化记录，或控制器/解码错误。
+/// Returns the decoded typed rows, or the storage/decoding error.
+/// 返回已解码的类型化记录，或存储/解码错误。
 fn decode_rows<T: DeserializeOwned>(json: &str) -> Result<Vec<T>, String> {
     serde_json::from_str(json).map_err(|error| format!("解码知识库查询结果失败：{error}"))
 }

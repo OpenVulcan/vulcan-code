@@ -5,17 +5,20 @@ use super::super::models::{
     KnowledgeCustomWord, KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary,
     KnowledgeOperationKind,
 };
+use super::int;
 use super::{
-    APP_SPACE_ID, KNOWLEDGE_FTS_INDEX, KNOWLEDGE_OPERATION_CANCELLED_ERROR, KnowledgeBaseRuntime,
-    PreparedKnowledgeOperation, int, nonnegative_u64, queued_operation_summary,
+    KNOWLEDGE_FTS_INDEX, KNOWLEDGE_OPERATION_CANCELLED_ERROR, KnowledgeBaseRuntime,
+    PreparedKnowledgeOperation, nonnegative_u64, queued_operation_summary,
     require_operation_not_cancelled, text, unix_epoch_millis,
 };
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use serde::Deserialize;
 use std::sync::atomic::AtomicBool;
-use vldb_controller_client::ControllerSqliteTokenizerMode;
+use vulcan_sqlite_engine::tokenizer::TokenizerMode;
 
-/// Maximum FTS mutations committed per cancellable controller batch.
-/// 每个可取消控制器批次提交的最大 FTS 变更数。
+/// Maximum FTS mutations committed per cancellable storage batch.
+/// 每个可取消存储批次提交的最大 FTS 变更数。
 const FTS_MUTATION_BATCH_SIZE: usize = 512;
 
 /// Maximum stale FTS identifiers deleted by one parameterized set statement.
@@ -105,20 +108,20 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the checked custom-word list, or a controller/conversion error.
-    /// 返回已校验的自定义词列表，或控制器/转换错误。
+    /// Returns the checked custom-word list, or a storage/conversion error.
+    /// 返回已校验的自定义词列表，或存储/转换错误。
     pub async fn list_custom_words(
         &self,
         library_id: &str,
     ) -> Result<Vec<KnowledgeCustomWord>, String> {
         self.require_active_library(library_id).await?;
-        let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
-        let result = self
-            .controller
-            .client
-            .list_sqlite_custom_words(&space_id, &binding_id)
-            .await
-            .map_err(|error| format!("读取知识库 Jieba 自定义词失败：{error}"))?;
+        let (_space_id, binding_id) = self.ensure_library_binding(library_id).await?;
+        let result = local_sql::list_custom_words_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+        )
+        .await
+        .map_err(|error| format!("读取知识库 Jieba 自定义词失败：{error}"))?;
         result
             .words
             .into_iter()
@@ -158,11 +161,14 @@ impl KnowledgeBaseRuntime {
         self.require_active_library(library_id).await?;
         let word = validate_custom_word(word)?;
         let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
-        self.controller
-            .client
-            .upsert_sqlite_custom_word(&space_id, &binding_id, word, weight.max(1))
-            .await
-            .map_err(|error| format!("保存知识库 Jieba 自定义词失败：{error}"))?;
+        local_sql::upsert_custom_word_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            word,
+            weight.max(1) as usize,
+        )
+        .await
+        .map_err(|error| format!("保存知识库 Jieba 自定义词失败：{error}"))?;
         self.mark_dictionary_dirty(library_id, &space_id, &binding_id)
             .await
     }
@@ -186,11 +192,13 @@ impl KnowledgeBaseRuntime {
         self.require_active_library(library_id).await?;
         let word = validate_custom_word(word)?;
         let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
-        self.controller
-            .client
-            .remove_sqlite_custom_word(&space_id, &binding_id, word)
-            .await
-            .map_err(|error| format!("删除知识库 Jieba 自定义词失败：{error}"))?;
+        local_sql::remove_custom_word_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            word,
+        )
+        .await
+        .map_err(|error| format!("删除知识库 Jieba 自定义词失败：{error}"))?;
         self.mark_dictionary_dirty(library_id, &space_id, &binding_id)
             .await
     }
@@ -460,8 +468,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `job_id` is the durable operation identity used for progress when supplied.
@@ -485,16 +493,14 @@ impl KnowledgeBaseRuntime {
         stale_chunk_ids: &[String],
         cancellation: &AtomicBool,
     ) -> Result<ImportIndexSyncOutcome, String> {
-        self.controller
-            .client
-            .ensure_sqlite_fts_index(
-                space_id,
-                binding_id,
-                KNOWLEDGE_FTS_INDEX,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("创建 Jieba FTS 索引失败：{error}"))?;
+        local_sql::ensure_fts_index_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            KNOWLEDGE_FTS_INDEX,
+            TokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("创建 Jieba FTS 索引失败：{error}"))?;
         for chunk_ids in stale_chunk_ids.chunks(FTS_DELETE_PARAMETER_BATCH_SIZE) {
             if require_operation_not_cancelled(cancellation).is_err() {
                 return Ok(ImportIndexSyncOutcome::Cancelled);
@@ -504,16 +510,14 @@ impl KnowledgeBaseRuntime {
             let placeholders = std::iter::repeat_n("?", chunk_ids.len())
                 .collect::<Vec<_>>()
                 .join(", ");
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    space_id,
-                    binding_id,
-                    format!("DELETE FROM {KNOWLEDGE_FTS_INDEX} WHERE id IN ({placeholders});"),
-                    chunk_ids.iter().map(text).collect(),
-                )
-                .await
-                .map_err(|error| format!("集合式删除过期 FTS 切片失败：{error}"))?;
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(binding_id)?,
+                format!("DELETE FROM {KNOWLEDGE_FTS_INDEX} WHERE id IN ({placeholders});"),
+                chunk_ids.iter().map(text).collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(|error| format!("集合式删除过期 FTS 切片失败：{error}"))?;
         }
         // TotalItems is derived from the committed authoritative rows selected by staged documents.
         // TotalItems 从暂存文档选择出的已提交权威记录派生。
@@ -540,8 +544,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `job_id` is the durable operation identity used for progress when supplied.
@@ -562,28 +566,24 @@ impl KnowledgeBaseRuntime {
         cancellation: &AtomicBool,
     ) -> Result<ImportIndexSyncOutcome, String> {
         require_operation_not_cancelled(cancellation)?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                format!("DROP TABLE IF EXISTS {KNOWLEDGE_FTS_INDEX};"),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("删除旧 FTS 索引失败：{error}"))?;
-        self.controller
-            .client
-            .ensure_sqlite_fts_index(
-                space_id,
-                binding_id,
-                KNOWLEDGE_FTS_INDEX,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("重建 Jieba FTS 索引结构失败：{error}"))?;
-        // TotalItems is read without materializing all chunk bodies across the controller boundary.
-        // TotalItems 无需跨控制器边界物化全部切片正文即可读取。
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            format!("DROP TABLE IF EXISTS {KNOWLEDGE_FTS_INDEX};"),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("删除旧 FTS 索引失败：{error}"))?;
+        local_sql::ensure_fts_index_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            KNOWLEDGE_FTS_INDEX,
+            TokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("重建 Jieba FTS 索引结构失败：{error}"))?;
+        // TotalItems is read without materializing all chunk bodies across the storage boundary.
+        // TotalItems 无需跨存储边界物化全部切片正文即可读取。
         let total_items = nonnegative_u64(
             self.authoritative_counts(space_id, binding_id)
                 .await?
@@ -613,8 +613,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `job_id` is the durable operation identity used for progress when supplied.
@@ -645,8 +645,8 @@ impl KnowledgeBaseRuntime {
             if require_operation_not_cancelled(cancellation).is_err() {
                 return Ok(ImportIndexSyncOutcome::Cancelled);
             }
-            // BatchSize bounds FTS5 write amplification while reducing controller crossings fourfold from 128 rows.
-            // BatchSize 限制 FTS5 写放大，同时相较 128 行窗口将控制器跨越次数减少四倍。
+            // BatchSize bounds FTS5 write amplification while reducing storage calls fourfold from 128 rows.
+            // BatchSize 限制 FTS5 写放大，同时相较 128 行窗口将存储调用次数减少四倍。
             let batch_size = FTS_MUTATION_BATCH_SIZE.min(total_items as usize - offset);
             self.replay_staged_fts_batch(space_id, binding_id, batch_size, offset)
                 .await?;
@@ -664,8 +664,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `job_id` is the durable operation identity used for progress when supplied.
@@ -696,8 +696,8 @@ impl KnowledgeBaseRuntime {
             if require_operation_not_cancelled(cancellation).is_err() {
                 return Ok(ImportIndexSyncOutcome::Cancelled);
             }
-            // BatchSize bounds one FTS transaction and controller response latency.
-            // BatchSize 限制单次 FTS 事务与控制器响应延迟。
+            // BatchSize bounds one FTS transaction and in-process storage latency.
+            // BatchSize 限制单次 FTS 事务与进程内存储延迟。
             let batch_size = FTS_MUTATION_BATCH_SIZE.min(total_items as usize - offset);
             self.replay_authoritative_fts_batch(space_id, binding_id, batch_size, offset)
                 .await?;
@@ -715,8 +715,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `limit` is the bounded SQL replay window size.
@@ -730,7 +730,7 @@ impl KnowledgeBaseRuntime {
     /// 返回所述操作完成后的成功，或明确校验/存储错误。
     async fn replay_staged_fts_batch(
         &self,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         limit: usize,
         offset: usize,
@@ -752,11 +752,14 @@ impl KnowledgeBaseRuntime {
                ORDER BY d.relative_path_key ASC, c.ordinal ASC
                LIMIT {limit} OFFSET {offset};"#
         );
-        self.controller
-            .client
-            .execute_sqlite_script_typed(space_id, binding_id, sql, Vec::new())
-            .await
-            .map_err(|error| format!("集合式写入变更 Jieba FTS 切片失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            sql,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("集合式写入变更 Jieba FTS 切片失败：{error}"))?;
         Ok(())
     }
 
@@ -765,8 +768,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `limit` is the bounded SQL replay window size.
@@ -780,7 +783,7 @@ impl KnowledgeBaseRuntime {
     /// 返回所述操作完成后的成功，或明确校验/存储错误。
     async fn replay_authoritative_fts_batch(
         &self,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         limit: usize,
         offset: usize,
@@ -801,11 +804,14 @@ impl KnowledgeBaseRuntime {
                ORDER BY d.relative_path_key ASC, c.ordinal ASC
                LIMIT {limit} OFFSET {offset};"#
         );
-        self.controller
-            .client
-            .execute_sqlite_script_typed(space_id, binding_id, sql, Vec::new())
-            .await
-            .map_err(|error| format!("集合式回放 Jieba FTS 切片失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            sql,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("集合式回放 Jieba FTS 切片失败：{error}"))?;
         Ok(())
     }
 
@@ -816,8 +822,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `job_id` is the durable operation identity used for progress when supplied.
@@ -858,16 +864,14 @@ impl KnowledgeBaseRuntime {
                 )
                 .await;
         }
-        self.controller
-            .client
-            .ensure_sqlite_fts_index(
-                space_id,
-                binding_id,
-                KNOWLEDGE_FTS_INDEX,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("创建待补全 Jieba FTS 索引失败：{error}"))?;
+        local_sql::ensure_fts_index_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            KNOWLEDGE_FTS_INDEX,
+            TokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("创建待补全 Jieba FTS 索引失败：{error}"))?;
         // TotalItems is authoritative work scanned by deterministic repair windows.
         // TotalItems 是确定性补全窗口扫描的权威工作量。
         let total_items = before.authoritative_chunk_count;
@@ -902,18 +906,21 @@ impl KnowledgeBaseRuntime {
                        OR candidate.source_matches = 0
                );"#
         );
-        self.controller
-            .client
-            .execute_sqlite_script_typed(space_id, binding_id, delete_sql, Vec::new())
-            .await
-            .map_err(|error| format!("删除孤立或错配 FTS 切片失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            delete_sql,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("删除孤立或错配 FTS 切片失败：{error}"))?;
         // Offset advances over authoritative rows rather than the shrinking missing-row subset.
         // Offset 在权威记录而非不断缩小的缺失记录子集上推进。
         let mut offset = 0usize;
         while offset < total_items as usize {
             require_operation_not_cancelled(cancellation)?;
-            // BatchSize bounds each repair transaction below the controller request deadline.
-            // BatchSize 将每次补全事务限制在控制器请求期限内。
+            // BatchSize bounds each repair transaction below the maintenance deadline.
+            // BatchSize 将每次补全事务限制在维护期限内。
             let batch_size = FTS_MUTATION_BATCH_SIZE.min(total_items as usize - offset);
             self.replay_missing_fts_batch(space_id, binding_id, batch_size, offset)
                 .await?;
@@ -941,8 +948,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `limit` is the bounded SQL replay window size.
@@ -956,7 +963,7 @@ impl KnowledgeBaseRuntime {
     /// 返回所述操作完成后的成功，或明确校验/存储错误。
     async fn replay_missing_fts_batch(
         &self,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         limit: usize,
         offset: usize,
@@ -982,11 +989,14 @@ impl KnowledgeBaseRuntime {
                EXCEPT
                SELECT id, file_path, title, content FROM {KNOWLEDGE_FTS_INDEX};"#
         );
-        self.controller
-            .client
-            .execute_sqlite_script_typed(space_id, binding_id, sql, Vec::new())
-            .await
-            .map_err(|error| format!("集合式补全 Jieba FTS 切片失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            sql,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("集合式补全 Jieba FTS 切片失败：{error}"))?;
         Ok(())
     }
 
@@ -997,8 +1007,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `job_id` is the durable operation identity used for progress when supplied.
@@ -1021,26 +1031,22 @@ impl KnowledgeBaseRuntime {
         if let Some(cancellation) = cancellation {
             require_operation_not_cancelled(cancellation)?;
         }
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                format!("DROP TABLE IF EXISTS {KNOWLEDGE_FTS_INDEX};"),
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("删除旧 FTS 索引失败：{error}"))?;
-        self.controller
-            .client
-            .ensure_sqlite_fts_index(
-                space_id,
-                binding_id,
-                KNOWLEDGE_FTS_INDEX,
-                ControllerSqliteTokenizerMode::Jieba,
-            )
-            .await
-            .map_err(|error| format!("重建 Jieba FTS 索引结构失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            format!("DROP TABLE IF EXISTS {KNOWLEDGE_FTS_INDEX};"),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("删除旧 FTS 索引失败：{error}"))?;
+        local_sql::ensure_fts_index_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
+            KNOWLEDGE_FTS_INDEX,
+            TokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("重建 Jieba FTS 索引结构失败：{error}"))?;
         // Counts supplies a constant authoritative denominator without materializing chunk bodies.
         // Counts 提供恒定权威分母，无需物化切片正文。
         let counts = self.authoritative_counts(space_id, binding_id).await?;
@@ -1058,8 +1064,8 @@ impl KnowledgeBaseRuntime {
             if let Some(cancellation) = cancellation {
                 require_operation_not_cancelled(cancellation)?;
             }
-            // BatchSize keeps each controller call cancellable and below its transport deadline.
-            // BatchSize 使每次控制器调用可取消且保持在传输期限内。
+            // BatchSize keeps each storage call cancellable and below its operation deadline.
+            // BatchSize 使每次存储调用可取消且保持在操作期限内。
             let batch_size = FTS_MUTATION_BATCH_SIZE.min(total_items as usize - offset);
             self.replay_authoritative_fts_batch(space_id, binding_id, batch_size, offset)
                 .await?;
@@ -1112,8 +1118,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1234,8 +1240,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1275,8 +1281,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1315,8 +1321,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the exact isolated controller space containing the candidate database.
-    /// `space_id` 是包含候选数据库的精确隔离控制器空间。
+    /// `space_id` is the exact isolated storage space containing the candidate database.
+    /// `space_id` 是包含候选数据库的精确隔离存储空间。
     /// `binding_id` is the exact SQLite binding used for the integrity query.
     /// `binding_id` 是执行完整性查询的精确 SQLite 绑定。
     ///
@@ -1338,8 +1344,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1379,8 +1385,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1442,8 +1448,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1451,20 +1457,17 @@ impl KnowledgeBaseRuntime {
     /// 返回值
     /// Returns success after the documented operation, or its explicit validation/storage error.
     /// 返回所述操作完成后的成功，或明确校验/存储错误。
-    async fn mark_index_ready(&self, space_id: &str, binding_id: &str) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
+    async fn mark_index_ready(&self, _space_id: &str, binding_id: &str) -> Result<(), String> {
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
                 r#"UPDATE knowledge_metadata SET value = (SELECT value FROM knowledge_metadata WHERE key = 'content_revision') WHERE key = 'indexed_content_revision';
                     UPDATE knowledge_metadata SET value = (SELECT value FROM knowledge_metadata WHERE key = 'dictionary_revision') WHERE key = 'indexed_dictionary_revision';
                     UPDATE knowledge_metadata SET value = 'jieba' WHERE key = 'tokenizer';
                     UPDATE knowledge_metadata SET value = 'ready' WHERE key = 'index_status';
                     UPDATE knowledge_metadata SET value = '' WHERE key = 'last_index_error';"#,
                 Vec::new(),
-            )
-            .await
+            ).await
             .map_err(|error| format!("提交知识库索引版本失败：{error}"))?;
         Ok(())
     }
@@ -1476,8 +1479,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1488,18 +1491,15 @@ impl KnowledgeBaseRuntime {
     async fn mark_dictionary_dirty(
         &self,
         library_id: &str,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
                 "UPDATE knowledge_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'dictionary_revision'; UPDATE knowledge_metadata SET value = 'dirty' WHERE key = 'index_status';",
                 Vec::new(),
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库词典版本失败：{error}"))?;
         self.set_registry_index_status(library_id, "dirty").await
     }
@@ -1509,8 +1509,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     ///
@@ -1547,8 +1547,8 @@ impl KnowledgeBaseRuntime {
     /// 参数
     /// `library_id` is the exact library owning this maintenance or registry projection.
     /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `space_id` is the already resolved isolated controller space.
-    /// `space_id` 是已解析的隔离控制器空间。
+    /// `space_id` is the already resolved isolated storage space.
+    /// `space_id` 是已解析的隔离存储空间。
     /// `binding_id` is the exact SQLite binding containing authoritative and derived rows.
     /// `binding_id` 是包含权威与派生记录的精确 SQLite 绑定。
     /// `state` is the exact index lifecycle state to persist.
@@ -1563,20 +1563,17 @@ impl KnowledgeBaseRuntime {
     async fn set_library_index_state(
         &self,
         library_id: &str,
-        space_id: &str,
+        _space_id: &str,
         binding_id: &str,
         state: &str,
         error: &str,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                space_id,
-                binding_id,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding_id)?,
                 "UPDATE knowledge_metadata SET value = CASE key WHEN 'index_status' THEN ? WHEN 'last_index_error' THEN ? END WHERE key IN ('index_status', 'last_index_error');",
                 vec![text(state), text(error)],
-            )
-            .await
+            ).await
             .map_err(|failure| format!("更新知识库索引状态失败：{failure}"))?;
         self.set_registry_index_status(library_id, state).await
     }
@@ -1596,16 +1593,14 @@ impl KnowledgeBaseRuntime {
     /// Returns success after the documented operation, or its explicit validation/storage error.
     /// 返回所述操作完成后的成功，或明确校验/存储错误。
     async fn set_registry_index_status(&self, library_id: &str, state: &str) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                "UPDATE knowledge_libraries SET index_status = ?, updated_at_ms = ? WHERE id = ?;",
-                vec![text(state), int(unix_epoch_millis()?), text(library_id)],
-            )
-            .await
-            .map_err(|error| format!("更新知识库中央索引状态失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            "UPDATE knowledge_libraries SET index_status = ?, updated_at_ms = ? WHERE id = ?;",
+            vec![text(state), int(unix_epoch_millis()?), text(library_id)],
+        )
+        .await
+        .map_err(|error| format!("更新知识库中央索引状态失败：{error}"))?;
         Ok(())
     }
 }

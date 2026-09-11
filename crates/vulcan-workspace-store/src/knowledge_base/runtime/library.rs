@@ -7,12 +7,16 @@ use super::super::models::{
 };
 use super::CountRow;
 use super::{
-    APP_SPACE_ID, KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, KnowledgeManifest, int,
-    nonnegative_u64, text, unix_epoch_millis, validate_library_id,
+    KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, KnowledgeManifest, nonnegative_u64,
+    unix_epoch_millis, validate_library_id,
 };
+use super::{int, text};
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use serde::Deserialize;
 use std::fs;
 use uuid::Uuid;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// One registry row decoded from the application database.
 /// 从应用数据库解码的一条知识库注册记录。
@@ -80,27 +84,25 @@ impl KnowledgeBaseRuntime {
         let library_id = Uuid::new_v4().to_string();
         let now = unix_epoch_millis()?;
         let name_key = library_name_key(&normalized_name);
-        self.controller
-            .client
-            .execute_sqlite_batch_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                r#"INSERT INTO knowledge_libraries(
+        local_sql::execute_batch_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            r#"INSERT INTO knowledge_libraries(
                     id, name, name_key, description, lifecycle_state, document_count,
                     chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
                 ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?, ?);"#,
-                vec![vec![
-                    text(&library_id),
-                    text(&normalized_name),
-                    text(&name_key),
-                    text(description.trim()),
-                    text("{}"),
-                    int(now),
-                    int(now),
-                ]],
-            )
-            .await
-            .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
+            vec![vec![
+                text(&library_id),
+                text(&normalized_name),
+                text(&name_key),
+                text(description.trim()),
+                text("{}"),
+                int(now),
+                int(now),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
 
         let initialize_result = async {
             self.initialize_library_storage(&library_id, &normalized_name)
@@ -115,16 +117,13 @@ impl KnowledgeBaseRuntime {
 
         if let Err(error) = initialize_result {
             let _ = self.release_library_binding(&library_id).await;
-            let _ = self
-                .controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    self.controller.sqlite_binding_id.as_str(),
-                    "DELETE FROM knowledge_libraries WHERE id = ?;",
-                    vec![text(&library_id)],
-                )
-                .await;
+            let _ = local_sql::execute_script_async(
+                &self.host_runtime.local,
+                LogicalDatabase::AppState,
+                "DELETE FROM knowledge_libraries WHERE id = ?;",
+                vec![text(&library_id)],
+            )
+            .await;
             let root = self.library_root(&library_id)?;
             let _ = self.remove_host_owned_child_directory_if_exists(&root, &library_id);
             return Err(error);
@@ -164,27 +163,25 @@ impl KnowledgeBaseRuntime {
         let now = unix_epoch_millis()?;
         let settings_json = serde_json::to_string(settings)
             .map_err(|error| format!("序列化知识库配置失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_batch_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                r#"INSERT INTO knowledge_libraries(
+        local_sql::execute_batch_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            r#"INSERT INTO knowledge_libraries(
                     id, name, name_key, description, lifecycle_state, document_count,
                     chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
                 ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?, ?);"#,
-                vec![vec![
-                    text(&library_id),
-                    text(&normalized_name),
-                    text(library_name_key(&normalized_name)),
-                    text(description.trim()),
-                    text(&settings_json),
-                    int(now),
-                    int(now),
-                ]],
-            )
-            .await
-            .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
+            vec![vec![
+                text(&library_id),
+                text(&normalized_name),
+                text(library_name_key(&normalized_name)),
+                text(description.trim()),
+                text(&settings_json),
+                int(now),
+                int(now),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
         let initialize_result = async {
             self.initialize_library_storage(&library_id, &normalized_name)
                 .await?;
@@ -197,16 +194,13 @@ impl KnowledgeBaseRuntime {
         .await;
         if let Err(error) = initialize_result {
             let _ = self.release_library_binding(&library_id).await;
-            let _ = self
-                .controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    self.controller.sqlite_binding_id.as_str(),
-                    "DELETE FROM knowledge_libraries WHERE id = ?;",
-                    vec![text(&library_id)],
-                )
-                .await;
+            let _ = local_sql::execute_script_async(
+                &self.host_runtime.local,
+                LogicalDatabase::AppState,
+                "DELETE FROM knowledge_libraries WHERE id = ?;",
+                vec![text(&library_id)],
+            )
+            .await;
             let root = self.library_root(&library_id)?;
             let _ = self.remove_host_owned_child_directory_if_exists(&root, &library_id);
             return Err(error);
@@ -219,15 +213,12 @@ impl KnowledgeBaseRuntime {
             }
             let settings_json = serde_json::to_string(&persisted)
                 .map_err(|error| format!("序列化显示库初始状态失败：{error}"))?;
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    self.controller.sqlite_binding_id.as_str(),
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                LogicalDatabase::AppState,
                     "UPDATE knowledge_libraries SET settings_json = ? WHERE id = ? AND lifecycle_state = 'active';",
                     vec![text(&settings_json), text(&library_id)],
-                )
-                .await
+                ).await
                 .map_err(|error| format!("保存显示库初始状态失败：{error}"))?;
         }
         self.get_library(&library_id).await
@@ -384,15 +375,12 @@ impl KnowledgeBaseRuntime {
         let settings_json = serde_json::to_string(&next)
             .map_err(|error| format!("序列化知识库配置失败：{error}"))?;
         let updated_at_ms = unix_epoch_millis()?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![text(&settings_json), int(updated_at_ms), text(library_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存知识库配置失败：{error}"))?;
         self.get_library(library_id).await
     }
@@ -423,11 +411,9 @@ impl KnowledgeBaseRuntime {
         let current = self.require_active_library(library_id).await?;
         let normalized_name = validate_library_name(name)?;
         let now = unix_epoch_millis()?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&normalized_name),
@@ -436,8 +422,7 @@ impl KnowledgeBaseRuntime {
                     int(now),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("重命名知识库失败：{error}"))?;
 
         let manifest = KnowledgeManifest {
@@ -446,22 +431,18 @@ impl KnowledgeBaseRuntime {
             schema_version: KNOWLEDGE_SCHEMA_VERSION,
         };
         if let Err(error) = self.write_manifest_atomic(&manifest) {
-            let _ = self
-                .controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    self.controller.sqlite_binding_id.as_str(),
-                    "UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?, updated_at_ms = ? WHERE id = ?;",
-                    vec![
-                        text(&current.name),
-                        text(library_name_key(&current.name)),
-                        text(&current.description),
-                        int(current.updated_at_ms),
-                        text(library_id),
-                    ],
-                )
-                .await;
+            let _ = local_sql::execute_script_async(
+                &self.host_runtime.local,
+                LogicalDatabase::AppState,
+                "UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?, updated_at_ms = ? WHERE id = ?;",
+                vec![
+                    text(&current.name),
+                    text(library_name_key(&current.name)),
+                    text(&current.description),
+                    int(current.updated_at_ms),
+                    text(library_id),
+                ],
+            ).await;
             return Err(error);
         }
         self.get_library(library_id).await
@@ -483,7 +464,7 @@ impl KnowledgeBaseRuntime {
         &self,
         project_id: Option<&str>,
     ) -> Result<Vec<KnowledgeLibrarySummary>, String> {
-        let (sql, params) = if let Some(project_id) = project_id {
+        let (sql, params): (&str, &[SqliteValue]) = if let Some(project_id) = project_id {
             (
                 r#"SELECT l.id, l.name, l.description, l.lifecycle_state, l.document_count,
                            l.chunk_count, l.index_status, l.settings_json, l.last_completed_import_at_ms,
@@ -492,14 +473,14 @@ impl KnowledgeBaseRuntime {
                     INNER JOIN knowledge_library_project_bindings b ON b.library_id = l.id
                     WHERE b.project_id = ? AND l.lifecycle_state = 'active'
                     ORDER BY l.name_key ASC;"#,
-                vec![text(project_id)],
+                &[text(project_id)],
             )
         } else {
             (
                 r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
                            index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
                     FROM knowledge_libraries ORDER BY name_key ASC;"#,
-                Vec::new(),
+                &[],
             )
         };
         let rows: Vec<LibraryRow> = self.query_app_rows(sql, params).await?;
@@ -525,7 +506,7 @@ impl KnowledgeBaseRuntime {
                 r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
                            index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
                     FROM knowledge_libraries WHERE id = ?;"#,
-                vec![text(library_id)],
+                &[text(library_id)],
             )
             .await?;
         rows.into_iter()
@@ -549,28 +530,22 @@ impl KnowledgeBaseRuntime {
     pub async fn delete_library(&self, library_id: &str) -> Result<(), String> {
         let _guard = self.library_mutation_guard(library_id).await?;
         self.require_active_library(library_id).await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET lifecycle_state = 'deleting', updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![int(unix_epoch_millis()?), text(library_id)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("撤销知识库访问失败：{error}"))?;
 
-        let (space_id, binding_id) = self.library_binding_identity(library_id)?;
-        let _ = self
-            .controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "PRAGMA wal_checkpoint(TRUNCATE);",
-                Vec::new(),
-            )
-            .await;
+        let (_space_id, binding_id) = self.library_binding_identity(library_id)?;
+        let _ = local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "PRAGMA wal_checkpoint(TRUNCATE);",
+            Vec::new(),
+        )
+        .await;
         self.release_library_binding(library_id).await?;
 
         let root = self.library_root(library_id)?;
@@ -601,16 +576,14 @@ impl KnowledgeBaseRuntime {
                 canonical_library_root.display()
             )
         })?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                "DELETE FROM knowledge_libraries WHERE id = ? AND lifecycle_state = 'deleting';",
-                vec![text(library_id)],
-            )
-            .await
-            .map_err(|error| format!("删除知识库注册记录失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            "DELETE FROM knowledge_libraries WHERE id = ? AND lifecycle_state = 'deleting';",
+            vec![text(library_id)],
+        )
+        .await
+        .map_err(|error| format!("删除知识库注册记录失败：{error}"))?;
         Ok(())
     }
 
@@ -668,19 +641,16 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化派生索引过期状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&settings_json),
                     int(unix_epoch_millis()?),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存派生索引过期状态失败：{error}"))?;
         Ok(())
     }
@@ -736,11 +706,9 @@ impl KnowledgeBaseRuntime {
         index_status: &str,
         updated_at_ms: i64,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET document_count = ?, chunk_count = ?, index_status = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     int(counts.document_count),
@@ -749,8 +717,7 @@ impl KnowledgeBaseRuntime {
                     int(updated_at_ms),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库权威摘要失败：{error}"))?;
         Ok(())
     }
@@ -780,11 +747,9 @@ impl KnowledgeBaseRuntime {
         index_status: &str,
         completed_at_ms: i64,
     ) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET document_count = ?, chunk_count = ?, index_status = ?, last_completed_import_at_ms = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     int(counts.document_count),
@@ -794,8 +759,7 @@ impl KnowledgeBaseRuntime {
                     int(completed_at_ms),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("更新知识库中央摘要失败：{error}"))?;
         Ok(())
     }

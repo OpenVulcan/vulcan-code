@@ -1,24 +1,20 @@
-//! Controller-backed VCE code-semantic persistence and search.
-//! 基于控制器的 VCE 代码语义持久化与检索。
+//! In-process VCE code-semantic persistence and search.
+//! 进程内 VCE 代码语义持久化与检索。
 
-use crate::data_plane::ControllerRuntimeHandle;
-use crate::runtime_assets;
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::{
+    LanceDbDirectoryBinding, LocalDatabaseRuntime, SqliteFileBinding,
+};
+use crate::local_sql;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-use vldb_controller_client::{
-    ControllerClient, ControllerLanceDbColumnDef, ControllerLanceDbColumnType,
-    ControllerLanceDbCompactionOperation, ControllerLanceDbCompactionOptions,
-    ControllerLanceDbEnableRequest, ControllerLanceDbInputFormat, ControllerLanceDbOutputFormat,
-    ControllerLanceDbTableStatistics, ControllerSqliteEnableRequest, ControllerSqliteValue,
-    is_uncertain_rpc_outcome_error, is_unimplemented_rpc_error,
-};
 use vulcan_context_engine::{
     AuxiliaryIndexStatus, Checkpoint, Chunk, ChunkKind, CommitReceipt, DenseSearchRequest,
     ExactSearchRequest, FileStatus, FindMissingRequest, FindMissingResponse, HitKind,
@@ -33,10 +29,21 @@ use vulcan_context_engine::{
     VceManagementQuery, VceManagementQueryRequest, VceManagementQueryResponse,
     VceManagementQueryResult, VceManagementRequest, VceOperationKind, VceOperationPhase,
     VceOperationSummary, VcePage, VcePageRequest, VcePathSearchResponse,
+    VcePhysicalCompactionMetrics, VcePhysicalCompactionOperation, VcePhysicalCompactionState,
     VcePhysicalFragmentSummary, VcePhysicalTablePlan, VcePhysicalTableRole,
     VcePhysicalTableStatistics, VcePortError, VcePortOperation, VceSearchResponse,
     VceStateSnapshot, content_hash,
 };
+use vulcan_lancedb_engine::engine::LanceDbEngine;
+use vulcan_lancedb_engine::types::{
+    LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCreateTableInput,
+    LanceDbDeleteInput, LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput,
+    LanceDbTableStatisticsInput, LanceDbTableStatisticsResult, LanceDbUpsertInput,
+};
+use vulcan_sqlite_engine::runtime::{
+    SqliteHardeningOptions, SqliteOpenOptions, SqlitePragmaOptions,
+};
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 pub use crate::vce_storage_catalog::VceDataPlaneFactory;
 pub use crate::vce_storage_paths::VceProjectWriterLease;
@@ -48,11 +55,6 @@ pub use jobs::{
     VceCompactionTableReceipt, VceCompactionTableState, VceCompletedJobUpdate, VceJobKind,
     VceJobReplacement, VceJobState, VceProjectJobStore, VceStoredJob,
 };
-
-/// Stable diagnostic code returned when the installed controller predates compaction RPCs.
-/// 已安装控制器早于整理 RPC 时返回的稳定诊断代码。
-pub const VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED: &str =
-    "VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED";
 
 #[path = "vce_embedding_provenance.rs"]
 mod embedding_provenance;
@@ -70,8 +72,8 @@ mod initial_allocation;
 #[path = "vce_embedding_manifest_store.rs"]
 mod embedding_manifest_store;
 
-/// Stable controller space reserved for code-semantic state.
-/// 为代码语义状态保留的稳定控制器空间。
+/// Stable logical space reserved for code-semantic state.
+/// 为代码语义状态保留的稳定逻辑空间。
 pub const VCE_SPACE_ID: &str = "vce";
 
 /// Stable SQLite binding tag reserved for VCE relational state.
@@ -102,25 +104,19 @@ const VCE_COMPACTION_THREADS: u64 = 2;
 /// VCE 物理整理使用的输入扫描批次行数。
 const VCE_COMPACTION_SCAN_BATCH_ROWS: u64 = 8_192;
 
-/// Maximum source fragments rewritten by one resumable controller operation.
-/// 单次可恢复控制器操作重写的最大源片段数。
+/// Maximum source fragments rewritten by one resumable storage operation.
+/// 单次可恢复存储操作重写的最大源片段数。
 const VCE_COMPACTION_MAX_SOURCE_FRAGMENTS: u64 = 512;
 
 /// Current relational schema version for the VCE host data plane.
 /// VCE 宿主数据面的当前关系结构版本。
+///
+/// This is the only marker a v1 database can carry. There is deliberately no constant for any earlier
+/// generation: pre-v1 markers are not recognized, not migrated and not repaired, so no code path needs to
+/// name them. See the initialization entry for where an unrecognized marker is rejected.
+/// 这是 v1 数据库唯一可能携带的标记。此处刻意不为任何更早的代次保留常量：v1 之前的标记既不被识别，也不被迁移或
+/// 修补，因此没有任何代码路径需要命名它们。未被识别的标记在哪里被拒绝，见初始化入口。
 pub const VCE_DATA_PLANE_SCHEMA_VERSION: i64 = 8;
-
-/// Seventh-generation schema retained for lazy embedding-manifest layout migration.
-/// 为向量清单布局惰性迁移保留的第七版结构。
-const VCE_SCHEMA_VERSION_7: i64 = 7;
-
-/// Sixth-generation schema retained so databases can cross audited migrations in order.
-/// 保留第六版结构，使数据库可以按顺序经过已审核迁移。
-const VCE_SCHEMA_VERSION_6: i64 = 6;
-
-/// Fifth-generation schema retained so databases can cross all audited migrations in order.
-/// 保留第五版结构，使数据库可以按顺序经过全部已审核迁移。
-const VCE_SCHEMA_VERSION_5: i64 = 5;
 
 /// Maximum result count accepted by one physical vector search.
 /// 一次物理向量检索允许的最大结果数量。
@@ -130,35 +126,12 @@ const VCE_VECTOR_SEARCH_LIMIT: u32 = 10_000;
 /// VCE SQLite 资源使用的忙等待超时，作为跨进程竞争的最后缓冲。
 const VCE_SQLITE_BUSY_TIMEOUT_MS: u64 = 15_000;
 
-/// Process-local sequence keeping repeated controller bindings distinct.
-/// 保证重复控制器绑定互不冲突的进程内序列。
+/// Process-local sequence keeping repeated host bindings distinct.
+/// 保证重复宿主绑定互不冲突的进程内序列。
 static VCE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-static VCE_SQLITE_WRITE_GATES: OnceLock<std::sync::Mutex<BTreeMap<PathBuf, Weak<Mutex<()>>>>> =
-    OnceLock::new();
-
-/// Share one async SQLite mutation gate across every VCE binding that points at one physical file.
-/// 让指向同一个物理文件的全部 VCE 绑定共享一个异步 SQLite 变更闸门。
-fn sqlite_write_gate_for(path: &Path) -> Arc<Mutex<()>> {
-    let registry = VCE_SQLITE_WRITE_GATES.get_or_init(|| std::sync::Mutex::new(BTreeMap::new()));
-    let mut registry = registry
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Remove dead entries so a long-lived host does not retain every historical SQLite path.
-    // 清理失效条目，避免长时间运行的宿主保留所有历史 SQLite 路径。
-    registry.retain(|_, gate| gate.strong_count() > 0);
-
-    if let Some(gate) = registry.get(path).and_then(Weak::upgrade) {
-        return gate;
-    }
-
-    let gate = Arc::new(Mutex::new(()));
-    registry.insert(path.to_path_buf(), Arc::downgrade(&gate));
-    gate
-}
-
-/// Long-lived controller bindings for VCE SQLite and LanceDB storage.
-/// VCE SQLite 与 LanceDB 存储使用的长生命周期控制器绑定。
+/// Long-lived host bindings for VCE SQLite and LanceDB storage.
+/// VCE SQLite 与 LanceDB 存储使用的长生命周期宿主绑定。
 #[derive(Clone)]
 pub struct VceDataPlaneHandle {
     /// Exact stable owner of this project's isolated physical storage.
@@ -167,12 +140,9 @@ pub struct VceDataPlaneHandle {
     /// Counts every retained clone so cache eviction cannot close an active query or writer.
     /// 统计全部保留克隆，使缓存淘汰不能关闭活动查询或写入者。
     pub(crate) lease: Arc<()>,
-    /// Final read-reference releases awaiting an owned controller boundary, never detached tasks.
-    /// 等待所属控制器边界处理的最终读取引用释放，绝不使用脱离管理的任务。
+    /// Final read-reference releases awaiting an owned host boundary, never detached tasks.
+    /// 等待所属宿主边界处理的最终读取引用释放，绝不使用脱离管理的任务。
     read_releases: Arc<std::sync::Mutex<Vec<read_generations::VceReleasedReadLease>>>,
-    /// Shared controller client owned by the VulcanCode host.
-    /// 由 VulcanCode 宿主持有的共享控制器客户端。
-    pub client: ControllerClient,
     /// Root directory dedicated to code-semantic data.
     /// 代码语义数据专用根目录。
     pub data_root: PathBuf,
@@ -185,12 +155,26 @@ pub struct VceDataPlaneHandle {
     /// Bootstrap-scoped SQLite binding identity.
     /// 单次引导作用域内的 SQLite 绑定身份。
     pub sqlite_binding_id: String,
+    /// Exact in-process SQLite binding for this project's authoritative state.
+    /// 本项目权威状态的精确进程内 SQLite 绑定。
+    pub sqlite_binding: SqliteFileBinding,
+    /// Host runtime owning the in-process engine that serves this project.
+    /// 拥有服务本项目的进程内引擎的宿主运行时。
+    pub local_runtime: Arc<LocalDatabaseRuntime>,
     /// Bootstrap-scoped LanceDB binding identity.
     /// 单次引导作用域内的 LanceDB 绑定身份。
     pub lancedb_binding_id: String,
-    /// Shared process-local gate for every VCE SQLite mutation.
-    /// 串行化全部 VCE SQLite 变更的进程内共享闸门。
-    sqlite_write_gate: Arc<Mutex<()>>,
+    /// Completed in-process physical compaction steps, keyed by operation identity.
+    /// 已完成的进程内物理整理步骤，按操作身份索引。
+    ///
+    /// The in-process step is synchronous, so its result is knowable only at the moment of submission.
+    /// Without this record a later query could only invent a terminal state; with it, a query either reports
+    /// the step that really ran or reports that the step is not knowable. Held in an `Arc` so every clone of
+    /// this handle — and therefore every index opened over it — observes the same submissions.
+    /// 进程内步骤是同步的，故其结果只在提交那一刻可知。没有本记录，后续查询只能编造终态；有了它，查询要么报告
+    /// 确实运行过的步骤，要么报告该步骤不可知。以 `Arc` 持有，使本句柄的每个克隆——以及在其上打开的每个索引
+    /// ——都观察到同一批提交。
+    compaction_operations: Arc<std::sync::Mutex<HashMap<String, VcePhysicalCompactionOperation>>>,
 }
 
 /// One persisted project-binding row used for compatibility validation.
@@ -1113,7 +1097,7 @@ fn staged_chunk_params(
     generation: u64,
     chunk: &Chunk,
     vector_ready: bool,
-) -> Result<Vec<ControllerSqliteValue>, String> {
+) -> Result<Vec<SqliteValue>, String> {
     Ok(vec![
         sqlite_text(namespace_id),
         sqlite_text(refresh_id),
@@ -1127,7 +1111,7 @@ fn staged_chunk_params(
         sqlite_usize_raw(chunk.range.end_line, "VCE chunk end line")?,
         sqlite_usize_raw(chunk.start_char_offset, "VCE chunk offset")?,
         sqlite_text(chunk_kind_text(chunk.kind)),
-        ControllerSqliteValue::Int64(i64::from(vector_ready)),
+        SqliteValue::Integer(i64::from(vector_ready)),
     ])
 }
 
@@ -1138,7 +1122,7 @@ fn staged_symbol_params(
     refresh_id: &str,
     generation: u64,
     symbol: &SymbolOccurrence,
-) -> Result<Vec<ControllerSqliteValue>, String> {
+) -> Result<Vec<SqliteValue>, String> {
     Ok(vec![
         sqlite_text(namespace_id),
         sqlite_text(refresh_id),
@@ -1557,34 +1541,11 @@ fn physical_compaction_options() -> VceCompactionOptions {
     }
 }
 
-/// Map a controller compaction RPC failure without guessing capability support from text.
-/// 映射控制器整理 RPC 失败，且不通过错误文本猜测能力支持情况。
-///
-/// `operation` identifies the failed read or mutation and `error` preserves the SDK error chain.
-/// Returns one stable upgrade code for an exact gRPC `Unimplemented` status, a stable transport
-/// prefix for uncertain outcomes, or the original operation-scoped diagnostic.
-/// `operation` 标识失败的读取或变更，`error` 保留 SDK 错误链。精确收到 gRPC
-/// `Unimplemented` 状态时返回稳定升级代码，结果不确定时返回稳定传输前缀，否则返回原始操作级诊断。
-fn map_physical_compaction_controller_error(
-    operation: &str,
-    error: vldb_controller_client::BoxError,
-) -> String {
-    if is_unimplemented_rpc_error(error.as_ref()) {
-        return format!(
-            "{VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED}: vldb-controller 0.2.4 or newer is required"
-        );
-    }
-    if is_uncertain_rpc_outcome_error(error.as_ref()) {
-        return format!("transport error: {operation}: {error}");
-    }
-    format!("{operation}: {error}")
-}
-
-/// Project controller statistics into the VCE maintenance contract.
-/// 将控制器统计信息投影到 VCE 维护契约。
+/// Projects engine statistics into the VCE maintenance contract.
+/// 将引擎统计信息投影到 VCE 维护契约。
 fn map_physical_table_statistics(
     role: VcePhysicalTableRole,
-    statistics: ControllerLanceDbTableStatistics,
+    statistics: LanceDbTableStatisticsResult,
 ) -> VcePhysicalTableStatistics {
     VcePhysicalTableStatistics {
         role,
@@ -1607,19 +1568,19 @@ fn map_physical_table_statistics(
     }
 }
 
-/// Validate the immutable identity repeated by one controller compaction response.
-/// 校验一条控制器整理响应重复携带的不可变身份。
+/// Validates the immutable identity repeated by one compaction-operation response.
+/// 校验一条整理操作响应重复携带的不可变身份。
 ///
 /// `expected_operation_id` and `expected_table_name` come from the admitted host receipt;
-/// `operation` is the untrusted controller projection. Returns the same projection only on an
+/// `operation` is the untrusted engine projection. Returns the same projection only on an
 /// exact identity match.
 /// `expected_operation_id` 与 `expected_table_name` 来自已准入宿主回执；`operation` 是不受信任的
-/// 控制器投影。仅在身份精确匹配时返回原投影。
+/// 存储操作投影。仅在身份精确匹配时返回原投影。
 fn validate_physical_compaction_operation_identity(
     expected_operation_id: &str,
     expected_table_name: &str,
-    operation: ControllerLanceDbCompactionOperation,
-) -> Result<ControllerLanceDbCompactionOperation, String> {
+    operation: VcePhysicalCompactionOperation,
+) -> Result<VcePhysicalCompactionOperation, String> {
     if operation.operation_id != expected_operation_id {
         return Err(String::from(
             "VCE physical compaction response returned a different operation identity",
@@ -1738,97 +1699,97 @@ fn vector_cleanup_id(namespace_id: &str, cleanup_kind: &str, seed: &str) -> Stri
 
 /// Returns the fixed LanceDB columns used by content and path vector tables.
 /// 返回内容与路径向量表使用的固定 LanceDB 列。
-fn vector_table_columns(dimension: u32) -> Vec<ControllerLanceDbColumnDef> {
+fn vector_table_columns(dimension: u32) -> Vec<LanceDbColumnDef> {
     vec![
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("row_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("blob_name"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("namespace_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("refresh_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("generation"),
-            column_type: ControllerLanceDbColumnType::Uint64,
+            column_type: LanceDbColumnType::Uint64,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("vector_space_id"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("physical_fingerprint"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("path"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("start_line"),
-            column_type: ControllerLanceDbColumnType::Uint64,
+            column_type: LanceDbColumnType::Uint64,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("end_line"),
-            column_type: ControllerLanceDbColumnType::Uint64,
+            column_type: LanceDbColumnType::Uint64,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("content_hash"),
-            column_type: ControllerLanceDbColumnType::String,
+            column_type: LanceDbColumnType::String,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("written_at_unix_ms"),
-            column_type: ControllerLanceDbColumnType::Int64,
+            column_type: LanceDbColumnType::Int64,
             vector_dim: 0,
             nullable: false,
         },
-        ControllerLanceDbColumnDef {
+        LanceDbColumnDef {
             name: String::from("vector"),
-            column_type: ControllerLanceDbColumnType::VectorFloat32,
+            column_type: LanceDbColumnType::VectorFloat32,
             vector_dim: dimension,
             nullable: false,
         },
     ]
 }
 
-/// Returns one bootstrap-scoped controller binding suffix.
-/// 返回一个单次引导作用域的控制器绑定后缀。
+/// Returns one bootstrap-scoped host binding suffix.
+/// 返回一个单次引导作用域的宿主绑定后缀。
 fn build_binding_suffix() -> String {
     let sequence = VCE_BINDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("{}-{sequence}", std::process::id())
@@ -1836,44 +1797,42 @@ fn build_binding_suffix() -> String {
 
 /// Converts one value into a SQLite text parameter.
 /// 将一个值转换为 SQLite 文本参数。
-fn sqlite_text(value: impl Into<String>) -> ControllerSqliteValue {
-    ControllerSqliteValue::String(value.into())
+fn sqlite_text(value: impl Into<String>) -> SqliteValue {
+    SqliteValue::Text(value.into())
 }
 
 /// Converts one optional value into a nullable SQLite text parameter.
 /// 将一个可选值转换为可空 SQLite 文本参数。
-fn sqlite_optional_text(value: Option<&str>) -> ControllerSqliteValue {
-    value
-        .map(sqlite_text)
-        .unwrap_or(ControllerSqliteValue::Null)
+fn sqlite_optional_text(value: Option<&str>) -> SqliteValue {
+    value.map(sqlite_text).unwrap_or(SqliteValue::Null)
 }
 
 /// Converts one u64 into a checked SQLite integer parameter.
 /// 将一个 u64 转换为经过校验的 SQLite 整数参数。
-fn sqlite_u64(value: u64, label: &str) -> Result<ControllerSqliteValue, VcePortError> {
+fn sqlite_u64(value: u64, label: &str) -> Result<SqliteValue, VcePortError> {
     sqlite_u64_raw(value, label).map_err(|message| port_rejected(VcePortOperation::Stage, message))
 }
 
 /// Converts one u64 into a checked raw SQLite integer parameter.
 /// 将一个 u64 转换为经过校验的原始 SQLite 整数参数。
-fn sqlite_u64_raw(value: u64, label: &str) -> Result<ControllerSqliteValue, String> {
+fn sqlite_u64_raw(value: u64, label: &str) -> Result<SqliteValue, String> {
     i64::try_from(value)
-        .map(ControllerSqliteValue::Int64)
+        .map(SqliteValue::Integer)
         .map_err(|_| format!("{label} exceeds SQLite integer range"))
 }
 
 /// Converts one usize into a checked SQLite integer parameter.
 /// 将一个 usize 转换为经过校验的 SQLite 整数参数。
-fn sqlite_usize(value: usize, label: &str) -> Result<ControllerSqliteValue, VcePortError> {
+fn sqlite_usize(value: usize, label: &str) -> Result<SqliteValue, VcePortError> {
     sqlite_usize_raw(value, label)
         .map_err(|message| port_rejected(VcePortOperation::Stage, message))
 }
 
 /// Converts one usize into a checked raw SQLite integer parameter.
 /// 将一个 usize 转换为经过校验的原始 SQLite 整数参数。
-fn sqlite_usize_raw(value: usize, label: &str) -> Result<ControllerSqliteValue, String> {
+fn sqlite_usize_raw(value: usize, label: &str) -> Result<SqliteValue, String> {
     i64::try_from(value)
-        .map(ControllerSqliteValue::Int64)
+        .map(SqliteValue::Integer)
         .map_err(|_| format!("{label} exceeds SQLite integer range"))
 }
 
@@ -2070,22 +2029,15 @@ mod performance_tests;
 mod tests {
     use super::{
         VCE_SPACE_ID, VceProjectIndexConfig, bootstrap_vce_data_plane, build_vce_schema_script,
-        partition_vector_rows_by_data_limit, sqlite_write_gate_for,
-        validate_checkpoint_membership_transition, validate_physical_compaction_operation_identity,
-        vector_table_name,
+        partition_vector_rows_by_data_limit, validate_checkpoint_membership_transition,
+        validate_physical_compaction_operation_identity, vector_table_name,
     };
-    use crate::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
+    use crate::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::tempdir;
     use uuid::Uuid;
-    use vldb_controller_client::{
-        ClientRegistration, ControllerClient, ControllerClientConfig,
-        ControllerLanceDbCompactionOperation, ControllerLanceDbCompactionState,
-        ControllerProcessMode, ControllerSqliteValue,
-    };
     use vulcan_context_engine::{
         AuxiliaryIndexStatus, Checkpoint, Chunk, ChunkKind, DenseSearchRequest, EmbeddingSpace,
         EmbeddingVector, FileObservation, FileRecord, FileSource, FileStatus, IndexAbortRequest,
@@ -2095,11 +2047,14 @@ mod tests {
         VceAiPurpose, VceCodeNodeSnapshot, VceConfig, VceEmbeddingBatchRecord,
         VceEmbeddingBatchState, VceEmbeddingRequest, VceEmbeddingResponse, VceEmbeddingRunManifest,
         VceEmbeddingRunState, VceEngine, VceFuture, VceIndexBinding, VceIndexPort,
-        VcePhysicalTableRole, VcePortError, VcePortOperation, VceQueryRewriteRequest,
-        VceQueryRewriteResponse, VceQueryStatistics, VceRefreshSummary, VceRerankRequest,
-        VceRerankResponse, VceSourcePort, VceSourceReadRequest, VceSourceReadResponse,
-        VceStateIdentity, VceStateSnapshot, WorkspaceSnapshot, blob_name,
+        VcePhysicalCompactionOperation, VcePhysicalCompactionState, VcePhysicalTableRole,
+        VcePortError, VcePortOperation, VceQueryRewriteRequest, VceQueryRewriteResponse,
+        VceQueryStatistics, VceRefreshSummary, VceRerankRequest, VceRerankResponse, VceSourcePort,
+        VceSourceReadRequest, VceSourceReadResponse, VceStateIdentity, VceStateSnapshot,
+        WorkspaceSnapshot, blob_name,
     };
+    use vulcan_lancedb_engine::types::{LanceDbCreateTableInput, LanceDbDropTableInput};
+    use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
     /// Deterministic VCE AI boundary used by the real data-plane test.
     /// 真实 VCE 数据面测试使用的确定性 VCE AI 边界。
@@ -2227,47 +2182,14 @@ mod tests {
         Box::pin(async move { value })
     }
 
-    /// Resolve the explicitly built test controller, falling back to the packaged binary.
-    /// 解析显式构建的测试控制器；未指定时回退到打包二进制。
-    ///
-    /// Takes no parameters. Returns the executable selected for isolated real-controller tests.
-    /// 无参数。返回隔离真实控制器测试选择的可执行文件。
-    fn test_controller_executable() -> PathBuf {
-        std::env::var_os("VLDB_CONTROLLER_TEST_EXECUTABLE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join("..")
-                    .join("output")
-                    .join("bin")
-                    .join("vldb-controller.exe")
-            })
-    }
-
-    /// Verify bindings for one physical SQLite file share the same process-local mutation gate.
-    /// 验证同一个物理 SQLite 文件的绑定共享同一个进程内变更闸门。
-    #[test]
-    fn physical_sqlite_paths_share_mutation_gate_across_bindings() {
-        let directory = tempdir().expect("create gate fixture directory");
-        let shared_path = directory.path().join("vce.sqlite3");
-        let first = sqlite_write_gate_for(&shared_path);
-        let second = sqlite_write_gate_for(&shared_path);
-        assert!(std::sync::Arc::ptr_eq(&first, &second));
-
-        let other_path = directory.path().join("other.sqlite3");
-        let other = sqlite_write_gate_for(&other_path);
-        assert!(!std::sync::Arc::ptr_eq(&first, &other));
-    }
-
-    /// Verify controller compaction snapshots cannot cross an admitted operation or table identity.
-    /// 验证控制器整理快照不能跨越已准入的操作或表身份。
+    /// Verifies compaction snapshots cannot cross an admitted operation or table identity.
+    /// 验证整理快照不能跨越已准入的操作或表身份。
     #[test]
     fn physical_compaction_response_identity_is_exact() {
-        let operation = ControllerLanceDbCompactionOperation {
+        let operation = VcePhysicalCompactionOperation {
             operation_id: String::from("operation-a"),
             table_name: String::from("content-table"),
-            state: ControllerLanceDbCompactionState::Queued,
+            state: VcePhysicalCompactionState::Queued,
             cancel_requested: false,
             message: String::from("queued"),
             error: None,
@@ -2532,91 +2454,49 @@ mod tests {
         );
     }
 
-    /// Exercises project binding, root rotation, and physical-table creation against the real controller.
-    /// 使用真实控制器验证项目绑定、根目录轮换和物理表创建。
+    /// Exercises project binding, root rotation, and physical-table creation against the real in-process runtime.
+    /// 使用真实进程内运行时验证项目绑定、根目录轮换和物理表创建。
     #[test]
-    #[ignore = "requires the bundled output/bin/vldb-controller.exe"]
-    fn real_controller_opens_and_rotates_project_binding() {
+    fn in_process_engine_opens_and_rotates_project_binding() {
         // This deliberately large integration fixture creates a correspondingly large async state
         // machine, so give only its private harness thread enough stack to construct and poll it.
         // 该大型集成夹具会生成同样庞大的异步状态机，因此仅为其私有测试线程提供足够栈空间。
         std::thread::Builder::new()
-            .name(String::from("vce-real-controller-binding"))
+            .name(String::from("vce-real-engine-binding"))
             .stack_size(16 * 1024 * 1024)
             .spawn(|| {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .expect("build VCE real-controller test runtime");
-                runtime.block_on(run_real_controller_opens_and_rotates_project_binding());
+                    .expect("build VCE real-engine test runtime");
+                runtime.block_on(run_in_process_engine_opens_and_rotates_project_binding());
             })
-            .expect("spawn VCE real-controller test thread")
+            .expect("spawn VCE real-engine test thread")
             .join()
-            .expect("join VCE real-controller test thread");
+            .expect("join VCE real-engine test thread");
     }
 
-    /// Runs the oversized real-controller integration fixture on its dedicated harness thread.
-    /// 在专用测试线程上运行超大型真实控制器集成夹具。
-    async fn run_real_controller_opens_and_rotates_project_binding() {
+    /// Runs the oversized in-process integration fixture on its dedicated harness thread.
+    /// 在专用测试线程上运行超大型进程内集成夹具。
+    async fn run_in_process_engine_opens_and_rotates_project_binding() {
         let temporary = tempdir().expect("create VCE integration root");
         let data_root = temporary.path().join("data");
         let first_root = temporary.path().join("project-one");
         let second_root = temporary.path().join("project-two");
         fs::create_dir_all(&first_root).expect("create first VCE project root");
         fs::create_dir_all(&second_root).expect("create second VCE project root");
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve VCE controller port");
-        let port = listener
-            .local_addr()
-            .expect("read VCE controller port")
-            .port();
-        drop(listener);
-        let executable = test_controller_executable();
-        assert!(executable.is_file(), "bundled controller must exist");
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            ClientRegistration {
-                client_name: format!("vce-e2e-{}", Uuid::new_v4()),
-                host_kind: String::from("test"),
-                process_id: std::process::id(),
-                process_name: String::from("vulcan-workspace-store-test"),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client.connect().await.expect("connect VCE controller");
-        let metadata_path = data_root.join("controller-placeholder.sqlite3");
-        let controller = ControllerRuntimeHandle::new(
-            client.clone(),
-            ControllerRuntimeMetadata {
-                endpoint,
-                executable: executable.display().to_string(),
-                data_root: data_root.clone(),
-                sqlite_path: metadata_path.clone(),
-                sqlite_binding_id: format!("vce-e2e-app-{}", Uuid::new_v4()),
-                system_statistics_sqlite_path: metadata_path,
-                system_statistics_sqlite_binding_id: format!(
-                    "vce-e2e-statistics-{}",
-                    Uuid::new_v4()
-                ),
-            },
-        );
+        let metadata_path = data_root.join("host-metadata.sqlite3");
+        let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: data_root.clone(),
+            sqlite_path: metadata_path.clone(),
+            sqlite_binding_id: format!("vce-e2e-app-{}", Uuid::new_v4()),
+            system_statistics_sqlite_path: metadata_path,
+            system_statistics_sqlite_binding_id: format!("vce-e2e-statistics-{}", Uuid::new_v4()),
+        });
         // catalog is the new lightweight location boundary; bootstrapping it must not open projects.
         // catalog 是新的轻量位置边界；引导它不得打开项目。
         fs::create_dir_all(&data_root).expect("create isolated application data root");
-        let catalog = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(&controller)
+        let catalog = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(&host_runtime)
             .await
             .expect("bootstrap lightweight catalog");
         assert!(catalog.root().join("catalog.sqlite3").is_file());
@@ -2661,9 +2541,9 @@ mod tests {
             allocated
         );
         catalog.close().await.expect("close catalog binding only");
-        // reopened verifies the durable catalog version and ownership through the same host controller.
-        // reopened 通过相同宿主控制器验证持久目录版本与归属。
-        let reopened = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(&controller)
+        // reopened verifies the durable catalog version and ownership through the same host runtime.
+        // reopened 通过相同宿主运行时验证持久目录版本与归属。
+        let reopened = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(&host_runtime)
             .await
             .expect("reopen catalog");
         assert_eq!(
@@ -2676,7 +2556,7 @@ mod tests {
         reopened.close().await.expect("close reopened catalog");
         // factory starts with no content bindings, even when the workspace contains many projects.
         // factory 起初不含内容绑定，即使工作区包含很多项目。
-        let factory = super::VceDataPlaneFactory::bootstrap(&controller)
+        let factory = super::VceDataPlaneFactory::bootstrap(&host_runtime)
             .await
             .expect("bootstrap isolated factory");
         for number in 0..100 {
@@ -2689,8 +2569,8 @@ mod tests {
             );
         }
         assert!(!data_root.join("vmm").exists());
-        // isolated_a and isolated_b must use separate physical files and controller binding identities.
-        // isolated_a 与 isolated_b 必须使用分离的物理文件和控制器绑定身份。
+        // isolated_a and isolated_b must use separate physical files and host binding identities.
+        // isolated_a 与 isolated_b 必须使用分离的物理文件和宿主绑定身份。
         let isolated_a = factory
             .create_project_index(test_project_config("isolated-a", &first_root, 1))
             .await
@@ -2945,7 +2825,7 @@ mod tests {
                    ) VALUES (?, 'partial-manifest-run', 1, 'planned', '{}', 2, 0, ?, 1, 1);"#,
                     vec![
                         super::sqlite_text(&isolated_b.binding().namespace_id),
-                        ControllerSqliteValue::String("f".repeat(64)),
+                        SqliteValue::Text("f".repeat(64)),
                     ],
                     "create partial manifest fixture",
                 )
@@ -2958,150 +2838,30 @@ mod tests {
                     .expect("hide partial manifest")
                     .is_none()
             );
-
-            // A version-seven single-row manifest remains readable and converts on its first write.
-            // 第七版单行清单保持可读，并在首次写入时转换。
-            let mut legacy_manifest = VceEmbeddingRunManifest {
-                run_id: String::from("legacy-manifest-run"),
-                nodes: large_manifest.nodes[..1].to_vec(),
-                batches: large_manifest.batches.clone(),
-                reused_blob_names: Vec::new(),
-                state: VceEmbeddingRunState::Running,
-                created_at_unix_ms: 10,
-                updated_at_unix_ms: 10,
-                ..large_manifest.clone()
-            };
-            // Legacy checkpoint publication changed only the parent after its child result was durable.
-            // 旧版检查点发布会在子结果持久化后仅修改父记录。
-            legacy_manifest.batches[0].mark_succeeded();
-            let legacy_json =
-                serde_json::to_string(&legacy_manifest).expect("encode legacy manifest");
-            isolated_b
+            // The v1 schema itself forbids every layout but the pinned one, so a manifest row in an earlier
+            // layout cannot exist in a database this build created. This is the assertion that replaced the
+            // dual-read path: without it, "there is only one layout" would be a convention that the loader
+            // happens to follow, and the first re-introduced decode branch would silently start reading
+            // storage the schema was supposed to make impossible.
+            // v1 结构自身禁止除固定布局外的任何布局，因此本构建创建的数据库中不可能存在更早布局的清单记录。
+            // 这就是取代双读路径的那条断言：若没有它，"只有一种布局"会沦为加载器恰好遵守的约定，而第一个被重新
+            // 引入的解码分支就会开始静默读取本该被结构排除在外的存储。
+            let refused = isolated_b
                 .data_plane
                 .execute(
                     r#"INSERT INTO vce_embedding_runs(
-                       namespace_id, run_id, generation, state, manifest_json,
-                       layout_version, manifest_complete, plan_fingerprint,
-                       created_at_unix_ms, updated_at_unix_ms
-                   ) VALUES (?, ?, 1, 'running', ?, 1, 1, NULL, 10, 10);"#,
-                    vec![
-                        super::sqlite_text(&isolated_b.binding().namespace_id),
-                        super::sqlite_text(&legacy_manifest.run_id),
-                        super::sqlite_text(legacy_json),
-                    ],
-                    "create legacy manifest fixture",
+                           namespace_id, run_id, generation, state, manifest_json,
+                           layout_version, manifest_complete, plan_fingerprint,
+                           created_at_unix_ms, updated_at_unix_ms
+                       ) VALUES (?, 'pre-v1-layout-run', 1, 'running', '{}', 1, 1, NULL, 10, 10);"#,
+                    vec![super::sqlite_text(&isolated_b.binding().namespace_id)],
+                    "probe a pre-v1 manifest layout",
                 )
-                .await
-                .expect("create legacy manifest fixture");
-            assert_eq!(
-                isolated_b
-                    .load_embedding_manifest(legacy_manifest.run_id.clone())
-                    .await
-                    .expect("load legacy manifest"),
-                Some(legacy_manifest.clone())
+                .await;
+            assert!(
+                refused.is_err(),
+                "the v1 schema must reject a manifest row in any layout but the pinned one"
             );
-            // Saved provider vectors precede candidate publication and survive the first granular conversion.
-            // 已保存供应商向量先于候选发布，并跨越首次细粒度转换继续保留。
-            let legacy_result = vulcan_context_engine::VceEmbeddingBatchResult::from_vectors(
-                &legacy_manifest.batches[0].batch_id,
-                &[vulcan_context_engine::SegmentVector { input_id: String::from("manifest-input-0"), values: vec![0.25, 0.75] }],
-            );
-            isolated_b.persist_embedding_batch_result(legacy_manifest.run_id.clone(), legacy_result.clone()).await.expect("save legacy provider result");
-            // Old checkpoint commits changed parent state without rewriting the legacy JSON payload.
-            // 旧检查点提交只修改父记录状态，没有重写旧版 JSON 负载。
-            isolated_b.data_plane.execute(
-                "UPDATE vce_embedding_runs SET state = 'candidate_ready', updated_at_unix_ms = 11 WHERE run_id = 'legacy-manifest-run';",
-                Vec::new(), "advance legacy parent lifecycle",
-            ).await.expect("advance legacy parent lifecycle");
-            legacy_manifest.state = VceEmbeddingRunState::CandidateReady;
-            legacy_manifest.updated_at_unix_ms = 11;
-            assert_eq!(isolated_b.load_embedding_manifest(legacy_manifest.run_id.clone()).await.expect("read authoritative legacy lifecycle"), Some(legacy_manifest.clone()));
-            isolated_b
-                .persist_embedding_run_state(
-                    legacy_manifest.run_id.clone(),
-                    VceEmbeddingRunState::Succeeded,
-                    12,
-                )
-                .await
-                .expect("prove legacy manifest converted to current layout");
-            legacy_manifest.state = VceEmbeddingRunState::Succeeded;
-            legacy_manifest.updated_at_unix_ms = 12;
-            assert_eq!(isolated_b.load_embedding_manifest(legacy_manifest.run_id.clone()).await.expect("read converted legacy state"), Some(legacy_manifest.clone()));
-            assert_eq!(isolated_b.load_embedding_batch_result(legacy_manifest.run_id.clone(), legacy_result.batch_id.clone()).await.expect("read converted legacy result"), Some(legacy_result));
-
-            // A physical version-seven embedding schema upgrades without rewriting other project tables.
-            // 物理第七版向量结构在不重写其他项目表的前提下完成升级。
-            isolated_b
-                .data_plane
-                .execute(
-                    r#"BEGIN IMMEDIATE;
-                       DROP TABLE vce_embedding_batch_results;
-                       DROP TABLE vce_embedding_run_batches;
-                       DROP TABLE vce_embedding_run_reused_blobs;
-                       DROP TABLE vce_embedding_run_node_chunks;
-                       DROP TABLE vce_embedding_runs;
-                       CREATE TABLE vce_embedding_runs (
-                           namespace_id TEXT NOT NULL,
-                           run_id TEXT NOT NULL,
-                           generation INTEGER NOT NULL CHECK(generation > 0),
-                           state TEXT NOT NULL CHECK(state IN ('planned', 'running', 'candidate_ready', 'succeeded', 'failed', 'cancelled')),
-                           manifest_json TEXT NOT NULL,
-                           created_at_unix_ms INTEGER NOT NULL,
-                           updated_at_unix_ms INTEGER NOT NULL,
-                           PRIMARY KEY(namespace_id, run_id),
-                           FOREIGN KEY(namespace_id) REFERENCES vce_project_bindings(namespace_id) ON DELETE CASCADE
-                       );
-                       CREATE INDEX idx_vce_embedding_runs_recent
-                       ON vce_embedding_runs(namespace_id, updated_at_unix_ms DESC, run_id);
-                       CREATE TABLE vce_embedding_batch_results (
-                           namespace_id TEXT NOT NULL,
-                           run_id TEXT NOT NULL,
-                           batch_id TEXT NOT NULL,
-                           result_json TEXT NOT NULL,
-                           updated_at_unix_ms INTEGER NOT NULL,
-                           PRIMARY KEY(namespace_id, run_id, batch_id),
-                           FOREIGN KEY(namespace_id, run_id)
-                               REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-                       );
-                       UPDATE vce_metadata SET value = '7' WHERE key = 'schema_version';
-                       COMMIT;"#,
-                    Vec::new(),
-                    "create version-seven migration fixture",
-                )
-                .await
-                .expect("create version-seven migration fixture");
-            isolated_b
-                .data_plane
-                .migrate_schema_v7_to_v8()
-                .await
-                .expect("migrate version-seven manifest schema");
-            let schema: Vec<super::StorageSchemaRow> = isolated_b
-                .data_plane
-                .query_rows(
-                    "SELECT value FROM vce_metadata WHERE key = 'schema_version';",
-                    Vec::new(),
-                )
-                .await
-                .expect("read migrated schema marker");
-            assert_eq!(schema[0].value, "8");
-            let sharded_objects: Vec<super::CountRow> = isolated_b
-                .data_plane
-                .query_rows(
-                    "SELECT COUNT(*) AS count FROM sqlite_master WHERE (type = 'table' AND name IN ('vce_embedding_run_node_chunks', 'vce_embedding_run_reused_blobs', 'vce_embedding_run_batches')) OR (type = 'trigger' AND name = 'trg_vce_embedding_run_batches_touch_parent');",
-                    Vec::new(),
-                )
-                .await
-                .expect("read migrated manifest objects");
-            assert_eq!(sharded_objects[0].count, 4);
-            let revision_columns: Vec<super::CountRow> = isolated_b
-                .data_plane
-                .query_rows(
-                    "SELECT COUNT(*) AS count FROM pragma_table_info('vce_embedding_runs') WHERE name = 'revision';",
-                    Vec::new(),
-                )
-                .await
-                .expect("read migrated manifest revision column");
-            assert_eq!(revision_columns[0].count, 1);
         })
         .await;
         // jobs is the exact physical project repository; a lookup cannot create its receipt table.
@@ -3416,22 +3176,22 @@ mod tests {
         factory.shutdown().await.expect("close isolated factory");
         // Verify first-allocation failure separately before the ordinary publication fixture starts.
         // 在普通发布夹具开始之前单独验证首次分配失败。
-        verify_initial_allocation_retry(&controller, &first_root).await;
-        // Exercise registration rollback and cleanup failure using isolated real-controller ownership.
-        // 使用隔离的真实控制器归属验证登记回滚及清理失败。
+        verify_initial_allocation_retry(&host_runtime, &first_root).await;
+        // Exercise registration rollback and cleanup failure using isolated real-runtime ownership.
+        // 使用隔离的真实运行时归属验证登记回滚及清理失败。
         for (project_id, interrupt_cleanup) in [
             ("initial-registration-failure", false),
             ("initial-cleanup-failure", true),
         ] {
-            // Await each owned task separately so its deep controller polling does not nest in the large parent fixture.
-            // 分别等待每个自有任务，避免深层控制器轮询嵌入大型父夹具栈。
-            let failure_controller = controller.clone();
+            // Await each owned task separately so its deep operation polling does not nest in the large parent fixture.
+            // 分别等待每个自有任务，避免深层操作轮询嵌入大型父夹具栈。
+            let failure_host_runtime = host_runtime.clone();
             // The same exact project target is moved into the sequential current-thread task.
             // 同一精确项目目标移入串行的当前线程任务。
             let failure_config = test_project_config(project_id, &first_root, 1);
             tokio::spawn(async move {
                 super::initial_allocation::verify_initial_allocation_failures(
-                    &failure_controller,
+                    &failure_host_runtime,
                     failure_config,
                     interrupt_cleanup,
                 )
@@ -3442,7 +3202,7 @@ mod tests {
         }
         // Use the same project-isolated factory as production; no legacy shared-store fixture.
         // 使用与生产相同的项目隔离工厂，不使用旧共享库夹具。
-        let current_factory = bootstrap_vce_data_plane(&controller)
+        let current_factory = bootstrap_vce_data_plane(&host_runtime)
             .await
             .expect("bootstrap current VCE factory");
         let first = test_project_config("project-1", &first_root, 1);
@@ -3464,8 +3224,8 @@ mod tests {
             .create_project_index(first)
             .await
             .expect("open first VCE project binding");
-        // Inspect only this project's controller-backed metadata through its actual binding.
-        // 仅通过此项目的实际绑定检查由控制器支持的元数据。
+        // Inspect only this project's host-owned metadata through its actual binding.
+        // 仅通过此项目的实际绑定检查由宿主存储支持的元数据。
         let data_plane = first_index.data_plane.clone();
         assert!(
             first_index
@@ -3579,23 +3339,23 @@ mod tests {
             assert_eq!(content_baseline.row_count, 0);
             assert_eq!(path_baseline.row_count, 0);
             data_plane
-                .client
-                .drop_lancedb_table(
-                    VCE_SPACE_ID,
-                    data_plane.lancedb_binding_id.as_str(),
-                    second_index.path_table.as_str(),
-                )
+                .vector_engine()
+                .await
+                .expect("open fixture vector engine")
+                .drop_table(LanceDbDropTableInput {
+                    table_name: second_index.path_table.to_string(),
+                })
                 .await
                 .expect("replace empty path table for child-batch fault");
             data_plane
-                .client
-                .create_lancedb_table_typed(
-                    VCE_SPACE_ID,
-                    data_plane.lancedb_binding_id.as_str(),
-                    second_index.path_table.as_str(),
-                    super::vector_table_columns(4),
-                    false,
-                )
+                .vector_engine()
+                .await
+                .expect("open fixture vector engine")
+                .create_table(LanceDbCreateTableInput {
+                    table_name: second_index.path_table.clone(),
+                    columns: super::vector_table_columns(4),
+                    overwrite_if_exists: false,
+                })
                 .await
                 .expect("create incompatible path table fixture");
             let child_failure_request = IndexStageBatch {
@@ -3628,12 +3388,12 @@ mod tests {
             // Restore the correct table and replay the exact stage; stable row IDs prevent content duplication.
             // 恢复正确表并重放同一阶段；稳定行标识会阻止内容向量重复。
             data_plane
-                .client
-                .drop_lancedb_table(
-                    VCE_SPACE_ID,
-                    data_plane.lancedb_binding_id.as_str(),
-                    second_index.path_table.as_str(),
-                )
+                .vector_engine()
+                .await
+                .expect("open fixture vector engine")
+                .drop_table(LanceDbDropTableInput {
+                    table_name: second_index.path_table.to_string(),
+                })
                 .await
                 .expect("drop incompatible path table fixture");
             data_plane
@@ -4736,18 +4496,17 @@ mod tests {
             .shutdown()
             .await
             .expect("close current-format fixture");
-        client.shutdown().await.expect("shutdown VCE controller");
         assert_eq!(VCE_SPACE_ID, "vce");
     }
 
     /// Verify a rejected initial table allocation preserves foreign tables and permits explicit retry.
     /// 验证被拒绝的首次表分配保留外部表，并允许明确重试。
-    /// `controller` owns temporary fixture storage; `root` is the existing temporary source root.
-    /// `controller` 持有临时夹具存储；`root` 是已存在的临时源码根目录。
+    /// `host_runtime` owns temporary fixture storage; `root` is the existing temporary source root.
+    /// `host_runtime` 持有临时夹具存储；`root` 是已存在的临时源码根目录。
     /// Returns boxed assertions, closing every additional binding before reporting a retry failure.
     /// 返回装箱断言，在报告重试失败前关闭全部额外绑定。
     fn verify_initial_allocation_retry<'a>(
-        controller: &'a ControllerRuntimeHandle,
+        host_runtime: &'a HostRuntimeHandle,
         root: &'a std::path::Path,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
@@ -4759,9 +4518,10 @@ mod tests {
                 let config = test_project_config(&format!("initial-collision-{channel}"), root, 1);
                 // The catalog allocates directories only; it does not publish an initialized index.
                 // catalog 仅分配目录，不发布已初始化索引。
-                let catalog = crate::vce_storage_catalog::VceStorageCatalog::bootstrap(controller)
-                    .await
-                    .expect("open initial collision catalog");
+                let catalog =
+                    crate::vce_storage_catalog::VceStorageCatalog::bootstrap(host_runtime)
+                        .await
+                        .expect("open initial collision catalog");
                 // Paths come from the real catalog rather than a guessed project directory.
                 // paths 来自真实目录服务，而不是猜测的项目目录。
                 let paths = catalog
@@ -4771,7 +4531,7 @@ mod tests {
                 // The fixture's binding installs only schema and its own deliberate collision.
                 // 夹具绑定仅安装结构及其自有的有意碰撞。
                 let store = super::prepare_vce_storage_binding(
-                    controller.client.clone(),
+                    &host_runtime,
                     paths.root,
                     config.project_id.clone(),
                     true,
@@ -4801,7 +4561,7 @@ mod tests {
                     .expect("create fixture-owned initial collision table");
                 // Factory is the public production creation boundary with the real project writer lock.
                 // factory 是使用真实项目写入锁的公开生产创建边界。
-                let factory = bootstrap_vce_data_plane(controller)
+                let factory = bootstrap_vce_data_plane(host_runtime)
                     .await
                     .expect("open initial collision factory");
                 assert!(factory.create_project_index(config.clone()).await.is_err());
@@ -4823,12 +4583,12 @@ mod tests {
                 // Only the fixture removes its exact collision after proving the allocator preserved it.
                 // 仅夹具在证明分配器保留冲突表后移除其精确自有冲突。
                 store
-                    .client
-                    .drop_lancedb_table(
-                        VCE_SPACE_ID,
-                        store.lancedb_binding_id.as_str(),
-                        foreign_table.as_str(),
-                    )
+                    .vector_engine()
+                    .await
+                    .expect("open fixture vector engine")
+                    .drop_table(LanceDbDropTableInput {
+                        table_name: foreign_table.to_string(),
+                    })
                     .await
                     .expect("remove only the fixture-owned collision");
                 // Capture failure before closing bindings, so a red regression leaves no live fixture owner.
@@ -5598,71 +5358,97 @@ mod tests {
         })
     }
 
+    /// Verifies a live lease rejects shutdown before any idle binding enters partial closure.
+    /// 验证活动租约会在任何空闲绑定进入部分关闭前拒绝关闭。
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_live_lease_preflight_preserves_all_cached_bindings() {
+        let temporary = tempdir().expect("create VCE shutdown preflight root");
+        let data_root = temporary.path().join("data");
+        let first_root = temporary.path().join("project-one");
+        let second_root = temporary.path().join("project-two");
+        fs::create_dir_all(&first_root).expect("create first shutdown project root");
+        fs::create_dir_all(&second_root).expect("create second shutdown project root");
+        fs::create_dir_all(&data_root).expect("create shutdown application root");
+        let metadata_path = data_root.join("host-metadata.sqlite3");
+        let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root,
+            sqlite_path: metadata_path.clone(),
+            sqlite_binding_id: format!("vce-shutdown-app-{}", Uuid::new_v4()),
+            system_statistics_sqlite_path: metadata_path,
+            system_statistics_sqlite_binding_id: format!(
+                "vce-shutdown-statistics-{}",
+                Uuid::new_v4()
+            ),
+        });
+        let factory = bootstrap_vce_data_plane(&host_runtime)
+            .await
+            .expect("bootstrap VCE shutdown preflight factory");
+        let first = factory
+            .create_project_index(test_project_config("shutdown-first", &first_root, 1))
+            .await
+            .expect("create first shutdown project");
+        let second = factory
+            .create_project_index(test_project_config("shutdown-second", &second_root, 1))
+            .await
+            .expect("create second shutdown project");
+        let ordered = factory.cached_store_states().await;
+        assert_eq!(ordered.len(), 2);
+        // Make the first cache entry idle and retain the second entry's external lease. The old
+        // one-pass loop closed the first binding before discovering the second live lease.
+        // 让首个缓存条目空闲并保留第二个条目的外部租约。旧的单遍循环会先关闭首个绑定，
+        // 然后才发现第二个活动租约。
+        let (idle, live) = if first.data_plane.project_owner_for_test() == ordered[0].0 {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        drop(idle);
+        assert!(
+            factory
+                .close_project_bindings()
+                .await
+                .expect_err("live lease rejects shutdown preflight")
+                .contains("live project leases")
+        );
+        assert!(
+            factory
+                .cached_store_states()
+                .await
+                .iter()
+                .all(|(_, closing)| !closing),
+            "rejected shutdown must not partially close an idle binding"
+        );
+        assert!(live.load_state_snapshot().await.is_ok());
+        drop(live);
+        factory
+            .shutdown()
+            .await
+            .expect("close shutdown preflight factory");
+    }
+
     /// Exercises engine publication, retrieval, mutations, restart, and project isolation on real storage.
     /// 在真实存储上验证引擎发布、检索、变更、重启与项目隔离。
     #[tokio::test(flavor = "current_thread")]
-    #[ignore = "requires the bundled output/bin/vldb-controller.exe"]
-    async fn real_controller_engine_end_to_end_preserves_checkpoint_isolation() {
+    async fn in_process_engine_end_to_end_preserves_checkpoint_isolation() {
         let temporary = tempdir().expect("create VCE engine integration root");
         let data_root = temporary.path().join("data");
         let first_root = temporary.path().join("project-one");
         let second_root = temporary.path().join("project-two");
         fs::create_dir_all(&first_root).expect("create first VCE engine project root");
         fs::create_dir_all(&second_root).expect("create second VCE engine project root");
-        let executable = test_controller_executable();
-        assert!(executable.is_file(), "bundled controller must exist");
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve VCE engine test port");
-        let port = listener
-            .local_addr()
-            .expect("read VCE engine test port")
-            .port();
-        drop(listener);
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let client = ControllerClient::new(
-            ControllerClientConfig {
-                endpoint: endpoint.clone(),
-                auto_spawn: true,
-                spawn_executable: Some(executable.display().to_string()),
-                spawn_process_mode: ControllerProcessMode::Managed,
-                minimum_uptime_secs: 0,
-                idle_timeout_secs: 1,
-                default_lease_ttl_secs: 30,
-                connect_timeout_secs: 30,
-                startup_timeout_secs: 15,
-                startup_retry_interval_ms: 100,
-                lease_renew_interval_secs: 10,
-            },
-            ClientRegistration {
-                client_name: format!("vce-engine-e2e-{}", Uuid::new_v4()),
-                host_kind: String::from("test"),
-                process_id: std::process::id(),
-                process_name: String::from("vulcan-workspace-store-test"),
-                lease_ttl_secs: Some(30),
-            },
-        );
-        client
-            .connect()
-            .await
-            .expect("connect VCE engine controller");
-        let metadata_path = data_root.join("controller-placeholder.sqlite3");
-        let controller = ControllerRuntimeHandle::new(
-            client.clone(),
-            ControllerRuntimeMetadata {
-                endpoint,
-                executable: executable.display().to_string(),
-                data_root: data_root.clone(),
-                sqlite_path: metadata_path.clone(),
-                sqlite_binding_id: format!("vce-engine-app-{}", Uuid::new_v4()),
-                system_statistics_sqlite_path: metadata_path,
-                system_statistics_sqlite_binding_id: format!(
-                    "vce-engine-statistics-{}",
-                    Uuid::new_v4()
-                ),
-            },
-        );
+        let metadata_path = data_root.join("host-metadata.sqlite3");
+        let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: data_root.clone(),
+            sqlite_path: metadata_path.clone(),
+            sqlite_binding_id: format!("vce-engine-app-{}", Uuid::new_v4()),
+            system_statistics_sqlite_path: metadata_path,
+            system_statistics_sqlite_binding_id: format!(
+                "vce-engine-statistics-{}",
+                Uuid::new_v4()
+            ),
+        });
         fs::create_dir_all(&data_root).expect("create test application root");
-        let factory = bootstrap_vce_data_plane(&controller)
+        let factory = bootstrap_vce_data_plane(&host_runtime)
             .await
             .expect("bootstrap project-isolated VCE engine factory");
         let first_index = factory
@@ -6485,10 +6271,6 @@ mod tests {
             .shutdown()
             .await
             .expect("close project-isolated test factory");
-        client
-            .shutdown()
-            .await
-            .expect("shutdown VCE engine controller");
     }
 
     /// Builds a deterministic AI registration for one project index.
@@ -6665,8 +6447,8 @@ mod tests {
 }
 
 impl fmt::Debug for VceDataPlaneHandle {
-    /// Formats non-sensitive controller binding metadata.
-    /// 格式化不含敏感信息的控制器绑定元数据。
+    /// Formats non-sensitive host binding metadata.
+    /// 格式化不含敏感信息的宿主绑定元数据。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VceDataPlaneHandle")
@@ -6761,8 +6543,8 @@ pub struct VceRebuildCandidateBase {
 /// 一个项目作用域的 VCE 索引端口实现。
 #[derive(Clone)]
 pub struct VceProjectIndex {
-    /// Shared controller-backed data plane.
-    /// 共享的控制器数据面。
+    /// Shared host-owned data plane.
+    /// 共享的宿主数据面。
     data_plane: VceDataPlaneHandle,
     /// Stable VulcanCode project identity.
     /// 稳定的 VulcanCode 项目身份。
@@ -6824,8 +6606,8 @@ struct PreparedVectorRows {
     /// Physical table receiving every encoded batch.
     /// 接收全部编码批次的物理表。
     table_name: String,
-    /// JSON row arrays whose complete protobuf envelopes fit the controller limit.
-    /// 完整 protobuf 封装均不超过控制器上限的 JSON 行数组。
+    /// JSON row arrays whose encoded payloads fit the in-process engine limit.
+    /// 编码载荷均不超过进程内引擎上限的 JSON 行数组。
     batches: Vec<Vec<u8>>,
 }
 
@@ -6833,9 +6615,9 @@ struct PreparedVectorRows {
 /// 在返回一张表的字节有界 JSON 数组批次前编码全部逻辑行。
 ///
 /// `table_name` identifies the diagnostic target, `rows` is the complete stage-local row set, and
-/// `max_data_bytes` is the exact data-field capacity reported by the controller SDK. Returns only
+/// `max_data_bytes` is the exact data-field capacity declared by the host binding. Returns only
 /// complete JSON arrays; an oversized individual row rejects the entire preparation before writes.
-/// `table_name` 标识诊断目标，`rows` 是完整阶段内行集合，`max_data_bytes` 是控制器 SDK 报告的精确
+/// `table_name` 标识诊断目标，`rows` 是完整阶段内行集合，`max_data_bytes` 是宿主绑定声明的精确
 /// 数据字段容量。仅返回完整 JSON 数组；任一单行过大都会在写入前拒绝整个准备过程。
 fn partition_vector_rows_by_data_limit(
     table_name: &str,
@@ -6905,8 +6687,8 @@ fn partition_vector_rows_by_data_limit(
 }
 
 impl fmt::Debug for VceProjectIndex {
-    /// Formats one project index without exposing controller internals.
-    /// 格式化一个项目索引且不暴露控制器内部对象。
+    /// Formats one project index without exposing engine internals.
+    /// 格式化一个项目索引且不暴露引擎内部对象。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VceProjectIndex")
@@ -6929,27 +6711,28 @@ impl fmt::Debug for VceProjectIndex {
 /// Prepare the metadata-only VCE factory without opening historical project databases.
 /// 准备仅元数据的 VCE 工厂，不打开历史项目数据库。
 ///
-/// `controller` is the existing host registration. Returns the lazy project storage factory.
-/// `controller` 是现有宿主注册。返回惰性项目存储工厂。
+/// `host_runtime` is the existing host registration. Returns the lazy project storage factory.
+/// `host_runtime` 是现有宿主注册。返回惰性项目存储工厂。
 pub async fn bootstrap_vce_data_plane(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
 ) -> Result<VceDataPlaneFactory, String> {
-    VceDataPlaneFactory::bootstrap(controller).await
+    VceDataPlaneFactory::bootstrap(host_runtime).await
 }
 
-/// Prepare exact binding ownership before any controller activation may partially fail.
-/// 在控制器激活可能部分失败前准备精确绑定归属。
+/// Prepares exact binding ownership before any engine activation may partially fail.
+/// 在引擎激活可能部分失败前准备精确绑定归属。
 ///
 /// `client` reuses host registration; `data_root` and `project_owner` are validated ownership.
 /// `create` is explicit job authority. Returns unopened project-owned handles.
 /// `client` 复用宿主注册；`data_root` 与 `project_owner` 是已校验归属。
 /// `create` 是明确作业授权。返回尚未打开的项目自有句柄。
 pub(crate) fn prepare_vce_storage_binding(
-    client: ControllerClient,
+    host_runtime: &HostRuntimeHandle,
     data_root: PathBuf,
     project_owner: String,
     create: bool,
 ) -> Result<VceDataPlaneHandle, String> {
+    let local_runtime = host_runtime.local.clone();
     // sqlite_root, lancedb_path and sqlite_path belong to the factory-validated physical root.
     // sqlite_root、lancedb_path 与 sqlite_path 属于工厂校验过的物理根。
     let sqlite_root = data_root.join("sqlite");
@@ -6974,50 +6757,105 @@ pub(crate) fn prepare_vce_storage_binding(
     // sqlite_binding_id 与 lancedb_binding_id 即使部分失败后也能标识精确资源。
     let sqlite_binding_id = format!("{VCE_SQLITE_BINDING_TAG}-{binding_suffix}");
     let lancedb_binding_id = format!("{VCE_LANCEDB_BINDING_TAG}-{binding_suffix}");
-    let sqlite_write_gate = sqlite_write_gate_for(&sqlite_path);
+    let sqlite_binding = vce_project_sqlite_binding(sqlite_path.clone());
     Ok(VceDataPlaneHandle {
         project_owner,
         lease: Arc::new(()),
         read_releases: Arc::new(std::sync::Mutex::new(Vec::new())),
-        client,
         data_root,
         sqlite_path,
         lancedb_path,
         sqlite_binding_id,
         lancedb_binding_id,
-        sqlite_write_gate,
+        sqlite_binding,
+        local_runtime,
+        compaction_operations: Arc::new(std::sync::Mutex::new(HashMap::new())),
     })
 }
 
+/// Builds one project's exact in-process SQLite binding.
+/// 构建某个项目精确的进程内 SQLite 绑定。
+///
+/// The binding declares only options enforced by the in-process engine. Host-side runtime
+/// serialization provides the concurrency boundary instead of exposing a fictitious pool size.
+/// 此绑定只声明进程内引擎实际执行的选项。并发边界由宿主运行时串行化提供，不再暴露虚假的连接池大小。
+fn vce_project_sqlite_binding(path: PathBuf) -> SqliteFileBinding {
+    SqliteFileBinding {
+        path,
+        options: SqliteOpenOptions {
+            busy_timeout_ms: VCE_SQLITE_BUSY_TIMEOUT_MS,
+            pragmas: SqlitePragmaOptions {
+                cache_size_kib: 8_192,
+                mmap_size_bytes: 0,
+                ..Default::default()
+            },
+            hardening: SqliteHardeningOptions {
+                read_only: false,
+                ..Default::default()
+            },
+        },
+    }
+}
+
 impl VceDataPlaneHandle {
+    /// Returns the exact physical project owner for cache lifecycle tests.
+    /// 为缓存生命周期测试返回精确物理项目所有者。
+    ///
+    /// Takes no parameters and returns the immutable owner identity.
+    /// 无参数，返回不可变所有者身份。
+    #[cfg(test)]
+    pub(crate) fn project_owner_for_test(&self) -> &str {
+        &self.project_owner
+    }
+
+    /// Declares the LanceDB limits the VCE vector store runs with.
+    /// 声明 VCE 向量存储使用的 LanceDB 限制。
+    ///
+    /// These are the engine's defaults, which is what the application-level store ran with before the
+    /// controller was removed. VCE states them here rather than inheriting silently, because the
+    /// subsystem that owns a binding is the place that knows why its limits are what they are.
+    ///
+    /// 取值采用引擎默认值，也就是移除控制器前应用级存储实际使用的值。VCE 在此显式声明而非静默继承，
+    /// 因为拥有绑定的子系统才是知道其限制取值理由的地方。
+    pub(crate) fn vector_store_binding(&self) -> LanceDbDirectoryBinding {
+        LanceDbDirectoryBinding {
+            directory: self.lancedb_path.clone(),
+            read_consistency_interval_ms: Some(250),
+            max_upsert_payload: 16 * 1024 * 1024,
+            max_search_limit: VCE_VECTOR_SEARCH_LIMIT as usize,
+            max_concurrent_requests: 16,
+        }
+    }
+
+    /// Returns the in-process LanceDB engine holding this project's code and path vectors.
+    /// 返回保存本项目代码与路径向量的进程内 LanceDB 引擎。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an explicit error when the vector directory cannot be opened, or when the host runtime
+    /// has already shut down.
+    /// 向量目录无法打开，或宿主运行时已关停时返回显式错误。
+    pub(crate) async fn vector_engine(&self) -> Result<LanceDbEngine, String> {
+        self.local_runtime
+            .lance_engine(self.vector_store_binding())
+            .await
+            .map_err(|error| format!("打开原生 VCE LanceDB 数据库失败：{error}"))
+    }
+
     /// Activate bindings only after the factory has retained cleanup ownership.
     /// 仅在工厂保留清理归属后激活绑定。
     ///
     /// `create` permits initialization of a new database. Returns failures without losing handles.
     /// `create` 允许初始化新数据库。返回失败时不丢失句柄。
     pub(crate) async fn activate_bindings(&self, create: bool) -> Result<(), String> {
-        // new_database is captured before the controller creates its own internal metadata tables.
-        // new_database 在控制器创建自身内部元数据表之前获取。
+        // new_database is captured before the engine creates its own internal metadata tables.
+        // new_database 在引擎创建自身内部元数据表之前获取。
         let new_database = !self.sqlite_path.exists();
-        {
-            // Binding activation is a SQLite-resource mutation and must share the same gate as statements.
-            // 绑定启用属于 SQLite 资源变更，必须与语句共享同一个闸门。
-            let _write_gate = self.sqlite_write_gate.lock().await;
-            self.client
-                .enable_sqlite(ControllerSqliteEnableRequest {
-                    space_id: String::from(VCE_SPACE_ID),
-                    binding_id: self.sqlite_binding_id.clone(),
-                    db_path: runtime_assets::native_host_path_text_from_path(&self.sqlite_path),
-                    read_only: false,
-                    connection_pool_size: 2,
-                    busy_timeout_ms: VCE_SQLITE_BUSY_TIMEOUT_MS,
-                    cache_size_kib: 8_192,
-                    mmap_size_bytes: 0,
-                    ..ControllerSqliteEnableRequest::default()
-                })
-                .await
-                .map_err(|error| format!("启用 VCE SQLite 数据库失败：{error}"))?;
-        }
+        // The binding registry does not eagerly open this project's SQLite database or hold its lock.
+        // The binding above is the whole activation: the engine opens the file on
+        // the first statement and keeps it open until `close_bindings` releases it.
+        // 没有外部服务会获知本项目的 SQLite 数据库，因此不会存在第二个打开者或锁持有者。上方的绑定就是全部激活：
+        // 引擎在第一条语句时打开该文件，并保持打开直到 `close_bindings` 释放它。
         // metadata_count checks ownership before initialization could overwrite a foreign schema.
         // metadata_count 在初始化可能覆盖外部结构之前检查归属。
         let metadata_count: Vec<CountRow> = self.query_rows(
@@ -7025,8 +6863,11 @@ impl VceDataPlaneHandle {
             Vec::new(),
         ).await?;
         if metadata_count.first().map(|row| row.count) == Some(1) {
-            // The stored marker selects either the exact schema or one explicit, audited migration.
-            // 持久版本标记只能选择精确结构或一条明确且已审核的迁移路径。
+            // The stored marker must equal the one v1 value. It selects nothing: an exact match continues,
+            // anything else is reported. There is no branch here that repairs, upgrades or reinterprets
+            // storage, which is what makes this an assertion rather than a migration entry point.
+            // 持久版本标记必须等于唯一的 v1 值。它不选择任何路径：精确匹配则继续，其他一律报出。此处不存在任何
+            // 修补、升级或重新解释存储的分支，这正是它是断言而非迁移入口的原因。
             let schema: Vec<StorageSchemaRow> = self
                 .query_rows(
                     "SELECT value FROM vce_metadata WHERE key = 'schema_version';",
@@ -7042,65 +6883,38 @@ impl VceDataPlaneHandle {
                 .value
                 .parse::<i64>()
                 .map_err(|_| String::from("VCE project storage schema marker is invalid"))?;
-            if stored_schema == VCE_SCHEMA_VERSION_5 {
-                self.migrate_schema_v5_to_v6().await?;
-                self.migrate_schema_v6_to_v7().await?;
-                self.migrate_schema_v7_to_v8().await?;
-            } else if stored_schema == VCE_SCHEMA_VERSION_6 {
-                self.migrate_schema_v6_to_v7().await?;
-                self.migrate_schema_v7_to_v8().await?;
-            } else if stored_schema == VCE_SCHEMA_VERSION_7 {
-                self.migrate_schema_v7_to_v8().await?;
-            } else if stored_schema != VCE_DATA_PLANE_SCHEMA_VERSION {
-                return Err(String::from(
-                    "VCE project storage schema is missing or unsupported",
+            // One v1 baseline, verified rather than assumed. A database carrying any other marker is
+            // rejected by name: this build does not detect pre-v1 layouts, does not migrate them and does
+            // not repair them. Reporting the observed value is what makes an unexpected database a loud,
+            // diagnosable failure instead of a silent no-op or a wrong-data read.
+            // 唯一 v1 基线，经校验而非假定。携带任何其他标记的数据库都会被指名拒绝：本构建不探测 v1 之前的布局、
+            // 不迁移它们、也不修补它们。报出观测到的值，正是把一个意外数据库变成响亮且可诊断的失败、而不是静默
+            // 无效或读错数据的原因。
+            if stored_schema != VCE_DATA_PLANE_SCHEMA_VERSION {
+                return Err(format!(
+                    "VCE project storage schema is {stored_schema}, but this build only supports the v1 baseline \
+                     marker {VCE_DATA_PLANE_SCHEMA_VERSION}; pre-v1 storage is not migrated or repaired"
                 ));
             }
         } else if create && new_database {
-            // The factory admitted this absent file; controller-internal tables are not VCE content.
-            // 工厂准入了此缺失文件；控制器内部表不属于 VCE 内容。
+            // The factory admitted this absent file; engine-internal tables are not VCE content.
+            // 工厂准入了此缺失文件；引擎内部表不属于 VCE 内容。
         } else {
             return Err(String::from(
                 "VCE existing project storage has no schema marker",
             ));
         }
-        self.client
-            .enable_lancedb(ControllerLanceDbEnableRequest {
-                space_id: String::from(VCE_SPACE_ID),
-                binding_id: self.lancedb_binding_id.clone(),
-                default_db_path: runtime_assets::native_host_path_text_from_path(
-                    &self.lancedb_path,
-                ),
-                db_root: Some(runtime_assets::native_host_path_text_from_path(
-                    &self.lancedb_path,
-                )),
-                read_consistency_interval_ms: Some(250),
-                max_upsert_payload: 16 * 1024 * 1024,
-                max_search_limit: VCE_VECTOR_SEARCH_LIMIT as usize,
-                max_concurrent_requests: 16,
-            })
-            .await
-            .map_err(|error| format!("启用 VCE LanceDB 数据库失败：{error}"))?;
         if create {
             // schema_result confirms actual initialization, not merely a successful transport response.
             // schema_result 确认实际初始化，而不只是传输响应成功。
-            let _write_gate = self.sqlite_write_gate.lock().await;
-            let schema_result = self
-                .client
-                .execute_sqlite_script_typed(
-                    VCE_SPACE_ID,
-                    self.sqlite_binding_id.as_str(),
-                    build_vce_schema_script(),
-                    Vec::new(),
-                )
-                .await
-                .map_err(|error| format!("初始化 VCE 数据结构失败：{error}"))?;
-            if !schema_result.success {
-                return Err(format!(
-                    "初始化 VCE 数据结构失败：{}",
-                    schema_result.message
-                ));
-            }
+            local_sql::execute_script_async(
+                &self.local_runtime,
+                &self.sqlite_binding,
+                build_vce_schema_script(),
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("初始化 VCE 数据结构失败：{error}"))?;
         }
         self.reconcile_publication_intents().await?;
         Ok(())
@@ -7128,175 +6942,10 @@ impl VceDataPlaneHandle {
                        AND c.generation = vce_publication_intents.generation
                        AND c.refresh_id = vce_publication_intents.refresh_id
                  );"#,
-            vec![
-                ControllerSqliteValue::Int64(now),
-                ControllerSqliteValue::Int64(now),
-            ],
+            vec![SqliteValue::Integer(now), SqliteValue::Integer(now)],
             "恢复 VCE 发布意图状态失败",
         )
         .await
-    }
-
-    /// Add the durable embedding manifest table without touching published checkpoints or vectors.
-    /// 增加持久化向量清单表，不触碰已发布检查点或向量数据。
-    async fn migrate_schema_v5_to_v6(&self) -> Result<(), String> {
-        let _write_gate = self.sqlite_write_gate.lock().await;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VCE_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"BEGIN IMMEDIATE;
-                   CREATE TABLE IF NOT EXISTS vce_embedding_runs (
-                       namespace_id TEXT NOT NULL,
-                       run_id TEXT NOT NULL,
-                       generation INTEGER NOT NULL CHECK(generation > 0),
-                       state TEXT NOT NULL CHECK(state IN ('planned', 'running', 'candidate_ready', 'succeeded', 'failed', 'cancelled')),
-                       manifest_json TEXT NOT NULL,
-                       created_at_unix_ms INTEGER NOT NULL,
-                       updated_at_unix_ms INTEGER NOT NULL,
-                       PRIMARY KEY(namespace_id, run_id),
-                       FOREIGN KEY(namespace_id) REFERENCES vce_project_bindings(namespace_id) ON DELETE CASCADE
-                   );
-                   CREATE INDEX IF NOT EXISTS idx_vce_embedding_runs_recent
-                   ON vce_embedding_runs(namespace_id, updated_at_unix_ms DESC, run_id);
-                   CREATE TABLE IF NOT EXISTS vce_embedding_batch_results (
-                       namespace_id TEXT NOT NULL,
-                       run_id TEXT NOT NULL,
-                       batch_id TEXT NOT NULL,
-                       result_json TEXT NOT NULL,
-                       updated_at_unix_ms INTEGER NOT NULL,
-                       PRIMARY KEY(namespace_id, run_id, batch_id),
-                       FOREIGN KEY(namespace_id, run_id)
-                           REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-                   );
-                   UPDATE vce_metadata SET value = '6' WHERE key = 'schema_version' AND value = '5';
-                   COMMIT;"#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移 VCE 向量清单结构失败：{error}"))?;
-        if !result.success {
-            return Err(format!("迁移 VCE 向量清单结构失败：{}", result.message));
-        }
-        Ok(())
-    }
-
-    /// Add durable publication intents without changing committed checkpoints or vector rows.
-    /// 增加持久化发布意图，不修改已提交检查点或向量行。
-    async fn migrate_schema_v6_to_v7(&self) -> Result<(), String> {
-        let _write_gate = self.sqlite_write_gate.lock().await;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VCE_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"BEGIN IMMEDIATE;
-                   CREATE TABLE IF NOT EXISTS vce_publication_intents (
-                       namespace_id TEXT NOT NULL,
-                       operation_id TEXT NOT NULL,
-                       refresh_id TEXT NOT NULL,
-                       generation INTEGER NOT NULL CHECK(generation > 0),
-                       checkpoint_version INTEGER NOT NULL CHECK(checkpoint_version > 0),
-                       request_fingerprint TEXT NOT NULL CHECK(length(request_fingerprint) = 64),
-                       stage TEXT NOT NULL CHECK(stage IN ('preparing', 'committed', 'reconciled', 'failed')),
-                       error TEXT,
-                       created_at_unix_ms INTEGER NOT NULL,
-                       heartbeat_at_unix_ms INTEGER NOT NULL,
-                       updated_at_unix_ms INTEGER NOT NULL,
-                       PRIMARY KEY(namespace_id, operation_id),
-                       FOREIGN KEY(namespace_id) REFERENCES vce_project_bindings(namespace_id) ON DELETE CASCADE
-                   );
-                   CREATE INDEX IF NOT EXISTS idx_vce_publication_intents_recent
-                   ON vce_publication_intents(namespace_id, updated_at_unix_ms DESC, operation_id);
-                   UPDATE vce_metadata SET value = '7' WHERE key = 'schema_version' AND value = '6';
-                   COMMIT;"#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移 VCE 发布意图结构失败：{error}"))?;
-        if !result.success {
-            return Err(format!("迁移 VCE 发布意图结构失败：{}", result.message));
-        }
-        Ok(())
-    }
-
-    /// Add sharded embedding-plan storage without rewriting legacy manifest payloads.
-    /// 增加分片向量计划存储，不重写旧版清单负载。
-    async fn migrate_schema_v7_to_v8(&self) -> Result<(), String> {
-        let _write_gate = self.sqlite_write_gate.lock().await;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(
-                VCE_SPACE_ID,
-                self.sqlite_binding_id.as_str(),
-                r#"BEGIN IMMEDIATE;
-                   ALTER TABLE vce_embedding_runs
-                       ADD COLUMN layout_version INTEGER NOT NULL DEFAULT 1
-                       CHECK(layout_version IN (1, 2));
-                   ALTER TABLE vce_embedding_runs
-                       ADD COLUMN manifest_complete INTEGER NOT NULL DEFAULT 1
-                       CHECK(manifest_complete IN (0, 1));
-                   ALTER TABLE vce_embedding_runs
-                       ADD COLUMN plan_fingerprint TEXT
-                       CHECK(plan_fingerprint IS NULL OR length(plan_fingerprint) = 64);
-                   ALTER TABLE vce_embedding_runs
-                       ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0);
-                   CREATE TABLE IF NOT EXISTS vce_embedding_run_node_chunks (
-                       namespace_id TEXT NOT NULL,
-                       run_id TEXT NOT NULL,
-                       node_index INTEGER NOT NULL CHECK(node_index >= 0),
-                       chunk_index INTEGER NOT NULL CHECK(chunk_index >= 0),
-                       blob_name TEXT NOT NULL CHECK(length(trim(blob_name)) > 0 AND length(blob_name) <= 8192),
-                       node_json_chunk TEXT NOT NULL CHECK(length(CAST(node_json_chunk AS BLOB)) BETWEEN 1 AND 32768),
-                       PRIMARY KEY(namespace_id, run_id, node_index, chunk_index),
-                       FOREIGN KEY(namespace_id, run_id)
-                           REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-                   );
-                   CREATE INDEX IF NOT EXISTS idx_vce_embedding_run_node_chunks_order
-                   ON vce_embedding_run_node_chunks(namespace_id, run_id, node_index, chunk_index);
-                   CREATE TABLE IF NOT EXISTS vce_embedding_run_reused_blobs (
-                       namespace_id TEXT NOT NULL,
-                       run_id TEXT NOT NULL,
-                       reused_index INTEGER NOT NULL CHECK(reused_index >= 0),
-                       blob_name TEXT NOT NULL CHECK(length(trim(blob_name)) > 0 AND length(blob_name) <= 8192),
-                       PRIMARY KEY(namespace_id, run_id, reused_index),
-                       UNIQUE(namespace_id, run_id, blob_name),
-                       FOREIGN KEY(namespace_id, run_id)
-                           REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-                   );
-                   CREATE TABLE IF NOT EXISTS vce_embedding_run_batches (
-                       namespace_id TEXT NOT NULL,
-                       run_id TEXT NOT NULL,
-                       batch_index INTEGER NOT NULL CHECK(batch_index >= 0),
-                       batch_id TEXT NOT NULL CHECK(length(trim(batch_id)) > 0 AND length(batch_id) <= 8192),
-                       identity_fingerprint TEXT NOT NULL CHECK(length(identity_fingerprint) = 64),
-                       batch_json TEXT NOT NULL CHECK(length(CAST(batch_json AS BLOB)) BETWEEN 1 AND 1048576),
-                       updated_at_unix_ms INTEGER NOT NULL CHECK(updated_at_unix_ms >= 0),
-                       PRIMARY KEY(namespace_id, run_id, batch_index),
-                       UNIQUE(namespace_id, run_id, batch_id),
-                       FOREIGN KEY(namespace_id, run_id)
-                           REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-                   );
-                   CREATE TRIGGER IF NOT EXISTS trg_vce_embedding_run_batches_touch_parent
-                   AFTER UPDATE OF batch_json, updated_at_unix_ms ON vce_embedding_run_batches
-                   BEGIN
-                       UPDATE vce_embedding_runs
-                       SET updated_at_unix_ms = NEW.updated_at_unix_ms,
-                           revision = revision + 1
-                       WHERE namespace_id = NEW.namespace_id AND run_id = NEW.run_id
-                         AND layout_version = 2 AND manifest_complete = 1;
-                   END;
-                   UPDATE vce_metadata SET value = '8' WHERE key = 'schema_version' AND value = '7';
-                   COMMIT;"#,
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("迁移 VCE 分片向量清单结构失败：{error}"))?;
-        if !result.success {
-            return Err(format!("迁移 VCE 分片向量清单结构失败：{}", result.message));
-        }
-        Ok(())
     }
 }
 
@@ -7961,7 +7610,7 @@ impl VceDataPlaneHandle {
             vec![
                 sqlite_text(namespace_id),
                 sqlite_text(snapshot_json),
-                ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
             ],
             "持久化 VCE 状态快照失败",
         )
@@ -7973,80 +7622,65 @@ impl VceDataPlaneHandle {
     /// `table_name` and `dimension` come from the admitted binding; errors remain explicit, including collisions.
     /// `table_name` 与 `dimension` 来自已准入绑定；包括名称冲突在内的错误均明确保留。
     async fn ensure_vector_table(&self, table_name: &str, dimension: u32) -> Result<(), String> {
-        self.client
-            .create_lancedb_table_typed(
-                VCE_SPACE_ID,
-                self.lancedb_binding_id.as_str(),
-                table_name,
-                vector_table_columns(dimension),
+        self.vector_engine()
+            .await?
+            .create_table(LanceDbCreateTableInput {
+                table_name: table_name.to_string(),
+                columns: vector_table_columns(dimension),
                 // This argument is overwrite_if_exists, not an if-not-exists switch.
                 // 此参数是 overwrite_if_exists，不是“仅不存在时创建”开关。
-                false,
-            )
+                overwrite_if_exists: false,
+            })
             .await
             .map_err(|error| format!("创建 VCE LanceDB 表 `{table_name}` 失败：{error}"))?;
         Ok(())
     }
 
-    /// Executes one typed SQLite statement and checks the controller receipt.
-    /// 执行一条类型化 SQLite 语句并校验控制器回执。
+    /// Executes one typed SQLite statement and checks the engine result.
+    /// 执行一条类型化 SQLite 语句并校验引擎结果。
     async fn execute(
         &self,
         sql: &str,
-        params: Vec<ControllerSqliteValue>,
+        params: Vec<SqliteValue>,
         context: &str,
     ) -> Result<(), String> {
-        let _write_gate = self.sqlite_write_gate.lock().await;
-        let result = self
-            .client
-            .execute_sqlite_script_typed(VCE_SPACE_ID, self.sqlite_binding_id.as_str(), sql, params)
+        local_sql::execute_script_async(&self.local_runtime, &self.sqlite_binding, sql, params)
             .await
             .map_err(|error| format!("{context}：{error}"))?;
-        if !result.success {
-            return Err(format!("{context}：{}", result.message));
-        }
         Ok(())
     }
 
-    /// Executes one repeated SQLite statement as a bounded controller batch.
-    /// 通过有界控制器批次重复执行一条 SQLite 语句。
+    /// Executes one repeated SQLite statement as a bounded in-process batch.
+    /// 通过有界进程内批次重复执行一条 SQLite 语句。
     async fn execute_batch(
         &self,
         sql: &str,
-        items: Vec<Vec<ControllerSqliteValue>>,
+        items: Vec<Vec<SqliteValue>>,
         context: &str,
     ) -> Result<(), String> {
         if items.is_empty() {
             return Ok(());
         }
-        let _write_gate = self.sqlite_write_gate.lock().await;
-        let result = self
-            .client
-            .execute_sqlite_batch_typed(VCE_SPACE_ID, self.sqlite_binding_id.as_str(), sql, items)
+        local_sql::execute_batch_async(&self.local_runtime, &self.sqlite_binding, sql, items)
             .await
             .map_err(|error| format!("{context}：{error}"))?;
-        if !result.success {
-            return Err(format!("{context}：{}", result.message));
-        }
         Ok(())
     }
 
-    /// Queries typed SQLite rows through the controller JSON projection.
-    /// 通过控制器 JSON 投影查询类型化 SQLite 行。
+    /// Queries typed SQLite rows through the host JSON projection.
+    /// 通过宿主 JSON 投影查询类型化 SQLite 行。
     async fn query_rows<T: for<'de> Deserialize<'de>>(
         &self,
         sql: &str,
-        params: Vec<ControllerSqliteValue>,
+        params: Vec<SqliteValue>,
     ) -> Result<Vec<T>, String> {
-        // Reads share the physical-file gate so a controller connection cannot hold a snapshot
+        // Reads share the physical-file gate so one engine connection cannot hold a snapshot
         // while another VCE binding starts a mutation or closes the database.
-        // 读取也共享物理文件闸门，避免控制器连接持有快照时另一 VCE 绑定开始变更或关闭数据库。
-        let _read_gate = self.sqlite_write_gate.lock().await;
-        let result = self
-            .client
-            .query_sqlite_json_typed(VCE_SPACE_ID, self.sqlite_binding_id.as_str(), sql, params)
-            .await
-            .map_err(|error| format!("查询 VCE SQLite 失败：{error}"))?;
+        // 读取也共享物理文件闸门，避免引擎连接持有快照时另一 VCE 绑定开始变更或关闭数据库。
+        let result =
+            local_sql::query_json_async(&self.local_runtime, &self.sqlite_binding, sql, params)
+                .await
+                .map_err(|error| format!("查询 VCE SQLite 失败：{error}"))?;
         serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析 VCE SQLite 查询结果失败：{error}"))
     }
@@ -8064,8 +7698,8 @@ impl VceDataPlaneHandle {
         Ok(())
     }
 
-    /// Release only these exact controller bindings after every external lease has drained.
-    /// 全部外部租约排空后仅释放这些精确控制器绑定。
+    /// Releases only these exact host bindings after every external lease has drained.
+    /// 全部外部租约排空后仅释放这些精确宿主绑定。
     ///
     /// Takes no extra parameters; returns combined cleanup errors without deleting stored data.
     /// 无额外参数；返回合并清理错误，不删除存储数据。
@@ -8074,24 +7708,31 @@ impl VceDataPlaneHandle {
         // failures retains both independent backend cleanup diagnostics for a later retry.
         // failures 保留两个独立后端的清理诊断，供后续重试。
         let mut failures = Vec::new();
-        if let Err(error) = self
-            .client
-            .disable_lancedb(VCE_SPACE_ID, &self.lancedb_binding_id)
-            .await
         {
-            failures.push(format!("Close VCE vectors: {error}"));
-        }
-        {
-            // Disable must not race a final receipt or migration statement on the same physical file.
-            // 禁用不能与同一物理文件上的最后一条回执或迁移语句竞争。
-            let _write_gate = self.sqlite_write_gate.lock().await;
-            if let Err(error) = self
-                .client
-                .disable_sqlite(VCE_SPACE_ID, &self.sqlite_binding_id)
-                .await
+            // The host registry has no external binding to disable. The in-process handle is closed
+            // instead, which is what actually releases the file and lets a VCE
+            // layout change delete its directory on Windows. The close goes through the boundary so it
+            // cannot take the file's lock away between two statements of one operation.
+            // 没有外部服务持有该数据库绑定。关闭进程内句柄才是真正释放文件、并让
+            // VCE 布局变更能在 Windows 上删除其目录的动作。关闭经由边界进行，因此不会在一个操作的两条语句之间
+            // 把该文件的锁拿走。
+            if let Err(error) =
+                local_sql::close_database_file_async(&self.local_runtime, &self.sqlite_binding)
+                    .await
             {
                 failures.push(format!("Close VCE metadata: {error}"));
             }
+        }
+        // External project leases have drained before this method is called, so removing the cached runtime
+        // cannot strand an active VCE vector operation. This releases the database-root lock and makes the
+        // factory's resident-store limit apply to both physical backends rather than SQLite alone.
+        // 调用本方法前外部项目租约已经排空，因此移除缓存运行时不会遗留活动的 VCE 向量操作。此举释放数据库根锁，
+        // 并使工厂的驻留存储上限同时约束两个物理后端，而非只约束 SQLite。
+        if let Err(error) = self
+            .local_runtime
+            .close_lance_directory(&self.vector_store_binding())
+        {
+            failures.push(format!("Close VCE vector database: {error}"));
         }
         if failures.is_empty() {
             Ok(())
@@ -8231,7 +7872,10 @@ CREATE TABLE IF NOT EXISTS vce_embedding_runs (
     generation INTEGER NOT NULL CHECK(generation > 0),
     state TEXT NOT NULL CHECK(state IN ('planned', 'running', 'candidate_ready', 'succeeded', 'failed', 'cancelled')),
     manifest_json TEXT NOT NULL,
-    layout_version INTEGER NOT NULL DEFAULT 2 CHECK(layout_version IN (1, 2)),
+    -- The layout marker is pinned to the one v1 value by the schema itself, so a row in any other layout
+    -- cannot be written even by a bug. The CHECK is the anti-drift assertion, in the same spirit as the
+    -- pinned Lance file version: there is no second layout this build can read.
+    layout_version INTEGER NOT NULL DEFAULT 2 CHECK(layout_version = 2),
     manifest_complete INTEGER NOT NULL DEFAULT 0 CHECK(manifest_complete IN (0, 1)),
     plan_fingerprint TEXT CHECK(plan_fingerprint IS NULL OR length(plan_fingerprint) = 64),
     revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
@@ -8363,7 +8007,6 @@ CREATE TABLE IF NOT EXISTS vce_staged_symbols (
     FOREIGN KEY(namespace_id, refresh_id, generation, blob_name)
         REFERENCES vce_staged_blobs(namespace_id, refresh_id, generation, blob_name) ON DELETE CASCADE
 );
-
 
 
 CREATE TABLE IF NOT EXISTS vce_operations (
@@ -8627,9 +8270,9 @@ impl VceProjectIndex {
     /// Read authoritative physical statistics for one fixed VCE table role.
     /// 读取一个固定 VCE 表角色的权威物理统计信息。
     ///
-    /// `role` selects only this index's content or path table. Returns controller statistics
+    /// `role` selects only this index's content or path table. Returns engine statistics
     /// projected into the model-independent maintenance contract.
-    /// `role` 只能选择此索引的内容表或路径表。返回投影到模型无关维护契约的控制器统计信息。
+    /// `role` 只能选择此索引的内容表或路径表。返回投影到模型无关维护契约的引擎统计信息。
     pub async fn physical_table_statistics(
         &self,
         role: VcePhysicalTableRole,
@@ -8637,19 +8280,13 @@ impl VceProjectIndex {
         let table_name = self.physical_table_name(role);
         let statistics = self
             .data_plane
-            .client
-            .get_lancedb_table_statistics(
-                VCE_SPACE_ID,
-                &self.data_plane.lancedb_binding_id,
-                table_name,
-            )
+            .vector_engine()
+            .await?
+            .table_statistics(LanceDbTableStatisticsInput {
+                table_name: table_name.to_string(),
+            })
             .await
-            .map_err(|error| {
-                map_physical_compaction_controller_error(
-                    "Read VCE physical table statistics",
-                    error,
-                )
-            })?;
+            .map_err(|error| format!("读取 VCE 物理表统计失败：{error}"))?;
         if statistics.table_name != table_name {
             return Err(String::from(
                 "VCE physical statistics returned a different table identity",
@@ -8658,8 +8295,8 @@ impl VceProjectIndex {
         Ok(map_physical_table_statistics(role, statistics))
     }
 
-    /// Project controller-returned operation statistics after verifying the immutable table role.
-    /// 校验不可变表角色后，投影控制器操作返回的统计信息。
+    /// Projects operation statistics after verifying the immutable table role.
+    /// 校验不可变表角色后，投影存储操作返回的统计信息。
     ///
     /// `role` selects this index's fixed table and `statistics` is one operation boundary snapshot.
     /// Returns the VCE maintenance representation or rejects a cross-table result.
@@ -8668,62 +8305,140 @@ impl VceProjectIndex {
     pub fn physical_operation_statistics(
         &self,
         role: VcePhysicalTableRole,
-        statistics: ControllerLanceDbTableStatistics,
+        statistics: VcePhysicalTableStatistics,
     ) -> Result<VcePhysicalTableStatistics, String> {
-        if statistics.table_name != self.physical_table_name(role) {
+        if statistics.table_name != self.physical_table_name(role) || statistics.role != role {
             return Err(String::from(
                 "VCE physical compaction statistics belong to a different table",
             ));
         }
-        Ok(map_physical_table_statistics(role, statistics))
+        Ok(statistics)
     }
 
     /// Submit one idempotent native file-compaction step for a fixed VCE table.
     /// 为一张固定 VCE 表提交一个幂等的原生文件整理步骤。
     ///
     /// `operation_id` is stable across uncertain replies; `expected_version` and `options`
-    /// are frozen by the confirmed plan. Returns the controller-owned operation snapshot.
+    /// are frozen by the confirmed plan. Returns the host-owned operation snapshot.
     /// `operation_id` 在不确定回复间保持稳定；`expected_version` 与 `options` 由已确认计划冻结。
-    /// 返回控制器持有的操作快照。
+    /// 返回宿主持有的操作快照。
     pub async fn submit_physical_compaction(
         &self,
         role: VcePhysicalTableRole,
         operation_id: &str,
         expected_version: u64,
         options: &VceCompactionOptions,
-    ) -> Result<ControllerLanceDbCompactionOperation, String> {
+    ) -> Result<VcePhysicalCompactionOperation, String> {
         if operation_id.trim().is_empty() || expected_version == 0 {
             return Err(String::from(
                 "VCE physical compaction requires a stable operation and table version",
             ));
         }
-        let operation = self
+        let table_name = self.physical_table_name(role).to_string();
+        let submitted_at_unix_ms = u64::try_from(current_unix_epoch_millis_i64()?)
+            .map_err(|_| String::from("VCE physical compaction timestamp is out of range"))?;
+        // The in-process engine performs one synchronous compaction step, so the operation is already
+        // terminal when this returns and no queued, running or cancellable window ever exists.
+        // 进程内引擎执行一次同步整理步骤，故本函数返回时操作已处于终态，不存在排队、运行或可取消窗口。
+        // The maintenance contract states these options as u64 while the engine takes platform-sized
+        // values, so the narrowing is explicit and refuses silently truncated settings.
+        // 维护契约把这些选项表述为 u64，而引擎取平台字长的值，故收窄是显式的，并拒绝被静默截断的设置。
+        let narrowing = |value: u64, name: &str| {
+            usize::try_from(value)
+                .map_err(|_| format!("VCE compaction option {name} exceeds platform limits"))
+        };
+        let outcome = self
             .data_plane
-            .client
-            .submit_lancedb_compaction(
-                VCE_SPACE_ID,
-                &self.data_plane.lancedb_binding_id,
-                operation_id,
-                self.physical_table_name(role),
-                ControllerLanceDbCompactionOptions {
-                    expected_version: Some(expected_version),
-                    target_rows_per_fragment: Some(options.target_rows_per_fragment),
-                    max_rows_per_group: Some(options.max_rows_per_group),
-                    max_bytes_per_file: Some(options.max_bytes_per_file),
-                    num_threads: Some(options.num_threads),
-                    batch_size: Some(options.batch_size),
-                    max_source_fragments: Some(options.max_source_fragments),
-                },
-            )
-            .await
-            .map_err(|error| {
-                map_physical_compaction_controller_error("Submit VCE physical compaction", error)
-            })?;
+            .vector_engine()
+            .await?
+            .compact_table(LanceDbCompactTableInput {
+                table_name: table_name.clone(),
+                expected_version: Some(expected_version),
+                target_rows_per_fragment: Some(narrowing(
+                    options.target_rows_per_fragment,
+                    "target_rows_per_fragment",
+                )?),
+                max_rows_per_group: Some(narrowing(
+                    options.max_rows_per_group,
+                    "max_rows_per_group",
+                )?),
+                max_bytes_per_file: Some(narrowing(
+                    options.max_bytes_per_file,
+                    "max_bytes_per_file",
+                )?),
+                num_threads: Some(narrowing(options.num_threads, "num_threads")?),
+                batch_size: Some(narrowing(options.batch_size, "batch_size")?),
+                max_source_fragments: Some(narrowing(
+                    options.max_source_fragments,
+                    "max_source_fragments",
+                )?),
+            })
+            .await;
+        let operation = match outcome {
+            Ok(result) => VcePhysicalCompactionOperation {
+                operation_id: operation_id.to_string(),
+                table_name,
+                state: VcePhysicalCompactionState::Succeeded,
+                cancel_requested: false,
+                message: result.message,
+                error: None,
+                submitted_at_unix_ms,
+                started_at_unix_ms: Some(submitted_at_unix_ms),
+                completed_at_unix_ms: Some(submitted_at_unix_ms),
+                before: Some(map_physical_table_statistics(role, result.before)),
+                after: Some(map_physical_table_statistics(role, result.after)),
+                metrics: Some(VcePhysicalCompactionMetrics {
+                    fragments_removed: result.metrics.fragments_removed,
+                    fragments_added: result.metrics.fragments_added,
+                    files_removed: result.metrics.files_removed,
+                    files_added: result.metrics.files_added,
+                }),
+            },
+            Err(error) => VcePhysicalCompactionOperation {
+                operation_id: operation_id.to_string(),
+                table_name,
+                state: VcePhysicalCompactionState::Failed,
+                cancel_requested: false,
+                message: String::from("VCE physical compaction did not complete"),
+                error: Some(error.to_string()),
+                submitted_at_unix_ms,
+                started_at_unix_ms: Some(submitted_at_unix_ms),
+                completed_at_unix_ms: Some(submitted_at_unix_ms),
+                before: None,
+                after: None,
+                metrics: None,
+            },
+        };
+        // The in-process step is synchronous, so this submission is the only moment its result is knowable.
+        // Recording it here is what lets a later query report the step that really ran instead of inventing a
+        // terminal state. Failures are recorded too, so a consumer that re-queries a failed step observes the
+        // same failure rather than a reconstructed success.
+        // 进程内步骤是同步的，故本次提交是唯一能得知其结果的时刻。在此记录它，正是后续查询能够报告确实运行过的
+        // 步骤、而不是编造终态的原因。失败同样被记录，使重新查询失败步骤的消费者观察到同一个失败，而不是一个被
+        // 重建出来的成功。
+        self.remember_compaction_operation(&operation);
         self.validate_physical_compaction_operation(role, operation_id, operation)
     }
 
-    /// Query one controller-owned compaction operation for this index and table role.
-    /// 查询此索引及表角色所属的一项控制器整理操作。
+    /// Records one completed in-process physical compaction step on this project's shared handle.
+    /// 在本项目的共享句柄上记录一个已完成的进程内物理整理步骤。
+    ///
+    /// `operation` is the exact step this index just ran. Takes no other input and returns nothing; a poisoned
+    /// registry lock is recovered rather than refused, matching the recovery convention used throughout the
+    /// local database runtime.
+    /// `operation` 是本索引刚刚运行的精确步骤。不接收其他输入且无返回值；注册表锁被毒化时予以恢复而非拒绝，
+    /// 与本地数据库运行时全篇采用的恢复惯例一致。
+    fn remember_compaction_operation(&self, operation: &VcePhysicalCompactionOperation) {
+        let mut registry = self
+            .data_plane
+            .compaction_operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.insert(operation.operation_id.clone(), operation.clone());
+    }
+
+    /// Queries one host-owned compaction operation for this index and table role.
+    /// 查询此索引及表角色所属的一项宿主整理操作。
     ///
     /// `operation_id` identifies a previously submitted step. Returns a verified table-scoped
     /// snapshot or an explicit state-loss diagnostic.
@@ -8732,46 +8447,50 @@ impl VceProjectIndex {
         &self,
         role: VcePhysicalTableRole,
         operation_id: &str,
-    ) -> Result<ControllerLanceDbCompactionOperation, String> {
-        let operation = self
-            .data_plane
-            .client
-            .get_lancedb_compaction_operation(
-                VCE_SPACE_ID,
-                &self.data_plane.lancedb_binding_id,
-                operation_id,
-            )
-            .await
-            .map_err(|error| {
-                map_physical_compaction_controller_error("Query VCE physical compaction", error)
-            })?;
+    ) -> Result<VcePhysicalCompactionOperation, String> {
+        if operation_id.trim().is_empty() {
+            return Err(String::from(
+                "VCE physical compaction requires a stable operation identity",
+            ));
+        }
+        // The in-process step is synchronous, so its result was fixed at submission and this query reports the
+        // step that really ran, with the statistics and metrics the engine actually returned. When this
+        // process holds no such submission, the honest answer is that the step is not knowable — never a
+        // reconstructed terminal state.
+        // 进程内步骤是同步的，故其结果在提交时即已固定；本查询报告确实运行过的步骤，并携带引擎实际返回的统计与
+        // 指标。若本进程没有该提交的记录，唯一诚实的回答是该步骤不可知，绝不重建一个终态。
+        let operation = {
+            let registry = self
+                .data_plane
+                .compaction_operations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            registry.get(operation_id).cloned()
+        };
+        let Some(operation) = operation else {
+            return Err(format!(
+                "VCE physical compaction operation `{operation_id}` was not submitted by this process and its \
+                 result cannot be reconstructed"
+            ));
+        };
         self.validate_physical_compaction_operation(role, operation_id, operation)
     }
 
-    /// Request cancellation at the controller's next safe compaction boundary.
-    /// 请求在控制器的下一个安全整理边界取消操作。
+    /// Requests cancellation at the host operation's next safe compaction boundary.
+    /// 请求在宿主操作的下一个安全整理边界取消操作。
     ///
-    /// `operation_id` identifies the current table step. Returns the controller's exact
+    /// `operation_id` identifies the current table step. Returns the host operation's exact
     /// cancellation state and never claims that an atomic rewrite was preempted.
-    /// `operation_id` 标识当前表步骤。返回控制器的精确取消状态，绝不宣称已抢占原子重写。
+    /// `operation_id` 标识当前表步骤。返回宿主操作的精确取消状态，绝不宣称已抢占原子重写。
     pub async fn cancel_physical_compaction(
         &self,
         role: VcePhysicalTableRole,
         operation_id: &str,
-    ) -> Result<ControllerLanceDbCompactionOperation, String> {
-        let operation = self
-            .data_plane
-            .client
-            .cancel_lancedb_compaction(
-                VCE_SPACE_ID,
-                &self.data_plane.lancedb_binding_id,
-                operation_id,
-            )
-            .await
-            .map_err(|error| {
-                map_physical_compaction_controller_error("Cancel VCE physical compaction", error)
-            })?;
-        self.validate_physical_compaction_operation(role, operation_id, operation)
+    ) -> Result<VcePhysicalCompactionOperation, String> {
+        // An in-process synchronous step holds no cancellation window, so the only honest answer is that
+        // the work already completed. This never claims that an atomic rewrite was preempted.
+        // 进程内同步步骤不持有取消窗口，故唯一诚实的回答是工作已经完成。这绝不宣称已抢占原子重写。
+        self.physical_compaction_operation(role, operation_id).await
     }
 
     /// Resolve one authorized table role to this index's immutable physical table name.
@@ -8783,14 +8502,14 @@ impl VceProjectIndex {
         }
     }
 
-    /// Verify that a controller operation still belongs to the selected identity and immutable table.
-    /// 校验控制器操作仍属于选定身份与不可变物理表。
+    /// Verifies that a storage operation still belongs to the selected identity and immutable table.
+    /// 校验存储操作仍属于选定身份与不可变物理表。
     fn validate_physical_compaction_operation(
         &self,
         role: VcePhysicalTableRole,
         operation_id: &str,
-        operation: ControllerLanceDbCompactionOperation,
-    ) -> Result<ControllerLanceDbCompactionOperation, String> {
+        operation: VcePhysicalCompactionOperation,
+    ) -> Result<VcePhysicalCompactionOperation, String> {
         validate_physical_compaction_operation_identity(
             operation_id,
             self.physical_table_name(role),
@@ -9081,7 +8800,7 @@ impl VceProjectIndex {
                     sqlite_text(&run_id),
                     sqlite_text(&result.batch_id),
                     sqlite_text(&result_json),
-                    ControllerSqliteValue::Int64(now),
+                    SqliteValue::Integer(now),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&run_id),
                 ],
@@ -9505,8 +9224,8 @@ impl VceProjectIndex {
                     sqlite_text(&request.refresh_id),
                     sqlite_u64(request.generation, "VCE generation")?,
                     sqlite_text(&request.operation_id),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
+                    SqliteValue::Integer(now),
+                    SqliteValue::Integer(now),
                 ],
                 "登记 VCE 暂存代次失败",
             )
@@ -9616,8 +9335,8 @@ impl VceProjectIndex {
                 sqlite_u64_raw(request.generation, "VCE abort generation")
                     .map_err(|message| port_rejected(VcePortOperation::AbortStage, message))?,
                 sqlite_text(&request.operation_id),
-                ControllerSqliteValue::Int64(abort_recorded_at),
-                ControllerSqliteValue::Int64(abort_recorded_at),
+                SqliteValue::Integer(abort_recorded_at),
+                SqliteValue::Integer(abort_recorded_at),
             ],
             "记录 VCE 中止身份失败",
         ).await.map_err(|message| port_failed(VcePortOperation::AbortStage, message))?;
@@ -9822,9 +9541,9 @@ impl VceProjectIndex {
                     )
                     .map_err(|message| port_failed(VcePortOperation::Commit, message.to_string()))?,
                     sqlite_text(request_fingerprint),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
+                    SqliteValue::Integer(now),
+                    SqliteValue::Integer(now),
+                    SqliteValue::Integer(now),
                 ],
                 "持久化 VCE 发布意图失败",
             )
@@ -9847,8 +9566,8 @@ impl VceProjectIndex {
                 "UPDATE vce_publication_intents SET stage = 'failed', error = ?, heartbeat_at_unix_ms = ?, updated_at_unix_ms = ? WHERE namespace_id = ? AND operation_id = ? AND request_fingerprint = ? AND stage = 'preparing';",
                 vec![
                     sqlite_text(&diagnostic),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
+                    SqliteValue::Integer(now),
+                    SqliteValue::Integer(now),
                     sqlite_text(&self.binding.namespace_id),
                     sqlite_text(&request.request_id),
                     sqlite_text(request_fingerprint),
@@ -10428,8 +10147,8 @@ impl VceProjectIndex {
         Ok((content_rows, path_row))
     }
 
-    /// Encode and partition rows so every exact controller request stays within its hard limit.
-    /// 编码并划分行，确保每个精确控制器请求都处于硬上限以内。
+    /// Encodes and partitions rows so every exact engine call stays within its hard limit.
+    /// 编码并划分行，确保每个精确引擎调用都处于硬上限以内。
     fn prepare_vector_rows(
         &self,
         table_name: &str,
@@ -10438,18 +10157,10 @@ impl VceProjectIndex {
         if rows.is_empty() {
             return partition_vector_rows_by_data_limit(table_name, rows, 2);
         }
-        let key_columns = vec![String::from("row_id")];
-        let max_data_bytes = self
-            .data_plane
-            .client
-            .lancedb_upsert_max_data_bytes(
-                VCE_SPACE_ID,
-                self.data_plane.lancedb_binding_id.as_str(),
-                table_name,
-                ControllerLanceDbInputFormat::JsonRows,
-                &key_columns,
-            )
-            .map_err(|error| format!("计算 VCE LanceDB 表 `{table_name}` 请求上限失败：{error}"))?;
+        // The engine declares this limit on the binding, so the batch size comes from the same declaration
+        // the engine itself enforces rather than from a controller round trip.
+        // 引擎把该上限声明在绑定上，故批次大小来自引擎自身执行的那份声明，而非一次控制器往返。
+        let max_data_bytes = self.data_plane.vector_store_binding().max_upsert_payload;
         partition_vector_rows_by_data_limit(table_name, rows, max_data_bytes)
     }
 
@@ -10461,15 +10172,14 @@ impl VceProjectIndex {
     ) -> Result<(), String> {
         for data in prepared.batches {
             self.data_plane
-                .client
-                .upsert_lancedb_typed(
-                    VCE_SPACE_ID,
-                    self.data_plane.lancedb_binding_id.as_str(),
-                    &prepared.table_name,
-                    ControllerLanceDbInputFormat::JsonRows,
+                .vector_engine()
+                .await?
+                .vector_upsert(LanceDbUpsertInput {
+                    table_name: prepared.table_name.clone(),
+                    input_format: LanceDbInputFormat::JsonRows,
                     data,
-                    vec![String::from("row_id")],
-                )
+                    key_columns: vec![String::from("row_id")],
+                })
                 .await
                 .map_err(|error| {
                     format!(
@@ -10929,7 +10639,7 @@ COMMIT;"#,
                         .execute(
                             "UPDATE vce_vector_cleanup SET state = 'completed', attempt = attempt + 1, error = NULL, updated_at_unix_ms = ? WHERE namespace_id = ? AND cleanup_id = ?;",
                             vec![
-                                ControllerSqliteValue::Int64(now),
+                                SqliteValue::Integer(now),
                                 sqlite_text(&self.binding.namespace_id),
                                 sqlite_text(&row.cleanup_id),
                             ],
@@ -10946,7 +10656,7 @@ COMMIT;"#,
                             "UPDATE vce_vector_cleanup SET attempt = attempt + 1, error = ?, updated_at_unix_ms = ? WHERE namespace_id = ? AND cleanup_id = ?;",
                             vec![
                                 sqlite_text(&error),
-                                ControllerSqliteValue::Int64(now),
+                                SqliteValue::Integer(now),
                                 sqlite_text(&self.binding.namespace_id),
                                 sqlite_text(&row.cleanup_id),
                             ],
@@ -11022,7 +10732,7 @@ COMMIT;"#,
         let mut parameters = vec![
             sqlite_text(&self.binding.namespace_id),
             sqlite_text(refresh_id),
-            ControllerSqliteValue::Int64(generation),
+            SqliteValue::Integer(generation),
         ];
         let member_filter = if let Some(blob) = &retired_blob {
             parameters.push(sqlite_text(blob));
@@ -11050,13 +10760,12 @@ COMMIT;"#,
         };
         for table in [&self.content_table, &self.path_table] {
             self.data_plane
-                .client
-                .delete_lancedb_typed(
-                    VCE_SPACE_ID,
-                    self.data_plane.lancedb_binding_id.as_str(),
-                    table,
-                    predicate.clone(),
-                )
+                .vector_engine()
+                .await?
+                .delete(LanceDbDeleteInput {
+                    table_name: table.clone(),
+                    condition: predicate.clone(),
+                })
                 .await
                 .map_err(|error| format!("Delete exact VCE vectors from `{table}`: {error}"))?;
         }
@@ -11098,17 +10807,17 @@ COMMIT;"#,
         );
         let result = self
             .data_plane
-            .client
-            .search_lancedb_typed(
-                VCE_SPACE_ID,
-                self.data_plane.lancedb_binding_id.as_str(),
-                table_name,
-                query_vector.to_vec(),
-                physical_limit,
-                predicate,
-                "vector",
-                ControllerLanceDbOutputFormat::JsonRows,
-            )
+            .vector_engine()
+            .await
+            .map_err(|error| port_failed(operation, format!("打开 VCE LanceDB 引擎失败：{error}")))?
+            .vector_search(LanceDbSearchInput {
+                table_name: table_name.to_string(),
+                vector: query_vector.to_vec(),
+                limit: physical_limit,
+                filter: predicate,
+                vector_column: String::from("vector"),
+                output_format: LanceDbOutputFormat::JsonRows,
+            })
             .await
             .map_err(|error| port_failed(operation, format!("VCE LanceDB 检索失败：{error}")))?;
         let mut rows: Vec<LanceHitRow> = serde_json::from_slice(&result.data)
@@ -11452,10 +11161,10 @@ COMMIT;"#,
                     sqlite_text(&self.binding.namespace_id),
                     self.management_active_refresh
                         .as_ref()
-                        .map_or(ControllerSqliteValue::Null, sqlite_text),
+                        .map_or(SqliteValue::Null, sqlite_text),
                     self.management_active_refresh
                         .as_ref()
-                        .map_or(ControllerSqliteValue::Null, sqlite_text),
+                        .map_or(SqliteValue::Null, sqlite_text),
                 ],
             )
             .await
@@ -11632,8 +11341,8 @@ COMMIT;"#,
                     sqlite_u64(record.total_units, "VCE total units")
                         .map_err(|error| error.to_string())?,
                     sqlite_optional_text(record.error),
-                    ControllerSqliteValue::Int64(now),
-                    ControllerSqliteValue::Int64(now),
+                    SqliteValue::Integer(now),
+                    SqliteValue::Integer(now),
                 ],
                 "记录 VCE 操作失败",
             )

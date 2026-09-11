@@ -1,22 +1,22 @@
-//! Real-controller VCE physical-compaction performance and equivalence fixture.
-//! 真实控制器 VCE 物理整理性能与等价性夹具。
+//! Real in-process VCE physical-compaction performance and equivalence fixture.
+//! 真实进程内 VCE 物理整理性能与等价性夹具。
 
 use super::{
-    VCE_SPACE_ID, VceProjectIndex, VceProjectIndexConfig, bootstrap_vce_data_plane,
-    lance_string_literal, lance_string_set, physical_compaction_options, vector_row_id,
+    VceProjectIndex, VceProjectIndexConfig, bootstrap_vce_data_plane, lance_string_literal,
+    lance_string_set, physical_compaction_options, vector_row_id,
 };
-use crate::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
+use crate::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerLanceDbCompactionState,
-    ControllerLanceDbInputFormat, ControllerLanceDbOutputFormat, ControllerProcessMode,
-};
 use vulcan_context_engine::{
-    EmbeddingSpace, VceIndexBinding, VcePhysicalTableRole, VcePhysicalTableStatistics, blob_name,
+    EmbeddingSpace, VceIndexBinding, VcePhysicalCompactionState, VcePhysicalTableRole,
+    VcePhysicalTableStatistics, blob_name,
+};
+use vulcan_lancedb_engine::types::{
+    LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput, LanceDbUpsertInput,
 };
 
 /// Vector dimension from the diagnosed production-equivalent workload.
@@ -73,24 +73,6 @@ struct QueryMeasurements {
     /// Ordered stable row identities used for before/after equivalence.
     /// 用于整理前后等价比较的有序稳定行身份。
     signature: Vec<String>,
-}
-
-/// Resolve the explicitly built controller used by the isolated performance run.
-/// 解析隔离性能运行使用的显式已构建控制器。
-///
-/// Takes no parameters. Returns the environment override or the packaged fallback path.
-/// 无参数。返回环境覆盖路径或打包回退路径。
-fn test_controller_executable() -> PathBuf {
-    std::env::var_os("VLDB_CONTROLLER_TEST_EXECUTABLE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..")
-                .join("output")
-                .join("bin")
-                .join("vldb-controller.exe")
-        })
 }
 
 /// Build one 1024-dimensional project configuration under a canonical temporary root.
@@ -193,9 +175,9 @@ fn performance_row(
 /// 将一个有界行批次写入两张物理 VCE 向量表。
 ///
 /// `index`, `blobs`, and `ordinals` select current or historical records; `refresh_id` and
-/// `generation` freeze their attempt identity. Returns after both real controller writes finish.
+/// `generation` freeze their attempt identity. Returns after both real engine writes finish.
 /// `index`、`blobs` 与 `ordinals` 选择当前或历史记录；`refresh_id` 与 `generation`
-/// 冻结其尝试身份。两次真实控制器写入均完成后返回。
+/// 冻结其尝试身份。两次真实引擎写入均完成后返回。
 async fn write_performance_rows(
     index: &VceProjectIndex,
     blobs: &[String],
@@ -230,27 +212,27 @@ async fn write_performance_rows(
         .collect::<Vec<_>>();
     let content_data = serde_json::to_vec(&content_rows).expect("encode content performance rows");
     let path_data = serde_json::to_vec(&path_rows).expect("encode path performance rows");
-    let client = &index.data_plane.client;
-    client
-        .upsert_lancedb_typed(
-            VCE_SPACE_ID,
-            index.data_plane.lancedb_binding_id.as_str(),
-            index.content_table.as_str(),
-            ControllerLanceDbInputFormat::JsonRows,
-            content_data,
-            vec![String::from("row_id")],
-        )
+    let engine = index
+        .data_plane
+        .vector_engine()
+        .await
+        .expect("open performance vector engine");
+    engine
+        .vector_upsert(LanceDbUpsertInput {
+            table_name: index.content_table.clone(),
+            input_format: LanceDbInputFormat::JsonRows,
+            data: content_data,
+            key_columns: vec![String::from("row_id")],
+        })
         .await
         .expect("write content performance fragment");
-    client
-        .upsert_lancedb_typed(
-            VCE_SPACE_ID,
-            index.data_plane.lancedb_binding_id.as_str(),
-            index.path_table.as_str(),
-            ControllerLanceDbInputFormat::JsonRows,
-            path_data,
-            vec![String::from("row_id")],
-        )
+    engine
+        .vector_upsert(LanceDbUpsertInput {
+            table_name: index.path_table.clone(),
+            input_format: LanceDbInputFormat::JsonRows,
+            data: path_data,
+            key_columns: vec![String::from("row_id")],
+        })
         .await
         .expect("write path performance fragment");
 }
@@ -335,8 +317,8 @@ fn performance_filter(
     (filter, allowed, updated)
 }
 
-/// Execute and validate one bounded real-controller vector query.
-/// 执行并校验一次有界真实控制器向量查询。
+/// Execute and validate one bounded real-engine vector query.
+/// 执行并校验一次有界真实引擎向量查询。
 ///
 /// `index` and `role` select the table, `filter` freezes the physical scope, and `allowed` plus
 /// `updated` define the exact logical view. Returns elapsed time and the ordered result signature.
@@ -358,20 +340,23 @@ async fn measured_search(
     let started = Instant::now();
     let result = tokio::time::timeout(
         Duration::from_secs(30),
-        index.data_plane.client.search_lancedb_typed(
-            VCE_SPACE_ID,
-            index.data_plane.lancedb_binding_id.as_str(),
-            table_name,
-            query,
-            QUERY_LIMIT,
-            filter,
-            "vector",
-            ControllerLanceDbOutputFormat::JsonRows,
-        ),
+        index
+            .data_plane
+            .vector_engine()
+            .await
+            .expect("open performance vector engine")
+            .vector_search(LanceDbSearchInput {
+                table_name: table_name.to_string(),
+                vector: query,
+                limit: QUERY_LIMIT,
+                filter: filter.to_string(),
+                vector_column: String::from("vector"),
+                output_format: LanceDbOutputFormat::JsonRows,
+            }),
     )
     .await
     .expect("performance query must finish within the original timeout")
-    .expect("real controller performance query succeeds");
+    .expect("real in-process engine performance query succeeds");
     let elapsed = started.elapsed();
     let rows = serde_json::from_slice::<Vec<serde_json::Value>>(&result.data)
         .expect("decode performance query rows");
@@ -510,12 +495,12 @@ fn report_query_profile(
     Duration::from_micros(u64::try_from(single_p95).expect("p95 duration fits u64"))
 }
 
-/// Compact one physical table through the production VCE controller adapter.
-/// 通过生产 VCE 控制器适配器整理一张物理表。
+/// Compact one physical table through the production VCE in-process adapter.
+/// 通过生产 VCE 进程内适配器整理一张物理表。
 ///
 /// `index` and `role` select the exact authorized table. Returns authoritative before/after
-/// statistics and elapsed wall time after the controller operation succeeds.
-/// `index` 与 `role` 选择精确授权表。控制器操作成功后返回权威整理前后统计与墙钟耗时。
+/// statistics and elapsed wall time after the engine operation succeeds.
+/// `index` 与 `role` 选择精确授权表。引擎操作成功后返回权威整理前后统计与墙钟耗时。
 async fn compact_performance_table(
     index: &VceProjectIndex,
     role: VcePhysicalTableRole,
@@ -542,22 +527,21 @@ async fn compact_performance_table(
     tokio::time::timeout(Duration::from_secs(180), async {
         loop {
             match operation.state {
-                ControllerLanceDbCompactionState::Succeeded => break,
-                ControllerLanceDbCompactionState::Failed => {
+                VcePhysicalCompactionState::Succeeded => break,
+                VcePhysicalCompactionState::Failed => {
                     panic!("performance compaction failed: {:?}", operation.error)
                 }
-                ControllerLanceDbCompactionState::Cancelled => {
+                VcePhysicalCompactionState::Cancelled => {
                     panic!("performance compaction was cancelled")
                 }
-                ControllerLanceDbCompactionState::Queued
-                | ControllerLanceDbCompactionState::Running => {
+                VcePhysicalCompactionState::Queued | VcePhysicalCompactionState::Running => {
                     tokio::time::sleep(Duration::from_millis(25)).await;
                     operation = index
                         .physical_compaction_operation(role, &operation_id)
                         .await
                         .expect("query performance compaction operation");
                 }
-                ControllerLanceDbCompactionState::Unspecified => {
+                VcePhysicalCompactionState::Unspecified => {
                     panic!("performance compaction returned an unspecified state")
                 }
             }
@@ -588,12 +572,12 @@ async fn compact_performance_table(
 /// Benchmark both VCE vector tables before and after native physical compaction.
 /// 对原生物理整理前后的两张 VCE 向量表进行基准测试。
 ///
-/// Takes no parameters. Uses one temporary controller/database fixture and performs no provider
+/// Takes no parameters. Uses one temporary database fixture and performs no provider
 /// calls or writes to user storage.
-/// 无参数。仅使用一个临时控制器／数据库夹具，不调用供应商也不写入用户存储。
+/// 无参数。仅使用一个临时数据库夹具，不调用供应商也不写入用户存储。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires a vldb-controller 0.2.4 executable and runs the full performance matrix"]
-async fn real_controller_native_compaction_meets_vce_performance_targets() {
+#[ignore = "runs the full performance matrix; not a per-commit gate"]
+async fn in_process_native_compaction_meets_vce_performance_targets() {
     let temporary = tempfile::tempdir().expect("create VCE performance root");
     let regression_project_root = temporary.path().join("project-regression");
     let scale_project_root = temporary.path().join("project-scale");
@@ -602,55 +586,14 @@ async fn real_controller_native_compaction_meets_vce_performance_targets() {
         .expect("create regression performance project root");
     std::fs::create_dir_all(&scale_project_root).expect("create scale performance project root");
     std::fs::create_dir_all(&data_root).expect("create performance data root");
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("reserve performance controller port");
-    let port = listener
-        .local_addr()
-        .expect("read performance controller port")
-        .port();
-    drop(listener);
-    let executable = test_controller_executable();
-    assert!(executable.is_file(), "performance controller must exist");
-    let endpoint = format!("http://127.0.0.1:{port}");
-    let client = ControllerClient::new(
-        ControllerClientConfig {
-            endpoint: endpoint.clone(),
-            auto_spawn: true,
-            spawn_executable: Some(executable.display().to_string()),
-            spawn_process_mode: ControllerProcessMode::Managed,
-            minimum_uptime_secs: 0,
-            idle_timeout_secs: 1,
-            default_lease_ttl_secs: 30,
-            connect_timeout_secs: 30,
-            startup_timeout_secs: 15,
-            startup_retry_interval_ms: 100,
-            lease_renew_interval_secs: 10,
-        },
-        ClientRegistration {
-            client_name: format!("vce-native-compaction-perf-{}", Uuid::new_v4()),
-            host_kind: String::from("test"),
-            process_id: std::process::id(),
-            process_name: String::from("vce-native-compaction-perf"),
-            lease_ttl_secs: Some(30),
-        },
-    );
-    client
-        .connect()
-        .await
-        .expect("connect performance controller");
-    let controller = ControllerRuntimeHandle::new(
-        client.clone(),
-        ControllerRuntimeMetadata {
-            endpoint,
-            executable: executable.display().to_string(),
-            data_root: data_root.clone(),
-            sqlite_path: data_root.join("unused.sqlite3"),
-            sqlite_binding_id: Uuid::new_v4().to_string(),
-            system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
-            system_statistics_sqlite_binding_id: Uuid::new_v4().to_string(),
-        },
-    );
-    let factory = bootstrap_vce_data_plane(&controller)
+    let host_runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+        data_root: data_root.clone(),
+        sqlite_path: data_root.join("unused.sqlite3"),
+        sqlite_binding_id: Uuid::new_v4().to_string(),
+        system_statistics_sqlite_path: data_root.join("unused-statistics.sqlite3"),
+        system_statistics_sqlite_binding_id: Uuid::new_v4().to_string(),
+    });
+    let factory = bootstrap_vce_data_plane(&host_runtime)
         .await
         .expect("bootstrap performance VCE data plane");
     let regression_index = factory
@@ -806,8 +749,4 @@ async fn real_controller_native_compaction_meets_vce_performance_targets() {
         .shutdown()
         .await
         .expect("close performance VCE bindings");
-    client
-        .shutdown()
-        .await
-        .expect("stop performance controller");
 }

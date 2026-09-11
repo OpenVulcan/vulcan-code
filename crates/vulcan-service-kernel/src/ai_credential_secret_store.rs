@@ -1,5 +1,5 @@
-//! Controller-backed SQLite storage for public AI credentials.
-//! 公共 AI 凭据的 Controller 托管 SQLite 存储。
+//! In-process SQLite storage for public AI credentials.
+//! 公共 AI 凭据的进程内 SQLite 存储。
 
 use async_trait::async_trait;
 use std::collections::BTreeSet;
@@ -9,7 +9,7 @@ use vulcan_provider_adapters::{
     CredentialSecretResolver, CredentialSecretStore, MiniMaxRegion, OAuthTokenSet,
 };
 use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle,
+    data_plane::HostRuntimeHandle,
     workspace_store::{
         AiCredentialSecretRecord, create_ai_credential_secret_record,
         delete_ai_credential_secret_record, load_ai_credential_secret_record,
@@ -17,13 +17,13 @@ use vulcan_workspace_store::{
     },
 };
 
-/// Stores all public AI credentials in Controller-backed SQLite.
-/// 将全部公共 AI 凭据保存到 Controller 托管 SQLite。
+/// Stores all public AI credentials in host-owned in-process SQLite.
+/// 将全部公共 AI 凭据保存到宿主持有的进程内 SQLite。
 #[derive(Clone)]
 pub(crate) struct SqliteAiCredentialSecretStore {
     /// Shared application data-plane handle.
     /// 共享应用数据平面句柄。
-    controller: ControllerRuntimeHandle,
+    controller: HostRuntimeHandle,
 }
 
 impl SqliteAiCredentialSecretStore {
@@ -39,7 +39,7 @@ impl SqliteAiCredentialSecretStore {
     /// 返回值
     /// One store bound to the current application SQLite binding.
     /// 返回绑定当前应用 SQLite 的仓库。
-    pub(crate) fn new(controller: ControllerRuntimeHandle) -> Self {
+    pub(crate) fn new(controller: HostRuntimeHandle) -> Self {
         Self { controller }
     }
 }

@@ -147,9 +147,7 @@ use vulcan_workbench_model::{
     subagent_close_agent_projection_from_tool_metadata,
     subagent_feedback_execution_id_from_tool_metadata, subagent_navigation_task_label,
 };
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
-};
+use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::WorkspaceSnapshot};
 
 mod agent_skills_watcher;
 mod agent_stream;
@@ -435,6 +433,7 @@ pub fn create_service_bridge_state(
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,
+        host_database_providers: None,
         cached_luaskills_catalog: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
@@ -593,23 +592,49 @@ pub fn service_prepare_for_app_shutdown(
 pub fn service_resume_after_failed_app_shutdown(
     state: &SharedServiceBridgeState,
 ) -> Result<(), String> {
-    let (session_runtime_registry, vce_runtime) = {
+    let (session_runtime_registry, service_runtime, vce_runtime) = {
         let guard = state.lock().map_err(|_| {
             String::from("The service bridge state is locked during shutdown recovery.")
         })?;
         (
             Arc::clone(&guard.session_runtime_registry),
+            guard.service_runtime.clone(),
             guard.vce_runtime.clone(),
         )
     };
+    if let Some(manager) = vce_runtime {
+        let reconcile_projects = manager.resume_after_failed_shutdown();
+        if reconcile_projects {
+            // A completed VCE teardown removed every runtime and deactivated its HostAI registration.
+            // Reconcile the authoritative workspace snapshot before the still-open window accepts work.
+            // 已完成的 VCE 拆卸移除了全部运行时并注销其 HostAI 注册。仍打开的窗口重新接纳工作前，
+            // 必须按权威工作区快照完成协调。
+            let service_runtime = service_runtime.ok_or_else(|| {
+                String::from("VCE shutdown recovery requires the retained service runtime.")
+            })?;
+            service_runtime.block_on(manager.restore_after_failed_shutdown())?;
+            let report = service_runtime.block_on(vce::reconcile_vce_projects(state))?;
+            if !report.failures.is_empty() {
+                return Err(format!(
+                    "VCE shutdown recovery failed for projects: {}",
+                    report
+                        .failures
+                        .into_iter()
+                        .map(|(project_id, error)| format!("{project_id}: {error}"))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ));
+            }
+        }
+    }
+    // Session admission is the final recovery publication point. Opening it before VCE restoration
+    // would let a new root turn observe a partially recovered service graph, and a VCE failure would
+    // leave root turns enabled even though this function returned an error.
+    // 会话准入是恢复流程最后的发布点。若在 VCE 恢复前开放，新根回合会观察到部分恢复的服务图；
+    // VCE 恢复失败时，还会在本函数返回错误后错误地保持根回合可用。
     session_runtime_registry
         .resume_after_failed_shutdown()
         .map_err(|error| error.to_string())?;
-    if let Some(manager) = vce_runtime {
-        // Recovery reopens admission only; removed project handles are restored lazily, not indexed.
-        // 恢复仅重开准入；已移除项目句柄按需恢复，不在恢复流程中索引。
-        manager.resume_after_failed_shutdown();
-    }
     Ok(())
 }
 

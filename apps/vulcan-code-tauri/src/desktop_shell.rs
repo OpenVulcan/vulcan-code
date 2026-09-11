@@ -202,14 +202,25 @@ pub fn run() {
                     Ok(_) => {
                         shutdown_worker_close_allowed.store(true, Ordering::Release);
                         if let Err(error) = shutdown_window.close() {
+                            // Reopen admission because the drained process remains alive after the close failure.
+                            // 关闭失败后已排空的进程仍然存活，因此重新开放准入。
+                            let recovery_failure =
+                                service_resume_after_failed_app_shutdown(&shutdown_worker_state)
+                                    .err();
                             shutdown_worker_close_allowed.store(false, Ordering::Release);
                             shutdown_worker_in_progress.store(false, Ordering::Release);
                             shutdown_worker_force_available.store(true, Ordering::Release);
+                            let failure = match recovery_failure {
+                                Some(recovery_error) => format!(
+                                    "{error} Shutdown admission recovery also failed: {recovery_error}"
+                                ),
+                                None => error.to_string(),
+                            };
                             eprintln!(
-                                "[vulcan-code-tauri] closing drained app window failed: {error}"
+                                "[vulcan-code-tauri] closing drained app window failed: {failure}"
                             );
                             let _ = shutdown_window
-                                .emit("vulcan://shutdown-persist-failed", error.to_string());
+                                .emit("vulcan://shutdown-persist-failed", failure);
                         }
                     }
                     Err(error) => {

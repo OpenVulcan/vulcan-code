@@ -9,16 +9,17 @@ use super::super::models::{
 use super::super::schema::KNOWLEDGE_SCHEMA_VERSION;
 use super::{
     KNOWLEDGE_PACKAGE_INSPECTION_TEMP_PREFIX, KnowledgeBaseRuntime, KnowledgeManifest, LibraryRow,
-    MAX_KNOWLEDGE_PACKAGE_JSON_BYTES, int, library_name_key, library_summary_from_row,
+    MAX_KNOWLEDGE_PACKAGE_JSON_BYTES, library_name_key, library_summary_from_row,
     metadata_is_link_or_reparse, nonnegative_u64,
     package_archive::{
         PreparedKnowledgePackage, canonical_existing_directory, canonical_knowledge_package_path,
         copy_prepared_derived_artifacts, export_knowledge_package_files, prepare_knowledge_package,
     },
-    persist_tempfile_atomically, text, unix_epoch_millis, validate_library_id,
-    validate_library_name,
+    persist_tempfile_atomically, unix_epoch_millis, validate_library_id, validate_library_name,
 };
-use crate::data_plane::APP_SPACE_ID;
+use super::{int, text};
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use crate::runtime_assets;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -26,7 +27,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
-use vldb_controller_client::ControllerSqliteValue;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Version of the crash-recovery journal used by explicit package replacement.
 /// 显式知识库包覆盖使用的崩溃恢复日志版本。
@@ -118,8 +119,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `self` supplies the exact knowledge root, registry and controller bindings for startup recovery.
-    /// `self` 提供启动恢复使用的精确知识库根目录、注册表与控制器绑定。
+    /// `self` supplies the exact knowledge root, registry and storage bindings for startup recovery.
+    /// `self` 提供启动恢复使用的精确知识库根目录、注册表与存储绑定。
     ///
     /// # Returns
     /// 返回值
@@ -388,32 +389,28 @@ impl KnowledgeBaseRuntime {
                 "知识库注册计数与 SQLite 权威内容不一致，拒绝导出。",
             ));
         }
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "PRAGMA wal_checkpoint(TRUNCATE);",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("导出前收口知识库 SQLite 日志失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "PRAGMA wal_checkpoint(TRUNCATE);",
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("导出前收口知识库 SQLite 日志失败：{error}"))?;
         if display_path
             .try_exists()
             .map_err(|error| format!("检查知识库显示库是否存在失败：{error}"))?
         {
-            let (display_space_id, display_binding_id) =
+            let (_display_space_id, _display_binding_id) =
                 self.ensure_display_binding(library_id).await?;
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    &display_space_id,
-                    &display_binding_id,
-                    "PRAGMA wal_checkpoint(TRUNCATE);",
-                    Vec::new(),
-                )
-                .await
-                .map_err(|error| format!("导出前收口知识库显示库日志失败：{error}"))?;
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding_id)?,
+                "PRAGMA wal_checkpoint(TRUNCATE);",
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("导出前收口知识库显示库日志失败：{error}"))?;
         }
         self.release_library_binding(library_id).await?;
         let export_result = export_knowledge_package_files(
@@ -595,17 +592,15 @@ impl KnowledgeBaseRuntime {
         }
         let canonical_archive = canonical_knowledge_package_path(archive_path)?;
         let prepared = prepare_knowledge_package(&canonical_archive, &self.knowledge_root())?;
-        let (space_id, binding_id) = self.ensure_library_binding(target_library_id).await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "PRAGMA wal_checkpoint(TRUNCATE);",
-                Vec::new(),
-            )
-            .await
-            .map_err(|error| format!("覆盖前收口知识库 SQLite 日志失败：{error}"))?;
+        let (_space_id, binding_id) = self.ensure_library_binding(target_library_id).await?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "PRAGMA wal_checkpoint(TRUNCATE);",
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("覆盖前收口知识库 SQLite 日志失败：{error}"))?;
         // stagingLibraryId owns a fully copied and validated sibling directory before the old target moves.
         // stagingLibraryId 在旧目标移动前持有一个已完整复制并校验的同级暂存目录。
         let staging_library_id = Uuid::new_v4().to_string();
@@ -837,14 +832,15 @@ impl KnowledgeBaseRuntime {
         name: &str,
         excluded_library_id: Option<&str>,
     ) -> Result<Option<KnowledgeLibrarySummary>, String> {
-        let (predicate, params) = if let Some(excluded_library_id) = excluded_library_id {
-            (
-                "WHERE name_key = ? AND id <> ?",
-                vec![text(library_name_key(name)), text(excluded_library_id)],
-            )
-        } else {
-            ("WHERE name_key = ?", vec![text(library_name_key(name))])
-        };
+        let (predicate, params): (&str, &[SqliteValue]) =
+            if let Some(excluded_library_id) = excluded_library_id {
+                (
+                    "WHERE name_key = ? AND id <> ?",
+                    &[text(library_name_key(name)), text(excluded_library_id)],
+                )
+            } else {
+                ("WHERE name_key = ?", &[text(library_name_key(name))])
+            };
         let sql = format!(
             r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
                       index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
@@ -900,19 +896,17 @@ impl KnowledgeBaseRuntime {
             .await?;
         self.verify_sqlite_quick_check(&space_id, &binding_id)
             .await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "UPDATE knowledge_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
-                vec![
-                    text(target_library_id),
-                    text(&prepared.source_manifest.library_id),
-                ],
-            )
-            .await
-            .map_err(|error| format!("重写导入知识库内部标识失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "UPDATE knowledge_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
+            vec![
+                text(target_library_id),
+                text(&prepared.source_manifest.library_id),
+            ],
+        )
+        .await
+        .map_err(|error| format!("重写导入知识库内部标识失败：{error}"))?;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
@@ -920,19 +914,17 @@ impl KnowledgeBaseRuntime {
             let (display_space_id, display_binding_id) = self
                 .activate_display_binding(target_library_id, false)
                 .await?;
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    &display_space_id,
-                    &display_binding_id,
-                    "UPDATE display_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
-                    vec![
-                        text(target_library_id),
-                        text(&prepared.source_manifest.library_id),
-                    ],
-                )
-                .await
-                .map_err(|error| format!("重写导入显示库内部标识失败：{error}"))?;
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding_id)?,
+                "UPDATE display_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
+                vec![
+                    text(target_library_id),
+                    text(&prepared.source_manifest.library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("重写导入显示库内部标识失败：{error}"))?;
             self.validate_display_bound_metadata(
                 target_library_id,
                 &display_space_id,
@@ -980,16 +972,14 @@ impl KnowledgeBaseRuntime {
         let (space_id, binding_id) = self
             .activate_library_binding(target_library_id, false)
             .await?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                &space_id,
-                &binding_id,
-                "UPDATE knowledge_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
-                vec![text(target_library_id), text(staging_library_id)],
-            )
-            .await
-            .map_err(|error| format!("提交覆盖知识库内部标识失败：{error}"))?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            "UPDATE knowledge_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
+            vec![text(target_library_id), text(staging_library_id)],
+        )
+        .await
+        .map_err(|error| format!("提交覆盖知识库内部标识失败：{error}"))?;
         self.verify_sqlite_quick_check(&space_id, &binding_id)
             .await?;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
@@ -999,16 +989,14 @@ impl KnowledgeBaseRuntime {
             let (display_space_id, display_binding_id) = self
                 .activate_display_binding(target_library_id, false)
                 .await?;
-            self.controller
-                .client
-                .execute_sqlite_script_typed(
-                    &display_space_id,
-                    &display_binding_id,
-                    "UPDATE display_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
-                    vec![text(target_library_id), text(staging_library_id)],
-                )
-                .await
-                .map_err(|error| format!("提交覆盖显示库内部标识失败：{error}"))?;
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding_id)?,
+                "UPDATE display_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
+                vec![text(target_library_id), text(staging_library_id)],
+            )
+            .await
+            .map_err(|error| format!("提交覆盖显示库内部标识失败：{error}"))?;
             self.validate_display_bound_metadata(
                 target_library_id,
                 &display_space_id,
@@ -1073,32 +1061,30 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化导入知识库配置失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_batch_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                r#"INSERT INTO knowledge_libraries(
+        local_sql::execute_batch_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            r#"INSERT INTO knowledge_libraries(
                     id, name, name_key, description, lifecycle_state, document_count,
                     chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
                 ) VALUES (?, ?, ?, ?, 'active', ?, ?, 'ready', ?, ?, ?);"#,
-                vec![vec![
-                    text(library_id),
-                    text(name),
-                    text(library_name_key(name)),
-                    text(&package.description),
-                    int(checked_package_count(
-                        package.document_count,
-                        "document_count",
-                    )?),
-                    int(checked_package_count(package.chunk_count, "chunk_count")?),
-                    text(&settings_json),
-                    int(now),
-                    int(now),
-                ]],
-            )
-            .await
-            .map_err(|error| format!("注册导入知识库失败：{error}"))?;
+            vec![vec![
+                text(library_id),
+                text(name),
+                text(library_name_key(name)),
+                text(&package.description),
+                int(checked_package_count(
+                    package.document_count,
+                    "document_count",
+                )?),
+                int(checked_package_count(package.chunk_count, "chunk_count")?),
+                text(&settings_json),
+                int(now),
+                int(now),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("注册导入知识库失败：{error}"))?;
         Ok(())
     }
 
@@ -1126,32 +1112,30 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化被覆盖知识库配置失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                r#"UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            r#"UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?,
                     lifecycle_state = 'active', document_count = ?, chunk_count = ?,
                     settings_json = ?, index_status = 'ready',
                     last_completed_import_at_ms = NULL, updated_at_ms = ?
                     WHERE id = ?;"#,
-                vec![
-                    text(name),
-                    text(library_name_key(name)),
-                    text(&package.description),
-                    int(checked_package_count(
-                        package.document_count,
-                        "document_count",
-                    )?),
-                    int(checked_package_count(package.chunk_count, "chunk_count")?),
-                    text(&settings_json),
-                    int(now),
-                    text(library_id),
-                ],
-            )
-            .await
-            .map_err(|error| format!("更新被覆盖知识库注册记录失败：{error}"))?;
+            vec![
+                text(name),
+                text(library_name_key(name)),
+                text(&package.description),
+                int(checked_package_count(
+                    package.document_count,
+                    "document_count",
+                )?),
+                int(checked_package_count(package.chunk_count, "chunk_count")?),
+                text(&settings_json),
+                int(now),
+                text(library_id),
+            ],
+        )
+        .await
+        .map_err(|error| format!("更新被覆盖知识库注册记录失败：{error}"))?;
         Ok(())
     }
 
@@ -1202,41 +1186,39 @@ impl KnowledgeBaseRuntime {
         previous: &KnowledgeLibrarySummary,
     ) -> Result<(), String> {
         validate_library_id(&previous.id)?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
-                r#"UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?,
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            r#"UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?,
                     lifecycle_state = ?, document_count = ?, chunk_count = ?, index_status = ?,
                     settings_json = ?,
                     last_completed_import_at_ms = ?, created_at_ms = ?, updated_at_ms = ?
                     WHERE id = ?;"#,
-                vec![
-                    text(&previous.name),
-                    text(library_name_key(&previous.name)),
-                    text(&previous.description),
-                    text(&previous.lifecycle_state),
-                    int(checked_package_count(
-                        previous.document_count,
-                        "document_count",
-                    )?),
-                    int(checked_package_count(previous.chunk_count, "chunk_count")?),
-                    text(&previous.index_status),
-                    text(
-                        &serde_json::to_string(&previous.settings)
-                            .map_err(|error| format!("序列化恢复知识库配置失败：{error}"))?,
-                    ),
-                    previous
-                        .last_completed_import_at_ms
-                        .map_or(ControllerSqliteValue::Null, int),
-                    int(previous.created_at_ms),
-                    int(previous.updated_at_ms),
-                    text(&previous.id),
-                ],
-            )
-            .await
-            .map_err(|error| format!("恢复原知识库注册记录失败：{error}"))?;
+            vec![
+                text(&previous.name),
+                text(library_name_key(&previous.name)),
+                text(&previous.description),
+                text(&previous.lifecycle_state),
+                int(checked_package_count(
+                    previous.document_count,
+                    "document_count",
+                )?),
+                int(checked_package_count(previous.chunk_count, "chunk_count")?),
+                text(&previous.index_status),
+                text(
+                    &serde_json::to_string(&previous.settings)
+                        .map_err(|error| format!("序列化恢复知识库配置失败：{error}"))?,
+                ),
+                previous
+                    .last_completed_import_at_ms
+                    .map_or(SqliteValue::Null, int),
+                int(previous.created_at_ms),
+                int(previous.updated_at_ms),
+                text(&previous.id),
+            ],
+        )
+        .await
+        .map_err(|error| format!("恢复原知识库注册记录失败：{error}"))?;
         let restored = self.get_library(&previous.id).await?;
         if restored != *previous {
             return Err(String::from("恢复后的知识库注册记录与旧记录不一致。"));

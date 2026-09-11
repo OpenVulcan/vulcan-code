@@ -3180,7 +3180,7 @@ pub(super) async fn service_read_knowledge_library_document(
     document_id: String,
     corpus: Option<String>,
 ) -> Result<Value, String> {
-    // runtime is the retained controller-backed knowledge runtime used by both corpus layers.
+    // runtime is the retained host-owned knowledge runtime used by both corpus layers.
     // runtime 是两个内容层共同使用的持久控制器知识库运行时。
     let runtime = retained_knowledge_runtime(&state)?;
     // document is read only from the explicitly requested corpus; unknown values fail closed.

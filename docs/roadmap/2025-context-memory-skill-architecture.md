@@ -488,7 +488,7 @@ pub fn split_system_prompt_for_cache(system_prompt: &str) -> Vec<SystemPromptBlo
 **已有基础设施**：
 - `memory-specialist` Agent + `memory.recall` / `memory.ready` Signal
 - `vulcan-workmem` LuaSkill
-- SQLite + LanceDB 存储（通过 `vldb-controller`）
+- SQLite + LanceDB 存储（进程内引擎）
 - 项目表 `projects`、会话表 `sessions` 已存在
 
 **缺失**：

@@ -5,13 +5,13 @@ use super::super::models::{
     KnowledgeDisplayIndexStatus, KnowledgeLibrarySummary, KnowledgeModelSnapshot,
     KnowledgeVectorIndexStatus,
 };
-use super::{
-    APP_SPACE_ID, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT, int, text, unix_epoch_millis,
-    validate_generation_id,
-};
-use vldb_controller_client::{
-    ControllerLanceDbColumnDef, ControllerLanceDbColumnType, ControllerLanceDbInputFormat,
-    ControllerLanceDbOutputFormat,
+use super::{KnowledgeBaseRuntime, MAX_SEARCH_LIMIT, unix_epoch_millis, validate_generation_id};
+use super::{int, text};
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
+use vulcan_lancedb_engine::types::{
+    LanceDbColumnDef, LanceDbColumnType, LanceDbCreateTableInput, LanceDbDropTableInput,
+    LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput, LanceDbUpsertInput,
 };
 
 impl KnowledgeBaseRuntime {
@@ -66,54 +66,55 @@ impl KnowledgeBaseRuntime {
             .vector_index
             .indexed_dimension;
         self.ensure_vector_storage(library_id).await?;
-        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        let (_space_id, binding_id) = self.vector_binding_identity(library_id)?;
         let table_name = vector_table_name(generation)?;
         // A changed dimension cannot reuse the old Lance schema; same-dimension retries remain upserts.
         // 维度变化不能复用旧 Lance 表结构；同维度重试仍使用 upsert 保留可恢复性。
+        // One engine acquisition serves both the optional drop and the create below, so the cached
+        // engine is looked up once per operation rather than once per statement.
+        // 一次引擎获取同时服务于下方的可选删除与创建，因此每个操作只查找一次已缓存的引擎。
+        let vector_engine = self.resolve_vector_engine(&binding_id).await?;
         let drop_error = if previous_dimension != Some(dimension) {
-            self.controller
-                .client
-                .drop_lancedb_table(&space_id, &binding_id, &table_name)
+            vector_engine
+                .drop_table(LanceDbDropTableInput {
+                    table_name: table_name.clone(),
+                })
                 .await
                 .err()
         } else {
             None
         };
-        let create_result = self
-            .controller
-            .client
-            .create_lancedb_table_typed(
-                &space_id,
-                &binding_id,
-                &table_name,
-                vec![
-                    ControllerLanceDbColumnDef {
+        let create_result = vector_engine
+            .create_table(LanceDbCreateTableInput {
+                table_name: table_name.clone(),
+                columns: vec![
+                    LanceDbColumnDef {
                         name: String::from("id"),
-                        column_type: ControllerLanceDbColumnType::String,
+                        column_type: LanceDbColumnType::String,
                         vector_dim: 0,
                         nullable: false,
                     },
-                    ControllerLanceDbColumnDef {
+                    LanceDbColumnDef {
                         name: String::from("display_chunk_id"),
-                        column_type: ControllerLanceDbColumnType::String,
+                        column_type: LanceDbColumnType::String,
                         vector_dim: 0,
                         nullable: false,
                     },
-                    ControllerLanceDbColumnDef {
+                    LanceDbColumnDef {
                         name: String::from("generation"),
-                        column_type: ControllerLanceDbColumnType::String,
+                        column_type: LanceDbColumnType::String,
                         vector_dim: 0,
                         nullable: false,
                     },
-                    ControllerLanceDbColumnDef {
+                    LanceDbColumnDef {
                         name: String::from("vector"),
-                        column_type: ControllerLanceDbColumnType::VectorFloat32,
+                        column_type: LanceDbColumnType::VectorFloat32,
                         vector_dim: dimension,
                         nullable: false,
                     },
                 ],
-                true,
-            )
+                overwrite_if_exists: true,
+            })
             .await;
         if let Err(error) = create_result {
             return Err(match drop_error {
@@ -139,13 +140,13 @@ impl KnowledgeBaseRuntime {
     /// `dimension` 是配置的代次向量列非零维度。
     /// `table_name` is the validated generation-scoped LanceDB table identity.
     /// `table_name` 是待校验的代次级 LanceDB 表身份。
-    /// `rows` is the embedding JSON rows required by the existing controller contract.
-    /// `rows` 是既有控制器契约要求的 Embedding JSON 行。
+    /// `rows` is the embedding JSON rows required by the in-process engine contract.
+    /// `rows` 是进程内引擎契约要求的 Embedding JSON 行。
     ///
     /// # Returns
     /// 返回值
-    /// Returns the controller-reported input row count, or a validation/write error.
-    /// 返回控制器报告的输入行数，或校验/写入错误。
+    /// Returns the engine-reported input row count, or a validation/write error.
+    /// 返回引擎报告的输入行数，或校验/写入错误。
     pub async fn write_vector_rows(
         &self,
         library_id: &str,
@@ -177,27 +178,36 @@ impl KnowledgeBaseRuntime {
                 return Err(String::from("向量写入行代次不一致"));
             }
         }
-        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        // The binding is re-established here rather than assumed. In-memory activation is per runtime, so a
+        // process that has just restarted has an empty activation set even though the library, the settings row
+        // and the LanceDB directory all persisted. Without this, a resumed write or a hybrid search would ask
+        // for a named binding the new process never registered and fail on intact storage.
+        // 此处重新建立绑定而不是假定它已存在。内存中的激活状态是按运行时独立的，因此刚重启的进程其激活集合为空，
+        // 即便资料库、设置行与 LanceDB 目录都已持久化。没有这一步，续写或混合检索会去索取一个本进程从未登记的
+        // 具名绑定，从而在一块完好的存储上失败。
+        // Creation stays disallowed: this call writes into a table `prepare_vector_generation` created, so a
+        // missing directory here is a real inconsistency and must be reported rather than created.
+        // 仍不允许创建：本次调用写入的是 `prepare_vector_generation` 已创建的表，因此此处目录缺失是真实的不一致，
+        // 必须报出而不是被创建出来。
+        let (_space_id, binding_id) = self.activate_vector_binding(library_id, false).await?;
         let data = serde_json::to_vec(rows)
             .map_err(|error| format!("编码 LanceDB 向量行失败：{error}"))?;
         let result = self
-            .controller
-            .client
-            .upsert_lancedb_typed(
-                &space_id,
-                &binding_id,
-                table_name,
-                ControllerLanceDbInputFormat::JsonRows,
+            .resolve_vector_engine(&binding_id)
+            .await?
+            .vector_upsert(LanceDbUpsertInput {
+                table_name: String::from(table_name),
+                input_format: LanceDbInputFormat::JsonRows,
                 data,
-                vec![String::from("id")],
-            )
+                key_columns: vec![String::from("id")],
+            })
             .await
             .map_err(|error| format!("写入知识库 LanceDB 向量批次失败：{error}"))?;
         Ok(result.input_rows)
     }
 
-    /// Searches one active vector generation and returns controller JSON rows.
-    /// 检索一份活动向量代次并返回控制器 JSON 行。
+    /// Searches one active vector generation and returns engine JSON rows.
+    /// 检索一份活动向量代次并返回引擎 JSON 行。
     ///
     /// # Parameters
     /// 参数
@@ -214,8 +224,8 @@ impl KnowledgeBaseRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the decoded controller result rows, or a validation/query error.
-    /// 返回解码后的控制器结果行，或校验/查询错误。
+    /// Returns the decoded engine result rows, or a validation/query error.
+    /// 返回解码后的引擎结果行，或校验/查询错误。
     pub async fn search_vector_rows(
         &self,
         library_id: &str,
@@ -229,20 +239,27 @@ impl KnowledgeBaseRuntime {
         if vector.is_empty() {
             return Err(String::from("向量查询不能为空"));
         }
-        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        // This is the production hybrid-search path's read, and it must stand on its own. Activation is per
+        // runtime, so after a restart the persisted `Ready` status and active generation are present while the
+        // named binding is not; relying on an earlier call in the same process to have registered it is exactly
+        // what made hybrid search fail on a restarted, fully intact library.
+        // 这是生产混合检索路径的读取，必须自足。激活状态按运行时独立，因此重启后持久化的 `Ready` 状态与活动代次
+        // 都在，而具名绑定不在；指望本进程中较早的某次调用已把它登记好，正是让混合检索在一个已重启且完好的资料库上
+        // 失败的原因。
+        // Creation is disallowed because a search must never bring a backend artifact into existence.
+        // 不允许创建：检索绝不应让一个后端产物从无到有。
+        let (_space_id, binding_id) = self.activate_vector_binding(library_id, false).await?;
         let result = self
-            .controller
-            .client
-            .search_lancedb_typed(
-                &space_id,
-                &binding_id,
-                table_name,
+            .resolve_vector_engine(&binding_id)
+            .await?
+            .vector_search(LanceDbSearchInput {
+                table_name: String::from(table_name),
                 vector,
-                limit.clamp(1, MAX_SEARCH_LIMIT),
-                format!("generation = '{generation}'"),
-                "vector",
-                ControllerLanceDbOutputFormat::JsonRows,
-            )
+                limit: limit.clamp(1, MAX_SEARCH_LIMIT),
+                filter: format!("generation = '{generation}'"),
+                vector_column: String::from("vector"),
+                output_format: LanceDbOutputFormat::JsonRows,
+            })
             .await
             .map_err(|error| format!("检索知识库 LanceDB 向量失败：{error}"))?;
         serde_json::from_slice(&result.data)
@@ -309,19 +326,16 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化向量索引成功状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&settings_json),
                     int(unix_epoch_millis()?),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存向量索引成功状态失败：{error}"))?;
         self.get_library(library_id).await
     }
@@ -357,19 +371,16 @@ impl KnowledgeBaseRuntime {
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| format!("序列化向量索引状态失败：{error}"))?;
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![
                     text(&settings_json),
                     int(unix_epoch_millis()?),
                     text(library_id),
                 ],
-            )
-            .await
+            ).await
             .map_err(|error| format!("保存向量索引生命周期状态失败：{error}"))?;
         self.get_library(library_id).await
     }

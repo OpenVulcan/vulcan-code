@@ -5,9 +5,7 @@ use std::collections::BTreeSet;
 use vulcan_workbench_model::{
     SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary,
 };
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
-};
+use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::WorkspaceSnapshot};
 
 use super::{
     SharedServiceBridgeState, current_unix_millis_value, is_active_session_run_phase,

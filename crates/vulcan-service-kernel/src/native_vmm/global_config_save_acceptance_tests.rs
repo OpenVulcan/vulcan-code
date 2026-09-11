@@ -4,7 +4,7 @@
 use super::*;
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use crate::tests::test_support::{
-    TestControllerRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+    TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
 };
 use futures_util::FutureExt;
 use vulcan_agent_runtime::agent_runtime::vmm_hooks::VmmHookConfigSnapshot;
@@ -246,10 +246,10 @@ pub(super) async fn verify(
     let session_id = uuid::Uuid::new_v4();
     // This guard owns all V1/configuration files until the attached controller has shut down.
     // 此守卫持有全部 V1 及配置文件，直至附加控制器关闭。
-    let root = TestControllerRuntimeRoot::new(session_id);
+    let root = TestHostRuntimeRoot::new(session_id);
     // Retain the actual client so cleanup runs even when an acceptance assertion panics.
     // 保留真实客户端，使验收断言恐慌时仍执行清理。
-    let (controller_client, controller_runtime) = root.attached_controller_runtime_handle().await;
+    let controller_runtime = root.attached_host_runtime_handle().await;
     // Catch only to release the managed process; assertion failures are rethrown below.
     // 仅为释放托管进程而捕获；断言失败将在下方重新抛出。
     let outcome = std::panic::AssertUnwindSafe(async {
@@ -637,10 +637,6 @@ pub(super) async fn verify(
     })
     .catch_unwind()
     .await;
-    controller_client
-        .shutdown()
-        .await
-        .expect("release save-test controller");
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

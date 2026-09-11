@@ -2,7 +2,7 @@
 //! 原生 VCE 集成的项目生命周期与功能入口管理器。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -184,6 +184,9 @@ pub(crate) struct VceRuntimeManager {
     /// Whether runtime teardown has removed project handles and requires reconciliation on resume.
     /// 运行时拆卸是否已移除项目句柄并要求恢复时重新协调。
     teardown_started: Arc<AtomicBool>,
+    /// Exact formerly-active projects retained until the application window actually closes.
+    /// 在应用窗口实际关闭前保留的精确原活动项目。
+    shutdown_recovery_projects: Arc<Mutex<BTreeMap<String, VceShutdownRecoveryProject>>>,
     /// Exact process owner of newly admitted durable jobs.
     /// 新准入持久作业的精确进程所有者。
     job_owner_run_id: String,
@@ -193,6 +196,27 @@ pub(crate) struct VceRuntimeManager {
     /// Weak host watcher registration avoids an ownership cycle with watcher tasks.
     /// 弱宿主监听注册避免与监听任务形成所有权环。
     watcher: Arc<std::sync::Mutex<Option<super::watcher::VceWeakWatcherService>>>,
+}
+
+/// Immutable activation inputs needed only when a drained application window fails to close.
+/// 仅在已排空应用窗口关闭失败时需要的不可变激活输入。
+#[derive(Clone)]
+struct VceShutdownRecoveryProject {
+    /// Stable workbench project identity.
+    /// 稳定工作台项目身份。
+    project_id: String,
+    /// Canonical source root owned by the stopped runtime.
+    /// 已停止运行时持有的规范源码根目录。
+    project_root: PathBuf,
+    /// Latest complete admitted project policy.
+    /// 最近一次完整准入的项目策略。
+    settings: ProjectVceSettings,
+    /// Exact physical embedding dimension.
+    /// 精确物理向量维度。
+    embedding_dimension: u32,
+    /// Exact physical embedding fingerprint.
+    /// 精确物理向量指纹。
+    embedding_physical_fingerprint: String,
 }
 
 /// Immutable admission facts derived only from a restored or successfully published checkpoint.
@@ -596,6 +620,7 @@ impl VceRuntimeManager {
             project_lifecycle_gates: Arc::new(Mutex::new(BTreeMap::new())),
             shutting_down: Arc::new(AtomicBool::new(false)),
             teardown_started: Arc::new(AtomicBool::new(false)),
+            shutdown_recovery_projects: Arc::new(Mutex::new(BTreeMap::new())),
             job_owner_run_id: Uuid::new_v4().to_string(),
             job_writer_budget: Arc::new(tokio::sync::Semaphore::new(1)),
             watcher: Arc::new(std::sync::Mutex::new(None)),
@@ -698,7 +723,41 @@ impl VceRuntimeManager {
     /// 当拆卸已经开始且必须重新协调持久化项目时返回 `true`。
     pub(crate) fn resume_after_failed_shutdown(&self) -> bool {
         self.shutting_down.store(false, Ordering::Release);
-        self.teardown_started.swap(false, Ordering::AcqRel)
+        self.teardown_started.load(Ordering::Acquire)
+    }
+
+    /// Restores exactly the project runtimes removed by a completed shutdown teardown.
+    /// 精确恢复已完成关闭拆卸所移除的项目运行时。
+    ///
+    /// Takes no parameters. Returns only after every retained runtime is active again; failed
+    /// restoration keeps the complete descriptor set for another explicit recovery attempt.
+    /// 无参数。仅在全部保留运行时重新激活后返回；恢复失败时保留完整描述集合，供再次明确恢复。
+    pub(crate) async fn restore_after_failed_shutdown(&self) -> Result<(), String> {
+        if !self.teardown_started.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let recoveries = self
+            .shutdown_recovery_projects
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for recovery in recoveries {
+            self.enable_project(
+                &recovery.project_id,
+                &recovery.project_root,
+                recovery.settings,
+                recovery.embedding_dimension,
+                &recovery.embedding_physical_fingerprint,
+                false,
+            )
+            .await
+            .map_err(String::from)?;
+        }
+        self.shutdown_recovery_projects.lock().await.clear();
+        self.teardown_started.store(false, Ordering::Release);
+        Ok(())
     }
 
     /// Activate one project and restore compatible metadata without scanning or refreshing.
@@ -1681,10 +1740,49 @@ impl VceRuntimeManager {
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
         self.begin_shutdown();
         let _manager_lifecycle = self.lifecycle_gate.write().await;
-        self.teardown_started.store(true, Ordering::Release);
+        // Capture complete restart inputs before removing or stopping any runtime. The desktop shell
+        // may keep this process alive when the final native window close fails.
+        // 在移除或停止任何运行时之前捕获完整重启输入。最终原生窗口关闭失败时，桌面壳可能继续保留本进程。
+        let runtime_snapshot = self
+            .projects
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut recovery_snapshot = Vec::with_capacity(runtime_snapshot.len());
+        for runtime in &runtime_snapshot {
+            let settings = runtime
+                .latest_settings
+                .read()
+                .map_err(|_| String::from("VCE project policy lock is poisoned"))?
+                .clone();
+            let embedding_space = runtime.ai.embedding_space();
+            let embedding_dimension = u32::try_from(embedding_space.dimension)
+                .map_err(|_| String::from("VCE embedding dimension exceeds the host limit"))?;
+            let embedding_physical_fingerprint = embedding_space
+                .physical_fingerprint
+                .clone()
+                .ok_or_else(|| String::from("VCE runtime is missing its physical fingerprint"))?;
+            recovery_snapshot.push(VceShutdownRecoveryProject {
+                project_id: runtime.project_id.clone(),
+                project_root: runtime.source.project_root().to_path_buf(),
+                settings,
+                embedding_dimension,
+                embedding_physical_fingerprint,
+            });
+        }
         let runtimes = std::mem::take(&mut *self.projects.write().await)
             .into_values()
             .collect::<Vec<_>>();
+        {
+            let mut recoveries = self.shutdown_recovery_projects.lock().await;
+            for recovery in recovery_snapshot {
+                recoveries.insert(recovery.project_id.clone(), recovery);
+            }
+        }
+        drop(runtime_snapshot);
+        self.teardown_started.store(true, Ordering::Release);
         self.activation_failures.write().await.clear();
         let mut failures = Vec::new();
         // Snapshot project controls without holding the registry lock across worker completion.
@@ -2080,11 +2178,11 @@ impl VceRuntimeManager {
     }
 
     /// Admit the exact host job control before scanning, sharing cancellation and progress.
-    /// 扫描前准入精确宿主作业控制器，共享取消与进度。
+    /// 扫描前准入精确宿主作业控制句柄，共享取消与进度。
     ///
     /// `runtime` owns the index, `request_id` identifies the job, and `cancellation` is its control.
     /// Returns the admitted refresh or a stopping error without starting source work.
-    /// `runtime` 持有索引，`request_id` 标识作业，`cancellation` 为其控制器。
+    /// `runtime` 持有索引，`request_id` 标识作业，`cancellation` 为其控制句柄。
     /// 返回已准入刷新或停止错误，不启动源码处理。
     async fn begin_observed_refresh(
         &self,
@@ -2161,7 +2259,7 @@ impl VceRuntimeManager {
         error: String,
     ) -> String {
         // cancelled is checked before terminalizing the shared control.
-        // cancelled 在将共享控制器转为终态之前检查。
+        // cancelled 在将共享控制句柄转为终态之前检查。
         let cancelled = matches!(active.cancellation.check(), Err(VceError::RefreshCancelled));
         self.end_active_refresh(runtime, active).await;
         if cancelled {
@@ -2226,7 +2324,7 @@ impl VceRuntimeManager {
         runtime.operation_admission.stop();
         {
             // A coalesced successor replaces its one-shot control under the same admission lock.
-            // 合并后续批次在相同准入锁下替换一次性控制器。
+            // 合并后续批次在相同准入锁下替换一次性控制句柄。
             // Cancel the installed owner after that handoff, then release admission before draining workers.
             // 在交接后取消已安装所有者，然后先释放准入锁再排空工作线程。
             let _admission = runtime.job_state.admission.lock().await;

@@ -21,25 +21,25 @@ struct GitRepositoryMonitoringPreferenceRow {
 /// Loads persisted monitoring flags for one project.
 /// 加载单个项目已持久化的监听标记。
 pub async fn load_git_repository_monitoring_preferences(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project_id: &str,
 ) -> Result<std::collections::BTreeMap<String, bool>, String> {
     let project_id = validate_git_preference_text(project_id, "项目标识")?;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
-            r#"
+    // The asynchronous twin is the entry every async caller uses, so this call leaves the Tokio core threads.
+    // 异步孪生是每个异步调用方使用的入口，因此本次调用会离开 Tokio 核心线程。
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 SELECT project_id, repository_key, enabled
 FROM project_git_review_preferences
 WHERE project_id = ?1
 ORDER BY repository_key ASC;
 "#,
-            vec![ControllerSqliteValue::String(project_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询 Git 审查监听偏好失败：{error}"))?;
+        vec![SqliteValue::Text(project_id.to_string())],
+    )
+    .await
+    .map_err(|error| format!("查询 Git 审查监听偏好失败：{error}"))?;
     let rows = decode_query_rows::<GitRepositoryMonitoringPreferenceRow>(&result.json_data)?;
     let mut preferences = std::collections::BTreeMap::new();
     for row in rows {
@@ -57,19 +57,17 @@ ORDER BY repository_key ASC;
 /// Persists one repository monitoring flag using an idempotent upsert.
 /// 使用幂等 upsert 持久化单个仓库监听标记。
 pub async fn persist_git_repository_monitoring_preference(
-    controller: ControllerRuntimeHandle,
+    host_runtime: HostRuntimeHandle,
     project_id: &str,
     repository_key: &str,
     enabled: bool,
 ) -> Result<(), String> {
     let project_id = validate_git_preference_text(project_id, "项目标识")?;
     let repository_key = validate_git_preference_text(repository_key, "仓库键")?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
-            r#"
+    local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 INSERT INTO project_git_review_preferences (
     project_id,
     repository_key,
@@ -81,15 +79,15 @@ ON CONFLICT(project_id, repository_key) DO UPDATE SET
     enabled = excluded.enabled,
     updated_at = excluded.updated_at;
 "#,
-            vec![vec![
-                ControllerSqliteValue::String(project_id.to_string()),
-                ControllerSqliteValue::String(repository_key.to_string()),
-                ControllerSqliteValue::Int64(i64::from(enabled)),
-                ControllerSqliteValue::String(current_unix_millis_text()),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("保存 Git 审查监听偏好失败：{error}"))?;
+        vec![vec![
+            SqliteValue::Text(project_id.to_string()),
+            SqliteValue::Text(repository_key.to_string()),
+            SqliteValue::Integer(i64::from(enabled)),
+            SqliteValue::Text(current_unix_millis_text()),
+        ]],
+    )
+    .await
+    .map_err(|error| format!("保存 Git 审查监听偏好失败：{error}"))?;
     Ok(())
 }
 

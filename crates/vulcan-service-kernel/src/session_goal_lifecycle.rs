@@ -9,7 +9,7 @@ use vulcan_agent_runtime::{
 };
 use vulcan_service_api::{SessionGoalStatus, SessionGoalSummary};
 use vulcan_workbench_model::SessionId;
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
 use super::{
     SharedServiceBridgeState, parse_session_id, selected_session_id_from_state,

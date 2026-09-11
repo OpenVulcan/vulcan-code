@@ -11,7 +11,7 @@ pub(crate) fn settings() -> Vec<SettingSectionSummary> {
             "runtime",
             "运行时",
             "Core Service、LuaSkills、VLDB、MCP 的启动与状态设置",
-            &["启动模式", "运行时目录", "MCP 工具策略", "VLDB 控制器"],
+            &["启动模式", "运行时目录", "MCP 工具策略", "本地数据库"],
         ),
         setting_section(
             "providers",

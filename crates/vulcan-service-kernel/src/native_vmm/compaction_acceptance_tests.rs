@@ -12,7 +12,7 @@ use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission,
 };
 use crate::tests::test_support::{
-    TestControllerRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+    TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
 };
 use std::sync::{Arc, Mutex};
 use vulcan_agent_runtime::agent_runtime::{
@@ -78,7 +78,7 @@ pub(super) async fn verify(
         .await
         .expect("native host AI admission");
     let session_id = SessionId::new_v4();
-    let root = TestControllerRuntimeRoot::new(session_id);
+    let root = TestHostRuntimeRoot::new(session_id);
     let mut service = test_service_state_with_parent_session(session_id);
     // Load the initialized disk document so durable writes retain its active split tail.
     // 加载已初始化的磁盘文档，使持久写入保留其有效分片尾部。
@@ -91,7 +91,7 @@ pub(super) async fn verify(
         .session_runtime_registry
         .register(handle.clone())
         .expect("register V1");
-    service.controller_runtime = Some(root.controller_runtime_handle());
+    service.controller_runtime = Some(root.host_runtime_handle());
     service.native_vmm_maintenance = Some(maintenance.clone());
     // Readiness and Hook publication share the same explicit native configuration.
     // 就绪状态与 Hook 发布共享同一明确原生配置。

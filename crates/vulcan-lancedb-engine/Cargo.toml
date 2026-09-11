@@ -1,0 +1,29 @@
+[package]
+name = "vulcan-lancedb-engine"
+description = "In-process LanceDB engine with shared per-database reuse, table-level concurrency gates and physical maintenance for Vulcan Code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# This crate has no FFI requirement, so it inherits the full workspace lint set normally.
+# 本 crate 没有 FFI 需求，因此正常继承完整的工作区 lint 集合。
+[lints]
+workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+fs4.workspace = true
+futures.workspace = true
+lancedb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -424,8 +424,7 @@ async fn verify_publication_barrier(
         .expect("old cache");
     // The host cache now also lives in a real private V1 session document and controller registry.
     // 宿主缓存现在也存在于真实私有 V1 会话文档及控制器注册表中。
-    let controller_root =
-        crate::tests::test_support::TestControllerRuntimeRoot::new(host_session_id);
+    let controller_root = crate::tests::test_support::TestHostRuntimeRoot::new(host_session_id);
     // This controller is the only writer of its private cache document.
     // 此控制器是其私有缓存文档的唯一写入方。
     let registry = crate::vmm_session_controller::SessionVmmControllerRegistry::default();
@@ -505,7 +504,7 @@ async fn verify_publication_barrier(
     let evicted_id = uuid::Uuid::new_v4();
     // The evicted runtime fixture still owns an independent real session document.
     // 驱逐运行态夹具仍拥有独立真实会话文档。
-    let evicted_root = crate::tests::test_support::TestControllerRuntimeRoot::new(evicted_id);
+    let evicted_root = crate::tests::test_support::TestHostRuntimeRoot::new(evicted_id);
     // Register its sole durable cache writer without adding a workspace runtime row.
     // 注册其唯一持久缓存写入方，不添加工作区运行态行。
     let evicted = registry
@@ -528,7 +527,7 @@ async fn verify_publication_barrier(
     let external_id = uuid::Uuid::new_v4();
     // Give each isolated controller its own declared V1 storage locator.
     // 为每个隔离控制器提供其自身声明的 V1 存储定位器。
-    let external_root = crate::tests::test_support::TestControllerRuntimeRoot::new(external_id);
+    let external_root = crate::tests::test_support::TestHostRuntimeRoot::new(external_id);
     // External cache ownership uses the same registry but must not enter native reconciliation.
     // 外置缓存归属使用同一注册表，但不能进入原生对账。
     let external = registry

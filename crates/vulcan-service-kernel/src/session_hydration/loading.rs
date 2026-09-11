@@ -5,7 +5,7 @@ use super::*;
 
 pub(crate) async fn load_workspace_for_submission(
     state: &SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     session_id: Option<SessionId>,
 ) -> Result<WorkspaceSnapshot, String> {
     // Measures lightweight workspace index loading for prompt submission.
@@ -97,7 +97,7 @@ pub(crate) fn retained_submission_snapshot_is_usable(
 /// 当会话已具备上下文或已完成水合后返回 `Ok(())`。
 pub(crate) async fn hydrate_retained_submission_session_if_needed(
     state: &SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
@@ -135,7 +135,7 @@ pub(crate) async fn hydrate_retained_submission_session_if_needed(
 /// 当运行态上下文已存在或已报告明确水合错误后返回 `Ok(())`。
 pub(crate) async fn hydrate_selected_session_runtime_if_needed(
     state: &SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    controller_runtime: HostRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {

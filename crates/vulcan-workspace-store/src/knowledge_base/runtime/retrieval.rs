@@ -8,10 +8,11 @@ use super::raw_corpus::JoinedChunkRow;
 use super::{
     KNOWLEDGE_FTS_INDEX, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT, RRF_K, int, nonnegative_u64, text,
 };
+use crate::local_sql;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
-use vldb_controller_client::ControllerSqliteTokenizerMode;
+use vulcan_sqlite_engine::tokenizer::TokenizerMode;
 
 /// Lightweight FTS rank row used when the host materializes authoritative content itself.
 /// 宿主自行物化权威内容时使用的轻量 FTS 排名记录。
@@ -210,18 +211,15 @@ impl KnowledgeBaseRuntime {
         self.verify_index_gate(&space_id, &binding_id).await?;
         // tokenized_query is produced by the VLDB SQLite Jieba tokenizer and contains a safe MATCH expression.
         // tokenized_query 由 VLDB SQLite Jieba 分词器生成，并包含安全的 MATCH 表达式。
-        let tokenized_query = self
-            .controller
-            .client
-            .tokenize_sqlite_text(
-                &space_id,
-                &binding_id,
-                ControllerSqliteTokenizerMode::Jieba,
-                query,
-                true,
-            )
-            .await
-            .map_err(|error| format!("构建 Jieba FTS 查询失败：{error}"))?;
+        let tokenized_query = local_sql::tokenize_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding_id)?,
+            TokenizerMode::Jieba,
+            query,
+            true,
+        )
+        .await
+        .map_err(|error| format!("构建 Jieba FTS 查询失败：{error}"))?;
         // The generic VLDB search response computes highlights and snippets that this host discards.
         // 通用 VLDB 搜索响应会计算本宿主不使用的高亮与摘要，因此这里只读取标识符与 BM25 分值。
         let ranked_rows: Vec<FtsRankRow> = self
@@ -245,8 +243,8 @@ impl KnowledgeBaseRuntime {
         // fts_chunk_ids bounds the authoritative bulk materialization to ranked matches.
         // fts_chunk_ids 将权威批量物化限制在已排名的命中集合内。
         let fts_chunk_ids: Vec<String> = ranked_rows.iter().map(|row| row.id.clone()).collect();
-        // authoritative_rows enables deterministic identifier lookup without additional controller calls.
-        // authoritative_rows 支持确定性标识符查找且不再产生额外控制器调用。
+        // authoritative_rows enables deterministic identifier lookup without additional storage calls.
+        // authoritative_rows 支持确定性标识符查找且不再产生额外存储调用。
         let mut authoritative_rows: BTreeMap<String, JoinedChunkRow> = self
             .load_joined_chunks_by_ids(&space_id, &binding_id, &fts_chunk_ids)
             .await?
@@ -254,8 +252,8 @@ impl KnowledgeBaseRuntime {
             .map(|row| (row.id.clone(), row))
             .collect();
         for ranked_row in ranked_rows {
-            // Materialize ranked hits from one bulk query to avoid one controller round trip per result.
-            // 从单次批量查询物化排序命中，避免每条结果各发生一次控制器往返。
+            // Materialize ranked hits from one bulk query to avoid one storage call per result.
+            // 从单次批量查询物化排序命中，避免每条结果各发生一次存储调用。
             let row = authoritative_rows
                 .remove(&ranked_row.id)
                 .ok_or_else(|| format!("FTS 命中的权威切片不存在：{}", ranked_row.id))?;

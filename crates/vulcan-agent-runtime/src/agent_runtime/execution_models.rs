@@ -35,7 +35,7 @@ use vulcan_session_core::{
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
 use vulcan_workbench_model::SessionTurnUsageSegment;
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
 /// Request-scoped agent prompt snapshot consumed by the shared prompt composer.
 /// 由共享提示词组合器消费的请求级代理提示词快照。
@@ -525,7 +525,7 @@ pub struct ExecutionPreparationRequest {
     pub runtime_system_updates: Vec<RuntimeSystemUpdateEvent>,
     /// Optional controller runtime used by host-owned tools that need durable workspace state.
     /// 需要持久工作区状态的宿主工具使用的可选控制器运行时。
-    pub controller_runtime: Option<ControllerRuntimeHandle>,
+    pub controller_runtime: Option<HostRuntimeHandle>,
     /// Optional host-injected V1 Goal domain port used by native Goal tools.
     /// 原生 Goal 工具使用的可选宿主注入 V1 Goal 领域端口。
     pub native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,

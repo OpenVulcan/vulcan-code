@@ -3,15 +3,11 @@
 
 use super::*;
 use std::path::PathBuf;
-use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
-    ControllerSqliteEnableRequest, SpaceKind, SpaceRegistration,
-};
 use vulcan_memorymesh_core::{
     CandidateQueryBoundary, MemoryCategory, MemoryId, MemoryLevel, MemoryRecord, MemoryScopeClass,
     MemorySourceKind, MemoryStability, ScopeAccess, ScopeId, SubjectId,
 };
-use vulcan_workspace_store::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
+use vulcan_workspace_store::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 use vulcan_workspace_store::vmm_data_plane::bootstrap_vmm_data_plane;
 
 #[path = "lexical_boundary_tests.rs"]
@@ -682,85 +678,64 @@ mod project_retention_acceptance_tests;
 
 /// Creates an isolated real controller; returns its directory owner, runtime handle and shutdown client.
 /// 创建隔离的真实控制器；返回目录所有者、运行时句柄与关闭客户端。
-async fn isolated_controller() -> (tempfile::TempDir, ControllerRuntimeHandle, ControllerClient) {
+async fn isolated_controller() -> (tempfile::TempDir, HostRuntimeHandle) {
     // temporary owns the entire isolated controller database tree for this acceptance.
     // temporary 拥有本次验收的完整隔离控制器数据库树。
     let temporary = tempfile::tempdir().expect("isolated database root");
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral endpoint");
-    let port = listener.local_addr().expect("port").port();
-    drop(listener);
-    // executable is the real bundled VLDB server already used by the workspace-store acceptance.
-    // executable 是工作区存储验收已经使用的真实随附 VLDB 服务端。
-    let executable =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../output/bin/vldb-controller.exe");
-    assert!(executable.is_file(), "bundled controller must exist");
-    let endpoint = format!("http://127.0.0.1:{port}");
-    let client = ControllerClient::new(
-        ControllerClientConfig {
-            endpoint: endpoint.clone(),
-            auto_spawn: true,
-            spawn_executable: Some(executable.display().to_string()),
-            spawn_process_mode: ControllerProcessMode::Managed,
-            minimum_uptime_secs: 0,
-            idle_timeout_secs: 1,
-            default_lease_ttl_secs: 30,
-            connect_timeout_secs: 30,
-            startup_timeout_secs: 15,
-            startup_retry_interval_ms: 100,
-            lease_renew_interval_secs: 10,
-        },
-        ClientRegistration {
-            client_name: format!("vmm-driver-test-{}", uuid::Uuid::new_v4()),
-            host_kind: "test".to_owned(),
-            process_id: std::process::id(),
-            process_name: "vmm-driver-test".to_owned(),
-            lease_ttl_secs: Some(30),
-        },
-    );
-    client.connect().await.expect("controller");
     let data_root = temporary.path().join("data");
     std::fs::create_dir_all(&data_root).expect("data root");
     let app_path = data_root.join("app.sqlite3");
-    client
-        .attach_space(SpaceRegistration {
-            space_id: "app".to_owned(),
-            space_label: "test".to_owned(),
-            space_kind: SpaceKind::User,
-            space_root: data_root.display().to_string(),
-        })
-        .await
-        .expect("app space");
-    client
-        .enable_sqlite(ControllerSqliteEnableRequest {
-            space_id: "app".to_owned(),
-            binding_id: "test-app".to_owned(),
-            db_path: app_path.display().to_string(),
-            ..Default::default()
-        })
-        .await
-        .expect("app sqlite");
-    let controller = ControllerRuntimeHandle::new(
-        client.clone(),
-        ControllerRuntimeMetadata {
-            endpoint,
-            executable: executable.display().to_string(),
-            data_root,
-            sqlite_path: app_path.clone(),
-            sqlite_binding_id: "test-app".to_owned(),
-            system_statistics_sqlite_path: app_path,
-            system_statistics_sqlite_binding_id: "test-app".to_owned(),
-        },
-    );
-    (temporary, controller, client)
+    let controller = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+        data_root,
+        sqlite_path: app_path.clone(),
+        sqlite_binding_id: "test-app".to_owned(),
+        system_statistics_sqlite_path: app_path,
+        system_statistics_sqlite_binding_id: "test-app".to_owned(),
+    });
+    (temporary, controller)
 }
 
 /// Verifies production indexing and reads against temporary SQLite, never the user's databases or model route.
 /// 对临时 SQLite 验证生产索引与读取，绝不使用用户数据库或模型路由。
-#[tokio::test]
-async fn real_controller_lexical_driver_pages_and_tracks_mutations() {
+#[test]
+fn real_controller_lexical_driver_pages_and_tracks_mutations() {
+    // The in-process engine runs this indexing and query workload on the caller's stack, and a debug build of
+    // the vector layer needs far more than a default test thread provides: on the default stack this test
+    // overflows rather than failing an assertion, and it passes once the stack is large enough. The external
+    // controller this test used to drive ran the same work in another process, which is why the host's own
+    // stack was never the binding constraint before. An explicit large stack keeps that requirement inside the
+    // test instead of in an environment variable no future reader would know to set.
+    // 进程内引擎在调用者栈上执行这套索引与查询工作，而向量层的 debug 构建所需栈远超默认测试线程：在默认栈上
+    // 本测试会溢出而不是断言失败，栈足够大时即通过。本测试过去驱动的是外部控制器，同样的工作跑在另一个进程里，
+    // 这正是宿主自身栈此前从不是约束的原因。显式的大栈把该要求留在测试内部，而不是留在一个未来读者不会知道要设
+    // 的环境变量里。
+    let executor = std::sync::Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("isolated VMM lexical runtime"),
+    );
+    std::thread::Builder::new()
+        .name(String::from("vmm-lexical-driver"))
+        .stack_size(32 * 1024 * 1024)
+        .spawn({
+            let executor = std::sync::Arc::clone(&executor);
+            move || {
+                executor.block_on(real_controller_lexical_driver_pages_and_tracks_mutations_body())
+            }
+        })
+        .expect("spawn isolated VMM lexical thread")
+        .join()
+        .expect("isolated VMM lexical thread completed");
+}
+
+/// Runs the production indexing and read workload driven by the test above.
+/// 运行上方测试所驱动的生产索引与读取工作负载。
+async fn real_controller_lexical_driver_pages_and_tracks_mutations_body() {
     // Retain the isolated directory until the controller is explicitly shut down.
     // 保留隔离目录，直到控制器被明确关闭。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     // runtime uses the production bootstrap; the unregistered mock AI port must remain unused.
     // runtime 使用生产引导；未注册能力的模拟 AI 端口必须保持未使用。
     let runtime = NativeVmmCoreRuntime::bootstrap(
@@ -958,25 +933,17 @@ async fn real_controller_lexical_driver_pages_and_tracks_mutations() {
     lexical_boundary_tests::verify_query_boundaries(&runtime, &cleared).await;
     verify_nonempty_hybrid_search(&runtime, &cleared).await;
     verify_saved_cleanup_policy_on_real_storage(runtime).await;
-    client
-        .shutdown()
-        .await
-        .expect("isolated controller shutdown");
 }
 
 /// Verifies queued native extraction on its own vector generation and isolated controller.
 /// 在独立向量代次及隔离控制器上验证排队的原生提炼。
 #[tokio::test]
 async fn real_controller_pending_analysis_preserves_caller_policy() {
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::verify_caller_policy_in_real_queue(
         bootstrap_vmm_data_plane(&controller).await.expect("analysis data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
     ).await;
-    client
-        .shutdown()
-        .await
-        .expect("analysis controller shutdown");
 }
 
 /// Verifies both editable text controls through real service saves, durable intake and queued L1 input.
@@ -985,7 +952,7 @@ async fn real_controller_pending_analysis_preserves_caller_policy() {
 async fn real_controller_text_policy_preserves_admitted_fragments() {
     // This temporary controller owns every policy file, queue row and canonical turn used below.
     // 此临时控制器持有下文使用的每份策略文件、队列记录及规范回合。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::text_policy_service::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -994,7 +961,6 @@ async fn real_controller_text_policy_preserves_admitted_fragments() {
             .snapshot,
     )
     .await;
-    client.shutdown().await.expect("text controller shutdown");
 }
 
 /// Verifies saved precheck controls through the real public native client and its host AI boundary.
@@ -1003,7 +969,7 @@ async fn real_controller_text_policy_preserves_admitted_fragments() {
 async fn real_controller_precheck_policy_controls_admitted_commands() {
     // Own every native policy file and physical index in one isolated controller lifetime.
     // 在一个隔离控制器生命周期内持有每份原生策略文件及物理索引。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::precheck_policy::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1012,10 +978,6 @@ async fn real_controller_precheck_policy_controls_admitted_commands() {
             .snapshot,
     )
     .await;
-    client
-        .shutdown()
-        .await
-        .expect("precheck policy controller shutdown");
 }
 
 /// Verifies saved decay controls against actual search-time bounds and durable precheck adoption.
@@ -1024,7 +986,7 @@ async fn real_controller_precheck_policy_controls_admitted_commands() {
 async fn real_controller_weibull_policy_controls_lifecycle_scores() {
     // Keep every policy and lifecycle mutation inside one private controller lifetime.
     // 将每份策略及生命周期变更保留在一个私有控制器生命周期内。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::weibull_policy::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1033,7 +995,6 @@ async fn real_controller_weibull_policy_controls_lifecycle_scores() {
             .snapshot,
     )
     .await;
-    client.shutdown().await.expect("decay controller shutdown");
 }
 
 /// Verifies saved replacement controls through direct writes, real queued analysis and durable states.
@@ -1044,7 +1005,7 @@ async fn real_controller_weibull_policy_controls_lifecycle_scores() {
 async fn real_controller_replacement_policy_controls_actual_writes() {
     // Every source and configuration mutation remains inside this isolated controller lifetime.
     // 每份来源及配置变更均保留在此隔离控制器生命周期内。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::replacement_policy::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1053,10 +1014,6 @@ async fn real_controller_replacement_policy_controls_actual_writes() {
             .snapshot,
     )
     .await;
-    client
-        .shutdown()
-        .await
-        .expect("replacement controller shutdown");
 }
 
 /// Runs real component HTTP phases against private storage; requires the explicit handshake directory.
@@ -1075,13 +1032,12 @@ async fn real_controller_policy_components_over_http() {
     assert!(root.is_absolute() && root.is_dir());
     // All relational and vector changes belong to this independent controller lifetime.
     // 全部关系及向量变更属于此独立控制器生命周期。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::replacement_policy::network::verify(
         bootstrap_vmm_data_plane(&controller).await.expect("HTTP data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
         &root,
     ).await;
-    client.shutdown().await.expect("HTTP controller shutdown");
 }
 
 /// Serves the built workbench against a private native runtime for explicit browser acceptance.
@@ -1105,17 +1061,13 @@ async fn real_controller_native_workbench_over_http() {
     assert!(assets.is_absolute() && assets.join("index.html").is_file());
     // The real controller owns only disposable isolated SQLite and vector data.
     // 真实控制器仅持有可丢弃的隔离关系及向量数据。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::replacement_policy::network::workbench::verify(
         bootstrap_vmm_data_plane(&controller).await.expect("workbench data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
         &root,
         &assets,
     ).await;
-    client
-        .shutdown()
-        .await
-        .expect("workbench controller shutdown");
 }
 
 /// Verifies saved hybrid and RRF controls through actual vector/full-text search.
@@ -1124,7 +1076,7 @@ async fn real_controller_native_workbench_over_http() {
 async fn real_controller_hybrid_policy_controls_physical_search() {
     // Keep every source, index and policy inside the private controller lifetime.
     // 将每份来源、索引及策略保留在私有控制器生命周期中。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::hybrid_policy::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1133,7 +1085,6 @@ async fn real_controller_hybrid_policy_controls_physical_search() {
             .snapshot,
     )
     .await;
-    client.shutdown().await.expect("hybrid controller shutdown");
 }
 
 /// Verifies formal rerank saves through the public search client and actual physical candidates.
@@ -1142,7 +1093,7 @@ async fn real_controller_hybrid_policy_controls_physical_search() {
 async fn real_controller_rerank_policy_controls_actual_search() {
     // Own all policy files and indexes in one private controller lifetime.
     // 在一个私有控制器生命周期内持有全部策略文件与索引。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::rerank_policy::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1151,7 +1102,6 @@ async fn real_controller_rerank_policy_controls_actual_search() {
             .snapshot,
     )
     .await;
-    client.shutdown().await.expect("rerank controller shutdown");
 }
 
 /// Verifies formal analysis-budget saves across real queued and already admitted PostAction commands.
@@ -1160,7 +1110,7 @@ async fn real_controller_rerank_policy_controls_actual_search() {
 async fn real_controller_postaction_budget_policy_freezes_admitted_analysis() {
     // Keep all policy files, canonical sources and queue receipts inside one private controller lifetime.
     // 将全部策略文件、规范来源及队列回执限定在一个私有控制器生命周期中。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::postaction_budget::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1169,10 +1119,6 @@ async fn real_controller_postaction_budget_policy_freezes_admitted_analysis() {
             .snapshot,
     )
     .await;
-    client
-        .shutdown()
-        .await
-        .expect("postaction budget controller shutdown");
 }
 
 /// Verifies saved history limits against real completed and pending turns at the PreCheck AI boundary.
@@ -1181,7 +1127,7 @@ async fn real_controller_postaction_budget_policy_freezes_admitted_analysis() {
 async fn real_controller_precheck_history_policy_preserves_mixed_turns() {
     // The temporary controller owns the real policy files, turn records and pending jobs for this case.
     // 临时控制器持有此用例的真实策略文件、回合记录及待处理作业。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::precheck_policy::history::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1190,25 +1136,17 @@ async fn real_controller_precheck_history_policy_preserves_mixed_turns() {
             .snapshot,
     )
     .await;
-    client
-        .shutdown()
-        .await
-        .expect("history controller shutdown");
 }
 
 /// Verifies nonempty extraction, both profile roles and physical indexes through the actual native queue.
 /// 通过实际原生队列验证非空提炼、两种画像角色及物理索引。
 #[tokio::test]
 async fn real_controller_nonempty_analysis_materializes_memory_and_profiles() {
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::verify_nonempty_analysis(
         bootstrap_vmm_data_plane(&controller).await.expect("nonempty data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
     ).await;
-    client
-        .shutdown()
-        .await
-        .expect("nonempty controller shutdown");
 }
 
 /// Verifies the installed asynchronous VMM Hook after a real durable V1 compaction.
@@ -1217,22 +1155,18 @@ async fn real_controller_nonempty_analysis_materializes_memory_and_profiles() {
 async fn real_controller_compaction_dispatches_builtin_vmm_hook() {
     // Each acceptance owns its controller process, bindings and temporary database root.
     // 每个验收拥有自身的控制器进程、绑定及临时数据库根目录。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::compaction_hook_acceptance::verify(
         bootstrap_vmm_data_plane(&controller).await.expect("compaction Hook data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
     ).await;
-    client
-        .shutdown()
-        .await
-        .expect("compaction Hook controller shutdown");
 }
 
 /// Verifies queued and manual profile lifetimes against stable memory ownership in real storage.
 /// 在真实存储中按稳定记忆归属验证排队及手动画像生命周期。
 #[tokio::test]
 async fn real_controller_project_profile_policy_preserves_fixed_user_and_queued_owner() {
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::project_profiles::verify(
         bootstrap_vmm_data_plane(&controller)
             .await
@@ -1241,25 +1175,17 @@ async fn real_controller_project_profile_policy_preserves_fixed_user_and_queued_
             .snapshot,
     )
     .await;
-    client
-        .shutdown()
-        .await
-        .expect("profile policy controller shutdown");
 }
 
 /// Verifies profile bundle partitions and write isolation through the real client and persisted scopes.
 /// 通过真实客户端及持久化作用域验证画像包分区及写入隔离。
 #[tokio::test]
 async fn real_controller_profile_bundles_preserve_scope_and_mode() {
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::profile_bundle_acceptance::verify(
         bootstrap_vmm_data_plane(&controller).await.expect("profile bundle data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
     ).await;
-    client
-        .shutdown()
-        .await
-        .expect("profile bundle controller shutdown");
 }
 
 /// Verifies explicit full-text reconstruction repairs derived text without touching authoritative state.

@@ -37,9 +37,7 @@ use vulcan_workbench_model::{
     SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
 };
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
-};
+use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::WorkspaceSnapshot};
 
 use super::{
     AgentRuntimeBridge, ServiceBridgeState, SharedServiceBridgeState,

@@ -459,7 +459,7 @@ pub(super) fn normalize_non_empty_name(name: &str) -> Result<String, String> {
 /// 从共享服务状态中读取控制器运行时句柄。
 pub(super) fn controller_runtime_from_state(
     state: &SharedServiceBridgeState,
-) -> Result<ControllerRuntimeHandle, String> {
+) -> Result<HostRuntimeHandle, String> {
     state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?

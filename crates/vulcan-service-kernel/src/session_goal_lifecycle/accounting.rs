@@ -24,7 +24,7 @@ use crate::session_runtime_registry_v1::{
 /// 返回可见 V1 投影是否发生变化。
 pub(crate) async fn account_session_goal_from_report(
     state: &SharedServiceBridgeState,
-    _controller_runtime: &ControllerRuntimeHandle,
+    _controller_runtime: &HostRuntimeHandle,
     report: &ExecutionRunReport,
     expected_goal_id: Option<&str>,
     _elapsed_seconds: i64,
@@ -109,7 +109,7 @@ pub(crate) fn session_goal_id_for_provider_request(
 /// 返回请求绑定的可见投影是否发生变化。
 pub(crate) async fn account_session_goal_provider_usage(
     state: &SharedServiceBridgeState,
-    _controller_runtime: &ControllerRuntimeHandle,
+    _controller_runtime: &HostRuntimeHandle,
     session_id: SessionId,
     expected_goal_id: &str,
     _usage: &ProviderRequestCompletedUsage,

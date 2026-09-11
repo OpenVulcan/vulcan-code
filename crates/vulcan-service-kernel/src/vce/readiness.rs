@@ -29,8 +29,8 @@ use super::{
 pub(crate) fn vce_publication_authority(
     state: &SharedServiceBridgeState,
 ) -> super::VcePublicationAuthority {
-    // Weak ownership lets service shutdown release every manager and controller binding.
-    // 弱归属允许服务关闭释放全部管理器和控制器绑定。
+    // Weak ownership lets service shutdown release every manager and host binding.
+    // 弱归属允许服务关闭释放全部管理器和宿主绑定。
     let state = Arc::downgrade(state);
     Arc::new(
         move |contract: &super::VcePublicationContract| -> Result<(), super::VcePublicationError> {

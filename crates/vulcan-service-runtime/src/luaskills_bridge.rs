@@ -15,22 +15,18 @@ use crate::managed_runtime_bootstrap::{
 use luaskills::runtime_options::LuaRuntimeRunLuaPoolConfig;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
-    LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeDatabaseProviderMode,
-    LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig, LuaRuntimeSpaceControllerProcessMode,
-    LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillConfigEventBatch,
-    RuntimeSkillConfigStoreRefresh, RuntimeSkillPackageConfigDescriptor,
-    RuntimeSkillPackageConfigItemDescriptor, RuntimeSkillPackageConfigStatus, RuntimeSkillRoot,
-    SkillConfigDeleteResult, SkillConfigWriteResult, SkillInstallRequest, SkillInstallSourceType,
-    SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
-    SkillPackageConfigInputValue, SkillPackageConfigItemState, SkillUninstallOptions,
-    ToolCacheConfig,
+    LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
+    LuaRuntimeManagedRuntimeConfig, LuaVmPoolConfig, RuntimeEntryDescriptor,
+    RuntimeSkillConfigEventBatch, RuntimeSkillConfigStoreRefresh,
+    RuntimeSkillPackageConfigDescriptor, RuntimeSkillPackageConfigItemDescriptor,
+    RuntimeSkillPackageConfigStatus, RuntimeSkillRoot, SkillConfigDeleteResult,
+    SkillConfigWriteResult, SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
+    SkillManager, SkillManagerConfig, SkillMeta, SkillPackageConfigInputValue,
+    SkillPackageConfigItemState, SkillUninstallOptions, ToolCacheConfig,
 };
 use vulcan_luaskills_config::{
     LuaSkillsRuntimeSettings, load_runtime_settings, runtime_settings_file_path,
     save_runtime_settings,
-};
-use vulcan_provider_config::config::{
-    PersistedControllerConfiguration, PersistedControllerProcessMode,
 };
 
 /// Declarative bootstrap configuration for host-managed ROOT skills.
@@ -304,10 +300,9 @@ pub struct TauriLuaSkillToolSummary {
     pub description: String,
 }
 
-/// Bootstraps LuaSkills using the controller-backed database mode shared by Vulcan Code hosts.
-/// 使用 Vulcan Code 宿主共享的控制器数据库模式引导 LuaSkills。
+/// Bootstraps LuaSkills using the in-process database mode shared by Vulcan Code hosts.
+/// 使用 Vulcan Code 宿主共享的进程内数据库模式引导 LuaSkills。
 pub fn bootstrap_luaskills<F, G>(
-    controller: PersistedControllerConfiguration,
     mut progress: F,
     mut managed_progress: G,
 ) -> Result<TauriLuaSkillsHandle, String>
@@ -381,7 +376,6 @@ where
         &runtime_root,
         &managed_runtime_distribution_root,
         &skill_config_root,
-        controller,
         &runtime_settings,
     );
     let pool_config = LuaVmPoolConfig {
@@ -1399,13 +1393,12 @@ fn ordinary_uninstall_target_root_for_skill(
     Ok(resolved)
 }
 
-/// Builds LuaSkills host options backed by the shared VLDB controller.
-/// 构建由共享 VLDB 控制器支撑的 LuaSkills 宿主选项。
+/// Builds LuaSkills host options that route both databases through this process's own engine.
+/// 构建使 LuaSkills 两个数据库都经由本进程自身引擎的宿主选项。
 fn build_host_options(
     runtime_root: &Path,
     managed_runtime_distribution_root: &Path,
     skill_config_root: &Path,
-    controller: PersistedControllerConfiguration,
     runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
     // lua_runtime_root enforces the native-path invariant at the final LuaSkills HostOptions boundary.
@@ -1463,35 +1456,20 @@ fn build_host_options(
             .enable_skill_management_bridge,
         enable_managed_io_compat: runtime_settings.capabilities.enable_managed_io_compat,
     };
-    host_options.sqlite_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
-    host_options.lancedb_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
-    host_options.space_controller.endpoint = controller
-        .endpoint
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| Some(vulcan_runtime_assets::default_vldb_controller_endpoint()));
-    host_options.space_controller.auto_spawn = controller.auto_spawn;
-    host_options.space_controller.executable_path = controller
-        .executable_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(vulcan_runtime_assets::resolve_bundled_controller_executable_path)
-        .map(|path| vulcan_runtime_assets::native_host_path(&path));
-    host_options.space_controller.process_mode = match controller.process_mode {
-        PersistedControllerProcessMode::Service => LuaRuntimeSpaceControllerProcessMode::Service,
-        PersistedControllerProcessMode::Managed => LuaRuntimeSpaceControllerProcessMode::Managed,
-    };
-    host_options.space_controller.minimum_uptime_secs = controller.minimum_uptime_secs;
-    host_options.space_controller.idle_timeout_secs = controller.idle_timeout_secs;
-    host_options.space_controller.default_lease_ttl_secs = controller.default_lease_ttl_secs;
-    host_options.space_controller.connect_timeout_secs = controller.connect_timeout_secs;
-    host_options.space_controller.startup_timeout_secs = controller.startup_timeout_secs;
-    host_options.space_controller.startup_retry_interval_ms = controller.startup_retry_interval_ms;
-    host_options.space_controller.lease_renew_interval_secs = controller.lease_renew_interval_secs;
+    // The mode comes from the host-provider policy rather than a local literal. It deliberately remains
+    // `HostCallback` even before installation, so a broken startup order fails loudly instead of selecting the
+    // retired external-controller path.
+    // 模式取自宿主 provider 策略而非本地字面量。它在安装前也刻意保持 `HostCallback`，使错误的启动顺序响亮
+    // 失败，而不是选择已退役的外部控制器路径。
+    //
+    // The LuaSkills `space_controller` options keep their crate defaults. That mode talks to an external
+    // controller process, which Vulcan Code neither ships nor supports any more.
+    // LuaSkills 的 `space_controller` 选项保持该 crate 的默认值。该模式与外部控制器进程通信，
+    // 而 Vulcan Code 已不再随附也不再支持它。
+    host_options.sqlite_provider_mode =
+        vulcan_agent_runtime::luaskills_runtime::host_database_providers::provider_mode();
+    host_options.lancedb_provider_mode =
+        vulcan_agent_runtime::luaskills_runtime::host_database_providers::provider_mode();
     host_options
 }
 

@@ -292,7 +292,7 @@ pub(crate) struct FullWorkbenchColdRefreshRequest<'a> {
     pub(crate) state: &'a SharedServiceBridgeState,
     /// Provides controller-level persistence and filesystem services.
     /// 提供控制器级持久化与文件系统服务。
-    pub(crate) controller_runtime: &'a ControllerRuntimeHandle,
+    pub(crate) controller_runtime: &'a HostRuntimeHandle,
     /// Provides the LuaSkills catalog projected into the workbench snapshot.
     /// 提供需要投影到工作台快照中的 LuaSkills 目录。
     pub(crate) luaskills_catalog: &'a TauriLuaSkillsCatalog,

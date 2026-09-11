@@ -1,7 +1,7 @@
 //! Explicit project settings and initialization through the production service boundary.
 //! 通过生产服务边界验证明确项目设置与初始化。
 
-use super::test_support::TestControllerRuntimeRoot;
+use super::test_support::TestHostRuntimeRoot;
 use super::vce_configuration_readiness_tests::configured_state;
 use crate::{ServiceEventEmitter, vce};
 use futures_util::FutureExt;
@@ -13,7 +13,7 @@ use vulcan_service_api::{
     VceProjectSettingsUpdateRequest,
 };
 use vulcan_workbench_model::{ProjectVceSettings, ProjectVceUpdateMode, TaskProjectSummary};
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::vce_data_plane::VceDataPlaneFactory;
 use vulcan_workspace_store::workspace_store::{load_workspace_index_snapshot, persist_new_project};
 
@@ -44,10 +44,7 @@ fn editable_settings(settings: &ProjectVceSettings) -> VceProjectSettingsInput {
 /// 通过生产工作区加载器读取一个项目的实际持久设置。
 /// Controller identifies private APP storage and project_id its exact row. Returns the stored project.
 /// 控制器标识私有应用存储，项目编号标识精确记录。返回已存项目。
-async fn saved_project(
-    controller: &ControllerRuntimeHandle,
-    project_id: &str,
-) -> TaskProjectSummary {
+async fn saved_project(controller: &HostRuntimeHandle, project_id: &str) -> TaskProjectSummary {
     load_workspace_index_snapshot(controller.clone())
         .await
         .expect("read private workspace")
@@ -62,37 +59,33 @@ async fn saved_project(
 /// `controller` owns private storage and `project_id` selects one exact identity; returns both row arrays.
 /// `controller` 持有私有存储，`project_id` 选择精确身份；返回两个记录数组。
 async fn project_persistence_rows(
-    controller: &ControllerRuntimeHandle,
+    controller: &HostRuntimeHandle,
     project_id: &str,
 ) -> [serde_json::Value; 2] {
     // Preserve every project column, including timestamps and optional metadata, for rollback comparison.
     // 保留每个项目列，包括时间戳与可选元数据，以供回滚比较。
-    let project_rows = controller
-        .client
-        .query_sqlite_json_typed(
-            vulcan_workspace_store::data_plane::APP_SPACE_ID,
-            &controller.sqlite_binding_id,
-            "SELECT * FROM projects WHERE id = ?1;",
-            vec![vldb_controller_client::ControllerSqliteValue::String(
-                project_id.to_owned(),
-            )],
-        )
-        .await
-        .expect("read full private project row");
+    let project_rows = vulcan_workspace_store::local_sql::query_json_async(
+        &controller.local,
+        vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
+        "SELECT * FROM projects WHERE id = ?1;",
+        vec![vulcan_sqlite_engine::sql_exec::SqliteValue::Text(
+            project_id.to_owned(),
+        )],
+    )
+    .await
+    .expect("read full private project row");
     // Read the semantic row separately so either missing half remains visible in the test result.
     // 单独读取语义记录，使缺失的任一部分都在测试结果中可见。
-    let settings_rows = controller
-        .client
-        .query_sqlite_json_typed(
-            vulcan_workspace_store::data_plane::APP_SPACE_ID,
-            &controller.sqlite_binding_id,
-            "SELECT * FROM project_vce_settings WHERE project_id = ?1;",
-            vec![vldb_controller_client::ControllerSqliteValue::String(
-                project_id.to_owned(),
-            )],
-        )
-        .await
-        .expect("read full private semantic row");
+    let settings_rows = vulcan_workspace_store::local_sql::query_json_async(
+        &controller.local,
+        vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
+        "SELECT * FROM project_vce_settings WHERE project_id = ?1;",
+        vec![vulcan_sqlite_engine::sql_exec::SqliteValue::Text(
+            project_id.to_owned(),
+        )],
+    )
+    .await
+    .expect("read full private semantic row");
     [
         serde_json::from_str(&project_rows.json_data).expect("project row JSON"),
         serde_json::from_str(&settings_rows.json_data).expect("settings row JSON"),
@@ -102,10 +95,9 @@ async fn project_persistence_rows(
 /// Verify a rejected semantic-settings insert cannot commit its owning project independently.
 /// 验证被拒绝的语义设置插入不能使所属项目独立提交。
 /// No arguments or return value; all SQL, failure injection, and rows belong to a private controller.
-/// 无参数和返回值；全部 SQL、故障注入和记录属于私有控制器。
+/// 无参数和返回值；全部 SQL、故障注入和记录属于私有宿主存储。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_project_creation_is_atomic_with_vce_settings() {
+fn real_host_storage_project_creation_is_atomic_with_vce_settings() {
     // The executor and temporary root own this fixture independently from the running application.
     // 执行器和临时根独立于运行中的应用持有此夹具。
     let executor = tokio::runtime::Builder::new_current_thread()
@@ -114,11 +106,11 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
         .expect("private project persistence executor");
     // Every database and session fixture is removed only after the controller lease is released.
     // 仅在控制器租约释放后移除各数据库和会话夹具。
-    let storage = TestControllerRuntimeRoot::new(uuid::Uuid::new_v4());
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
     executor.block_on(async {
         // This client and APP binding never attach to user storage.
         // 此客户端和应用绑定绝不挂接用户存储。
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         // Catch assertion failures so the managed controller is released on the red regression too.
         // 捕获断言失败，确保红色回归同样释放托管控制器。
         let outcome = std::panic::AssertUnwindSafe(async {
@@ -142,9 +134,9 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
             let rejection_statement = "CREATE TRIGGER reject_test_vce_insert BEFORE INSERT ON project_vce_settings
                  WHEN NEW.project_id = 'atomic-vce-project'
                  BEGIN SELECT RAISE(ABORT, 'test_vce_settings_rejected'); END;";
-            controller.client.execute_sqlite_script_typed(
-                vulcan_workspace_store::data_plane::APP_SPACE_ID,
-                &controller.sqlite_binding_id,
+            vulcan_workspace_store::local_sql::execute_script_async(
+                &controller.local,
+                vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
                 rejection_statement,
                 Vec::new(),
             ).await.expect("install exact private failure condition");
@@ -156,20 +148,20 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
             assert!(error.contains("test_vce_settings_rejected"), "{error}");
             // Query the raw tables instead of the production inner join that could hide a partial row.
             // 查询原始表，避免生产内连接掩盖部分写入记录。
-            let raw = controller.client.query_sqlite_json_typed(
-                vulcan_workspace_store::data_plane::APP_SPACE_ID,
-                &controller.sqlite_binding_id,
+            let raw = vulcan_workspace_store::local_sql::query_json_async(
+                &controller.local,
+                vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
                 "SELECT (SELECT COUNT(*) FROM projects WHERE id = ?1) AS project_count,
                  (SELECT COUNT(*) FROM project_vce_settings WHERE project_id = ?1) AS settings_count;",
-                vec![vldb_controller_client::ControllerSqliteValue::String(project.id.clone())],
+                vec![vulcan_sqlite_engine::sql_exec::SqliteValue::Text(project.id.clone())],
             ).await.expect("read exact post-failure state");
             // A declared failure must leave neither half of this newly created project durable.
             // 明确失败后，此新建项目的任一部分都不得持久保留。
             let rows: serde_json::Value = serde_json::from_str(&raw.json_data).expect("typed counts");
             assert_eq!(rows, serde_json::json!([{ "project_count": 0, "settings_count": 0 }]));
-            controller.client.execute_sqlite_script_typed(
-                vulcan_workspace_store::data_plane::APP_SPACE_ID,
-                &controller.sqlite_binding_id,
+            vulcan_workspace_store::local_sql::execute_script_async(
+                &controller.local,
+                vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
                 "DROP TRIGGER reject_test_vce_insert;",
                 Vec::new(),
             ).await.expect("remove only the private failure condition");
@@ -224,9 +216,9 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
             assert!(persist_new_project(controller.clone(), &invalid_existing).await.is_err());
             assert_eq!(project_persistence_rows(&controller, &project.id).await, before);
 
-            controller.client.execute_sqlite_script_typed(
-                vulcan_workspace_store::data_plane::APP_SPACE_ID,
-                &controller.sqlite_binding_id,
+            vulcan_workspace_store::local_sql::execute_script_async(
+                &controller.local,
+                vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
                 rejection_statement,
                 Vec::new(),
             ).await.expect("reject the existing project's second logical write");
@@ -236,9 +228,9 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
                 .expect_err("existing project update must fail atomically");
             assert!(rejected.contains("test_vce_settings_rejected"), "{rejected}");
             assert_eq!(project_persistence_rows(&controller, &project.id).await, before);
-            controller.client.execute_sqlite_script_typed(
-                vulcan_workspace_store::data_plane::APP_SPACE_ID,
-                &controller.sqlite_binding_id,
+            vulcan_workspace_store::local_sql::execute_script_async(
+                &controller.local,
+                vulcan_workspace_store::local_database_runtime::LogicalDatabase::AppState,
                 "DROP TRIGGER reject_test_vce_insert;",
                 Vec::new(),
             ).await.expect("release private rejection before retry");
@@ -260,7 +252,6 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
             assert_eq!(after[0][0]["created_at"], before[0][0]["created_at"]);
             assert!(!storage.data_root().join("vce/projects").exists());
         }).catch_unwind().await;
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);
         }
@@ -270,10 +261,9 @@ fn real_controller_project_creation_is_atomic_with_vce_settings() {
 /// Verify settings do not create an index and explicit initialization is the only first-build entry.
 /// 验证设置不创建索引，明确初始化是唯一首次建库入口。
 /// No input; all source, metadata and vectors belong to a private controller with credential-rejecting AI.
-/// 无输入；全部源码、元数据及向量属于私有控制器，AI 拒绝凭据访问。
+/// 无输入；全部源码、元数据及向量属于私有宿主存储，AI 拒绝凭据访问。
 #[test]
-#[ignore = "requires the bundled local VLDB controller executable"]
-fn real_controller_project_settings_require_explicit_initialization_and_preserve_indexes() {
+fn real_host_storage_project_settings_require_explicit_initialization_and_preserve_indexes() {
     // Bound this fixture's asynchronous jobs and watcher workers independently from the real app.
     // 将夹具异步作业及监听任务约束在独立于真实应用的执行器中。
     let executor = Arc::new(
@@ -283,9 +273,9 @@ fn real_controller_project_settings_require_explicit_initialization_and_preserve
             .build()
             .expect("project settings executor"),
     );
-    let storage = TestControllerRuntimeRoot::new(uuid::Uuid::new_v4());
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
     executor.block_on(async {
-        let (client, controller) = storage.attached_controller_runtime_handle().await;
+        let controller = storage.attached_host_runtime_handle().await;
         // Application-table setup is also covered by controller cleanup, not just later service assertions.
         // 应用表准备同样受控制器清理保护，而不只保护后续服务断言。
         let controller_outcome = std::panic::AssertUnwindSafe(async {
@@ -364,7 +354,7 @@ fn real_controller_project_settings_require_explicit_initialization_and_preserve
                 guard.vce_watcher = Some(watcher.clone());
             }
             // Keep teardown outside assertions so failed service calls cannot leave a private controller running.
-            // 将清理保留在断言之外，避免服务断言失败遗留私有控制器。
+            // 将清理保留在断言之外，避免服务断言失败遗留私有宿主存储。
             let outcome = std::panic::AssertUnwindSafe(async {
                 let initial = saved_project(&controller, &project.id).await.vce;
                 assert!(!initial.enabled);
@@ -693,7 +683,6 @@ fn real_controller_project_settings_require_explicit_initialization_and_preserve
         })
         .catch_unwind()
         .await;
-        client.shutdown().await.expect("release private controller");
         if let Err(panic) = controller_outcome {
             std::panic::resume_unwind(panic);
         }

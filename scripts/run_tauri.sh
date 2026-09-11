@@ -12,10 +12,6 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # ProjectDir 保存仓库根目录，确保输出路径稳定。
 ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
 
-# ControllerProfileScriptPath points at the runtime-profile-aware generated Controller configuration updater.
-# ControllerProfileScriptPath 指向按运行模式更新 Controller 生成配置的脚本。
-ControllerProfileScriptPath="$ScriptDir/configure_controller_profile.sh"
-
 # Release stores whether this run should launch the release output.
 # Release 保存本次运行是否启动 release 产物。
 Release=0
@@ -58,16 +54,6 @@ if [ ! -f "$OutputBinaryPath" ]; then
     fi
     echo "Missing built Tauri binary: $OutputBinaryPath. Run $BuildCommand first." >&2
     exit 1
-fi
-
-if [ ! -f "$ControllerProfileScriptPath" ]; then
-    echo "Missing Controller profile configuration script: $ControllerProfileScriptPath" >&2
-    exit 1
-fi
-if [ "$Release" = "1" ]; then
-    sh "$ControllerProfileScriptPath" --release
-else
-    sh "$ControllerProfileScriptPath"
 fi
 
 # ProfileName describes the selected runtime profile in command output.

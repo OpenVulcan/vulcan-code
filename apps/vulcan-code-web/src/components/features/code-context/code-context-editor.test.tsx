@@ -702,31 +702,6 @@ describe("project semantic settings editor", () => {
     expect(host.textContent).toContain("维护计划已失效");
   });
 
-  // An old controller capability response becomes localized guidance without hiding index availability.
-  // 旧控制器能力响应转换为本地化指引，且不暗示现有索引不可用。
-  it("localizes the old-controller compaction capability boundary", async () => {
-    rpc.plan.mockRejectedValueOnce(
-      new Error(
-        "VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED: vldb-controller 0.2.4 or newer is required",
-      ),
-    );
-    await renderEditor(createVceActivityFixture());
-    await click("查看索引详情与统计");
-    expect(
-      Array.from(host.querySelectorAll("button")).filter(
-        (button) => button.textContent?.trim() === "检查并整理物理索引",
-      ),
-    ).toHaveLength(1);
-    await click("检查并整理物理索引");
-    expect(host.textContent).toContain(
-      "当前 VLDB 控制器版本不支持物理索引整理",
-    );
-    expect(host.textContent).toContain("现有索引与查询不受影响");
-    expect(host.textContent).not.toContain(
-      "VCE_COMPACTION_CONTROLLER_UPGRADE_REQUIRED",
-    );
-  });
-
   // An uninitialized failed publication can request a rebuild plan without opening management details.
   // 尚未发布的失败索引可以直接请求重建计划，不需要展开管理详情。
   it("plans recovery from the top-level failed-index action", async () => {

@@ -97,7 +97,7 @@ impl AsyncHostDriver for ReviewHost {
 async fn real_controller_precheck_projects_actual_retrieval_origins() {
     // temporary owns all physical SQLite/LanceDB fixtures until explicit controller shutdown.
     // temporary 持有全部物理 SQLite/LanceDB 夹具，直至显式关闭控制器。
-    let (_temporary, controller, client) = isolated_controller().await;
+    let (_temporary, controller) = isolated_controller().await;
     let runtime = NativeVmmCoreRuntime::bootstrap(
         Arc::new(vulcan_ai_contract::test_support::MockHostAiPort::new()),
         bootstrap_vmm_data_plane(&controller)
@@ -337,5 +337,4 @@ async fn real_controller_precheck_projects_actual_retrieval_origins() {
             }
         }
     }
-    client.shutdown().await.expect("controller shutdown");
 }

@@ -302,7 +302,7 @@ pub struct ServiceBridgeState {
     pub(crate) webui_service_discovery: Option<SharedWebuiServiceDiscoverySnapshot>,
     /// Long-lived controller runtime handle.
     /// 长生命周期控制器运行时句柄。
-    pub(crate) controller_runtime: Option<ControllerRuntimeHandle>,
+    pub(crate) controller_runtime: Option<HostRuntimeHandle>,
     /// Long-lived host-native knowledge-base runtime.
     /// 长生命周期宿主原生知识库运行时。
     pub(crate) knowledge_runtime:
@@ -310,6 +310,13 @@ pub struct ServiceBridgeState {
     /// Long-lived LuaSkills runtime handle.
     /// 长生命周期 LuaSkills 运行时句柄。
     pub(crate) luaskills_runtime: Option<TauriLuaSkillsHandle>,
+    /// Owned installation that keeps the process-wide LuaSkills database callbacks alive.
+    /// 持有进程级 LuaSkills 数据库回调生命周期的安装所有者。
+    pub(crate) host_database_providers: Option<
+        Arc<
+            vulcan_agent_runtime::luaskills_runtime::host_database_providers::InstalledHostDatabaseProviders,
+        >,
+    >,
     /// Cached LuaSkills catalog captured during startup or explicit refresh.
     /// 启动或显式刷新时捕获的 LuaSkills 目录缓存。
     pub(crate) cached_luaskills_catalog: Option<TauriLuaSkillsCatalog>,
@@ -376,6 +383,18 @@ pub struct ServiceBridgeState {
     /// 按精确或未解析作用域索引的有所有权项目准入预留。
     pub(crate) project_admission_reservations:
         BTreeMap<ProjectAdmissionScope, ProjectAdmissionReservation>,
+}
+
+impl Drop for ServiceBridgeState {
+    /// Releases the process-wide LuaSkills database provider slot before its owned handle.
+    /// 在释放自身持有的句柄之前，先释放进程级 LuaSkills 数据库 provider 槽位。
+    fn drop(&mut self) {
+        let owned_installation = self.host_database_providers.take();
+        if owned_installation.is_some() {
+            vulcan_agent_runtime::luaskills_runtime::host_database_providers::shutdown();
+        }
+        drop(owned_installation);
+    }
 }
 
 /// Thread-safe service state handle.

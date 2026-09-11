@@ -1,5 +1,5 @@
-//! Controller-backed relational persistence for public AI credential material.
-//! 公共 AI 凭据材料的 Controller 托管关系化持久层。
+//! In-process relational persistence for public AI credential material.
+//! 公共 AI 凭据材料的进程内关系化持久层。
 
 use super::*;
 
@@ -101,23 +101,22 @@ struct AiCredentialMutationRow {
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application SQLite binding and `secret_reference` is the exact lookup key.
-/// `controller` 持有应用 SQLite 绑定，`secret_reference` 是精确查找键。
+/// `host_runtime` owns the application SQLite binding and `secret_reference` is the exact lookup key.
+/// `host_runtime` 持有应用 SQLite 绑定，`secret_reference` 是精确查找键。
 ///
 /// # Returns
 /// 返回值
 /// One stored record, clean absence, or a controlled database error.
 /// 返回一条已存记录、干净缺失或受控数据库错误。
 pub async fn load_ai_credential_secret_record(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     secret_reference: &str,
 ) -> Result<Option<AiCredentialSecretRecord>, String> {
     let secret_reference = validate_secret_reference(secret_reference)?;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
+    let result =
+        local_sql::query_json_async(
+            &host_runtime.local,
+            LogicalDatabase::AppState,
             r#"
 SELECT
     secret_reference, format_version, revision, material_kind, secret_value,
@@ -130,9 +129,8 @@ FROM ai_credential_secrets
 WHERE secret_reference = ?1
 LIMIT 1;
 "#,
-            vec![ControllerSqliteValue::String(secret_reference.to_string())],
-        )
-        .await
+            vec![SqliteValue::Text(secret_reference.to_string())],
+        ).await
         .map_err(|error| format!("查询 AI 凭据记录失败：{error}"))?;
     let mut rows = decode_query_rows::<AiCredentialSecretRecord>(&result.json_data)?;
     if rows.len() > 1 {
@@ -146,22 +144,22 @@ LIMIT 1;
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application SQLite binding and `record` is the complete candidate row.
-/// `controller` 持有应用 SQLite 绑定，`record` 是完整候选记录。
+/// `host_runtime` owns the application SQLite binding and `record` is the complete candidate row.
+/// `host_runtime` 持有应用 SQLite 绑定，`record` 是完整候选记录。
 ///
 /// # Returns
 /// 返回值
 /// Success only after SQLite inserts the exact reference.
 /// 仅在 SQLite 插入精确引用后返回成功。
 pub async fn create_ai_credential_secret_record(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &AiCredentialSecretRecord,
 ) -> Result<(), String> {
     validate_record(record)?;
     if record.revision != 1 {
         return Err(String::from("新 AI 凭据记录必须从修订号一开始。"));
     }
-    insert_ai_credential_secret_record(controller, record, "创建").await
+    insert_ai_credential_secret_record(host_runtime, record, "创建").await
 }
 
 /// Restores one previously deleted relational credential record with its exact revision.
@@ -169,19 +167,19 @@ pub async fn create_ai_credential_secret_record(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application SQLite binding and `record` is the exact rollback snapshot.
-/// `controller` 持有应用 SQLite 绑定，`record` 是精确回滚快照。
+/// `host_runtime` owns the application SQLite binding and `record` is the exact rollback snapshot.
+/// `host_runtime` 持有应用 SQLite 绑定，`record` 是精确回滚快照。
 ///
 /// # Returns
 /// 返回值
 /// Success only when the reference is absent and the snapshot is inserted.
 /// 仅在引用缺失且快照成功插入时返回成功。
 pub async fn restore_ai_credential_secret_record(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &AiCredentialSecretRecord,
 ) -> Result<(), String> {
     validate_record(record)?;
-    insert_ai_credential_secret_record(controller, record, "恢复").await
+    insert_ai_credential_secret_record(host_runtime, record, "恢复").await
 }
 
 /// Replaces one relational credential only when its stored revision matches the caller expectation.
@@ -189,16 +187,16 @@ pub async fn restore_ai_credential_secret_record(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application SQLite binding, `expected_revision` is the current revision,
+/// `host_runtime` owns the application SQLite binding, `expected_revision` is the current revision,
 /// and `record` is the complete next revision.
-/// `controller` 持有应用 SQLite 绑定，`expected_revision` 是当前修订号，`record` 是完整下一修订版。
+/// `host_runtime` 持有应用 SQLite 绑定，`expected_revision` 是当前修订号，`record` 是完整下一修订版。
 ///
 /// # Returns
 /// 返回值
 /// Success only after exactly one compare-and-replace update.
 /// 仅在精确完成一次比较替换更新后返回成功。
 pub async fn replace_ai_credential_secret_record(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     expected_revision: i64,
     record: &AiCredentialSecretRecord,
 ) -> Result<(), String> {
@@ -209,12 +207,10 @@ pub async fn replace_ai_credential_secret_record(
     if record.revision != expected_next {
         return Err(String::from("替换 AI 凭据必须精确递增一个修订号。"));
     }
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
-            r#"
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
 UPDATE ai_credential_secrets
 SET format_version = ?1,
     revision = ?2,
@@ -243,10 +239,10 @@ SET format_version = ?1,
 WHERE secret_reference = ?25 AND revision = ?26
 RETURNING secret_reference;
 "#,
-            update_params(record, expected_revision),
-        )
-        .await
-        .map_err(|error| format!("替换 AI 凭据记录失败：{error}"))?;
+        update_params(record, expected_revision),
+    )
+    .await
+    .map_err(|error| format!("替换 AI 凭据记录失败：{error}"))?;
     require_single_mutation_row(&result.json_data, record.secret_reference.as_str(), "替换")
 }
 
@@ -255,45 +251,40 @@ RETURNING secret_reference;
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application SQLite binding and `secret_reference` is the exact deletion key.
-/// `controller` 持有应用 SQLite 绑定，`secret_reference` 是精确删除键。
+/// `host_runtime` owns the application SQLite binding and `secret_reference` is the exact deletion key.
+/// `host_runtime` 持有应用 SQLite 绑定，`secret_reference` 是精确删除键。
 ///
 /// # Returns
 /// 返回值
 /// Success when the row is absent or deleted.
 /// 记录缺失或已删除时返回成功。
 pub async fn delete_ai_credential_secret_record(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     secret_reference: &str,
 ) -> Result<(), String> {
     let secret_reference = validate_secret_reference(secret_reference)?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
-            "DELETE FROM ai_credential_secrets WHERE secret_reference = ?1;",
-            vec![vec![ControllerSqliteValue::String(
-                secret_reference.to_string(),
-            )]],
-        )
-        .await
-        .map_err(|error| format!("删除 AI 凭据记录失败：{error}"))?;
+    local_sql::execute_batch_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        "DELETE FROM ai_credential_secrets WHERE secret_reference = ?1;",
+        vec![vec![SqliteValue::Text(secret_reference.to_string())]],
+    )
+    .await
+    .map_err(|error| format!("删除 AI 凭据记录失败：{error}"))?;
     Ok(())
 }
 
 /// Inserts one complete credential row for create or rollback restoration.
 /// 为创建或回滚恢复插入一条完整凭据记录。
 async fn insert_ai_credential_secret_record(
-    controller: &ControllerRuntimeHandle,
+    host_runtime: &HostRuntimeHandle,
     record: &AiCredentialSecretRecord,
     operation: &str,
 ) -> Result<(), String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            controller.sqlite_binding_id.as_str(),
+    let result =
+        local_sql::query_json_async(
+            &host_runtime.local,
+            LogicalDatabase::AppState,
             r#"
 INSERT INTO ai_credential_secrets (
     secret_reference, format_version, revision, material_kind, secret_value,
@@ -312,8 +303,7 @@ INSERT INTO ai_credential_secrets (
 RETURNING secret_reference;
 "#,
             insert_params(record),
-        )
-        .await
+        ).await
         .map_err(|error| format!("{operation} AI 凭据记录失败：{error}"))?;
     require_single_mutation_row(
         &result.json_data,
@@ -324,18 +314,18 @@ RETURNING secret_reference;
 
 /// Builds typed SQLite values for one complete insert.
 /// 为一次完整插入构建类型化 SQLite 参数。
-fn insert_params(record: &AiCredentialSecretRecord) -> Vec<ControllerSqliteValue> {
+fn insert_params(record: &AiCredentialSecretRecord) -> Vec<SqliteValue> {
     vec![
-        ControllerSqliteValue::String(record.secret_reference.clone()),
-        ControllerSqliteValue::Int64(record.format_version),
-        ControllerSqliteValue::Int64(record.revision),
-        ControllerSqliteValue::String(record.material_kind.clone()),
+        SqliteValue::Text(record.secret_reference.clone()),
+        SqliteValue::Integer(record.format_version),
+        SqliteValue::Integer(record.revision),
+        SqliteValue::Text(record.material_kind.clone()),
         optional_sqlite_string(&record.secret_value),
         optional_sqlite_string(&record.access_token),
         optional_sqlite_string(&record.refresh_token),
         optional_sqlite_i64(record.issued_at_unix_ms),
         optional_sqlite_i64(record.expires_at_unix_ms),
-        ControllerSqliteValue::String(record.scope_text.clone()),
+        SqliteValue::Text(record.scope_text.clone()),
         optional_sqlite_string(&record.account_subject),
         optional_sqlite_string(&record.authorization_kind),
         optional_sqlite_string(&record.provider_username),
@@ -350,24 +340,19 @@ fn insert_params(record: &AiCredentialSecretRecord) -> Vec<ControllerSqliteValue
         optional_sqlite_string(&record.provider_region),
         optional_sqlite_string(&record.resource_url),
         optional_sqlite_string(&record.provider_device_id),
-        ControllerSqliteValue::Int64(record.created_at_unix_ms),
-        ControllerSqliteValue::Int64(record.updated_at_unix_ms),
+        SqliteValue::Integer(record.created_at_unix_ms),
+        SqliteValue::Integer(record.updated_at_unix_ms),
     ]
 }
 
 /// Builds typed SQLite values for one complete compare-and-replace update.
 /// 为一次完整比较替换更新构建类型化 SQLite 参数。
-fn update_params(
-    record: &AiCredentialSecretRecord,
-    expected_revision: i64,
-) -> Vec<ControllerSqliteValue> {
+fn update_params(record: &AiCredentialSecretRecord, expected_revision: i64) -> Vec<SqliteValue> {
     let mut params = insert_params(record);
     params.remove(0);
     params.remove(23);
-    params.push(ControllerSqliteValue::String(
-        record.secret_reference.clone(),
-    ));
-    params.push(ControllerSqliteValue::Int64(expected_revision));
+    params.push(SqliteValue::Text(record.secret_reference.clone()));
+    params.push(SqliteValue::Integer(expected_revision));
     params
 }
 
@@ -418,19 +403,17 @@ fn validate_secret_reference(secret_reference: &str) -> Result<&str, String> {
 
 /// Converts one optional text field into a typed SQLite scalar.
 /// 将一个可选文本字段转换为类型化 SQLite 标量。
-fn optional_sqlite_string(value: &Option<String>) -> ControllerSqliteValue {
+fn optional_sqlite_string(value: &Option<String>) -> SqliteValue {
     value
         .as_ref()
-        .map(|value| ControllerSqliteValue::String(value.clone()))
-        .unwrap_or(ControllerSqliteValue::Null)
+        .map(|value| SqliteValue::Text(value.clone()))
+        .unwrap_or(SqliteValue::Null)
 }
 
 /// Converts one optional integer field into a typed SQLite scalar.
 /// 将一个可选整数字段转换为类型化 SQLite 标量。
-fn optional_sqlite_i64(value: Option<i64>) -> ControllerSqliteValue {
-    value
-        .map(ControllerSqliteValue::Int64)
-        .unwrap_or(ControllerSqliteValue::Null)
+fn optional_sqlite_i64(value: Option<i64>) -> SqliteValue {
+    value.map(SqliteValue::Integer).unwrap_or(SqliteValue::Null)
 }
 
 #[cfg(test)]
@@ -473,11 +456,8 @@ mod tests {
         let params = update_params(&record, 1);
 
         assert_eq!(params.len(), 26);
-        assert_eq!(params[23], ControllerSqliteValue::Int64(20));
-        assert_eq!(
-            params[24],
-            ControllerSqliteValue::String(String::from("secret-1"))
-        );
-        assert_eq!(params[25], ControllerSqliteValue::Int64(1));
+        assert_eq!(params[23], SqliteValue::Integer(20));
+        assert_eq!(params[24], SqliteValue::Text(String::from("secret-1")));
+        assert_eq!(params[25], SqliteValue::Integer(1));
     }
 }

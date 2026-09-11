@@ -417,7 +417,7 @@ pub(super) fn conversations_archived_delta_envelope(
 fn controller_runtime_for_visible_session_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<ControllerRuntimeHandle, String> {
+) -> Result<HostRuntimeHandle, String> {
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;

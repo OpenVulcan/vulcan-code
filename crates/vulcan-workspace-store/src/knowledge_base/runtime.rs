@@ -18,6 +18,7 @@ use display::recovered_display_index_status;
 use library::{LibraryRow, library_name_key, library_summary_from_row, validate_library_name};
 use raw_corpus::CountRow;
 use vector::recovered_vector_index_status;
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 use storage::{
     KnowledgeManifest, metadata_is_link_or_reparse, persist_tempfile_atomically,
@@ -34,13 +35,14 @@ use operations::{
 use super::models;
 
 use super::schema::{KNOWLEDGE_FTS_INDEX, KNOWLEDGE_SCHEMA_VERSION};
-use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
+use crate::data_plane::HostRuntimeHandle;
+use crate::local_database_runtime::LogicalDatabase;
+use crate::local_sql;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use vldb_controller_client::ControllerSqliteValue;
 
 /// Maximum user-visible warning length.
 /// 单条用户可见告警的最大长度。
@@ -59,21 +61,21 @@ const KNOWLEDGE_PACKAGE_INSPECTION_TEMP_PREFIX: &str = ".package-inspect-";
 /// 可接受的 JSON 元数据条目最大字节数。
 const MAX_KNOWLEDGE_PACKAGE_JSON_BYTES: u64 = 1024 * 1024;
 
-/// Host-native knowledge runtime sharing the controller connection and application registry.
-/// 共享控制器连接与应用注册表的宿主原生知识库运行时。
+/// Host-native knowledge runtime sharing the in-process storage runtime and application registry.
+/// 共享进程内存储运行时与应用注册表的宿主原生知识库运行时。
 #[derive(Clone)]
 pub struct KnowledgeBaseRuntime {
-    /// Long-lived controller data-plane handle.
-    /// 长生命周期控制器数据面句柄。
-    controller: ControllerRuntimeHandle,
+    /// Long-lived host data-plane handle.
+    /// 长生命周期宿主数据面句柄。
+    host_runtime: HostRuntimeHandle,
     /// Per-library exclusive mutation locks.
     /// 每知识库独占变更锁。
     mutation_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     /// Serializes binding activation and protects the shared active-binding caches.
     /// 串行化绑定激活并保护共享活动绑定缓存。
     binding_activation_lock: Arc<Mutex<()>>,
-    /// Library identifiers whose controller SQLite binding is already active.
-    /// 控制器 SQLite 绑定已经激活的知识库标识符。
+    /// Library identifiers whose host SQLite binding is already active.
+    /// 宿主 SQLite 绑定已经激活的知识库标识符。
     active_bindings: Arc<Mutex<BTreeSet<String>>>,
     /// Library identifiers whose derived display SQLite binding is already active.
     /// 派生显示库 SQLite 绑定已经激活的知识库标识符。
@@ -86,8 +88,8 @@ pub struct KnowledgeBaseRuntime {
     active_operations: Arc<Mutex<BTreeMap<String, ActiveKnowledgeOperation>>>,
 }
 
-/// Process-local knowledge runtime state shared by every wrapper over one controller handle.
-/// 由同一控制器句柄的所有包装运行时共享的进程内知识库状态。
+/// Process-local knowledge runtime state shared by every wrapper over one host handle.
+/// 由同一宿主句柄的所有包装运行时共享的进程内知识库状态。
 #[derive(Default)]
 pub(crate) struct KnowledgeBaseRuntimeSharedState {
     /// Per-library exclusive mutation locks.
@@ -96,8 +98,8 @@ pub(crate) struct KnowledgeBaseRuntimeSharedState {
     /// Serializes binding activation and protects the shared active-binding caches.
     /// 串行化绑定激活并保护共享活动绑定缓存。
     binding_activation_lock: Arc<Mutex<()>>,
-    /// Library identifiers whose controller SQLite binding is already active.
-    /// 控制器 SQLite 绑定已经激活的知识库标识符。
+    /// Library identifiers whose host SQLite binding is already active.
+    /// 宿主 SQLite 绑定已经激活的知识库标识符。
     active_bindings: Arc<Mutex<BTreeSet<String>>>,
     /// Library identifiers whose derived display SQLite binding is already active.
     /// 派生显示库 SQLite 绑定已经激活的知识库标识符。
@@ -113,16 +115,16 @@ pub(crate) struct KnowledgeBaseRuntimeSharedState {
 impl KnowledgeBaseRuntime {
     /// Creates a knowledge runtime from the established application data plane.
     /// 从已建立的应用数据面创建知识库运行时。
-    /// `controller` is the established data-plane handle that owns shared knowledge state.
-    /// `controller` 是持有共享知识库状态的既有数据面句柄。
-    /// Returns a wrapper reusing that exact controller, locks, caches, and active-operation map.
-    /// 返回复用同一控制器、锁、缓存和活动任务映射的包装运行时。
-    pub fn new(controller: ControllerRuntimeHandle) -> Self {
+    /// `host_runtime` is the established host handle that owns shared knowledge state.
+    /// `host_runtime` 是持有共享知识库状态的既有宿主句柄。
+    /// Returns a wrapper reusing that exact host runtime, locks, caches, and active-operation map.
+    /// 返回复用同一宿主运行时、锁、缓存和活动任务映射的包装运行时。
+    pub fn new(host_runtime: HostRuntimeHandle) -> Self {
         // sharedState ensures independently reconstructed AI and WebUI runtimes coordinate the same bindings and operations.
         // sharedState 确保独立重建的 AI 与 WebUI 运行时协调同一组绑定和操作。
-        let shared_state = controller.knowledge_runtime_state.clone();
+        let shared_state = host_runtime.knowledge_runtime_state.clone();
         Self {
-            controller,
+            host_runtime,
             mutation_locks: shared_state.mutation_locks.clone(),
             binding_activation_lock: shared_state.binding_activation_lock.clone(),
             active_bindings: shared_state.active_bindings.clone(),
@@ -134,20 +136,17 @@ impl KnowledgeBaseRuntime {
 
     /// Marks abandoned queued or running knowledge operations as interrupted during service startup.
     /// 服务启动时将遗留的排队或运行中知识库操作标记为已中断。
-    /// Uses the established controller; no independent recovery state is allocated.
-    /// 使用既有控制器，不分配独立恢复状态。
+    /// Uses the established host runtime; no independent recovery state is allocated.
+    /// 使用既有宿主运行时，不分配独立恢复状态。
     /// Returns success after job, replacement, derived-state, and orphan cleanup recovery in order.
     /// 按顺序完成任务、覆盖、派生状态及孤立目录清理恢复后返回成功。
     pub async fn recover_interrupted_jobs(&self) -> Result<(), String> {
-        self.controller
-            .client
-            .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                self.controller.sqlite_binding_id.as_str(),
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET state = 'interrupted', phase = 'interrupted', error_message = 'service restarted before knowledge operation completion', finished_at_ms = ? WHERE state IN ('queued', 'running');",
                 vec![int(unix_epoch_millis()?)],
-            )
-            .await
+            ).await
             .map_err(|error| format!("恢复知识库操作状态失败：{error}"))?;
         self.recover_interrupted_replacements().await?;
         self.recover_interrupted_derived_index_states().await?;
@@ -257,16 +256,16 @@ fn nonnegative_u64(value: i64, field: &str) -> Result<u64, String> {
 /// 返回类型化 SQLite 文本值。
 /// Consumes `value` and returns the same text as a typed SQLite parameter.
 /// 消费 `value`，并将同一文本返回为类型化 SQLite 参数。
-fn text(value: impl Into<String>) -> ControllerSqliteValue {
-    ControllerSqliteValue::String(value.into())
+fn text(value: impl Into<String>) -> SqliteValue {
+    SqliteValue::Text(value.into())
 }
 
 /// Returns a typed SQLite integer value.
 /// 返回类型化 SQLite 整数值。
 /// Returns `value` unchanged as a signed 64-bit SQLite parameter.
 /// 将 `value` 原样返回为有符号64位 SQLite 参数。
-fn int(value: i64) -> ControllerSqliteValue {
-    ControllerSqliteValue::Int64(value)
+fn int(value: i64) -> SqliteValue {
+    SqliteValue::Integer(value)
 }
 
 /// Returns the current Unix timestamp in milliseconds.
