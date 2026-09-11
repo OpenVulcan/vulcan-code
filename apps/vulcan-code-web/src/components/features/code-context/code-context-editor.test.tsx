@@ -182,7 +182,7 @@ describe("project semantic settings editor", () => {
     );
 
     expect(host.querySelector('[role="status"]')?.textContent).toContain(
-      "projectSettings.codeContext.generating",
+      "正在重建",
     );
     expect(host.textContent).not.toContain(
       "VCE explicit replacement is in progress; observe its durable job",

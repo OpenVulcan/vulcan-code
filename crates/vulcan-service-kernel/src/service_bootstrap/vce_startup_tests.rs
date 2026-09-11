@@ -91,8 +91,8 @@ fn real_startup_and_restart_leave_uninitialized_projects_cold() {
     assert_eq!(first["lastSuccess"], second["lastSuccess"]);
 }
 
-/// Install private paths, persist the exact controller endpoint and run the unmodified startup orchestration.
-/// 安装私有路径、持久化精确控制器端点并运行未替换的启动编排。
+/// Install private paths, persist isolated provider routes and run the unmodified startup orchestration.
+/// 安装私有路径、持久化隔离的供应商路由并运行未替换的启动编排。
 /// `root` owns both phases; `phase` selects explicit initialization or read-only process restoration.
 /// `root` 持有两个阶段；`phase` 选择明确初始化或只读进程恢复。
 fn run_bootstrap_phase(root: &Path, phase: &str) {
@@ -363,8 +363,8 @@ async fn run_browser_acceptance(
         "[vce-browser-acceptance] ready at http://{address}; root={}",
         root.display()
     );
-    // A finite deadline prevents an abandoned manual test from holding the controller indefinitely.
-    // 有限截止时间防止被遗弃的手动测试无限持有控制器。
+    // A finite deadline prevents an abandoned manual test from holding the private browser host indefinitely.
+    // 有限截止时间防止被遗弃的手动测试无限持有私有浏览器宿主。
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
     while !root.join("stop-browser-host").exists() && tokio::time::Instant::now() < deadline {
         assert!(

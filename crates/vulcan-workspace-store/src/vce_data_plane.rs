@@ -2045,16 +2045,41 @@ mod tests {
         RefreshReason, RefreshRequest, RetrieveRequest, SegmentVector,
         VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION, VceAiBinding, VceAiCapabilitySnapshot, VceAiPort,
         VceAiPurpose, VceCodeNodeSnapshot, VceConfig, VceEmbeddingBatchRecord,
-        VceEmbeddingBatchState, VceEmbeddingRequest, VceEmbeddingResponse, VceEmbeddingRunManifest,
-        VceEmbeddingRunState, VceEngine, VceFuture, VceIndexBinding, VceIndexPort,
-        VcePhysicalCompactionOperation, VcePhysicalCompactionState, VcePhysicalTableRole,
-        VcePortError, VcePortOperation, VceQueryRewriteRequest, VceQueryRewriteResponse,
-        VceQueryStatistics, VceRefreshSummary, VceRerankRequest, VceRerankResponse, VceSourcePort,
-        VceSourceReadRequest, VceSourceReadResponse, VceStateIdentity, VceStateSnapshot,
-        WorkspaceSnapshot, blob_name,
+        VceEmbeddingBatchState, VceEmbeddingRequest, VceEmbeddingResponse, VceEmbeddingRunContract,
+        VceEmbeddingRunManifest, VceEmbeddingRunState, VceEngine, VceFuture, VceIndexBinding,
+        VceIndexPort, VcePhysicalCompactionOperation, VcePhysicalCompactionState,
+        VcePhysicalTableRole, VcePortError, VcePortOperation, VceQueryRewriteRequest,
+        VceQueryRewriteResponse, VceQueryStatistics, VceRefreshSummary, VceRerankRequest,
+        VceRerankResponse, VceSourcePort, VceSourceReadRequest, VceSourceReadResponse,
+        VceStateIdentity, VceStateSnapshot, WorkspaceSnapshot, blob_name,
     };
     use vulcan_lancedb_engine::types::{LanceDbCreateTableInput, LanceDbDropTableInput};
     use vulcan_sqlite_engine::sql_exec::SqliteValue;
+
+    /// Build the mandatory frozen execution contract used by storage manifest fixtures.
+    /// 构建存储清单夹具使用的必需冻结执行契约。
+    fn test_embedding_contract() -> VceEmbeddingRunContract {
+        VceEmbeddingRunContract {
+            embedding_space: EmbeddingSpace {
+                vector_space_id: String::from("test-space"),
+                physical_fingerprint: Some(String::from("test-provider:test-model:3")),
+                dimension: 3,
+                preprocessing_version: String::from("vce-preprocess-v1"),
+                chunker_version: String::from("vce-chunker-v1"),
+            },
+            configured_max_inputs: 20,
+            provider_max_inputs: Some(20),
+            effective_max_inputs: 20,
+            max_chars: 8_192,
+            max_segment_chars: 4_096,
+            overlap_chars: 128,
+            max_file_bytes: 16 * 1024 * 1024,
+            purposes: vec![
+                VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
+                VceAiPurpose::CodePathEmbedding.as_str().to_owned(),
+            ],
+        }
+    }
 
     /// Deterministic VCE AI boundary used by the real data-plane test.
     /// 真实 VCE 数据面测试使用的确定性 VCE AI 边界。
@@ -2640,7 +2665,7 @@ mod tests {
                 generation: 1,
                 source_revision: None,
                 state: VceEmbeddingRunState::Planned,
-                contract: None,
+                contract: test_embedding_contract(),
                 base_checkpoint_version: None,
                 reused_blob_names: vec![String::from("reused-manifest-blob")],
                 nodes: large_nodes,

@@ -3194,7 +3194,7 @@ impl VceEngine {
             generation: context.generation,
             source_revision: context.source_revision.map(str::to_owned),
             state: VceEmbeddingRunState::Planned,
-            contract: Some(contract),
+            contract,
             base_checkpoint_version,
             reused_blob_names,
             nodes,
@@ -4505,12 +4505,6 @@ fn validate_embedding_manifest_plan(
     existing: &VceEmbeddingRunManifest,
 ) -> Result<(), VceError> {
     existing.validate().map_err(VceError::InvalidRequest)?;
-    if existing.contract.is_none() && planned.contract.is_some() {
-        return Err(VceError::InvalidRequest(
-            "durable Embedding manifest predates the frozen run contract; start a new run"
-                .to_owned(),
-        ));
-    }
     if existing.run_id != planned.run_id
         || existing.namespace_id != planned.namespace_id
         || existing.generation != planned.generation

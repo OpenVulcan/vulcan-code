@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { VceJobSummary } from "@/types";
 import { isVceJobActive, mergeVceJobReceipt } from "./use-vce-project-job";
-import { VceJobProgress, vceSynchronizationControl } from "./vce-job-progress";
+import { VceJobProgress, vceActiveJobStatusLabel, vceSynchronizationControl } from "./vce-job-progress";
 
 // Create one complete receipt for deterministic progress and event-ordering assertions.
 // 创建完整回执用于确定性进度与事件排序断言。
@@ -31,6 +31,18 @@ describe("durable VCE job projections", () => {
     expect(markup).toContain("取消更新及后续同步");
     expect(vceSynchronizationControl({ ...running, state: "cancelling" }, false).disabled).toBe(true);
     expect(vceSynchronizationControl({ ...running, state: "succeeded" }, true).disabled).toBe(false);
+  });
+
+  // Compact work keeps its own localized identity in shared controls and compact surfaces.
+  // 物理整理在共享控件和紧凑界面中保持自身的本地化身份。
+  it("labels active compaction without retired controller or generic update wording", () => {
+    const queued: VceJobSummary = { ...receipt(), kind: "compact" };
+    const running: VceJobSummary = { ...queued, state: "running" };
+    expect(vceSynchronizationControl(queued, true)).toEqual({ disabled: true, label: "物理整理已排队" });
+    expect(vceSynchronizationControl(running, false)).toEqual({ disabled: true, label: "Physical compaction in progress" });
+    expect(vceActiveJobStatusLabel(running, true)).toBe("正在整理物理向量表");
+    expect(vceActiveJobStatusLabel({ ...running, state: "cancelling" }, false)).toBe("Cancelling physical compaction");
+    expect(vceActiveJobStatusLabel({ ...running, state: "succeeded" }, true)).toBeNull();
   });
 
   // A terminal persistence diagnostic keeps the recovery cancellation action enabled even after the last phase.
@@ -139,7 +151,7 @@ describe("durable VCE job projections", () => {
           plannedFragmentCount: 24,
           currentFragmentCount: 24,
           metrics: { fragmentsRemoved: 0, fragmentsAdded: 0, filesRemoved: 0, filesAdded: 0 },
-          error: "controller operation disappeared",
+          error: "in-process compaction operation disappeared",
         }],
       },
     };
@@ -150,10 +162,10 @@ describe("durable VCE job projections", () => {
     expect(chinese).toContain("取消整理");
     expect(chinese).toContain("内容向量表");
     expect(chinese).toContain("片段 32 → 4");
-    expect(chinese).toContain("控制器状态已丢失");
+    expect(chinese).toContain("整理操作状态已丢失");
     expect(chinese).toContain("整理复用现有向量");
     expect(chinese).toContain("查看技术诊断");
-    expect(chinese).toContain("controller operation disappeared");
+    expect(chinese).toContain("in-process compaction operation disappeared");
     expect(chinese).toContain("<details");
     expect(chinese).not.toContain("重新执行");
 
@@ -162,7 +174,7 @@ describe("durable VCE job projections", () => {
     );
     expect(english).toContain("Compacting physical vector tables");
     expect(english).toContain("Content vector table");
-    expect(english).toContain("Controller state lost");
+    expect(english).toContain("Compaction operation state lost");
     expect(english).toContain("Compaction reuses existing vectors");
   });
 

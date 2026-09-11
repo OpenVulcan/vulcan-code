@@ -56,7 +56,7 @@ import {
 } from "./code-context-pagination";
 import { useVceProjectJob } from "./use-vce-project-job";
 import { useVceActionScope } from "./use-vce-action-scope";
-import { VceJobProgress, vceSynchronizationControl } from "./vce-job-progress";
+import { VceJobProgress, vceActiveJobStatusLabel, vceSynchronizationControl } from "./vce-job-progress";
 import {
   VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS,
   VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
@@ -160,9 +160,17 @@ export function CodeContextArea(props: {
   // projectReportsActiveJob 是作业回执观察器完成恢复前，宿主已经提供的生命周期投影。
   const projectReportsActiveJob =
     props.overview?.status.lifecycle === "indexing";
+  // activeJobStatusLabel uses the exact acknowledged operation kind whenever its receipt is available.
+  // activeJobStatusLabel 在已取得回执时使用已确认的精确操作类型。
+  const activeJobStatusLabel = vceActiveJobStatusLabel(
+    indexing.job,
+    locale === "zh-CN",
+  );
   // Use the acknowledged project job to offer at most one subsequent manual synchronization.
   // 使用已确认项目作业提供至多一次后续手动同步。
-  const synchronization = projectReportsActiveJob
+  const synchronization = activeJobStatusLabel !== null
+    ? vceSynchronizationControl(indexing.job, locale === "zh-CN")
+    : projectReportsActiveJob
     ? {
         disabled: true,
         label: locale === "zh-CN" ? "索引任务进行中" : "Index job in progress",
@@ -942,7 +950,7 @@ export function CodeContextArea(props: {
               aria-live="polite"
             >
               <LoaderCircle className="animate-spin" size={14} />
-              {t("projectSettings.codeContext.generating")}
+              {activeJobStatusLabel ?? t("projectSettings.codeContext.generating")}
             </div>
           ) : null}
           <Button

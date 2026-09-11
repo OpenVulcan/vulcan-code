@@ -26,10 +26,6 @@ const VCE_EMBEDDING_NODE_METADATA_ALLOWANCE_BYTES: u64 = 1024 * 1024;
 /// 源码、代码块、分段、符号及 JSON 表示允许的最大放大倍数。
 const VCE_EMBEDDING_NODE_SERIALIZATION_EXPANSION: u64 = 32;
 
-/// Legacy source limit used only when a recovered manifest predates the frozen run contract.
-/// 仅在恢复清单早于冻结运行契约时使用的旧版源码上限。
-const VCE_LEGACY_EMBEDDING_SOURCE_MAX_BYTES: u64 = 16 * 1024 * 1024;
-
 /// The only persisted embedding-manifest schema currently accepted by VCE.
 /// VCE 当前唯一接受的持久化向量清单结构版本。
 pub const VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -543,8 +539,7 @@ pub struct VceEmbeddingRunManifest {
     pub state: VceEmbeddingRunState,
     /// Frozen model, vector-space, preprocessing, and effective batching contract.
     /// 固定的模型、向量空间、预处理和有效批次契约。
-    #[serde(default)]
-    pub contract: Option<VceEmbeddingRunContract>,
+    pub contract: VceEmbeddingRunContract,
     /// Published checkpoint used as the comparison base for this run.
     /// 本次运行用于对比的已发布检查点版本。
     #[serde(default)]
@@ -602,9 +597,7 @@ impl VceEmbeddingRunManifest {
         })?;
         i64::try_from(self.updated_at_unix_ms)
             .map_err(|_| String::from("VCE embedding manifest update time exceeds SQLite range"))?;
-        if let Some(contract) = &self.contract {
-            contract.validate()?;
-        }
+        self.contract.validate()?;
         // Project-independent metadata projection that excludes source-node and batch payloads.
         // 排除源码节点和批次负载的项目规模无关元数据投影。
         let envelope = VceEmbeddingManifestEnvelope {
@@ -614,7 +607,7 @@ impl VceEmbeddingRunManifest {
             generation: self.generation,
             source_revision: self.source_revision.as_deref(),
             state: self.state,
-            contract: self.contract.as_ref(),
+            contract: &self.contract,
             base_checkpoint_version: self.base_checkpoint_version,
             node_count: self.nodes.len(),
             reused_blob_count: self.reused_blob_names.len(),
@@ -631,14 +624,9 @@ impl VceEmbeddingRunManifest {
                 "VCE embedding manifest envelope exceeds its metadata bound",
             ));
         }
-        // Frozen source-file budget; only legacy plans use the documented old maximum.
-        // 冻结源码文件预算；仅旧版计划使用已定义的历史最大值。
-        let configured_source_bound = self
-            .contract
-            .as_ref()
-            .map_or(VCE_LEGACY_EMBEDDING_SOURCE_MAX_BYTES, |contract| {
-                contract.max_file_bytes
-            });
+        // Frozen source-file budget from the mandatory run contract.
+        // 来自必需运行契约的冻结源码文件预算。
+        let configured_source_bound = self.contract.max_file_bytes;
         // Checked per-node allowance covering source and prepared artifact representations.
         // 经过校验的单节点配额，覆盖源码和准备产物表示。
         let node_metadata_bound = configured_source_bound
@@ -801,7 +789,7 @@ impl VceEmbeddingRunManifest {
                 namespace_id: &self.namespace_id,
                 generation: self.generation,
                 source_revision: self.source_revision.as_deref(),
-                contract: self.contract.as_ref(),
+                contract: &self.contract,
                 base_checkpoint_version: self.base_checkpoint_version,
                 reused_blob_count: self.reused_blob_names.len(),
                 node_count: self.nodes.len(),
@@ -919,9 +907,9 @@ struct VceEmbeddingManifestEnvelope<'a> {
     /// Current durable run state.
     /// 当前持久化运行状态。
     state: VceEmbeddingRunState,
-    /// Optional frozen execution contract.
-    /// 可选冻结执行契约。
-    contract: Option<&'a VceEmbeddingRunContract>,
+    /// Frozen execution contract.
+    /// 冻结执行契约。
+    contract: &'a VceEmbeddingRunContract,
     /// Optional comparison checkpoint.
     /// 可选对比检查点。
     base_checkpoint_version: Option<u64>,
@@ -963,7 +951,7 @@ struct VceEmbeddingPlanEnvelope<'a> {
     source_revision: Option<&'a str>,
     /// Frozen execution contract.
     /// 冻结执行契约。
-    contract: Option<&'a VceEmbeddingRunContract>,
+    contract: &'a VceEmbeddingRunContract,
     /// Optional comparison checkpoint.
     /// 可选对比检查点。
     base_checkpoint_version: Option<u64>,
@@ -1054,6 +1042,31 @@ fn finalize_sha256_hex(hasher: Sha256) -> String {
 mod tests {
     use super::*;
     use crate::embedding::{EmbeddingInput, EmbeddingPlan};
+
+    /// Build the mandatory frozen execution contract used by manifest fixtures.
+    /// 构建清单夹具使用的必需冻结执行契约。
+    fn test_embedding_contract() -> VceEmbeddingRunContract {
+        VceEmbeddingRunContract {
+            embedding_space: EmbeddingSpace {
+                vector_space_id: String::from("test-space"),
+                physical_fingerprint: Some(String::from("test-provider:test-model:3")),
+                dimension: 3,
+                preprocessing_version: String::from("vce-preprocess-v1"),
+                chunker_version: String::from("vce-chunker-v1"),
+            },
+            configured_max_inputs: 20,
+            provider_max_inputs: Some(20),
+            effective_max_inputs: 20,
+            max_chars: 8_192,
+            max_segment_chars: 4_096,
+            overlap_chars: 128,
+            max_file_bytes: 16 * 1024 * 1024,
+            purposes: vec![
+                VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
+                VceAiPurpose::CodePathEmbedding.as_str().to_owned(),
+            ],
+        }
+    }
 
     /// Verify a validated provider result survives serialization and restores exact segment identities.
     /// 验证已校验供应商结果经过序列化后仍能恢复精确分段身份。
@@ -1150,7 +1163,7 @@ mod tests {
             generation: 1,
             source_revision: None,
             state: VceEmbeddingRunState::Planned,
-            contract: None,
+            contract: test_embedding_contract(),
             base_checkpoint_version: None,
             reused_blob_names: Vec::new(),
             nodes: vec![VceCodeNodeSnapshot {
@@ -1228,7 +1241,7 @@ mod tests {
             generation: 1,
             source_revision: None,
             state: VceEmbeddingRunState::Running,
-            contract: None,
+            contract: test_embedding_contract(),
             base_checkpoint_version: None,
             reused_blob_names: Vec::new(),
             nodes: Vec::new(),
@@ -1309,7 +1322,7 @@ mod tests {
             generation: 1,
             source_revision: None,
             state: VceEmbeddingRunState::Planned,
-            contract: None,
+            contract: test_embedding_contract(),
             base_checkpoint_version: None,
             reused_blob_names: Vec::new(),
             nodes,

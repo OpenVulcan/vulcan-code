@@ -68,7 +68,7 @@ struct StoredEmbeddingManifestEnvelope {
     source_revision: Option<String>,
     /// Frozen model and batching contract.
     /// 冻结模型与批处理契约。
-    contract: Option<VceEmbeddingRunContract>,
+    contract: VceEmbeddingRunContract,
     /// Optional published checkpoint used as the comparison base.
     /// 可选的已发布对比基线检查点。
     base_checkpoint_version: Option<u64>,
@@ -394,8 +394,8 @@ impl VceProjectIndex {
         .await
     }
 
-    /// Load one complete v1 plan without exposing partial child writes.
-    /// 读取一份完整旧版或分片计划，不暴露部分子记录写入。
+    /// Load one complete v1 sharded plan without exposing partial child writes.
+    /// 读取一份完整 v1 分片计划，不暴露部分子记录写入。
     ///
     /// `run_id` selects one exact plan. Returns a consistent complete plan, absence for unpublished data, or an error.
     /// `run_id` 选择精确计划；返回一致的完整计划，未发布数据返回空值，失败返回错误。

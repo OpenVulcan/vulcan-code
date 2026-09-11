@@ -2,6 +2,29 @@ import { Button } from "@/components/ui/button";
 import type { VceJobSummary } from "@/types";
 import { isVceJobActive } from "./use-vce-project-job";
 
+// Describe one active durable job by its real operation kind and lifecycle state.
+// 按真实操作类型和生命周期状态描述一项活动持久作业。
+// job is the acknowledged project receipt and chinese selects locale. Returns null for terminal work.
+// job 为已确认项目回执，chinese 选择语言；终态作业返回空值。
+export function vceActiveJobStatusLabel(job: VceJobSummary | null, chinese: boolean): string | null {
+  if (!isVceJobActive(job) || job === null) return null;
+  // copy selects display language without weakening the durable state distinction.
+  // copy 选择显示语言，不弱化持久状态区分。
+  const copy = (zh: string, en: string) => chinese ? zh : en;
+  if (job.state === "cancelling") {
+    return job.kind === "compact" ? copy("正在取消物理整理", "Cancelling physical compaction")
+      : copy("正在取消索引任务", "Cancelling index job");
+  }
+  if (job.kind === "compact") {
+    return job.state === "queued" ? copy("物理整理已排队", "Physical compaction queued")
+      : copy("正在整理物理向量表", "Compacting physical vector tables");
+  }
+  if (job.kind === "initialize") return copy("正在初始化", "Initializing");
+  if (job.kind === "rebuild") return copy("正在重建", "Rebuilding");
+  return job.state === "queued" ? copy("索引更新已排队", "Index update queued")
+    : copy("正在更新", "Updating");
+}
+
 // Derive one shared synchronization action from the acknowledged receipt, never from a local click count.
 // 从已确认回执派生统一同步操作，绝不依赖本地点击计数。
 // job is project-scoped and chinese selects copy. Returns the label and disabled state for both entry points.
@@ -12,6 +35,7 @@ export function vceSynchronizationControl(job: VceJobSummary | null, chinese: bo
   const copy = (zh: string, en: string) => chinese ? zh : en;
   if (!isVceJobActive(job) || job === null) return { disabled: false, label: copy("手动更新索引", "Synchronize index now") };
   if (job.state === "cancelling") return { disabled: true, label: job.kind === "compact" ? copy("正在取消整理", "Cancelling compaction") : copy("正在取消更新", "Cancelling update") };
+  if (job.kind === "compact") return { disabled: true, label: job.state === "queued" ? copy("物理整理已排队", "Physical compaction queued") : copy("物理整理进行中", "Physical compaction in progress") };
   if (job.kind !== "synchronize") return { disabled: true, label: copy("索引任务进行中", "Index job in progress") };
   if (job.state === "queued") return { disabled: true, label: copy("已排队等待更新", "Update queued") };
   if (job.followupRequested) return { disabled: true, label: copy("已安排后续更新", "Follow-up update scheduled") };
@@ -77,7 +101,7 @@ export function VceJobProgress(props: {
     succeeded: copy("已完成", "Completed"),
     failed: copy("失败", "Failed"),
     cancelled: copy("已取消", "Cancelled"),
-    state_lost: copy("控制器状态已丢失", "Controller state lost"),
+    state_lost: copy("整理操作状态已丢失", "Compaction operation state lost"),
     interrupted: copy("已中断", "Interrupted"),
   };
   const progress = job.progress;
@@ -89,9 +113,9 @@ export function VceJobProgress(props: {
   const recoveryStatus = recoveryRequired
     ? copy("终态回执尚未完成写入，作业仍保留以便恢复。请点击“恢复并取消”释放作业。", "The terminal receipt is not fully persisted; the job remains recoverable. Choose “Recover and cancel” to release it.")
     : null;
-  // technicalDiagnostics retains raw host/controller evidence behind an explicit disclosure;
+  // technicalDiagnostics retains raw host/storage evidence behind an explicit disclosure;
   // normal active states remain localized and never render diagnostics as an inline red status.
-  // technicalDiagnostics 将宿主／控制器原始证据保留在显式展开项中；
+  // technicalDiagnostics 将宿主／存储原始证据保留在显式展开项中；
   // 正常活动状态保持本地化，绝不把诊断渲染成行内红色状态。
   const technicalDiagnostics = Array.from(new Set([
     ...(job.error ? [job.error] : []),

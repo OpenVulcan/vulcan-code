@@ -254,6 +254,22 @@ describe("shared project semantic surfaces", () => {
     expect(rpc.update).not.toHaveBeenCalled();
   });
 
+  // The composer menu must preserve a physical compaction job's real operation identity.
+  // 输入区菜单必须保留物理整理作业的真实操作身份。
+  it("labels active physical compaction in the composer menu", async () => {
+    const compact: VceJobSummary = {
+      projectId: "project-a", jobId: "compact-a", kind: "compact", state: "running",
+      sequence: 2, createdAtUnixMs: 2000, updatedAtUnixMs: 2100, sourceCheckpointVersion: 2,
+      resultCheckpointVersion: null, followupRequested: false, error: null,
+      progress: { phase: "writing", operationId: "compact-a:content:1", unit: "tables", completed: 0, total: 2, currentPath: null },
+    };
+    rpc.jobs.mockResolvedValue(compact);
+    await act(async () => root.render(<Harness projectId="project-a" menu />));
+    await act(async () => menuItem("语义引擎").click());
+    expect(menuItem("正在整理物理向量表，查看进度")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("索引任务进行中，查看进度");
+  });
+
   // An old surface closure must not acquire a newly mounted project's current action owner.
   // 旧界面闭包不得取得新挂载项目的当前操作归属。
   it("rejects retired menu actions after project navigation, re-entry and unmount", async () => {

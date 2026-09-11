@@ -2,7 +2,7 @@ import { ScanSearch } from "lucide-react";
 import { DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/ui/dropdown-menu";
 import { useI18n } from "@/i18n";
-import { VceJobProgress, vceSynchronizationControl } from "./vce-job-progress";
+import { VceJobProgress, vceActiveJobStatusLabel, vceSynchronizationControl } from "./vce-job-progress";
 import { useVceProjectSurface, type VceSurfaceGate } from "./vce-project-surface";
 
 // Map the explicit gate to actionable user text, not technical lifecycle enum names.
@@ -35,6 +35,9 @@ export function VceComposerMenu() {
   // Both the menu and project settings expose the same bounded follow-up operation.
   // 菜单与项目设置暴露相同的有界后续操作。
   const synchronization = vceSynchronizationControl(surface.jobState.job, chinese);
+  // activeJobLabel keeps every compact surface aligned with the exact durable operation kind.
+  // activeJobLabel 使每个紧凑界面都与持久作业的精确操作类型保持一致。
+  const activeJobLabel = vceActiveJobStatusLabel(surface.jobState.job, chinese);
   const openGate = surface.gate === "engine_off" ? surface.openEngineSettings
     : surface.gate === "unavailable" ? surface.reload : surface.openProjectSettings;
   return <DropdownMenuSub>
@@ -59,7 +62,7 @@ export function VceComposerMenu() {
         {vceSurfaceLabel(surface.gate, chinese)}
       </DropdownMenuItem>}
       {surface.jobState.active ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={surface.openProjectSettings}>
-        {chinese ? "索引任务进行中，查看进度" : "Index job in progress — view details"}
+        {activeJobLabel ?? (chinese ? "作业进行中" : "Job in progress")}{chinese ? "，查看进度" : " — view details"}
       </DropdownMenuItem></> : null}
     </DropdownMenuSubContent>
   </DropdownMenuSub>;
@@ -89,8 +92,8 @@ export function VceFloatingNode(props: {
     : (chinese ? "已同步至最近观察" : "Synced through last observation");
   if (surface.gate === "ready") label = freshnessLabel;
   if (surface.gate === "ready" || surface.gate === "uninitialized") {
-    if (surface.jobState.active) label = surface.jobState.job?.kind === "initialize"
-      ? (chinese ? "正在初始化" : "Initializing") : (chinese ? "正在更新" : "Updating");
+    const activeJobLabel = vceActiveJobStatusLabel(surface.jobState.job, chinese);
+    if (activeJobLabel !== null) label = activeJobLabel;
     else if (surface.jobState.job?.state === "failed") label = chinese ? "索引更新失败" : "Index update failed";
     else if (surface.jobState.job?.state === "cancelled") label = chinese ? "索引更新已取消" : "Index update cancelled";
     else if (surface.jobState.job?.state === "interrupted") label = chinese ? "索引任务中断" : "Index job interrupted";
