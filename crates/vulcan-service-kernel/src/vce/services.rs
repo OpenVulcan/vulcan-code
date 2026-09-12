@@ -769,6 +769,7 @@ pub(crate) fn map_vce_job(
                 VceRefreshUnit::Files => "files",
                 VceRefreshUnit::Blobs => "blobs",
                 VceRefreshUnit::Batches => "batches",
+                VceRefreshUnit::Requests => "requests",
                 VceRefreshUnit::Tables => "tables",
                 VceRefreshUnit::None => "none",
             }
@@ -777,6 +778,21 @@ pub(crate) fn map_vce_job(
             total: progress.total,
             overall_completed: progress.overall_completed,
             overall_total: progress.overall_total,
+            provider_batch_state: progress.provider_batch_state.map(|state| {
+                match state {
+                    vulcan_context_engine::VceRefreshProviderBatchState::Validating => "validating",
+                    vulcan_context_engine::VceRefreshProviderBatchState::InProgress => {
+                        "in_progress"
+                    }
+                    vulcan_context_engine::VceRefreshProviderBatchState::Finalizing => "finalizing",
+                    vulcan_context_engine::VceRefreshProviderBatchState::Completed => "completed",
+                    vulcan_context_engine::VceRefreshProviderBatchState::Failed => "failed",
+                    vulcan_context_engine::VceRefreshProviderBatchState::Expired => "expired",
+                    vulcan_context_engine::VceRefreshProviderBatchState::Cancelling => "cancelling",
+                    vulcan_context_engine::VceRefreshProviderBatchState::Cancelled => "cancelled",
+                }
+                .to_owned()
+            }),
             current_path: progress.current_path,
         }),
         compaction: job.compaction.map(map_compaction_job),

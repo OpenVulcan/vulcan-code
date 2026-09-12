@@ -76,6 +76,7 @@ fn vce_has_no_runtime_memory_or_storage_dependency() {
         "serde",
         "serde_json",
         "sha2",
+        "tokio",
         "vulcan-ai-contract",
         "workspace-hack",
     ]);

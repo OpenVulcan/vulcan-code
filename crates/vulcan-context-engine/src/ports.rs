@@ -319,6 +319,562 @@ pub struct VceEmbeddingResponse {
     pub space: EmbeddingSpace,
 }
 
+/// Identifies the provider input transport used by one VCE embedding Batch route.
+/// 标识一条 VCE 向量 Batch 路由使用的供应商输入传输方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VceEmbeddingBatchTransport {
+    /// Requests are submitted directly in one JSON body.
+    /// 请求直接通过一个 JSON 正文提交。
+    InlineJson,
+    /// Requests are uploaded as JSONL before task creation.
+    /// 请求在创建任务前以 JSONL 文件上传。
+    JsonlFile,
+}
+
+/// Declares the exact effective limits exposed to VCE for asynchronous embedding Batch work.
+/// 声明向 VCE 暴露的异步向量 Batch 精确有效限制。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingBatchCapabilities {
+    /// Exact provider input transport selected by the frozen route.
+    /// 冻结路由选择的精确供应商输入传输方式。
+    pub transport: VceEmbeddingBatchTransport,
+    /// Verified provider maximum request items before host-policy intersection.
+    /// 与宿主策略取交集前，供应商已验证的最大请求项数量。
+    pub provider_maximum_requests: Option<u32>,
+    /// Verified provider maximum complete payload bytes before host-policy intersection.
+    /// 与宿主策略取交集前，供应商已验证的最大完整负载字节数。
+    pub provider_maximum_payload_bytes: Option<u64>,
+    /// Verified provider maximum encoded bytes for one request item.
+    /// 供应商已验证的单个请求项最大编码字节数。
+    pub provider_maximum_item_bytes: Option<u64>,
+    /// Verified provider maximum simultaneously active remote tasks.
+    /// 供应商已验证的最大同时活动远端任务数。
+    pub provider_maximum_parallel_tasks: Option<u32>,
+    /// Host-owned maximum remote tasks generated for one VCE run.
+    /// 单次 VCE 运行允许生成的宿主持有最大远端任务数。
+    pub host_policy_maximum_tasks_per_run: u32,
+    /// Host-owned maximum request items per remote task.
+    /// 单个远端任务允许包含的宿主持有最大请求项数。
+    pub host_policy_maximum_requests: u32,
+    /// Host-owned maximum complete payload bytes per remote task.
+    /// 单个远端任务允许使用的宿主持有最大完整负载字节数。
+    pub host_policy_maximum_payload_bytes: u64,
+    /// Host-owned maximum downloaded result bytes per remote task.
+    /// 单个远端任务允许下载的宿主持有最大结果字节数。
+    pub host_policy_maximum_result_bytes: u64,
+    /// Exact provider completion window submitted by file-backed protocols.
+    /// 文件型协议提交的精确供应商完成窗口秒数。
+    pub provider_completion_window_seconds: Option<u64>,
+    /// Effective maximum provider request items per remote task.
+    /// 每个远端任务的有效最大供应商请求项数。
+    pub maximum_requests: u32,
+    /// Effective maximum encoded input payload bytes.
+    /// 有效最大编码输入负载字节数。
+    pub maximum_payload_bytes: u64,
+    /// Host maximum downloaded result bytes.
+    /// 宿主最大下载结果字节数。
+    pub maximum_result_bytes: u64,
+    /// Effective maximum number of remote tasks in one VCE run.
+    /// 单次 VCE 运行允许的有效最大远端任务数。
+    pub maximum_tasks_per_run: u32,
+    /// Provider account file-count ceiling when file transport is used.
+    /// 使用文件传输时供应商账号的文件数量上限。
+    pub provider_maximum_files: Option<u32>,
+    /// Provider account aggregate retained-file byte ceiling.
+    /// 供应商账号保留文件总字节上限。
+    pub provider_maximum_total_file_bytes: Option<u64>,
+    /// Provider upload requests per second.
+    /// 供应商文件上传接口每秒请求上限。
+    pub provider_file_upload_qps: Option<u32>,
+    /// Provider aggregate file-operation requests per second.
+    /// 供应商文件类接口合计每秒请求上限。
+    pub provider_file_operation_qps: Option<u32>,
+    /// Provider Batch creation requests per minute.
+    /// 供应商每分钟 Batch 创建请求上限。
+    pub provider_task_create_rpm: Option<u32>,
+    /// Provider Batch status requests per minute.
+    /// 供应商每分钟 Batch 状态请求上限。
+    pub provider_task_status_rpm: Option<u32>,
+    /// Provider Batch-list reconciliation requests per minute.
+    /// 供应商每分钟 Batch 列表对账请求上限。
+    pub provider_task_list_rpm: Option<u32>,
+    /// Provider Batch cancellation requests per minute.
+    /// 供应商每分钟 Batch 取消请求上限。
+    pub provider_task_cancel_rpm: Option<u32>,
+    /// Minimum status polling interval.
+    /// 最短状态轮询间隔。
+    pub minimum_poll_interval_ms: u64,
+    /// Whether the provider accepts remote cancellation.
+    /// 供应商是否接受远端取消。
+    pub supports_cancel: bool,
+    /// Whether VCE should delete a provider input file after durable result ingestion.
+    /// VCE 是否应在结果持久入库后删除供应商输入文件。
+    pub deletes_input_file_after_ingestion: bool,
+}
+
+impl VceEmbeddingBatchCapabilities {
+    /// Validates the frozen provider limits before VCE creates or resumes remote work.
+    /// 在 VCE 创建或恢复远端作业前校验冻结的供应商限制。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Unit for a coherent bounded capability snapshot, otherwise a precise contract message.
+    /// 能力快照一致且有界时返回空值，否则返回明确契约消息。
+    pub fn validate(&self) -> Result<(), String> {
+        let expected_maximum_requests = self
+            .provider_maximum_requests
+            .map_or(self.host_policy_maximum_requests, |provider| {
+                provider.min(self.host_policy_maximum_requests)
+            });
+        let expected_maximum_payload_bytes = self
+            .provider_maximum_payload_bytes
+            .map_or(self.host_policy_maximum_payload_bytes, |provider| {
+                provider.min(self.host_policy_maximum_payload_bytes)
+            });
+        let expected_maximum_tasks = self
+            .provider_maximum_parallel_tasks
+            .map_or(self.host_policy_maximum_tasks_per_run, |provider| {
+                provider.min(self.host_policy_maximum_tasks_per_run)
+            });
+        if self.provider_maximum_requests == Some(0)
+            || self.provider_maximum_payload_bytes == Some(0)
+            || self.provider_maximum_item_bytes == Some(0)
+            || self.provider_maximum_parallel_tasks == Some(0)
+            || self.host_policy_maximum_tasks_per_run == 0
+            || self.host_policy_maximum_requests == 0
+            || self.host_policy_maximum_payload_bytes == 0
+            || self.host_policy_maximum_result_bytes == 0
+            || self.provider_completion_window_seconds == Some(0)
+            || self.maximum_requests == 0
+            || self.maximum_payload_bytes == 0
+            || self.maximum_result_bytes == 0
+            || self.maximum_tasks_per_run == 0
+            || self.minimum_poll_interval_ms == 0
+            || self.provider_maximum_files == Some(0)
+            || self.provider_maximum_total_file_bytes == Some(0)
+            || self.provider_file_upload_qps == Some(0)
+            || self.provider_file_operation_qps == Some(0)
+            || self.provider_task_create_rpm == Some(0)
+            || self.provider_task_status_rpm == Some(0)
+            || self.provider_task_list_rpm == Some(0)
+            || self.provider_task_cancel_rpm == Some(0)
+        {
+            return Err(String::from(
+                "VCE embedding Batch capability contains a zero limit",
+            ));
+        }
+        if self.maximum_requests != expected_maximum_requests
+            || self.maximum_payload_bytes != expected_maximum_payload_bytes
+            || self.maximum_tasks_per_run != expected_maximum_tasks
+            || self.maximum_result_bytes != self.host_policy_maximum_result_bytes
+        {
+            return Err(String::from(
+                "VCE embedding Batch effective limits disagree with their frozen provider and host-policy sources",
+            ));
+        }
+        if self
+            .provider_maximum_item_bytes
+            .zip(self.provider_maximum_payload_bytes)
+            .is_some_and(|(item, payload)| item > payload)
+        {
+            return Err(String::from(
+                "VCE embedding Batch provider item limit exceeds its provider payload limit",
+            ));
+        }
+        if self
+            .provider_completion_window_seconds
+            .is_some_and(|seconds| !seconds.is_multiple_of(3_600))
+        {
+            return Err(String::from(
+                "VCE embedding Batch completion window must use complete hours",
+            ));
+        }
+        if self
+            .provider_file_upload_qps
+            .zip(self.provider_file_operation_qps)
+            .is_some_and(|(upload, aggregate)| upload > aggregate)
+        {
+            return Err(String::from(
+                "VCE embedding Batch upload rate exceeds the aggregate file-operation rate",
+            ));
+        }
+        if !self.supports_cancel && self.provider_task_cancel_rpm.is_some() {
+            return Err(String::from(
+                "VCE embedding Batch cancellation rate is declared without cancellation support",
+            ));
+        }
+        match self.transport {
+            VceEmbeddingBatchTransport::InlineJson => {
+                if self.provider_maximum_files.is_some()
+                    || self.provider_maximum_total_file_bytes.is_some()
+                    || self.provider_file_upload_qps.is_some()
+                    || self.provider_file_operation_qps.is_some()
+                    || self.provider_task_list_rpm.is_some()
+                    || self.provider_completion_window_seconds.is_some()
+                    || self.deletes_input_file_after_ingestion
+                {
+                    return Err(String::from(
+                        "Inline VCE embedding Batch capability declares file-only behavior",
+                    ));
+                }
+            }
+            VceEmbeddingBatchTransport::JsonlFile => {}
+        }
+        Ok(())
+    }
+}
+
+/// Records one durable provider input file between upload and Batch creation.
+/// 记录上传与创建 Batch 之间的一份持久供应商输入文件。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingBatchUploadedInput {
+    /// Exact deterministic remote task identity.
+    /// 精确的确定性远端任务身份。
+    pub task_id: String,
+    /// Provider-owned input file identifier.
+    /// 供应商持有的输入文件标识。
+    pub provider_input_file_id: String,
+    /// Host observation time immediately after successful upload.
+    /// 上传成功后宿主立即记录的观测时间。
+    pub uploaded_at_unix_ms: u64,
+}
+
+impl VceEmbeddingBatchUploadedInput {
+    /// Validate one durable uploaded-file identity before persistence or provider reuse.
+    /// 在持久化或供应商复用前校验一个持久上传文件身份。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.task_id.trim().is_empty()
+            || !vce_batch_provider_identifier_valid(self.provider_input_file_id.as_str())
+            || self.uploaded_at_unix_ms == 0
+        {
+            return Err(String::from(
+                "VCE embedding Batch uploaded input identity is incomplete",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Describes one deterministic provider task planned for a VCE segment group.
+/// 描述为一组 VCE 分段规划的确定性供应商任务。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingBatchTaskPlan {
+    /// Stable provider task identity.
+    /// 稳定供应商任务身份。
+    pub task_id: String,
+    /// Zero-based first segment index in the grouped request.
+    /// 分组请求内从零开始的首个分段索引。
+    pub first_input_index: u32,
+    /// Number of contiguous segments in the provider task.
+    /// 供应商任务中的连续分段数量。
+    pub input_count: u32,
+    /// Exact encoded provider payload bytes.
+    /// 精确编码供应商负载字节数。
+    pub encoded_payload_bytes: u64,
+    /// Exact lowercase SHA-256 of the provider payload.
+    /// 供应商负载的精确小写 SHA-256。
+    pub payload_sha256: String,
+}
+
+impl VceEmbeddingBatchTaskPlan {
+    /// Validate one stable contiguous task range and exact payload digest.
+    /// 校验一个稳定连续任务范围及精确负载摘要。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.task_id.trim().is_empty()
+            || self.input_count == 0
+            || self.encoded_payload_bytes == 0
+            || self.payload_sha256.len() != 64
+            || !self
+                .payload_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || self
+                .first_input_index
+                .checked_add(self.input_count)
+                .is_none()
+        {
+            return Err(String::from("VCE embedding Batch task plan is invalid"));
+        }
+        Ok(())
+    }
+
+    /// Return the checked exclusive end of this task's input range.
+    /// 返回当前任务输入范围经过校验的排他结束位置。
+    pub fn end_input_index(&self) -> Result<u32, String> {
+        self.first_input_index
+            .checked_add(self.input_count)
+            .ok_or_else(|| String::from("VCE embedding Batch task range exceeds u32"))
+    }
+}
+
+/// Freezes a deterministic VCE Batch request partition before provider I/O.
+/// 在供应商 I/O 前冻结一份确定性的 VCE Batch 请求分区。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingBatchPlan {
+    /// Stable grouped request identity.
+    /// 稳定分组请求身份。
+    pub request_id: String,
+    /// Immutable request and route fingerprint.
+    /// 不可变请求及路由指纹。
+    pub request_fingerprint: String,
+    /// Frozen effective capability limits.
+    /// 冻结有效能力限制。
+    pub capabilities: VceEmbeddingBatchCapabilities,
+    /// Exact ordered remote tasks required for this VCE group.
+    /// 当前 VCE 分组所需的精确有序远端任务。
+    pub tasks: Vec<VceEmbeddingBatchTaskPlan>,
+}
+
+impl VceEmbeddingBatchPlan {
+    /// Validate an ordered, gap-free and bounded partition of the expected inputs.
+    /// 校验预期输入的一份有序、无间隙且有界分区。
+    pub fn validate(&self, expected_inputs: usize) -> Result<(), String> {
+        self.capabilities.validate()?;
+        let maximum_tasks = usize::try_from(self.capabilities.maximum_tasks_per_run)
+            .map_err(|_| String::from("VCE embedding Batch task limit exceeds usize"))?;
+        if self.request_id.trim().is_empty()
+            || self.request_fingerprint.len() != 64
+            || !self
+                .request_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || self.tasks.is_empty()
+            || self.tasks.len() > maximum_tasks
+        {
+            return Err(String::from(
+                "VCE embedding Batch plan identity is incomplete",
+            ));
+        }
+        let expected_inputs = u32::try_from(expected_inputs)
+            .map_err(|_| String::from("VCE embedding Batch input count exceeds u32"))?;
+        let mut next_input_index = 0_u32;
+        for task in &self.tasks {
+            task.validate()?;
+            if task.first_input_index != next_input_index
+                || task.input_count > self.capabilities.maximum_requests
+                || task.encoded_payload_bytes > self.capabilities.maximum_payload_bytes
+            {
+                return Err(String::from(
+                    "VCE embedding Batch tasks are not an ordered bounded partition",
+                ));
+            }
+            next_input_index = task.end_input_index()?;
+        }
+        if next_input_index != expected_inputs {
+            return Err(String::from(
+                "VCE embedding Batch tasks do not cover the complete request",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Records one durable provider Batch identity returned after submission.
+/// 记录提交后返回的一个持久供应商 Batch 身份。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingBatchSubmission {
+    /// Exact planned task identity.
+    /// 精确规划任务身份。
+    pub task_id: String,
+    /// Provider-owned Batch identity.
+    /// 供应商持有的 Batch 身份。
+    pub provider_batch_id: String,
+    /// Provider input file identity when file transport is used.
+    /// 使用文件传输时的供应商输入文件身份。
+    pub provider_input_file_id: Option<String>,
+    /// Host observation time after successful submission.
+    /// 成功提交后的宿主观测时间。
+    pub submitted_at_unix_ms: u64,
+}
+
+impl VceEmbeddingBatchSubmission {
+    /// Validate one durable provider Batch identity before polling or recovery.
+    /// 在轮询或恢复前校验一个持久供应商 Batch 身份。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.task_id.trim().is_empty()
+            || !vce_batch_provider_identifier_valid(self.provider_batch_id.as_str())
+            || self
+                .provider_input_file_id
+                .as_deref()
+                .is_some_and(|file_id| !vce_batch_provider_identifier_valid(file_id))
+            || self.submitted_at_unix_ms == 0
+        {
+            return Err(String::from(
+                "VCE embedding Batch submission identity is incomplete",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Normalizes provider lifecycle states used by VCE recovery.
+/// 归一化 VCE 恢复使用的供应商生命周期状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VceEmbeddingBatchProviderState {
+    /// Provider validates input.
+    /// 供应商校验输入。
+    Validating,
+    /// Provider processes items.
+    /// 供应商处理条目。
+    InProgress,
+    /// Provider assembles output.
+    /// 供应商组装输出。
+    Finalizing,
+    /// Output is ready.
+    /// 输出已经就绪。
+    Completed,
+    /// Provider failed the task.
+    /// 供应商执行任务失败。
+    Failed,
+    /// Completion window elapsed.
+    /// 已超过完成窗口。
+    Expired,
+    /// Cancellation is in progress.
+    /// 正在取消。
+    Cancelling,
+    /// Task is cancelled.
+    /// 任务已经取消。
+    Cancelled,
+}
+
+/// Carries one durable provider Batch status observation.
+/// 承载一次持久供应商 Batch 状态观测。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingBatchSnapshot {
+    /// Durable submission being observed.
+    /// 当前观测的持久提交记录。
+    pub submission: VceEmbeddingBatchSubmission,
+    /// Current normalized provider state.
+    /// 当前归一化供应商状态。
+    pub state: VceEmbeddingBatchProviderState,
+    /// Total provider request count.
+    /// 供应商请求项总数。
+    pub total_requests: Option<u32>,
+    /// Completed provider request count.
+    /// 已完成供应商请求项数。
+    pub completed_requests: Option<u32>,
+    /// Failed provider request count.
+    /// 失败供应商请求项数。
+    pub failed_requests: Option<u32>,
+    /// Provider output file identity.
+    /// 供应商输出文件身份。
+    pub output_file_id: Option<String>,
+    /// Provider error file identity.
+    /// 供应商错误文件身份。
+    pub error_file_id: Option<String>,
+    /// Controlled provider diagnostic.
+    /// 受控供应商诊断。
+    pub error: Option<String>,
+}
+
+impl VceEmbeddingBatchSnapshot {
+    /// Validate one provider observation and its optional all-or-none counters.
+    /// 校验一次供应商观测及其可选的全有或全无计数。
+    pub fn validate(&self) -> Result<(), String> {
+        self.submission.validate()?;
+        let counters = [
+            self.total_requests,
+            self.completed_requests,
+            self.failed_requests,
+        ];
+        if counters.iter().any(Option::is_some) && counters.iter().any(Option::is_none) {
+            return Err(String::from(
+                "VCE embedding Batch snapshot counters are partial",
+            ));
+        }
+        if let (Some(total), Some(completed), Some(failed)) = (
+            self.total_requests,
+            self.completed_requests,
+            self.failed_requests,
+        ) {
+            let settled = completed
+                .checked_add(failed)
+                .ok_or_else(|| String::from("VCE embedding Batch counters overflow u32"))?;
+            if settled > total
+                || self.state == VceEmbeddingBatchProviderState::Completed && settled != total
+            {
+                return Err(String::from(
+                    "VCE embedding Batch snapshot counters are inconsistent",
+                ));
+            }
+        }
+        for identifier in [
+            self.output_file_id.as_deref(),
+            self.error_file_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !vce_batch_provider_identifier_valid(identifier) {
+                return Err(String::from(
+                    "VCE embedding Batch snapshot file identity is invalid",
+                ));
+            }
+        }
+        if self
+            .error
+            .as_ref()
+            .is_some_and(|error| error.trim().is_empty() || error.len() > 8_192)
+        {
+            return Err(String::from(
+                "VCE embedding Batch snapshot diagnostic is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Return whether one provider-owned Batch or file identifier is safe for durable endpoint expansion.
+/// 返回一个供应商持有的 Batch 或文件标识是否可安全用于持久端点展开。
+fn vce_batch_provider_identifier_valid(identifier: &str) -> bool {
+    !identifier.trim().is_empty()
+        && identifier.len() <= 512
+        && identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Requests asynchronous Batch handling for one ordered VCE segment group.
+/// 请求对一个有序 VCE 分段组执行异步 Batch 处理。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VceEmbeddingBatchRequest {
+    /// Common host routing and correlation context.
+    /// 宿主路由与关联共同上下文。
+    pub context: VceAiRequestContext,
+    /// Ordered segments represented by the remote task.
+    /// 远端任务表示的有序分段。
+    pub batch: EmbeddingBatch,
+}
+
+/// Returns vectors collected for one completed asynchronous VCE Batch task.
+/// 返回为一个已完成异步 VCE Batch 任务收集的向量。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VceEmbeddingBatchCollectedResponse {
+    /// Stable grouped request identity.
+    /// 稳定分组请求身份。
+    pub operation_id: String,
+    /// Stable provider task identity.
+    /// 稳定供应商任务身份。
+    pub task_id: String,
+    /// Vectors aligned with the grouped segment order.
+    /// 与分组分段顺序对齐的向量。
+    pub vectors: Vec<SegmentVector>,
+    /// Logical and physical compatibility metadata.
+    /// 逻辑与物理兼容性元数据。
+    pub space: EmbeddingSpace,
+    /// Non-fatal temporary-file cleanup warning.
+    /// 非致命临时文件清理警告。
+    pub cleanup_warning: Option<String>,
+}
+
 /// Request an optional LLM query rewrite through the same VCE registration.
 /// 通过同一项 VCE 注册请求可选的 LLM 查询改写。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1019,6 +1575,16 @@ pub enum VcePortError {
         /// 可选的供应商或宿主指定毫秒延迟。
         retry_after_ms: Option<u64>,
     },
+    /// A non-idempotent provider submission may have reached the provider, but no identity was returned.
+    /// 非幂等供应商提交可能已经到达供应商，但没有返回可持久化身份。
+    SubmissionUnknown {
+        /// Provider operation whose submission outcome cannot be reconciled safely.
+        /// 无法安全对账提交结果的供应商操作。
+        operation: VcePortOperation,
+        /// Explicit diagnostic retained for manual reconciliation.
+        /// 为人工对账保留的明确诊断。
+        message: String,
+    },
     /// The host returned data that violates the VCE contract.
     /// 宿主返回的数据违反 VCE 契约。
     InvalidResponse {
@@ -1069,6 +1635,11 @@ impl Display for VcePortError {
                     operation.as_str()
                 ),
             },
+            Self::SubmissionUnknown { operation, message } => write!(
+                formatter,
+                "VCE port operation `{}` has an unknown submission outcome: {message}",
+                operation.as_str()
+            ),
             Self::InvalidResponse { operation, reason } => write!(
                 formatter,
                 "VCE port operation `{}` returned an invalid response: {reason}",
@@ -1309,6 +1880,133 @@ pub trait VceAiPort: Send + Sync {
         None
     }
 
+    /// Return asynchronous embedding Batch limits when this frozen route supports them.
+    /// 当前冻结路由支持异步向量 Batch 时返回其限制。
+    fn embedding_batch_capabilities(&self) -> Option<VceEmbeddingBatchCapabilities> {
+        None
+    }
+
+    /// Plan one deterministic one-task asynchronous embedding Batch group.
+    /// 规划一个确定性的单任务异步向量 Batch 分组。
+    fn plan_embedding_batch(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+    ) -> VceFuture<Result<VceEmbeddingBatchPlan, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Upload one exact file-backed asynchronous embedding Batch input.
+    /// 上传一个精确的文件型异步向量 Batch 输入。
+    fn upload_embedding_batch_input(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _task: VceEmbeddingBatchTaskPlan,
+    ) -> VceFuture<Result<VceEmbeddingBatchUploadedInput, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Submit one planned asynchronous embedding Batch task exactly once.
+    /// 精确一次提交一个已规划异步向量 Batch 任务。
+    fn submit_embedding_batch(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _task: VceEmbeddingBatchTaskPlan,
+        _uploaded_input: Option<VceEmbeddingBatchUploadedInput>,
+    ) -> VceFuture<Result<VceEmbeddingBatchSubmission, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Reconcile one file-backed task whose creation response was indeterminate.
+    /// 对账一个创建响应不确定的文件型任务。
+    fn reconcile_embedding_batch_submission(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _task: VceEmbeddingBatchTaskPlan,
+        _uploaded_input: VceEmbeddingBatchUploadedInput,
+    ) -> VceFuture<Result<Option<VceEmbeddingBatchSubmission>, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Poll one durable asynchronous embedding Batch submission.
+    /// 轮询一个持久异步向量 Batch 提交。
+    fn embedding_batch_status(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _submission: VceEmbeddingBatchSubmission,
+    ) -> VceFuture<Result<VceEmbeddingBatchSnapshot, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Collect one completed asynchronous embedding Batch task.
+    /// 收集一个已完成异步向量 Batch 任务。
+    fn collect_embedding_batch(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _task: VceEmbeddingBatchTaskPlan,
+        _snapshot: VceEmbeddingBatchSnapshot,
+    ) -> VceFuture<Result<VceEmbeddingBatchCollectedResponse, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Delete one temporary provider Batch input after durable VCE result persistence.
+    /// 在 VCE 结果持久化后删除一个供应商 Batch 临时输入。
+    fn cleanup_embedding_batch_input(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _submission: VceEmbeddingBatchSubmission,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
+    /// Cancel one durable asynchronous embedding Batch submission when supported.
+    /// 在供应商支持时取消一个持久异步向量 Batch 提交。
+    fn cancel_embedding_batch(
+        &self,
+        _request: VceEmbeddingBatchRequest,
+        _plan: VceEmbeddingBatchPlan,
+        _submission: VceEmbeddingBatchSubmission,
+    ) -> VceFuture<Result<VceEmbeddingBatchSnapshot, VcePortError>> {
+        Box::pin(async {
+            Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            })
+        })
+    }
+
     /// Execute one Embedding batch through the host-registered capability.
     /// 通过宿主注册能力执行一个向量化批次。
     fn embed(
@@ -1459,6 +2157,26 @@ pub trait VceIndexPort: Send + Sync {
         _updated_at_unix_ms: u64,
     ) -> VceFuture<Result<(), VcePortError>> {
         Box::pin(async { Ok(()) })
+    }
+
+    /// Persist one bounded remote asynchronous Batch lifecycle record.
+    /// 持久化一条有界远端异步 Batch 生命周期记录。
+    fn persist_embedding_remote_batch_record(
+        &self,
+        _run_id: String,
+        _record: crate::manifest::VceEmbeddingRemoteBatchRecord,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Load all remote asynchronous Batch records for one run and purpose in stable order.
+    /// 按稳定顺序读取一次运行中指定用途的全部远端异步 Batch 记录。
+    fn load_embedding_remote_batch_records(
+        &self,
+        _run_id: String,
+        _purpose: VceAiPurpose,
+    ) -> VceFuture<Result<Vec<crate::manifest::VceEmbeddingRemoteBatchRecord>, VcePortError>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 
     /// Persist validated vectors for one exact manifest batch before source staging.

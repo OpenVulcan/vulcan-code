@@ -22,6 +22,7 @@ pub mod media_delivery;
 mod media_failure;
 mod media_upload_deadline;
 mod native_inference;
+mod native_inference_batch;
 pub mod oauth;
 mod operation_media_source;
 pub mod provider_manifest;
@@ -57,7 +58,9 @@ pub use media::{
 pub use media_delivery::*;
 pub use media_failure::{MediaUploadFailure, MediaUploadStage};
 pub use media_upload_deadline::MediaUploadDeadline;
-pub use native_inference::registered_native_action_binding_id;
+pub use native_inference::{
+    registered_native_action_binding_id, registered_native_embedding_batch_capabilities,
+};
 pub use oauth::*;
 pub use provider_manifest::*;
 pub use provider_operational_telemetry::*;

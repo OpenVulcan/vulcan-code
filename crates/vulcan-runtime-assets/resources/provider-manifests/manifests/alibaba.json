@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 15,
-  "published_at": "2026-09-08T00:00:00Z",
+  "revision": 19,
+  "published_at": "2026-09-12T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -446,6 +446,54 @@
       "native_inference_bindings": [
         {
           "operation": "embedding_create",
+          "model_ids": [
+            "text-embedding-v1",
+            "text-embedding-v2",
+            "text-embedding-v3",
+            "text-embedding-v4",
+            "qwen3.7-text-embedding",
+            "qwen3.7-text-embedding-flash"
+          ],
+          "binding_id": "alibaba.model_studio.embeddings.batch.v1",
+          "endpoint_path": "/embeddings",
+          "projection": "compatible",
+          "batch": {
+            "protocol": "alibaba_open_ai_compatible_v1",
+            "capabilities": {
+              "transport": "jsonl_file",
+              "result_delivery": "jsonl_files",
+              "provider_maximum_requests": 50000,
+              "provider_maximum_payload_bytes": 524288000,
+              "provider_maximum_item_bytes": 1000000,
+              "provider_maximum_files": 10000,
+              "provider_maximum_total_file_bytes": 107374182400,
+              "provider_file_upload_qps": 3,
+              "provider_file_operation_qps": 10,
+              "provider_maximum_parallel_tasks": 1000,
+              "provider_task_create_rpm": 1000,
+              "provider_task_status_rpm": 1000,
+              "provider_task_list_rpm": 100,
+              "provider_task_cancel_rpm": 1000,
+              "host_policy_maximum_tasks_per_run": 1000,
+              "host_policy_maximum_requests": 10000,
+              "host_policy_maximum_payload_bytes": 67108864,
+              "host_policy_maximum_result_bytes": 268435456,
+              "provider_completion_window_seconds": 86400,
+              "minimum_poll_interval_ms": 65000,
+              "supports_cancel": true,
+              "deletes_input_file_after_ingestion": true
+            },
+            "submit_endpoint_path": "/batches",
+            "status_endpoint_path_template": "/batches/{batch_id}",
+            "cancel_endpoint_path_template": "/batches/{batch_id}/cancel",
+            "item_endpoint_path": "/v1/embeddings",
+            "file_upload_endpoint_path": "/files",
+            "file_content_endpoint_path_template": "/files/{file_id}/content",
+            "file_delete_endpoint_path_template": "/files/{file_id}"
+          }
+        },
+        {
+          "operation": "embedding_create",
           "binding_id": "alibaba.model_studio.embeddings.v1",
           "endpoint_path": "/embeddings",
           "projection": "compatible"
@@ -490,6 +538,8 @@
           { "model_id": "xiaomi/mimo-v2.5-pro", "display_name": "Xiaomi MiMo V2.5 Pro" },
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
           { "model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
+          { "model_id": "text-embedding-v1", "display_name": "Text Embedding V1" },
+          { "model_id": "text-embedding-v2", "display_name": "Text Embedding V2" },
           { "model_id": "text-embedding-v4", "display_name": "Text Embedding V4" },
           { "model_id": "text-embedding-v3", "display_name": "Text Embedding V3" },
           { "model_id": "qwen3-rerank", "display_name": "Qwen3 Rerank" },
@@ -627,6 +677,50 @@
         "example_origin": "https://workspace-id.ap-southeast-1.maas.aliyuncs.com"
       },
       "native_inference_bindings": [
+        {
+          "operation": "embedding_create",
+          "model_ids": [
+            "text-embedding-v3",
+            "text-embedding-v4"
+          ],
+          "binding_id": "alibaba.model_studio.embeddings.batch.v1",
+          "endpoint_path": "/embeddings",
+          "projection": "compatible",
+          "batch": {
+            "protocol": "alibaba_open_ai_compatible_v1",
+            "capabilities": {
+              "transport": "jsonl_file",
+              "result_delivery": "jsonl_files",
+              "provider_maximum_requests": 50000,
+              "provider_maximum_payload_bytes": 524288000,
+              "provider_maximum_item_bytes": 1000000,
+              "provider_maximum_files": 10000,
+              "provider_maximum_total_file_bytes": 107374182400,
+              "provider_file_upload_qps": 3,
+              "provider_file_operation_qps": 10,
+              "provider_maximum_parallel_tasks": 1000,
+              "provider_task_create_rpm": 1000,
+              "provider_task_status_rpm": 1000,
+              "provider_task_list_rpm": 100,
+              "provider_task_cancel_rpm": 1000,
+              "host_policy_maximum_tasks_per_run": 1000,
+              "host_policy_maximum_requests": 10000,
+              "host_policy_maximum_payload_bytes": 67108864,
+              "host_policy_maximum_result_bytes": 268435456,
+              "provider_completion_window_seconds": 86400,
+              "minimum_poll_interval_ms": 65000,
+              "supports_cancel": true,
+              "deletes_input_file_after_ingestion": true
+            },
+            "submit_endpoint_path": "/batches",
+            "status_endpoint_path_template": "/batches/{batch_id}",
+            "cancel_endpoint_path_template": "/batches/{batch_id}/cancel",
+            "item_endpoint_path": "/v1/embeddings",
+            "file_upload_endpoint_path": "/files",
+            "file_content_endpoint_path_template": "/files/{file_id}/content",
+            "file_delete_endpoint_path_template": "/files/{file_id}"
+          }
+        },
         {
           "operation": "embedding_create",
           "binding_id": "alibaba.model_studio.embeddings.v1",
@@ -2523,6 +2617,130 @@
         "rerank": null,
         "context_limit": 1048576,
         "output_limit": 131072
+      },
+      "model_parameters": []
+    },
+    {
+      "rule_id": "alibaba-text-embedding-v1",
+      "scope": {
+        "service_entry_ids": [
+          "model-studio-cn"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "text-embedding-v1"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "operations": [
+          "embedding_create"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "embedding": {
+          "tasks": [
+            "provider_default"
+          ],
+          "input_resources": [],
+          "output_kinds": [
+            "dense"
+          ],
+          "encodings": [
+            "float"
+          ],
+          "dimensions": [
+            1536
+          ],
+          "minimum_dimensions": 1536,
+          "maximum_dimensions": 1536,
+          "default_dimensions": 1536,
+          "maximum_inputs": 25,
+          "maximum_tokens_per_input": 2048,
+          "normalization": "unknown",
+          "distance_metric": "unknown"
+        },
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 2048,
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "model-core.alibaba.embeddings.2026-09-12",
+        "output_limit": null,
+        "rerank": null
+      },
+      "model_parameters": []
+    },
+    {
+      "rule_id": "alibaba-text-embedding-v2",
+      "scope": {
+        "service_entry_ids": [
+          "model-studio-cn"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "text-embedding-v2"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "operations": [
+          "embedding_create"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "embedding": {
+          "tasks": [
+            "provider_default"
+          ],
+          "input_resources": [],
+          "output_kinds": [
+            "dense"
+          ],
+          "encodings": [
+            "float"
+          ],
+          "dimensions": [
+            1536
+          ],
+          "minimum_dimensions": 1536,
+          "maximum_dimensions": 1536,
+          "default_dimensions": 1536,
+          "maximum_inputs": 25,
+          "maximum_tokens_per_input": 2048,
+          "normalization": "unknown",
+          "distance_metric": "unknown"
+        },
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 2048,
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "model-core.alibaba.embeddings.2026-09-12",
+        "output_limit": null,
+        "rerank": null
       },
       "model_parameters": []
     },

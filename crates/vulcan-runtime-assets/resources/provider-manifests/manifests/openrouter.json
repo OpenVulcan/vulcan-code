@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openrouter",
-  "revision": 7,
-  "published_at": "2026-08-18T00:00:00Z",
+  "revision": 9,
+  "published_at": "2026-09-12T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -55,6 +55,31 @@
         "x-openrouter-title": "Vulcan Code"
       },
       "native_inference_bindings": [
+        {
+          "operation": "embedding_create",
+          "model_ids": ["openai/text-embedding-3-small"],
+          "binding_id": "openrouter.embeddings.batch.v1",
+          "endpoint_path": "/embeddings",
+          "projection": "routed_compatible",
+          "batch": {
+            "protocol": "open_router_beta_v1",
+            "capabilities": {
+              "transport": "inline_json",
+              "result_delivery": "inline_json",
+              "host_policy_maximum_tasks_per_run": 100,
+              "host_policy_maximum_requests": 10000,
+              "host_policy_maximum_payload_bytes": 67108864,
+              "host_policy_maximum_result_bytes": 268435456,
+              "minimum_poll_interval_ms": 60000,
+              "supports_cancel": false,
+              "deletes_input_file_after_ingestion": false
+            },
+            "base_url_override": "https://openrouter.ai/api/beta",
+            "submit_endpoint_path": "/batches",
+            "status_endpoint_path_template": "/batches/{batch_id}",
+            "item_endpoint_path": "/v1/embeddings"
+          }
+        },
         {
           "operation": "embedding_create",
           "binding_id": "openrouter.embeddings.v1",

@@ -999,27 +999,31 @@ pub fn build_alibaba_model_studio_catalog(
         generation,
         definitions,
     )?;
-    for (id, display_name) in [
-        ("text-embedding-v4", "Text Embedding V4"),
-        ("text-embedding-v3", "Text Embedding V3"),
-        ("qwen3-rerank", "Qwen3 Rerank"),
-    ] {
+    let native_models = if service_entry_id == "model-studio-cn" {
+        vec![
+            ("text-embedding-v1", "Text Embedding V1"),
+            ("text-embedding-v2", "Text Embedding V2"),
+            ("text-embedding-v4", "Text Embedding V4"),
+            ("text-embedding-v3", "Text Embedding V3"),
+            ("qwen3-rerank", "Qwen3 Rerank"),
+            ("qwen3.7-text-embedding", "Qwen3.7 Text Embedding"),
+            (
+                "qwen3.7-text-embedding-flash",
+                "Qwen3.7 Text Embedding Flash",
+            ),
+            ("qwen3.7-text-rerank", "Qwen3.7 Text Rerank"),
+        ]
+    } else {
+        vec![
+            ("text-embedding-v4", "Text Embedding V4"),
+            ("text-embedding-v3", "Text Embedding V3"),
+            ("qwen3-rerank", "Qwen3 Rerank"),
+        ]
+    };
+    for (id, display_name) in native_models {
         let model = ConnectionModel {
             id: id.to_string(),
             display_name: display_name.to_string(),
-            capabilities: ModelCapabilities::default(),
-            capability_evidence: ModelCapabilityEvidence::default(),
-            protocol_variants: BTreeMap::new(),
-            resolved_protocol_binding: None,
-        };
-        // The bundled manifest rules carry these reviewed embedding/rerank contracts.
-        // 已审核向量/重排契约由内置清单规则承载。
-        catalog.models.push(model);
-    }
-    if service_entry_id == "model-studio-cn" {
-        let model = ConnectionModel {
-            id: String::from("qwen3.7-text-embedding"),
-            display_name: String::from("Qwen3.7 Text Embedding"),
             capabilities: ModelCapabilities::default(),
             capability_evidence: ModelCapabilityEvidence::default(),
             protocol_variants: BTreeMap::new(),
@@ -1895,6 +1899,10 @@ fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
         "model-studio-cn" | "model-studio-singapore"
     ) {
         match model.id.as_str() {
+            "text-embedding-v1" | "text-embedding-v2" if service_entry_id == "model-studio-cn" => {
+                apply_alibaba_embedding_capabilities(model, &[1536], 1536, 1536, 1536, 25, 2_048);
+                return;
+            }
             "text-embedding-v4" => {
                 apply_alibaba_embedding_capabilities(
                     model,
@@ -4756,6 +4764,8 @@ mod manifest_migration_tests {
     #[test]
     fn alibaba_embedding_and_rerank_rules_equal_legacy_enrichment() {
         for model_id in [
+            "text-embedding-v1",
+            "text-embedding-v2",
             "text-embedding-v4",
             "text-embedding-v3",
             "qwen3.7-text-embedding",

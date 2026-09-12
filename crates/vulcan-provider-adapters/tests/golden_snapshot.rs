@@ -8,7 +8,9 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use vulcan_provider_adapters::{ProviderDescriptor, ProviderRegistry};
+use vulcan_provider_adapters::{
+    ProviderDescriptor, ProviderRegistry, registered_native_embedding_batch_capabilities,
+};
 
 /// Golden file location relative to this crate.
 /// golden 文件相对当前 crate 的位置。
@@ -63,4 +65,30 @@ fn system_provider_registry_matches_golden_snapshot() {
         expected, actual,
         "system provider registry drifted from golden snapshot; regenerate with {regeneration}"
     );
+}
+
+/// Verifies Singapore Model Studio exposes file-backed Batch only for its declared embeddings.
+/// 验证新加坡 Model Studio 仅为其已声明向量模型暴露文件型 Batch。
+#[test]
+fn singapore_model_studio_exposes_declared_embedding_batch() {
+    let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
+    let singapore = registry
+        .provider("alibaba")
+        .expect("Alibaba provider should register")
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == "model-studio-singapore")
+        .expect("Singapore Model Studio should register");
+
+    for model_id in ["text-embedding-v3", "text-embedding-v4"] {
+        let capabilities = registered_native_embedding_batch_capabilities(singapore, model_id)
+            .expect("declared Singapore embedding should expose Batch");
+        assert_eq!(capabilities.provider_maximum_requests, Some(50_000));
+        assert_eq!(
+            capabilities.provider_maximum_payload_bytes,
+            Some(524_288_000)
+        );
+        assert_eq!(capabilities.provider_file_upload_qps, Some(3));
+    }
+    assert!(registered_native_embedding_batch_capabilities(singapore, "qwen3-rerank").is_none());
 }

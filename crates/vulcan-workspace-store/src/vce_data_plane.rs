@@ -22,13 +22,13 @@ use vulcan_context_engine::{
     IndexedBlob, IndexedBlobStatus, PathDocument, PathSearchRequest, RefreshMode, RefreshReason,
     SearchHit, SearchSource, SourceRange, StructureMode, SymbolKind, SymbolOccurrence,
     VceBlobDetail, VceChannelState, VceChunkSummary, VceCompactionOptions, VceEmbeddingBatchRecord,
-    VceEmbeddingBatchResult, VceEmbeddingRunManifest, VceEmbeddingRunState, VceFileSummary,
-    VceFuture, VceIndexBinding, VceIndexCounts, VceIndexIntegrity, VceIndexJobSummary,
-    VceIndexManagementSnapshot, VceIndexPort, VceIndexStoreStatus, VceIntegrityIssue,
-    VceIntegrityIssueKind, VceMaintenanceAction, VceMaintenanceMode, VceMaintenancePlan,
-    VceManagementQuery, VceManagementQueryRequest, VceManagementQueryResponse,
-    VceManagementQueryResult, VceManagementRequest, VceOperationKind, VceOperationPhase,
-    VceOperationSummary, VcePage, VcePageRequest, VcePathSearchResponse,
+    VceEmbeddingBatchResult, VceEmbeddingRemoteBatchRecord, VceEmbeddingRunManifest,
+    VceEmbeddingRunState, VceFileSummary, VceFuture, VceIndexBinding, VceIndexCounts,
+    VceIndexIntegrity, VceIndexJobSummary, VceIndexManagementSnapshot, VceIndexPort,
+    VceIndexStoreStatus, VceIntegrityIssue, VceIntegrityIssueKind, VceMaintenanceAction,
+    VceMaintenanceMode, VceMaintenancePlan, VceManagementQuery, VceManagementQueryRequest,
+    VceManagementQueryResponse, VceManagementQueryResult, VceManagementRequest, VceOperationKind,
+    VceOperationPhase, VceOperationSummary, VcePage, VcePageRequest, VcePathSearchResponse,
     VcePhysicalCompactionMetrics, VcePhysicalCompactionOperation, VcePhysicalCompactionState,
     VcePhysicalFragmentSummary, VcePhysicalTablePlan, VcePhysicalTableRole,
     VcePhysicalTableStatistics, VcePortError, VcePortOperation, VceSearchResponse,
@@ -116,7 +116,7 @@ const VCE_COMPACTION_MAX_SOURCE_FRAGMENTS: u64 = 512;
 /// name them. See the initialization entry for where an unrecognized marker is rejected.
 /// 这是 v1 数据库唯一可能携带的标记。此处刻意不为任何更早的代次保留常量：v1 之前的标记既不被识别，也不被迁移或
 /// 修补，因此没有任何代码路径需要命名它们。未被识别的标记在哪里被拒绝，见初始化入口。
-pub const VCE_DATA_PLANE_SCHEMA_VERSION: i64 = 8;
+pub const VCE_DATA_PLANE_SCHEMA_VERSION: i64 = 9;
 
 /// Maximum result count accepted by one physical vector search.
 /// 一次物理向量检索允许的最大结果数量。
@@ -2044,14 +2044,18 @@ mod tests {
         IndexCommit, IndexStageBatch, IndexedBlob, IndexedBlobStatus, PathDocument, RefreshMode,
         RefreshReason, RefreshRequest, RetrieveRequest, SegmentVector,
         VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION, VceAiBinding, VceAiCapabilitySnapshot, VceAiPort,
-        VceAiPurpose, VceCodeNodeSnapshot, VceConfig, VceEmbeddingBatchRecord,
-        VceEmbeddingBatchState, VceEmbeddingRequest, VceEmbeddingResponse, VceEmbeddingRunContract,
-        VceEmbeddingRunManifest, VceEmbeddingRunState, VceEngine, VceFuture, VceIndexBinding,
-        VceIndexPort, VcePhysicalCompactionOperation, VcePhysicalCompactionState,
-        VcePhysicalTableRole, VcePortError, VcePortOperation, VceQueryRewriteRequest,
-        VceQueryRewriteResponse, VceQueryStatistics, VceRefreshSummary, VceRerankRequest,
-        VceRerankResponse, VceSourcePort, VceSourceReadRequest, VceSourceReadResponse,
-        VceStateIdentity, VceStateSnapshot, WorkspaceSnapshot, blob_name,
+        VceAiPurpose, VceCodeNodeSnapshot, VceConfig, VceEmbeddingBatchCapabilities,
+        VceEmbeddingBatchPlan, VceEmbeddingBatchProviderState, VceEmbeddingBatchRecord,
+        VceEmbeddingBatchSnapshot, VceEmbeddingBatchState, VceEmbeddingBatchSubmission,
+        VceEmbeddingBatchTaskPlan, VceEmbeddingBatchTransport, VceEmbeddingBatchUploadedInput,
+        VceEmbeddingRemoteBatchRecord, VceEmbeddingRemoteBatchState, VceEmbeddingRequest,
+        VceEmbeddingResponse, VceEmbeddingRunContract, VceEmbeddingRunManifest,
+        VceEmbeddingRunState, VceEngine, VceFuture, VceIndexBinding, VceIndexPort,
+        VcePhysicalCompactionOperation, VcePhysicalCompactionState, VcePhysicalTableRole,
+        VcePortError, VcePortOperation, VceQueryRewriteRequest, VceQueryRewriteResponse,
+        VceQueryStatistics, VceRefreshSummary, VceRerankRequest, VceRerankResponse, VceSourcePort,
+        VceSourceReadRequest, VceSourceReadResponse, VceStateIdentity, VceStateSnapshot,
+        WorkspaceSnapshot, blob_name,
     };
     use vulcan_lancedb_engine::types::{LanceDbCreateTableInput, LanceDbDropTableInput};
     use vulcan_sqlite_engine::sql_exec::SqliteValue;
@@ -2078,6 +2082,65 @@ mod tests {
                 VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
                 VceAiPurpose::CodePathEmbedding.as_str().to_owned(),
             ],
+        }
+    }
+
+    /// Build one bounded planned remote Batch record for durable storage tests.
+    /// 为持久存储测试构建一条有界的已规划远端 Batch 记录。
+    fn test_remote_embedding_batch_record() -> VceEmbeddingRemoteBatchRecord {
+        let remote_task_id = String::from("remote-task-0");
+        VceEmbeddingRemoteBatchRecord {
+            remote_task_id: remote_task_id.clone(),
+            purpose: VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
+            first_logical_batch_index: 0,
+            logical_batch_count: 1,
+            plan: VceEmbeddingBatchPlan {
+                request_id: String::from("remote-request-0"),
+                request_fingerprint: "a".repeat(64),
+                capabilities: VceEmbeddingBatchCapabilities {
+                    transport: VceEmbeddingBatchTransport::JsonlFile,
+                    provider_maximum_requests: Some(50_000),
+                    provider_maximum_payload_bytes: Some(500 * 1024 * 1024),
+                    provider_maximum_item_bytes: Some(1_000_000),
+                    provider_maximum_parallel_tasks: Some(1_000),
+                    host_policy_maximum_tasks_per_run: 1_000,
+                    host_policy_maximum_requests: 50_000,
+                    host_policy_maximum_payload_bytes: 500 * 1024 * 1024,
+                    host_policy_maximum_result_bytes: 256 * 1024 * 1024,
+                    provider_completion_window_seconds: Some(86_400),
+                    maximum_requests: 50_000,
+                    maximum_payload_bytes: 500 * 1024 * 1024,
+                    maximum_result_bytes: 256 * 1024 * 1024,
+                    maximum_tasks_per_run: 1_000,
+                    provider_maximum_files: Some(10_000),
+                    provider_maximum_total_file_bytes: Some(100 * 1024 * 1024 * 1024),
+                    provider_file_upload_qps: Some(3),
+                    provider_file_operation_qps: Some(10),
+                    provider_task_create_rpm: Some(1_000),
+                    provider_task_status_rpm: Some(1_000),
+                    provider_task_list_rpm: Some(100),
+                    provider_task_cancel_rpm: Some(1_000),
+                    minimum_poll_interval_ms: 60_000,
+                    supports_cancel: true,
+                    deletes_input_file_after_ingestion: true,
+                },
+                tasks: vec![VceEmbeddingBatchTaskPlan {
+                    task_id: remote_task_id,
+                    first_input_index: 0,
+                    input_count: 1,
+                    encoded_payload_bytes: 128,
+                    payload_sha256: "b".repeat(64),
+                }],
+            },
+            state: VceEmbeddingRemoteBatchState::Planned,
+            uploaded_input: None,
+            submission: None,
+            snapshot: None,
+            poll_attempt: 0,
+            next_poll_not_before_unix_ms: None,
+            error: None,
+            cleanup_warning: None,
+            updated_at_unix_ms: 2,
         }
     }
 
@@ -2268,10 +2331,14 @@ mod tests {
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_node_chunks"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_reused_blobs"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_batches"));
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_remote_batches"));
+        assert!(schema.contains(VceAiPurpose::CodeDocumentEmbedding.as_str()));
+        assert!(schema.contains(VceAiPurpose::CodePathEmbedding.as_str()));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_batch_results"));
         assert!(schema.contains("manifest_complete INTEGER NOT NULL DEFAULT 0"));
         assert!(schema.contains("revision INTEGER NOT NULL DEFAULT 1"));
         assert!(schema.contains("trg_vce_embedding_run_batches_touch_parent"));
+        assert!(schema.contains("trg_vce_embedding_remote_batches_touch_parent"));
         assert!(!schema.contains("vmm_projects"));
         assert!(!schema.contains("knowledge_documents"));
     }
@@ -2713,10 +2780,141 @@ mod tests {
                 .persist_embedding_manifest(large_manifest.clone())
                 .await
                 .expect("update large manifest without rewriting nodes");
+            // Remote provider state is stored independently from the large immutable source plan.
+            // 远端供应商状态独立于大型不可变源码计划持久化。
+            let mut remote_batch = test_remote_embedding_batch_record();
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist planned remote Batch record");
+            assert_eq!(
+                isolated_b
+                    .load_embedding_remote_batch_records(
+                        large_manifest.run_id.clone(),
+                        VceAiPurpose::CodeDocumentEmbedding,
+                    )
+                    .await
+                    .expect("load planned remote Batch record"),
+                vec![remote_batch.clone()]
+            );
+            // Reject a later remote task that skips a logical-batch range before any provider I/O can use it.
+            // 在任何供应商 I/O 使用记录前，拒绝跳过逻辑批次范围的后续远端任务。
+            let mut gapped_remote_batch = remote_batch.clone();
+            gapped_remote_batch.remote_task_id = String::from("remote-task-gap");
+            gapped_remote_batch.first_logical_batch_index = 2;
+            gapped_remote_batch.plan.request_id = String::from("remote-request-gap");
+            gapped_remote_batch.plan.tasks[0].task_id = gapped_remote_batch.remote_task_id.clone();
+            assert!(
+                isolated_b
+                    .persist_embedding_remote_batch_record(
+                        large_manifest.run_id.clone(),
+                        gapped_remote_batch,
+                    )
+                    .await
+                    .is_err()
+            );
+            // Exercise every durable file-backed transition used around upload and exact reconciliation.
+            // 覆盖文件上传与精确对账周围使用的每一条持久状态转换。
+            remote_batch.state = VceEmbeddingRemoteBatchState::Uploading;
+            remote_batch.updated_at_unix_ms = 3;
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist uploading remote Batch");
+            let uploaded_input = VceEmbeddingBatchUploadedInput {
+                task_id: remote_batch.remote_task_id.clone(),
+                provider_input_file_id: String::from("file-remote-task-0"),
+                uploaded_at_unix_ms: 3,
+            };
+            remote_batch.uploaded_input = Some(uploaded_input.clone());
+            remote_batch.state = VceEmbeddingRemoteBatchState::Uploaded;
+            remote_batch.updated_at_unix_ms = 4;
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist uploaded remote Batch");
+            remote_batch.state = VceEmbeddingRemoteBatchState::Submitting;
+            remote_batch.updated_at_unix_ms = 5;
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist submitting remote Batch");
+            remote_batch.state = VceEmbeddingRemoteBatchState::SubmissionUnknown;
+            remote_batch.error = Some(String::from("submission response interrupted"));
+            remote_batch.updated_at_unix_ms = 6;
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist indeterminate remote Batch submission");
+            let submission = VceEmbeddingBatchSubmission {
+                task_id: remote_batch.remote_task_id.clone(),
+                provider_batch_id: String::from("batch-remote-task-0"),
+                provider_input_file_id: Some(uploaded_input.provider_input_file_id.clone()),
+                submitted_at_unix_ms: 7,
+            };
+            remote_batch.submission = Some(submission.clone());
+            remote_batch.state = VceEmbeddingRemoteBatchState::Submitted;
+            remote_batch.error = None;
+            remote_batch.next_poll_not_before_unix_ms = Some(60_007);
+            remote_batch.updated_at_unix_ms = 7;
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist reconciled remote Batch submission");
+            remote_batch.snapshot = Some(VceEmbeddingBatchSnapshot {
+                submission,
+                state: VceEmbeddingBatchProviderState::Cancelled,
+                total_requests: Some(1),
+                completed_requests: Some(0),
+                failed_requests: Some(0),
+                output_file_id: None,
+                error_file_id: None,
+                error: Some(String::from("cancelled by fixture")),
+            });
+            remote_batch.state = VceEmbeddingRemoteBatchState::Cancelled;
+            remote_batch.poll_attempt = 1;
+            remote_batch.next_poll_not_before_unix_ms = None;
+            remote_batch.error = Some(String::from("cancelled by fixture"));
+            remote_batch.updated_at_unix_ms = 8;
+            isolated_b
+                .persist_embedding_remote_batch_record(
+                    large_manifest.run_id.clone(),
+                    remote_batch.clone(),
+                )
+                .await
+                .expect("persist cancelled remote Batch");
+            assert_eq!(
+                isolated_b
+                    .load_embedding_remote_batch_records(
+                        large_manifest.run_id.clone(),
+                        VceAiPurpose::CodeDocumentEmbedding,
+                    )
+                    .await
+                    .expect("load terminal remote Batch record"),
+                vec![remote_batch]
+            );
             large_manifest.batches[0]
                 .mark_running()
                 .expect("mark large batch running");
-            large_manifest.updated_at_unix_ms = 3;
+            large_manifest.updated_at_unix_ms = 9;
             isolated_b
                 .persist_embedding_batch_record(
                     large_manifest.run_id.clone(),
@@ -2775,14 +2973,14 @@ mod tests {
             // 当关联修订无法推进时，拟议成功状态保持未提交。
             let mut rejected_batch = large_manifest.batches[0].clone();
             rejected_batch.mark_succeeded();
-            assert!(isolated_b.persist_embedding_batch_record(large_manifest.run_id.clone(), rejected_batch, 4).await.is_err());
+            assert!(isolated_b.persist_embedding_batch_record(large_manifest.run_id.clone(), rejected_batch, 10).await.is_err());
             isolated_b.data_plane.execute(
                 "DROP TRIGGER reject_manifest_parent_update;",
                 Vec::new(), "remove atomic batch failure fixture",
             ).await.expect("remove atomic batch failure fixture");
             assert_eq!(isolated_b.load_embedding_manifest(large_manifest.run_id.clone()).await.expect("read rolled-back batch"), Some(large_manifest.clone()));
             large_manifest.state = VceEmbeddingRunState::Cancelled;
-            large_manifest.updated_at_unix_ms = 4;
+            large_manifest.updated_at_unix_ms = 11;
             isolated_b
                 .persist_embedding_run_state(
                     large_manifest.run_id.clone(),
@@ -2809,7 +3007,7 @@ mod tests {
                 )
                 .await
                 .expect("read granular manifest revision");
-            assert_eq!(final_revision[0].count, 5);
+            assert_eq!(final_revision[0].count, 11);
             isolated_b.data_plane.execute(
                 "DROP TRIGGER reject_manifest_node_insert; DROP TRIGGER reject_manifest_node_delete; DROP TRIGGER reject_manifest_node_update;",
                 Vec::new(), "remove immutable node guards",
@@ -7960,6 +8158,32 @@ BEGIN
       AND layout_version = 2 AND manifest_complete = 1;
 END;
 
+CREATE TABLE IF NOT EXISTS vce_embedding_remote_batches (
+    namespace_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    remote_task_id TEXT NOT NULL CHECK(length(trim(remote_task_id)) > 0 AND length(remote_task_id) <= 512),
+    purpose TEXT NOT NULL CHECK(purpose IN ('code_retrieval.document_embedding', 'code_retrieval.path_embedding')),
+    first_logical_batch_index INTEGER NOT NULL CHECK(first_logical_batch_index >= 0),
+    logical_batch_count INTEGER NOT NULL CHECK(logical_batch_count > 0),
+    record_json TEXT NOT NULL CHECK(length(CAST(record_json AS BLOB)) BETWEEN 1 AND 65536),
+    updated_at_unix_ms INTEGER NOT NULL CHECK(updated_at_unix_ms > 0),
+    PRIMARY KEY(namespace_id, run_id, remote_task_id),
+    UNIQUE(namespace_id, run_id, purpose, first_logical_batch_index),
+    FOREIGN KEY(namespace_id, run_id)
+        REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_vce_embedding_remote_batches_order
+ON vce_embedding_remote_batches(namespace_id, run_id, purpose, first_logical_batch_index);
+CREATE TRIGGER IF NOT EXISTS trg_vce_embedding_remote_batches_touch_parent
+AFTER UPDATE OF record_json, updated_at_unix_ms ON vce_embedding_remote_batches
+BEGIN
+    UPDATE vce_embedding_runs
+    SET updated_at_unix_ms = NEW.updated_at_unix_ms,
+        revision = revision + 1
+    WHERE namespace_id = NEW.namespace_id AND run_id = NEW.run_id
+      AND layout_version = 2 AND manifest_complete = 1;
+END;
+
 CREATE TABLE IF NOT EXISTS vce_embedding_batch_results (
     namespace_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
@@ -8247,6 +8471,36 @@ impl VceIndexPort for VceProjectIndex {
         Box::pin(async move {
             index
                 .persist_embedding_batch_record_sharded(run_id, batch, updated_at_unix_ms)
+                .await
+        })
+    }
+
+    /// Persists one remote asynchronous Batch record without rewriting source-plan shards.
+    /// 持久化一条远端异步 Batch 记录，不重写源码计划分片。
+    fn persist_embedding_remote_batch_record(
+        &self,
+        run_id: String,
+        record: VceEmbeddingRemoteBatchRecord,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        let index = self.clone();
+        Box::pin(async move {
+            index
+                .persist_embedding_remote_batch_record(run_id, record)
+                .await
+        })
+    }
+
+    /// Loads one purpose's remote asynchronous Batch records in deterministic order.
+    /// 按确定顺序读取一个用途的远端异步 Batch 记录。
+    fn load_embedding_remote_batch_records(
+        &self,
+        run_id: String,
+        purpose: vulcan_context_engine::VceAiPurpose,
+    ) -> VceFuture<Result<Vec<VceEmbeddingRemoteBatchRecord>, VcePortError>> {
+        let index = self.clone();
+        Box::pin(async move {
+            index
+                .load_embedding_remote_batch_records(run_id, purpose)
                 .await
         })
     }

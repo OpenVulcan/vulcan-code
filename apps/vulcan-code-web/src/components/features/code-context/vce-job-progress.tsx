@@ -93,7 +93,17 @@ export function VceJobProgress(props: {
     committing: copy("提交检查点", "Committing checkpoint"),
     complete: compact ? copy("确认整理结果", "Confirming compaction result") : copy("确认更新结果", "Confirming update result"),
   };
-  const unitLabels = { files: copy("文件", "files"), blobs: copy("代码单元", "blobs"), batches: copy("批次", "batches"), tables: copy("张表", "tables"), none: "" };
+  const unitLabels = { files: copy("文件", "files"), blobs: copy("代码单元", "blobs"), batches: copy("批次", "batches"), requests: copy("请求项", "requests"), tables: copy("张表", "tables"), none: "" };
+  const providerBatchStateLabels = {
+    validating: copy("供应商正在校验批次", "Provider is validating the batch"),
+    in_progress: copy("供应商正在生成向量", "Provider is generating embeddings"),
+    finalizing: copy("供应商正在整理批次结果", "Provider is finalizing batch results"),
+    completed: copy("供应商批次已完成", "Provider batch completed"),
+    failed: copy("供应商批次失败", "Provider batch failed"),
+    expired: copy("供应商批次已过期", "Provider batch expired"),
+    cancelling: copy("供应商正在取消批次", "Provider is cancelling the batch"),
+    cancelled: copy("供应商批次已取消", "Provider batch cancelled"),
+  };
   const compactionTableStateLabels = {
     pending: copy("待提交", "Pending"),
     queued: copy("已排队", "Queued"),
@@ -140,6 +150,7 @@ export function VceJobProgress(props: {
         <>
           {job.followupRequested ? <p className="text-xs text-primary" role="status">{copy("已合并一次后续手动同步；本次结束后核对文件，不受自动间隔限制。", "One manual follow-up is scheduled to reconcile files after this update, without the automatic cooldown.")}</p> : null}
           <p className="text-xs text-muted-foreground">{progress ? phaseLabels[progress.phase] : compact ? copy("整理作业尚未开始，不会调用模型", "Compaction has not started and will not call a model") : copy("当前批次尚未开始扫描或调用模型", "This batch has not started file scans or model calls")}{progress && progress.unit !== "none" ? ` · ${progress.completed}${progress.total !== null ? ` / ${progress.total}` : ""} ${unitLabels[progress.unit]}` : ""}</p>
+          {progress?.providerBatchState ? <p className="text-xs text-muted-foreground" role="status">{providerBatchStateLabels[progress.providerBatchState]}</p> : null}
           {overallMeasured ? (
             <div className="space-y-1">
               <div className="flex items-center justify-between text-xs text-muted-foreground">

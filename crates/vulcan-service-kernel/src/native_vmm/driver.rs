@@ -3663,6 +3663,7 @@ mod tests {
                 unavailable_reason: None,
                 route: None,
                 embedding: None,
+                embedding_batch: None,
                 rerank: None,
             })
             .collect();

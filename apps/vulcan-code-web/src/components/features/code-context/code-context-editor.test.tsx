@@ -173,6 +173,7 @@ describe("project semantic settings editor", () => {
         unit: "batches",
         completed: 1,
         total: 2,
+        providerBatchState: null,
         currentPath: null,
       },
     } satisfies VceJobSummary);
@@ -211,6 +212,7 @@ describe("project semantic settings editor", () => {
         unit: "batches",
         completed: 1,
         total: 2,
+        providerBatchState: null,
         currentPath: null,
       },
     } satisfies VceJobSummary);
@@ -249,6 +251,7 @@ describe("project semantic settings editor", () => {
         unit: "batches",
         completed: 1,
         total: 2,
+        providerBatchState: null,
         currentPath: null,
       },
     } satisfies VceJobSummary);
@@ -345,6 +348,7 @@ describe("project semantic settings editor", () => {
           unit: "batches",
           completed: 1,
           total: 3,
+          providerBatchState: null,
           currentPath: null,
         },
       };

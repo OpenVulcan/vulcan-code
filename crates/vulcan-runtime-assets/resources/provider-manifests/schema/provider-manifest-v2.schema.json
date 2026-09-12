@@ -565,6 +565,69 @@
                     "uniqueItems": true,
                     "items": {"type": "string", "minLength": 1, "maxLength": 256}
                   }
+                },
+                "batch": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "protocol",
+                    "capabilities",
+                    "submit_endpoint_path",
+                    "status_endpoint_path_template",
+                    "item_endpoint_path"
+                  ],
+                  "properties": {
+                    "protocol": {
+                      "enum": ["open_router_beta_v1", "alibaba_open_ai_compatible_v1"]
+                    },
+                    "capabilities": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "transport",
+                        "result_delivery",
+                        "host_policy_maximum_tasks_per_run",
+                        "host_policy_maximum_requests",
+                        "host_policy_maximum_payload_bytes",
+                        "host_policy_maximum_result_bytes",
+                        "minimum_poll_interval_ms",
+                        "supports_cancel",
+                        "deletes_input_file_after_ingestion"
+                      ],
+                      "properties": {
+                        "transport": {"enum": ["inline_json", "jsonl_file"]},
+                        "result_delivery": {"enum": ["inline_json", "jsonl_files"]},
+                        "provider_maximum_requests": {"type": "integer", "minimum": 1},
+                        "provider_maximum_payload_bytes": {"type": "integer", "minimum": 1},
+                        "provider_maximum_item_bytes": {"type": "integer", "minimum": 1},
+                        "provider_maximum_files": {"type": "integer", "minimum": 1},
+                        "provider_maximum_total_file_bytes": {"type": "integer", "minimum": 1},
+                        "provider_file_upload_qps": {"type": "integer", "minimum": 1},
+                        "provider_file_operation_qps": {"type": "integer", "minimum": 1},
+                        "provider_maximum_parallel_tasks": {"type": "integer", "minimum": 1},
+                        "provider_task_create_rpm": {"type": "integer", "minimum": 1},
+                        "provider_task_status_rpm": {"type": "integer", "minimum": 1},
+                        "provider_task_list_rpm": {"type": "integer", "minimum": 1},
+                        "provider_task_cancel_rpm": {"type": "integer", "minimum": 1},
+                        "host_policy_maximum_tasks_per_run": {"type": "integer", "minimum": 1},
+                        "host_policy_maximum_requests": {"type": "integer", "minimum": 1},
+                        "host_policy_maximum_payload_bytes": {"type": "integer", "minimum": 1},
+                        "host_policy_maximum_result_bytes": {"type": "integer", "minimum": 1},
+                        "provider_completion_window_seconds": {"type": "integer", "minimum": 1},
+                        "minimum_poll_interval_ms": {"type": "integer", "minimum": 1},
+                        "supports_cancel": {"type": "boolean"},
+                        "deletes_input_file_after_ingestion": {"type": "boolean"}
+                      }
+                    },
+                    "base_url_override": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+                    "submit_endpoint_path": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "status_endpoint_path_template": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "cancel_endpoint_path_template": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "item_endpoint_path": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "file_upload_endpoint_path": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "file_content_endpoint_path_template": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "file_delete_endpoint_path_template": {"type": "string", "minLength": 1, "maxLength": 2048}
+                  }
                 }
               }
             }

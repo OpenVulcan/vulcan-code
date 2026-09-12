@@ -2,6 +2,7 @@
 //! Vulcan 运行时、适配器与用户界面共享的供应商无关 AI 契约。
 
 pub mod account_usage;
+pub mod batch;
 pub mod cache;
 pub mod capability;
 pub mod content;
@@ -22,6 +23,7 @@ pub mod tool;
 pub mod usage;
 
 pub use account_usage::*;
+pub use batch::*;
 pub use cache::*;
 pub use capability::*;
 pub use content::*;

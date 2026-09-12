@@ -3680,6 +3680,7 @@ fn compaction_progress(
         total: Some(total),
         overall_completed: completed,
         overall_total: Some(total),
+        provider_batch_state: None,
         current_path: None,
     }
 }
@@ -4912,6 +4913,7 @@ mod tests {
                 total: Some(1),
                 overall_completed: 0,
                 overall_total: Some(1),
+                provider_batch_state: None,
                 current_path: None,
             });
             tokio::time::timeout(Duration::from_secs(1), persistence_started.notified())
@@ -4964,6 +4966,7 @@ mod tests {
                 total: Some(2),
                 overall_completed: 1,
                 overall_total: Some(2),
+                provider_batch_state: None,
                 current_path: None,
             };
 
@@ -5123,6 +5126,7 @@ mod tests {
                     unavailable_reason: None,
                     route: Some(route),
                     embedding: Some(embedding),
+                    embedding_batch: None,
                     rerank: None,
                 },
                 InferenceOperationCapability {
@@ -5132,6 +5136,7 @@ mod tests {
                     unavailable_reason: None,
                     route: None,
                     embedding: None,
+                    embedding_batch: None,
                     rerank: None,
                 },
                 InferenceOperationCapability {
@@ -5141,6 +5146,7 @@ mod tests {
                     unavailable_reason: None,
                     route: None,
                     embedding: None,
+                    embedding_batch: None,
                     rerank: None,
                 },
             ],
@@ -7495,6 +7501,7 @@ mod tests {
             total: None,
             overall_completed: 0,
             overall_total: None,
+            provider_batch_state: None,
             current_path: None,
         });
         candidate_store

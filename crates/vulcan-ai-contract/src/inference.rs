@@ -1260,10 +1260,249 @@ pub struct InferenceOperationCapability {
     /// 当前为向量路由时的强类型向量能力。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<EmbeddingCapabilities>,
+    /// Strong asynchronous Batch capability when this embedding route supports it.
+    /// 当前向量路由支持异步 Batch 时的强类型批次能力。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_batch: Option<EmbeddingBatchCapabilities>,
     /// Strong rerank capability when this is a rerank route.
     /// 当前为重排路由时的强类型重排能力。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rerank: Option<RerankCapabilities>,
+}
+
+/// Identifies how one provider accepts asynchronous inference Batch inputs.
+/// 标识供应商接收异步推理 Batch 输入的方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceBatchTransport {
+    /// The complete ordered request array is submitted in one JSON body.
+    /// 完整且有序的请求数组通过一个 JSON 请求体提交。
+    InlineJson,
+    /// Requests are encoded as JSONL, uploaded, and referenced by a file identifier.
+    /// 请求编码为 JSONL、上传后通过文件标识引用。
+    JsonlFile,
+}
+
+/// Identifies where a completed asynchronous Batch exposes its result items.
+/// 标识完成的异步 Batch 在何处提供结果项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceBatchResultDelivery {
+    /// Result items are embedded in the terminal Batch status response.
+    /// 结果项内嵌在终态 Batch 状态响应中。
+    InlineJson,
+    /// Result and error items are exposed through provider file identifiers.
+    /// 成功与错误结果通过供应商文件标识提供。
+    JsonlFiles,
+}
+
+/// Declares verified provider limits and explicit host safety limits for embedding Batch work.
+/// 声明向量 Batch 工作已验证的供应商限制和明确的宿主安全限制。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddingBatchCapabilities {
+    /// Provider input transport selected by the frozen manifest binding.
+    /// 冻结 Manifest 绑定选择的供应商输入传输方式。
+    pub transport: InferenceBatchTransport,
+    /// Provider result delivery selected by the frozen manifest binding.
+    /// 冻结 Manifest 绑定选择的供应商结果交付方式。
+    pub result_delivery: InferenceBatchResultDelivery,
+    /// Verified provider maximum request items per remote Batch, when published.
+    /// 供应商已公布时每个远端 Batch 的最大请求项数量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_maximum_requests: Option<u32>,
+    /// Verified provider maximum complete payload bytes, when published.
+    /// 供应商已公布时完整负载的最大字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_maximum_payload_bytes: Option<u64>,
+    /// Verified provider maximum encoded item bytes, when published.
+    /// 供应商已公布时单个编码请求项的最大字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_maximum_item_bytes: Option<u64>,
+    /// Provider maximum retained file count for one account, when published.
+    /// 供应商已公布时单个账号允许保留的最大文件数量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_maximum_files: Option<u32>,
+    /// Provider maximum aggregate retained file bytes for one account, when published.
+    /// 供应商已公布时单个账号允许保留的文件总字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_maximum_total_file_bytes: Option<u64>,
+    /// Provider file-upload requests per second, when published.
+    /// 供应商已公布时文件上传接口每秒请求上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_file_upload_qps: Option<u32>,
+    /// Provider aggregate file-operation requests per second, when published.
+    /// 供应商已公布时文件类接口合计每秒请求上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_file_operation_qps: Option<u32>,
+    /// Provider maximum simultaneously active Batch tasks, when published.
+    /// 供应商已公布时同时活动的 Batch 任务上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_maximum_parallel_tasks: Option<u32>,
+    /// Provider Batch creation requests per minute, when published.
+    /// 供应商已公布时每分钟 Batch 创建请求上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_task_create_rpm: Option<u32>,
+    /// Provider Batch status requests per minute, when published.
+    /// 供应商已公布时每分钟 Batch 状态请求上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_task_status_rpm: Option<u32>,
+    /// Provider Batch-list reconciliation requests per minute, when published.
+    /// 供应商已公布时每分钟 Batch 列表对账请求上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_task_list_rpm: Option<u32>,
+    /// Provider Batch cancellation requests per minute, when published.
+    /// 供应商已公布时每分钟 Batch 取消请求上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_task_cancel_rpm: Option<u32>,
+    /// Host-owned maximum remote tasks generated for one initialization run.
+    /// 一次初始化运行允许生成的宿主持有最大远端任务数。
+    pub host_policy_maximum_tasks_per_run: u32,
+    /// Host-owned maximum request items used even when the provider publishes no bound.
+    /// 即使供应商未公布上限也始终生效的宿主持有最大请求项数量。
+    pub host_policy_maximum_requests: u32,
+    /// Host-owned maximum payload bytes used to bound local memory and transport.
+    /// 用于限制本地内存与传输的宿主持有最大负载字节数。
+    pub host_policy_maximum_payload_bytes: u64,
+    /// Host-owned maximum downloaded result bytes for one remote Batch task.
+    /// 单个远端 Batch 任务允许下载的宿主持有最大结果字节数。
+    pub host_policy_maximum_result_bytes: u64,
+    /// Exact provider completion window submitted when the protocol exposes one, in seconds.
+    /// 协议提供该参数时提交给供应商的精确完成窗口，单位为秒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_completion_window_seconds: Option<u64>,
+    /// Minimum provider-recommended interval between status polls.
+    /// 供应商建议的最短状态轮询间隔。
+    pub minimum_poll_interval_ms: u64,
+    /// Whether the provider exposes a remote cancellation endpoint.
+    /// 供应商是否提供远端取消端点。
+    pub supports_cancel: bool,
+    /// Whether a provider input file can be deleted after durable result ingestion.
+    /// 结果持久化后是否可以删除供应商输入文件。
+    pub deletes_input_file_after_ingestion: bool,
+}
+
+impl EmbeddingBatchCapabilities {
+    /// Validates one complete asynchronous embedding Batch capability declaration.
+    /// 校验一份完整的异步向量 Batch 能力声明。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Unit for a coherent bounded declaration, or a precise contract error.
+    /// 声明一致且有界时返回空值，否则返回明确契约错误。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.provider_maximum_requests == Some(0)
+            || self.provider_maximum_payload_bytes == Some(0)
+            || self.provider_maximum_item_bytes == Some(0)
+            || self.provider_maximum_files == Some(0)
+            || self.provider_maximum_total_file_bytes == Some(0)
+            || self.provider_file_upload_qps == Some(0)
+            || self.provider_file_operation_qps == Some(0)
+            || self.provider_maximum_parallel_tasks == Some(0)
+            || self.provider_task_create_rpm == Some(0)
+            || self.provider_task_status_rpm == Some(0)
+            || self.provider_task_list_rpm == Some(0)
+            || self.provider_task_cancel_rpm == Some(0)
+            || self.host_policy_maximum_tasks_per_run == 0
+            || self.host_policy_maximum_requests == 0
+            || self.host_policy_maximum_payload_bytes == 0
+            || self.host_policy_maximum_result_bytes == 0
+            || self.provider_completion_window_seconds == Some(0)
+            || self.minimum_poll_interval_ms == 0
+        {
+            return Err(String::from(
+                "Embedding Batch capability contains a zero limit",
+            ));
+        }
+        if self
+            .provider_maximum_item_bytes
+            .zip(self.provider_maximum_payload_bytes)
+            .is_some_and(|(item, payload)| item > payload)
+        {
+            return Err(String::from(
+                "Embedding Batch provider item limit exceeds the provider payload limit",
+            ));
+        }
+        if self
+            .provider_file_upload_qps
+            .zip(self.provider_file_operation_qps)
+            .is_some_and(|(upload, operations)| upload > operations)
+        {
+            return Err(String::from(
+                "Embedding Batch upload QPS exceeds the aggregate file-operation QPS",
+            ));
+        }
+        if !self.supports_cancel && self.provider_task_cancel_rpm.is_some() {
+            return Err(String::from(
+                "Embedding Batch cancellation rate is declared without cancellation support",
+            ));
+        }
+        if self
+            .provider_completion_window_seconds
+            .is_some_and(|seconds| !seconds.is_multiple_of(3_600))
+        {
+            return Err(String::from(
+                "Embedding Batch completion window must be expressed in complete hours",
+            ));
+        }
+        match (self.transport, self.result_delivery) {
+            (InferenceBatchTransport::InlineJson, InferenceBatchResultDelivery::InlineJson) => {
+                if self.provider_maximum_files.is_some()
+                    || self.provider_maximum_total_file_bytes.is_some()
+                    || self.provider_file_upload_qps.is_some()
+                    || self.provider_file_operation_qps.is_some()
+                    || self.provider_task_list_rpm.is_some()
+                    || self.deletes_input_file_after_ingestion
+                {
+                    return Err(String::from(
+                        "Inline embedding Batch capability declares file-only limits or behavior",
+                    ));
+                }
+                Ok(())
+            }
+            (InferenceBatchTransport::JsonlFile, InferenceBatchResultDelivery::JsonlFiles) => {
+                if self.provider_maximum_payload_bytes.is_some_and(|maximum| {
+                    self.provider_maximum_total_file_bytes
+                        .is_some_and(|total| maximum > total)
+                }) {
+                    return Err(String::from(
+                        "Embedding Batch file size exceeds the aggregate provider file quota",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Err(String::from(
+                "Embedding Batch transport and result delivery are inconsistent",
+            )),
+        }
+    }
+
+    /// Returns the effective request-count limit after applying host policy.
+    /// 应用宿主策略后返回有效请求项数量上限。
+    pub fn effective_maximum_requests(&self) -> u32 {
+        self.provider_maximum_requests
+            .map_or(self.host_policy_maximum_requests, |provider| {
+                provider.min(self.host_policy_maximum_requests)
+            })
+    }
+
+    /// Returns the effective payload-byte limit after applying host policy.
+    /// 应用宿主策略后返回有效负载字节上限。
+    pub fn effective_maximum_payload_bytes(&self) -> u64 {
+        self.provider_maximum_payload_bytes
+            .map_or(self.host_policy_maximum_payload_bytes, |provider| {
+                provider.min(self.host_policy_maximum_payload_bytes)
+            })
+    }
+
+    /// Returns the effective remote-task count after applying host policy.
+    /// 应用宿主策略后返回有效远端任务数量上限。
+    pub fn effective_maximum_tasks_per_run(&self) -> u32 {
+        self.provider_maximum_parallel_tasks
+            .map_or(self.host_policy_maximum_tasks_per_run, |provider| {
+                provider.min(self.host_policy_maximum_tasks_per_run)
+            })
+    }
 }
 
 /// Carries one consumer-profile-scoped configured inference capability snapshot.
@@ -1346,6 +1585,36 @@ impl EmbeddingCapabilities {
     /// 每个请求选项均被显式支持时返回成功。
     pub fn validate_request(&self, request: &EmbeddingRequest) -> Result<(), String> {
         request.validate()?;
+        self.validate_request_options(request)?;
+        if let Some(maximum_inputs) = self.maximum_inputs
+            && request.inputs.len() > maximum_inputs as usize
+        {
+            return Err(format!(
+                "Embedding input count {} exceeds the selected model limit {maximum_inputs}.",
+                request.inputs.len()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates options and individual inputs for an asynchronous Batch of single-input requests.
+    /// 校验由多个单输入请求组成的异步 Batch 的选项与各项输入。
+    ///
+    /// `request` is the aggregate host plan; its item count is governed by the separate Batch capability.
+    /// `request` 是宿主聚合计划；其条目数量由独立 Batch 能力约束。
+    /// Returns success when every per-request option and input resource is supported.
+    /// 每项请求选项与输入资源均受支持时返回成功。
+    pub fn validate_batch_request(&self, request: &EmbeddingRequest) -> Result<(), String> {
+        request.validate()?;
+        self.validate_request_options(request)
+    }
+
+    /// Validates embedding options shared by synchronous and asynchronous execution shapes.
+    /// 校验同步与异步执行形态共享的向量选项。
+    ///
+    /// `request` is structurally valid. Returns success when task, output, dimensions, and resources match.
+    /// `request` 已通过结构校验；任务、输出、维度与资源匹配时返回成功。
+    fn validate_request_options(&self, request: &EmbeddingRequest) -> Result<(), String> {
         if !self.tasks.contains(&request.task) {
             return Err(format!(
                 "Embedding task `{:?}` is not supported by the selected model route.",
@@ -1362,14 +1631,6 @@ impl EmbeddingCapabilities {
             return Err(format!(
                 "Embedding encoding `{:?}` is not supported by the selected model route.",
                 request.encoding
-            ));
-        }
-        if let Some(maximum_inputs) = self.maximum_inputs
-            && request.inputs.len() > maximum_inputs as usize
-        {
-            return Err(format!(
-                "Embedding input count {} exceeds the selected model limit {maximum_inputs}.",
-                request.inputs.len()
             ));
         }
         if let Some(dimensions) = request.dimensions {
@@ -1636,6 +1897,179 @@ mod tests {
             .expect("request should deserialize");
 
         assert_eq!(decoded, request);
+    }
+
+    /// Verifies Batch aggregate size is governed by Batch limits rather than the synchronous request limit.
+    /// 验证 Batch 聚合数量由 Batch 限制约束，而不是由同步请求条数限制约束。
+    #[test]
+    fn embedding_batch_validation_does_not_apply_synchronous_input_count() {
+        // capabilities deliberately permits one input per synchronous call while retaining two valid Batch items.
+        // capabilities 有意只允许同步调用包含一个输入，同时保留两个有效 Batch 条目。
+        let capabilities = EmbeddingCapabilities {
+            tasks: BTreeSet::from([EmbeddingTask::Document]),
+            input_resources: BTreeSet::new(),
+            output_kinds: BTreeSet::from([EmbeddingOutputKind::Dense]),
+            encodings: BTreeSet::from([EmbeddingEncoding::Float]),
+            dimensions: BTreeSet::from([1_024]),
+            minimum_dimensions: None,
+            maximum_dimensions: None,
+            default_dimensions: Some(1_024),
+            maximum_inputs: Some(1),
+            maximum_tokens_per_input: None,
+            normalization: EmbeddingNormalization::Unknown,
+            distance_metric: DistanceMetric::Unknown,
+        };
+        // request represents two independent single-input requests in the asynchronous provider file.
+        // request 表示异步供应商文件中的两个独立单输入请求。
+        let request = EmbeddingRequest {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("request-batch"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("vce"),
+            inputs: vec![
+                EmbeddingInput {
+                    input_id: String::from("chunk-1"),
+                    content: EmbeddingInputContent::Text {
+                        text: String::from("alpha"),
+                    },
+                },
+                EmbeddingInput {
+                    input_id: String::from("chunk-2"),
+                    content: EmbeddingInputContent::Text {
+                        text: String::from("beta"),
+                    },
+                },
+            ],
+            task: EmbeddingTask::Document,
+            dimensions: Some(1_024),
+            output_kind: EmbeddingOutputKind::Dense,
+            encoding: EmbeddingEncoding::Float,
+            invalid_input_policy: EmbeddingInvalidInputPolicy::FailBatch,
+        };
+
+        assert!(capabilities.validate_request(&request).is_err());
+        capabilities
+            .validate_batch_request(&request)
+            .expect("Batch aggregate must not inherit the synchronous item-count limit");
+    }
+
+    /// Builds one valid file-backed Batch capability for contract boundary tests.
+    /// 为契约边界测试构建一份有效的文件型 Batch 能力。
+    fn file_batch_capability_fixture() -> EmbeddingBatchCapabilities {
+        EmbeddingBatchCapabilities {
+            transport: InferenceBatchTransport::JsonlFile,
+            result_delivery: InferenceBatchResultDelivery::JsonlFiles,
+            provider_maximum_requests: Some(50_000),
+            provider_maximum_payload_bytes: Some(500 * 1024 * 1024),
+            provider_maximum_item_bytes: Some(6 * 1024 * 1024),
+            provider_maximum_files: Some(10_000),
+            provider_maximum_total_file_bytes: Some(100 * 1024 * 1024 * 1024),
+            provider_file_upload_qps: Some(3),
+            provider_file_operation_qps: Some(10),
+            provider_maximum_parallel_tasks: Some(1_000),
+            provider_task_create_rpm: Some(1_000),
+            provider_task_status_rpm: Some(1_000),
+            provider_task_list_rpm: Some(100),
+            provider_task_cancel_rpm: Some(1_000),
+            host_policy_maximum_tasks_per_run: 1_000,
+            host_policy_maximum_requests: 50_000,
+            host_policy_maximum_payload_bytes: 500 * 1024 * 1024,
+            host_policy_maximum_result_bytes: 256 * 1024 * 1024,
+            provider_completion_window_seconds: Some(86_400),
+            minimum_poll_interval_ms: 60_000,
+            supports_cancel: true,
+            deletes_input_file_after_ingestion: true,
+        }
+    }
+
+    /// Verifies file Batch providers may omit optional cancellation and cleanup operations.
+    /// 验证文件型 Batch 供应商可以不提供可选的取消与清理操作。
+    #[test]
+    fn file_batch_capability_allows_optional_cancel_and_cleanup() {
+        let mut capability = file_batch_capability_fixture();
+        capability.supports_cancel = false;
+        capability.provider_task_cancel_rpm = None;
+        capability.deletes_input_file_after_ingestion = false;
+
+        capability
+            .validate()
+            .expect("optional lifecycle operations should not be mandatory");
+    }
+
+    /// Verifies a cancellation rate cannot be advertised without a cancellation operation.
+    /// 验证未提供取消操作时不能声明取消接口速率。
+    #[test]
+    fn batch_capability_rejects_orphan_cancel_rate() {
+        let mut capability = file_batch_capability_fixture();
+        capability.supports_cancel = false;
+
+        let error = capability
+            .validate()
+            .expect_err("orphan cancellation rate must be rejected");
+        assert!(error.contains("cancellation rate"));
+    }
+
+    /// Verifies the provider-neutral contract does not require Alibaba-specific published limits.
+    /// 验证供应商无关契约不会强制要求阿里云特有的公开限制。
+    #[test]
+    fn file_batch_capability_allows_unpublished_provider_limits() {
+        let mut capability = file_batch_capability_fixture();
+        capability.provider_maximum_requests = None;
+        capability.provider_maximum_payload_bytes = None;
+        capability.provider_maximum_item_bytes = None;
+        capability.provider_maximum_files = None;
+        capability.provider_maximum_total_file_bytes = None;
+        capability.provider_file_upload_qps = None;
+        capability.provider_file_operation_qps = None;
+        capability.provider_maximum_parallel_tasks = None;
+        capability.provider_task_create_rpm = None;
+        capability.provider_task_status_rpm = None;
+        capability.provider_task_list_rpm = None;
+        capability.provider_task_cancel_rpm = None;
+        capability.supports_cancel = false;
+
+        capability
+            .validate()
+            .expect("host policies must bound providers with unpublished limits");
+    }
+
+    /// Verifies host policy may safely lower complete payload size below the provider item ceiling.
+    /// 验证宿主策略可以安全地把完整负载大小收紧到供应商单项上限以下。
+    #[test]
+    fn batch_capability_allows_host_payload_limit_below_provider_item_limit() {
+        let mut capability = file_batch_capability_fixture();
+        capability.host_policy_maximum_payload_bytes = 512 * 1024;
+
+        capability
+            .validate()
+            .expect("host payload policy should be independently stricter");
+    }
+
+    /// Verifies a provider item ceiling cannot exceed that provider's complete payload ceiling.
+    /// 验证供应商单项上限不能超过同一供应商的完整负载上限。
+    #[test]
+    fn batch_capability_rejects_provider_item_limit_above_provider_payload_limit() {
+        let mut capability = file_batch_capability_fixture();
+        capability.provider_maximum_payload_bytes = Some(1024);
+        capability.provider_maximum_item_bytes = Some(1025);
+
+        let error = capability
+            .validate()
+            .expect_err("provider limits must remain internally coherent");
+        assert!(error.contains("provider item limit"));
+    }
+
+    /// Verifies completion windows remain serializable by the current whole-hour wire contract.
+    /// 验证完成窗口可由当前整小时线协议序列化。
+    #[test]
+    fn batch_capability_rejects_partial_hour_completion_window() {
+        let mut capability = file_batch_capability_fixture();
+        capability.provider_completion_window_seconds = Some(86_401);
+
+        let error = capability
+            .validate()
+            .expect_err("partial-hour completion windows are not serializable");
+        assert!(error.contains("complete hours"));
     }
 
     /// Verifies configured rolling limits cannot silently disable every request.

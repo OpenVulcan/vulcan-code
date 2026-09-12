@@ -14,6 +14,8 @@ use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     AiErrorCategory, AiExecutionError, AiOperation, AiStreamEvent, DispatchOutcome,
+    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
+    EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
     EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot, InferenceCallerContext,
     InferenceCapabilitySnapshot, RerankRequest, RerankResponse, ResponsesExecutionRequest,
     ResponsesExecutionResult, RetryAfterHint,
@@ -911,6 +913,142 @@ pub trait HostAiPort: Send + Sync {
         &self,
         handle: &HostAiCapabilityHandle,
     ) -> Result<InferenceCapabilitySnapshot, HostAiError>;
+
+    /// Builds a deterministic bounded asynchronous embedding Batch plan without provider I/O.
+    /// 在不执行供应商 I/O 的情况下构建确定且有界的异步向量 Batch 计划。
+    fn plan_embedding_batch(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        request: &HostAiEmbeddingRequest,
+    ) -> Result<EmbeddingBatchPlan, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support asynchronous embedding Batch execution.",
+        )
+        .with_request_id(request.request.request_id.as_str()))
+    }
+
+    /// Uploads one exact file-backed embedding Batch input before task creation.
+    /// 在创建任务前上传一个精确的文件型向量 Batch 输入。
+    async fn upload_embedding_batch_input(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _task: EmbeddingBatchTaskPlan,
+    ) -> Result<EmbeddingBatchUploadedInput, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support embedding Batch input upload.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
+
+    /// Submits one previously planned embedding Batch task exactly once.
+    /// 精确一次提交一个此前已规划的向量 Batch 任务。
+    async fn submit_embedding_batch(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _task: EmbeddingBatchTaskPlan,
+        _uploaded_input: Option<EmbeddingBatchUploadedInput>,
+    ) -> Result<EmbeddingBatchSubmission, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support asynchronous embedding Batch submission.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
+
+    /// Reconciles a file-backed task whose creation response was not durably observed.
+    /// 对账一项创建响应未被持久观测的文件型任务。
+    async fn reconcile_embedding_batch_submission(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _task: EmbeddingBatchTaskPlan,
+        _uploaded_input: EmbeddingBatchUploadedInput,
+    ) -> Result<Option<EmbeddingBatchSubmission>, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support embedding Batch submission reconciliation.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
+
+    /// Polls one durable asynchronous embedding Batch submission without replaying it.
+    /// 在不重放任务的情况下轮询一个持久异步向量 Batch 提交。
+    async fn embedding_batch_status(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _submission: EmbeddingBatchSubmission,
+    ) -> Result<EmbeddingBatchSnapshot, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support asynchronous embedding Batch polling.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
+
+    /// Collects and normalizes one completed asynchronous embedding Batch task.
+    /// 收集并归一化一个已完成异步向量 Batch 任务。
+    async fn collect_embedding_batch(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _task: EmbeddingBatchTaskPlan,
+        _snapshot: EmbeddingBatchSnapshot,
+    ) -> Result<EmbeddingBatchCollectedResult, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support asynchronous embedding Batch collection.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
+
+    /// Deletes a temporary provider input file only after the consumer durably stores all results.
+    /// 仅在调用方持久保存全部结果后删除供应商临时输入文件。
+    async fn cleanup_embedding_batch_input(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _submission: EmbeddingBatchSubmission,
+    ) -> Result<(), HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support embedding Batch input cleanup.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
+
+    /// Requests cancellation of one durable asynchronous embedding Batch submission.
+    /// 请求取消一个持久异步向量 Batch 提交。
+    async fn cancel_embedding_batch(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: HostAiEmbeddingRequest,
+        _request_fingerprint: String,
+        _submission: EmbeddingBatchSubmission,
+    ) -> Result<EmbeddingBatchSnapshot, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support asynchronous embedding Batch cancellation.",
+        )
+        .with_request_context(&context, Some(request.request.request_id.as_str())))
+    }
 
     /// Executes one typed embedding request through the registered host route.
     /// 通过已注册宿主路由执行一次类型化向量请求。

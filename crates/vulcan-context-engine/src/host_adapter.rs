@@ -104,10 +104,33 @@ pub async fn create_embedding_batch_with_response<P: HostAiPort + ?Sized>(
     request: HostAiEmbeddingRequest,
 ) -> Result<HostEmbeddingBatchResult, HostAiError> {
     request.validate()?;
-    let request_for_validation = request.request.clone();
+    context.validate(request.request.request_id.as_str())?;
+    let response = port
+        .create_embeddings(handle, context, request.clone())
+        .await?;
+    validate_embedding_batch_response(&request, response)
+}
+
+/// Validates and aligns one already collected HostAI embedding response for a VCE batch.
+/// 校验并对齐一个已经收集的 HostAI 向量响应以供 VCE 批次使用。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact original HostAI request and `response` is its collected response.
+/// `request` 是精确原始 HostAI 请求，`response` 是其已收集响应。
+///
+/// # Returns
+/// 返回值
+/// Original response metadata and dense vectors aligned to request order.
+/// 返回原始响应元数据以及按请求顺序对齐的稠密向量。
+pub fn validate_embedding_batch_response(
+    request: &HostAiEmbeddingRequest,
+    response: HostAiEmbeddingResponse,
+) -> Result<HostEmbeddingBatchResult, HostAiError> {
+    request.validate()?;
+    let request_for_validation = &request.request;
     let request_id = request_for_validation.request_id.clone();
-    context.validate(&request_id)?;
-    let vector_space_id = request.vector_space_id.clone();
+    let vector_space_id = request.vector_space_id.as_str();
     let expected_ids = request_for_validation
         .inputs
         .iter()
@@ -116,7 +139,6 @@ pub async fn create_embedding_batch_with_response<P: HostAiPort + ?Sized>(
     let expected_dimension = request_for_validation
         .dimensions
         .map(|value| value as usize);
-    let response = port.create_embeddings(handle, context, request).await?;
     if response.vector_space_id != vector_space_id {
         return Err(contract_error(
             &request_id,
@@ -128,7 +150,7 @@ pub async fn create_embedding_batch_with_response<P: HostAiPort + ?Sized>(
     }
     response
         .response
-        .validate_for_request(&request_for_validation)
+        .validate_for_request(request_for_validation)
         .map_err(|message| contract_error(&request_id, message))?;
     let fingerprint = &response.response.fingerprint;
     if fingerprint.output_kind != EmbeddingOutputKind::Dense

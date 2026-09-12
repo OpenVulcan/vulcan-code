@@ -22,7 +22,7 @@ mod usage;
 mod wire_capture;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use failure::ProviderExecutionFailure;
 pub(crate) use failure::{

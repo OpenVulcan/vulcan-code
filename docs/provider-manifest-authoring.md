@@ -752,6 +752,44 @@ V1首次上传现在先持久声明`UploadPending`，保存精确原路线及上
 期限等待在构造外围Future前将阶段装箱，保留父拥有及丢弃取消，不扩大默认线程栈。原通道超时不是
 凭空新增的全局回合时限；完整批次元数据规划及排队等待不被误称为每个文件已经开始物理上传。
 
+### 向量 Batch 原生推理绑定
+
+异步向量 Batch 必须作为 `native_inference_bindings[].batch` 的封闭子契约声明，并通过同一绑定的
+`model_ids` 精确限定模型。未列入 `model_ids` 的模型、未声明该绑定的服务入口以及未知地域均不得
+从同步 `embedding_create` 推断出 Batch 能力。当前已核实的首批实现为 OpenRouter 与阿里云 Model
+Studio 北京、新加坡地域。阿里云两地均使用各自地域的 OpenAI 兼容 `/files` 与 `/batches` 入口；
+新加坡仅对其当前目录已有的 `text-embedding-v3`、`text-embedding-v4` 声明向量 Batch。
+
+带 `batch` 的条目是补充异步绑定，不参与同步 `embedding_create` 的动作选择；其每个 `model_ids`
+模型必须同时能由一个不带 `batch` 的精确或操作通用绑定覆盖。同步绑定继续定义向量空间身份，Batch
+绑定只冻结异步传输身份，禁止因为新增 Batch 能力而改变既有 VCE 配置的 action binding。
+
+`protocol` 必须声明精确线协议：`open_router_beta_v1` 只允许
+`inline_json/inline_json`，`alibaba_open_ai_compatible_v1` 只允许
+`jsonl_file/jsonl_files`。`inline_json/inline_json` 表示请求和终态结果均在 Batch API JSON 中；
+`jsonl_file/jsonl_files` 表示先上传 UTF-8 JSONL，再以文件 ID 创建任务，完成后按输出/错误文件 ID
+下载。文件型绑定对供应商已经公开的限制逐项声明，包括单任务条数、文件总字节、单行字节、账号文件
+数量与总容量、上传/文件操作频率、并行任务数、创建/查询/列表对账/取消频率；供应商未公开的硬限制
+保持为空，不能用宿主策略值冒充。绑定必须声明 `host_policy_maximum_*` 作为本进程的内存、结果下载与
+单次 VCE 运行安全边界；激活时拒绝协议/传输不匹配、越过服务根目录或含 query/fragment 的端点路径。
+
+OpenRouter 使用 `base_url_override=https://openrouter.ai/api/beta`，提交正文顶层字段必须按
+  `endpoint`、`model`、`requests` 顺序编码。当前官方提交体不接收 `completion_window`，因此
+  `provider_completion_window_seconds` 必须省略；官方公布的 30 天输入/结果保留期不是任务完成窗口。
+  该服务不使用文件上传，结果只能从具体 Batch 状态响应内收集。阿里云文件型实现把上传与创建拆成
+两个宿主操作：上传成功后必须先
+持久化输入文件 ID，再创建 Batch；创建响应不确定时仅允许通过输入文件 ID 和稳定任务元数据精确
+对账，禁止盲目重提。输入文件只在向量结果已小粒度持久化后删除，删除失败记录告警而不撤销结果。
+
+VCE 仅在首次初始化和显式全量重建中选择该能力；增量更新和查询向量继续使用同步接口。远端计划在
+任何供应商 I/O 前按精确编码字节、连续输入范围和 SHA-256 固化，运行中保存上传、提交、状态计数、
+下次轮询时间、终态和清理告警。页面刷新或进程重启必须读取同一持久记录继续查询，不能创建替代任务。
+
+官方证据：OpenRouter `https://openrouter.ai/docs/batch-quickstart`；阿里云 Batch 适用范围与流程
+`https://help.aliyun.com/zh/model-studio/batch-inference`；Batch API
+`https://help.aliyun.com/zh/model-studio/batch-interfaces-compatible-with-openai`；File API
+`https://help.aliyun.com/zh/model-studio/openai-file-interface`。
+
 每项操作从凭据解析与上传准备开始共享一个不可重置的绝对截止时间；同步请求与响应读取均受该
 截止时间约束。异步任务冻结完整 target/operation/upload/credential/generation 快照。恢复、轮询与取消使用同一
 快照；热更新只影响新任务。`generic_json_async_lifecycle` 必须显式声明 start/poll/cancel 方法、

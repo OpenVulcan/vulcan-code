@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    AiOperation, InferenceUsageScope, ModelCapabilities, PromptCachePolicy, RerankTruncation,
-    ResourceKind,
+    AiOperation, EmbeddingBatchCapabilities, InferenceBatchResultDelivery, InferenceBatchTransport,
+    InferenceUsageScope, ModelCapabilities, PromptCachePolicy, RerankTruncation, ResourceKind,
 };
 use vulcan_llm_core::UsageExtractionProfile;
 
@@ -370,6 +370,242 @@ pub struct NativeInferenceBinding {
     /// 按公开请求模型标识索引的已审核供应商回报别名。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub response_model_aliases: BTreeMap<String, BTreeSet<String>>,
+    /// Optional asynchronous Batch transport and lifecycle contract for this exact binding.
+    /// 当前精确绑定可选的异步 Batch 传输与生命周期契约。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<NativeInferenceBatchBinding>,
+}
+
+/// Declares provider-wire endpoints beside the provider-neutral embedding Batch capability.
+/// 在供应商无关向量 Batch 能力之外声明供应商线协议端点。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInferenceBatchBinding {
+    /// Closed wire protocol used to encode requests and decode lifecycle responses.
+    /// 用于编码请求和解码生命周期响应的封闭线协议。
+    pub protocol: NativeInferenceBatchProtocolKind,
+    /// Provider-neutral limits and lifecycle behavior projected to HostAI consumers.
+    /// 投影给 HostAI 消费者的供应商无关限制与生命周期行为。
+    pub capabilities: EmbeddingBatchCapabilities,
+    /// Optional HTTPS API root used when Batch endpoints live outside the synchronous API root.
+    /// 当 Batch 端点位于同步 API 根之外时使用的可选 HTTPS API 根。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url_override: Option<String>,
+    /// Service-root-relative endpoint used to submit one Batch.
+    /// 用于提交一个 Batch 的服务根相对端点。
+    pub submit_endpoint_path: String,
+    /// Endpoint template used to retrieve one Batch; `{batch_id}` is required.
+    /// 用于查询 Batch 的端点模板，必须包含 `{batch_id}`。
+    pub status_endpoint_path_template: String,
+    /// Optional endpoint template used to cancel one Batch.
+    /// 用于取消 Batch 的可选端点模板。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_endpoint_path_template: Option<String>,
+    /// Endpoint value stored in every submitted Batch request item.
+    /// 每个已提交 Batch 请求项中保存的端点值。
+    pub item_endpoint_path: String,
+    /// Optional multipart file-upload endpoint for JSONL transports.
+    /// JSONL 传输使用的可选 multipart 文件上传端点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_upload_endpoint_path: Option<String>,
+    /// Optional file-content endpoint template for JSONL result delivery.
+    /// JSONL 结果交付使用的可选文件内容端点模板。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_content_endpoint_path_template: Option<String>,
+    /// Optional file-delete endpoint template used for input cleanup.
+    /// 用于清理输入文件的可选文件删除端点模板。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_delete_endpoint_path_template: Option<String>,
+}
+
+/// Validates one canonical service-root-relative Batch endpoint or endpoint template.
+/// 校验一个规范的服务根相对 Batch 端点或端点模板。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact manifest value and `placeholder` is the one required dynamic identifier.
+/// `path` 是精确 Manifest 值，`placeholder` 是唯一允许且必须存在的动态标识。
+///
+/// # Returns
+/// 返回值
+/// `true` only when publication and runtime URL construction accept the same closed path.
+/// 仅当发布期与运行时 URL 构造接受同一个封闭路径时返回 `true`。
+fn native_batch_endpoint_path_valid(path: &str, placeholder: Option<&str>) -> bool {
+    if path != path.trim()
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains(['?', '#', '\\'])
+        || path.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    let normalized = match placeholder {
+        Some(placeholder) if path.matches(placeholder).count() == 1 => {
+            path.replace(placeholder, "provider-id")
+        }
+        Some(_) => return false,
+        None if path.contains(['{', '}']) => return false,
+        None => path.to_owned(),
+    };
+    !normalized.contains(['{', '}'])
+        && !normalized
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+}
+
+impl NativeInferenceBatchBinding {
+    /// Validates provider endpoints against the declared transport and lifecycle capability.
+    /// 根据已声明传输与生命周期能力校验供应商端点。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Unit for a closed executable declaration, or a precise validation error.
+    /// 声明封闭且可执行时返回空值，否则返回明确校验错误。
+    pub fn validate(&self) -> Result<(), String> {
+        self.capabilities.validate()?;
+        if self.capabilities.host_policy_maximum_result_bytes
+            > EMBEDDING_BATCH_ABSOLUTE_MAXIMUM_RESULT_BYTES
+        {
+            return Err(String::from(
+                "Native inference Batch result limit exceeds the process safety ceiling",
+            ));
+        }
+        if self.base_url_override.as_ref().is_some_and(|base_url| {
+            base_url != base_url.trim()
+                || reqwest::Url::parse(base_url).map_or(true, |url| {
+                    url.scheme() != "https"
+                        || url.host_str().is_none()
+                        || !url.username().is_empty()
+                        || url.password().is_some()
+                        || url.query().is_some()
+                        || url.fragment().is_some()
+                })
+        }) {
+            return Err(String::from(
+                "Native inference Batch base URL override must be an absolute credential-free HTTPS URL without query or fragment",
+            ));
+        }
+        if !native_batch_endpoint_path_valid(&self.submit_endpoint_path, None)
+            || !native_batch_endpoint_path_valid(
+                &self.status_endpoint_path_template,
+                Some("{batch_id}"),
+            )
+            || !native_batch_endpoint_path_valid(&self.item_endpoint_path, None)
+        {
+            return Err(String::from(
+                "Native inference Batch endpoints are incomplete",
+            ));
+        }
+        if self.capabilities.supports_cancel != self.cancel_endpoint_path_template.is_some()
+            || self
+                .cancel_endpoint_path_template
+                .as_ref()
+                .is_some_and(|path| !native_batch_endpoint_path_valid(path, Some("{batch_id}")))
+        {
+            return Err(String::from(
+                "Native inference Batch cancellation endpoint is inconsistent",
+            ));
+        }
+        if !matches!(
+            (
+                self.protocol,
+                self.capabilities.transport,
+                self.capabilities.result_delivery
+            ),
+            (
+                NativeInferenceBatchProtocolKind::OpenRouterBetaV1,
+                InferenceBatchTransport::InlineJson,
+                InferenceBatchResultDelivery::InlineJson
+            ) | (
+                NativeInferenceBatchProtocolKind::AlibabaOpenAiCompatibleV1,
+                InferenceBatchTransport::JsonlFile,
+                InferenceBatchResultDelivery::JsonlFiles
+            )
+        ) {
+            return Err(String::from(
+                "Native inference Batch protocol, transport, and result delivery are inconsistent",
+            ));
+        }
+        match self.protocol {
+            NativeInferenceBatchProtocolKind::OpenRouterBetaV1
+                if self
+                    .capabilities
+                    .provider_completion_window_seconds
+                    .is_some() =>
+            {
+                return Err(String::from(
+                    "OpenRouter Batch does not accept a provider completion-window parameter",
+                ));
+            }
+            NativeInferenceBatchProtocolKind::AlibabaOpenAiCompatibleV1
+                if self
+                    .capabilities
+                    .provider_completion_window_seconds
+                    .is_none_or(|seconds| !(86_400..=1_209_600).contains(&seconds)) =>
+            {
+                return Err(String::from(
+                    "Alibaba Batch completion window must be between 24 and 336 hours",
+                ));
+            }
+            _ => {}
+        }
+        match self.capabilities.transport {
+            InferenceBatchTransport::InlineJson => {
+                if self.file_upload_endpoint_path.is_some()
+                    || self.file_content_endpoint_path_template.is_some()
+                    || self.file_delete_endpoint_path_template.is_some()
+                    || self.capabilities.result_delivery != InferenceBatchResultDelivery::InlineJson
+                {
+                    return Err(String::from(
+                        "Inline native inference Batch declares file endpoints",
+                    ));
+                }
+            }
+            InferenceBatchTransport::JsonlFile => {
+                if self
+                    .file_upload_endpoint_path
+                    .as_ref()
+                    .is_none_or(|path| !native_batch_endpoint_path_valid(path, None))
+                    || self
+                        .file_content_endpoint_path_template
+                        .as_ref()
+                        .is_none_or(|path| {
+                            !native_batch_endpoint_path_valid(path, Some("{file_id}"))
+                        })
+                    || self.capabilities.deletes_input_file_after_ingestion
+                        && self
+                            .file_delete_endpoint_path_template
+                            .as_ref()
+                            .is_none_or(|path| {
+                                !native_batch_endpoint_path_valid(path, Some("{file_id}"))
+                            })
+                    || self.capabilities.result_delivery != InferenceBatchResultDelivery::JsonlFiles
+                {
+                    return Err(String::from(
+                        "JSONL native inference Batch file endpoints are incomplete",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Hard process safety ceiling for one downloaded provider Batch status or result.
+/// 单次下载供应商 Batch 状态或结果的进程安全硬上限。
+pub(crate) const EMBEDDING_BATCH_ABSOLUTE_MAXIMUM_RESULT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Selects one closed asynchronous Batch wire protocol implementation.
+/// 选择一个封闭的异步 Batch 线协议实现。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeInferenceBatchProtocolKind {
+    /// OpenRouter beta Batch API with ordered inline request arrays and inline results.
+    /// 使用有序内联请求数组与内联结果的 OpenRouter Beta Batch API。
+    OpenRouterBetaV1,
+    /// Alibaba Model Studio's OpenAI-compatible JSONL file, Batch, metadata, and result-file API.
+    /// 阿里云 Model Studio 的 OpenAI 兼容 JSONL 文件、Batch、元数据及结果文件 API。
+    AlibabaOpenAiCompatibleV1,
 }
 
 /// Selects one closed provider-neutral native inference wire projection.

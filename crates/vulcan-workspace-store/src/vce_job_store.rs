@@ -829,22 +829,30 @@ impl VceStoredJob {
                 "VCE compaction success must preserve its checkpoint and complete every table",
             ));
         }
-        if let Some(progress) = &self.progress
-            && (progress
+        if let Some(progress) = &self.progress {
+            let remote_batch_progress =
+                matches!(self.kind, VceJobKind::Initialize | VceJobKind::Rebuild)
+                    && progress.phase == vulcan_context_engine::VceRefreshPhase::Embedding
+                    && progress.unit == vulcan_context_engine::VceRefreshUnit::Requests;
+            if progress
                 .total
                 .is_some_and(|total| progress.completed > total)
                 || progress
                     .overall_total
                     .is_some_and(|total| progress.overall_completed > total)
+                || progress.operation_id.trim().is_empty()
                 || progress.operation_id.len() > 2048
+                || progress.provider_batch_state.is_some() != remote_batch_progress
+                || (remote_batch_progress && progress.current_path.is_some())
                 || progress
                     .current_path
                     .as_ref()
-                    .is_some_and(|path| path.len() > 4096))
-        {
-            return Err(String::from(
-                "VCE job progress contains invalid counters or oversized metadata",
-            ));
+                    .is_some_and(|path| path.len() > 4096)
+            {
+                return Err(String::from(
+                    "VCE job progress contains invalid counters or metadata",
+                ));
+            }
         }
         Ok(())
     }
@@ -1685,9 +1693,52 @@ mod tests {
             total: Some(1),
             overall_completed: 2,
             overall_total: Some(1),
+            provider_batch_state: None,
             current_path: None,
         });
 
+        assert!(receipt.validate().is_err());
+    }
+
+    /// Reject provider Batch state outside the exact embedding-request progress shape.
+    /// 拒绝出现在精确向量请求进度形状之外的供应商 Batch 状态。
+    #[test]
+    fn receipt_rejects_invalid_provider_batch_progress_shape() {
+        let mut receipt = compaction_test_receipt();
+        receipt.kind = VceJobKind::Initialize;
+        receipt.contract_fingerprint = "b".repeat(64);
+        receipt.compaction = None;
+        receipt.progress = Some(VceRefreshProgress {
+            phase: vulcan_context_engine::VceRefreshPhase::Scanning,
+            operation_id: String::from("invalid-provider-progress"),
+            unit: vulcan_context_engine::VceRefreshUnit::Files,
+            completed: 0,
+            total: Some(1),
+            overall_completed: 0,
+            overall_total: Some(1),
+            provider_batch_state: Some(
+                vulcan_context_engine::VceRefreshProviderBatchState::InProgress,
+            ),
+            current_path: None,
+        });
+        assert!(receipt.validate().is_err());
+
+        let progress = receipt.progress.as_mut().expect("progress fixture");
+        progress.phase = vulcan_context_engine::VceRefreshPhase::Embedding;
+        progress.unit = vulcan_context_engine::VceRefreshUnit::Requests;
+        receipt
+            .validate()
+            .expect("provider Batch state belongs to embedding request progress");
+
+        receipt.kind = VceJobKind::Synchronize;
+        assert!(receipt.validate().is_err());
+        receipt.kind = VceJobKind::Initialize;
+
+        receipt
+            .progress
+            .as_mut()
+            .expect("progress fixture")
+            .provider_batch_state = None;
         assert!(receipt.validate().is_err());
     }
 

@@ -50,7 +50,7 @@ describe("durable VCE job projections", () => {
   it.each(["committing", "complete"] as const)("keeps recovery cancellation available in %s", (phase) => {
     const job: VceJobSummary = {
       ...receipt(), state: "running", error: "Persist VCE terminal job receipt failed: transport error",
-      progress: { phase, operationId: "job-a", unit: "batches", completed: 1, total: 1, currentPath: null },
+      progress: { phase, operationId: "job-a", unit: "batches", completed: 1, total: 1, providerBatchState: null, currentPath: null },
     };
     const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese={false} onCancel={() => undefined} />);
     expect(markup).toContain("Recover and cancel");
@@ -99,13 +99,14 @@ describe("durable VCE job projections", () => {
   // 已知批次分母使用实际已完成响应数，同时保留旧查询可用提示。
   it("renders measured progress and preserves ongoing conversations", () => {
     const job: VceJobSummary = { ...receipt(), kind: "synchronize", state: "running", sourceCheckpointVersion: 2,
-      progress: { phase: "embedding", operationId: "job-a:document:1", unit: "batches", completed: 3, total: 7, overallCompleted: 4, overallTotal: 12, currentPath: "src/main.rs" } };
+      progress: { phase: "embedding", operationId: "job-a:document:1", unit: "batches", completed: 3, total: 7, overallCompleted: 4, overallTotal: 12, providerBatchState: "in_progress", currentPath: "src/main.rs" } };
     const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
     expect(markup).toContain('value="3"');
     expect(markup).toContain('max="7"');
     expect(markup).toContain("整体进度");
     expect(markup).toContain('value="4"');
     expect(markup).toContain('max="12"');
+    expect(markup).toContain("供应商正在生成向量");
     expect(markup).toContain("会话和已有索引查询仍可正常使用");
     job.progress!.total = null;
     job.progress!.overallTotal = null;
@@ -127,6 +128,7 @@ describe("durable VCE job projections", () => {
         unit: "tables",
         completed: 1,
         total: 2,
+        providerBatchState: null,
         currentPath: null,
       },
       compaction: {

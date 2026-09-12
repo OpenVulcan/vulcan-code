@@ -50,6 +50,31 @@ pub fn registered_native_action_binding_id<'a>(
         .map(|binding| binding.binding_id.as_str())
 }
 
+/// Returns the exact asynchronous embedding Batch capability selected by one model route.
+/// 返回一条模型路由精确选择的异步向量 Batch 能力。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the immutable service snapshot and `model_id` is the exact public model identifier.
+/// `entry` 是不可变服务快照，`model_id` 是精确公开模型标识。
+///
+/// # Returns
+/// 返回值
+/// The declared Batch capability when the selected embedding binding supports it.
+/// 所选向量绑定支持 Batch 时返回其已声明能力。
+pub fn registered_native_embedding_batch_capabilities<'a>(
+    entry: &'a crate::ServiceEntry,
+    model_id: &str,
+) -> Option<&'a vulcan_ai_contract::EmbeddingBatchCapabilities> {
+    select_native_batch_binding(
+        &entry.native_inference_bindings,
+        AiOperation::EmbeddingCreate,
+        model_id,
+    )
+    .and_then(|binding| binding.batch.as_ref())
+    .map(|batch| &batch.capabilities)
+}
+
 /// Selects the most specific manifest binding for one operation and model.
 /// 为一个操作和模型选择 Manifest 中最精确的绑定。
 ///
@@ -63,7 +88,7 @@ pub fn registered_native_action_binding_id<'a>(
 /// 返回值
 /// The model-specific binding when declared, otherwise the operation-wide binding.
 /// 已声明时返回模型专用绑定，否则返回操作通用绑定。
-fn select_native_binding<'a>(
+pub(crate) fn select_native_binding<'a>(
     bindings: &'a [crate::NativeInferenceBinding],
     operation: AiOperation,
     model_id: &str,
@@ -72,16 +97,211 @@ fn select_native_binding<'a>(
         .iter()
         .find(|binding| {
             binding.operation == operation
+                && binding.batch.is_none()
                 && binding
                     .model_ids
                     .iter()
                     .any(|candidate| candidate == model_id)
         })
         .or_else(|| {
-            bindings
-                .iter()
-                .find(|binding| binding.operation == operation && binding.model_ids.is_empty())
+            bindings.iter().find(|binding| {
+                binding.operation == operation
+                    && binding.batch.is_none()
+                    && binding.model_ids.is_empty()
+            })
         })
+}
+
+/// Selects the exact supplemental Batch binding for one operation and model.
+/// 为一个操作和模型选择精确的补充 Batch 绑定。
+///
+/// # Parameters
+/// 参数
+/// `bindings` is the immutable binding list, `operation` is the provider-neutral action, and
+/// `model_id` is the exact public model identifier.
+/// `bindings` 是不可变绑定列表，`operation` 是供应商无关操作，`model_id` 是精确公开模型标识。
+///
+/// # Returns
+/// 返回值
+/// The model-specific asynchronous binding when declared; Batch declarations never replace the
+/// synchronous action binding selected by [`select_native_binding`].
+/// 已声明时返回模型专用异步绑定；Batch 声明绝不会替换 [`select_native_binding`] 选择的同步动作绑定。
+pub(crate) fn select_native_batch_binding<'a>(
+    bindings: &'a [crate::NativeInferenceBinding],
+    operation: AiOperation,
+    model_id: &str,
+) -> Option<&'a crate::NativeInferenceBinding> {
+    bindings.iter().find(|binding| {
+        binding.operation == operation
+            && binding.batch.is_some()
+            && binding
+                .model_ids
+                .iter()
+                .any(|candidate| candidate == model_id)
+    })
+}
+
+/// Normalizes one completed asynchronous Batch's single-input embedding bodies.
+/// 归一化一个已完成异步 Batch 的单输入向量响应正文。
+///
+/// # Parameters
+/// 参数
+/// Route, model, usage, and revisions identify the frozen execution; `bodies` maps each original
+/// input index to exactly one standard embedding response body.
+/// 路由、模型、用途与修订冻结执行；`bodies` 将每个原始输入索引映射到唯一标准向量响应正文。
+///
+/// # Returns
+/// 返回值
+/// One normalized partial response retaining original request indexes, or a protocol failure.
+/// 返回保留原始请求索引的归一化部分响应，或协议失败。
+pub(crate) fn normalize_embedding_batch_bodies(
+    route: &ProviderExecutionRoute,
+    model: &ConnectionModel,
+    request: &EmbeddingRequest,
+    usage_scope: InferenceUsageScope,
+    revisions: ExecutionRevisionRefs<'_>,
+    bodies: Vec<(u32, serde_json::Value)>,
+    duration_ms: u64,
+) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
+    let native_route = NativeInferenceRoute {
+        binding: select_native_binding(
+            &route.entry.native_inference_bindings,
+            AiOperation::EmbeddingCreate,
+            model.id.as_str(),
+        )
+        .ok_or_else(|| pre_dispatch_failure("Native embedding binding is unavailable."))?,
+    };
+    let mut observed_indexes = BTreeSet::new();
+    let mut results = Vec::with_capacity(bodies.len());
+    let mut actual_dimensions = None;
+    let mut prompt_tokens = Some(0u64);
+    let mut total_tokens = Some(0u64);
+    for (original_index, body) in bodies {
+        let input_index = usize::try_from(original_index).map_err(|_| {
+            response_headers_protocol_failure("Embedding Batch input index exceeds usize.")
+        })?;
+        let input = request.inputs.get(input_index).ok_or_else(|| {
+            response_headers_protocol_failure(format!(
+                "Embedding Batch result index {original_index} is outside the original request."
+            ))
+        })?;
+        if !observed_indexes.insert(original_index) {
+            return Err(response_headers_protocol_failure(format!(
+                "Embedding Batch result index {original_index} is duplicated."
+            )));
+        }
+        let wire: WireEmbeddingResponse = serde_json::from_value(body).map_err(|error| {
+            response_headers_protocol_failure(format!(
+                "Embedding Batch response body is invalid JSON: {error}"
+            ))
+        })?;
+        validate_response_model(native_route, model.id.as_str(), wire.model.as_deref())?;
+        if wire.data.len() != 1 || wire.data[0].index != 0 {
+            return Err(response_headers_protocol_failure(
+                "Each embedding Batch item must return exactly one vector at index zero.",
+            ));
+        }
+        let wire_value = wire
+            .data
+            .into_iter()
+            .next()
+            .ok_or_else(|| response_headers_protocol_failure("Embedding Batch vector is absent."))?
+            .embedding;
+        let (embedding, dimensions) =
+            normalize_embedding_value(request.encoding, request.dimensions, wire_value)?;
+        if actual_dimensions
+            .replace(dimensions)
+            .is_some_and(|known| known != dimensions)
+        {
+            return Err(response_headers_protocol_failure(
+                "Embedding Batch responses contain inconsistent vector dimensions.",
+            ));
+        }
+        prompt_tokens = checked_optional_usage_sum(
+            prompt_tokens,
+            wire.usage.input_tokens.or(wire.usage.prompt_tokens),
+        );
+        total_tokens = checked_optional_usage_sum(total_tokens, wire.usage.total_tokens);
+        results.push(EmbeddingResult {
+            input_id: input.input_id.clone(),
+            input_index: original_index,
+            embedding,
+        });
+    }
+    results.sort_by_key(|result| result.input_index);
+    let dimensions = actual_dimensions.ok_or_else(|| {
+        response_headers_protocol_failure("Embedding Batch contains no successful vectors.")
+    })?;
+    Ok(EmbeddingResponse {
+        request_id: request.request_id.clone(),
+        route: execution_route_snapshot(
+            route,
+            model,
+            usage_scope,
+            revisions.catalog,
+            revisions.route,
+            Some(native_route.binding.binding_id.as_str()),
+        ),
+        fingerprint: EmbeddingSpaceFingerprint {
+            provider_id: route.provider.id.clone(),
+            service_entry_id: route.entry.id.clone(),
+            deployment_id: Some(route.connection.credential_id.clone()),
+            secondary_route_id: secondary_route_id(&route.secondary_route),
+            model_id: model.id.clone(),
+            binding_id: native_route.binding.binding_id.clone(),
+            capability_revision: model.capabilities.evidence_revision.clone(),
+            task: request.task,
+            dimensions,
+            output_kind: request.output_kind,
+            encoding: request.encoding,
+            normalization: model
+                .capabilities
+                .embedding
+                .as_ref()
+                .ok_or_else(|| {
+                    pre_dispatch_failure(format!(
+                        "Model `{}` does not expose an embedding contract.",
+                        model.id
+                    ))
+                })?
+                .normalization,
+            distance_metric: model
+                .capabilities
+                .embedding
+                .as_ref()
+                .ok_or_else(|| {
+                    pre_dispatch_failure(format!(
+                        "Model `{}` does not expose an embedding contract.",
+                        model.id
+                    ))
+                })?
+                .distance_metric,
+        },
+        results,
+        dropped: Vec::new(),
+        usage: normalized_usage(WireUsage {
+            input_tokens: prompt_tokens,
+            prompt_tokens: None,
+            total_tokens,
+        }),
+        duration_ms,
+    })
+}
+
+/// Adds two optional reported usage counters without inventing values or wrapping overflow.
+/// 对两个可选已报告用量计数求和，既不虚构数值也不允许溢出回绕。
+///
+/// # Parameters
+/// 参数
+/// `accumulator` and `value` are optional provider-reported counts.
+/// `accumulator` 与 `value` 是供应商可选报告的计数。
+///
+/// # Returns
+/// 返回值
+/// Their checked sum only when both values remain known.
+/// 仅当两个数值均已知且未溢出时返回校验后的和。
+fn checked_optional_usage_sum(accumulator: Option<u64>, value: Option<u64>) -> Option<u64> {
+    accumulator.and_then(|accumulator| value.and_then(|value| accumulator.checked_add(value)))
 }
 
 /// Validates a configured action binding against the exact native provider route.
@@ -1166,7 +1386,7 @@ fn normalize_embedding_value(
 /// 返回值
 /// One non-secret route snapshot suitable for persistence and diagnostics.
 /// 返回一个适合持久化与诊断的非秘密路由快照。
-fn execution_route_snapshot(
+pub(crate) fn execution_route_snapshot(
     route: &ProviderExecutionRoute,
     model: &ConnectionModel,
     usage_scope: InferenceUsageScope,
@@ -1334,6 +1554,7 @@ mod tests {
                         BTreeSet::from([String::from("rerank-v4.0-pro")]),
                     ),
                 ]),
+                batch: None,
             });
         NativeInferenceRoute { binding: &BINDING }
     }
@@ -1352,6 +1573,7 @@ mod tests {
                 requires_service_origin_override: false,
                 rerank_truncation: Some(RerankTruncation::ProviderDefault),
                 response_model_aliases: BTreeMap::new(),
+                batch: None,
             });
         NativeInferenceRoute { binding: &BINDING }
     }
@@ -1370,6 +1592,7 @@ mod tests {
                 requires_service_origin_override: true,
                 rerank_truncation: Some(RerankTruncation::ProviderDefault),
                 response_model_aliases: BTreeMap::new(),
+                batch: None,
             });
         NativeInferenceRoute { binding: &BINDING }
     }
@@ -1388,6 +1611,7 @@ mod tests {
                 requires_service_origin_override: true,
                 rerank_truncation: Some(RerankTruncation::ProviderDefault),
                 response_model_aliases: BTreeMap::new(),
+                batch: None,
             });
         static SINGAPORE: LazyLock<crate::NativeInferenceBinding> =
             LazyLock::new(|| crate::NativeInferenceBinding {
@@ -1400,6 +1624,7 @@ mod tests {
                 requires_service_origin_override: true,
                 rerank_truncation: Some(RerankTruncation::ProviderDefault),
                 response_model_aliases: BTreeMap::new(),
+                batch: None,
             });
         NativeInferenceRoute {
             binding: if china { &CHINA } else { &SINGAPORE },

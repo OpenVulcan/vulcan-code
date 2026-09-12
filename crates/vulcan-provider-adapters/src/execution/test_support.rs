@@ -26,7 +26,7 @@ use vulcan_llm_core::LlmProtocolRuntime;
 /// 返回值
 /// A resolved route whose usage profiles come from the manifest declarations.
 /// 返回已解析路由，其 usage Profile 来自清单声明。
-pub(super) fn bundled_manifest_route(
+pub(crate) fn bundled_manifest_route(
     provider_id: &str,
     entry_id: &str,
     protocol_id: &str,

@@ -372,6 +372,7 @@ impl VceProjectSourceAdapter {
             total: None,
             overall_completed: 0,
             overall_total: None,
+            provider_batch_state: None,
             current_path: None,
         });
         // walker uses the same admission rules as path-scoped refreshes without pruning.
@@ -428,6 +429,7 @@ impl VceProjectSourceAdapter {
                 total: None,
                 overall_completed: 0,
                 overall_total: None,
+                provider_batch_state: None,
                 current_path: Some(relative_path),
             });
         }
@@ -471,6 +473,7 @@ impl VceProjectSourceAdapter {
             total: Some(total),
             overall_completed: 0,
             overall_total: Some(total),
+            provider_batch_state: None,
             current_path: None,
         });
         let mut observations = Vec::new();
@@ -499,6 +502,7 @@ impl VceProjectSourceAdapter {
                 total: Some(total),
                 overall_completed: position as u64 + 1,
                 overall_total: Some(total),
+                provider_batch_state: None,
                 current_path: Some(relative_path),
             });
         }

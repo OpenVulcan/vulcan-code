@@ -205,7 +205,7 @@ export interface VceJobSummary {
     operationId: string;
     // Meaning of the numeric counters.
     // 数字计数的含义。
-    unit: "files" | "blobs" | "batches" | "tables" | "none";
+    unit: "files" | "blobs" | "batches" | "requests" | "tables" | "none";
     // Confirmed completions, not started requests.
     // 已确认完成量，而非已开始请求量。
     completed: number;
@@ -218,6 +218,9 @@ export interface VceJobSummary {
     // Known total across the whole refresh operation.
     // 整个刷新操作范围内已知的总数量。
     overallTotal?: number | null;
+    // Normalized upstream Batch state while remote embedding work is active.
+    // 远端向量工作活动期间的归一化上游 Batch 状态。
+    providerBatchState: "validating" | "in_progress" | "finalizing" | "completed" | "failed" | "expired" | "cancelling" | "cancelled" | null;
     // Optional relative path, never source content.
     // 可选相对路径，绝不包含源码内容。
     currentPath: string | null;

@@ -48,12 +48,46 @@ pub enum VceRefreshUnit {
     /// Embedding batches whose responses passed validation.
     /// 响应已通过校验的向量批次。
     Batches,
+    /// Provider request items whose terminal outcomes were observed.
+    /// 已观测到终态结果的供应商请求项。
+    Requests,
     /// Physical vector tables whose maintenance completed.
     /// 已完成维护的物理向量表。
     Tables,
     /// No numeric denominator is currently meaningful.
     /// 当前没有有意义的数字分母。
     None,
+}
+
+/// Normalizes the upstream asynchronous Batch state exposed with refresh progress.
+/// 归一化随刷新进度暴露的上游异步 Batch 状态。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceRefreshProviderBatchState {
+    /// The provider is validating the accepted Batch.
+    /// 供应商正在校验已受理 Batch。
+    Validating,
+    /// The provider is processing request items.
+    /// 供应商正在处理请求项。
+    InProgress,
+    /// The provider is assembling result output.
+    /// 供应商正在组装结果输出。
+    Finalizing,
+    /// The provider completed the Batch.
+    /// 供应商已完成 Batch。
+    Completed,
+    /// The provider failed the Batch.
+    /// 供应商执行 Batch 失败。
+    Failed,
+    /// The provider completion window expired.
+    /// 供应商完成窗口已过期。
+    Expired,
+    /// The provider is cancelling the Batch.
+    /// 供应商正在取消 Batch。
+    Cancelling,
+    /// The provider cancelled the Batch.
+    /// 供应商已取消 Batch。
+    Cancelled,
 }
 
 /// Immutable phase observation without host UI, database, or provider dependencies.
@@ -83,6 +117,10 @@ pub struct VceRefreshProgress {
     /// 整个刷新操作范围内已知的总单元数量。
     #[serde(default)]
     pub overall_total: Option<u64>,
+    /// Normalized upstream Batch state when counters come from a remote provider task.
+    /// 当计数来自远端供应商任务时的归一化上游 Batch 状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_batch_state: Option<VceRefreshProviderBatchState>,
     /// Optional validated source-relative path, never source content.
     /// 可选的已验证源码相对路径，绝不包含源码正文。
     pub current_path: Option<String>,

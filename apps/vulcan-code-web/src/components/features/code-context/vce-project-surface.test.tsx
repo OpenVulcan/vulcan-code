@@ -261,7 +261,7 @@ describe("shared project semantic surfaces", () => {
       projectId: "project-a", jobId: "compact-a", kind: "compact", state: "running",
       sequence: 2, createdAtUnixMs: 2000, updatedAtUnixMs: 2100, sourceCheckpointVersion: 2,
       resultCheckpointVersion: null, followupRequested: false, error: null,
-      progress: { phase: "writing", operationId: "compact-a:content:1", unit: "tables", completed: 0, total: 2, currentPath: null },
+      progress: { phase: "writing", operationId: "compact-a:content:1", unit: "tables", completed: 0, total: 2, providerBatchState: null, currentPath: null },
     };
     rpc.jobs.mockResolvedValue(compact);
     await act(async () => root.render(<Harness projectId="project-a" menu />));
@@ -445,7 +445,7 @@ describe("shared project semantic surfaces", () => {
     const job: VceJobSummary = { projectId: "project-a", jobId: "job-1", kind: "synchronize", state: "running",
       sequence: 2, createdAtUnixMs: 2000, updatedAtUnixMs: 3000, sourceCheckpointVersion: 2,
       resultCheckpointVersion: null, followupRequested: false, error: null,
-      progress: { phase: "embedding", operationId: "job-1", unit: "batches", completed: 3, total: 7, currentPath: null } };
+      progress: { phase: "embedding", operationId: "job-1", unit: "batches", completed: 3, total: 7, providerBatchState: null, currentPath: null } };
     rpc.jobs.mockResolvedValue(job);
     await act(async () => root.render(<Harness projectId="project-a" />));
     expect(surface?.gate).toBe("ready"); expect(surface?.activity?.lastSuccessfulUpdateUnixMs).toBe(1000);

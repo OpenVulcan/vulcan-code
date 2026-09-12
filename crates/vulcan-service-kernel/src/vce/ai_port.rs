@@ -12,24 +12,32 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
 use vulcan_ai_contract::{
-    AiMessage, AiOperation, ContentItem, DispatchOutcome, EmbeddingCapabilities, EmbeddingEncoding,
-    EmbeddingOutputKind, EmbeddingTask, ExecutionRouteSnapshot, HostAiCallContext,
-    HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
-    HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError, HostAiErrorCode,
+    AiMessage, AiOperation, ContentItem, DispatchOutcome, EmbeddingBatchCapabilities,
+    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchProviderState,
+    EmbeddingBatchSnapshot, EmbeddingBatchSubmission, EmbeddingBatchTaskPlan,
+    EmbeddingBatchUploadedInput, EmbeddingCapabilities, EmbeddingEncoding, EmbeddingOutputKind,
+    EmbeddingTask, ExecutionRouteSnapshot, HostAiCallContext, HostAiCancellation,
+    HostAiCapabilityHandle, HostAiCapabilityRegistration, HostAiCapabilityRequirement,
+    HostAiEmbeddingRequest, HostAiEmbeddingResponse, HostAiError, HostAiErrorCode,
     HostAiExecutionHandle, HostAiPort, HostAiRetryReason, INFERENCE_CONTRACT_VERSION,
-    InferenceCallerBudget, InferenceCallerContext, InferenceCapabilitySnapshot,
-    InferencePermission, InferenceUsageScope, MessageRole, ParallelToolCallPolicy,
-    PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy, RerankRequest, RerankText,
-    RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
+    InferenceBatchTransport, InferenceCallerBudget, InferenceCallerContext,
+    InferenceCapabilitySnapshot, InferencePermission, InferenceUsageScope, MessageRole,
+    ParallelToolCallPolicy, PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy,
+    RerankRequest, RerankText, RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
+    ToolChoicePolicy,
 };
 use vulcan_context_engine::host_adapter::{
     HostEmbeddingRequestConfig, create_embedding_batch_with_response, rerank_documents,
-    start_response_execution, wait_response,
+    start_response_execution, validate_embedding_batch_response, wait_response,
 };
 use vulcan_context_engine::{
     EmbeddingSpace, VceAiBinding, VceAiCapabilitySnapshot, VceAiPort, VceAiPurpose,
-    VceEmbeddingRequest, VceEmbeddingResponse, VceFuture, VcePortError, VcePortOperation,
-    VceQueryRewriteRequest, VceQueryRewriteResponse, VceRerankRequest, VceRerankResponse,
+    VceEmbeddingBatchCapabilities, VceEmbeddingBatchCollectedResponse, VceEmbeddingBatchPlan,
+    VceEmbeddingBatchProviderState, VceEmbeddingBatchRequest, VceEmbeddingBatchSnapshot,
+    VceEmbeddingBatchSubmission, VceEmbeddingBatchTaskPlan, VceEmbeddingBatchTransport,
+    VceEmbeddingBatchUploadedInput, VceEmbeddingRequest, VceEmbeddingResponse, VceFuture,
+    VcePortError, VcePortOperation, VceQueryRewriteRequest, VceQueryRewriteResponse,
+    VceRerankRequest, VceRerankResponse,
 };
 
 use super::embedding_dimensions::validate_explicit_embedding_dimension;
@@ -196,6 +204,9 @@ struct VceEmbeddingContract {
     /// Exact strong embedding capability declaration.
     /// 精确的强类型向量能力声明。
     capabilities: EmbeddingCapabilities,
+    /// Optional asynchronous Batch capability frozen with the exact route.
+    /// 随精确路由冻结的可选异步 Batch 能力。
+    batch_capabilities: Option<EmbeddingBatchCapabilities>,
     /// Task-neutral physical compatibility fingerprint.
     /// 与任务无关的物理兼容性指纹。
     physical_fingerprint: String,
@@ -577,6 +588,57 @@ impl VceHostAiAdapter {
         Ok(())
     }
 
+    /// Builds one exact HostAI request for a document-only asynchronous Batch group.
+    /// 为一个仅文档用途的异步 Batch 分组构建精确 HostAI 请求。
+    fn prepare_batch_host_request(
+        &self,
+        request: &VceEmbeddingBatchRequest,
+    ) -> Result<(HostAiCapabilityHandle, HostAiEmbeddingRequest), VcePortError> {
+        if !matches!(
+            request.context.purpose,
+            VceAiPurpose::CodeDocumentEmbedding | VceAiPurpose::CodePathEmbedding
+        ) || self.embedding_contract.batch_capabilities.is_none()
+        {
+            return Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            });
+        }
+        self.validate_context(
+            &request.context,
+            request.context.purpose,
+            VcePortOperation::Embedding,
+        )?;
+        let handle = self
+            .refreshed_handle()
+            .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+        if !handle.supports(AiOperation::EmbeddingCreate, None) {
+            return Err(VcePortError::Unavailable {
+                operation: VcePortOperation::Embedding,
+            });
+        }
+        let task = vce_embedding_task(
+            &self.embedding_contract.capabilities.tasks,
+            request.context.purpose,
+        )
+        .map_err(|reason| VcePortError::Rejected {
+            operation: VcePortOperation::Embedding,
+            reason,
+        })?;
+        let host_request = vulcan_context_engine::host_adapter::build_embedding_request(
+            &request.batch,
+            HostEmbeddingRequestConfig {
+                vector_space_id: self.binding.vector_space_id.clone(),
+                request_id: request.context.operation_id.clone(),
+                idempotency_key: Some(request.context.operation_id.clone()),
+                consumer_profile_id: self.binding.consumer_profile_id.clone(),
+                task,
+                dimensions: Some(self.embedding_space.dimension as u32),
+            },
+        )
+        .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+        Ok((handle, host_request))
+    }
+
     /// Verifies one host embedding response still belongs to the frozen physical route.
     /// 校验一次宿主向量响应仍属于冻结物理路由。
     fn validate_embedding_response(
@@ -626,6 +688,253 @@ impl VceHostAiAdapter {
     }
 }
 
+/// Projects HostAI Batch capabilities into VCE's provider-neutral durable form.
+/// 将 HostAI Batch 能力投影为 VCE 的供应商无关持久形式。
+fn project_vce_batch_capabilities(
+    capabilities: &EmbeddingBatchCapabilities,
+) -> VceEmbeddingBatchCapabilities {
+    VceEmbeddingBatchCapabilities {
+        transport: match capabilities.transport {
+            InferenceBatchTransport::InlineJson => VceEmbeddingBatchTransport::InlineJson,
+            InferenceBatchTransport::JsonlFile => VceEmbeddingBatchTransport::JsonlFile,
+        },
+        provider_maximum_requests: capabilities.provider_maximum_requests,
+        provider_maximum_payload_bytes: capabilities.provider_maximum_payload_bytes,
+        provider_maximum_item_bytes: capabilities.provider_maximum_item_bytes,
+        provider_maximum_parallel_tasks: capabilities.provider_maximum_parallel_tasks,
+        host_policy_maximum_tasks_per_run: capabilities.host_policy_maximum_tasks_per_run,
+        host_policy_maximum_requests: capabilities.host_policy_maximum_requests,
+        host_policy_maximum_payload_bytes: capabilities.host_policy_maximum_payload_bytes,
+        host_policy_maximum_result_bytes: capabilities.host_policy_maximum_result_bytes,
+        provider_completion_window_seconds: capabilities.provider_completion_window_seconds,
+        maximum_requests: capabilities.effective_maximum_requests(),
+        maximum_payload_bytes: capabilities.effective_maximum_payload_bytes(),
+        maximum_result_bytes: capabilities.host_policy_maximum_result_bytes,
+        maximum_tasks_per_run: capabilities.effective_maximum_tasks_per_run(),
+        provider_maximum_files: capabilities.provider_maximum_files,
+        provider_maximum_total_file_bytes: capabilities.provider_maximum_total_file_bytes,
+        provider_file_upload_qps: capabilities.provider_file_upload_qps,
+        provider_file_operation_qps: capabilities.provider_file_operation_qps,
+        provider_task_create_rpm: capabilities.provider_task_create_rpm,
+        provider_task_status_rpm: capabilities.provider_task_status_rpm,
+        provider_task_list_rpm: capabilities.provider_task_list_rpm,
+        provider_task_cancel_rpm: capabilities.provider_task_cancel_rpm,
+        minimum_poll_interval_ms: capabilities.minimum_poll_interval_ms,
+        supports_cancel: capabilities.supports_cancel,
+        deletes_input_file_after_ingestion: capabilities.deletes_input_file_after_ingestion,
+    }
+}
+
+/// Projects one HostAI uploaded input into its VCE durable representation.
+/// 将一个 HostAI 已上传输入投影为其 VCE 持久表示。
+fn project_vce_batch_uploaded_input(
+    uploaded: &EmbeddingBatchUploadedInput,
+) -> VceEmbeddingBatchUploadedInput {
+    VceEmbeddingBatchUploadedInput {
+        task_id: uploaded.task_id.clone(),
+        provider_input_file_id: uploaded.provider_input_file_id.clone(),
+        uploaded_at_unix_ms: uploaded.uploaded_at_unix_ms,
+    }
+}
+
+/// Restores one HostAI uploaded input from its VCE durable representation.
+/// 从 VCE 持久表示恢复一个 HostAI 已上传输入。
+fn restore_host_batch_uploaded_input(
+    uploaded: &VceEmbeddingBatchUploadedInput,
+) -> EmbeddingBatchUploadedInput {
+    EmbeddingBatchUploadedInput {
+        task_id: uploaded.task_id.clone(),
+        provider_input_file_id: uploaded.provider_input_file_id.clone(),
+        uploaded_at_unix_ms: uploaded.uploaded_at_unix_ms,
+    }
+}
+
+/// Projects one HostAI task plan into its VCE durable representation.
+/// 将一个 HostAI 任务计划投影为其 VCE 持久表示。
+fn project_vce_batch_task(task: &EmbeddingBatchTaskPlan) -> VceEmbeddingBatchTaskPlan {
+    VceEmbeddingBatchTaskPlan {
+        task_id: task.task_id.clone(),
+        first_input_index: task.first_input_index,
+        input_count: task.input_count,
+        encoded_payload_bytes: task.encoded_payload_bytes,
+        payload_sha256: task.payload_sha256.clone(),
+    }
+}
+
+/// Restores one HostAI task plan from its VCE durable representation.
+/// 从 VCE 持久表示恢复一个 HostAI 任务计划。
+fn restore_host_batch_task(task: &VceEmbeddingBatchTaskPlan) -> EmbeddingBatchTaskPlan {
+    EmbeddingBatchTaskPlan {
+        task_id: task.task_id.clone(),
+        first_input_index: task.first_input_index,
+        input_count: task.input_count,
+        encoded_payload_bytes: task.encoded_payload_bytes,
+        payload_sha256: task.payload_sha256.clone(),
+    }
+}
+
+/// Projects one HostAI submission into its VCE durable representation.
+/// 将一个 HostAI 提交记录投影为其 VCE 持久表示。
+fn project_vce_batch_submission(
+    submission: &EmbeddingBatchSubmission,
+) -> VceEmbeddingBatchSubmission {
+    VceEmbeddingBatchSubmission {
+        task_id: submission.task_id.clone(),
+        provider_batch_id: submission.provider_batch_id.clone(),
+        provider_input_file_id: submission.provider_input_file_id.clone(),
+        submitted_at_unix_ms: submission.submitted_at_unix_ms,
+    }
+}
+
+/// Restores one HostAI submission from its VCE durable representation.
+/// 从 VCE 持久表示恢复一个 HostAI 提交记录。
+fn restore_host_batch_submission(
+    submission: &VceEmbeddingBatchSubmission,
+) -> EmbeddingBatchSubmission {
+    EmbeddingBatchSubmission {
+        task_id: submission.task_id.clone(),
+        provider_batch_id: submission.provider_batch_id.clone(),
+        provider_input_file_id: submission.provider_input_file_id.clone(),
+        submitted_at_unix_ms: submission.submitted_at_unix_ms,
+    }
+}
+
+/// Validates one durable VCE Batch plan against its reconstructed typed request.
+/// 根据重建的类型化请求校验一份持久 VCE Batch 计划。
+///
+/// # Parameters
+/// 参数
+/// `plan` is durable VCE state, `request` is reconstructed from the same durable source manifest,
+/// and `reason` identifies the rejected lifecycle operation.
+/// `plan` 是 VCE 持久状态，`request` 从同一持久源码清单重建，`reason` 标识被拒绝的生命周期操作。
+///
+/// # Returns
+/// 返回值
+/// Unit for a complete ordered plan bound to the request, otherwise a pre-dispatch VCE rejection.
+/// 计划完整有序且绑定请求时返回空值，否则返回分派前 VCE 拒绝错误。
+fn validate_frozen_vce_batch_plan(
+    plan: &VceEmbeddingBatchPlan,
+    request_id: &str,
+    input_count: usize,
+    reason: &'static str,
+) -> Result<(), VcePortError> {
+    if plan.request_id == request_id && plan.validate(input_count).is_ok() {
+        return Ok(());
+    }
+    Err(VcePortError::Rejected {
+        operation: VcePortOperation::Embedding,
+        reason: reason.to_owned(),
+    })
+}
+
+/// Restores one exact task only when it belongs to the validated durable plan.
+/// 仅当任务属于已校验持久计划时恢复其精确 HostAI 表示。
+fn restore_planned_host_batch_task(
+    plan: &VceEmbeddingBatchPlan,
+    task: &VceEmbeddingBatchTaskPlan,
+    reason: &'static str,
+) -> Result<EmbeddingBatchTaskPlan, VcePortError> {
+    if plan.tasks.iter().any(|planned| planned == task) {
+        return Ok(restore_host_batch_task(task));
+    }
+    Err(VcePortError::Rejected {
+        operation: VcePortOperation::Embedding,
+        reason: reason.to_owned(),
+    })
+}
+
+/// Validates that one durable submission belongs to a task in the frozen VCE plan.
+/// 校验一项持久提交属于冻结 VCE 计划中的任务。
+fn validate_planned_vce_batch_submission(
+    plan: &VceEmbeddingBatchPlan,
+    submission: &VceEmbeddingBatchSubmission,
+    reason: &'static str,
+) -> Result<(), VcePortError> {
+    if submission.validate().is_ok()
+        && plan
+            .tasks
+            .iter()
+            .any(|task| task.task_id == submission.task_id)
+    {
+        return Ok(());
+    }
+    Err(VcePortError::Rejected {
+        operation: VcePortOperation::Embedding,
+        reason: reason.to_owned(),
+    })
+}
+
+/// Projects one normalized HostAI provider state into VCE state.
+/// 将一个归一化 HostAI 供应商状态投影为 VCE 状态。
+fn project_vce_batch_state(state: EmbeddingBatchProviderState) -> VceEmbeddingBatchProviderState {
+    match state {
+        EmbeddingBatchProviderState::Validating => VceEmbeddingBatchProviderState::Validating,
+        EmbeddingBatchProviderState::InProgress => VceEmbeddingBatchProviderState::InProgress,
+        EmbeddingBatchProviderState::Finalizing => VceEmbeddingBatchProviderState::Finalizing,
+        EmbeddingBatchProviderState::Completed => VceEmbeddingBatchProviderState::Completed,
+        EmbeddingBatchProviderState::Failed => VceEmbeddingBatchProviderState::Failed,
+        EmbeddingBatchProviderState::Expired => VceEmbeddingBatchProviderState::Expired,
+        EmbeddingBatchProviderState::Cancelling => VceEmbeddingBatchProviderState::Cancelling,
+        EmbeddingBatchProviderState::Cancelled => VceEmbeddingBatchProviderState::Cancelled,
+    }
+}
+
+/// Restores one normalized HostAI provider state from VCE state.
+/// 从 VCE 状态恢复一个归一化 HostAI 供应商状态。
+fn restore_host_batch_state(state: VceEmbeddingBatchProviderState) -> EmbeddingBatchProviderState {
+    match state {
+        VceEmbeddingBatchProviderState::Validating => EmbeddingBatchProviderState::Validating,
+        VceEmbeddingBatchProviderState::InProgress => EmbeddingBatchProviderState::InProgress,
+        VceEmbeddingBatchProviderState::Finalizing => EmbeddingBatchProviderState::Finalizing,
+        VceEmbeddingBatchProviderState::Completed => EmbeddingBatchProviderState::Completed,
+        VceEmbeddingBatchProviderState::Failed => EmbeddingBatchProviderState::Failed,
+        VceEmbeddingBatchProviderState::Expired => EmbeddingBatchProviderState::Expired,
+        VceEmbeddingBatchProviderState::Cancelling => EmbeddingBatchProviderState::Cancelling,
+        VceEmbeddingBatchProviderState::Cancelled => EmbeddingBatchProviderState::Cancelled,
+    }
+}
+
+/// Projects one HostAI status snapshot into its VCE durable representation.
+/// 将一个 HostAI 状态快照投影为其 VCE 持久表示。
+fn project_vce_batch_snapshot(snapshot: &EmbeddingBatchSnapshot) -> VceEmbeddingBatchSnapshot {
+    VceEmbeddingBatchSnapshot {
+        submission: project_vce_batch_submission(&snapshot.submission),
+        state: project_vce_batch_state(snapshot.state),
+        total_requests: snapshot.total_requests,
+        completed_requests: snapshot.completed_requests,
+        failed_requests: snapshot.failed_requests,
+        output_file_id: snapshot.output_file_id.clone(),
+        error_file_id: snapshot.error_file_id.clone(),
+        error: snapshot.error.clone(),
+    }
+}
+
+/// Restores one HostAI status snapshot from its VCE durable representation.
+/// 从 VCE 持久表示恢复一个 HostAI 状态快照。
+fn restore_host_batch_snapshot(snapshot: &VceEmbeddingBatchSnapshot) -> EmbeddingBatchSnapshot {
+    EmbeddingBatchSnapshot {
+        submission: restore_host_batch_submission(&snapshot.submission),
+        state: restore_host_batch_state(snapshot.state),
+        total_requests: snapshot.total_requests,
+        completed_requests: snapshot.completed_requests,
+        failed_requests: snapshot.failed_requests,
+        output_file_id: snapshot.output_file_id.clone(),
+        error_file_id: snapshot.error_file_id.clone(),
+        error: snapshot.error.clone(),
+    }
+}
+
+/// Projects one HostAI Batch plan into VCE's durable provider-neutral plan.
+/// 将一个 HostAI Batch 计划投影为 VCE 的持久供应商无关计划。
+fn project_vce_batch_plan(plan: &EmbeddingBatchPlan) -> VceEmbeddingBatchPlan {
+    VceEmbeddingBatchPlan {
+        request_id: plan.request_id.clone(),
+        request_fingerprint: plan.request_fingerprint.clone(),
+        capabilities: project_vce_batch_capabilities(&plan.capabilities),
+        tasks: plan.tasks.iter().map(project_vce_batch_task).collect(),
+    }
+}
+
 impl VceAiPort for VceHostAiAdapter {
     /// Returns the immutable project-scoped VCE AI binding.
     /// 返回不可变的项目作用域 VCE AI 绑定。
@@ -666,6 +975,355 @@ impl VceAiPort for VceHostAiAdapter {
             .capabilities
             .maximum_inputs
             .and_then(|value| usize::try_from(value).ok())
+    }
+
+    /// Returns exact effective asynchronous Batch limits frozen with the embedding route.
+    /// 返回随向量路由冻结的精确有效异步 Batch 限制。
+    fn embedding_batch_capabilities(&self) -> Option<VceEmbeddingBatchCapabilities> {
+        self.embedding_contract
+            .batch_capabilities
+            .as_ref()
+            .map(project_vce_batch_capabilities)
+    }
+
+    /// Plans provider tasks for one ordered document-segment group without provider I/O.
+    /// 在不执行供应商 I/O 的情况下为一个有序文档分段组规划供应商任务。
+    fn plan_embedding_batch(
+        &self,
+        request: VceEmbeddingBatchRequest,
+    ) -> VceFuture<Result<VceEmbeddingBatchPlan, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            let plan = adapter
+                .port
+                .plan_embedding_batch(&handle, &host_request)
+                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            Ok(project_vce_batch_plan(&plan))
+        })
+    }
+
+    /// Uploads one exact file-backed provider input after verifying the frozen plan.
+    /// 校验冻结计划后上传一个精确的文件型供应商输入。
+    fn upload_embedding_batch_input(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        task: VceEmbeddingBatchTaskPlan,
+    ) -> VceFuture<Result<VceEmbeddingBatchUploadedInput, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch upload requires a valid frozen plan",
+            )?;
+            let current_task = restore_planned_host_batch_task(
+                &plan,
+                &task,
+                "VCE embedding Batch upload task is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let uploaded = adapter
+                .port
+                .upload_embedding_batch_input(
+                    &handle,
+                    host_context,
+                    host_request,
+                    plan.request_fingerprint,
+                    current_task,
+                )
+                .await
+                .map_err(|error| map_host_submission_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            Ok(project_vce_batch_uploaded_input(&uploaded))
+        })
+    }
+
+    /// Submits one exact one-task provider Batch without automatic replay.
+    /// 在不自动重放的情况下提交一个精确单任务供应商 Batch。
+    fn submit_embedding_batch(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        task: VceEmbeddingBatchTaskPlan,
+        uploaded_input: Option<VceEmbeddingBatchUploadedInput>,
+    ) -> VceFuture<Result<VceEmbeddingBatchSubmission, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch submission requires a valid frozen plan",
+            )?;
+            let current_task = restore_planned_host_batch_task(
+                &plan,
+                &task,
+                "VCE embedding Batch task is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let submission = adapter
+                .port
+                .submit_embedding_batch(
+                    &handle,
+                    host_context,
+                    host_request,
+                    plan.request_fingerprint,
+                    current_task,
+                    uploaded_input
+                        .as_ref()
+                        .map(restore_host_batch_uploaded_input),
+                )
+                .await
+                .map_err(|error| map_host_submission_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            Ok(project_vce_batch_submission(&submission))
+        })
+    }
+
+    /// Reconciles one file-backed task by its durable input file and frozen task identity.
+    /// 按持久输入文件和冻结任务身份对账一个文件型任务。
+    fn reconcile_embedding_batch_submission(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        task: VceEmbeddingBatchTaskPlan,
+        uploaded_input: VceEmbeddingBatchUploadedInput,
+    ) -> VceFuture<Result<Option<VceEmbeddingBatchSubmission>, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch reconciliation requires a valid frozen plan",
+            )?;
+            let current_task = restore_planned_host_batch_task(
+                &plan,
+                &task,
+                "VCE embedding Batch reconciliation task is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let submission = adapter
+                .port
+                .reconcile_embedding_batch_submission(
+                    &handle,
+                    host_context,
+                    host_request,
+                    plan.request_fingerprint,
+                    current_task,
+                    restore_host_batch_uploaded_input(&uploaded_input),
+                )
+                .await
+                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            Ok(submission.as_ref().map(project_vce_batch_submission))
+        })
+    }
+
+    /// Polls one durable provider Batch submission without resubmitting it.
+    /// 在不重新提交的情况下轮询一个持久供应商 Batch 提交。
+    fn embedding_batch_status(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        submission: VceEmbeddingBatchSubmission,
+    ) -> VceFuture<Result<VceEmbeddingBatchSnapshot, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch status requires a valid frozen plan",
+            )?;
+            validate_planned_vce_batch_submission(
+                &plan,
+                &submission,
+                "VCE embedding Batch status submission is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let snapshot = adapter
+                .port
+                .embedding_batch_status(
+                    &handle,
+                    host_context,
+                    host_request,
+                    plan.request_fingerprint,
+                    restore_host_batch_submission(&submission),
+                )
+                .await
+                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            Ok(project_vce_batch_snapshot(&snapshot))
+        })
+    }
+
+    /// Collects one completed provider Batch and validates the frozen VCE vector contract.
+    /// 收集一个已完成供应商 Batch 并校验冻结 VCE 向量契约。
+    fn collect_embedding_batch(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        task: VceEmbeddingBatchTaskPlan,
+        snapshot: VceEmbeddingBatchSnapshot,
+    ) -> VceFuture<Result<VceEmbeddingBatchCollectedResponse, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch collection requires a valid frozen plan",
+            )?;
+            let current_task = restore_planned_host_batch_task(
+                &plan,
+                &task,
+                "VCE embedding Batch task is absent from the frozen plan",
+            )?;
+            validate_planned_vce_batch_submission(
+                &plan,
+                &snapshot.submission,
+                "VCE embedding Batch collection snapshot is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let collected: EmbeddingBatchCollectedResult = adapter
+                .port
+                .collect_embedding_batch(
+                    &handle,
+                    host_context,
+                    host_request.clone(),
+                    plan.request_fingerprint,
+                    current_task,
+                    restore_host_batch_snapshot(&snapshot),
+                )
+                .await
+                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            validate_collected_embedding_batch_identity(&task.task_id, &collected.task_id)?;
+            let aligned = validate_embedding_batch_response(
+                &host_request,
+                HostAiEmbeddingResponse {
+                    vector_space_id: adapter.binding.vector_space_id.clone(),
+                    response: collected.response,
+                },
+            )
+            .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            adapter.validate_embedding_response(&aligned)?;
+            Ok(VceEmbeddingBatchCollectedResponse {
+                operation_id: request.context.operation_id,
+                task_id: collected.task_id,
+                vectors: aligned.vectors,
+                space: adapter.embedding_space.clone(),
+                cleanup_warning: collected.cleanup_warning,
+            })
+        })
+    }
+
+    /// Deletes one temporary provider Batch input only after VCE confirms durable vector storage.
+    /// 仅在 VCE 确认向量已持久保存后删除一个供应商 Batch 临时输入。
+    fn cleanup_embedding_batch_input(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        submission: VceEmbeddingBatchSubmission,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch cleanup requires a valid frozen plan",
+            )?;
+            validate_planned_vce_batch_submission(
+                &plan,
+                &submission,
+                "VCE embedding Batch cleanup submission is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            adapter
+                .port
+                .cleanup_embedding_batch_input(
+                    &handle,
+                    host_context,
+                    host_request,
+                    plan.request_fingerprint,
+                    restore_host_batch_submission(&submission),
+                )
+                .await
+                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            Ok(())
+        })
+    }
+
+    /// Cancels one durable provider Batch submission when supported.
+    /// 在供应商支持时取消一个持久供应商 Batch 提交。
+    fn cancel_embedding_batch(
+        &self,
+        request: VceEmbeddingBatchRequest,
+        plan: VceEmbeddingBatchPlan,
+        submission: VceEmbeddingBatchSubmission,
+    ) -> VceFuture<Result<VceEmbeddingBatchSnapshot, VcePortError>> {
+        let adapter = self.clone();
+        Box::pin(async move {
+            let (handle, host_request) = adapter.prepare_batch_host_request(&request)?;
+            validate_frozen_vce_batch_plan(
+                &plan,
+                host_request.request.request_id.as_str(),
+                host_request.request.inputs.len(),
+                "VCE embedding Batch cancellation requires a valid frozen plan",
+            )?;
+            validate_planned_vce_batch_submission(
+                &plan,
+                &submission,
+                "VCE embedding Batch cancellation submission is absent from the frozen plan",
+            )?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let snapshot = adapter
+                .port
+                .cancel_embedding_batch(
+                    &handle,
+                    host_context,
+                    host_request,
+                    plan.request_fingerprint,
+                    restore_host_batch_submission(&submission),
+                )
+                .await
+                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            call_guard.disarm();
+            Ok(project_vce_batch_snapshot(&snapshot))
+        })
     }
 
     /// Executes document or query embedding through this project's VCE HostAI registration.
@@ -950,6 +1608,29 @@ impl VceAiPort for VceHostAiAdapter {
     }
 }
 
+/// Validates that a collected HostAI result still belongs to the exact frozen provider task.
+/// 校验已收集的 HostAI 结果仍属于精确冻结的供应商任务。
+///
+/// `expected_task_id` is selected from the frozen plan and `actual_task_id` comes from the host result.
+/// `expected_task_id` 来自冻结计划，`actual_task_id` 来自宿主返回结果。
+/// Returns unit only when result ownership is exact; otherwise returns an invalid-response error.
+/// 仅当结果归属精确一致时返回空值，否则返回无效响应错误。
+fn validate_collected_embedding_batch_identity(
+    expected_task_id: &str,
+    actual_task_id: &str,
+) -> Result<(), VcePortError> {
+    if actual_task_id == expected_task_id {
+        Ok(())
+    } else {
+        Err(VcePortError::InvalidResponse {
+            operation: VcePortOperation::Embedding,
+            reason: String::from(
+                "HostAI embedding Batch result does not belong to the frozen provider task",
+            ),
+        })
+    }
+}
+
 /// Declares one project-scoped capability on the common HostAI registration plane.
 /// 在公共 HostAI 注册平面声明一个项目作用域能力。
 fn vce_capability_registration(
@@ -1072,7 +1753,12 @@ fn embedding_contract(
         .embedding
         .clone()
         .ok_or_else(|| String::from("VCE HostAI Embedding capabilities are missing"))?;
-    validated_embedding_contract(route, capabilities, dimension)
+    validated_embedding_contract(
+        route,
+        capabilities,
+        operation.embedding_batch.clone(),
+        dimension,
+    )
 }
 
 /// Validate a resolved candidate using the same exact contract as registered VCE execution.
@@ -1083,6 +1769,7 @@ fn embedding_contract(
 fn validated_embedding_contract(
     route: ExecutionRouteSnapshot,
     capabilities: EmbeddingCapabilities,
+    batch_capabilities: Option<EmbeddingBatchCapabilities>,
     dimension: u32,
 ) -> Result<VceEmbeddingContract, String> {
     let provider_default_task = capabilities.tasks.contains(&EmbeddingTask::ProviderDefault);
@@ -1108,6 +1795,7 @@ fn validated_embedding_contract(
     Ok(VceEmbeddingContract {
         route,
         capabilities,
+        batch_capabilities,
         physical_fingerprint,
     })
 }
@@ -1122,7 +1810,7 @@ pub(super) fn candidate_embedding_fingerprint(
     capabilities: EmbeddingCapabilities,
     dimension: u32,
 ) -> Result<String, String> {
-    Ok(validated_embedding_contract(route, capabilities, dimension)?.physical_fingerprint)
+    Ok(validated_embedding_contract(route, capabilities, None, dimension)?.physical_fingerprint)
 }
 
 /// Selects the exact host embedding task for one VCE semantic purpose.
@@ -1387,10 +2075,54 @@ fn map_host_error(operation: VcePortOperation, error: HostAiError) -> VcePortErr
     }
 }
 
+/// Preserve ambiguous non-idempotent submission outcomes without changing ordinary request errors.
+/// 保留非幂等提交的不确定结果，同时不改变普通请求错误语义。
+fn map_host_submission_error(operation: VcePortOperation, error: HostAiError) -> VcePortError {
+    if matches!(
+        error.dispatch_outcome,
+        DispatchOutcome::Dispatched | DispatchOutcome::Unknown
+    ) {
+        VcePortError::SubmissionUnknown {
+            operation,
+            message: error.to_string(),
+        }
+    } else {
+        map_host_error(operation, error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use vulcan_ai_contract::test_support::MockHostAiPort;
+
+    /// Verifies a collected Batch result cannot cross the frozen provider-task boundary.
+    /// 验证已收集的 Batch 结果不能跨越冻结的供应商任务边界。
+    #[test]
+    fn collected_batch_result_requires_exact_task_identity() {
+        validate_collected_embedding_batch_identity("task-a", "task-a")
+            .expect("matching task identity must be accepted");
+        assert!(matches!(
+            validate_collected_embedding_batch_identity("task-a", "task-b"),
+            Err(VcePortError::InvalidResponse {
+                operation: VcePortOperation::Embedding,
+                ..
+            })
+        ));
+    }
+
+    /// Verifies ambiguous dispatch cannot be converted into a retryable local submission failure.
+    /// 验证不确定分派不能被转换成可重试的本地提交失败。
+    #[test]
+    fn unknown_batch_dispatch_maps_to_submission_unknown() {
+        let mut error = HostAiError::new(HostAiErrorCode::Cancelled, "cancelled after start");
+        error.dispatch_outcome = DispatchOutcome::Unknown;
+
+        assert!(matches!(
+            map_host_submission_error(VcePortOperation::Embedding, error),
+            VcePortError::SubmissionUnknown { .. }
+        ));
+    }
 
     /// Verifies unrelated catalogs and labels preserve identity while actual route drift does not.
     /// 验证无关目录及标签保留身份，但实际路由漂移不会保留身份。
@@ -1490,6 +2222,7 @@ mod tests {
                         route: Some(route.clone()),
                         embedding: (requirement.operation == AiOperation::EmbeddingCreate)
                             .then(|| capabilities.clone()),
+                        embedding_batch: None,
                         rerank: None,
                     },
                 )
@@ -1633,6 +2366,7 @@ mod tests {
                         route: Some(route.clone()),
                         embedding: (requirement.operation == AiOperation::EmbeddingCreate)
                             .then(|| capabilities.clone()),
+                        embedding_batch: None,
                         rerank: None,
                     },
                 )
@@ -1876,6 +2610,7 @@ mod tests {
                         unavailable_reason: None,
                         route: None,
                         embedding: None,
+                        embedding_batch: None,
                         rerank: None,
                     },
                 )
@@ -1983,6 +2718,113 @@ mod tests {
             vce_embedding_task(&dedicated, VceAiPurpose::CodePathQueryEmbedding)
                 .expect("query task should serve path queries"),
             EmbeddingTask::Query
+        );
+    }
+
+    /// Verifies lifecycle calls accept only a complete frozen plan and identities owned by that plan.
+    /// 验证生命周期调用仅接受完整冻结计划及其持有的身份。
+    ///
+    /// Takes no parameters and returns unit after request, task, and submission ownership are enforced.
+    /// 无参数；请求、任务及提交归属均被强制校验后返回空值。
+    #[test]
+    fn remote_batch_lifecycle_requires_complete_frozen_plan_ownership() {
+        // plan represents the exact HostAI result frozen before the first provider I/O.
+        // plan 表示首次供应商 I/O 前冻结的精确 HostAI 结果。
+        let plan = EmbeddingBatchPlan {
+            request_id: String::from("batch-request"),
+            request_fingerprint: "a".repeat(64),
+            route: ExecutionRouteSnapshot {
+                provider_id: String::from("provider-a"),
+                service_entry_id: String::from("service-a"),
+                connection_id: String::from("connection-a"),
+                model_id: String::from("embedding-a"),
+                protocol_binding_id: Some(String::from("batch-protocol")),
+                action_binding_id: None,
+                secondary_route_id: None,
+                secondary_provider_name: None,
+                secondary_endpoint_name: None,
+                capability_revision: String::from("capability-a"),
+                catalog_revision: String::from("catalog-a"),
+                route_revision: String::from("route-a"),
+                usage_scope: InferenceUsageScope::InternalBackground,
+            },
+            capabilities: EmbeddingBatchCapabilities {
+                transport: InferenceBatchTransport::InlineJson,
+                result_delivery: vulcan_ai_contract::InferenceBatchResultDelivery::InlineJson,
+                provider_maximum_requests: None,
+                provider_maximum_payload_bytes: None,
+                provider_maximum_item_bytes: None,
+                provider_maximum_files: None,
+                provider_maximum_total_file_bytes: None,
+                provider_file_upload_qps: None,
+                provider_file_operation_qps: None,
+                provider_maximum_parallel_tasks: None,
+                provider_task_create_rpm: None,
+                provider_task_status_rpm: None,
+                provider_task_list_rpm: None,
+                provider_task_cancel_rpm: None,
+                host_policy_maximum_tasks_per_run: 8,
+                host_policy_maximum_requests: 32,
+                host_policy_maximum_payload_bytes: 1_048_576,
+                host_policy_maximum_result_bytes: 1_048_576,
+                provider_completion_window_seconds: None,
+                minimum_poll_interval_ms: 60_000,
+                supports_cancel: true,
+                deletes_input_file_after_ingestion: false,
+            },
+            tasks: vec![EmbeddingBatchTaskPlan {
+                task_id: String::from("batch-task"),
+                first_input_index: 0,
+                input_count: 1,
+                encoded_payload_bytes: 256,
+                payload_sha256: "b".repeat(64),
+            }],
+        };
+        let expected = project_vce_batch_plan(&plan);
+        assert!(
+            validate_frozen_vce_batch_plan(&expected, "batch-request", 1, "fixture plan drift")
+                .is_ok()
+        );
+        assert!(matches!(
+            validate_frozen_vce_batch_plan(&expected, "different-request", 1, "fixture plan drift"),
+            Err(VcePortError::Rejected {
+                operation: VcePortOperation::Embedding,
+                ..
+            })
+        ));
+
+        let task = expected.tasks[0].clone();
+        assert!(restore_planned_host_batch_task(&expected, &task, "fixture task drift").is_ok());
+        let mut foreign_task = task.clone();
+        foreign_task.task_id = String::from("foreign-task");
+        assert!(
+            restore_planned_host_batch_task(&expected, &foreign_task, "fixture task drift")
+                .is_err()
+        );
+
+        let submission = VceEmbeddingBatchSubmission {
+            task_id: task.task_id,
+            provider_batch_id: String::from("provider-batch"),
+            provider_input_file_id: None,
+            submitted_at_unix_ms: 1,
+        };
+        assert!(
+            validate_planned_vce_batch_submission(
+                &expected,
+                &submission,
+                "fixture submission drift"
+            )
+            .is_ok()
+        );
+        let mut foreign_submission = submission;
+        foreign_submission.task_id = String::from("foreign-task");
+        assert!(
+            validate_planned_vce_batch_submission(
+                &expected,
+                &foreign_submission,
+                "fixture submission drift"
+            )
+            .is_err()
         );
     }
 
@@ -2157,6 +2999,7 @@ mod tests {
                     unavailable_reason: None,
                     route: None,
                     embedding: None,
+                    embedding_batch: None,
                     rerank: None,
                 },
                 vulcan_ai_contract::InferenceOperationCapability {
@@ -2166,6 +3009,7 @@ mod tests {
                     unavailable_reason: None,
                     route: None,
                     embedding: None,
+                    embedding_batch: None,
                     rerank: None,
                 },
                 vulcan_ai_contract::InferenceOperationCapability {
@@ -2175,6 +3019,7 @@ mod tests {
                     unavailable_reason: None,
                     route: None,
                     embedding: None,
+                    embedding_batch: None,
                     rerank: None,
                 },
             ],

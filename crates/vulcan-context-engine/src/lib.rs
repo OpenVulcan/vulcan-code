@@ -28,7 +28,8 @@ pub mod host_adapter;
 pub use host_adapter::{
     HostEmbeddingBatchResult, HostEmbeddingRequestConfig, build_embedding_request,
     cancel_execution, create_embedding_batch, create_embedding_batch_with_response,
-    execution_status, rerank_documents, start_response_execution, stream_response, wait_response,
+    execution_status, rerank_documents, start_response_execution, stream_response,
+    validate_embedding_batch_response, wait_response,
 };
 
 pub use chunking::{ChunkerError, RecursiveChunker, RecursiveChunkerConfig};
@@ -62,8 +63,9 @@ pub use management::{
 };
 pub use manifest::{
     VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION, VceCodeNodeSnapshot, VceEmbeddingBatchRecord,
-    VceEmbeddingBatchResult, VceEmbeddingBatchState, VceEmbeddingRunContract,
-    VceEmbeddingRunManifest, VceEmbeddingRunState, VceEmbeddingVectorResult,
+    VceEmbeddingBatchResult, VceEmbeddingBatchState, VceEmbeddingRemoteBatchRecord,
+    VceEmbeddingRemoteBatchState, VceEmbeddingRunContract, VceEmbeddingRunManifest,
+    VceEmbeddingRunState, VceEmbeddingVectorResult,
 };
 pub use model::{
     Chunk, ChunkError, ChunkKind, FileRecord, FileSource, FileStatus, HitKind, SearchHit,
@@ -75,18 +77,23 @@ pub use ports::{
     FindMissingRequest, FindMissingResponse, IndexAbortReceipt, IndexAbortRequest, IndexCommit,
     IndexStageBatch, IndexStageReceipt, IndexedBlob, IndexedBlobStatus, PathSearchRequest,
     RefreshMode, RefreshReason, RefreshRequest, RetrievalScope, RetrieveRequest, VceAiBinding,
-    VceAiCapabilitySnapshot, VceAiPort, VceAiPurpose, VceAiRequestContext, VceEmbeddingRequest,
-    VceEmbeddingResponse, VceFuture, VceIndexBinding, VceIndexCounts, VceIndexIntegrity,
-    VceIndexJobSummary, VceIndexManagementSnapshot, VceIndexPort, VceIndexStoreStatus,
-    VceManagementRequest, VcePathSearchResponse, VcePortError, VcePortOperation,
-    VceQueryRewriteRequest, VceQueryRewriteResponse, VceRerankRequest, VceRerankResponse,
-    VceSearchResponse, VceSourceDocument, VceSourceExpectation, VceSourcePort,
-    VceSourceReadRequest, VceSourceReadResponse,
+    VceAiCapabilitySnapshot, VceAiPort, VceAiPurpose, VceAiRequestContext,
+    VceEmbeddingBatchCapabilities, VceEmbeddingBatchCollectedResponse, VceEmbeddingBatchPlan,
+    VceEmbeddingBatchProviderState, VceEmbeddingBatchRequest, VceEmbeddingBatchSnapshot,
+    VceEmbeddingBatchSubmission, VceEmbeddingBatchTaskPlan, VceEmbeddingBatchTransport,
+    VceEmbeddingBatchUploadedInput, VceEmbeddingRequest, VceEmbeddingResponse, VceFuture,
+    VceIndexBinding, VceIndexCounts, VceIndexIntegrity, VceIndexJobSummary,
+    VceIndexManagementSnapshot, VceIndexPort, VceIndexStoreStatus, VceManagementRequest,
+    VcePathSearchResponse, VcePortError, VcePortOperation, VceQueryRewriteRequest,
+    VceQueryRewriteResponse, VceRerankRequest, VceRerankResponse, VceSearchResponse,
+    VceSourceDocument, VceSourceExpectation, VceSourcePort, VceSourceReadRequest,
+    VceSourceReadResponse,
 };
 pub use query::{QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 pub use refresh_control::{
     VceCancelOutcome, VceRefreshControl, VceRefreshFailure, VceRefreshFailureObserver,
-    VceRefreshObserver, VceRefreshPhase, VceRefreshProgress, VceRefreshUnit,
+    VceRefreshObserver, VceRefreshPhase, VceRefreshProgress, VceRefreshProviderBatchState,
+    VceRefreshUnit,
 };
 pub use retrieval::{
     CoverageConfig, RankedHits, RerankCallback, RetrievalPipeline, RrfConfig,

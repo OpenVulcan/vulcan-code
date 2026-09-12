@@ -79,8 +79,8 @@ pub struct VceJobProgressSummary {
     /// Exact child operation identity that scopes phase counters.
     /// 限定阶段计数的精确子操作身份。
     pub operation_id: String,
-    /// Exact unit: files, blobs, batches, or none.
-    /// 精确单位：文件、块对象、批次或无单位。
+    /// Exact unit: files, blobs, batches, requests, tables, or none.
+    /// 精确单位：文件、块对象、批次、请求项、表或无单位。
     pub unit: String,
     /// Confirmed completed units.
     /// 已确认完成的单位数。
@@ -96,6 +96,9 @@ pub struct VceJobProgressSummary {
     /// 整个刷新操作范围内已知的总单元数量。
     #[serde(default)]
     pub overall_total: Option<u64>,
+    /// Normalized upstream asynchronous Batch state, absent outside remote Batch execution.
+    /// 归一化上游异步 Batch 状态；非远端 Batch 执行期间为空。
+    pub provider_batch_state: Option<String>,
     /// Optional source-relative path, never source content or credentials.
     /// 可选源码相对路径，绝不含源码正文或凭据。
     pub current_path: Option<String>,

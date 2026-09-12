@@ -3,7 +3,9 @@
 
 use crate::embedding::{EmbeddingBatch, EmbeddingSpace, SegmentVector};
 use crate::indexing::PreparedIndex;
-use crate::ports::VceAiPurpose;
+use crate::ports::{
+    VceAiPurpose, VceEmbeddingBatchPlan, VceEmbeddingBatchSnapshot, VceEmbeddingBatchSubmission,
+};
 use crate::structure::StructureMode;
 use crate::symbol::SymbolOccurrence;
 use serde::{Deserialize, Serialize};
@@ -17,6 +19,10 @@ const VCE_EMBEDDING_MANIFEST_ENVELOPE_MAX_BYTES: usize = 64 * 1024;
 /// Maximum serialized bytes accepted for one durable provider batch record.
 /// 单条持久化供应商批次记录允许的最大序列化字节数。
 const VCE_EMBEDDING_BATCH_RECORD_MAX_BYTES: usize = 1024 * 1024;
+
+/// Maximum serialized bytes accepted for one remote asynchronous Batch record.
+/// 单条远端异步 Batch 记录允许的最大序列化字节数。
+const VCE_EMBEDDING_REMOTE_BATCH_RECORD_MAX_BYTES: usize = 64 * 1024;
 
 /// Extra metadata allowance added after scaling the configured source-file limit.
 /// 按配置源码文件上限放大后额外预留的元数据字节数。
@@ -72,6 +78,341 @@ pub enum VceEmbeddingBatchState {
     /// The batch stopped with an explicit bounded error.
     /// 批次以明确且有界的错误停止。
     Failed,
+}
+
+/// Durable local lifecycle for one remote asynchronous embedding Batch task.
+/// 一个远端异步向量 Batch 任务的持久本地生命周期。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VceEmbeddingRemoteBatchState {
+    /// Deterministic task plan is durable and no provider I/O has started.
+    /// 确定性任务计划已持久化且尚未开始供应商 I/O。
+    Planned,
+    /// Input-file upload started but no durable provider file identity exists yet.
+    /// 输入文件上传已经开始但尚无持久供应商文件身份。
+    Uploading,
+    /// A crash window prevents proving which provider file was created.
+    /// 崩溃窗口导致无法证明创建了哪一个供应商文件。
+    UploadUnknown,
+    /// Input upload was confirmed not dispatched and may be retried safely.
+    /// 输入上传已确认未发出，可以安全重试。
+    UploadFailed,
+    /// The exact provider input file is durable and Batch creation may start or resume.
+    /// 精确供应商输入文件已经持久化，可开始或恢复创建 Batch。
+    Uploaded,
+    /// Submission dispatch started but a durable provider identity is not yet stored.
+    /// 提交分派已经开始但尚未持久化供应商身份。
+    Submitting,
+    /// A crash window prevents proving whether the provider accepted the submission.
+    /// 崩溃窗口导致无法证明供应商是否受理提交。
+    SubmissionUnknown,
+    /// Submission was confirmed not dispatched and may be retried safely.
+    /// 提交已确认未发出，可以安全重试。
+    SubmissionFailed,
+    /// Durable provider identity exists and status polling may resume.
+    /// 持久供应商身份存在且可恢复状态轮询。
+    Submitted,
+    /// Provider reports completed and result collection may resume.
+    /// 供应商报告完成且可恢复结果收集。
+    Ready,
+    /// All vectors were split into durable logical batch results.
+    /// 全部向量已拆分写入持久逻辑批次结果。
+    Succeeded,
+    /// Provider or contract processing failed explicitly.
+    /// 供应商或契约处理明确失败。
+    Failed,
+    /// Provider reached a cancelled terminal state.
+    /// 供应商达到已取消终态。
+    Cancelled,
+}
+
+/// Persists one remote task that owns a contiguous range of logical VCE batches.
+/// 持久化一个持有连续 VCE 逻辑批次范围的远端任务。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VceEmbeddingRemoteBatchRecord {
+    /// Stable run-local remote task identity.
+    /// 运行范围内稳定的远端任务身份。
+    pub remote_task_id: String,
+    /// Provider-neutral embedding purpose.
+    /// 供应商无关向量用途。
+    pub purpose: String,
+    /// Zero-based first logical VCE batch index within this purpose.
+    /// 当前用途内首个 VCE 逻辑批次的零基索引。
+    pub first_logical_batch_index: u32,
+    /// Number of contiguous logical VCE batches owned by this task.
+    /// 当前任务持有的连续 VCE 逻辑批次数量。
+    pub logical_batch_count: u32,
+    /// Frozen deterministic provider plan for the grouped request.
+    /// 分组请求使用的冻结确定性供应商计划。
+    pub plan: VceEmbeddingBatchPlan,
+    /// Current durable local lifecycle.
+    /// 当前持久本地生命周期。
+    pub state: VceEmbeddingRemoteBatchState,
+    /// Durable provider input file recorded before Batch creation.
+    /// 在创建 Batch 前记录的持久供应商输入文件。
+    pub uploaded_input: Option<crate::ports::VceEmbeddingBatchUploadedInput>,
+    /// Durable provider identity after successful submission.
+    /// 成功提交后的持久供应商身份。
+    pub submission: Option<VceEmbeddingBatchSubmission>,
+    /// Last durable provider status observation.
+    /// 最近一次持久供应商状态观测。
+    pub snapshot: Option<VceEmbeddingBatchSnapshot>,
+    /// Number of durable provider status observations used for bounded backoff.
+    /// 用于有界退避的持久供应商状态观测次数。
+    pub poll_attempt: u32,
+    /// Earliest Unix millisecond timestamp for the next provider poll.
+    /// 下一次供应商轮询允许的最早 Unix 毫秒时间。
+    pub next_poll_not_before_unix_ms: Option<u64>,
+    /// Bounded terminal or uncertainty diagnostic.
+    /// 有界终态或不确定性诊断。
+    pub error: Option<String>,
+    /// Non-fatal provider input cleanup diagnostic retained after vector durability.
+    /// 向量持久化后保留的非致命供应商输入清理诊断。
+    pub cleanup_warning: Option<String>,
+    /// Last durable mutation timestamp.
+    /// 最近一次持久变更时间。
+    pub updated_at_unix_ms: u64,
+}
+
+impl VceEmbeddingRemoteBatchRecord {
+    /// Validates immutable grouping, provider identity, and local lifecycle consistency.
+    /// 校验不可变分组、供应商身份及本地生命周期一致性。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Unit for one bounded recoverable record, otherwise a precise contract error.
+    /// 记录有界且可恢复时返回空值，否则返回明确契约错误。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.remote_task_id.trim().is_empty()
+            || self.remote_task_id.len() > 512
+            || ![
+                VceAiPurpose::CodeDocumentEmbedding.as_str(),
+                VceAiPurpose::CodePathEmbedding.as_str(),
+            ]
+            .contains(&self.purpose.as_str())
+            || self.logical_batch_count == 0
+            || self.plan.request_id.trim().is_empty()
+            || self.plan.tasks.len() != 1
+            || self.updated_at_unix_ms == 0
+            || self
+                .error
+                .as_ref()
+                .is_some_and(|error| error.trim().is_empty() || error.len() > 8_192)
+            || self
+                .cleanup_warning
+                .as_ref()
+                .is_some_and(|warning| warning.trim().is_empty() || warning.len() > 8_192)
+        {
+            return Err(String::from(
+                "VCE remote embedding Batch identity or grouping is invalid",
+            ));
+        }
+        let expected_inputs = self
+            .plan
+            .tasks
+            .last()
+            .ok_or_else(|| String::from("VCE remote embedding Batch plan has no tasks"))?
+            .end_input_index()?;
+        self.plan.validate(
+            usize::try_from(expected_inputs).map_err(|_| {
+                String::from("VCE remote embedding Batch input count exceeds usize")
+            })?,
+        )?;
+        let task = &self.plan.tasks[0];
+        if task.task_id != self.remote_task_id {
+            return Err(String::from(
+                "VCE remote embedding Batch task is absent from its plan",
+            ));
+        }
+        if task.first_input_index != 0 {
+            return Err(String::from(
+                "VCE remote embedding Batch task must own its complete grouped request",
+            ));
+        }
+        let has_submission = self.submission.is_some();
+        let has_uploaded_input = self.uploaded_input.is_some();
+        let has_snapshot = self.snapshot.is_some();
+        let has_error = self
+            .error
+            .as_ref()
+            .is_some_and(|error| !error.trim().is_empty());
+        let expects_uploaded_input =
+            self.plan.capabilities.transport == crate::ports::VceEmbeddingBatchTransport::JsonlFile;
+        let lifecycle_invalid = match self.state {
+            VceEmbeddingRemoteBatchState::Planned => {
+                has_uploaded_input
+                    || has_submission
+                    || has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || has_error
+            }
+            VceEmbeddingRemoteBatchState::Uploading => {
+                !expects_uploaded_input
+                    || has_uploaded_input
+                    || has_submission
+                    || has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || has_error
+            }
+            VceEmbeddingRemoteBatchState::UploadUnknown
+            | VceEmbeddingRemoteBatchState::UploadFailed => {
+                !expects_uploaded_input
+                    || has_uploaded_input
+                    || has_submission
+                    || has_snapshot
+                    || !has_error
+            }
+            VceEmbeddingRemoteBatchState::Uploaded => {
+                !expects_uploaded_input
+                    || !has_uploaded_input
+                    || has_submission
+                    || has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || has_error
+            }
+            VceEmbeddingRemoteBatchState::Submitting => {
+                has_uploaded_input != expects_uploaded_input
+                    || has_submission
+                    || has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || has_error
+            }
+            VceEmbeddingRemoteBatchState::SubmissionUnknown
+            | VceEmbeddingRemoteBatchState::SubmissionFailed => {
+                has_uploaded_input != expects_uploaded_input
+                    || has_submission
+                    || has_snapshot
+                    || !has_error
+            }
+            VceEmbeddingRemoteBatchState::Submitted => {
+                has_uploaded_input != expects_uploaded_input
+                    || !has_submission
+                    || has_error
+                    || self.next_poll_not_before_unix_ms.is_none()
+                    || self.snapshot.as_ref().is_some_and(|snapshot| {
+                        !matches!(
+                            snapshot.state,
+                            crate::ports::VceEmbeddingBatchProviderState::Validating
+                                | crate::ports::VceEmbeddingBatchProviderState::InProgress
+                                | crate::ports::VceEmbeddingBatchProviderState::Finalizing
+                                | crate::ports::VceEmbeddingBatchProviderState::Cancelling
+                        )
+                    })
+            }
+            VceEmbeddingRemoteBatchState::Ready => {
+                has_uploaded_input != expects_uploaded_input
+                    || !has_submission
+                    || !has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || self.snapshot.as_ref().is_none_or(|snapshot| {
+                        snapshot.state != crate::ports::VceEmbeddingBatchProviderState::Completed
+                    })
+                    || has_error
+            }
+            VceEmbeddingRemoteBatchState::Succeeded => {
+                has_uploaded_input != expects_uploaded_input
+                    || !has_submission
+                    || !has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || self.snapshot.as_ref().is_none_or(|snapshot| {
+                        snapshot.state != crate::ports::VceEmbeddingBatchProviderState::Completed
+                    })
+                    || has_error
+            }
+            VceEmbeddingRemoteBatchState::Failed => {
+                has_uploaded_input != expects_uploaded_input
+                    || !has_submission
+                    || !has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || self.snapshot.as_ref().is_none_or(|snapshot| {
+                        !matches!(
+                            snapshot.state,
+                            crate::ports::VceEmbeddingBatchProviderState::Completed
+                                | crate::ports::VceEmbeddingBatchProviderState::Failed
+                                | crate::ports::VceEmbeddingBatchProviderState::Expired
+                        )
+                    })
+                    || !has_error
+            }
+            VceEmbeddingRemoteBatchState::Cancelled => {
+                has_uploaded_input != expects_uploaded_input
+                    || !has_submission
+                    || !has_snapshot
+                    || self.next_poll_not_before_unix_ms.is_some()
+                    || self.snapshot.as_ref().is_none_or(|snapshot| {
+                        snapshot.state != crate::ports::VceEmbeddingBatchProviderState::Cancelled
+                    })
+                    || !has_error
+            }
+        };
+        if lifecycle_invalid {
+            return Err(String::from(
+                "VCE remote embedding Batch lifecycle fields disagree",
+            ));
+        }
+        if let Some(uploaded_input) = &self.uploaded_input {
+            uploaded_input.validate()?;
+        }
+        if let Some(submission) = &self.submission {
+            submission.validate()?;
+        }
+        if let Some(snapshot) = &self.snapshot {
+            snapshot.validate()?;
+        }
+        if self.uploaded_input.as_ref().is_some_and(|uploaded| {
+            uploaded.task_id != self.remote_task_id
+                || uploaded.provider_input_file_id.trim().is_empty()
+                || uploaded.uploaded_at_unix_ms == 0
+        }) || self
+            .submission
+            .as_ref()
+            .is_some_and(|submission| submission.task_id != self.remote_task_id)
+            || self.submission.as_ref().is_some_and(|submission| {
+                submission.provider_input_file_id.as_deref()
+                    != self
+                        .uploaded_input
+                        .as_ref()
+                        .map(|uploaded| uploaded.provider_input_file_id.as_str())
+            })
+            || self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| self.submission.as_ref() != Some(&snapshot.submission))
+        {
+            return Err(String::from(
+                "VCE remote embedding Batch provider identity disagrees with its plan",
+            ));
+        }
+        if let Some(snapshot) = &self.snapshot
+            && let (Some(total), Some(completed), Some(failed)) = (
+                snapshot.total_requests,
+                snapshot.completed_requests,
+                snapshot.failed_requests,
+            )
+        {
+            let settled = completed.checked_add(failed).ok_or_else(|| {
+                String::from("VCE remote embedding Batch snapshot counters overflow u32")
+            })?;
+            if (total != 0 && total != task.input_count)
+                || settled > total
+                || snapshot.state == crate::ports::VceEmbeddingBatchProviderState::Completed
+                    && (total != task.input_count || settled != total)
+            {
+                return Err(String::from(
+                    "VCE remote embedding Batch snapshot counters disagree with its plan",
+                ));
+            }
+        }
+        let encoded = serde_json::to_vec(self)
+            .map_err(|error| format!("Encode VCE remote embedding Batch record: {error}"))?;
+        if encoded.len() > VCE_EMBEDDING_REMOTE_BATCH_RECORD_MAX_BYTES {
+            return Err(String::from(
+                "VCE remote embedding Batch record exceeds its metadata bound",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Frozen compatibility and batching contract for one embedding run.
@@ -1068,6 +1409,95 @@ mod tests {
         }
     }
 
+    /// Build one valid planned remote Batch record for validation-focused tests.
+    /// 为聚焦校验的测试构建一条有效的已规划远端 Batch 记录。
+    fn remote_batch_record_fixture() -> VceEmbeddingRemoteBatchRecord {
+        let capabilities = crate::ports::VceEmbeddingBatchCapabilities {
+            transport: crate::ports::VceEmbeddingBatchTransport::InlineJson,
+            provider_maximum_requests: None,
+            provider_maximum_payload_bytes: None,
+            provider_maximum_item_bytes: None,
+            provider_maximum_parallel_tasks: None,
+            host_policy_maximum_tasks_per_run: 10,
+            host_policy_maximum_requests: 10,
+            host_policy_maximum_payload_bytes: 1_024,
+            host_policy_maximum_result_bytes: 4_096,
+            provider_completion_window_seconds: None,
+            maximum_requests: 10,
+            maximum_payload_bytes: 1_024,
+            maximum_result_bytes: 4_096,
+            maximum_tasks_per_run: 10,
+            provider_maximum_files: None,
+            provider_maximum_total_file_bytes: None,
+            provider_file_upload_qps: None,
+            provider_file_operation_qps: None,
+            provider_task_create_rpm: None,
+            provider_task_status_rpm: None,
+            provider_task_list_rpm: None,
+            provider_task_cancel_rpm: None,
+            minimum_poll_interval_ms: 1,
+            supports_cancel: false,
+            deletes_input_file_after_ingestion: false,
+        };
+        let task = crate::ports::VceEmbeddingBatchTaskPlan {
+            task_id: String::from("task-one"),
+            first_input_index: 0,
+            input_count: 1,
+            encoded_payload_bytes: 64,
+            payload_sha256: "a".repeat(64),
+        };
+        VceEmbeddingRemoteBatchRecord {
+            remote_task_id: task.task_id.clone(),
+            purpose: VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
+            first_logical_batch_index: 0,
+            logical_batch_count: 1,
+            plan: VceEmbeddingBatchPlan {
+                request_id: String::from("request-one"),
+                request_fingerprint: "b".repeat(64),
+                capabilities,
+                tasks: vec![task],
+            },
+            state: VceEmbeddingRemoteBatchState::Planned,
+            uploaded_input: None,
+            submission: None,
+            snapshot: None,
+            poll_attempt: 0,
+            next_poll_not_before_unix_ms: None,
+            error: None,
+            cleanup_warning: None,
+            updated_at_unix_ms: 1,
+        }
+    }
+
+    /// Verify durable effective limits cannot conceal changed provider or host-policy sources.
+    /// 验证持久化有效限制不能掩盖已经变化的供应商或宿主策略来源。
+    #[test]
+    fn remote_batch_capability_requires_exact_limit_provenance() {
+        let record = remote_batch_record_fixture();
+        record.validate().expect("exact frozen limits");
+
+        let mut changed_provider = record.clone();
+        changed_provider.plan.capabilities.provider_maximum_requests = Some(5);
+        assert_eq!(
+            changed_provider
+                .validate()
+                .expect_err("provider source mismatch"),
+            "VCE embedding Batch effective limits disagree with their frozen provider and host-policy sources"
+        );
+
+        let mut changed_host_policy = record;
+        changed_host_policy
+            .plan
+            .capabilities
+            .host_policy_maximum_payload_bytes = 512;
+        assert_eq!(
+            changed_host_policy
+                .validate()
+                .expect_err("host-policy source mismatch"),
+            "VCE embedding Batch effective limits disagree with their frozen provider and host-policy sources"
+        );
+    }
+
     /// Verify a validated provider result survives serialization and restores exact segment identities.
     /// 验证已校验供应商结果经过序列化后仍能恢复精确分段身份。
     #[test]
@@ -1137,6 +1567,93 @@ mod tests {
         assert_eq!(
             batch.validate().expect_err("reject oversized single batch"),
             "VCE embedding batch record exceeds its metadata bound"
+        );
+    }
+
+    /// Verify one durable remote record cannot smuggle a second provider task into recovery.
+    /// 验证单条持久远端记录不能在恢复过程中夹带第二个供应商任务。
+    #[test]
+    fn remote_batch_record_requires_one_exact_provider_task() {
+        let capabilities = crate::ports::VceEmbeddingBatchCapabilities {
+            transport: crate::ports::VceEmbeddingBatchTransport::InlineJson,
+            provider_maximum_requests: None,
+            provider_maximum_payload_bytes: None,
+            provider_maximum_item_bytes: None,
+            provider_maximum_parallel_tasks: None,
+            host_policy_maximum_tasks_per_run: 10,
+            host_policy_maximum_requests: 10,
+            host_policy_maximum_payload_bytes: 1_024,
+            host_policy_maximum_result_bytes: 4_096,
+            provider_completion_window_seconds: None,
+            maximum_requests: 10,
+            maximum_payload_bytes: 1_024,
+            maximum_result_bytes: 4_096,
+            maximum_tasks_per_run: 10,
+            provider_maximum_files: None,
+            provider_maximum_total_file_bytes: None,
+            provider_file_upload_qps: None,
+            provider_file_operation_qps: None,
+            provider_task_create_rpm: None,
+            provider_task_status_rpm: None,
+            provider_task_list_rpm: None,
+            provider_task_cancel_rpm: None,
+            minimum_poll_interval_ms: 1,
+            supports_cancel: false,
+            deletes_input_file_after_ingestion: false,
+        };
+        let task = crate::ports::VceEmbeddingBatchTaskPlan {
+            task_id: String::from("task-one"),
+            first_input_index: 0,
+            input_count: 1,
+            encoded_payload_bytes: 64,
+            payload_sha256: "a".repeat(64),
+        };
+        let mut record = VceEmbeddingRemoteBatchRecord {
+            remote_task_id: task.task_id.clone(),
+            purpose: VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
+            first_logical_batch_index: 0,
+            logical_batch_count: 1,
+            plan: VceEmbeddingBatchPlan {
+                request_id: String::from("request-one"),
+                request_fingerprint: "b".repeat(64),
+                capabilities,
+                tasks: vec![task.clone()],
+            },
+            state: VceEmbeddingRemoteBatchState::Planned,
+            uploaded_input: None,
+            submission: None,
+            snapshot: None,
+            poll_attempt: 0,
+            next_poll_not_before_unix_ms: None,
+            error: None,
+            cleanup_warning: None,
+            updated_at_unix_ms: 1,
+        };
+        record.validate().expect("single-task record");
+
+        let mut second = task;
+        second.task_id = String::from("task-two");
+        second.first_input_index = 1;
+        record.plan.tasks.push(second);
+        assert_eq!(
+            record
+                .validate()
+                .expect_err("multi-task remote record must fail"),
+            "VCE remote embedding Batch identity or grouping is invalid"
+        );
+    }
+
+    /// Verify a present remote Batch diagnostic is canonical, non-empty, and meaningful.
+    /// 验证存在的远端 Batch 诊断采用规范、非空且有意义的表示。
+    #[test]
+    fn remote_batch_record_rejects_empty_diagnostic() {
+        let mut record = remote_batch_record_fixture();
+        record.error = Some(String::from("   "));
+        assert_eq!(
+            record
+                .validate()
+                .expect_err("blank diagnostic must not be persistable"),
+            "VCE remote embedding Batch identity or grouping is invalid"
         );
     }
 

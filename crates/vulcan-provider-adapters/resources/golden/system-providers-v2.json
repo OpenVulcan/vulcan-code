@@ -31,6 +31,11 @@
           {
             "protocol_profile_id": "openai-codex-responses.v1",
             "endpoint_path": "/responses",
+            "responses_features": {
+              "remote_compaction": "disabled",
+              "websocket": "disabled",
+              "recovery": "agent_space_result_and_usage_reconciliation_v1"
+            },
             "verified": true
           }
         ],
@@ -1502,6 +1507,7 @@
           "host_suffix": ".cn-beijing.maas.aliyuncs.com",
           "allowed_input_paths": [
             "",
+            "/api/v1",
             "/apps/anthropic",
             "/compatible-api/v1",
             "/compatible-mode/v1"
@@ -1516,6 +1522,55 @@
         "native_inference_bindings": [
           {
             "operation": "embedding_create",
+            "model_ids": [
+              "text-embedding-v1",
+              "text-embedding-v2",
+              "text-embedding-v3",
+              "text-embedding-v4",
+              "qwen3.7-text-embedding",
+              "qwen3.7-text-embedding-flash"
+            ],
+            "binding_id": "alibaba.model_studio.embeddings.batch.v1",
+            "endpoint_path": "/embeddings",
+            "projection": "compatible",
+            "requires_service_origin_override": false,
+            "batch": {
+              "protocol": "alibaba_open_ai_compatible_v1",
+              "capabilities": {
+                "transport": "jsonl_file",
+                "result_delivery": "jsonl_files",
+                "provider_maximum_requests": 50000,
+                "provider_maximum_payload_bytes": 524288000,
+                "provider_maximum_item_bytes": 1000000,
+                "provider_maximum_files": 10000,
+                "provider_maximum_total_file_bytes": 107374182400,
+                "provider_file_upload_qps": 3,
+                "provider_file_operation_qps": 10,
+                "provider_maximum_parallel_tasks": 1000,
+                "provider_task_create_rpm": 1000,
+                "provider_task_status_rpm": 1000,
+                "provider_task_list_rpm": 100,
+                "provider_task_cancel_rpm": 1000,
+                "host_policy_maximum_tasks_per_run": 1000,
+                "host_policy_maximum_requests": 10000,
+                "host_policy_maximum_payload_bytes": 67108864,
+                "host_policy_maximum_result_bytes": 268435456,
+                "provider_completion_window_seconds": 86400,
+                "minimum_poll_interval_ms": 65000,
+                "supports_cancel": true,
+                "deletes_input_file_after_ingestion": true
+              },
+              "submit_endpoint_path": "/batches",
+              "status_endpoint_path_template": "/batches/{batch_id}",
+              "cancel_endpoint_path_template": "/batches/{batch_id}/cancel",
+              "item_endpoint_path": "/v1/embeddings",
+              "file_upload_endpoint_path": "/files",
+              "file_content_endpoint_path_template": "/files/{file_id}/content",
+              "file_delete_endpoint_path_template": "/files/{file_id}"
+            }
+          },
+          {
+            "operation": "embedding_create",
             "binding_id": "alibaba.model_studio.embeddings.v1",
             "endpoint_path": "/embeddings",
             "projection": "compatible",
@@ -1527,6 +1582,18 @@
             "endpoint_path": "/reranks",
             "projection": "compatible",
             "service_origin_base_path": "/compatible-api/v1",
+            "requires_service_origin_override": true,
+            "rerank_truncation": "provider_default"
+          },
+          {
+            "operation": "rerank_documents",
+            "model_ids": [
+              "qwen3.7-text-rerank"
+            ],
+            "binding_id": "alibaba.model_studio.qwen3_7_text_rerank.v1",
+            "endpoint_path": "/services/rerank/text-rerank/text-rerank",
+            "projection": "alibaba_text_rerank",
+            "service_origin_base_path": "/api/v1",
             "requires_service_origin_override": true,
             "rerank_truncation": "provider_default"
           }
@@ -1954,6 +2021,51 @@
           "example_origin": "https://workspace-id.ap-southeast-1.maas.aliyuncs.com"
         },
         "native_inference_bindings": [
+          {
+            "operation": "embedding_create",
+            "model_ids": [
+              "text-embedding-v3",
+              "text-embedding-v4"
+            ],
+            "binding_id": "alibaba.model_studio.embeddings.batch.v1",
+            "endpoint_path": "/embeddings",
+            "projection": "compatible",
+            "requires_service_origin_override": false,
+            "batch": {
+              "protocol": "alibaba_open_ai_compatible_v1",
+              "capabilities": {
+                "transport": "jsonl_file",
+                "result_delivery": "jsonl_files",
+                "provider_maximum_requests": 50000,
+                "provider_maximum_payload_bytes": 524288000,
+                "provider_maximum_item_bytes": 1000000,
+                "provider_maximum_files": 10000,
+                "provider_maximum_total_file_bytes": 107374182400,
+                "provider_file_upload_qps": 3,
+                "provider_file_operation_qps": 10,
+                "provider_maximum_parallel_tasks": 1000,
+                "provider_task_create_rpm": 1000,
+                "provider_task_status_rpm": 1000,
+                "provider_task_list_rpm": 100,
+                "provider_task_cancel_rpm": 1000,
+                "host_policy_maximum_tasks_per_run": 1000,
+                "host_policy_maximum_requests": 10000,
+                "host_policy_maximum_payload_bytes": 67108864,
+                "host_policy_maximum_result_bytes": 268435456,
+                "provider_completion_window_seconds": 86400,
+                "minimum_poll_interval_ms": 65000,
+                "supports_cancel": true,
+                "deletes_input_file_after_ingestion": true
+              },
+              "submit_endpoint_path": "/batches",
+              "status_endpoint_path_template": "/batches/{batch_id}",
+              "cancel_endpoint_path_template": "/batches/{batch_id}/cancel",
+              "item_endpoint_path": "/v1/embeddings",
+              "file_upload_endpoint_path": "/files",
+              "file_content_endpoint_path_template": "/files/{file_id}/content",
+              "file_delete_endpoint_path_template": "/files/{file_id}"
+            }
+          },
           {
             "operation": "embedding_create",
             "binding_id": "alibaba.model_studio.embeddings.v1",
@@ -4865,7 +4977,8 @@
             "endpoint_path": "/responses",
             "responses_features": {
               "remote_compaction": "enabled_with_local_fallback",
-              "websocket": "verified"
+              "websocket": "verified",
+              "recovery": "none"
             },
             "provider_request_id_headers": [
               "x-request-id",
@@ -5143,6 +5256,34 @@
           "x-openrouter-title": "Vulcan Code"
         },
         "native_inference_bindings": [
+          {
+            "operation": "embedding_create",
+            "model_ids": [
+              "openai/text-embedding-3-small"
+            ],
+            "binding_id": "openrouter.embeddings.batch.v1",
+            "endpoint_path": "/embeddings",
+            "projection": "routed_compatible",
+            "requires_service_origin_override": false,
+            "batch": {
+              "protocol": "open_router_beta_v1",
+              "capabilities": {
+                "transport": "inline_json",
+                "result_delivery": "inline_json",
+                "host_policy_maximum_tasks_per_run": 100,
+                "host_policy_maximum_requests": 10000,
+                "host_policy_maximum_payload_bytes": 67108864,
+                "host_policy_maximum_result_bytes": 268435456,
+                "minimum_poll_interval_ms": 60000,
+                "supports_cancel": false,
+                "deletes_input_file_after_ingestion": false
+              },
+              "base_url_override": "https://openrouter.ai/api/beta",
+              "submit_endpoint_path": "/batches",
+              "status_endpoint_path_template": "/batches/{batch_id}",
+              "item_endpoint_path": "/v1/embeddings"
+            }
+          },
           {
             "operation": "embedding_create",
             "binding_id": "openrouter.embeddings.v1",

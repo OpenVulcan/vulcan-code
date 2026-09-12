@@ -57,6 +57,30 @@ const FORBIDDEN_PROVIDER_REQUEST_ID_RESPONSE_HEADERS: &[&str] = &[
     "www-authenticate",
 ];
 
+/// Determines whether one manifest-owned Batch endpoint is a safe service-root-relative path.
+/// 判断一个 Manifest 持有的 Batch 端点是否为安全的服务根相对路径。
+///
+/// # Parameters
+/// 参数
+/// `endpoint` is the endpoint or endpoint template declared by the system manifest.
+/// `endpoint` 是系统 Manifest 声明的端点或端点模板。
+///
+/// # Returns
+/// 返回值
+/// `true` only for an absolute-path reference without query or fragment components.
+/// 仅对不含查询与片段部分的绝对路径引用返回 `true`。
+fn valid_native_batch_endpoint(endpoint: &str) -> bool {
+    endpoint.starts_with('/')
+        && !endpoint.starts_with("//")
+        && !endpoint.contains('?')
+        && !endpoint.contains('#')
+        && !endpoint.contains('\\')
+        && !endpoint.chars().any(char::is_whitespace)
+        && !endpoint
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+}
+
 /// Ownership class of one manifest document.
 /// 单份清单文档的所有权类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1104,6 +1128,87 @@ fn validate_service_entry(
                 format!("{binding_path}.endpoint_path"),
                 "native inference endpoint must be one relative absolute path without query or fragment",
             ));
+        }
+        if let Some(batch) = binding.batch.as_ref() {
+            if binding.operation != vulcan_ai_contract::AiOperation::EmbeddingCreate {
+                errors.push(ManifestValidationError::new(
+                    "native_batch_requires_embedding_operation",
+                    format!("{binding_path}.batch"),
+                    "native inference Batch is valid only for embedding_create",
+                ));
+            }
+            if binding.model_ids.is_empty() {
+                errors.push(ManifestValidationError::new(
+                    "native_batch_requires_exact_models",
+                    format!("{binding_path}.model_ids"),
+                    "native inference Batch must be scoped to verified exact model ids",
+                ));
+            }
+            if let Err(message) = batch.validate() {
+                errors.push(ManifestValidationError::new(
+                    "invalid_native_inference_batch",
+                    format!("{binding_path}.batch"),
+                    message,
+                ));
+            }
+            for model_id in &binding.model_ids {
+                // Batch augments an existing physical embedding route and must never replace its identity.
+                // Batch 只增强既有物理向量路由，绝不能替换该路由的身份。
+                let has_synchronous_binding =
+                    entry.native_inference_bindings.iter().any(|candidate| {
+                        candidate.operation == binding.operation
+                            && candidate.batch.is_none()
+                            && (candidate.model_ids.is_empty()
+                                || candidate.model_ids.iter().any(|value| value == model_id))
+                    });
+                if !has_synchronous_binding {
+                    errors.push(ManifestValidationError::new(
+                        "native_batch_requires_synchronous_binding",
+                        format!("{binding_path}.model_ids"),
+                        format!(
+                            "native inference Batch model `{model_id}` requires a matching synchronous embedding binding"
+                        ),
+                    ));
+                }
+            }
+            for (field, endpoint) in [
+                (
+                    "submit_endpoint_path",
+                    Some(batch.submit_endpoint_path.as_str()),
+                ),
+                (
+                    "status_endpoint_path_template",
+                    Some(batch.status_endpoint_path_template.as_str()),
+                ),
+                (
+                    "cancel_endpoint_path_template",
+                    batch.cancel_endpoint_path_template.as_deref(),
+                ),
+                (
+                    "item_endpoint_path",
+                    Some(batch.item_endpoint_path.as_str()),
+                ),
+                (
+                    "file_upload_endpoint_path",
+                    batch.file_upload_endpoint_path.as_deref(),
+                ),
+                (
+                    "file_content_endpoint_path_template",
+                    batch.file_content_endpoint_path_template.as_deref(),
+                ),
+                (
+                    "file_delete_endpoint_path_template",
+                    batch.file_delete_endpoint_path_template.as_deref(),
+                ),
+            ] {
+                if endpoint.is_some_and(|endpoint| !valid_native_batch_endpoint(endpoint)) {
+                    errors.push(ManifestValidationError::new(
+                        "invalid_native_inference_batch_endpoint",
+                        format!("{binding_path}.batch.{field}"),
+                        "native inference Batch endpoints must be relative absolute paths without query or fragment",
+                    ));
+                }
+            }
         }
         match binding.operation {
             vulcan_ai_contract::AiOperation::EmbeddingCreate
@@ -7228,6 +7333,17 @@ mod tests {
             ProviderManifestV1, RuleScope,
         },
     };
+
+    /// Verify Batch endpoints remain inside the declared service origin and API root.
+    /// 验证 Batch 端点始终位于声明的服务源地址及 API 根路径内。
+    #[test]
+    fn native_batch_endpoint_rejects_origin_and_path_escape() {
+        assert!(valid_native_batch_endpoint("/batches/{batch_id}"));
+        assert!(!valid_native_batch_endpoint("//attacker.invalid/batches"));
+        assert!(!valid_native_batch_endpoint("/batches/../files"));
+        assert!(!valid_native_batch_endpoint("/batches?limit=1"));
+        assert!(!valid_native_batch_endpoint("/batches\\escape"));
+    }
 
     /// Builds a minimal valid manifest fixture.
     /// 构建最小有效清单 fixture。

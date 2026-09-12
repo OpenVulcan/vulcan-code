@@ -159,7 +159,7 @@ describe("VCE browser event transport", () => {
         projectId: project.projectId, jobId: "semantic-job", kind: "synchronize", state: "running",
         sequence: 4, createdAtUnixMs: 1000, updatedAtUnixMs: 1001,
         sourceCheckpointVersion: 7, resultCheckpointVersion: null,
-        progress: { phase: "embedding", operationId: "semantic-operation", unit: "batches", completed: 1, total: 3, currentPath: null },
+        progress: { phase: "embedding", operationId: "semantic-operation", unit: "batches", completed: 1, total: 3, providerBatchState: null, currentPath: null },
         followupRequested: false, error: null,
       };
       socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "vceProjectChanged", payload: project }) }));
