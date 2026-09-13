@@ -14,7 +14,6 @@ import {
   type ConversationGenerationDialogActionV1,
 } from "@/components/conversation/conversation-generation-dialog-v1";
 import {
-  StreamingThinkingOverlay,
   TransientReasoningStatusLine,
 } from "@/components/conversation/conversation-live-reasoning";
 import {
@@ -406,7 +405,6 @@ export function ChatArea(props: ChatAreaProps) {
   // 视觉过渡在当前会话作用域内保留空状态、思考浮层与首条提交界面。
   const {
     visibleThinkingBlock: visibleStreamingThinkingOverlayBlock,
-    thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
     emptyPromptVisible,
     emptyPromptLeaving,
     firstSubmissionMaskVisible,
@@ -659,13 +657,6 @@ export function ChatArea(props: ChatAreaProps) {
       ) : null}
       {props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible ? (
         <ConversationSubmissionStatus stage={props.selectedDraftConversation.pendingSubmission.stage} />
-      ) : null}
-      {visibleStreamingThinkingOverlayBlock && activeSurfaceConversationId ? (
-        <StreamingThinkingOverlay
-          block={visibleStreamingThinkingOverlayBlock}
-          conversationId={activeSurfaceConversationId}
-          leaving={streamingThinkingOverlayLeaving}
-        />
       ) : null}
       {firstSubmissionMaskVisible ? (
         <div

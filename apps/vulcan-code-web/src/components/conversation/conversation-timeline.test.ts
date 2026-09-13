@@ -138,6 +138,62 @@ describe("conversation timeline business keys", () => {
 });
 
 describe("conversation timeline chronological projection", () => {
+  it("aligns only the consecutive tools owned by one reasoning prefix", () => {
+    // Later assistant content ends this alignment scope; the reasoning icon belongs only to the first tool.
+    // 后续助手正文结束当前对齐范围；思考图标仅属于首个工具。
+    const timeline = projectConversationTimelineItems([
+      createTimelineRenderItem("user", "user", "markdown"),
+      createTimelineRenderItem("reasoning", "assistant", "thinking"),
+      createTimelineRenderItem("tool-1", "assistant", "tool-result"),
+      createTimelineRenderItem("tool-2", "assistant", "tool-result"),
+      createTimelineRenderItem("tool-3", "assistant", "tool-result"),
+      createTimelineRenderItem("commentary", "assistant", "markdown"),
+      createTimelineRenderItem("tool-4", "assistant", "tool-result"),
+    ].map((item) => item.blocks[0].kind === "tool-result"
+      ? { ...item, blocks: [{ ...item.blocks[0], toolCallId: item.id }] }
+      : item), undefined, false);
+    // process contains the resulting immutable rows in original content order.
+    // process 包含按原始内容顺序排列的不可变结果行。
+    const process = timeline.find((entry) => entry.kind === "process");
+    if (!process || process.kind !== "process") throw new Error("Missing process");
+    expect(process.process.items.map((item) => Boolean(item.reserveThinkingPrefix))).toEqual([true, true, true, false, false]);
+    expect(process.process.items.map((item) => Boolean(item.leadingThinking))).toEqual([true, false, false, false, false]);
+  });
+
+  it.each(["completed", "stopped"])("attaches intermediate reasoning but preserves final-answer rules for %s turns", (status) => {
+    // Distinct reasoning segments must keep their immediate owners, including a stopped assistant ending.
+    // 不同思考段必须保持紧邻归属，包括以助手正文结束的已停止回合。
+    const commentaryThinking = createTimelineRenderItem("commentary-thinking", "assistant", "thinking");
+    const finalThinking = createTimelineRenderItem("final-thinking", "assistant", "thinking");
+    const commentary = createTimelineRenderItem("commentary", "assistant", "markdown");
+    const final = createTimelineRenderItem("final", "assistant", "markdown");
+    const timeline = projectConversationTimelineItems([
+      createTimelineRenderItem("user", "user", "markdown"),
+      commentaryThinking,
+      commentary,
+      createTimelineRenderItem("tool", "assistant", "tool-result"),
+      finalThinking,
+      final,
+      createTimelineRenderItem("stats", "system", "turn-stats", { turn_stats: { status } }),
+    ], undefined, false);
+    // The process projection is the authority for intermediate versus final output.
+    // 过程投影是中间输出与最终输出分类的权威。
+    const process = timeline.find((entry) => entry.kind === "process");
+    if (!process || process.kind !== "process") throw new Error("Missing process");
+    expect(process.process.items[0]).toMatchObject({ id: "commentary", leadingThinking: commentaryThinking.blocks });
+    expect(process.process.items[0].sourceMessages).toEqual([...commentaryThinking.sourceMessages, ...commentary.sourceMessages]);
+    expect(process.process.items[1].leadingThinking).toBeUndefined();
+    if (status === "completed") {
+      expect(process.process.items[2]).toBe(finalThinking);
+      expect(timeline.find((entry) => entry.kind === "item" && entry.finalAssistantOutput)).toMatchObject({ item: final });
+    } else {
+      expect(process.process.items[2]).toMatchObject({ id: "final", leadingThinking: finalThinking.blocks });
+      expect(timeline.some((entry) => entry.kind === "item" && entry.finalAssistantOutput)).toBe(false);
+    }
+    expect(commentary.leadingThinking).toBeUndefined();
+    expect(final.leadingThinking).toBeUndefined();
+  });
+
   it("preserves commentary before later tool and compaction failure events", () => {
     // The assistant Markdown is intermediate commentary because later process events exist.
     // 该 Assistant Markdown 后面仍有处理事件，因此它是中间说明而不是最终回答。

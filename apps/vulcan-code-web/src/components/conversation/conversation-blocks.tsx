@@ -1,8 +1,9 @@
+import { ThinkingPopupContext, ThinkingPreview } from "./thinking-preview";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Bot,
-  BrainCircuit,
+  Sparkles,
   ChevronDown,
   ChevronRight,
   Columns2,
@@ -307,6 +308,9 @@ export function ThinkingBlock(props: {
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const { locale, t } = useI18n();
+  // popupEnabled changes the reading surface, never the availability of reasoning.
+  // popupEnabled 改变阅读界面，绝不影响思考内容是否可用。
+  const popupEnabled = React.useContext(ThinkingPopupContext);
   const content = props.block.body.trim() || props.block.summary || t("contextCompaction.emptyThinking");
   const shouldAutoExpand = props.autoExpanded || (props.streaming && (props.autoExpandWhileStreaming ?? true));
   const collapseId = `thinking:${props.block.id}`;
@@ -356,6 +360,15 @@ export function ThinkingBlock(props: {
   }, [props.streaming, setExpanded, shouldAutoExpand]);
 
   const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block, locale, t);
+  if (popupEnabled && props.streaming) {
+    return <section className="thinking-block thinking-popup-node"><ThinkingPreview streaming={props.streaming}>
+      {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
+        <StreamingMarkdownDocument conversationId={props.conversationId} fallbackContent={content}
+          fallbackStreaming={props.streaming} messageId={props.block.sourceMessageId} onOpenMedia={props.onOpenMedia} />
+      ) : <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />}
+    </ThinkingPreview></section>;
+  }
+
 
   return (
     <section className={cn("thinking-block", expanded && "expanded")}>
@@ -368,7 +381,7 @@ export function ThinkingBlock(props: {
         type="button"
       >
         <span className="thinking-toggle-label">
-          <BrainCircuit size={15} />
+          <Sparkles size={15} />
           <strong>{t("contextCompaction.thinkingLabel")}</strong>
           {durationLabel ? <span>{durationLabel}</span> : null}
         </span>
@@ -660,7 +673,7 @@ export function StreamingThinkingOverlay(props: {
     >
       <header className="streaming-thinking-header">
         <span className="streaming-thinking-title">
-          <BrainCircuit size={16} />
+          <Sparkles size={16} />
           <span className="shimmer">{t("runtime.thinking")}</span>
         </span>
         <Tooltip>

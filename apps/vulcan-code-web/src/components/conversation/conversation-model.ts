@@ -108,6 +108,12 @@ export interface RuntimeCue {
 // ConversationRenderItem describes one row rendered after transcript projection.
 // ConversationRenderItem 描述转录投影后的单条渲染行。
 export interface ConversationRenderItem {
+  // Reasoning immediately preceding this tool or intermediate assistant row, attached only in the presentation projection.
+  // 紧邻当前工具或中间助手行之前的思考，仅在展示投影中附加。
+  leadingThinking?: readonly ConversationBlock[];
+  // Reserve header-only space for every tool in one consecutive reasoning-owned tool sequence.
+  // 为同一思考所属连续工具序列中的每个工具仅预留标题空位。
+  reserveThinkingPrefix?: boolean;
   // Stable projected row identifier.
   // 稳定投影行标识。
   id: string;

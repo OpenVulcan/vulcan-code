@@ -99,7 +99,7 @@ describe("turn statistics hover card", () => {
     );
 
     expect(markup).toContain("turn-stats-subagent-section");
-    expect(markup).toContain("子代理 Tokens");
+    expect(markup).toContain("智能体 Tokens");
     expect(markup).toContain("1,637");
     expect(markup).toContain("266,461");
     expect(markup).not.toContain("266,261");

@@ -146,32 +146,13 @@
   scrollbar-gutter: stable;
 }
 
-.subagent-orchestration-usage-tooltip-anchor {
-  position: relative;
-  width: fit-content;
-  max-width: 100%;
-}
-
 .subagent-orchestration-usage-tooltip {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  z-index: 30;
   display: grid;
-  min-width: 220px;
+  width: min(420px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: var(--radix-tooltip-content-available-height);
+  overflow: auto;
   gap: 8px;
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(3px);
-  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms linear;
-}
-
-.subagent-orchestration-usage-tooltip-anchor:hover .subagent-orchestration-usage-tooltip,
-.subagent-orchestration-usage-tooltip-anchor:focus-within .subagent-orchestration-usage-tooltip {
-  visibility: visible;
-  opacity: 1;
-  transform: translateY(0);
 }
 
 .tool-presentation-command-line,

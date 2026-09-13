@@ -991,7 +991,7 @@ function WorkspaceSubagentPanel(args: {
         initialExpandedState={args.expandedStates.current.get(taskId) ?? null}
         onExpandedStateChange={writeSubagentExpandedState}
         onOpenSubagentPanel={args.props.onOpenSubagentPanel}
-        reasoningDisplayMode="inline_output"
+        reasoningDisplayMode={args.props.workbench.thinkingDisplayMode ?? "popup_only"}
         scrollRef={scrollRef}
         sessionId={taskId}
         sessionRunning={Boolean(task?.isRunning)}

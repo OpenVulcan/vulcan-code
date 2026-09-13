@@ -7,6 +7,7 @@ import { isContextCompactionBlock } from "@/components/conversation/conversation
 import { metadataValue } from "@/components/conversation/conversation-metadata";
 import { isSubagentFeedbackMetadata } from "@/components/conversation/conversation-tool-metadata";
 import type { LocaleCode } from "@/i18n";
+import { integrateProcessThinking } from "@/components/conversation/thinking-display";
 
 // ProjectedTurnState stores transient grouping data while projecting transcript rows.
 // ProjectedTurnState 存储投影转录行时使用的临时分组数据。
@@ -55,7 +56,12 @@ export function projectConversationTimelineItems(
     const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems);
     const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
     const finalItem = !running && !stopped ? popTrailingFinalAssistantItem(bodyItems) : null;
-    const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item));
+    // Final output is already excluded; only process content may own preceding reasoning.
+    // 最终输出已经排除，只有过程内容可以承接前置思考。
+    const processItems = integrateProcessThinking(
+      bodyItems.filter((item) => !isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item)),
+      isAssistantMarkdownRenderItem,
+    );
     const turnUserItem = currentTurn.userItem;
     const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
     const startedAtMs = conversationMessageUnixMillis(currentTurn.anchorItem.sourceMessage ?? currentTurn.anchorItem.userMessage);

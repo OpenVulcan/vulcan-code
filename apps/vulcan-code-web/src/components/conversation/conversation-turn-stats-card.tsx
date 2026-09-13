@@ -121,7 +121,7 @@ export function TurnStatsTooltipCard(props: {
       </div>
       {subagent ? (
         <section className="turn-stats-subagent-section">
-          <div className="turn-stats-section-title">{zh ? "子代理 Tokens" : "Subagent tokens"}</div>
+          <div className="turn-stats-section-title">{zh ? "智能体 Tokens" : "Subagent tokens"}</div>
           <TurnStatsUsageRows locale={props.locale} usage={subagent} />
         </section>
       ) : null}

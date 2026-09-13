@@ -1,9 +1,11 @@
+import { ThinkingPopupContext, ThinkingPreview } from "./thinking-preview";
+import { normalizeThinkingDisplayMode } from "./thinking-display";
 import React from "react";
 import { runConversationControlAction } from "./conversation-control-feedback";
 import { ModelSwitchNotice, modelSwitchRouteLabel } from "./conversation-model-switch";
 import type { ProviderSummary } from "@/types";
 import {
-  BrainCircuit,
+  Sparkles,
   Check,
   ChevronDown,
   ChevronRight,
@@ -221,6 +223,7 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
     [props.events, props.reasoningDisplayMode],
   );
   return (
+    <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode ?? "inline_output") === "popup_only"}>
     <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
       <div className="conversation-v1-display" data-conversation-v1-display="true">
         {transcriptNodes.map((node) => (
@@ -240,6 +243,7 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
         ))}
       </div>
     </MarkdownImageWorkspacePathProvider>
+    </ThinkingPopupContext.Provider>
   );
 }
 
@@ -310,27 +314,11 @@ function ConversationV1TranscriptNodeView(props: ConversationV1TranscriptNodeVie
  *          当前展示方式对应的精确内联可见序列。 */
 function conversationDisplayItemsForReasoningMode(
   items: readonly ConversationEventDisplayItem[],
-  mode: ThinkingDisplayMode,
+  _mode: ThinkingDisplayMode,
 ): ConversationEventDisplayItem[] {
-  if (mode === "inline_output") {
-    return [...items];
-  }
-  if (mode === "popup_only") {
-    return items.filter((item) => item.kind !== "assistant_reasoning");
-  }
-  // firstReasoningTurns records only the first reasoning event in each logical Turn.
-  // firstReasoningTurns 仅记录每个逻辑 Turn 中第一条思考事件。
-  const firstReasoningTurns = new Set<number>();
-  return items.filter((item) => {
-    if (item.kind !== "assistant_reasoning") {
-      return true;
-    }
-    if (item.turn_id === null || firstReasoningTurns.has(item.turn_id)) {
-      return false;
-    }
-    firstReasoningTurns.add(item.turn_id);
-    return true;
-  });
+  // Popup preferences never remove historical or live reasoning from the transcript.
+  // 弹窗偏好绝不从转录中移除历史或实时思考。
+  return [...items];
 }
 
 /** Renders one canonical user input with the established bubble and subordinate actions.
@@ -413,6 +401,24 @@ function ConversationV1ProcessGroup(
   // hasOperationalItems keeps a reasoning-only Turn in the established independent thinking-card form.
   // hasOperationalItems 让只有思考的 Turn 保持既有独立思考卡形态。
   const hasOperationalItems = props.node.items.some((item) => item.kind !== "assistant_reasoning");
+  // Process text is intermediate; the canonical projection emits final answers outside this group.
+  // 过程正文属于中间输出；规范投影将最终回答放在本组之外。
+  const entries = React.useMemo(() => {
+    // projected stores display-only associations; pending retains consecutive reasoning positions.
+    // projected 保存仅展示关联；pending 保留连续思考的位置。
+    const projected: { item: ConversationProcessDisplayItem; leading: Extract<ConversationProcessDisplayItem, { kind: "assistant_reasoning" }>[]; aligned: boolean }[] = [];
+    let pending: Extract<ConversationProcessDisplayItem, { kind: "assistant_reasoning" }>[] = [];
+    // Alignment belongs to a consecutive tool run, and stops at the next content boundary.
+    // 对齐属于连续工具序列，在下一条内容边界处终止。
+    let alignedToolRun = false;
+    for (const item of props.node.items) {
+      if (item.kind === "assistant_reasoning") { pending.push(item); alignedToolRun = false; continue; }
+      alignedToolRun = item.kind === "tool_call" && (alignedToolRun || pending.length > 0);
+      projected.push({ item, leading: pending, aligned: alignedToolRun });
+      pending = [];
+    }
+    return [...projected, ...pending.map((item) => ({ item, leading: [], aligned: false }))];
+  }, [props.node.items]);
   const [expanded, setExpanded] = React.useState(props.node.active);
   React.useEffect(() => {
     if (props.node.active) setExpanded(true);
@@ -420,8 +426,10 @@ function ConversationV1ProcessGroup(
   if (!hasOperationalItems) {
     return (
       <div className="conversation-v1-reasoning-stack" data-seq={props.node.seq}>
-        {props.node.items.map((item) => (
+        {entries.map(({ item, leading, aligned }) => (
           <ConversationV1ProcessItem
+            reserveThinkingPrefix={aligned}
+            leadingReasoning={leading}
             availableExternalRefKeys={props.availableExternalRefKeys}
             defaultExpandedTools={props.defaultExpandedTools}
             item={item}
@@ -450,8 +458,10 @@ function ConversationV1ProcessGroup(
         <ChevronDown aria-hidden="true" className="work-process-toggle-icon" size={14} />
       </button>
       <div className="work-process-body" hidden={!expanded}>
-        {props.node.items.map((item) => (
+        {entries.map(({ item, leading, aligned }) => (
           <ConversationV1ProcessItem
+            reserveThinkingPrefix={aligned}
+            leadingReasoning={leading}
             availableExternalRefKeys={props.availableExternalRefKeys}
             defaultExpandedTools={props.defaultExpandedTools}
             item={item}
@@ -470,6 +480,12 @@ function ConversationV1ProcessGroup(
  * 在不改变 canonical 顺序的情况下渲染处理过程组中的一项。 */
 function ConversationV1ProcessItem(props: {
   item: ConversationProcessDisplayItem;
+  // Complete reasoning owned by this process item's compact prefix, in original order.
+  // 当前过程条目紧凑入口拥有的完整思考，保持原始顺序。
+  leadingReasoning?: Extract<ConversationProcessDisplayItem, { kind: "assistant_reasoning" }>[];
+  // Reserve only the title prefix for subsequent tools sharing one reasoning segment.
+  // 为共享同一思考段的后续工具仅预留标题前缀。
+  reserveThinkingPrefix?: boolean;
   defaultExpandedTools?: boolean;
   availableExternalRefKeys?: ReadonlySet<string>;
   onOpenExternalRef?: (reference: ExternalResourceRef) => void;
@@ -486,7 +502,10 @@ function ConversationV1ProcessItem(props: {
   }
   if (props.item.kind === "tool_call") {
     return (
-      <div className="conversation-v1-process-item" data-event-kind="tool_call" data-seq={props.item.seq}>
+      <div className={`conversation-v1-process-item${props.leadingReasoning?.length ? " tool-with-thinking" : ""}${props.reserveThinkingPrefix ? " tool-thinking-aligned" : ""}`} data-event-kind="tool_call" data-seq={props.item.seq}>
+        {props.leadingReasoning && props.leadingReasoning.length > 0 ? <ThinkingPreview compact>
+          {props.leadingReasoning.map((item) => <MarkdownMessage key={item.seq} content={item.reasoning.text} eager onOpenMedia={props.onOpenMarkdownMedia} />)}
+        </ThinkingPreview> : null}
         <ConversationV1ToolCard
           availableExternalRefKeys={props.availableExternalRefKeys}
           defaultExpanded={props.defaultExpandedTools}
@@ -499,10 +518,13 @@ function ConversationV1ProcessItem(props: {
   }
   return (
     <div
-      className="conversation-v1-process-assistant"
+      className={`conversation-v1-process-assistant${props.leadingReasoning?.length ? " assistant-with-thinking" : ""}`}
       data-event-kind={props.item.kind}
       data-seq={props.item.seq}
     >
+      {props.leadingReasoning && props.leadingReasoning.length > 0 ? <ThinkingPreview compact>
+        {props.leadingReasoning.map((item) => <MarkdownMessage key={item.seq} content={item.reasoning.text} eager onOpenMedia={props.onOpenMarkdownMedia} />)}
+      </ThinkingPreview> : null}
       <MarkdownMessage
         content={props.item.markdown}
         eager
@@ -529,6 +551,9 @@ function ConversationV1ThinkingCard(props: {
   // streaming determines the historical auto-expand and completion-collapse behavior.
   // streaming 决定历史行为中的流式自动展开与完成后折叠。
   const streaming = props.item.reasoning.status === "streaming";
+  // popupEnabled chooses a compact entry without filtering the event.
+  // popupEnabled 选择紧凑入口，不过滤事件。
+  const popupEnabled = React.useContext(ThinkingPopupContext);
   // expanded is local presentation state and never becomes a second transcript authority.
   // expanded 是本地展示状态，不会成为第二转录权威。
   const [expanded, setExpanded] = React.useState(streaming);
@@ -543,6 +568,9 @@ function ConversationV1ThinkingCard(props: {
     }
     wasStreaming.current = streaming;
   }, [streaming]);
+  if (popupEnabled && streaming) return <section className="thinking-block thinking-popup-node" data-event-kind="assistant_reasoning" data-seq={props.item.seq}>
+    <ThinkingPreview streaming={streaming}><MarkdownMessage content={props.item.reasoning.text} eager streaming={streaming} onOpenMedia={props.onOpenMarkdownMedia} /></ThinkingPreview>
+  </section>;
   return (
     <section
       className={`thinking-block${expanded ? " expanded" : ""}`}
@@ -556,7 +584,7 @@ function ConversationV1ThinkingCard(props: {
         type="button"
       >
         <span className="thinking-toggle-label">
-          <BrainCircuit aria-hidden="true" size={15} />
+          <Sparkles aria-hidden="true" size={15} />
           <strong>{t("contextCompaction.thinkingLabel")}</strong>
           {streaming ? <span>{t("contextCompaction.thinkingActive")}</span> : null}
         </span>

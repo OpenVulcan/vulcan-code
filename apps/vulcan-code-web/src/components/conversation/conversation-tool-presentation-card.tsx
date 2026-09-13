@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { Button } from "@/components/ui/button";
@@ -2117,13 +2118,10 @@ function SubagentUsageChip(props: {
   // 语言及共用统计行与轮次统计卡一致，不虚构当前没有的 Token 字段。
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
-  // tooltipId connects the focusable usage chip to its state-free detail card.
-  // tooltipId 将可聚焦的用量胶囊与无状态详情卡关联起来。
-  const tooltipId = React.useId();
   return (
-    <div className="subagent-orchestration-usage-tooltip-anchor">
+    <Tooltip>
+      <TooltipTrigger asChild>
       <div
-        aria-describedby={tooltipId}
         aria-label={summaryText}
         className="subagent-orchestration-usage"
         data-subagent-usage-tooltip="true"
@@ -2132,11 +2130,10 @@ function SubagentUsageChip(props: {
         <Bot aria-hidden="true" size={13} />
         <span>{summaryText}</span>
       </div>
-      <div
-        className="context-usage-tooltip subagent-orchestration-usage-tooltip"
-        id={tooltipId}
-        role="tooltip"
-      >
+      </TooltipTrigger>
+      {/* The shared portal escapes measured tool folds and clamps the floating card to the viewport. */}
+      {/* 共享 Portal 避开工具测量折叠的裁切，并将浮动卡限制在视口内。 */}
+      <TooltipContent className="context-usage-tooltip subagent-orchestration-usage-tooltip" side="top" align="start" collisionPadding={12} showArrow={false}>
         <div className="context-usage-card-header turn-stats-card-header">
           <strong>{props.t("conversation.subagent.detail.usage")}</strong>
         </div>
@@ -2154,8 +2151,8 @@ function SubagentUsageChip(props: {
             rightValue={formatTurnStatsNumber(props.summary.totalTokens, locale)}
           />
         </div>
-      </div>
-    </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

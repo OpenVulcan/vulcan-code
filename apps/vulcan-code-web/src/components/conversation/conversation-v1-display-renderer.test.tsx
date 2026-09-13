@@ -202,8 +202,8 @@ describe("ConversationV1DisplayRenderer", () => {
         />
       </I18nProvider>,
     );
-    // firstInlineMarkup preserves only the first reasoning event in the logical Turn.
-    // firstInlineMarkup 仅保留逻辑 Turn 中的第一条思考事件。
+    // Legacy popup intent now preserves both reasoning nodes, with only live content in the portal.
+    // 旧弹窗意图现在保留两个思考节点，仅实时内容位于 Portal。
     const firstInlineMarkup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
@@ -228,9 +228,10 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(firstInlineMarkup).toContain("first reasoning");
     expect(firstInlineMarkup).not.toContain("second reasoning");
     expect(firstInlineMarkup).toContain("answer after reasoning");
-    expect(popupOnlyMarkup).not.toContain("first reasoning");
+    expect(popupOnlyMarkup).toContain("first reasoning");
     expect(popupOnlyMarkup).not.toContain("second reasoning");
     expect(popupOnlyMarkup).toContain("answer after reasoning");
+    expect(seqOffset(popupOnlyMarkup, 1)).toBeLessThan(seqOffset(popupOnlyMarkup, 2));
     expect(inlineMarkup).toContain('class="thinking-block"');
     expect(inlineMarkup).toContain("思考过程");
     expect(inlineMarkup).not.toContain("已工作");
@@ -506,10 +507,12 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).toContain("diagram.png");
     expect(markup).toContain("[MISSING PROJECT RESOURCE]");
     expect(markup).not.toContain("资源：101, 102");
-    expect(markup).toContain("Checking");
+    expect(markup).toContain("conversation-v1-process-assistant assistant-with-thinking");
+    expect(markup).toContain("thinking-preview-trigger compact");
+    expect(markup).not.toContain("Checking");
     expect(markup).toContain("result");
     expect(markup).toContain("已工作");
-    expect(markup).toContain('class="thinking-block"');
+    expect(markup).not.toContain('class="thinking-block"');
     expect(markup).toContain("思考过程");
     expect(markup).toContain('class="message-row user conversation-v1-event"');
     expect(markup).toContain('class="message-row assistant assistant-final-output conversation-v1-event"');

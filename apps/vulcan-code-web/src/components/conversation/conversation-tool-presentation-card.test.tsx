@@ -3,7 +3,8 @@
 
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createRoot } from "react-dom/client";
 
 import type {
   CommandExecutionPresentation,
@@ -587,8 +588,17 @@ describe("ToolPresentationCard file access icons", () => {
 
   // Completed child usage keeps its compact chip and exposes the dedicated Tooltip trigger.
   // 已完成子智能体用量保留紧凑胶囊，并暴露专用 Tooltip 触发器。
-  it("binds completed subagent usage to a focusable Tooltip trigger", () => {
-    const markup = renderToStaticMarkup(
+  it("portals focused subagent usage outside a clipped tool fold", async () => {
+    // The mounted owner deliberately clips children, matching the measured tool fold.
+    // 挂载归属故意裁切子元素，与工具测量折叠一致。
+    const host = document.createElement("div");
+    host.style.overflow = "hidden";
+    host.style.height = "24px";
+    document.body.append(host);
+    const root = createRoot(host);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+    await React.act(async () => root.render(
       <I18nProvider initialLocale="zh-CN">
         <TooltipProvider>
           <ToolPresentationCard
@@ -602,7 +612,15 @@ describe("ToolPresentationCard file access icons", () => {
           />
         </TooltipProvider>
       </I18nProvider>,
-    );
+    ));
+    // Focus opens the real shared Tooltip without depending on pointer timing.
+    // 聚焦打开真实共享 Tooltip，不依赖指针时序。
+    const trigger = host.querySelector<HTMLElement>('[data-subagent-usage-tooltip="true"]')!;
+    await React.act(async () => trigger.focus());
+    const tooltip = document.querySelector<HTMLElement>('[data-slot="tooltip-content"]')!;
+    expect(tooltip).not.toBeNull();
+    expect(host.contains(tooltip)).toBe(false);
+    const markup = host.innerHTML + tooltip.innerHTML;
 
     expect(markup).toContain("2 次调用 · 0 个工具 · 38348 tokens · 缓存 30000 tokens");
     expect(markup).toContain('data-subagent-usage-tooltip="true"');
@@ -611,12 +629,17 @@ describe("ToolPresentationCard file access icons", () => {
     // 深色弹窗使用共用标签/数值对比样式，不沿用页面的弱化文字色。
     expect(markup).toContain('class="context-usage-card-header turn-stats-card-header"');
     expect(markup).toContain('class="turn-stats-metric-grid"');
-    expect(markup.match(/class="turn-stats-metric"/g)).toHaveLength(4);
+    expect(tooltip.querySelector(".turn-stats-metric-grid")?.querySelectorAll(".turn-stats-metric")).toHaveLength(4);
     expect(markup).toContain('<span>总请求次数</span><strong>2</strong>');
     expect(markup).toContain('<span>工具调用次数</span><strong>0</strong>');
     expect(markup).toContain('<span>缓存 Tokens</span><strong>30,000</strong>');
     expect(markup).toContain('<span>合计 Tokens</span><strong>38,348</strong>');
     expect(markup).not.toContain("subagent-orchestration-usage-tooltip-grid");
+    } finally {
+      await React.act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
   });
 
   // Every folded orchestration card keeps the operation name before its concrete agent or outcome.

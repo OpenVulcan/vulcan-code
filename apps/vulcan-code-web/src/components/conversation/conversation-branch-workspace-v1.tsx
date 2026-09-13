@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ThinkingPopupContext } from "./thinking-preview";
 
 import type { GeneratedMediaAttachment, GeneratedMediaKind } from "@/components/media/generated-media";
 import {
@@ -13,6 +14,7 @@ import type { ConversationPlanArtifact } from "@/components/conversation/convers
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import {
   hiddenThinkingBlockIdsForDisplayMode,
+  normalizeThinkingDisplayMode,
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
 import type { ToolDetailPayload } from "@/components/conversation/conversation-detail";
@@ -264,8 +266,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   }, [canonicalPresentation.messages, props.onRootInputGenerationAction, props.sessionRunning]);
 
   return (
+    <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
     <ConversationWorkspace
-      autoExpandStreamingThinking={props.reasoningDisplayMode !== "first_inline_with_popup"}
+      autoExpandStreamingThinking={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "inline_output"}
       commandSessions={props.commandSessions}
       conversation={props.conversation}
       error={null}
@@ -300,6 +303,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       transientReasoningStatus={props.transientReasoningStatus}
       workspacePath={props.workspacePath}
     />
+    </ThinkingPopupContext.Provider>
   );
 }
 

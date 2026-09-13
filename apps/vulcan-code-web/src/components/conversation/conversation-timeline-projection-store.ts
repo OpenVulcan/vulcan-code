@@ -272,7 +272,8 @@ function conversationRenderItemEqual(
   if (left.id !== right.id || left.renderKey !== right.renderKey || left.role !== right.role) {
     return false;
   }
-  return referenceArrayEqual(left.sourceMessages, right.sourceMessages);
+  return left.reserveThinkingPrefix === right.reserveThinkingPrefix
+    && referenceArrayEqual(left.sourceMessages, right.sourceMessages);
 }
 
 // referenceArrayEqual compares ordered immutable source arrays by exact reference.

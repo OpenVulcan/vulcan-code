@@ -168,6 +168,9 @@ function workspaceTree(
   // Explicit card IDs allow testing the production expanded result rather than a detached presentation fixture.
   // 显式卡片标识用于测试生产展开结果，而不是脱离实际路径的展示夹具。
   expandedToolPresentationIds: string[] = [],
+  // Running state exercises the production live reasoning expansion path.
+  // 运行状态用于验证生产实时思考展开路径。
+  sessionRunning = false,
 ): React.ReactElement {
   const conversation: ConversationSummary = {
     id: "session-branch-v1",
@@ -183,7 +186,7 @@ function workspaceTree(
   const timeline = projectConversationTimelineItems(
     projectConversationBranchPresentationV1(conversation.id, events, emptyResourceCatalog(), (key) => key).renderItems,
     conversation,
-    false,
+    sessionRunning,
   );
   return (
     <I18nProvider initialLocale="zh-CN">
@@ -210,7 +213,7 @@ function workspaceTree(
             reasoningDisplayMode={reasoningDisplayMode}
             scrollRef={React.createRef<HTMLElement>()}
             sessionId={conversation.id}
-            sessionRunning={false}
+            sessionRunning={sessionRunning}
             snapshot={snapshot(events)}
           />
         </ConversationLiveStreamProvider>
@@ -228,6 +231,82 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  // The same live sequence must hand reasoning to exactly one tool under either popup preference.
+  // 同一实时序列在两种弹窗偏好下都必须仅将思考交给一个工具。
+  it.each(["popup_only", "inline_output"] as const)("retains full reasoning through live-to-tool handoff in %s", async (mode) => {
+    // Long text catches accidental summary-only rendering and must remain selectable in the portal.
+    // 长文本用于发现只渲染摘要的错误，且必须在浮层内保持可选择。
+    const fullText = "完整思考段落。".repeat(300) + "末尾校验标记";
+    const completed = completeTurnEvents().slice(0, 3).map((summary): ConversationEventSummary => summary.event.kind === "assistant_reasoning"
+      ? { ...summary, event: { ...summary.event, text: fullText } } : summary);
+    const streaming = completed.slice(0, 2).map((summary): ConversationEventSummary => summary.event.kind === "assistant_reasoning"
+      ? { ...summary, event: { ...summary.event, status: "streaming" } } : summary);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    // jsdom has no geometry observer; production scrolling still receives the real lifecycle calls.
+    // jsdom 没有几何观察器；生产滚动仍接收真实生命周期调用。
+    vi.stubGlobal("ResizeObserver", class {
+      // Observation is inert without browser geometry; no value is returned.
+      // 无浏览器几何时观察为空操作，不返回值。
+      observe() {}
+      // Disconnect releases the inert test observer; no value is returned.
+      // 断开空测试观察器，不返回值。
+      disconnect() {}
+      // Unobserve removes an inert target; no value is returned.
+      // 移除空观察目标，不返回值。
+      unobserve() {}
+    });
+    try {
+      await React.act(async () => root.render(workspaceTree(streaming, mode, [], true)));
+      expect(host.querySelector(".thinking-block")).not.toBeNull();
+      if (mode === "popup_only") {
+        expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
+        expect(host.querySelector(".thinking-body")).toBeNull();
+      } else {
+        expect(host.querySelector(".thinking-body")?.textContent).toContain("末尾校验标记");
+        expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+      }
+      await React.act(async () => root.render(workspaceTree(completed, mode, [], true)));
+      expect(host.querySelector(".thinking-block")).toBeNull();
+      expect(host.querySelectorAll(".tool-with-thinking")).toHaveLength(1);
+      // The header selector must target the real card, without wrapping its expanded detail in a prefix column.
+      // 标题选择器必须命中真实卡片，不能把展开详情包进思考入口所在分栏。
+      expect(host.querySelector(".tool-with-thinking > .conversation-block-content > .tool-execution-stack:first-child > .tool-presentation-card > .tool-presentation-summary")).not.toBeNull();
+      expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+      const trigger = host.querySelector<HTMLButtonElement>(".thinking-preview-trigger.compact")!;
+      await React.act(async () => trigger.click());
+      const surface = document.querySelector<HTMLElement>(".thinking-preview-surface")!;
+      expect(surface.textContent).toContain("末尾校验标记");
+      expect(host.contains(surface)).toBe(false);
+      // A final assistant response keeps its preceding reasoning as the standard collapsed row.
+      // 最终助手回复之前的思考保留为标准折叠行。
+      const final = [completed[0], completed[1], completeTurnEvents()[4]];
+      await React.act(async () => root.render(workspaceTree(final, mode)));
+      expect(host.querySelector(".thinking-toggle")?.getAttribute("aria-expanded")).toBe("false");
+      expect(host.querySelector(".tool-with-thinking")).toBeNull();
+      expect(host.textContent).toContain("已经完成核对。");
+      // A later tool makes this assistant text intermediate; its prefix owns the full preceding reasoning.
+      // 后续工具使这段助手正文成为中间输出；其前置入口拥有完整的上一段思考。
+      await React.act(async () => root.render(workspaceTree([
+        completed[0], completed[1],
+        { ...completeTurnEvents()[4], seq: 3 },
+        { ...completed[2], seq: 4 },
+        { ...completeTurnEvents()[4], seq: 5 },
+      ], mode)));
+      expect(host.querySelectorAll(".assistant-with-thinking")).toHaveLength(1);
+      expect(host.querySelector(".tool-with-thinking")).toBeNull();
+      expect(host.querySelector(".thinking-block")).toBeNull();
+      const assistantTrigger = host.querySelector<HTMLButtonElement>(".assistant-with-thinking > .thinking-preview-trigger");
+      await React.act(async () => assistantTrigger?.click());
+      expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
+    } finally {
+      await React.act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
   // The real runtime-config call revealed that branch rendering bypassed the direct V1 domain card.
   // 实际 runtime-config 调用暴露了分支渲染绕过直接 V1 领域卡的问题。
   it("renders the runtime descriptor through the full branch projection without eager raw JSON", async () => {
@@ -270,7 +349,7 @@ describe("ConversationBranchWorkspaceV1", () => {
 
   // Mode changes must reproject the same completed ledger without waiting for a new provider event.
   // 模式变化必须重新投影同一份已结束账本，不能等待新的供应商事件。
-  it("applies all display modes to completed history without mutating its events", () => {
+  it("preserves independent final reasoning and tool prefixes under every persisted preference", () => {
     // events includes two reasoning segments in each completed logical Turn.
     // events 在每个已完成逻辑回合中包含两段思考。
     const events = completeTurnEvents().flatMap((summary) => summary.event.kind === "assistant_text"
@@ -303,17 +382,18 @@ describe("ConversationBranchWorkspaceV1", () => {
     // cases also returns to inline mode so previously hidden reasoning must remain recoverable.
     // cases 还会返回内联模式，确保此前隐藏的思考仍能恢复。
     const cases: readonly [ThinkingDisplayMode, number][] = [
-      ["inline_output", 4],
-      ["popup_only", 0],
+      ["inline_output", 2],
+      ["popup_only", 2],
       ["first_inline_with_popup", 2],
       ["first_inline_only", 2],
-      ["inline_output", 4],
+      ["inline_output", 2],
     ];
     for (const [mode, expectedCount] of cases) {
       // markup uses the production branch shell, including its exact row filtering.
       // markup 使用生产分支外壳，包含其精确行过滤逻辑。
       const markup = renderWorkspace(history, mode);
       expect(markup.match(/class="thinking-block[" ]/g)?.length ?? 0, mode).toBe(expectedCount);
+      expect(markup.match(/thinking-preview-trigger compact/g)?.length ?? 0, mode).toBe(2);
       expect(markup, mode).toContain("已经完成核对。");
       expect(markup, mode).toContain("rg current-call-chain");
       expect(markup, mode).toContain("turn-stats-row");

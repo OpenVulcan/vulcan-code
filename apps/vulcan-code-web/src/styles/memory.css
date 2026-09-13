@@ -118,20 +118,34 @@
 .vmm-linked-project-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
 .vmm-project-list button { text-align: left; padding: 10px 12px; border-radius: 6px; overflow-wrap: anywhere; }
 .vmm-project-list button[aria-pressed="true"] { background: var(--accent); font-weight: 600; }
-.vmm-resource-workspace { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); gap: 18px; align-items: start; }
+/* Keep composition identity, locale and save action compact; related noise controls share a separate row.
+   组合说明、区域与保存操作紧凑排列，相关噪音控件单独成行。 */
+.vmm-resource-composition-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.vmm-resource-composition-heading { flex: 1 1 320px; min-width: 0; }
+.vmm-resource-composition-actions { display: flex; flex: 0 1 340px; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.vmm-resource-composition-actions > div { flex: 1 1 160px; min-width: 0; }
+.vmm-resource-composition-actions [data-slot="select-trigger"] { width: 100%; }
+.vmm-resource-noise-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 16px; }
+.vmm-resource-workspace { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); gap: 18px; align-items: stretch; }
 .vmm-resource-files { display: flex; flex-direction: column; gap: 4px; }
-.vmm-resource-file-groups { max-height: 600px; overflow: auto; }
+/* Let the editor determine the row height while the file list stretches and scrolls independently.
+   由编辑器决定整行高度，文件列表等高拉伸并独立滚动。 */
+.vmm-resource-file-groups { contain: size; min-height: 0; overflow: auto; }
 .vmm-resource-files button { padding: 10px 12px; text-align: left; border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
 .vmm-resource-files button[aria-pressed="true"] { background: var(--accent); font-weight: 600; }
 .vmm-resource-editor { min-width: 0; }
 
 @container memory-body (max-width: 840px) {
+  .vmm-resource-composition-actions { flex-basis: 100%; }
+  .vmm-resource-noise-options { grid-template-columns: minmax(0, 1fr); }
   .vmm-session-workspace.has-selection { grid-template-columns: minmax(0, 1fr); }
   .vmm-project-workspace, .vmm-resource-workspace, .vmm-search-workspace { grid-template-columns: minmax(0, 1fr); }
   .vmm-project-directory-expanded { display: none; }
   .vmm-project-picker { display: block; }
   .vmm-resource-files { flex-direction: row; flex-wrap: wrap; }
-  .vmm-resource-file-groups { max-height: 240px; }
+  /* Restore content sizing when the file list occupies its own row on narrow layouts.
+     窄布局下文件列表独占一行，恢复按内容计算高度。 */
+  .vmm-resource-file-groups { contain: none; max-height: 240px; }
 }
 @container memory-inference (max-width: 680px) {
   .vmm-inference-route { grid-template-columns: minmax(0, 1fr) auto; }

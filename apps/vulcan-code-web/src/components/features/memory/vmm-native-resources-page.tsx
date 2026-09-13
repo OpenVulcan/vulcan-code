@@ -296,11 +296,40 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   )
 }
 
-// ResourceCompositionSettings renders only settings belonging to the active category.
-// ResourceCompositionSettings 仅渲染属于当前分类的设置。
+// ResourceCompositionSettings groups the active category's catalog, draft controls and save callback in a compact card; busy disables saving.
+// ResourceCompositionSettings 将当前分类的目录、草稿控件与保存回调组织为紧凑卡片；busy 禁用保存。
 function ResourceCompositionSettings({ busy, catalog, group, onChange, onSave, settings }: { busy: boolean; catalog: VmmNativeResourceCatalogSummary; group: ResourceGroup; onChange: React.Dispatch<React.SetStateAction<VmmNativeResourceSettingsSummary | null>>; onSave: () => Promise<void>; settings: VmmNativeResourceSettingsSummary }) {
+  // t resolves the current locale's resource-setting labels.
+  // t 解析当前语言的资源设置文案。
   const { t } = useI18n()
-  return <Card><CardHeader><CardTitle>{t("memory.resources.composition")}</CardTitle><CardDescription>{t("memory.resources.compositionDescription")}</CardDescription></CardHeader><CardContent className="space-y-4">{group === "prompt" ? <ResourceSelect label={t("memory.resources.promptBundle")} onChange={(promptBundle) => onChange((current) => current ? { ...current, promptBundle } : current)} options={catalog.promptBundles} value={settings.promptBundle} /> : null}{group === "pii" ? <ResourceSelect label={t("memory.resources.piiLocale")} onChange={(piiLanguage) => onChange((current) => current ? { ...current, piiLanguage } : current)} options={catalog.piiLanguages} value={settings.piiLanguage} /> : null}{group === "noise" ? <div className="grid gap-4 md:grid-cols-2"><ResourceSelect label={t("memory.resources.noiseLocale")} onChange={(noiseLanguage) => onChange((current) => current ? { ...current, noiseLanguage } : current)} options={catalog.noiseLanguages} value={settings.noiseLanguage} /><BooleanSetting checked={settings.noiseEnabled} label={t("memory.resources.noiseEnabled")} onChange={(noiseEnabled) => onChange((current) => current ? { ...current, noiseEnabled } : current)} /><BooleanSetting checked={settings.noiseSemanticEnabled} label={t("memory.resources.noiseSemanticEnabled")} onChange={(noiseSemanticEnabled) => onChange((current) => current ? { ...current, noiseSemanticEnabled } : current)} /><div className="space-y-2"><Label htmlFor="vmm-noise-threshold">{t("memory.resources.noiseThreshold")}</Label><Input id="vmm-noise-threshold" max="1" min="0.01" onChange={(event) => onChange((current) => current ? { ...current, noiseSemanticThreshold: Number(event.target.value) } : current)} step="0.01" type="number" value={settings.noiseSemanticThreshold} /></div></div> : null}<Button disabled={busy} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveComposition")}</Button></CardContent></Card>
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        <div className="vmm-resource-composition-toolbar">
+          <div className="vmm-resource-composition-heading space-y-1">
+            <CardTitle>{t("memory.resources.composition")}</CardTitle>
+            <CardDescription>{t("memory.resources.compositionDescription")}</CardDescription>
+          </div>
+          <div className="vmm-resource-composition-actions">
+            {group === "prompt" ? <ResourceSelect label={t("memory.resources.promptBundle")} onChange={(promptBundle) => onChange((current) => current ? { ...current, promptBundle } : current)} options={catalog.promptBundles} value={settings.promptBundle} /> : null}
+            {group === "pii" ? <ResourceSelect label={t("memory.resources.piiLocale")} onChange={(piiLanguage) => onChange((current) => current ? { ...current, piiLanguage } : current)} options={catalog.piiLanguages} value={settings.piiLanguage} /> : null}
+            {group === "noise" ? <ResourceSelect label={t("memory.resources.noiseLocale")} onChange={(noiseLanguage) => onChange((current) => current ? { ...current, noiseLanguage } : current)} options={catalog.noiseLanguages} value={settings.noiseLanguage} /> : null}
+            <Button disabled={busy} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveComposition")}</Button>
+          </div>
+        </div>
+        {group === "noise" ? (
+          <div className="vmm-resource-noise-options border-t pt-4">
+            <BooleanSetting checked={settings.noiseEnabled} label={t("memory.resources.noiseEnabled")} onChange={(noiseEnabled) => onChange((current) => current ? { ...current, noiseEnabled } : current)} />
+            <BooleanSetting checked={settings.noiseSemanticEnabled} label={t("memory.resources.noiseSemanticEnabled")} onChange={(noiseSemanticEnabled) => onChange((current) => current ? { ...current, noiseSemanticEnabled } : current)} />
+            <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
+              <Label htmlFor="vmm-noise-threshold">{t("memory.resources.noiseThreshold")}</Label>
+              <Input className="w-24 shrink-0" id="vmm-noise-threshold" max="1" min="0.01" onChange={(event) => onChange((current) => current ? { ...current, noiseSemanticThreshold: Number(event.target.value) } : current)} step="0.01" type="number" value={settings.noiseSemanticThreshold} />
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
 }
 
 // ResourceFileSelect renders file names for only the active resource category.
@@ -338,8 +367,12 @@ interface ResourceCodeEditorProps {
 // ResourceCodeEditor renders a guarded syntax-highlighted editor with synchronized line numbers.
 // ResourceCodeEditor 渲染一个带同步行号的受保护语法高亮编辑器。
 function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCodeEditorProps) {
-  const previewRef = React.useRef<HTMLPreElement>(null)
-  const gutterRef = React.useRef<HTMLPreElement>(null)
+  // previewRef targets the token content so native scrollbar gutters cannot clamp its offset.
+  // previewRef 指向高亮内容，避免原生滚动条占位限制其偏移量。
+  const previewRef = React.useRef<HTMLElement>(null)
+  // gutterRef targets the line-number content independently of its fixed clipping surface.
+  // gutterRef 指向行号内容，与固定的裁剪容器分离。
+  const gutterRef = React.useRef<HTMLSpanElement>(null)
   const lines = React.useMemo(() => value.split(/\r\n|\r|\n/u), [value])
   const shikiTheme = useDiffShikiTheme()
   const highlightEnabled = lines.length <= 2_000 && value.length <= 262_144
@@ -356,15 +389,16 @@ function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCod
     [lines.length],
   )
 
-  // synchronizeScroll keeps syntax tokens and line numbers aligned with the editable layer.
-  // synchronizeScroll 让语法 token 与行号始终和可编辑层保持对齐。
+  // synchronizeScroll applies the textarea's exact offsets to both display layers and returns nothing.
+  // synchronizeScroll 将输入框的准确偏移应用到两个显示层，无返回值。
+  // Translate content instead of scrolling shorter ranges: native scrollbars reduce only the textarea's viewport.
+  // 平移内容而非滚动较短的范围：原生滚动条仅缩小输入框的可视区域。
   const synchronizeScroll = React.useCallback((element: HTMLTextAreaElement) => {
     if (previewRef.current) {
-      previewRef.current.scrollLeft = element.scrollLeft
-      previewRef.current.scrollTop = element.scrollTop
+      previewRef.current.style.transform = `translate(${-element.scrollLeft}px, ${-element.scrollTop}px)`
     }
     if (gutterRef.current) {
-      gutterRef.current.scrollTop = element.scrollTop
+      gutterRef.current.style.transform = `translateY(${-element.scrollTop}px)`
     }
   }, [])
 
@@ -374,8 +408,8 @@ function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCod
         <span className="font-mono">{language}</span>
       </div>
       <div className="relative h-[28rem] min-h-[28rem] overflow-hidden bg-background font-mono text-xs leading-5 text-foreground">
-        <pre ref={previewRef} aria-hidden="true" className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre py-3 pl-[4.5rem] pr-3 font-mono text-xs leading-5">
-          <code>
+        <pre aria-hidden="true" className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre py-3 pl-[4.5rem] pr-3 font-mono text-xs leading-5">
+          <code ref={previewRef} className="block w-max min-w-full">
             {renderedLines.map((line, index) => (
               <span
                 className="block min-h-5"
@@ -385,7 +419,7 @@ function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCod
             ))}
           </code>
         </pre>
-        <pre ref={gutterRef} aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-10 m-0 w-14 select-none overflow-hidden border-r bg-muted px-3 py-3 text-right font-mono text-xs leading-5 text-muted-foreground">{lineNumbers}</pre>
+        <pre aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-10 m-0 w-14 select-none overflow-hidden border-r bg-muted px-3 py-3 text-right font-mono text-xs leading-5 text-muted-foreground"><span ref={gutterRef} className="block">{lineNumbers}</span></pre>
         <textarea
           aria-label="VMM resource code editor"
           aria-readonly={disabled}

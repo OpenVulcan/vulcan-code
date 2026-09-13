@@ -84,12 +84,13 @@ it("shows an existing session's pending style rather than selecting a different 
 });
 
 it("exposes thinking choices as radios and preserves the exact typed selection", async () => {
-  await openMenu(); await openSubmenu("思考过程");
-  // choices follow the source-declared four display modes, independently of model reasoning effort.
-  // choices 遵循源码声明的四种展示模式，与模型推理强度独立。
+  await openMenu(); await openSubmenu("思考弹窗");
+  // The popup has exactly two choices, independently of model reasoning effort.
+  // 弹窗只有两个选项，与模型推理强度独立。
   const choices = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
-  expect(choices).toHaveLength(4);
-  expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual(["true", "false", "false", "false"]);
+  expect(choices).toHaveLength(2);
+  expect(choices.map((choice) => choice.textContent)).toEqual(["开启", "关闭"]);
+  expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual(["true", "false"]);
   await act(async () => choices[1].click());
   expect(props.onThinkingDisplayModeChange).toHaveBeenCalledWith("inline_output");
 });

@@ -1,4 +1,6 @@
 import React from "react";
+import { ThinkingPreview } from "./thinking-preview";
+import { MarkdownMessage } from "./conversation-markdown";
 import { runConversationControlAction } from "./conversation-control-feedback";
 import {
   Check,
@@ -1052,8 +1054,12 @@ export function ConversationRenderItemView(props: {
 
   return (
     <article className={cn("message-row", props.item.role, props.finalAssistantOutput && "assistant-final-output")}>
-      <div className="assistant-flow">
+      <div className={cn("assistant-flow", props.item.reserveThinkingPrefix && "tool-thinking-aligned", props.item.leadingThinking && (props.item.blocks.some(isMergeableToolBlock) ? "tool-with-thinking" : "assistant-with-thinking"))}>
+        {props.item.leadingThinking ? <ThinkingPreview compact>
+          {props.item.leadingThinking.map((block) => <MarkdownMessage key={block.id} content={block.body} eager onOpenMedia={props.onOpenMedia} />)}
+        </ThinkingPreview> : null}
         {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
+        <div className="conversation-block-content">
         <ConversationBlocksView
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
@@ -1078,6 +1084,7 @@ export function ConversationRenderItemView(props: {
           onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
           onTrace={props.onTrace}
         />
+        </div>
       </div>
     </article>
   );

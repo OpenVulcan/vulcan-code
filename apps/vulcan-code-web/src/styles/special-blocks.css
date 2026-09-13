@@ -549,12 +549,15 @@
 }
 
 .thinking-body {
-  max-width: min(100%, 920px);
-  max-height: 300px;
+  width: min(100%, 760px);
+  max-width: 100%;
+  height: auto;
+  max-height: min(300px, 70dvh);
   min-height: 0;
   overflow: auto;
-  /* Boundary wheel deltas continue into the parent conversation viewport. */
-  /* 边界处的滚轮增量继续传递给父级会话视口。 */
+  /* Resize stays within the transcript; boundary scrolling preserves normal transcript navigation. */
+  /* 调整尺寸不超出转录区域，边界滚动保持正常的转录导航。 */
+  resize: both;
   overscroll-behavior: auto;
   border-left: 2px solid var(--border);
   padding-left: 12px;
@@ -818,6 +821,87 @@
   gap: 7px;
   padding-top: 1px;
 }
+
+/* Reserve prefix space only in the tool header; expanded details retain their full original width and alignment. */
+/* 仅在工具标题内预留思考入口空间；展开详情保留原有完整宽度与对齐位置。 */
+.assistant-flow.tool-with-thinking,
+.conversation-v1-process-item.tool-with-thinking {
+  position: relative;
+  display: block;
+}
+.tool-with-thinking > .thinking-preview-trigger {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+.tool-thinking-aligned > .conversation-block-content > .tool-execution-stack:first-child > .tool-presentation-card > .tool-presentation-summary,
+.conversation-v1-process-item.tool-thinking-aligned > .tool-presentation-card > .tool-presentation-summary {
+  margin-left: 32px;
+  width: calc(100% - 32px);
+  min-height: 26px;
+}
+.assistant-flow.assistant-with-thinking,
+.conversation-v1-process-assistant.assistant-with-thinking {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 6px;
+}
+.conversation-block-content { min-width: 0; }
+.thinking-preview-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+}
+.thinking-preview-trigger.compact { width: 26px; height: 26px; padding: 5px; }
+.thinking-preview-trigger:hover,
+.thinking-preview-trigger[aria-expanded="true"] { color: var(--foreground); background: var(--muted); }
+.thinking-preview-trigger:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Radix collision bounds constrain the glass reading surface without interactive resizing. */
+/* Radix 碰撞边界约束毛玻璃阅读浮层，不提供交互式尺寸调整。 */
+[data-slot="popover-content"].thinking-preview-surface {
+  width: min(600px, calc(100vw - 32px));
+  max-width: min(calc(100vw - 32px), var(--radix-popover-content-available-width));
+  height: auto;
+  max-height: min(420px, 70dvh, var(--radix-popover-content-available-height));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Use bounded natural height and internal scrolling without interactive resize work. */
+  /* 使用有限的自然高度和内部滚动，取消交互式尺寸调整。 */
+  resize: none;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--card) 45%, transparent);
+  /* A translucent gradient reveals the blurred backdrop; keep the blur static during entry motion. */
+  /* 半透明渐变透出模糊背景；入场动画期间保持模糊强度不变。 */
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--card) 76%, transparent),
+    color-mix(in srgb, var(--card) 58%, transparent));
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--foreground) 8%, transparent),
+    0 2px 6px color-mix(in srgb, var(--foreground) 4%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--card) 55%, transparent);
+  animation-duration: 160ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="popover-content"].thinking-preview-surface { animation: none; }
+}
+.thinking-preview-body { min-width: 0; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
+.thinking-preview-body .markdown-message { min-width: 0; max-width: none; font-size: 13px; overflow-wrap: anywhere; }
+.thinking-body .markdown-message { overflow-wrap: anywhere; }
 
 /* Reconciliation notice explains why automatic replay is intentionally unavailable. */
 /* 对账提示说明为何自动重放被有意禁用。 */
