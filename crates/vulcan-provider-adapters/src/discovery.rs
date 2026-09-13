@@ -361,6 +361,25 @@ pub fn parse_openrouter_complete_model_catalog(
                 &model,
                 openrouter_rerank_capabilities(&model),
             );
+        } else {
+            // The complete directory also contains image, video, audio, and other dedicated
+            // output models absent from the conversation endpoint. Keep their exact identities
+            // for account management without inventing an executable native operation.
+            // 完整目录还包含会话端点缺失的图片、视频、音频等专用输出模型；保留其精确身份
+            // 供账号管理，但不凭空赋予可执行原生操作。
+            models
+                .entry(model.id.clone())
+                .or_insert_with(|| ConnectionModel {
+                    id: model.id.clone(),
+                    display_name: openrouter_model_display_name(
+                        model.name.as_deref(),
+                        model.id.as_str(),
+                    ),
+                    capabilities: openrouter_reported_capabilities(&model),
+                    capability_evidence: openrouter_capability_evidence(&model),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
+                });
         }
     }
     Ok(ConnectionModelCatalog {
@@ -1379,9 +1398,33 @@ pub fn enrich_compatible_model_catalog_with_manifest(
             && let Ok(defaults) = resolved.model_defaults_for_entry(service_entry_id)
             && let Some(default_capabilities) = defaults.capabilities.as_ref()
         {
+            // Dedicated discovery endpoints prove specialized operations, and the signed native
+            // binding must independently admit the same exact model before either survives the
+            // generic conversation default.
+            // 专用发现端点证明特殊操作；签名原生绑定也必须独立准入同一精确模型，
+            // 该操作才能在通用会话默认能力投影后保留。
+            let signed_native_operations = resolved
+                .descriptor
+                .service_entries
+                .iter()
+                .find(|entry| entry.id == service_entry_id)
+                .map(|entry| {
+                    entry
+                        .native_inference_bindings
+                        .iter()
+                        .filter(|binding| {
+                            binding.batch.is_none()
+                                && (binding.model_ids.is_empty()
+                                    || binding.model_ids.iter().any(|id| id == &model.id))
+                        })
+                        .map(|binding| binding.operation)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             apply_manifest_default_capabilities_with_discovery_evidence(
                 model,
                 default_capabilities,
+                signed_native_operations.as_slice(),
             );
         }
     }
@@ -1392,12 +1435,14 @@ pub fn enrich_compatible_model_catalog_with_manifest(
 ///
 /// # Parameters
 /// 参数
-/// `model` owns the raw discovery capabilities and presence evidence; `defaults` is the complete
-/// compiled capability authority for the exact service entry.
-/// `model` 持有原始发现能力与存在性证据；`defaults` 是精确服务入口的完整已编译能力权威。
+/// `model` owns raw discovery evidence; `defaults` is the compiled entry baseline;
+/// `signed_native_operations` contains exact non-batch actions authorized by that entry.
+/// `model` 持有原始发现证据；`defaults` 是已编译入口基线；`signed_native_operations`
+/// 包含该入口精确授权的非批处理动作。
 fn apply_manifest_default_capabilities_with_discovery_evidence(
     model: &mut ConnectionModel,
     defaults: &ModelCapabilities,
+    signed_native_operations: &[AiOperation],
 ) {
     let discovered = model.capabilities.clone();
     let evidence = &model.capability_evidence;
@@ -1421,6 +1466,24 @@ fn apply_manifest_default_capabilities_with_discovery_evidence(
         capabilities
             .operations
             .retain(|operation| *operation != AiOperation::ConversationRespond);
+    }
+    if signed_native_operations.contains(&AiOperation::EmbeddingCreate)
+        && discovered
+            .operations
+            .contains(&AiOperation::EmbeddingCreate)
+        && let Some(embedding) = discovered.embedding
+    {
+        capabilities.operations.push(AiOperation::EmbeddingCreate);
+        capabilities.embedding = Some(embedding);
+    }
+    if signed_native_operations.contains(&AiOperation::RerankDocuments)
+        && discovered
+            .operations
+            .contains(&AiOperation::RerankDocuments)
+        && let Some(rerank) = discovered.rerank
+    {
+        capabilities.operations.push(AiOperation::RerankDocuments);
+        capabilities.rerank = Some(rerank);
     }
     capabilities.evidence_revision = format!(
         "{}+discovery:{}",
@@ -3721,6 +3784,62 @@ mod tests {
                 .expect("rerank contract")
                 .truncation,
             BTreeSet::from([RerankTruncation::Disabled])
+        );
+    }
+
+    /// Verifies signed generic native bindings retain specialized OpenRouter discovery evidence.
+    /// 验证签名的通用原生绑定保留 OpenRouter 专用发现证据。
+    #[test]
+    fn openrouter_unknown_specialized_models_keep_signed_native_operations() {
+        let mut catalog = parse_openrouter_complete_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[]}"#,
+            r#"{"data":[{"id":"vendor/novel-embed","name":"Novel Embed","context_length":4096,"architecture":{"input_modalities":["text"],"output_modalities":["embeddings"]}}]}"#,
+            r#"{"data":[{"id":"vendor/novel-rerank","name":"Novel Rerank","context_length":4096,"architecture":{"input_modalities":["text"],"output_modalities":["rerank"]}},{"id":"vendor/novel-image","name":"Novel Image","context_length":4096,"architecture":{"input_modalities":["text"],"output_modalities":["image"]}}]}"#,
+        )
+        .expect("dedicated directories should parse");
+        let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = manifests
+            .manifest("openrouter")
+            .expect("OpenRouter manifest should resolve");
+        enrich_compatible_model_catalog_with_manifest(
+            "openrouter",
+            "public-api",
+            Some("api-key"),
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            &mut catalog,
+            manifest,
+        );
+        let embedding = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "vendor/novel-embed")
+            .expect("embedding identity should remain visible");
+        assert_eq!(
+            embedding.capabilities.operations,
+            vec![AiOperation::EmbeddingCreate]
+        );
+        assert!(embedding.capabilities.embedding.is_some());
+        let rerank = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "vendor/novel-rerank")
+            .expect("rerank identity should remain visible");
+        assert_eq!(
+            rerank.capabilities.operations,
+            vec![AiOperation::RerankDocuments]
+        );
+        assert!(rerank.capabilities.rerank.is_some());
+        let image = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "vendor/novel-image")
+            .expect("image-only identity should remain visible");
+        assert!(image.capabilities.operations.is_empty());
+        assert_eq!(
+            image.capabilities.output_resources,
+            vec![ResourceKind::Image]
         );
     }
 

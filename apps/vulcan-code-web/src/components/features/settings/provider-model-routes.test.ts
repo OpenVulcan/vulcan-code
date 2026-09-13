@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  buildProviderModelInventoryGroups,
   buildProviderModelGroups,
   compactServiceEntryName,
 } from "@/components/features/settings/provider-model-routes"
@@ -266,6 +267,66 @@ describe("buildProviderModelGroups", () => {
       { accountCount: 1, bindingRuleId: "model-1" },
       { accountCount: 1, bindingRuleId: "model-1-credential-b" },
     ])
+  })
+})
+
+describe("buildProviderModelInventoryGroups", () => {
+  it("keeps native embedding and signed image or video models visible without conversation protocol routes", () => {
+    const connection = connectionFixture("media-account", "default-api")
+    const baseModel = catalogFixture(connection.id).models[0]!
+    const embedding = {
+      ...baseModel,
+      id: "vector-model",
+      display_name: "Vector Model",
+      capabilities: { ...baseModel.capabilities, operations: ["embedding_create" as const] },
+    }
+    const supportCatalog = { ...catalogFixture(connection.id), models: [embedding] }
+    const groups = buildProviderModelInventoryGroups({
+      providers: [providerFixture],
+      connections: [connection],
+      catalogs: { [connection.id]: supportCatalog },
+      modelSupportCatalogs: { [connection.id]: supportCatalog },
+      modelRouteRecords: [],
+      providerToolTemplateModels: [{
+        providerId: providerFixture.id,
+        connectionId: connection.id,
+        serviceEntryId: "default-api",
+        modelId: "image-model",
+        displayName: "Image Model",
+      }, {
+        providerId: providerFixture.id,
+        connectionId: connection.id,
+        serviceEntryId: "default-api",
+        modelId: "video-model",
+        displayName: "Video Model",
+        capabilities: ["video_generate"],
+      }],
+      providerToolTargets: [{
+        connectionId: connection.id,
+        connectionDisplayName: connection.display_name,
+        manifestSourceLayer: "bundled",
+        target: {
+          target_id: "image-target",
+          provider_id: providerFixture.id,
+          service_entry_id: "default-api",
+          credential_profile_ids: ["api-key"],
+          upstream_target_id: "image-model",
+          display_name: "Image Model",
+          contract: {
+            tool_id: "image_generate",
+            description: "Generate image",
+            capability: "image_generate",
+            input_schema: {},
+            output: { kind: "resources", source_path: "images", normalized_result_path: "images" },
+          },
+        },
+      }],
+    })
+
+    expect([...groups[0]!.models.keys()]).toEqual(["vector-model", "image-model", "video-model"])
+    expect(groups[0]!.models.get("vector-model")).toMatchObject({ availableAccountCount: 1, protocolRoutes: [] })
+    expect(groups[0]!.models.get("image-model")).toMatchObject({ availableAccountCount: 1, extensionCapabilities: ["image_generate"] })
+    expect(groups[0]!.models.get("video-model")).toMatchObject({ availableAccountCount: 0, extensionCapabilities: ["video_generate"] })
   })
 })
 

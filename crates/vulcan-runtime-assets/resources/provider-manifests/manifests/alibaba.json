@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 19,
-  "published_at": "2026-09-12T00:00:00Z",
+  "revision": 20,
+  "published_at": "2026-09-13T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -479,7 +479,7 @@
               "host_policy_maximum_payload_bytes": 67108864,
               "host_policy_maximum_result_bytes": 268435456,
               "provider_completion_window_seconds": 86400,
-              "minimum_poll_interval_ms": 65000,
+              "minimum_poll_interval_ms": 30000,
               "supports_cancel": true,
               "deletes_input_file_after_ingestion": true
             },
@@ -708,7 +708,7 @@
               "host_policy_maximum_payload_bytes": 67108864,
               "host_policy_maximum_result_bytes": 268435456,
               "provider_completion_window_seconds": 86400,
-              "minimum_poll_interval_ms": 65000,
+              "minimum_poll_interval_ms": 30000,
               "supports_cancel": true,
               "deletes_input_file_after_ingestion": true
             },

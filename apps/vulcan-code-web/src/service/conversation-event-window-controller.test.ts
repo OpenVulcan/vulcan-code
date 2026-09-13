@@ -322,6 +322,33 @@ type ConversationEventWindowRpcTestRequest = <T>(
 ) => Promise<T>;
 
 describe("V1 conversation event window controller", () => {
+  it("restores paged history before reconnecting and retains it while missing events arrive", async () => {
+    // The first visit has loaded older pages; these events are required by saved viewport anchors.
+    // 首次访问已加载更早分页；保存的视口锚点依赖这些事件。
+    const first = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([summary(3, userInput(3)), summary(4, userInput(4))], { older_before_seq: 3, has_more: true }),
+      page: async () => pageResponse([summary(1, userInput(1)), summary(2, userInput(2))]),
+    }));
+    await first.hydrate(SESSION_ID);
+    await first.prependOlder();
+    const cached = first.snapshot();
+    first.dispose();
+    // The new active controller must render immediately and recover only the missing revision range.
+    // 新活动控制器必须立即渲染，并仅恢复缺失修订范围。
+    const reconnect = vi.fn(async () => reconnectResponse([summary(5, userInput(5), 20, 2)], { memory_revision: 2, durable_revision: 2 }));
+    const subscribeLive = vi.fn(async () => () => undefined);
+    const restored = new ConversationEventWindowController(rpcMock({ reconnect, subscribeLive }));
+    restored.restoreCachedSnapshot(cached);
+    expect(restored.snapshot()).toEqual(cached);
+    expect(restored.snapshot().events.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+    expect(subscribeLive).not.toHaveBeenCalled();
+    await restored.resumeCachedWindow();
+    expect(subscribeLive).toHaveBeenCalledOnce();
+    expect(reconnect).toHaveBeenCalledWith(cached.owner, 4, 1, SERVICE_EPOCH, undefined);
+    expect(restored.snapshot().events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+    restored.dispose();
+  });
+
   it("hydrates an immutable snapshot without opening the live subscription", () => {
     const subscribeLive = vi.fn(async () => () => undefined);
     const controller = new ConversationEventWindowController(rpcMock({ subscribeLive }));

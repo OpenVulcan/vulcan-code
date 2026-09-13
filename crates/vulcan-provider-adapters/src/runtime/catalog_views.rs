@@ -12,7 +12,8 @@ use super::model_overrides::validate_model_overrides;
 use super::tool_targets::{AvailableProviderToolTarget, provider_tool_target_allows_credential};
 use super::{PublicAiRuntime, ResolvedProviderGeneration};
 use crate::{
-    ConnectionModelCatalog, PersistedAiConfiguration, ProviderRegistry, ResolvedProviderManifest,
+    ConnectionModelAccessPolicy, ConnectionModelCatalog, PersistedAiConfiguration,
+    ProviderRegistry, ProviderToolCapabilityKind, ResolvedProviderManifest,
     RuntimeConnectionCatalogs,
 };
 use serde::Serialize;
@@ -47,6 +48,9 @@ pub struct PublicAiRuntimeSettingsCatalogSnapshot {
     /// Inherited model access defaults keyed by the canonical provider/model identity.
     /// 按规范供应商/模型身份索引的继承模型访问默认值。
     pub model_default_enabled_by_key: BTreeMap<String, bool>,
+    /// Signed initial checkbox policy for each account before any user-owned decision.
+    /// 用户尚未作出决定时，每个账号的签名初始勾选策略。
+    pub connection_model_initial_policies: BTreeMap<String, ConnectionModelAccessPolicy>,
     /// Provider-tool targets currently eligible under credential and model access policy.
     /// 当前在凭据与模型访问策略下合格的供应商工具目标。
     pub available_provider_tool_targets: Vec<AvailableProviderToolTarget>,
@@ -88,10 +92,10 @@ pub struct ProviderManifestRuntimeSnapshot {
 ///
 /// # Returns
 /// 返回值
-/// A manual model's declared default, then the selected manifest default. Undeclared models fail
-/// closed when no manifest exists.
-/// 依次返回手工模型声明默认值、所选 Manifest 默认值；无 Manifest 时未声明模型失败关闭。
-fn runtime_model_default_enabled_from_manifest(
+/// A manual model's declared default, then the selected manifest account default. Undeclared
+/// models fail closed when no manifest exists.
+/// 依次返回手工模型声明默认值、所选 Manifest 账号默认值；无 Manifest 时未声明模型失败关闭。
+fn runtime_model_account_default_enabled_from_manifest(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     service_entry_id: &str,
@@ -116,22 +120,21 @@ fn runtime_model_default_enabled_from_manifest(
         )
 }
 
-/// Resolves model enablement from one exact manifest snapshot and persisted user ownership.
-/// 根据一份精确清单快照与持久化用户所有权解析模型启用状态。
+/// Resolves the conversation-purpose default independently from initial account checks.
+/// 独立于账号初始勾选解析会话用途默认值。
 ///
 /// # Parameters
 /// 参数
-/// `configuration` owns user overrides/manual models; provider, service, credential, and model
-/// identities select the exact scope; `manifest` is captured from the same immutable generation.
-/// `configuration` 持有用户覆盖/手动模型；供应商、服务、凭据与模型身份选择精确作用域；
-/// `manifest` 从同一不可变代际捕获。
+/// `configuration` owns manual models; route identifiers select the exact manifest rule;
+/// `manifest` is captured from the immutable generation.
+/// `configuration` 持有手工模型；路由标识选择精确清单规则；`manifest` 来自不可变代际。
 ///
 /// # Returns
 /// 返回值
-/// Explicit user/manual-model ownership first, then the selected manifest default. Undeclared
-/// models fail closed when no manifest exists.
-/// 依次返回显式用户/手工模型所有权与所选清单默认值；无 Manifest 时未声明模型失败关闭。
-pub(super) fn runtime_model_is_enabled_from_manifest(
+/// Account opt-in defaults do not turn off the provider-wide conversation purpose; otherwise
+/// the existing manual and manifest defaults remain authoritative.
+/// 账号选择式默认值不会关闭供应商范围的会话用途；其他情况保留原有手工与清单默认值。
+fn runtime_model_conversation_default_enabled_from_manifest(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     service_entry_id: &str,
@@ -139,17 +142,52 @@ pub(super) fn runtime_model_is_enabled_from_manifest(
     model_id: &str,
     manifest: Option<&ResolvedProviderManifest>,
 ) -> bool {
-    // inherited_default is derived from the same frozen manifest used for membership and routing.
-    // inherited_default 从与成员关系和路由相同的冻结 Manifest 派生。
-    let inherited_default = runtime_model_default_enabled_from_manifest(
+    if let Some(model) = configuration.custom_model(provider_id, model_id) {
+        return model.enabled;
+    }
+    if manifest.is_some_and(|manifest| !manifest.default_enabled) {
+        return true;
+    }
+    runtime_model_account_default_enabled_from_manifest(
         configuration,
         provider_id,
         service_entry_id,
         credential_profile_id,
         model_id,
         manifest,
-    );
-    configuration.model_is_enabled_with_default(provider_id, model_id, inherited_default)
+    )
+}
+
+/// Resolves model enablement from one exact manifest snapshot and persisted user ownership.
+/// 根据一份精确清单快照与持久化用户所有权解析模型启用状态。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns user overrides/manual models; provider and model identify support;
+/// `manifest` is captured from the immutable generation.
+/// `configuration` 持有用户覆盖/手动模型；供应商与模型身份选择受支持模型；
+/// `manifest` 从不可变代际捕获。
+///
+/// # Returns
+/// 返回值
+/// Explicit user/manual-model ownership first, then manifest-backed support. The manifest's
+/// `default_enabled` belongs to initial account access, not a supplier-wide admission gate.
+/// 显式用户/手工模型所有权优先，其次是清单支持；清单 `default_enabled` 属于账号初始访问，
+/// 不是供应商范围的准入门禁。
+pub(super) fn runtime_model_is_enabled_from_manifest(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    model_id: &str,
+    manifest: Option<&ResolvedProviderManifest>,
+) -> bool {
+    // Account defaults are resolved by catalog overlay. A supported manifest model must remain
+    // selectable after its account checkbox is enabled, even when it was initially unchecked.
+    // 账号默认值由目录覆盖层解析；清单支持的模型即使初始未勾选，账号勾选后仍必须可选。
+    let support_default = manifest.is_some()
+        || configuration
+            .custom_model(provider_id, model_id)
+            .is_some_and(|model| model.enabled);
+    configuration.model_is_enabled_with_default(provider_id, model_id, support_default)
 }
 
 /// Builds the exact effective-catalog view owned by one immutable published generation.
@@ -427,15 +465,19 @@ fn provider_tool_template_models_in_generation(
             // declaration_key preserves account identity while collapsing multiple operations for one model.
             // declaration_key 保留账号身份，同时折叠同一模型的多个操作。
             let declaration_key = (connection.id.clone(), instance.model_id.clone());
-            declarations.entry(declaration_key).or_insert_with(|| {
-                DeclaredProviderToolTemplateModel {
+            declarations
+                .entry(declaration_key)
+                .and_modify(|declaration: &mut DeclaredProviderToolTemplateModel| {
+                    declaration.capabilities.insert(target.contract.capability);
+                })
+                .or_insert_with(|| DeclaredProviderToolTemplateModel {
                     provider_id: connection.provider_id.clone(),
                     connection_id: connection.id.clone(),
                     service_entry_id: connection.service_entry_id.clone(),
                     model_id: instance.model_id.clone(),
                     display_name: instance.model_display_name.clone(),
-                }
-            });
+                    capabilities: std::collections::BTreeSet::from([target.contract.capability]),
+                });
         }
     }
     Ok(declarations.into_values().collect())
@@ -494,9 +536,9 @@ impl PublicAiRuntime {
         // support_configuration removes only account access switches for the management inventory.
         // support_configuration 仅为管理目录移除账号访问开关。
         let mut support_configuration = configuration.clone();
-        support_configuration
-            .connection_model_access_policies
-            .clear();
+        for connection_id in configuration.connection_graph.connections.keys() {
+            support_configuration.allow_all_connection_models_for_support(connection_id);
+        }
         // model_support_catalogs retains disabled account membership from the same generation.
         // model_support_catalogs 从同一代际保留已关闭账号成员关系。
         let model_support_catalogs = resolve_model_catalog_overlays_from_inputs(
@@ -534,6 +576,50 @@ impl PublicAiRuntime {
         // model_default_enabled_by_key freezes browser access defaults with the same manifest generation.
         // model_default_enabled_by_key 把浏览器访问默认值与同一 Manifest 代际共同冻结。
         let mut model_default_enabled_by_key = BTreeMap::new();
+        // connection_model_initial_policies keeps exact account defaults separate from the
+        // provider/model OR projection used only by the conversation-purpose settings row.
+        // connection_model_initial_policies 保留精确账号默认值，不与仅供会话用途设置行使用的
+        // 供应商/模型 OR 投影混合。
+        let mut connection_model_initial_policies = BTreeMap::new();
+        for connection in configuration.connection_graph.connections.values() {
+            let scoped_manifest = generation
+                .manifests
+                .manifest(connection.provider_id.as_str());
+            let default_enabled = scoped_manifest.is_none_or(|manifest| manifest.default_enabled);
+            let mut model_enabled_overrides = BTreeMap::new();
+            if let Some(manifest) = scoped_manifest.filter(|_| !default_enabled) {
+                // Exact signed choices stay inherited even when an account is edited before
+                // every featured model appears in its remote discovery response.
+                // 即使账号在远端发现全部精选模型前已被编辑，精确签名选择仍继续继承。
+                for rule in &manifest.rule_instances {
+                    if rule.service_entry_id != connection.service_entry_id
+                        || rule.matcher.kind != crate::provider_manifest::MatcherKind::Exact
+                        || (!rule.credential_profile_ids.is_empty()
+                            && !rule
+                                .credential_profile_ids
+                                .contains(&connection.credential_profile_id))
+                    {
+                        continue;
+                    }
+                    let rule_default = crate::provider_manifest::manifest_default_enabled(
+                        manifest,
+                        connection.service_entry_id.as_str(),
+                        Some(connection.credential_profile_id.as_str()),
+                        rule.matcher.value.as_str(),
+                    );
+                    if rule_default != default_enabled {
+                        model_enabled_overrides.insert(rule.matcher.value.clone(), rule_default);
+                    }
+                }
+            }
+            connection_model_initial_policies.insert(
+                connection.id.clone(),
+                ConnectionModelAccessPolicy {
+                    default_enabled,
+                    model_enabled_overrides,
+                },
+            );
+        }
         for (connection_id, catalog) in &model_support_catalogs {
             // connection resolves the owning provider for this exact account catalog.
             // connection 解析该精确账号目录所属的供应商。
@@ -544,30 +630,48 @@ impl PublicAiRuntime {
             else {
                 continue;
             };
+            let scoped_manifest = generation
+                .manifests
+                .manifest(connection.provider_id.as_str());
+            let mut initial_policy = connection_model_initial_policies
+                .remove(connection_id)
+                .ok_or_else(|| format!("Account `{connection_id}` has no initial model policy."))?;
             for model in &catalog.models {
                 // scoped_default preserves the exact entry and credential rule scope.
                 // scoped_default 保留精确入口与凭据规则作用域。
-                let scoped_default = runtime_model_default_enabled_from_manifest(
+                let scoped_default = runtime_model_account_default_enabled_from_manifest(
                     configuration,
                     connection.provider_id.as_str(),
                     connection.service_entry_id.as_str(),
                     Some(connection.credential_profile_id.as_str()),
                     model.id.as_str(),
-                    generation
-                        .manifests
-                        .manifest(connection.provider_id.as_str()),
+                    scoped_manifest,
                 );
-                // The provider-level settings row is enabled by default when at least one exact
-                // configured route enables the model; OR aggregation is stable and order-free.
-                // 当至少一条精确已配置路由默认启用模型时，供应商级设置行默认启用；OR 聚合稳定且与顺序无关。
+                if !initial_policy.default_enabled && scoped_default {
+                    initial_policy
+                        .model_enabled_overrides
+                        .insert(model.id.clone(), scoped_default);
+                }
+                // The conversation-purpose row is independent of account opt-in; exact route
+                // defaults still aggregate with a stable, order-free OR.
+                // 会话用途行独立于账号初始勾选；精确路由默认值仍以稳定且无顺序依赖的 OR 聚合。
+                let conversation_default = runtime_model_conversation_default_enabled_from_manifest(
+                    configuration,
+                    connection.provider_id.as_str(),
+                    connection.service_entry_id.as_str(),
+                    Some(connection.credential_profile_id.as_str()),
+                    model.id.as_str(),
+                    scoped_manifest,
+                );
                 model_default_enabled_by_key
                     .entry(PersistedAiConfiguration::provider_model_key(
                         connection.provider_id.as_str(),
                         model.id.as_str(),
                     ))
-                    .and_modify(|default_enabled| *default_enabled |= scoped_default)
-                    .or_insert(scoped_default);
+                    .and_modify(|default_enabled| *default_enabled |= conversation_default)
+                    .or_insert(conversation_default);
             }
+            connection_model_initial_policies.insert(connection_id.clone(), initial_policy);
         }
         for model in &provider_tool_template_models {
             // connection restores the credential scope intentionally omitted from the public inventory row.
@@ -582,7 +686,7 @@ impl PublicAiRuntime {
                         model.provider_id, model.model_id, model.connection_id
                     )
                 })?;
-            let scoped_default = runtime_model_default_enabled_from_manifest(
+            let scoped_default = runtime_model_conversation_default_enabled_from_manifest(
                 configuration,
                 model.provider_id.as_str(),
                 model.service_entry_id.as_str(),
@@ -614,6 +718,7 @@ impl PublicAiRuntime {
             manifest_revisions,
             provider_tool_template_models,
             model_default_enabled_by_key,
+            connection_model_initial_policies,
             available_provider_tool_targets,
         })
     }
@@ -630,9 +735,10 @@ impl PublicAiRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// The stable OR of all exact configured route defaults. Without a configured route, the
-    /// manual/provider-level manifest default is returned.
-    /// 返回全部精确已配置路由默认值的稳定 OR；没有已配置路由时返回手工/供应商级 Manifest 默认值。
+    /// The stable OR of exact conversation-purpose defaults. Without a configured route, the
+    /// manual or manifest conversation-purpose default is returned; account opt-in is separate.
+    /// 返回精确会话用途默认值的稳定 OR；无已配置路由时返回手工或清单的会话用途默认值；
+    /// 账号初始勾选独立计算。
     pub fn model_default_enabled(
         &self,
         configuration: &PersistedAiConfiguration,
@@ -654,7 +760,7 @@ impl PublicAiRuntime {
             .values()
             .filter(|connection| connection.provider_id == provider_id)
             .map(|connection| {
-                runtime_model_default_enabled_from_manifest(
+                runtime_model_conversation_default_enabled_from_manifest(
                     configuration,
                     provider_id,
                     connection.service_entry_id.as_str(),
@@ -666,7 +772,7 @@ impl PublicAiRuntime {
             .reduce(|left, right| left || right);
         scoped_default.unwrap_or_else(|| {
             let Some(manifest) = manifest.as_deref() else {
-                return runtime_model_default_enabled_from_manifest(
+                return runtime_model_conversation_default_enabled_from_manifest(
                     configuration,
                     provider_id,
                     "",
@@ -681,7 +787,7 @@ impl PublicAiRuntime {
             // 供应商级管理行。
             manifest.descriptor.service_entries.iter().any(|entry| {
                 if entry.credential_profiles.is_empty() {
-                    return runtime_model_default_enabled_from_manifest(
+                    return runtime_model_conversation_default_enabled_from_manifest(
                         configuration,
                         provider_id,
                         entry.id.as_str(),
@@ -691,7 +797,7 @@ impl PublicAiRuntime {
                     );
                 }
                 entry.credential_profiles.iter().any(|profile| {
-                    runtime_model_default_enabled_from_manifest(
+                    runtime_model_conversation_default_enabled_from_manifest(
                         configuration,
                         provider_id,
                         entry.id.as_str(),
@@ -739,8 +845,6 @@ impl PublicAiRuntime {
         Ok(runtime_model_is_enabled_from_manifest(
             configuration,
             connection.provider_id.as_str(),
-            connection.service_entry_id.as_str(),
-            Some(connection.credential_profile_id.as_str()),
             model_id,
             manifest,
         ))
@@ -757,9 +861,9 @@ impl PublicAiRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// Explicit user/manual-model state wins, then the currently published manifest default;
+    /// Explicit user/manual-model state wins, then the published conversation-purpose default;
     /// undeclared models without a manifest fail closed.
-    /// 显式用户/手工模型状态优先；其次采用当前已发布清单默认值；无 Manifest 的未声明模型失败关闭。
+    /// 显式用户/手工模型状态优先；其次采用已发布的会话用途默认值；无 Manifest 的未声明模型失败关闭。
     pub fn model_is_enabled(
         &self,
         configuration: &PersistedAiConfiguration,
@@ -814,8 +918,6 @@ impl PublicAiRuntime {
                 runtime_model_is_enabled_from_manifest(
                     configuration,
                     provider_id,
-                    connection.service_entry_id.as_str(),
-                    Some(connection.credential_profile_id.as_str()),
                     model_id,
                     manifest,
                 ) && catalogs
@@ -867,8 +969,6 @@ impl PublicAiRuntime {
                         runtime_model_is_enabled_from_manifest(
                             configuration,
                             connection.provider_id.as_str(),
-                            connection.service_entry_id.as_str(),
-                            Some(connection.credential_profile_id.as_str()),
                             model.id.as_str(),
                             generation
                                 .manifests
@@ -1513,4 +1613,7 @@ pub struct DeclaredProviderToolTemplateModel {
     /// User-visible model name supplied by the signed binding catalog.
     /// 签名绑定目录提供的用户可见模型名称。
     pub display_name: String,
+    /// AI-visible signed capabilities supplied by this model's template targets.
+    /// 此模型模板目标声明的 AI 可见能力。
+    pub capabilities: std::collections::BTreeSet<ProviderToolCapabilityKind>,
 }

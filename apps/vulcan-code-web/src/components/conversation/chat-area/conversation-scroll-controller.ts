@@ -455,6 +455,15 @@ export function useConversationScrollController(
     if (element.dataset.conversationSurfaceId !== currentOptions.surfaceId) {
       return;
     }
+    // Child composer layout effects run before this owner's surface restoration effect on navigation.
+    // 导航时，输入框子组件的布局副作用先于当前所有者的界面恢复副作用执行。
+    // Until restoration completes, the incoming DOM still carries the previous surface's tail ownership.
+    // 在恢复完成之前，新界面的 DOM 仍沿用上一界面的尾部所有权状态。
+    // Preserve the saved snapshot instead of replacing it with this uninitialized geometry.
+    // 保留已存快照，避免将其替换为尚未初始化的几何状态。
+    if (renderedSurfaceIdRef.current !== currentOptions.surfaceId) {
+      return;
+    }
     // snapshot freezes the current business anchor before the geometry mutation commits.
     // snapshot 在几何修改提交前固定当前业务锚点。
     const snapshot = writeCurrentSnapshot(element, currentOptions.surfaceId);

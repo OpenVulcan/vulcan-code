@@ -272,6 +272,39 @@ export class ConversationEventWindowController {
     return true;
   }
 
+  /** Restores a previously initialized local window, including all paged history, without a network request.
+   * 恢复此前已初始化的本地窗口及全部已分页历史，不发起网络请求。
+   * @param snapshot exact cached controller boundary; returns after the atomic store installation.
+   * @param snapshot 精确缓存的控制器边界；原子安装到 store 后返回。 */
+  restoreCachedSnapshot(snapshot: ConversationEventWindowControllerSnapshot): void {
+    if (!snapshot.owner || snapshot.service_epoch === null || snapshot.memory_revision === null
+      || snapshot.durable_revision === null || snapshot.session_config === null) {
+      throw new Error("cached conversation window has no complete initialization boundary");
+    }
+    this.hydrateSnapshot({
+      ...snapshot.owner,
+      service_epoch: snapshot.service_epoch,
+      memory_revision: snapshot.memory_revision,
+      durable_revision: snapshot.durable_revision,
+      events: snapshot.events,
+      older_before_seq: snapshot.older_before_seq,
+      has_more: snapshot.has_more,
+      open_turn_id: snapshot.open_turn_id,
+      open_turn_start_seq: snapshot.open_turn_start_seq,
+      session_config: snapshot.session_config,
+    });
+  }
+
+  /** Resubscribes and reconciles a restored window from its exact revision frontier.
+   * 重新订阅并从精确修订前沿协调已恢复窗口。
+   * @returns after missing updates are reconciled; disposal cancels the pending activation.
+   * @returns 缺失更新协调完成后返回；释放操作取消待完成的激活。 */
+  async resumeCachedWindow(): Promise<void> {
+    await this.ensureLiveSubscription();
+    if (this.disposed) return;
+    await this.reconnect();
+  }
+
   /** Refreshes an already-owned session without reusing the initial-only hydration transition.
    * 在不复用仅限首次归属的 hydration 转换前提下刷新已持有的会话。 */
   async rehydrate(sessionId: string, options?: ServiceRequestOptions): Promise<boolean> {

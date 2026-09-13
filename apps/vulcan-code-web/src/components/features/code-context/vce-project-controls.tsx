@@ -120,6 +120,6 @@ export function VceFloatingNode(props: {
       onRetry={!surface.pending && (surface.gate === "ready" || surface.gate === "uninitialized") ? () => { void surface.retryLatest(); } : undefined}
       queryAvailable={surface.gate === "ready"} onCancel={() => { void surface.jobState.cancel(); }} cancelPending={surface.jobState.cancelPending} /> : null}
     {surface.error || surface.jobState.error ? <p className="break-words text-xs text-destructive">{surface.error ?? surface.jobState.error}</p> : null}
-    {surface.activity?.status.lastError ? <p className="break-words text-xs text-destructive">{surface.activity.status.lastError}</p> : null}
+    {surface.activity?.status.lastError && surface.activity.status.lastError !== surface.jobState.job?.error ? <p className="break-words text-xs text-destructive">{surface.activity.status.lastError}</p> : null}
   </section>;
 }

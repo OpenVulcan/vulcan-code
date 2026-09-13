@@ -487,21 +487,22 @@ mod tests {
         assert_eq!(binding.protocol_profile_id, "openai-chat-completions.v1");
     }
 
-    /// Verifies openrouter rejects undeclared models under `declared_rule_required`.
-    /// 验证 openrouter 在 `declared_rule_required` 下拒绝未声明模型。
+    /// Verifies a newly discovered OpenRouter model may use the reviewed default route.
+    /// 验证新发现的 OpenRouter 模型可使用已审核的默认路由。
     #[test]
-    fn declared_rule_required_rejects_unknown_models() {
+    fn openrouter_discovery_uses_default_binding_after_account_selection() {
         let manifest =
             compile_manifest_text(&bundled_text("openrouter"), ManifestOwnership::System)
                 .expect("openrouter manifest must compile");
-        let error = resolve_system_model_protocol_binding(
+        let binding = resolve_system_model_protocol_binding(
             &manifest,
             "public-api",
             Some("api-key"),
             "openai/gpt-4o",
         )
-        .expect_err("undeclared model must be rejected");
-        assert!(matches!(error, ModelProtocolBindingError::Missing { .. }));
+        .expect("discovered model may bind after account selection");
+        assert_eq!(binding.protocol_profile_id, "anthropic-messages.v1");
+        assert!(binding.rule_id.is_empty());
     }
 
     /// Verifies DeepSeek rejects identities outside its fixed manifest inventory.

@@ -10,14 +10,16 @@ import {
   type FilterableProviderModel,
 } from "@/components/features/settings/provider-model-filter"
 import { modelModalityLabel, ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
-import { providerModelModalities } from "@/components/features/settings/provider-model-modalities"
+import { providerExtensionOutputModalities, providerModelModalities } from "@/components/features/settings/provider-model-modalities"
 import { providerPriority } from "@/components/features/settings/provider-ordering"
 import {
-  buildProviderModelGroups,
+  buildProviderModelInventoryGroups,
+  type PublicProviderModelInventoryEntry,
   type PublicModelProtocolRoute,
 } from "@/components/features/settings/provider-model-routes"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
+import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities"
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -34,20 +36,67 @@ import {
   savePublicAiInternalModelEnabled,
   savePublicAiMultimodalUnderstandingCandidate,
   savePublicAiModelEnabled,
+  savePublicAiProviderExtensionTargetSet,
+  savePublicAiProviderToolCapabilityEnabled,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiCodexModelBehavior,
   PublicAiModel,
   PublicAiOperation,
+  PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSnapshot,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
 // PublicProviderModelRow binds one rendered provider model to its routes and effective enabled state.
 // PublicProviderModelRow 将一个渲染中的供应商模型绑定到其路由与有效启用状态。
 interface PublicProviderModelRow extends FilterableProviderModel {
+  // Complete account and signed-template facts backing this provider model.
+  // 该供应商模型背后的完整账号与签名模板事实。
+  inventory: PublicProviderModelInventoryEntry
   // Protocol-scoped routes exposing this model through configured accounts.
   // 通过已配置账号暴露此模型的协议作用域路由。
   routes: PublicModelProtocolRoute[]
+}
+
+// extensionModelTargets retains only exact signed, non-custom targets for one provider model and capability.
+// extensionModelTargets 仅保留某供应商模型和能力的精确签名非自定义目标。
+// Parameters: snapshot owns target facts and the remaining identifiers select one extension model; returns selectable targets.
+// 参数：snapshot 持有目标事实，其余标识定位一个扩展模型；返回可选择的目标。
+function extensionModelTargets(
+  snapshot: PublicAiSettingsSnapshot,
+  providerId: string,
+  modelId: string,
+  capability: PublicAiProviderToolCapabilityKind,
+): PublicAiProviderToolTargetSnapshot[] {
+  return snapshot.providerToolTargets.filter((target) => (
+    target.target.provider_id === providerId
+    && target.target.upstream_target_id === modelId
+    && target.target.contract.capability === capability
+    && target.manifestSourceLayer !== "custom"
+  ))
+}
+
+// extensionCapabilityLabel resolves the localized action represented by one signed extension switch.
+// extensionCapabilityLabel 解析签名扩展开关所代表操作的本地化名称。
+// Parameters: capability is a closed extension kind and t is the locale resolver; returns its user-facing label.
+// 参数：capability 是封闭扩展类型，t 是语言解析器；返回面向用户的标签。
+function extensionCapabilityLabel(
+  capability: PublicAiProviderToolCapabilityKind,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (capability) {
+    case "image_generate": return t("settings.providerTools.imageGenerate")
+    case "image_edit": return t("settings.providerTools.imageEdit")
+    case "video_generate": return t("settings.providerTools.videoGenerate")
+    case "video_edit": return t("settings.providerTools.videoEdit")
+    case "video_extend": return t("settings.providerTools.videoExtend")
+    case "speech_synthesize": return t("settings.providerTools.speechSynthesize")
+    case "speech_transcribe": return t("settings.providerTools.speechTranscribe")
+    case "music_generate": return t("settings.providerTools.musicGenerate")
+    case "music_cover": return t("settings.providerTools.musicCover")
+    default: return capability
+  }
 }
 
 // ModelListSettingsArea renders the process-local public AI model catalog.
@@ -76,9 +125,12 @@ export function ModelListSettingsArea() {
   // usageFilter narrows visible rows using independent backend-owned admission dimensions.
   // usageFilter 使用相互独立的后端准入维度收窄可见模型。
   const [usageFilter, setUsageFilter] = React.useState("all")
-  // capabilityFilter matches declared input resources or internal operations on at least one actual route.
-  // capabilityFilter 匹配至少一条真实路由声明的输入资源或内部操作。
+  // capabilityFilter matches only declared output modes, including signed native extensions.
+  // capabilityFilter 仅匹配已声明的输出模式，包括签名原生扩展。
   const [capabilityFilter, setCapabilityFilter] = React.useState("all")
+  // currentPage bounds rendered model controls when a provider publishes a large catalog.
+  // currentPage 在供应商发布大目录时限制一次渲染的模型控件数量。
+  const [currentPage, setCurrentPage] = React.useState(1)
   const mutationInFlightRef = React.useRef(false)
 
   // runSnapshotMutation serializes full-snapshot writes so late responses cannot regress the UI.
@@ -97,8 +149,16 @@ export function ModelListSettingsArea() {
         setSnapshot(next)
         setError(null)
       })
-      .catch((reason) => {
+      .catch(async (reason) => {
         setError(errorMessage(reason))
+        // A two-step extension write may have saved its selection before global enablement fails.
+        // 两步扩展写入可能在全局启用失败前已保存选择，因此重新读取权威状态。
+        try {
+          setSnapshot(await loadPublicAiSettings())
+        } catch {
+          // The original mutation error remains visible when reconciliation cannot load.
+          // 对账读取失败时保留原写入错误供用户查看。
+        }
       })
       .finally(() => {
         mutationInFlightRef.current = false
@@ -134,7 +194,7 @@ export function ModelListSettingsArea() {
     }
     // indexedGroups preserves current registry order when priorities are equal.
     // indexedGroups 在优先级相同时保留当前注册表顺序。
-    const indexedGroups = buildProviderModelGroups(snapshot)
+    const indexedGroups = buildProviderModelInventoryGroups(snapshot)
       .map((group, index) => ({ group, index }))
     return indexedGroups
       .sort((left, right) => (
@@ -163,39 +223,55 @@ export function ModelListSettingsArea() {
     if (!snapshot || !selectedGroup) {
       return []
     }
-    return Array.from(selectedGroup.models.entries()).flatMap(([modelId, routes]) => {
-      const representative = routes[0]
-      if (!representative) {
-        return []
-      }
+    return Array.from(selectedGroup.models.values()).map((inventory) => {
+      const { modelId, protocolRoutes: routes } = inventory
       const access = snapshot.modelAccessRecords.find((record) => (
         record.providerId === selectedGroup.provider.id
         && record.modelId === modelId
       ))
-      return [{
+      return {
         modelId,
-        displayName: representative.model.display_name,
+        displayName: inventory.displayName,
         enabled: access?.enabled ?? true,
         routes,
-      }]
+        inventory,
+      }
     })
   }, [selectedGroup, snapshot])
   // visibleModelRows applies page-local filters without changing catalog or persisted access state.
   // visibleModelRows 应用页面内筛选，不改变目录或持久化访问状态。
   const visibleModelRows = React.useMemo(
     () => filterProviderModels(providerModelRows, searchQuery, "all").filter((row) => {
-      if (capabilityFilter !== "all" && !row.routes.some((route) => (
-        providerModelModalities(route.model).input.some((modality) => modality === capabilityFilter)
-        || providerModelModalities(route.model).output.some((modality) => modality === capabilityFilter)
-      ))) return false
+      if (capabilityFilter !== "all" && ![
+        ...row.inventory.catalogModels.flatMap((model) => providerModelModalities(model).output),
+        ...providerExtensionOutputModalities(row.inventory.extensionCapabilities),
+      ].includes(capabilityFilter as ReturnType<typeof providerModelModalities>["output"][number])) return false
       if (usageFilter === "all") return true
       if (usageFilter === "conversation") return row.enabled && row.routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
       if (!snapshot || !selectedGroup) return false
       if (usageFilter === "internal") return internalStateForModel(snapshot, selectedGroup.provider.id, row.modelId)?.enabled === true
+        || row.inventory.extensionCapabilities.some((capability) => snapshot.providerToolEnabledCapabilities.includes(capability) && snapshot.providerExtensionTargetSets[capability]?.some((selection) => (
+          snapshot.providerToolTargets.some((target) => target.connectionId === selection.connection_id && target.target.target_id === selection.target_id && target.target.provider_id === selectedGroup.provider.id && target.target.upstream_target_id === row.modelId)
+        )) === true)
       return snapshot.multimodalUnderstandingCandidateModels?.some((record) => record.providerId === selectedGroup.provider.id && record.modelId === row.modelId) === true
     }),
     [providerModelRows, searchQuery, usageFilter, capabilityFilter, snapshot, selectedGroup],
   )
+  // Changing any directory dimension begins at the first page of the new result set.
+  // 更换任意目录维度后从新结果集第一页开始。
+  React.useEffect(() => setCurrentPage(1), [selectedProviderId, searchQuery, usageFilter, capabilityFilter])
+  // pageSize limits simultaneous switches and tooltips for very large provider catalogs.
+  // pageSize 限制超大供应商目录同时挂载的开关和提示组件数量。
+  const pageSize = 50
+  // pageCount retains at least one logical page for an empty filtered set.
+  // pageCount 为筛选结果为空的情况保留至少一个逻辑页。
+  const pageCount = Math.max(1, Math.ceil(visibleModelRows.length / pageSize))
+  // effectivePage clamps a stale page index after a catalog refresh.
+  // effectivePage 在目录刷新后约束过期页码。
+  const effectivePage = Math.min(currentPage, pageCount)
+  // pageRows is the sole slice whose interactive controls are mounted.
+  // pageRows 是唯一挂载交互控件的模型切片。
+  const pageRows = visibleModelRows.slice((effectivePage - 1) * pageSize, effectivePage * pageSize)
   // blockedModelRoutes keeps backend diagnostics visible without admitting blocked routes to controls.
   // blockedModelRoutes 保持后端诊断可见，同时不把受阻路由放入可操作控件。
   const blockedModelRoutes = React.useMemo(() => {
@@ -330,7 +406,7 @@ export function ModelListSettingsArea() {
                     <SelectTrigger aria-label={t("settings.modelExperience.capabilityFilter")}><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">{t("settings.modelExperience.allCapabilities")}</SelectItem>
-                      {(["image", "audio", "video", "file", "embedding", "rerank"] as const).map((modality) => <SelectItem key={modality} value={modality}>{modelModalityLabel(modality, t)}</SelectItem>)}
+                      {(["text", "image", "video", "audio", "file", "embedding", "rerank"] as const).map((modality) => <SelectItem key={modality} value={modality}>{modelModalityLabel(modality, t)}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -352,15 +428,13 @@ export function ModelListSettingsArea() {
                 <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
               ) : visibleModelRows.length === 0 ? (
                 <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
-              ) : visibleModelRows.map(({ modelId, routes, enabled }) => {
-                const representative = routes[0]
-                if (!representative) {
-                  return null
-                }
-                const availableAccountCount = routes.reduce(
-                  (total, route) => total + route.accountCount,
-                  0,
-                )
+              ) : pageRows.map(({ modelId, routes, enabled, displayName, inventory }) => {
+                // representative supplies editable normalized capability facts when a catalog model exists.
+                // representative 在目录模型存在时提供可编辑的归一化能力事实。
+                const representative = inventory.catalogModels[0]
+                // availableAccountCount has already deduplicated catalog and extension accounts.
+                // availableAccountCount 已经对目录与扩展账号去重。
+                const availableAccountCount = inventory.availableAccountCount
                 const modelKey = `${selectedGroup.provider.id}/${modelId}`
                 // conversationEligible follows declared operations, independently from its access preference.
                 // conversationEligible 遵循声明操作，与访问偏好相互独立。
@@ -390,11 +464,11 @@ export function ModelListSettingsArea() {
                   <article className="settings-model-catalog-row" key={`${selectedGroup.provider.id}/${modelId}`}>
                     <div className="settings-model-row-main">
                       <div className="settings-model-title-line">
-                        <strong title={representative.model.display_name}>{representative.model.display_name}</strong>
+                        <strong title={displayName}>{displayName}</strong>
                       </div>
                       <span className="settings-model-id" title={modelId}>{modelId}</span>
                       <div className="settings-model-catalog-meta">
-                        <ProviderModelModalitySummary model={representative.model} additionalModels={routes.slice(1).map((route) => route.model)} />
+                        <ProviderModelModalitySummary model={representative} additionalModels={inventory.catalogModels.slice(1)} extensionCapabilities={inventory.extensionCapabilities} />
                         <span>
                           {t("settings.models.availableCredentials")
                             .replace("{count}", String(availableAccountCount))}
@@ -405,7 +479,7 @@ export function ModelListSettingsArea() {
                       <span className="settings-model-purpose-label">{t("settings.models.conversationUse")}</span>
                       {conversationEligible ? (
                         <Switch
-                          aria-label={`${t("settings.models.conversationUse")} ${representative.model.display_name}`}
+                          aria-label={`${t("settings.models.conversationUse")} ${displayName}`}
                           checked={enabled}
                           disabled={pendingMutationKey !== null}
                           onCheckedChange={(checked) => {
@@ -427,7 +501,7 @@ export function ModelListSettingsArea() {
                       {multimodalCandidateEligible || multimodalCandidateEnabled ? (
                         <Tooltip><TooltipTrigger asChild><span className="inline-flex">
                           <Switch
-                            aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${representative.model.display_name}`}
+                            aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${displayName}`}
                             aria-description={t("settings.modelExperience.candidateExplanation")}
                             checked={multimodalCandidateEnabled}
                             disabled={multimodalCandidateToggleDisabled(
@@ -448,12 +522,12 @@ export function ModelListSettingsArea() {
                         </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.candidateExplanation")}</TooltipContent></Tooltip>
                       ) : <span>—</span>}
                       </div>
-                      <div className="settings-model-purpose-cell">
+                      <div className="settings-model-purpose-cell settings-model-extension-cell">
                       <span className="settings-model-purpose-label">{t("settings.models.internalUse")}</span>
                       {internalState ? (
                         <Tooltip><TooltipTrigger asChild><span className="inline-flex">
                           <Switch
-                            aria-label={`${t("settings.models.internalUse")} ${representative.model.display_name}`}
+                            aria-label={`${t("settings.models.internalUse")} ${displayName}`}
                             aria-description={internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter"))}
                             checked={internalState.enabled}
                             disabled={pendingMutationKey !== null}
@@ -468,21 +542,66 @@ export function ModelListSettingsArea() {
                             }}
                           />
                         </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.internalPurposes").replace("{purposes}", internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter")))}</TooltipContent></Tooltip>
-                      ) : <span>—</span>}
+                      ) : null}
+                      {inventory.extensionCapabilities.filter(isModelExtensionCapability).map((capability) => {
+                        // Matching exact targets preserves the extension's persisted account choice.
+                        // 匹配精确目标以保留扩展已持久化的账号选择。
+                        const targets = extensionModelTargets(snapshot, selectedGroup.provider.id, modelId, capability)
+                        // selections contains the complete saved model set for this extension capability.
+                        // selections 包含此扩展能力已保存的完整模型集合。
+                        const selections = snapshot.providerExtensionTargetSets[capability] ?? []
+                        // selected identifies this model's exact account selection, if present.
+                        // selected 标识此模型已选中的精确账号，如有。
+                        const selected = selections.find((selection) => targets.some((target) => (
+                          target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
+                        )))
+                        // available is a signed target with the reviewed extension profile required by the backend.
+                        // available 是包含后端所需审核扩展资料的签名目标。
+                        const available = targets.find((target) => target.target.contract.extension_profile !== undefined)
+                        // label names this operation independently from its output resource.
+                        // label 独立于输出资源命名此项操作。
+                        const label = extensionCapabilityLabel(capability, t)
+                        return <Tooltip key={capability}><TooltipTrigger asChild><span className="settings-model-extension-toggle">
+                          <Switch
+                            aria-label={`${label} ${displayName}`}
+                            checked={selected !== undefined}
+                            disabled={pendingMutationKey !== null || (!available && !selected)}
+                            onCheckedChange={(checked) => {
+                              // retained preserves every other model in the capability's complete target set.
+                              // retained 保留此能力完整目标集合中的所有其他模型。
+                              const retained = selections.filter((selection) => !targets.some((target) => (
+                                target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
+                              )))
+                              if (checked && available) retained.push({ connection_id: available.connectionId, target_id: available.target.target_id })
+                              runSnapshotMutation(`extension/${capability}/${modelKey}`, async () => {
+                                // next reflects the persisted selection before global capability admission.
+                                // next 反映全局能力准入前已经持久化的模型选择。
+                                const next = await savePublicAiProviderExtensionTargetSet({ capability, selections: retained })
+                                if (checked && !next.providerToolEnabledCapabilities.includes(capability)) {
+                                  return savePublicAiProviderToolCapabilityEnabled({ capability, enabled: true })
+                                }
+                                return next
+                              })
+                            }}
+                          />
+                          <small>{label}</small>
+                        </span></TooltipTrigger><TooltipContent>{label}</TooltipContent></Tooltip>
+                      })}
+                      {!internalState && !inventory.extensionCapabilities.some(isModelExtensionCapability) ? <span>—</span> : null}
                       </div>
                     <div className="settings-model-catalog-actions">
-                      <Button
-                        aria-label={`${t("settings.modelCapabilities.title")} ${representative.model.display_name}`}
+                      {representative ? <Button
+                        aria-label={`${t("settings.modelCapabilities.title")} ${displayName}`}
                         disabled={pendingMutationKey !== null}
-                        onClick={() => setEditingCapabilityModel(representative.model)}
+                        onClick={() => setEditingCapabilityModel(representative)}
                         size="sm"
                         type="button"
                         variant="ghost"
                       >
                         {t("settings.modelCapabilities.shortLabel")}
-                      </Button>
+                      </Button> : null}
                       <Button
-                        aria-label={`${t("settings.modelExperience.accessButton")} ${representative.model.display_name}`}
+                        aria-label={`${t("settings.modelExperience.accessButton")} ${displayName}`}
                         onClick={(event) => {
                           accessTrigger.current = event.currentTarget
                           setInspectingModel({ providerId: selectedGroup.provider.id, modelId })
@@ -496,6 +615,11 @@ export function ModelListSettingsArea() {
                 )
               })}
               </div>
+              {pageCount > 1 ? <div className="settings-pagination settings-model-pagination">
+                <Button disabled={effectivePage <= 1} onClick={() => setCurrentPage(effectivePage - 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.previousPage")}</Button>
+                <span>{t("settings.modelExperience.pageStatus").replace("{page}", String(effectivePage)).replace("{count}", String(pageCount))}</span>
+                <Button disabled={effectivePage >= pageCount} onClick={() => setCurrentPage(effectivePage + 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.nextPage")}</Button>
+              </div> : null}
             </div>
           </section>
         )}
@@ -513,9 +637,13 @@ export function ModelListSettingsArea() {
         }}>
           <DialogHeader>
             <DialogTitle>{inspectedRow?.displayName}</DialogTitle>
-            <DialogDescription>{t("settings.modelExperience.routes").replace("{count}", String(inspectedRow?.routes.length ?? 0))}</DialogDescription>
+            <DialogDescription>{inspectedRow?.routes.length ? t("settings.modelExperience.routes").replace("{count}", String(inspectedRow.routes.length)) : t("settings.modelExperience.nativeInventory")}</DialogDescription>
           </DialogHeader>
           <div className="settings-model-access-routes">
+            {inspectedRow && inspectedRow.routes.length === 0 ? <section className="settings-model-access-route">
+              <ProviderModelModalitySummary model={inspectedRow.inventory.catalogModels[0]} additionalModels={inspectedRow.inventory.catalogModels.slice(1)} extensionCapabilities={inspectedRow.inventory.extensionCapabilities} />
+              <p>{t("settings.models.availableCredentials").replace("{count}", String(inspectedRow.inventory.availableAccountCount))}</p>
+            </section> : null}
             {inspectedRow?.routes.map((route) => <section className="settings-model-access-route" key={modelRouteValue(route)}>
               <div className="settings-model-access-route-heading">
                 <div><strong>{route.serviceEntryName}</strong><span>{protocolDisplayName(route.protocolId)}</span></div>

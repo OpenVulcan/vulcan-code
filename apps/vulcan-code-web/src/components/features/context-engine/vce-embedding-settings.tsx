@@ -210,30 +210,30 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
     invalidate(); setDraftRoute(props.route ?? null); setDimensionText(initialDimensionText(props));
   };
 
-  return <section className="space-y-4 px-4 py-4" aria-label={copy("向量模型与维度", "Embedding model and dimensions")}>
+  return <section className="space-y-4 px-4 py-3" aria-label={copy("向量模型与维度", "Embedding model and dimensions")}>
     {/* Align purpose, model and icon actions with the other inference routes. */}
     {/* 将用途、模型和图标操作对齐到其他推理路由。 */}
-    <div className="grid items-center gap-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_12rem]">
-      <div className="flex min-w-0 items-center gap-3">
+    <div className="grid items-center gap-3 @xl/vce:grid-cols-[8rem_minmax(12rem,1fr)_9.5rem]">
+      <div className="flex min-w-0 items-center gap-2">
       <span className={props.status.available
         ? "flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
         : "flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[var(--vcn-content-warning)]"}>
         {props.status.available ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}
       </span>
       <div className="min-w-0 flex-1">
-        <h4 className="flex items-center gap-1 text-sm font-medium">{copy("向量模型", "Embedding model")}<VceHelpTooltip label={copy("向量模型说明", "Embedding model notes")}>{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</VceHelpTooltip></h4>
+        <h4 className="flex items-center gap-1 text-xs font-medium">{copy("向量模型", "Embedding model")}<VceHelpTooltip label={copy("向量模型说明", "Embedding model notes")}>{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</VceHelpTooltip></h4>
       </div>
       </div>
       <div className="min-w-0 space-y-1.5">
-        <span className="text-xs text-muted-foreground @4xl/vce:hidden">{copy("模型与账号", "Model and account")}</span>
-        <Combobox ariaLabel={copy("向量模型", "Embedding model")} className="h-10" disabled={disabled || props.candidates.length === 0}
+        <span className="text-xs text-muted-foreground @xl/vce:hidden">{copy("模型与账号", "Model and account")}</span>
+        <Combobox ariaLabel={copy("向量模型", "Embedding model")} className="h-8 px-2 text-xs" disabled={disabled || props.candidates.length === 0}
           options={vceRoutePickerOptions(props.candidates)} value={selected ? draftKey : undefined}
           placeholder={draftRoute?.model_id ?? copy("选择模型与账号", "Select model and account")}
           searchPlaceholder={copy("筛选模型、供应商或账号…", "Filter models, providers, or accounts…")}
           emptyText={copy("没有符合条件的模型", "No compatible models")}
           onValueChange={(value) => { const candidate = candidateByKey.get(value); if (candidate) changeRoute(candidate.route); }} />
       </div>
-      <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
+      <div className="flex flex-wrap items-center gap-2 @xl/vce:justify-end">
       <VceActionButton label={copy("向量维度", "Vector dimensions")}
         tooltip={`${copy("向量维度", "Vector dimensions")}: ${props.dimension ?? copy("未设置", "Not configured")}`}
         disabled={disabled || !draftRoute} icon={<Axis3D className="size-4" />}

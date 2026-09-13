@@ -1305,7 +1305,7 @@ export function CodeContextArea(props: {
         </div>
       </div>
 
-      {status.lastError && !indexingStatusVisible ? (
+      {status.lastError && !indexingStatusVisible && status.lastError !== indexing.job?.error ? (
         <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {status.lastError}
         </p>

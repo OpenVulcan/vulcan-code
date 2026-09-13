@@ -7,8 +7,8 @@ import type { TerminalViewportProps } from "./terminal-viewport";
 
 // TerminalViewportRuntime owns one stable xterm instance and event-driven ResizeObserver fitting.
 // TerminalViewportRuntime 持有一个稳定 xterm 实例，并使用事件驱动的 ResizeObserver 拟合。
-// Parameters: props supplies terminal content, input, resize and ownership callbacks; returns one stable xterm host whose theme follows application tokens.
-// 参数：props 提供终端内容、输入、尺寸及归属回调；返回一个主题跟随应用令牌的稳定 xterm 宿主。
+// Parameters: props supplies terminal content, input, resize and ownership callbacks; returns one stable xterm host with an independent terminal palette.
+// 参数：props 提供终端内容、输入、尺寸及归属回调；返回一个使用独立终端色板的稳定 xterm 宿主。
 export function TerminalViewportRuntime(props: TerminalViewportProps) {
   // hostRef identifies the exact DOM node into which xterm opens.
   // hostRef 标识 xterm 打开的精确 DOM 节点。
@@ -55,7 +55,15 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       lineHeight: 1.15,
       rows: fixedGrid?.rows,
       scrollback: 10_000,
-      theme: terminalViewportTheme(host),
+      // Keep the emulator palette independent of application light/dark surfaces.
+      // 保持模拟器色板独立于应用浅色和深色页面。
+      theme: {
+        background: "#111318",
+        foreground: "#d9dee8",
+        cursor: "#f0f3f8",
+        cursorAccent: "#111318",
+        selectionBackground: "#4e6b955c",
+      },
     });
     // fitAddon exists only for interactive or otherwise container-fitted terminals.
     // fitAddon 仅为交互式或其他需要容器拟合的终端创建。
@@ -63,12 +71,6 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
     if (fitAddon) terminal.loadAddon(fitAddon);
     terminal.open(host);
     terminalRef.current = terminal;
-    // themeObserver updates the existing emulator without discarding scrollback or changing its grid.
-    // themeObserver 更新现有模拟器，不丢弃回滚内容或改变字符网格。
-    const themeObserver = new MutationObserver(() => {
-      terminal.options.theme = terminalViewportTheme(host);
-    });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     // lastDimensions suppresses duplicate backend resize requests.
     // lastDimensions 抑制重复的后端尺寸调整请求。
     let lastDimensions = { rows: 0, cols: 0 };
@@ -124,7 +126,6 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
 
     return () => {
       resizeObserver?.disconnect();
-      themeObserver.disconnect();
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
       dataDisposable.dispose();
       binaryDisposable.dispose();
@@ -190,23 +191,6 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       role={props.readOnly ? "region" : "application"}
     />
   );
-}
-
-// terminalViewportTheme reads the authoritative application palette for one terminal host.
-// terminalViewportTheme 为一个终端宿主读取权威应用色板。
-// Parameters: host is the mounted element inheriting the application theme tokens.
-// 参数：host 是继承应用主题令牌的已挂载元素。
-// Returns: xterm colors resolved from the shared theme without resetting terminal state.
-// 返回值：从共享主题解析的 xterm 颜色，不重置终端状态。
-function terminalViewportTheme(host: HTMLElement) {
-  const palette = getComputedStyle(host);
-  return {
-    background: palette.getPropertyValue("--background").trim(),
-    foreground: palette.getPropertyValue("--foreground").trim(),
-    cursor: palette.getPropertyValue("--foreground").trim(),
-    cursorAccent: palette.getPropertyValue("--background").trim(),
-    selectionBackground: palette.getPropertyValue("--accent").trim(),
-  };
 }
 
 // stopTerminalUiPropagation lets xterm consume its target event before blocking outer WebUI controls.

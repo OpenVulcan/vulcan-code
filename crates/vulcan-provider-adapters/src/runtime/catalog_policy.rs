@@ -628,9 +628,33 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
     // hide every fixed, discovered, or manually admitted model without mutating source evidence.
     // 账号访问策略在支持成员关系与能力解析后求值，因此可以隐藏任意固定、发现或手工准入模型，
     // 同时不会修改原始证据。
-    models.retain(|model_id, _| {
-        configuration.connection_model_is_enabled(catalog.connection_id.as_str(), model_id)
-    });
+    let account_connection = configuration
+        .connection_graph
+        .connections
+        .get(catalog.connection_id.as_str());
+    if let Some(account_connection) = account_connection {
+        models.retain(|model_id, _| {
+            // A manifest with a closed base default seeds account checks from exact rules.
+            // Existing open-base providers keep their account-wide enabled default independent
+            // of provider-purpose model rules; explicit account choices always win.
+            // 清单基础默认关闭时，账号初始勾选取自精确规则；其他基础默认开启的供应商
+            // 保持账号全开，不受供应商用途模型规则影响；显式账号选择始终优先。
+            let inherited_default = manifest.is_none_or(|manifest| {
+                manifest.default_enabled
+                    || crate::provider_manifest::manifest_default_enabled(
+                        manifest,
+                        service_entry_id,
+                        Some(account_connection.credential_profile_id.as_str()),
+                        model_id,
+                    )
+            });
+            configuration.connection_model_is_enabled_with_default(
+                catalog.connection_id.as_str(),
+                model_id,
+                inherited_default,
+            )
+        });
+    }
     if let (Some(account_usage), Some(manifest), Some(connection)) = (
         account_usage,
         manifest,

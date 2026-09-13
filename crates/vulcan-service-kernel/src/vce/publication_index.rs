@@ -392,6 +392,30 @@ impl VceIndexPort for VcePublicationIndex {
             .persist_embedding_batch_record(run_id, batch, updated_at_unix_ms)
     }
 
+    /// Persist the exact remote task under `run_id`; return the underlying durable write result.
+    /// 在 `run_id` 下持久化精确远端任务；返回底层持久写入结果。
+    fn persist_embedding_remote_batch_record(
+        &self,
+        run_id: String,
+        record: VceEmbeddingRemoteBatchRecord,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.runtime
+            .index
+            .persist_embedding_remote_batch_record(run_id, record)
+    }
+
+    /// Load `purpose` task records for `run_id`; preserve ordering and storage failures.
+    /// 读取 `run_id` 中 `purpose` 的任务记录；保留顺序与存储失败。
+    fn load_embedding_remote_batch_records(
+        &self,
+        run_id: String,
+        purpose: VceAiPurpose,
+    ) -> VceFuture<Result<Vec<VceEmbeddingRemoteBatchRecord>, VcePortError>> {
+        self.runtime
+            .index
+            .load_embedding_remote_batch_records(run_id, purpose)
+    }
+
     /// Forward one validated provider result to restart-safe project storage.
     /// 将一份已校验供应商结果转发到可恢复项目存储。
     /// `run_id` owns `result`; returns after its vectors are durable or forwards the storage error.

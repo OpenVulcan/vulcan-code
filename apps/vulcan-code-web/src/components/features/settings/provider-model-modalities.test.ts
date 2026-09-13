@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { providerModelModalities } from "@/components/features/settings/provider-model-modalities"
+import { providerExtensionOutputModalities, providerModelModalities } from "@/components/features/settings/provider-model-modalities"
 import type { PublicAiModel } from "@/types"
 
 // modelFixture builds the minimum exact catalog model needed by modality tests.
@@ -24,6 +24,13 @@ function modelFixture(overrides: Partial<PublicAiModel["capabilities"]>): Public
 }
 
 describe("providerModelModalities", () => {
+  it("keeps all input modes after the direction marker in text, image, video, audio, file order", () => {
+    const modalities = providerModelModalities(modelFixture({
+      operations: ["conversation_respond"],
+      input_resources: ["file", "audio", "video", "image"],
+    }))
+    expect(modalities.input).toEqual(["text", "image", "video", "audio", "file"])
+  })
   it("shows exact text, image, and video inputs for a multimodal conversation route", () => {
     const modalities = providerModelModalities(modelFixture({
       operations: ["conversation_respond"],
@@ -66,5 +73,13 @@ describe("providerModelModalities", () => {
       input: ["text"],
       output: ["rerank"],
     })
+  })
+})
+
+describe("providerExtensionOutputModalities", () => {
+  it("groups signed image, video and audio actions by output mode", () => {
+    expect(providerExtensionOutputModalities([
+      "music_generate", "video_generate", "image_edit", "image_generate",
+    ])).toEqual(["image", "video", "audio"])
   })
 })

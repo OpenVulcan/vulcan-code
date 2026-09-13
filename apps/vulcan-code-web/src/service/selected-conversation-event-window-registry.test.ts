@@ -32,6 +32,14 @@ function hydratedSnapshot(sessionId: string): ConversationEventWindowControllerS
 /** Test controller that exposes exact lifecycle call evidence without transport behavior.
  * 不包含传输行为、仅暴露精确生命周期调用证据的测试控制器。 */
 class TestSelectedConversationController implements SelectedConversationEventWindowController {
+  /** Restores the exact cached snapshot synchronously; no RPC is performed.
+   * 同步恢复精确缓存快照，不执行 RPC。 */
+  readonly restoreCachedSnapshot = vi.fn((snapshot: ConversationEventWindowControllerSnapshot) => {
+    this.currentSnapshot = snapshot;
+  });
+  /** Records background reconciliation independently of initial hydration.
+   * 独立于首次加载记录后台协调。 */
+  readonly resumeCachedWindow = vi.fn(async (): Promise<void> => undefined);
   /** Active registry relay listeners.
    * 活动 registry 转发监听器。 */
   private readonly listeners = new Set<ConversationEventWindowControllerListener>();
@@ -115,6 +123,66 @@ function registryFixture(): {
 }
 
 describe("selected conversation event window registry", () => {
+  it("retains the requested oldest cached window when caching the outgoing session reaches capacity", async () => {
+    // Eight inactive windows and one active window exercise the exact cache-capacity boundary.
+    // 八个非活动窗口与一个活动窗口覆盖精确缓存容量边界。
+    const fixture = registryFixture();
+    for (let index = 0; index < 9; index += 1) await fixture.registry.selectSession(`session-${index}`);
+    await fixture.registry.selectSession("session-0");
+    expect(fixture.controllers[9].restoreCachedSnapshot).toHaveBeenCalledOnce();
+    expect(fixture.controllers[9].hydrate).not.toHaveBeenCalled();
+    fixture.registry.dispose();
+    expect(fixture.controllers.every((controller) => controller.dispose.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("does not let delayed cached-window reconciliation replace the newly selected session", async () => {
+    // The old command stays bound to the old selection even while its background resume is pending.
+    // 旧命令即使仍在等待后台恢复，也始终绑定旧选择。
+    // Create a controller with an externally completed resume to exercise the selection race.
+    // 创建由外部完成恢复的控制器，以覆盖选择竞争。
+    let completeResume: (() => void) | undefined;
+    const delayed = new TestSelectedConversationController();
+    delayed.resumeCachedWindow.mockImplementation(() => new Promise<void>((resolve) => { completeResume = resolve; }));
+    const controllers = [new TestSelectedConversationController(), new TestSelectedConversationController(), delayed, new TestSelectedConversationController()];
+    const registry = new SelectedConversationEventWindowRegistry(() => {
+      const controller = controllers.shift();
+      if (!controller) throw new Error("Missing controller");
+      return controller;
+    });
+    await registry.selectSession("session-a");
+    await registry.selectSession("session-b");
+    const pending = registry.selectSession("session-a");
+    await registry.selectSession("session-c");
+    if (!completeResume) throw new Error("Missing resume completion");
+    completeResume();
+    expect(await pending).toBe(false);
+    expect(registry.snapshot().owner?.session_id).toBe("session-c");
+    expect(registry.status()).toEqual({ kind: "ready", session_id: "session-c" });
+    expect(delayed.dispose).toHaveBeenCalledOnce();
+    registry.dispose();
+  });
+
+  it("restores a visited window synchronously without publishing loading or discarding its history", async () => {
+    // cached is the initialized owner's exact window, including its pagination and event identities.
+    // cached 是已初始化归属的精确窗口，包括分页与事件身份。
+    const fixture = registryFixture();
+    await fixture.registry.selectSession("session-a");
+    const cached = fixture.registry.snapshot();
+    const oldCommands = fixture.registry.commands();
+    await fixture.registry.selectSession("session-b");
+    const observed: string[] = [];
+    fixture.registry.subscribe(() => observed.push(fixture.registry.status().kind));
+    const selected = fixture.registry.selectSession("session-a");
+    expect(fixture.registry.snapshot()).toBe(cached);
+    expect(fixture.registry.status()).toEqual({ kind: "ready", session_id: "session-a" });
+    expect(observed).not.toContain("loading");
+    expect(await selected).toBe(true);
+    expect(fixture.controllers[2].hydrate).not.toHaveBeenCalled();
+    expect(fixture.controllers[2].resumeCachedWindow).toHaveBeenCalledOnce();
+    expect(fixture.controllers[0].dispose).toHaveBeenCalledOnce();
+    await expect(oldCommands.prependOlder()).rejects.toThrow(/owner is no longer active/);
+  });
+
   it("treats the first connected state as a baseline without recovery", async () => {
     // fixture contains one hydrated selected-session controller.
     // fixture 包含一个已 hydration 的选中会话控制器。

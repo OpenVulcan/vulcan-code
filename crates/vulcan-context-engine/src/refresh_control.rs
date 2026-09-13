@@ -113,6 +113,21 @@ pub enum VceEmbeddingActivityStage {
     /// Preparing the durable request plan; no submission has happened here.
     /// 正在准备持久请求计划；此阶段尚未提交。
     Preparing,
+    /// Building the global content and path embedding batches before provider I/O.
+    /// 在供应商调用前构建全局内容与路径向量批次。
+    Planning,
+    /// Validating the complete frozen source and request plan.
+    /// 校验完整冻结源码与请求计划。
+    Validating,
+    /// Persisting the complete plan before any provider request is admitted.
+    /// 在准入任何供应商请求前持久化完整计划。
+    Persisting,
+    /// Planning and persisting remote task records without submitting them.
+    /// 规划并持久化远端任务记录，尚未提交任务。
+    PlanningTasks,
+    /// Persisting logical batch admission before provider I/O; counts reflect confirmed local writes.
+    /// 在供应商调用前持久化逻辑批次准入；计数反映已确认的本地写入。
+    Admitting,
     /// Awaiting one synchronous embedding response.
     /// 正在等待一个同步向量响应。
     Requesting,

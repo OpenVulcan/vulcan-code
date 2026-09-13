@@ -137,7 +137,11 @@ export type TranslationKey =
   | "settings.modelExperience.internalEnabled"
   | "settings.modelExperience.multimodalEnabled"
   | "settings.modelExperience.capabilityFilter"
-  | "settings.modelExperience.allCapabilities"
+| "settings.modelExperience.allCapabilities"
+  | "settings.modelExperience.nativeInventory"
+  | "settings.modelExperience.previousPage"
+  | "settings.modelExperience.pageStatus"
+  | "settings.modelExperience.nextPage"
   | "settings.modelExperience.routes"
   | "settings.modelExperience.modelColumn"
   | "settings.modelExperience.understandingUse"
@@ -3856,8 +3860,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelExperience.conversationEnabled": "会话使用已开启",
     "settings.modelExperience.internalEnabled": "插件调用已开启",
     "settings.modelExperience.multimodalEnabled": "多模态理解候选已开启",
-    "settings.modelExperience.capabilityFilter": "筛选模型能力",
-    "settings.modelExperience.allCapabilities": "全部能力",
+    "settings.modelExperience.capabilityFilter": "筛选输出模式",
+    "settings.modelExperience.allCapabilities": "全部输出",
+    "settings.modelExperience.nativeInventory": "原生模型目录，无会话协议路由",
+    "settings.modelExperience.previousPage": "上一页",
+    "settings.modelExperience.pageStatus": "第 {page} / {count} 页",
+    "settings.modelExperience.nextPage": "下一页",
     "settings.modelExperience.routes": "接入详情 · {count} 条路线",
     "settings.modelExperience.modelColumn": "模型",
     "settings.modelExperience.understandingUse": "多模态理解",
@@ -6441,7 +6449,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.archivedRestore": "归档管理",
     "settings.modelProviders.description": "查看全部已实现供应商，并管理自定义兼容供应商。",
     "settings.credentialManagement.description": "管理模型账号、调用协议、用量与默认凭据。",
-    "settings.modelList.description": "按供应商查看已启用模型，并核对当前工作台模型。",
+    "settings.modelList.description": "按供应商查看全部模型，管理会话、内部调用与原生扩展。",
     "settings.modelBasics.description": "上下文、请求重试、用量与计费等模型运行基础设置。",
     "settings.providerRetry.description": "配置普通错误与 429 限流的重试次数、等待间隔和递增规则。",
     "settings.providerUsage.description": "查看原生出口侧用量、费用来源、覆盖率与账户额度快照。",
@@ -7573,8 +7581,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelExperience.conversationEnabled": "Conversation use enabled",
     "settings.modelExperience.internalEnabled": "Plugin calls enabled",
     "settings.modelExperience.multimodalEnabled": "Understanding candidate enabled",
-    "settings.modelExperience.capabilityFilter": "Filter model capabilities",
-    "settings.modelExperience.allCapabilities": "All capabilities",
+    "settings.modelExperience.capabilityFilter": "Filter output modes",
+    "settings.modelExperience.allCapabilities": "All outputs",
+    "settings.modelExperience.nativeInventory": "Native model inventory without a conversation protocol route",
+    "settings.modelExperience.previousPage": "Previous",
+    "settings.modelExperience.pageStatus": "Page {page} of {count}",
+    "settings.modelExperience.nextPage": "Next",
     "settings.modelExperience.routes": "Access details · {count} routes",
     "settings.modelExperience.modelColumn": "Model",
     "settings.modelExperience.understandingUse": "Understanding",
@@ -10158,7 +10170,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.archivedRestore": "Archive management",
     "settings.modelProviders.description": "Review all implemented providers and manage custom compatible providers.",
     "settings.credentialManagement.description": "Manage model accounts, protocols, usage, and default credentials.",
-    "settings.modelList.description": "Review enabled models by provider and the active workbench model.",
+    "settings.modelList.description": "Review every provider model and manage conversation, internal, and native extension use.",
     "settings.modelBasics.description": "Model runtime basics including context, request retry, usage, and billing.",
     "settings.providerRetry.description": "Configure retry counts, wait intervals, and backoff rules for ordinary failures and 429 rate limits.",
     "settings.providerUsage.description": "Inspect native egress usage, cost provenance, coverage, and account quota snapshots.",

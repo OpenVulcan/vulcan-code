@@ -95,17 +95,16 @@ fn connection_model_access_isolated_between_accounts() {
             .get("one")
             .expect("first account catalog should exist")
             .models
-            .is_empty()
+            .iter()
+            .all(|model| model.id != "openai/gpt-5.6-sol")
     );
-    assert_eq!(
+    assert!(
         effective
             .get("two")
             .expect("second account catalog should exist")
             .models
             .iter()
-            .map(|model| model.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["openai/gpt-5.6-sol"]
+            .any(|model| model.id == "openai/gpt-5.6-sol")
     );
 
     let source = runtime
@@ -123,10 +122,10 @@ fn connection_model_access_isolated_between_accounts() {
     );
 }
 
-/// Verifies a disabled account default applies to a model discovered after the decision.
-/// 验证禁用账号默认值会应用到决定之后才发现的模型。
+/// Verifies a disabled account can opt into a newly discovered model without changing its peer.
+/// 验证已关闭账号可选择新发现模型，且不会改变同供应商的其他账号。
 #[test]
-fn disabled_connection_default_hides_future_discovery() {
+fn disabled_connection_default_can_enable_future_discovery() {
     let (runtime, mut configuration) = two_account_runtime();
     configuration.set_connection_models_enabled("one", false);
     let future_catalog = parse_openrouter_model_catalog(
@@ -168,6 +167,117 @@ fn disabled_connection_default_hides_future_discovery() {
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
         vec!["vendor/future-model"]
+    );
+    // The support catalog retains discovered rows independently from account access.
+    // 支持目录独立于账号访问状态保留发现模型行。
+    let settings = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("settings catalog should resolve");
+    let support = settings
+        .model_support_catalogs
+        .get("one")
+        .expect("first account support catalog should exist");
+    assert_eq!(support.models.len(), 1);
+    assert!(
+        support
+            .models
+            .iter()
+            .any(|model| model.id == "vendor/future-model")
+    );
+}
+
+/// Verifies OpenRouter's 17 signed defaults initialize each account without hiding new models.
+/// 验证 OpenRouter 的 17 项签名默认值分别初始化账号，且不隐藏新发现模型。
+#[test]
+fn openrouter_account_starts_with_signed_models_and_can_select_discovery() {
+    let (runtime, configuration) = two_account_runtime();
+    let manifest_generation = runtime
+        .selection_catalog_snapshot()
+        .expect("published manifests should resolve");
+    let openrouter = manifest_generation
+        .manifests
+        .manifest("openrouter")
+        .expect("OpenRouter manifest should be present");
+    assert_eq!(openrouter.rule_instances.len(), 17);
+
+    let discovered = parse_openrouter_model_catalog(
+        "one",
+        2,
+        r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"GPT-5.6 Sol","context_length":8192,"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},{"id":"vendor/future-model","name":"Future Model","context_length":8192,"architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}"#,
+    )
+    .expect("discovered models should parse");
+    install_source_catalog(&runtime, discovered.clone());
+    runtime
+        .replace_catalog(discovered)
+        .expect("discovered catalog should publish");
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("initial account access should resolve");
+
+    let settings = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("settings should include account defaults");
+    let first_support = settings
+        .model_support_catalogs
+        .get("one")
+        .expect("first support catalog should exist");
+    assert_eq!(first_support.models.len(), 2);
+    let initial = settings
+        .connection_model_initial_policies
+        .get("one")
+        .expect("first account should have an initial policy");
+    assert!(!initial.default_enabled);
+    assert_eq!(initial.model_enabled_overrides.len(), 17);
+    assert!(initial.model_is_enabled("openai/gpt-5.6-sol"));
+    assert!(!initial.model_is_enabled("vendor/future-model"));
+    assert_eq!(
+        settings.model_default_enabled_by_key.get(
+            PersistedAiConfiguration::provider_model_key("openrouter", "vendor/future-model")
+                .as_str()
+        ),
+        Some(&true),
+        "conversation purpose must not inherit the account's unchecked default"
+    );
+    let initial_effective = runtime
+        .catalog_snapshot()
+        .expect("effective catalogs should resolve");
+    assert_eq!(
+        initial_effective
+            .get("one")
+            .expect("first account should exist")
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openai/gpt-5.6-sol"]
+    );
+
+    let mut selected = configuration.clone();
+    selected
+        .connection_model_access_policies
+        .insert(String::from("one"), initial.clone());
+    selected.set_connection_model_enabled("one", "vendor/future-model", true);
+    runtime
+        .reapply_model_catalog_overlays(&selected)
+        .expect("one account's explicit selection should resolve");
+    let enabled = runtime
+        .catalog_snapshot()
+        .expect("effective catalogs should resolve");
+    assert_eq!(
+        enabled
+            .get("one")
+            .expect("first account should exist")
+            .models
+            .len(),
+        2
+    );
+    assert_eq!(
+        enabled
+            .get("two")
+            .expect("second account should exist")
+            .models
+            .len(),
+        1
     );
 }
 
@@ -531,10 +641,10 @@ fn runtime_model_is_enabled_follows_manifest_first_precedence() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
 
-    // Bundled openrouter manifest: curated featured models enabled, everything else disabled.
-    // 内置 openrouter 清单：精选模型启用，其余禁用。
+    // OpenRouter's 17 account defaults do not disable other supported conversation models.
+    // OpenRouter 的 17 项账号默认值不会关闭其他受支持模型的会话用途。
     assert!(runtime.model_is_enabled(&configuration, "openrouter", "openai/gpt-5.6-sol"));
-    assert!(!runtime.model_is_enabled(&configuration, "openrouter", "openai/gpt-4o"));
+    assert!(runtime.model_is_enabled(&configuration, "openrouter", "openai/gpt-4o"));
 
     // An explicit user override wins over the manifest default in both directions.
     // 显式用户覆盖在两个方向都优先于清单默认。
@@ -790,16 +900,20 @@ fn provider_tool_template_models_are_independent_from_conversation_access() {
     let declared = runtime
         .provider_tool_template_models(&configuration)
         .expect("template model inventory should resolve");
-    assert!(
-        declared.iter().any(|model| {
-            model.provider_id == "alibaba" && model.model_id == "qwen-image-2.0-pro"
-        })
-    );
-    assert!(
-        declared
-            .iter()
-            .any(|model| model.provider_id == "alibaba" && model.model_id == "wan2.7-t2v")
-    );
+    assert!(declared.iter().any(|model| {
+        model.provider_id == "alibaba"
+            && model.model_id == "qwen-image-2.0-pro"
+            && model
+                .capabilities
+                .contains(&ProviderToolCapabilityKind::ImageGenerate)
+    }));
+    assert!(declared.iter().any(|model| {
+        model.provider_id == "alibaba"
+            && model.model_id == "wan2.7-t2v"
+            && model
+                .capabilities
+                .contains(&ProviderToolCapabilityKind::VideoGenerate)
+    }));
     assert!(
         runtime
             .provider_model_is_supported(&configuration, "alibaba", "wan2.7-t2v")

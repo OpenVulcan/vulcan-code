@@ -1556,7 +1556,7 @@
                 "host_policy_maximum_payload_bytes": 67108864,
                 "host_policy_maximum_result_bytes": 268435456,
                 "provider_completion_window_seconds": 86400,
-                "minimum_poll_interval_ms": 65000,
+                "minimum_poll_interval_ms": 30000,
                 "supports_cancel": true,
                 "deletes_input_file_after_ingestion": true
               },
@@ -2053,7 +2053,7 @@
                 "host_policy_maximum_payload_bytes": 67108864,
                 "host_policy_maximum_result_bytes": 268435456,
                 "provider_completion_window_seconds": 86400,
-                "minimum_poll_interval_ms": 65000,
+                "minimum_poll_interval_ms": 30000,
                 "supports_cancel": true,
                 "deletes_input_file_after_ingestion": true
               },

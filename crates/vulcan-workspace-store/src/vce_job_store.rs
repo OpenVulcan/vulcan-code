@@ -834,23 +834,43 @@ impl VceStoredJob {
                 matches!(self.kind, VceJobKind::Initialize | VceJobKind::Rebuild)
                     && progress.phase == vulcan_context_engine::VceRefreshPhase::Embedding
                     && progress.unit == vulcan_context_engine::VceRefreshUnit::Requests;
-            if progress
-                .total
-                .is_some_and(|total| progress.completed > total)
-                || progress
-                    .overall_total
-                    .is_some_and(|total| progress.overall_completed > total)
-                || progress.operation_id.trim().is_empty()
-                || progress.operation_id.len() > 2048
-                || progress.provider_batch_state.is_some() != remote_batch_progress
-                || (remote_batch_progress && progress.current_path.is_some())
-                || progress
-                    .current_path
-                    .as_ref()
-                    .is_some_and(|path| path.len() > 4096)
+            // Report only the violated field and bounded counts; paths and provider identities stay out of diagnostics.
+            // 仅报告违约字段及有界计数；路径和供应商身份不进入诊断。
+            let invalid = if let Some(total) = progress.total.filter(|total| progress.completed > *total)
             {
-                return Err(String::from(
-                    "VCE job progress contains invalid counters or metadata",
+                Some(format!("completed {} exceeds total {total}", progress.completed))
+            } else if let Some(total) = progress
+                .overall_total
+                .filter(|total| progress.overall_completed > *total)
+            {
+                Some(format!(
+                    "overall_completed {} exceeds overall_total {total}",
+                    progress.overall_completed
+                ))
+            } else if progress.operation_id.trim().is_empty() {
+                Some(String::from("operation_id is empty"))
+            } else if progress.operation_id.len() > 2048 {
+                Some(format!(
+                    "operation_id length {} exceeds 2048",
+                    progress.operation_id.len()
+                ))
+            } else if progress.provider_batch_state.is_some() != remote_batch_progress {
+                Some(String::from(
+                    "provider_batch_state does not match job kind, phase and unit",
+                ))
+            } else if remote_batch_progress && progress.current_path.is_some() {
+                Some(String::from(
+                    "provider request progress unexpectedly contains current_path",
+                ))
+            } else if progress.current_path.as_ref().is_some_and(|path| path.len() > 4096) {
+                Some(String::from("current_path length exceeds 4096"))
+            } else {
+                None
+            };
+            if let Some(invalid) = invalid {
+                return Err(format!(
+                    "VCE job progress contains invalid counters or metadata: {invalid} (kind={:?}, phase={:?}, unit={:?})",
+                    self.kind, progress.phase, progress.unit,
                 ));
             }
         }
@@ -1698,7 +1718,10 @@ mod tests {
             current_path: None,
         });
 
-        assert!(receipt.validate().is_err());
+        assert!(receipt
+            .validate()
+            .unwrap_err()
+            .contains("overall_completed 2 exceeds overall_total 1"));
     }
 
     /// Reject provider Batch state outside the exact embedding-request progress shape.
@@ -1723,11 +1746,20 @@ mod tests {
             ),
             current_path: None,
         });
-        assert!(receipt.validate().is_err());
+        assert!(receipt
+            .validate()
+            .unwrap_err()
+            .contains("provider_batch_state does not match job kind, phase and unit"));
 
         let progress = receipt.progress.as_mut().expect("progress fixture");
         progress.phase = vulcan_context_engine::VceRefreshPhase::Embedding;
         progress.unit = vulcan_context_engine::VceRefreshUnit::Requests;
+        progress.completed = 0;
+        progress.total = Some(45);
+        progress.overall_completed = 0;
+        progress.overall_total = Some(48);
+        progress.provider_batch_state =
+            Some(vulcan_context_engine::VceRefreshProviderBatchState::Cancelling);
         receipt
             .validate()
             .expect("provider Batch state belongs to embedding request progress");

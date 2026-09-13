@@ -19,6 +19,9 @@
 .terminal-viewport .xterm {
   height: 100%;
   padding: 8px 10px;
+  /* Match the emulator palette across padding and unused terminal space. */
+  /* 内边距和未使用终端空间与模拟器色板保持一致。 */
+  background: #111318;
 }
 
 .terminal-viewport .xterm-viewport {

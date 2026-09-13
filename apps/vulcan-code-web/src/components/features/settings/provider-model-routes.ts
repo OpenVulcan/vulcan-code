@@ -2,6 +2,7 @@ import type {
   PublicAiModel,
   PublicAiModelRouteRecord,
   PublicAiProviderDescriptor,
+  PublicAiProviderToolCapabilityKind,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
@@ -49,6 +50,139 @@ export interface PublicProviderModels {
   // Service-entry and protocol scoped model routes keyed by exact model identifier.
   // 按精确模型标识索引的服务入口与协议作用域模型路由。
   models: Map<string, PublicModelProtocolRoute[]>
+}
+
+// PublicProviderModelInventoryEntry keeps every catalog or signed extension model visible while protocol routes remain exact.
+// PublicProviderModelInventoryEntry 保留所有目录及签名扩展模型，同时让协议路由保持精确。
+export interface PublicProviderModelInventoryEntry {
+  // User-facing name and exact provider-scoped identifier.
+  // 面向用户的名称和精确供应商作用域标识。
+  modelId: string
+  displayName: string
+  // Normalized catalog models retain editable capability contracts across account routes.
+  // 归一化目录模型跨账号路由保留可编辑能力契约。
+  catalogModels: PublicAiModel[]
+  // Only backend-resolved conversation protocol routes may open protocol settings.
+  // 只有后端已解析的会话协议路由可以打开协议设置。
+  protocolRoutes: PublicModelProtocolRoute[]
+  // Signed provider-extension capabilities remain distinct from internal inference operations.
+  // 签名供应商扩展能力与内部推理操作保持独立。
+  extensionCapabilities: PublicAiProviderToolCapabilityKind[]
+  // Available account count is deduplicated by exact connection identity.
+  // 可用账号数按精确连接身份去重。
+  availableAccountCount: number
+}
+
+// PublicProviderModelInventory groups the complete account and signed-template inventory by provider.
+// PublicProviderModelInventory 按供应商归组完整账号目录与签名模板目录。
+export interface PublicProviderModelInventory {
+  // Registered provider owns each model identity.
+  // 已注册供应商拥有每个模型身份。
+  provider: PublicAiProviderDescriptor
+  // One row per exact upstream model identifier.
+  // 每个精确上游模型标识对应一行。
+  models: Map<string, PublicProviderModelInventoryEntry>
+}
+
+// buildProviderModelInventoryGroups combines full support catalogs and signed template models without inventing protocol bindings.
+// buildProviderModelInventoryGroups 合并完整支持目录与签名模板模型，不推测协议绑定。
+// Parameters: snapshot is one coherent settings generation; returns manageable provider groups.
+// 参数：snapshot 是同一代际的设置快照；返回可管理的供应商分组。
+export function buildProviderModelInventoryGroups(
+  snapshot: Pick<PublicAiSettingsSnapshot,
+    "providers" | "connections" | "catalogs" | "modelSupportCatalogs" | "modelRouteRecords"
+    | "providerToolTemplateModels" | "providerToolTargets">,
+): PublicProviderModelInventory[] {
+  // Protocol routes are already resolved by the backend and may be absent for native operations.
+  // 协议路由已经由后端解析，原生操作可以没有协议路由。
+  const routesByProvider = new Map(buildProviderModelGroups(snapshot).map((group) => [group.provider.id, group.models]))
+  // connectionsById supplies the registered provider owner for each account catalog.
+  // connectionsById 为每份账号目录提供已注册供应商归属。
+  const connectionsById = new Map(snapshot.connections.map((connection) => [connection.id, connection]))
+  return snapshot.providers.map((provider) => {
+    // Entries collect source-authoritative models before account availability is aggregated.
+    // 条目先收集来源权威模型，再汇总账号可用性。
+    const entries = new Map<string, PublicProviderModelInventoryEntry>()
+    // availableAccounts prevents duplicate counts when catalog and extension expose one account.
+    // availableAccounts 避免目录与扩展共用账号时重复计数。
+    const availableAccounts = new Map<string, Set<string>>()
+    // ensureEntry creates only an inventory row, never a fabricated protocol route.
+    // ensureEntry 只建立目录行，绝不伪造协议路由。
+    // Parameters: id and name identify one model; returns its shared row.
+    // 参数：id 与 name 标识一个模型；返回其共享行。
+    const ensureEntry = (modelId: string, displayName: string): PublicProviderModelInventoryEntry => {
+      // existing preserves the first authoritative display name for a provider-scoped model.
+      // existing 保留供应商作用域模型最先取得的权威展示名称。
+      const existing = entries.get(modelId)
+      if (existing) return existing
+      // entry starts with exact protocol routes or an empty native-only route set.
+      // entry 以精确协议路由或空的纯原生路由集建立。
+      const entry: PublicProviderModelInventoryEntry = {
+        modelId,
+        displayName,
+        catalogModels: [],
+        protocolRoutes: routesByProvider.get(provider.id)?.get(modelId) ?? [],
+        extensionCapabilities: [],
+        availableAccountCount: 0,
+      }
+      entries.set(modelId, entry)
+      return entry
+    }
+    for (const [connectionId, catalog] of Object.entries(snapshot.modelSupportCatalogs)) {
+      // connection identifies the provider that owns this exact support catalog.
+      // connection 标识这份精确支持目录所属的供应商。
+      const connection = connectionsById.get(connectionId)
+      if (connection?.provider_id !== provider.id) continue
+      // effectiveModels distinguishes configured availability from support-only visibility.
+      // effectiveModels 区分已配置可用状态和仅支持目录可见状态。
+      const effectiveModels = new Set(snapshot.catalogs[connectionId]?.models.map((model) => model.id) ?? [])
+      for (const model of catalog.models) {
+        // entry shares one row across this provider's account catalogs.
+        // entry 在此供应商各账号目录间共享一行。
+        const entry = ensureEntry(model.id, model.display_name)
+        entry.catalogModels.push(model)
+        if (effectiveModels.has(model.id)) {
+          // accounts records this exact available credential only once.
+          // accounts 仅记录一次此精确可用凭据。
+          const accounts = availableAccounts.get(model.id) ?? new Set<string>()
+          accounts.add(connectionId)
+          availableAccounts.set(model.id, accounts)
+        }
+      }
+    }
+    for (const template of snapshot.providerToolTemplateModels) {
+      if (template.providerId !== provider.id || !connectionsById.has(template.connectionId)) continue
+      // entry merges signed operations with an existing catalog identity when present.
+      // entry 在存在目录身份时将签名操作合并到已有模型行。
+      const entry = ensureEntry(template.modelId, template.displayName)
+      // Current development hosts may still serve the previous template DTO; exact available targets supply its capabilities.
+      // 当前开发宿主可能仍返回旧版模板 DTO；用精确可用目标补充其能力。
+      const templateCapabilities = template.capabilities ?? snapshot.providerToolTargets.filter((target) => (
+        target.connectionId === template.connectionId
+        && target.target.provider_id === provider.id
+        && target.target.upstream_target_id === template.modelId
+      )).map((target) => target.target.contract.capability)
+      for (const capability of templateCapabilities) {
+        if (!entry.extensionCapabilities.includes(capability)) entry.extensionCapabilities.push(capability)
+      }
+      if (snapshot.providerToolTargets.some((target) => (
+        target.connectionId === template.connectionId
+        && target.target.provider_id === provider.id
+        && target.target.upstream_target_id === template.modelId
+        && templateCapabilities.includes(target.target.contract.capability)
+      ))) {
+        // accounts joins extension availability with native catalog availability.
+        // accounts 将扩展可用性与原生目录可用性合并。
+        const accounts = availableAccounts.get(template.modelId) ?? new Set<string>()
+        accounts.add(template.connectionId)
+        availableAccounts.set(template.modelId, accounts)
+      }
+    }
+    for (const entry of entries.values()) {
+      entry.availableAccountCount = availableAccounts.get(entry.modelId)?.size ?? 0
+    }
+    return { provider, models: entries }
+  }).filter((group) => group.models.size > 0)
 }
 
 // compactServiceEntryName shortens common geographic and account-scope words for route tabs.

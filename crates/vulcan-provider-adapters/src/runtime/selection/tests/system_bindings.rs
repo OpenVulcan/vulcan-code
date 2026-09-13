@@ -3,10 +3,7 @@
 
 use crate::runtime::PublicAiRuntime;
 use crate::runtime::test_support::{connection, install_source_catalog, with_protocol_variants};
-use crate::{
-    ModelCapabilityEvidence, PersistedAiConfiguration, parse_openai_model_catalog,
-    parse_openrouter_model_catalog,
-};
+use crate::{PersistedAiConfiguration, parse_openai_model_catalog, parse_openrouter_model_catalog};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use vulcan_ai_contract::ModelCapabilities;
@@ -241,10 +238,10 @@ fn apikeyfun_rejects_discovered_model_outside_declared_whitelist() {
     );
 }
 
-/// Verifies an undeclared model on a `declared_rule_required` provider is not executable.
-/// 验证 `declared_rule_required` 供应商上未声明模型不可执行。
+/// Verifies an unchecked OpenRouter discovery is manageable before account selection.
+/// 验证未勾选的 OpenRouter 发现模型在账号选择前仍可管理。
 #[test]
-fn undeclared_model_on_declared_rule_required_provider_is_not_executable() {
+fn unchecked_openrouter_discovery_can_be_selected_per_account() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -256,20 +253,57 @@ fn undeclared_model_on_declared_rule_required_provider_is_not_executable() {
             connection("one"),
         )
         .expect("connection should register");
-    let catalog = parse_openrouter_model_catalog(
+    let mut catalog = parse_openrouter_model_catalog(
         "one",
         1,
         r#"{"data":[{"id":"openai/gpt-4o","name":"OpenAI: GPT-4o","context_length":128000,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":16384}}]}"#,
     )
     .expect("openrouter catalog should parse");
+    let bundled = crate::provider_manifest::load_bundled_resolved_catalog();
+    let manifest = bundled
+        .manifest("openrouter")
+        .expect("OpenRouter manifest should resolve");
+    crate::enrich_compatible_model_catalog_with_manifest(
+        "openrouter",
+        "public-api",
+        Some("api-key"),
+        ANTHROPIC_MESSAGES_PROFILE_ID,
+        &mut catalog,
+        manifest,
+    );
+    let catalog = with_protocol_variants(catalog, &[ANTHROPIC_MESSAGES_PROFILE_ID]);
     install_source_catalog(&runtime, catalog.clone());
     runtime
         .replace_catalog(catalog)
         .expect("catalog should install");
-    configuration.set_model_enabled("openrouter", "openai/gpt-4o", true);
     runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect("undeclared-model generation should publish");
+        .expect("unchecked discovered model should publish as support evidence");
+
+    let settings = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("support catalog should resolve");
+    assert!(
+        settings.model_support_catalogs["one"]
+            .models
+            .iter()
+            .any(|model| model.id == "openai/gpt-4o")
+    );
+    assert!(
+        runtime
+            .catalog_snapshot()
+            .expect("effective catalog should resolve")["one"]
+            .models
+            .is_empty()
+    );
+    configuration.connection_model_access_policies.insert(
+        String::from("one"),
+        settings.connection_model_initial_policies["one"].clone(),
+    );
+    configuration.set_connection_model_enabled("one", "openai/gpt-4o", true);
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("explicit account selection should publish");
 
     let published_catalogs = runtime
         .catalog_snapshot()
@@ -277,27 +311,18 @@ fn undeclared_model_on_declared_rule_required_provider_is_not_executable() {
     let published_model = published_catalogs
         .get("one")
         .and_then(|catalog| catalog.models.first())
-        .expect("the unmatched identity remains visible for diagnostics");
-    assert!(published_model.resolved_protocol_binding.is_none());
-    assert_eq!(published_model.capabilities, ModelCapabilities::default());
-    assert_eq!(
-        published_model.capability_evidence,
-        ModelCapabilityEvidence::default()
+        .expect("the selected discovered identity remains visible");
+    assert!(published_model.resolved_protocol_binding.is_some());
+    assert!(
+        published_model
+            .capabilities
+            .operations
+            .contains(&vulcan_ai_contract::AiOperation::ConversationRespond)
     );
 
-    let error = match runtime.resolve_connection_model_selection(
-        &configuration,
-        "one",
-        "openrouter",
-        "openai/gpt-4o",
-    ) {
-        Ok(_) => panic!("undeclared model must not execute"),
-        Err(error) => error,
-    };
-    assert!(
-        error.contains("not executable"),
-        "expected a binding-missing error, got: {error}"
-    );
+    runtime
+        .resolve_connection_model_selection(&configuration, "one", "openrouter", "openai/gpt-4o")
+        .expect("selected discovered text model should resolve");
 }
 
 /// Verifies the DeepSeek manifest supplies exact protocol variants for its current identities.

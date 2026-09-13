@@ -956,6 +956,10 @@
 
 .settings-model-catalog-meta > span + span { border-left: 1px solid var(--border); padding-left: 10px; }
 .settings-model-purpose-cell { display: flex; align-items: center; justify-content: center; color: var(--muted-foreground); min-width: 0; }
+.settings-model-extension-cell { flex-direction: column; gap: 5px; }
+.settings-model-extension-toggle { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.settings-model-extension-toggle small { max-width: 76px; color: var(--muted-foreground); font-size: 10px; text-align: center; white-space: normal; }
+.settings-model-pagination { border-top: 1px solid var(--border); padding: 10px 16px; color: var(--muted-foreground); font-size: 12px; }
 .settings-model-purpose-label { display: none; }
 .settings-model-catalog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
 .settings-model-catalog-actions > button { padding-inline: 9px; font-size: 12px; }

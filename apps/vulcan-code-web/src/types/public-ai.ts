@@ -1002,6 +1002,9 @@ export interface PublicAiProviderToolTemplateModel {
   // User-visible signed catalog name.
   // 用户可见的签名目录名称。
   displayName: string;
+  // Exact signed capabilities, absent only while an older running service supplies its previous DTO.
+  // 精确签名能力；仅旧版运行中服务返回先前 DTO 时缺失。
+  capabilities?: PublicAiProviderToolCapabilityKind[];
 }
 
 // PublicAiProviderToolTargetSelection stores the one selected target for one capability.

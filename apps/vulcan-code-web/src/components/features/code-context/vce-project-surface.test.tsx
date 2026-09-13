@@ -119,6 +119,21 @@ function menuItem(label: string, role = "menuitem"): HTMLElement {
 }
 
 describe("shared project semantic surfaces", () => {
+  // The expanded semantic panel must show one diagnostic for the same durable job failure.
+  // 展开的语义面板必须对同一持久作业失败只显示一条诊断。
+  it("shows identical job and index failures once", async () => {
+    // This error is deliberately shared by the job receipt and project activity.
+    // 此错误有意由作业回执及项目活动共享。
+    const value = activity();
+    const error = "Content-Type is not supported.";
+    value.status.lastError = error;
+    rpc.read.mockResolvedValue(value);
+    rpc.jobs.mockResolvedValue({ projectId: "project-a", jobId: "failed-upload", kind: "rebuild", state: "failed",
+      sequence: 75, createdAtUnixMs: 1, updatedAtUnixMs: 223_000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, followupRequested: false, error, progress: null } satisfies VceJobSummary);
+    await act(async () => root.render(<Harness projectId="project-a" />));
+    expect(host.textContent!.split(error)).toHaveLength(2);
+  });
   // Feature navigation releases UI polls while preserving the durable host job and child identity.
   // 功能页导航释放界面轮询，同时保留宿主持久作业与子界面身份。
   it("stops hidden-chat observations and reloads exact authority when chat returns", async () => {
@@ -476,13 +491,13 @@ describe("shared project semantic surfaces", () => {
     rpc.jobs.mockResolvedValue(job);
     await act(async () => root.render(<Harness projectId="project-a" />));
     expect(surface?.gate).toBe("ready"); expect(surface?.activity?.lastSuccessfulUpdateUnixMs).toBe(1000);
-    expect(host.querySelector("progress")?.getAttribute("value")).toBe("3");
-    expect(host.querySelector("progress")?.getAttribute("max")).toBe("7");
+    expect(host.querySelector('[role="progressbar"][aria-label="当前阶段进度"]')?.getAttribute("aria-valuenow")).toBe("3");
+    expect(host.querySelector('[role="progressbar"][aria-label="当前阶段进度"]')?.getAttribute("aria-valuemax")).toBe("7");
     expect(host.textContent).toContain("会话和已有索引查询仍可正常使用");
     const initialLayoutRenders = visibilityRenders;
     await act(async () => rpc.subscribeJobs.mock.calls[0][0]({ ...job, sequence: 3,
       progress: { ...job.progress!, completed: 4 } }));
-    expect(host.querySelector("progress")?.getAttribute("value")).toBe("4");
+    expect(host.querySelector('[role="progressbar"][aria-label="当前阶段进度"]')?.getAttribute("aria-valuenow")).toBe("4");
     expect(visibilityRenders).toBe(initialLayoutRenders);
   });
 

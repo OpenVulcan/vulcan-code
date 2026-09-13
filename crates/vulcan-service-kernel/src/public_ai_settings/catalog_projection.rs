@@ -179,30 +179,42 @@ pub(super) fn service_entry_model_directory_kind(
 ///
 /// # Parameters
 /// 参数
-/// `providers` resolves exact directory semantics and `configuration` owns user decisions.
-/// `providers` 解析精确目录语义，`configuration` 持有用户决定。
+/// `providers` resolves directory semantics; `configuration` owns user decisions;
+/// `initial_policies` contains per-account defaults from the same settings generation.
+/// `providers` 解析目录语义；`configuration` 持有用户决定；`initial_policies`
+/// 包含来自同一设置代际的逐账号默认值。
 ///
 /// # Returns
 /// 返回值
-/// Stable policy records in connection order.
-/// 返回按连接顺序排列的稳定策略记录。
+/// Stable records in connection order, or an explicit generation mismatch.
+/// 返回按连接顺序排列的稳定记录，代际不一致时显式报错。
 pub(super) fn build_connection_model_access_policy_records(
     providers: &ProviderRegistry,
     configuration: &PersistedAiConfiguration,
-) -> Vec<PublicAiConnectionModelAccessPolicyRecord> {
+    initial_policies: &BTreeMap<String, ConnectionModelAccessPolicy>,
+) -> Result<Vec<PublicAiConnectionModelAccessPolicyRecord>, String> {
     configuration
         .connection_graph
         .connections
         .values()
         .map(|connection| {
-            let policy: ConnectionModelAccessPolicy =
-                configuration.connection_model_access_policy(connection.id.as_str());
-            PublicAiConnectionModelAccessPolicyRecord {
+            let policy: ConnectionModelAccessPolicy = configuration
+                .connection_model_access_policies
+                .get(connection.id.as_str())
+                .cloned()
+                .or_else(|| initial_policies.get(connection.id.as_str()).cloned())
+                .ok_or_else(|| {
+                    format!(
+                        "Account `{}` has no initial model policy in the settings generation.",
+                        connection.id
+                    )
+                })?;
+            Ok(PublicAiConnectionModelAccessPolicyRecord {
                 connection_id: connection.id.clone(),
                 default_enabled: policy.default_enabled,
                 model_enabled_overrides: policy.model_enabled_overrides,
                 directory_kind: connection_model_directory_kind(providers, connection),
-            }
+            })
         })
         .collect()
 }

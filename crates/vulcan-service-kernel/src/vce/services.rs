@@ -757,6 +757,11 @@ pub(crate) fn map_vce_job(
             activity: progress.activity.map(|activity| api::VceEmbeddingActivitySummary {
                 stage: match activity.stage {
                     vulcan_context_engine::VceEmbeddingActivityStage::Preparing => "preparing",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Planning => "planning",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Validating => "validating",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Persisting => "persisting",
+                    vulcan_context_engine::VceEmbeddingActivityStage::PlanningTasks => "planning_tasks",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Admitting => "admitting",
                     vulcan_context_engine::VceEmbeddingActivityStage::Requesting => "requesting",
                     vulcan_context_engine::VceEmbeddingActivityStage::Uploading => "uploading",
                     vulcan_context_engine::VceEmbeddingActivityStage::Submitting => "submitting",

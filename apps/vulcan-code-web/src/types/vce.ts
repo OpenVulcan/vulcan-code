@@ -202,7 +202,7 @@ export interface VceJobSummary {
     activity?: {
       // Actual awaited action, never inferred from numeric progress.
       // 实际等待的动作，绝不从数字进度推断。
-      stage: "preparing" | "requesting" | "uploading" | "submitting" | "waiting" | "polling" | "collecting";
+      stage: "preparing" | "planning" | "validating" | "persisting" | "planning_tasks" | "admitting" | "requesting" | "uploading" | "submitting" | "waiting" | "polling" | "collecting";
       // Acknowledged provider task identity, absent before submission confirmation.
       // 已确认供应商任务身份；提交确认前为空。
       providerBatchId: string | null;

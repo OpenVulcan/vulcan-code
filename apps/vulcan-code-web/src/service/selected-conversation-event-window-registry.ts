@@ -60,6 +60,12 @@ export function activateSelectedConversationRegistryDisposalLease(
 /** Minimal controller lifecycle owned by the selected-session registry.
  * 选中会话 registry 持有的最小控制器生命周期。 */
 export interface SelectedConversationEventWindowController {
+  /** Installs a complete cached local window synchronously without fetching its tail again.
+   * 同步安装完整的本地缓存窗口，不重新获取尾部历史。 */
+  restoreCachedSnapshot(snapshot: ConversationEventWindowControllerSnapshot): void;
+  /** Resumes live delivery and reconciles the cached revision frontier.
+   * 恢复实时交付并协调缓存的修订前沿。 */
+  resumeCachedWindow(): Promise<void>;
   /** Establishes one exact selected-session ownership boundary.
    * 建立一个精确的选中会话归属边界。 */
   hydrate(sessionId: string): Promise<boolean>;
@@ -181,6 +187,9 @@ export class SelectedConversationEventWindowRegistry {
   /** Currently owned controller entry, or null for drafts and empty workbenches.
    * 当前持有的控制器条目；草稿与空工作台时为 null。 */
   private activeEntry: SelectedConversationEventWindowEntry | null = null;
+  /** Recently visited immutable windows; eight inactive sessions bound retained history memory without keeping sockets alive.
+   * 最近访问的不可变窗口；最多八个非活动会话限制历史内存占用，且不保留实时连接。 */
+  private readonly retainedWindows = new Map<string, ConversationEventWindowControllerSnapshot>();
   /** Stable snapshot consumed by the React external-store adapter.
    * React 外部 store 适配器消费的稳定快照。 */
   private snapshotCache = EMPTY_SELECTED_CONVERSATION_EVENT_WINDOW_SNAPSHOT;
@@ -258,6 +267,10 @@ export class SelectedConversationEventWindowRegistry {
     }
 
     const selectionToken = ++this.selectionToken;
+    // Remove the requested warm window before caching the outgoing one, so eviction cannot discard the destination.
+    // 在缓存离开窗口前取出目标缓存，避免淘汰操作丢弃即将进入的窗口。
+    const retained = sessionId === null ? undefined : this.retainedWindows.get(sessionId);
+    if (sessionId !== null) this.retainedWindows.delete(sessionId);
     this.releaseActiveEntry();
     if (sessionId === null) {
       this.publishSnapshot(EMPTY_SELECTED_CONVERSATION_EVENT_WINDOW_SNAPSHOT);
@@ -266,12 +279,15 @@ export class SelectedConversationEventWindowRegistry {
     }
 
     const controller = this.createController();
+    // Restore before subscribing or publishing so a warm switch never exposes an empty owner.
+    // 在订阅或发布前恢复，使已缓存切换绝不暴露空归属。
+    if (retained) controller.restoreCachedSnapshot(retained);
     const commands = this.createEntryCommands(selectionToken, controller);
     const entry: SelectedConversationEventWindowEntry = {
       sessionId,
       controller,
       unsubscribe: () => undefined,
-      hydrated: false,
+      hydrated: Boolean(retained),
       hydrationPromise: null,
       commands,
     };
@@ -280,6 +296,18 @@ export class SelectedConversationEventWindowRegistry {
     });
     this.activeEntry = entry;
     this.publishSnapshot(controller.snapshot());
+    if (retained) {
+      this.publishStatus({ kind: "ready", session_id: sessionId });
+      try {
+        await controller.resumeCachedWindow();
+        return selectionToken === this.selectionToken && this.activeEntry === entry;
+      } catch (error) {
+        if (this.activeEntry === entry) {
+          this.publishStatus({ kind: "failed", session_id: sessionId, message: selectedConversationHydrationErrorMessage(error) });
+        }
+        throw error;
+      }
+    }
     this.publishStatus({ kind: "loading", session_id: sessionId });
     const hydrated = await this.hydrateEntry(entry);
     if (selectionToken !== this.selectionToken || this.activeEntry !== entry) {
@@ -321,6 +349,7 @@ export class SelectedConversationEventWindowRegistry {
     this.disposed = true;
     this.selectionToken += 1;
     this.releaseActiveEntry();
+    this.retainedWindows.clear();
     this.snapshotCache = EMPTY_SELECTED_CONVERSATION_EVENT_WINDOW_SNAPSHOT;
     this.listeners.clear();
   }
@@ -453,6 +482,16 @@ export class SelectedConversationEventWindowRegistry {
     const entry = this.activeEntry;
     this.activeEntry = null;
     if (entry === null) return;
+    if (!this.disposed && entry.hydrated) {
+      this.retainedWindows.delete(entry.sessionId);
+      this.retainedWindows.set(entry.sessionId, entry.controller.snapshot());
+      // Map insertion order is the least-recently-used eviction order.
+      // Map 插入顺序即最近最少使用淘汰顺序。
+      while (this.retainedWindows.size > 8) {
+        const oldest = this.retainedWindows.keys().next().value;
+        if (oldest !== undefined) this.retainedWindows.delete(oldest);
+      }
+    }
     entry.unsubscribe();
     entry.controller.dispose();
   }

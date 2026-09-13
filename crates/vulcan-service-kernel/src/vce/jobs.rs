@@ -2936,6 +2936,9 @@ impl VceRuntimeManager {
         // Phase changes bypass counter throttling; identical-phase counters remain sampled.
         // 阶段变化绕过计数节流；同阶段计数仍采用采样。
         let mut published_phase = None;
+        // Retain the last actual observation so polling does not fabricate new progress timestamps.
+        // 保留最近实际观察，避免轮询伪造新的进度时间戳。
+        let mut published_progress = None;
         // Closed observers must not create a permanently ready selector branch.
         // 已关闭观察器不能产生永久就绪的选择器分支。
         let mut observing = true;
@@ -2959,9 +2962,12 @@ impl VceRuntimeManager {
                 _ = tick.tick(), if progress_error.is_none() => {
                     let progress = progress_receiver.borrow_and_update().clone();
                     if let Some(progress) = progress {
-                        let phase = (progress.operation_id.clone(), progress.phase);
+                        if published_progress.as_ref() == Some(&progress) {
+                            continue;
+                        }
+                        let phase = (progress.operation_id.clone(), progress.phase, progress.activity.as_ref().map(|activity| activity.stage));
                         if let Err(error) =
-                            persist_progress_with_retry(&persist_progress, progress).await
+                            persist_progress_with_retry(&persist_progress, progress.clone()).await
                         {
                             if !is_transient_progress_persistence_error(&error) {
                                 control.cancel();
@@ -2969,6 +2975,7 @@ impl VceRuntimeManager {
                             progress_error = Some(error);
                         } else {
                             published_phase = Some(phase);
+                            published_progress = Some(progress);
                         }
                     }
                 }
@@ -2979,10 +2986,10 @@ impl VceRuntimeManager {
                     }
                     let progress = progress_receiver.borrow_and_update().clone();
                     if let Some(progress) = progress {
-                        let phase = (progress.operation_id.clone(), progress.phase);
+                        let phase = (progress.operation_id.clone(), progress.phase, progress.activity.as_ref().map(|activity| activity.stage));
                         if published_phase.as_ref() != Some(&phase) {
                             if let Err(error) =
-                                persist_progress_with_retry(&persist_progress, progress).await
+                                persist_progress_with_retry(&persist_progress, progress.clone()).await
                             {
                                 if !is_transient_progress_persistence_error(&error) {
                                     control.cancel();
@@ -2990,6 +2997,7 @@ impl VceRuntimeManager {
                                 progress_error = Some(error);
                             } else {
                                 published_phase = Some(phase);
+                                published_progress = Some(progress);
                             }
                         }
                     }
@@ -3001,6 +3009,7 @@ impl VceRuntimeManager {
         if progress_error.is_none() {
             let final_progress = progress_receiver.borrow().clone();
             if let Some(progress) = final_progress
+                && published_progress.as_ref() != Some(&progress)
                 && let Err(error) = persist_progress_with_retry(&persist_progress, progress).await
             {
                 progress_error = Some(error);
@@ -4933,6 +4942,62 @@ mod tests {
                 .expect("supervisor must not deadlock behind progress persistence")
                 .expect("supervisor task must finish");
             assert_eq!(result.expect("execution must complete"), 7);
+        });
+    }
+
+    /// Ensure unchanged polling cannot advance durable progress timestamps or repeat storage writes.
+    /// 确保相同状态轮询不会推进持久进度时间戳或重复写入存储。
+    /// Takes no input; holds the worker across multiple real sampling ticks and returns after joining it.
+    /// 无输入；跨多个实际采样时钟保留工作任务，连接完成后返回。
+    #[test]
+    fn supervised_execution_does_not_republish_unchanged_progress() {
+        // runtime keeps this isolated supervisor and its timers on one test thread.
+        // runtime 将此隔离监管器及其时钟保留在一个测试线程。
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            // count and persisted establish the exact number of acknowledged progress writes.
+            // count 与 persisted 确定已确认进度写入的准确次数。
+            let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let persisted = Arc::new(Notify::new());
+            // release holds execution until multiple sampling ticks have occurred.
+            // release 保留执行，直到经过多个采样时钟。
+            let release = Arc::new(Notify::new());
+            // progress is a genuine unchanged local-preparation observation.
+            // progress 是实际保持不变的本地准备观察。
+            let progress = VceRefreshProgress {
+                activity: None, phase: vulcan_context_engine::VceRefreshPhase::Chunking,
+                operation_id: "unchanged-progress".to_owned(), unit: vulcan_context_engine::VceRefreshUnit::Files,
+                completed: 1, total: Some(3), overall_completed: 0, overall_total: Some(3),
+                provider_batch_state: None, current_path: None,
+            };
+            // sender stays alive so channel closure cannot settle the test early.
+            // sender 保持存活，避免通道关闭使测试提前收敛。
+            let (sender, receiver) = watch::channel(Some(progress.clone()));
+            // worker_release is owned by the real supervised execution future.
+            // worker_release 由实际受监管执行 future 持有。
+            let worker_release = Arc::clone(&release);
+            // writes and signal belong only to the persistence callback.
+            // writes 与 signal 仅属于持久化回调。
+            let writes = Arc::clone(&count);
+            let signal = Arc::clone(&persisted);
+            // supervisor retains worker ownership through normal completion.
+            // supervisor 在正常完成前始终持有工作任务所有权。
+            let supervisor = tokio::spawn(VceRuntimeManager::supervise_job_execution(
+                VceRefreshControl::default(), receiver,
+                async move { worker_release.notified().await; Ok(1) },
+                move |_| {
+                    writes.fetch_add(1, Ordering::SeqCst);
+                    signal.notify_one();
+                    Box::pin(async { Ok(()) })
+                },
+            ));
+            tokio::time::timeout(Duration::from_secs(1), persisted.notified()).await.unwrap();
+            sender.send_replace(Some(progress));
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            release.notify_one();
+            assert_eq!(supervisor.await.unwrap().unwrap(), 1);
+            assert_eq!(count.load(Ordering::SeqCst), 1);
         });
     }
 

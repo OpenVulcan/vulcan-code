@@ -132,6 +132,81 @@ fn queue_vce_embedding_diagnostic(
     });
 }
 
+/// Persist a bounded diagnostic without the embedding request or result body.
+/// 持久化有界诊断，不包含向量请求或结果正文。
+/// The request and snapshot supply correlation and provider counters; the host error supplies the cause.
+/// 请求与快照提供关联标识和供应商计数；宿主错误提供失败原因。
+async fn persist_vce_embedding_batch_failure_diagnostic(
+    project_id: &str,
+    request: &VceEmbeddingBatchRequest,
+    task: &VceEmbeddingBatchTaskPlan,
+    snapshot: &VceEmbeddingBatchSnapshot,
+    error: &HostAiError,
+) {
+    let project_id = project_id.to_owned();
+    let data_root = vulcan_workspace_store::data_plane::application_data_root();
+    let trace = serde_json::json!({
+        "schema_version": 1,
+        "captured_at_unix_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default(),
+        "capture_point": "vce_embedding_batch_collection_failure",
+        "request_stage": "collecting",
+        "project_id": project_id,
+        "operation_id": request.context.operation_id,
+        "task_id": task.task_id,
+        "provider_batch_id": snapshot.submission.provider_batch_id,
+        "submitted_at_unix_ms": snapshot.submission.submitted_at_unix_ms,
+        "provider_batch_state": format!("{:?}", snapshot.state),
+        "planned_input_count": task.input_count,
+        "provider_request_counts": {
+            "total": snapshot.total_requests,
+            "completed": snapshot.completed_requests,
+            "failed": snapshot.failed_requests,
+        },
+        "output_file_id": snapshot.output_file_id,
+        "error_file_id": snapshot.error_file_id,
+        "host_error": {
+            "code": error.code,
+            "message": bounded_vce_batch_error_message(error.message.as_str()),
+            "retryable": error.retryable,
+            "dispatch_outcome": error.dispatch_outcome,
+            "provider_category": error.provider_error.as_ref().map(|provider| provider.category),
+            "provider_stage": error.provider_error.as_ref().map(|provider| provider.stage.as_str()),
+            "provider_http_status": error.provider_error.as_ref().and_then(|provider| provider.http_status),
+            "provider_upstream_code": error.provider_error.as_ref().and_then(|provider| provider.upstream_code.as_deref()),
+        },
+        "request_body_omitted": true,
+        "credential_values_not_collected": true,
+    });
+    let stored = tokio::task::spawn_blocking(move || {
+        vulcan_workspace_store::workspace_store::persist_vce_diagnostic(
+            &data_root,
+            &project_id,
+            &trace,
+        )
+    })
+    .await;
+    match stored {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!("VCE Batch diagnostic persistence failed: {error}"),
+        Err(error) => tracing::warn!("VCE Batch diagnostic worker failed: {error}"),
+    }
+}
+
+/// Flatten and bound a host error without copying any request or result body.
+/// 压平并限制宿主错误，不复制任何请求或结果正文。
+/// `message` is an already controlled host diagnostic; the returned value fits one trace slot.
+/// `message` 是已经受控的宿主诊断；返回值适合单个追踪槽位。
+fn bounded_vce_batch_error_message(message: &str) -> String {
+    message
+        .chars()
+        .take(1_024)
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .collect()
+}
+
 /// Host-owned registration inputs for one project-scoped VCE runtime.
 /// 一个项目作用域 VCE 运行时使用的宿主持有注册输入。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1209,7 +1284,7 @@ impl VceAiPort for VceHostAiAdapter {
                 Arc::clone(&adapter.port),
                 request.context.operation_id.clone(),
             );
-            let collected: EmbeddingBatchCollectedResult = adapter
+            let collected: EmbeddingBatchCollectedResult = match adapter
                 .port
                 .collect_embedding_batch(
                     &handle,
@@ -1220,7 +1295,20 @@ impl VceAiPort for VceHostAiAdapter {
                     restore_host_batch_snapshot(&snapshot),
                 )
                 .await
-                .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            {
+                Ok(collected) => collected,
+                Err(error) => {
+                    persist_vce_embedding_batch_failure_diagnostic(
+                        adapter.project_id.as_str(),
+                        &request,
+                        &task,
+                        &snapshot,
+                        &error,
+                    )
+                    .await;
+                    return Err(map_host_error(VcePortOperation::Embedding, error));
+                }
+            };
             call_guard.disarm();
             validate_collected_embedding_batch_identity(&task.task_id, &collected.task_id)?;
             let aligned = validate_embedding_batch_response(

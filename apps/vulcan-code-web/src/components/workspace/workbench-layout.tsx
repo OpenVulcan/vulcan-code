@@ -1026,9 +1026,9 @@ export function WorkbenchLayout(props: {
     const projectedConversationId = selectedDraftConversation ? null : selectedConversationId;
     return workbenchWithSelectedConversationProjection(workbenchState, projectedConversationId);
   }, [selectedConversationId, selectedDraftConversation, workbenchState]);
-  // Keep the WorkbenchApp V1 owner aligned with the real local route; drafts own no durable session.
-  // 让 WorkbenchApp 的 V1 归属对齐真实本地路由；草稿不持有持久化会话。
-  React.useEffect(() => {
+  // Align ownership before paint so a cached route switch cannot flash the previous owner's loading placeholder.
+  // 在绘制前对齐归属，使缓存路由切换不会闪现旧归属对应的加载占位。
+  React.useLayoutEffect(() => {
     props.onSelectedConversationIdChanged(
       selectedDraftConversation ? null : selectedConversationId,
     );

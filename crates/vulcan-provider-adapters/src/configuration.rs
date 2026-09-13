@@ -2374,6 +2374,33 @@ impl PersistedAiConfiguration {
             .is_none_or(|policy| policy.model_is_enabled(model_id))
     }
 
+    /// Resolves account access from an explicit policy or the model's signed initial default.
+    /// 从显式账号策略或模型的签名初始默认值解析账号访问。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` and `model_id` select one account model; `inherited_default` is frozen
+    /// from its exact manifest scope when no user-owned account policy exists.
+    /// `connection_id` 与 `model_id` 选定一个账号模型；没有用户自有账号策略时，
+    /// `inherited_default` 来自精确清单作用域的冻结默认值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The persisted account decision when present, otherwise the signed initial default.
+    /// 已持久化账号决定优先，否则返回签名初始默认值。
+    pub fn connection_model_is_enabled_with_default(
+        &self,
+        connection_id: &str,
+        model_id: &str,
+        inherited_default: bool,
+    ) -> bool {
+        self.connection_model_access_policies
+            .get(connection_id)
+            .map_or(inherited_default, |policy| {
+                policy.model_is_enabled(model_id)
+            })
+    }
+
     /// Saves one exact account-model enabled decision using sparse persistence.
     /// 使用稀疏持久化保存一个精确账号模型启用决定。
     ///
@@ -2425,6 +2452,20 @@ impl PersistedAiConfiguration {
     /// `connection_id` 标识已删除凭据账号。
     pub fn remove_connection_model_access_policy(&mut self, connection_id: &str) {
         self.connection_model_access_policies.remove(connection_id);
+    }
+
+    /// Exposes all account models in a temporary support-only configuration.
+    /// 在临时且仅供支持目录使用的配置中暴露账号全部模型。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies the account whose access filter must be bypassed in a clone.
+    /// `connection_id` 标识要在配置副本中绕过访问筛选的账号。
+    pub fn allow_all_connection_models_for_support(&mut self, connection_id: &str) {
+        self.connection_model_access_policies.insert(
+            connection_id.to_string(),
+            ConnectionModelAccessPolicy::default(),
+        );
     }
 
     /// Reports whether one connection is isolated pending explicit model validation.

@@ -13,25 +13,26 @@ import {
 
 import {
   providerModelModalities,
+  providerExtensionOutputModalities,
   type ProviderModelModality,
 } from "@/components/features/settings/provider-model-modalities"
-import {
-  ModelBuiltinCapabilityIcons,
-  modelBuiltinCapabilities,
-} from "@/components/shared/model-builtin-capabilities"
+import { modelBuiltinCapabilities } from "@/components/shared/model-builtin-capabilities"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
-import type { PublicAiModel } from "@/types"
+import type { PublicAiModel, PublicAiProviderToolCapabilityKind } from "@/types"
 
 // ProviderModelModalitySummaryProps identifies the exact model whose modalities are summarized.
 // ProviderModelModalitySummaryProps 标识要汇总多模态能力的精确模型。
 interface ProviderModelModalitySummaryProps {
   // model contains the normalized capability contract.
   // model 包含归一化能力契约。
-  model: PublicAiModel
+  model?: PublicAiModel
   // additionalModels contributes declared modalities from other executable routes of the same model.
   // additionalModels 补充同一模型其他可执行路由声明的模态。
   additionalModels?: PublicAiModel[]
+  // Signed native extension capabilities add output icons to media-only models.
+  // 签名原生扩展能力为纯媒体模型补充输出图标。
+  extensionCapabilities?: PublicAiProviderToolCapabilityKind[]
 }
 
 // ProviderModelModalitySummary renders compact tooltip-backed modality icons shared by settings surfaces.
@@ -40,24 +41,28 @@ export function ProviderModelModalitySummary(props: ProviderModelModalitySummary
   const { t } = useI18n()
   // models preserves all executable route declarations when the caller renders a grouped model row.
   // models 在调用方渲染分组模型行时保留全部可执行路由声明。
-  const models = [props.model, ...(props.additionalModels ?? [])]
+  const models = [props.model, ...(props.additionalModels ?? [])].filter((model): model is PublicAiModel => model !== undefined)
   // routeModalities supplies the existing normalized input/output facts for each route.
   // routeModalities 提供每条路由既有的归一化输入输出事实。
   const routeModalities = models.map(providerModelModalities)
   // modalities merges exact declared kinds without repeating icons for equivalent routes.
   // modalities 合并精确声明的类型，避免等价路由重复显示图标。
+  // outputOrder keeps mixed catalog and extension outputs in the same stable visual sequence.
+  // outputOrder 让目录输出与扩展输出混合时仍保持一致的视觉顺序。
+  const outputOrder: ProviderModelModality[] = ["text", "image", "video", "audio", "file", "embedding", "rerank"]
+  // outputKinds merges model and native-extension declarations without duplicate icons.
+  // outputKinds 合并模型与原生扩展声明，避免图标重复。
+  const outputKinds = new Set<ProviderModelModality>([
+    ...routeModalities.flatMap((route) => route.output),
+    ...providerExtensionOutputModalities(props.extensionCapabilities ?? []),
+  ])
   const modalities = {
     input: [...new Set(routeModalities.flatMap((route) => route.input))],
-    output: [...new Set(routeModalities.flatMap((route) => route.output))],
+    output: outputOrder.filter((modality) => outputKinds.has(modality)),
   }
   // inputResources merges explicit media declarations across the displayed routes.
   // inputResources 合并所展示路由的明确媒体声明。
   const inputResources = [...new Set(models.flatMap((model) => model.capabilities.input_resources ?? []))]
-  // genericInputModalities excludes media inputs already represented as explicit understanding capabilities.
-  // genericInputModalities 排除已经由明确理解能力表示的媒体输入。
-  const genericInputModalities = modalities.input.filter((modality) => (
-    modality !== "image" && modality !== "video" && modality !== "audio"
-  ))
   // providerNativeTools retains native capabilities from every displayed route.
   // providerNativeTools 保留每条展示路由的原生能力。
   const providerNativeTools = [...new Set(models.flatMap((model) => model.capabilities.provider_native_tools ?? []))]
@@ -67,28 +72,36 @@ export function ProviderModelModalitySummary(props: ProviderModelModalitySummary
     inputResources,
     providerNativeTools,
   })
+  // inputModalities includes declared media and native understanding capabilities in one visual order.
+  // inputModalities 将声明的媒体与原生理解能力合并，按统一视觉顺序排列。
+  const inputKinds = new Set<ProviderModelModality>(modalities.input)
+  for (const capability of builtinCapabilities) {
+    if (capability === "image_understanding") inputKinds.add("image")
+    if (capability === "video_understanding") inputKinds.add("video")
+    if (capability === "audio_understanding") inputKinds.add("audio")
+  }
+  // inputOrder keeps the direction marker before a stable text-to-file icon sequence.
+  // inputOrder 让方向标记位于固定的文本至文件图标序列之前。
+  const inputOrder: ProviderModelModality[] = ["text", "image", "video", "audio", "file", "embedding", "rerank"]
+  // inputModalities displays only input kinds actually declared by the model.
+  // inputModalities 仅展示模型实际声明的输入类型。
+  const inputModalities = inputOrder.filter((modality) => inputKinds.has(modality))
   if (
-    genericInputModalities.length === 0
+    inputModalities.length === 0
     && modalities.output.length === 0
-    && builtinCapabilities.length === 0
   ) {
     return null
   }
   return (
     <span className="settings-model-modality-summary">
-      <ModelBuiltinCapabilityIcons
-        className="settings-model-builtin-capabilities"
-        inputResources={inputResources}
-        providerNativeTools={providerNativeTools}
-      />
-      {genericInputModalities.length > 0 ? (
+      {inputModalities.length > 0 ? (
         <span className="settings-model-modality-group">
           <ModalityIcon
             icon={<ArrowDownToLine aria-hidden="true" />}
             label={t("settings.models.inputModalities")}
             muted
           />
-          {genericInputModalities.map((modality) => (
+          {inputModalities.map((modality) => (
             <ModalityIcon
               icon={modelModalityIcon(modality)}
               key={`input/${modality}`}

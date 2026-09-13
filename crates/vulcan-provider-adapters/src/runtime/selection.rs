@@ -358,8 +358,6 @@ impl PublicAiRuntime {
             && !runtime_model_is_enabled_from_manifest(
                 configuration,
                 provider_id,
-                connection.service_entry_id.as_str(),
-                Some(connection.credential_profile_id.as_str()),
                 model_id,
                 catalog_snapshot.manifests.manifest(provider_id),
             )

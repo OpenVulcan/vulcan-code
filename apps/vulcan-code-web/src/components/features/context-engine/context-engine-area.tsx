@@ -445,7 +445,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           </div>
         ) : (
           <div className="divide-y">
-            <div className="hidden gap-4 px-4 py-2 text-xs text-muted-foreground @4xl/vce:grid @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_12rem]">
+            <div className="hidden gap-3 px-4 py-2 text-xs text-muted-foreground @xl/vce:grid @xl/vce:grid-cols-[8rem_minmax(12rem,1fr)_9.5rem]">
               <span>{copy("用途", "Purpose")}</span><span>{copy("模型与账号", "Model and account")}</span><span className="text-right">{copy("操作", "Actions")}</span>
             </div>
             {definitions.map((definition) => {
@@ -515,8 +515,8 @@ function VceRouteField(props: VceRouteFieldProps) {
   // selectedValue 仅在持久化路由仍是合格的精确候选项时存在。
   const selectedValue = candidateByKey.has(selectedKey) ? selectedKey : undefined;
   return (
-    <div className="grid items-center gap-4 px-4 py-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_12rem]">
-      <div className="flex min-w-0 items-center gap-3">
+    <div className="grid items-center gap-3 px-4 py-3 @xl/vce:grid-cols-[8rem_minmax(12rem,1fr)_9.5rem]">
+      <div className="flex min-w-0 items-center gap-2">
         <span className={props.status?.available
           ? "flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
           : "flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[var(--vcn-content-warning)]"}
@@ -526,13 +526,13 @@ function VceRouteField(props: VceRouteFieldProps) {
             : <CircleAlert className="size-4" />}
         </span>
         <div className="min-w-0">
-          <div className="flex items-center gap-1 text-sm font-medium">{props.definition.label}<VceHelpTooltip label={`${props.definition.label} ${copy("说明", "notes")}`}>{props.definition.description}</VceHelpTooltip></div>
+          <div className="flex items-center gap-1 text-xs font-medium">{props.definition.label}<VceHelpTooltip label={`${props.definition.label} ${copy("说明", "notes")}`}>{props.definition.description}</VceHelpTooltip></div>
         </div>
       </div>
       <div className="min-w-0">
         <Combobox
           ariaLabel={props.definition.label}
-          className="h-10"
+          className="h-8 px-2 text-xs"
           disabled={props.disabled || props.candidates.length === 0}
           emptyText={copy("没有匹配的兼容模型", "No compatible models match this filter")}
           onValueChange={(value) => {
@@ -555,7 +555,7 @@ function VceRouteField(props: VceRouteFieldProps) {
           <p className="mt-2 break-words text-xs text-[var(--vcn-content-warning)] dark:text-amber-300">{props.status.issue}</p>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
+      <div className="flex flex-wrap items-center gap-2 @xl/vce:justify-end">
         {props.onTest ? (
           <VceActionButton label={copy("测试连通性", "Test connectivity")}
             disabled={props.disabled || !props.route} onClick={() => void props.onTest?.()}

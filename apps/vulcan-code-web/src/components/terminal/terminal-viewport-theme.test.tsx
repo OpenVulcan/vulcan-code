@@ -17,7 +17,7 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {
 } }));
 
 describe("terminal theme", () => {
-  it("updates the existing read-only emulator from application tokens", async () => {
+  it("preserves the terminal palette and emulator when the application theme changes", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     // computed styles represent the same root-class palette switch used by the shell.
     // 计算样式模拟外壳使用的同一根类名色板切换。
@@ -29,10 +29,11 @@ describe("terminal theme", () => {
     try {
       await act(async () => root.render(<TerminalViewportRuntime chunks={[]} readOnly ariaLabel="Synthetic terminal" fixedRows={24} fixedCols={80} />));
       const instance = emulator.instances.at(-1)!;
-      expect(instance.options.theme).toMatchObject({ background: "light:--background", foreground: "light:--foreground" });
+      expect(instance.options.theme).toMatchObject({ background: "#111318", foreground: "#d9dee8" });
       const count = emulator.instances.length;
       await act(async () => { document.documentElement.classList.add("dark"); });
-      expect(instance.options.theme).toMatchObject({ background: "dark:--background", foreground: "dark:--foreground" });
+      expect(instance.options.theme).toMatchObject({ background: "#111318", foreground: "#d9dee8" });
+      expect(styles).not.toHaveBeenCalled();
       expect(emulator.instances).toHaveLength(count);
       await act(async () => root.unmount());
       expect(instance.dispose).toHaveBeenCalledOnce();

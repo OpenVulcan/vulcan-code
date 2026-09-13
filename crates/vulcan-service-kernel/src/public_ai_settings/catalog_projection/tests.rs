@@ -9,6 +9,74 @@ use vulcan_provider_adapters::{
     PublicAiRuntime,
 };
 
+/// Verifies a new OpenRouter account projects 17 signed checks without persisting them.
+/// 验证新 OpenRouter 账号无需持久化即可投影 17 项签名勾选。
+#[test]
+fn openrouter_account_projection_uses_signed_initial_checks() {
+    let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+    let providers = runtime.providers().expect("providers should resolve");
+    let mut configuration = PersistedAiConfiguration::default();
+    configuration
+        .connection_graph
+        .add_connection(
+            &providers,
+            CredentialConnection {
+                id: String::from("openrouter-account"),
+                provider_id: String::from("openrouter"),
+                service_entry_id: String::from("public-api"),
+                credential_profile_id: String::from("api-key"),
+                credential_mode: CredentialMode::Token,
+                credential_id: String::from("openrouter-credential"),
+                display_name: String::from("OpenRouter account"),
+                secret_reference: String::from("openrouter-secret"),
+                management_secret_reference: None,
+                service_origin_override: None,
+                prompt_cache_by_protocol: BTreeMap::new(),
+            },
+        )
+        .expect("account should register");
+    runtime
+        .replace_configuration(configuration.clone())
+        .expect("account should cross the settings activation boundary");
+    let settings = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("settings should resolve");
+    assert!(
+        settings
+            .runtime_configuration
+            .connection_graph
+            .connections
+            .contains_key("openrouter-account")
+    );
+    let records = build_connection_model_access_policy_records(
+        &providers,
+        &settings.runtime_configuration,
+        &settings.connection_model_initial_policies,
+    )
+    .expect("initial account records should project");
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].default_enabled);
+    assert_eq!(records[0].model_enabled_overrides.len(), 17);
+    assert_eq!(
+        records[0].directory_kind,
+        PublicAiModelDirectoryKind::Dynamic
+    );
+    assert!(configuration.connection_model_access_policies.is_empty());
+
+    configuration.connection_model_access_policies.insert(
+        String::from("openrouter-account"),
+        ConnectionModelAccessPolicy::default(),
+    );
+    let explicit = build_connection_model_access_policy_records(
+        &providers,
+        &configuration,
+        &settings.connection_model_initial_policies,
+    )
+    .expect("explicit account records should project");
+    assert!(explicit[0].default_enabled);
+    assert!(explicit[0].model_enabled_overrides.is_empty());
+}
+
 /// Verifies blocked custom models remain visible with an exact backend-owned reason.
 /// 验证被阻止的自定义模型仍保持可见，并携带精确的后端原因。
 #[test]

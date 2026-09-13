@@ -24,7 +24,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use vulcan_ai_contract::{
-    AiOperation, EmbeddingBatchCapabilities, EmbeddingBatchCollectedResult, EmbeddingBatchPlan,
+    AiErrorCategory, AiExecutionError, AiOperation, DispatchOutcome,
+    EmbeddingBatchCapabilities, EmbeddingBatchCollectedResult, EmbeddingBatchPlan,
     EmbeddingBatchProviderState, EmbeddingBatchSnapshot, EmbeddingBatchSubmission,
     EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput, EmbeddingEncoding, EmbeddingInputContent,
     EmbeddingRequest, InferenceBatchResultDelivery, InferenceBatchTransport, InferenceUsageScope,
@@ -210,6 +211,17 @@ struct WireBatchItemResponse {
     /// Standard embedding response body.
     /// 标准向量响应正文。
     body: serde_json::Value,
+}
+
+/// Retains only one provider-owned item error code and bounded explanatory message.
+/// 仅保留一条供应商条目错误码和有界说明消息。
+struct BatchErrorExample {
+    /// Stable provider error code, when supplied.
+    /// 供应商提供时的稳定错误码。
+    code: Option<String>,
+    /// Bounded provider message, when supplied.
+    /// 供应商提供时的有界消息。
+    message: Option<String>,
 }
 
 /// Parses one uploaded Alibaba File object.
@@ -701,8 +713,58 @@ impl ProviderExecutionClient {
                 if snapshot.failed_requests.unwrap_or_default() != 0
                     || snapshot.error_file_id.is_some()
                 {
-                    return Err(response_headers_protocol_failure(
-                        "Completed embedding Batch contains failed request items.",
+                    let mut diagnostic = failed_batch_request_diagnostic(
+                        snapshot.failed_requests,
+                        snapshot.total_requests,
+                    );
+                    let mut error_example = None;
+                    if let Some(error_file_id) = snapshot.error_file_id.as_deref() {
+                        let endpoint_template = binding
+                            .file_content_endpoint_path_template
+                            .as_deref()
+                            .ok_or_else(|| pre_dispatch_failure("Embedding Batch file-content endpoint is absent."))?;
+                        let endpoint = expand_endpoint_template(
+                            endpoint_template,
+                            "{file_id}",
+                            error_file_id,
+                        )?;
+                        match self.send_batch_request(
+                            BatchHttpRequest {
+                                route,
+                                binding,
+                                method: Method::GET,
+                                endpoint: endpoint.as_str(),
+                                secret,
+                                maximum_response_bytes: binding
+                                    .capabilities
+                                    .host_policy_maximum_result_bytes
+                                    .min(16 * 1024 * 1024),
+                                require_json: false,
+                            },
+                            |builder| builder,
+                        )
+                        .await {
+                            Ok(body) => match first_batch_error_file_diagnostic(body.as_str()) {
+                                Some(example) => {
+                                    diagnostic.push_str(" Provider error example: ");
+                                    diagnostic.push_str(example.display().as_str());
+                                    error_example = Some(example);
+                                }
+                                None => diagnostic.push_str(
+                                    " Provider error file contains no parseable item error.",
+                                ),
+                            },
+                            Err(error) => {
+                                diagnostic.push_str(" Provider error file retrieval failed: ");
+                                diagnostic.push_str(
+                                    bounded_batch_error_text(error.to_string().as_str()).as_str(),
+                                );
+                            }
+                        }
+                    }
+                    return Err(crate::execution::sanitize_provider_execution_failure(
+                        batch_failed_items_failure(diagnostic, error_example.as_ref()),
+                        secret,
                     ));
                 }
                 let output_file_id = snapshot.output_file_id.as_deref().ok_or_else(|| {
@@ -860,7 +922,10 @@ impl ProviderExecutionClient {
                     "Embedding Batch transport profile is unavailable: {error}"
                 ))
             })?;
-        let headers = execution_headers(route, &BTreeMap::new(), secret, None)?;
+        // Body encoders own Content-Type, including the exact multipart boundary for file uploads.
+        // 正文编码器负责 Content-Type，包含文件上传的精确 multipart 分隔边界。
+        let mut headers = execution_headers(route, &BTreeMap::new(), secret, None)?;
+        headers.remove(CONTENT_TYPE);
         let url = batch_request_url(route, binding, endpoint)?;
         let request = configure(self.http.request(method, url.as_str()).headers(headers));
         let response = tokio::time::timeout(
@@ -1711,6 +1776,108 @@ fn map_batch_result_items(
     Ok(bodies)
 }
 
+/// Extracts one bounded provider error example without retaining a custom id or request input.
+/// 提取一条有界供应商错误示例，不保留自定义标识或请求输入。
+/// `body` is the provider error JSONL; returns its first structured error code and message.
+/// `body` 是供应商错误 JSONL；返回首条结构化错误码和消息。
+fn first_batch_error_file_diagnostic(body: &str) -> Option<BatchErrorExample> {
+    let error = body.lines().filter(|line| !line.trim().is_empty()).find_map(|line| {
+        serde_json::from_str::<WireBatchResultItem>(line)
+            .ok()
+            .and_then(|item| item.error)
+    })?;
+    let code = error.get("code").and_then(serde_json::Value::as_str);
+    let message = error.get("message").and_then(serde_json::Value::as_str);
+    if code.is_none() && message.is_none() {
+        return None;
+    }
+    Some(BatchErrorExample {
+        code: code.map(bounded_batch_error_text),
+        message: message.map(bounded_batch_error_text),
+    })
+}
+
+impl BatchErrorExample {
+    /// Format one provider-owned example for a bounded user-facing diagnostic.
+    /// 将一条供应商错误示例格式化为有界的用户可见诊断。
+    /// Returns the exact available code and message without item identity or request text.
+    /// 返回可用的错误码和消息，不包含条目标识或请求正文。
+    fn display(&self) -> String {
+        match (&self.code, &self.message) {
+            (Some(code), Some(message)) => format!("{code}: {message}"),
+            (Some(code), None) => code.clone(),
+            (None, Some(message)) => message.clone(),
+            (None, None) => String::new(),
+        }
+    }
+}
+
+/// Classify an incomplete provider Batch without inventing a 200 status or blaming user input.
+/// 对不完整的供应商批次分类，不虚构 200 状态或归咎于用户输入。
+/// Partial successful items make replaying the whole Batch unsafe even when one item has a 500 error.
+/// 即使单项报 500，部分条目已成功也使整个批次无法安全重放。
+fn batch_failed_items_failure(
+    message: String,
+    example: Option<&BatchErrorExample>,
+) -> ProviderExecutionFailure {
+    ProviderExecutionFailure {
+        error: Box::new(AiExecutionError {
+            category: AiErrorCategory::Unclassified,
+            subcategory: Some(String::from("batch_item_failure")),
+            stage: String::from("batch_collect"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: example.and_then(|item| item.code.clone()),
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: example.and_then(|item| item.message.clone()),
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message,
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        }),
+    }
+}
+
+/// Bounds and flattens one provider diagnostic before persisting it in a VCE job error.
+/// 在持久化到 VCE 作业错误前限制并压平一条供应商诊断。
+/// `value` may come from a provider error file or a failed error-file download.
+/// `value` 可来自供应商错误文件或失败的错误文件下载。
+fn bounded_batch_error_text(value: &str) -> String {
+    value
+        .chars()
+        .take(320)
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .collect()
+}
+
+/// Describes a completed provider Batch whose item failures prevent complete vector ingestion.
+/// 描述已完成但存在失败条目、因而无法完整写入向量的供应商批次。
+/// Counts are provider-reported and may be absent when the provider omits metadata.
+/// 计数来自供应商；供应商省略元数据时计数可能缺失。
+fn failed_batch_request_diagnostic(
+    failed: Option<u32>,
+    total: Option<u32>,
+) -> String {
+    match (failed, total) {
+        (Some(failed), Some(total)) => format!(
+            "Completed embedding Batch contains {failed}/{total} failed request items."
+        ),
+        (Some(failed), None) => format!(
+            "Completed embedding Batch contains {failed} failed request items."
+        ),
+        _ => String::from("Completed embedding Batch contains failed request items."),
+    }
+}
+
 /// Returns current Unix time in milliseconds for durable submission ordering.
 /// 返回当前 Unix 毫秒时间用于持久提交排序。
 fn current_unix_millis() -> Result<u64, ProviderExecutionFailure> {
@@ -1738,6 +1905,90 @@ mod tests {
         DistanceMetric, EmbeddingCapabilities, EmbeddingInput, EmbeddingInvalidInputPolicy,
         EmbeddingNormalization, EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
     };
+
+    /// Verify the production Batch sender uses one encoder-owned Content-Type for multipart and JSON.
+    /// 验证生产 Batch 发送器对 multipart 及 JSON 使用唯一的编码器所属 Content-Type。
+    /// No parameters; a loopback server checks headers, boundaries and payload bytes without provider calls.
+    /// 无参数；回环服务校验请求头、分隔符及正文，不调用供应商。
+    #[tokio::test]
+    async fn batch_sender_preserves_multipart_boundary_and_json_content_type() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // Synthetic secret and manifest-backed route exercise the real shared header construction.
+        // 模拟密钥及清单路由经过真实共享请求头构造。
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-key"))
+            .unwrap().execution_secret().unwrap();
+        let route = crate::execution::test_support::bundled_manifest_route(
+            "alibaba", "model-studio-singapore", vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID);
+        let binding = test_binding(InferenceBatchTransport::JsonlFile, 10, 1_048_576, None);
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = ProviderExecutionClient::new(http.clone(), std::sync::Arc::new(
+            vulcan_ai_protocols::ProtocolRegistry::first_batch().unwrap()));
+        for multipart in [true, false] {
+            // Bind an ephemeral loopback endpoint and retain its exact address for this request only.
+            // 绑定临时回环端点，仅为本次请求保留精确地址。
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                // Read bounded raw wire bytes so duplicate headers cannot be hidden by a HeaderMap.
+                // 读取有界线缆字节，避免 HeaderMap 隐藏重复请求头。
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                loop {
+                    let count = stream.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    assert!(bytes.len() < 16_384);
+                    if let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                        let length = headers.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
+                        }).unwrap();
+                        if bytes.len() >= end + 4 + length { break; }
+                    }
+                }
+                // Capture before replying; assertions below verify the actual emitted MIME contract.
+                // 回复前捕获字节；后续断言校验实际发出的 MIME 契约。
+                let captured = String::from_utf8(bytes).unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+                captured
+            });
+            client.send_batch_request(BatchHttpRequest { route: &route, binding: &binding,
+                method: Method::POST, endpoint: "/v1/files", secret: &secret,
+                maximum_response_bytes: 1024, require_json: true }, |builder| {
+                // Both encoders use the real sender's authenticated headers; only the test destination changes.
+                // 两个编码器使用真实发送器的鉴权请求头；仅测试目标地址被替换。
+                let builder = if multipart {
+                    builder.multipart(reqwest::multipart::Form::new().text("purpose", "batch")
+                        .part("file", reqwest::multipart::Part::bytes(b"{\"input\":\"fixture\"}\n".to_vec())
+                            .file_name("fixture.jsonl").mime_str("application/jsonl").unwrap()))
+                } else { builder.json(&serde_json::json!({"input_file_id": "file-fixture"})) };
+                let mut request = builder.build().unwrap();
+                *request.url_mut() = format!("http://{address}/v1/files").parse().unwrap();
+                RequestBuilder::from_parts(http.clone(), request)
+            }).await.unwrap();
+            // Enforce exactly one MIME header and a boundary matching the multipart body.
+            // 强制只有一个 MIME 请求头，且分隔符与 multipart 正文一致。
+            let captured = tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
+            let (headers, body) = captured.split_once("\r\n\r\n").unwrap();
+            let types = headers.lines().filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-type").then_some(value.trim())
+            }).collect::<Vec<_>>();
+            assert_eq!(types.len(), 1);
+            if multipart {
+                let boundary = types[0].strip_prefix("multipart/form-data; boundary=").unwrap();
+                assert!(body.starts_with(&format!("--{boundary}\r\n")));
+                assert!(body.ends_with(&format!("--{boundary}--\r\n")));
+                assert!(body.contains("{\"input\":\"fixture\"}\n"));
+                assert!(body.contains("name=\"purpose\"\r\n\r\nbatch"));
+            } else {
+                assert_eq!(types[0], "application/json");
+                assert_eq!(serde_json::from_str::<serde_json::Value>(body).unwrap()["input_file_id"], "file-fixture");
+            }
+        }
+    }
 
     /// Builds one minimal model used by deterministic Batch planner tests.
     /// 构建确定性 Batch 规划器测试使用的最小模型。
@@ -2015,6 +2266,49 @@ mod tests {
             Some(serde_json::json!({"message": "invalid"}))
         );
         assert_eq!(batch.metadata, None);
+    }
+
+    /// Verify a completed file-backed Batch exposes provider item counts and one bounded cause.
+    /// 验证已完成的文件型批次展示供应商条目计数与一条有界原因。
+    /// No parameters; synthetic JSONL must not expose the per-item custom id in the diagnostic.
+    /// 无参数；模拟 JSONL 的诊断不得暴露单条自定义标识。
+    #[test]
+    fn failed_batch_error_file_reports_count_and_provider_cause() {
+        let body = r#"{"custom_id":"private-item-id","response":null,"error":{"code":"InvalidParameter","message":"input is too long"}}
+{"custom_id":"another-item","response":null,"error":{"code":"RateLimit","message":"later error"}}"#;
+        let example = first_batch_error_file_diagnostic(body).expect("structured error example");
+        let diagnostic = failed_batch_request_diagnostic(Some(197), Some(298));
+
+        assert!(diagnostic.contains("197/298 failed request items"));
+        assert_eq!(example.display(), "InvalidParameter: input is too long");
+        assert!(!example.display().contains("private-item-id"));
+        assert!(!example.display().contains("later error"));
+        let failure = batch_failed_items_failure(diagnostic, Some(&example));
+        assert_eq!(failure.error.category, AiErrorCategory::Unclassified);
+        assert_eq!(failure.error.stage, "batch_collect");
+        assert_eq!(failure.error.http_status, None);
+        assert_eq!(failure.error.upstream_code.as_deref(), Some("InvalidParameter"));
+        assert!(!failure.error.retryable);
+    }
+
+    /// Verify a provider-side vLLM item error is not labeled as a malformed user request.
+    /// 验证供应商侧 vLLM 条目错误不会被标记为用户请求格式错误。
+    /// No parameters; the observed error code remains typed without fabricating an HTTP 200 item status.
+    /// 无参数；保留已观察到的错误码，不虚构条目的 HTTP 200 状态。
+    #[test]
+    fn failed_batch_vllm_item_keeps_upstream_code_without_user_blame() {
+        let body = r#"{"custom_id":"private-item-id","response":null,"error":{"code":"InternalError.Algo","message":"<5000405> InternalError.Algo.ForwardingTransportError: vLLM Error: "}}"#;
+        let example = first_batch_error_file_diagnostic(body).expect("provider item error");
+        let failure = batch_failed_items_failure(
+            failed_batch_request_diagnostic(Some(197), Some(298)),
+            Some(&example),
+        );
+
+        assert_eq!(failure.error.category, AiErrorCategory::Unclassified);
+        assert_eq!(failure.error.subcategory.as_deref(), Some("batch_item_failure"));
+        assert_eq!(failure.error.upstream_code.as_deref(), Some("InternalError.Algo"));
+        assert_eq!(failure.error.http_status, None);
+        assert!(!failure.error.retryable);
     }
 
     /// Verifies Alibaba lifecycle responses must echo the exact durable task and input file.

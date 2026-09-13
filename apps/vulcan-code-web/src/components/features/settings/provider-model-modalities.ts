@@ -1,6 +1,7 @@
 import type {
   PublicAiModel,
   PublicAiOperation,
+  PublicAiProviderToolCapabilityKind,
   PublicAiResourceKind,
 } from "@/types"
 
@@ -22,8 +23,8 @@ export interface ProviderModelModalities {
 const MODALITY_ORDER: ProviderModelModality[] = [
   "text",
   "image",
-  "audio",
   "video",
+  "audio",
   "file",
   "embedding",
   "rerank",
@@ -57,4 +58,38 @@ export function providerModelModalities(model: PublicAiModel): ProviderModelModa
     input: MODALITY_ORDER.filter((modality) => input.has(modality)),
     output: MODALITY_ORDER.filter((modality) => output.has(modality)),
   }
+}
+
+// providerExtensionOutputModalities maps signed extension operations to their actual output mode.
+// providerExtensionOutputModalities 将签名扩展操作映射到实际输出模式。
+// Parameters: capabilities are declared by signed targets; returns unique modes in display order.
+// 参数：capabilities 来自签名目标声明；返回按展示顺序去重的模式。
+export function providerExtensionOutputModalities(
+  capabilities: readonly PublicAiProviderToolCapabilityKind[],
+): ProviderModelModality[] {
+  // output collects only resource types backed by signed extension actions.
+  // output 仅收集签名扩展操作支持的资源类型。
+  const output = new Set<ProviderModelModality>()
+  for (const capability of capabilities) {
+    switch (capability) {
+      case "image_generate":
+      case "image_edit":
+        output.add("image")
+        break
+      case "video_generate":
+      case "video_edit":
+      case "video_extend":
+        output.add("video")
+        break
+      case "speech_synthesize":
+      case "music_generate":
+      case "music_cover":
+        output.add("audio")
+        break
+      case "speech_transcribe":
+        output.add("text")
+        break
+    }
+  }
+  return MODALITY_ORDER.filter((modality) => output.has(modality))
 }

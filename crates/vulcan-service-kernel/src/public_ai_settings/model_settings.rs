@@ -4,8 +4,8 @@
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use vulcan_provider_adapters::{
-    ConnectionModelCatalog, ModelCapabilityOverrides, ModelExecutionOverrides,
-    PersistedAiConfiguration, PublicAiRuntime,
+    ConnectionModelAccessPolicy, ConnectionModelCatalog, ModelCapabilityOverrides,
+    ModelExecutionOverrides, PersistedAiConfiguration, PublicAiRuntime,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -140,11 +140,36 @@ fn connection_supports_model(
     model_id: &str,
 ) -> Result<bool, String> {
     let mut support_configuration = configuration.clone();
-    support_configuration.remove_connection_model_access_policy(connection_id);
+    support_configuration.allow_all_connection_models_for_support(connection_id);
     Ok(runtime
         .resolved_model_catalog_snapshot(&support_configuration)?
         .get(connection_id)
         .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id)))
+}
+
+/// Reads one account's signed initial checkbox policy from a coherent settings generation.
+/// 从一致的设置代际读取一个账号的签名初始勾选策略。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the published manifest and source catalog; `configuration` owns the account;
+/// `connection_id` selects its exact initial policy.
+/// `runtime` 持有已发布清单与来源目录；`configuration` 持有账号；`connection_id` 选定其初始策略。
+///
+/// # Returns
+/// 返回值
+/// The signed account policy, or an explicit missing-account error.
+/// 返回签名账号策略，账号缺失时显式报错。
+fn initial_connection_model_policy(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    connection_id: &str,
+) -> Result<ConnectionModelAccessPolicy, String> {
+    runtime
+        .settings_catalog_snapshot(configuration)?
+        .connection_model_initial_policies
+        .remove(connection_id)
+        .ok_or_else(|| format!("Account `{connection_id}` has no initial model policy."))
 }
 
 /// Applies an account-wide model default without allowing provider-disabled models to re-enter it.
@@ -168,6 +193,7 @@ fn set_connection_models_enabled_respecting_provider_access(
     connection_id: &str,
     provider_id: &str,
     enabled: bool,
+    initial_default_enabled: bool,
     support_catalog: &ConnectionModelCatalog,
 ) -> Result<(), String> {
     // connection_provider_id validates the exact caller scope before mutating sparse access state.
@@ -186,6 +212,16 @@ fn set_connection_models_enabled_respecting_provider_access(
     configuration.set_connection_models_enabled(connection_id, enabled);
     if !enabled {
         return Ok(());
+    }
+    if !initial_default_enabled {
+        // Explicit Enable All must persist as an account decision; removing the policy would
+        // otherwise restore the signed 17-model initial selection on the next projection.
+        // 显式“全部启用”必须持久化为账号决定；否则删除策略会在下次投影时恢复签名的
+        // 17 个初始选择。
+        configuration.connection_model_access_policies.insert(
+            connection_id.to_string(),
+            ConnectionModelAccessPolicy::default(),
+        );
     }
     for model in &support_catalog.models {
         if !runtime.model_is_enabled_for_connection(
@@ -255,6 +291,19 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
     }
 
     let mut candidate_configuration = current_configuration.clone();
+    if !candidate_configuration
+        .connection_model_access_policies
+        .contains_key(request.connection_id.as_str())
+    {
+        let initial_policy = initial_connection_model_policy(
+            runtime.as_ref(),
+            &current_configuration,
+            request.connection_id.as_str(),
+        )?;
+        candidate_configuration
+            .connection_model_access_policies
+            .insert(request.connection_id.clone(), initial_policy);
+    }
     candidate_configuration.set_connection_model_enabled(
         request.connection_id.as_str(),
         request.model_id.as_str(),
@@ -345,7 +394,7 @@ pub(crate) async fn service_save_public_ai_connection_models_enabled(
             )
         })?;
     let mut support_configuration = current_configuration.clone();
-    support_configuration.remove_connection_model_access_policy(request.connection_id.as_str());
+    support_configuration.allow_all_connection_models_for_support(request.connection_id.as_str());
     let support_catalog = runtime
         .resolved_model_catalog_snapshot(&support_configuration)?
         .get(request.connection_id.as_str())
@@ -364,12 +413,18 @@ pub(crate) async fn service_save_public_ai_connection_models_enabled(
     }
 
     let mut candidate_configuration = current_configuration.clone();
+    let initial_policy = initial_connection_model_policy(
+        runtime.as_ref(),
+        &current_configuration,
+        request.connection_id.as_str(),
+    )?;
     set_connection_models_enabled_respecting_provider_access(
         runtime.as_ref(),
         &mut candidate_configuration,
         request.connection_id.as_str(),
         connection.provider_id.as_str(),
         request.enabled,
+        initial_policy.default_enabled,
         &support_catalog,
     )?;
     let candidate_catalogs = runtime.resolved_model_catalog_snapshot(&candidate_configuration)?;

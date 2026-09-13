@@ -152,6 +152,21 @@ afterEach(async () => {
 });
 
 describe("project semantic settings editor", () => {
+  // A job owns its exact failure; unrelated project diagnostics must remain visible.
+  // 作业拥有其精确失败信息；其他项目诊断仍须可见。
+  it.each([true, false])("deduplicates identical job and index errors: %s", async (same) => {
+    // Independent fixtures exercise both duplicate and distinct diagnostic ownership.
+    // 独立夹具验证重复与不同诊断的归属。
+    const overview = createVceActivityFixture();
+    const error = "Content-Type is not supported.";
+    overview.status.lastError = same ? error : "Separate storage failure";
+    rpc.jobs.mockResolvedValue({ projectId: "project-a", jobId: "failed-upload", kind: "rebuild", state: "failed",
+      sequence: 75, createdAtUnixMs: 1, updatedAtUnixMs: 223_000, sourceCheckpointVersion: null,
+      resultCheckpointVersion: null, followupRequested: false, error, progress: null } satisfies VceJobSummary);
+    await renderEditor(overview);
+    expect(host.textContent!.split(error)).toHaveLength(2);
+    if (!same) expect(host.textContent).toContain("Separate storage failure");
+  });
   // A failed initial status retry must remain visible even before an overview exists.
   // 首次状态重试失败，即使尚无概览也必须保持可见。
   it("keeps an unavailable-overview retry rejection visible", async () => {

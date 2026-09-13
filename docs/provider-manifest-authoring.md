@@ -244,6 +244,11 @@ OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明�
 - `discovery_and_manual`：合并发现与手动模型；
 - `manifest_discovery_and_manual`：合并三者。
 
+内置 OpenRouter 的 `public-api` 使用 `manifest_and_discovery` 与 `open_router` 发现器，按账号同步远端
+对话、向量、重排及图片/视频/音频等专用输出模型。清单的 `model_defaults.default_enabled=false` 与 17 条精确模型规则的
+`default_enabled=true` 只决定未设置过访问策略的账号初始勾选状态；其他已发现模型仍在账号支持目录中，
+用户可以逐项勾选。显式账号选择优先于初始值，供应商级不提供可配置的模型访问默认开关。
+
 `model_catalog.discovery_kind: manifest_static` 表示不发远程目录请求，模型身份、顺序与基础能力完全
 由当前已编译 Manifest 持有。它的封闭约束为：
 

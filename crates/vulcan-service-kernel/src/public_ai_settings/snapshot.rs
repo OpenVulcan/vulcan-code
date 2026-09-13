@@ -476,6 +476,7 @@ pub(super) fn build_public_ai_settings_snapshot(
         manifest_revisions,
         provider_tool_template_models,
         model_default_enabled_by_key,
+        connection_model_initial_policies,
         available_provider_tool_targets,
     } = runtime.settings_catalog_snapshot(persisted_configuration)?;
     // configuration is the executable projection captured with the catalog generation above.
@@ -683,8 +684,11 @@ pub(super) fn build_public_ai_settings_snapshot(
         build_internal_inference_candidates(configuration, &providers, &catalogs)?;
     let inference_route_diagnostics =
         build_internal_inference_route_diagnostics(runtime, configuration);
-    let connection_model_access_policy_records =
-        build_connection_model_access_policy_records(&providers, configuration);
+    let connection_model_access_policy_records = build_connection_model_access_policy_records(
+        &providers,
+        configuration,
+        &connection_model_initial_policies,
+    )?;
     // modelRouteRecords projects every access-independent support model, including blocked
     // bindings, so WebUI never needs a second protocol resolver or a guessed failure reason.
     // modelRouteRecords 投影每个独立于访问开关的支持模型（包括被阻止的绑定），使 WebUI

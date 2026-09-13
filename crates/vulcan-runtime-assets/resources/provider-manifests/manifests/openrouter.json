@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openrouter",
-  "revision": 9,
-  "published_at": "2026-09-12T00:00:00Z",
+  "revision": 10,
+  "published_at": "2026-09-13T14:41:39Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -158,13 +158,17 @@
   "model_defaults": {
     "default_enabled": false,
     "catalog_membership_policy": "declared_and_discovery",
-    "unknown_model_policy": "declared_rule_required",
+    "unknown_model_policy": "default_binding_allowed",
     "supported_protocols": [
       "anthropic-messages.v1",
       "openai-chat-completions.v1",
       "openai-responses.v1"
     ],
     "selected_protocol": "anthropic-messages.v1",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "evidence_revision": "openrouter.discovered-text-default.v1"
+    },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],
     "default_response_profile_refs": [],
