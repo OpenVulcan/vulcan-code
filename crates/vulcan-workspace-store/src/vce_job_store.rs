@@ -1686,6 +1686,7 @@ mod tests {
     fn receipt_rejects_overflowing_overall_progress() {
         let mut receipt = compaction_test_receipt();
         receipt.progress = Some(VceRefreshProgress {
+            activity: None,
             phase: vulcan_context_engine::VceRefreshPhase::Writing,
             operation_id: String::from("compaction-job:compact:content:1"),
             unit: vulcan_context_engine::VceRefreshUnit::Tables,
@@ -1709,6 +1710,7 @@ mod tests {
         receipt.contract_fingerprint = "b".repeat(64);
         receipt.compaction = None;
         receipt.progress = Some(VceRefreshProgress {
+            activity: None,
             phase: vulcan_context_engine::VceRefreshPhase::Scanning,
             operation_id: String::from("invalid-provider-progress"),
             unit: vulcan_context_engine::VceRefreshUnit::Files,

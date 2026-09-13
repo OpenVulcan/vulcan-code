@@ -197,6 +197,19 @@ export interface VceJobSummary {
   // Actual bounded phase counters, absent before source work begins.
   // 实际有界阶段计数，源码处理开始前为空。
   progress: {
+    // Exact optional activity from current hosts; older receipts may omit it.
+    // 当前宿主的精确可选活动；旧回执可省略。
+    activity?: {
+      // Actual awaited action, never inferred from numeric progress.
+      // 实际等待的动作，绝不从数字进度推断。
+      stage: "preparing" | "requesting" | "uploading" | "submitting" | "waiting" | "polling" | "collecting";
+      // Acknowledged provider task identity, absent before submission confirmation.
+      // 已确认供应商任务身份；提交确认前为空。
+      providerBatchId: string | null;
+      // Earliest permitted automatic status check.
+      // 最早允许自动状态查询的时刻。
+      nextPollAtUnixMs: number | null;
+    } | null;
     // Exact processing phase reported by the core.
     // 核心报告的精确处理阶段。
     phase: "scanning" | "reconciling" | "chunking" | "embedding" | "writing" | "committing" | "complete";

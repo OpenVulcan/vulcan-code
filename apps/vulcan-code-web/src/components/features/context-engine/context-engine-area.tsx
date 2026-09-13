@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { VceEmbeddingSettings } from "./vce-embedding-settings";
+import { VceHelpTooltip } from "./vce-help-tooltip";
 import { vceDimensionDomain } from "./vce-embedding-dimensions";
 import { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
 export { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
@@ -405,17 +406,17 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
         <div className="flex max-w-xl items-start gap-2">
           <BrainCircuit className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
-          <span>{copy(
+          <span>{copy("查询改写", "Query rewriting")}</span><VceHelpTooltip label={copy("查询改写说明", "Query rewriting notes")}>{copy(
             "查询改写固定关闭模型思考，不提供额外思考档位。",
             "Query rewriting keeps model reasoning disabled and exposes no additional effort setting.",
-          )}</span>
+          )}</VceHelpTooltip>
         </div>
         <div className="flex max-w-xl items-start gap-2">
           <Database className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
-          <span>{copy(
+          <span>{copy("索引存储", "Index storage")}</span><VceHelpTooltip label={copy("索引存储说明", "Index storage notes")}>{copy(
             "索引存储复用 VulcanCode 的 VLDB/LanceDB，无需单独配置数据库。",
             "Index storage reuses VulcanCode's VLDB/LanceDB and needs no separate database setup.",
-          )}</span>
+          )}</VceHelpTooltip>
         </div>
       </div>
 
@@ -450,6 +451,9 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           </div>
         ) : (
           <div className="divide-y">
+            <div className="hidden gap-4 px-4 py-2 text-xs text-muted-foreground @4xl/vce:grid @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_10rem_14rem]">
+              <span>{copy("用途", "Purpose")}</span><span>{copy("模型与账号", "Model and account")}</span><span>{copy("参数", "Parameters")}</span><span className="text-right">{copy("操作", "Actions")}</span>
+            </div>
             {definitions.map((definition) => {
               const route = routeForDefinition(profile, definition);
               const candidates = snapshot.internalInferenceCandidates.filter((candidate) => (
@@ -519,7 +523,7 @@ function VceRouteField(props: VceRouteFieldProps) {
   // selectedValue 仅在持久化路由仍是合格的精确候选项时存在。
   const selectedValue = candidateByKey.has(selectedKey) ? selectedKey : undefined;
   return (
-    <div className="grid gap-4 px-4 py-4 @3xl/vce:grid-cols-[minmax(0,0.9fr)_minmax(18rem,1.25fr)_auto] @3xl/vce:items-start">
+    <div className="grid items-center gap-4 px-4 py-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_10rem_14rem]">
       <div className="flex min-w-0 items-start gap-3">
         <span className={props.status?.available
           ? "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
@@ -530,8 +534,7 @@ function VceRouteField(props: VceRouteFieldProps) {
             : <CircleAlert className="size-4" />}
         </span>
         <div className="min-w-0">
-          <div className="text-sm font-medium">{props.definition.label}</div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+          <div className="flex items-center gap-1 text-sm font-medium">{props.definition.label}<VceHelpTooltip label={`${props.definition.label} ${copy("说明", "notes")}`}>{props.definition.description}</VceHelpTooltip></div>
         </div>
       </div>
       <div className="min-w-0">
@@ -563,7 +566,8 @@ function VceRouteField(props: VceRouteFieldProps) {
           <p className="mt-2 break-words text-xs text-[var(--vcn-content-warning)] dark:text-amber-300">{props.status.issue}</p>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-2 @3xl/vce:justify-end">
+      <div aria-hidden="true" className="hidden @4xl/vce:block" />
+      <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
         {props.onTest ? (
           <Button
             disabled={props.disabled || !props.route}

@@ -745,7 +745,8 @@ export type TranslationKey =
   | "conversation.stopWithAgents.description"
   | "conversation.stopWithAgents.mainOnly"
   | "conversation.stopWithAgents.all"
-  | "conversation.process.header"
+  | "conversation.process.working"
+  | "conversation.process.worked"
   | "conversation.process.stoppedAfter"
   | "conversation.process.stopped"
   | "conversation.process.duration"
@@ -4460,7 +4461,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.stopWithAgents.description": "当前还有 {count} 个智能体正在工作。请选择只停止主会话，还是同时停止这些智能体。",
     "conversation.stopWithAgents.mainOnly": "只停止主会话",
     "conversation.stopWithAgents.all": "同时停止智能体",
-    "conversation.process.header": "处理过程",
+    "conversation.process.working": "正在工作",
+    "conversation.process.worked": "已工作",
     "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
     "conversation.process.stopped": "你已停止本轮工作",
     "conversation.process.duration": "持续 {duration}",
@@ -8173,7 +8175,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.stopWithAgents.description": "{count} agent(s) are still working. Choose whether to stop only the main conversation or stop those agents too.",
     "conversation.stopWithAgents.mainOnly": "Stop main only",
     "conversation.stopWithAgents.all": "Stop agents too",
-    "conversation.process.header": "Process",
+    "conversation.process.working": "Working",
+    "conversation.process.worked": "Worked",
     "conversation.process.stoppedAfter": "You stopped after {duration}",
     "conversation.process.stopped": "You stopped this turn",
     "conversation.process.duration": "Duration {duration}",

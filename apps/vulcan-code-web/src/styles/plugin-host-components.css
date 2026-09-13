@@ -65,6 +65,41 @@
   height: min(680px, calc(100vh - 48px));
 }
 
+/* Keep the date/time draft compact and use the same theme as other plugin dialogs. */
+/* 保持日期时间草稿紧凑，并沿用其他插件弹窗的主题。 */
+.plugin-statistics-range-dialog { width: min(560px, calc(100vw - 32px)); }
+.plugin-statistics-range-presets, .plugin-statistics-range-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.plugin-statistics-range-actions { justify-content: flex-end; }
+.plugin-statistics-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.plugin-statistics-range-fields label { display: grid; gap: 8px; font-size: 12px; color: var(--muted-foreground); }
+.plugin-statistics-range-fields input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); color: var(--foreground); font: inherit; }
+.plugin-statistics-range-fields input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.plugin-statistics-range-fields input:disabled { opacity: 0.5; }
+.plugin-statistics-range-follow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+
+/* RTK routes must not depend on the separately loaded system-settings stylesheet. */
+/* RTK 路由不能依赖单独加载的系统设置样式表。 */
+.plugin-panel-rtk .settings-route-groups { display: grid; gap: 16px; }
+.plugin-panel-rtk .settings-route-group { display: grid; gap: 8px; min-width: 0; }
+.plugin-panel-rtk .settings-route-group + .settings-route-group { padding-top: 16px; border-top: 1px solid var(--border); }
+.plugin-panel-rtk :is(.settings-route-group-header, .settings-route-header) { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.plugin-panel-rtk .settings-route-bulk-actions { display: flex; gap: 6px; }
+.plugin-panel-rtk .settings-route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.plugin-panel-rtk .settings-route-option { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.plugin-panel-rtk .settings-route-option:hover { background: var(--muted); }
+.plugin-panel-rtk .settings-route-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+/* Preserve native checkbox keyboard/label behavior while replacing browser-default blue paint. */
+/* 保留原生复选框的键盘与标签交互，同时替换浏览器默认蓝色样式。 */
+.plugin-panel-rtk input[type="checkbox"], .plugin-statistics-range-follow input {
+  appearance: none; display: inline-grid; place-content: center; flex: 0 0 16px;
+  width: 16px; height: 16px; margin: 0; border: 1px solid var(--input);
+  border-radius: 4px; background: var(--background); cursor: pointer;
+}
+.plugin-panel-rtk input[type="checkbox"]:checked, .plugin-statistics-range-follow input:checked { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.plugin-panel-rtk input[type="checkbox"]:checked::after, .plugin-statistics-range-follow input:checked::after { content: ""; width: 8px; height: 5px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
+.plugin-panel-rtk input[type="checkbox"]:focus-visible, .plugin-statistics-range-follow input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.plugin-panel-rtk input[type="checkbox"]:disabled { opacity: 0.5; cursor: default; }
+
 /* Keep statistics details outside table flow, with readable aligned facts in the host tooltip. */
 /* 将统计详情移出表格排版，在宿主提示层内对齐展示可读事实。 */
 .plugin-help-tooltip-trigger[data-tone="error"] { color: var(--destructive); }
@@ -76,8 +111,12 @@
 /* 跟随提示层前景色，确保名称在反色背景上依然清晰可读。 */
 .plugin-statistics-detail-facts dt { color: color-mix(in srgb, currentColor 80%, transparent); white-space: normal; }
 .plugin-statistics-detail-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: normal; }
-.plugin-statistics-cost-dimension { margin-top: 10px; }
-.plugin-statistics-cost-dimension > strong { display: block; margin-bottom: 3px; font-weight: 500; }
+/* Align exact nonzero costs and unit prices in a compact tooltip table. */
+/* 将精确非零费用与单价对齐到紧凑的提示表格中。 */
+.plugin-statistics-cost-table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 11px; }
+.plugin-statistics-cost-table :is(th, td) { padding: 5px 3px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.plugin-statistics-cost-table th { font-weight: 500; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+.plugin-statistics-cost-table :is(th, td):first-child { text-align: left; }
 .plugin-statistics-cost-total { padding-top: 10px; margin-top: 10px; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); font-weight: 600; }
 .plugin-statistics-token-cell, .plugin-statistics-estimate-cell { display: flex; align-items: center; gap: 4px; }
 .plugin-statistics-token-lines { display: grid; gap: 4px; }
@@ -452,6 +491,27 @@
   background: var(--card);
 }
 
+/* Keep navigation feedback inside its table without moving neighboring cards or scroll position. */
+/* 将导航反馈限制在所属表格内，不移动相邻卡片或滚动位置。 */
+.plugin-statistics-paged-card { position: relative; }
+.plugin-statistics-table-feedback {
+  position: absolute;
+  top: 3rem;
+  right: 13px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 26px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 /* Cost and usage share the available panel width and wrap only when their content needs it. */
 /* 费用与用量共享面板可用宽度，仅在内容需要时换行。 */
 .plugin-statistics-balance {
@@ -563,20 +623,25 @@
 .plugin-statistics-table td:is(.plugin-statistics-consumer, .plugin-statistics-operation) { white-space: normal; overflow-wrap: anywhere; }
 /* Distribute available width across all facts instead of assigning every spare pixel to the model. */
 /* 将可用宽度分配给各项信息，避免模型列独占所有剩余空间。 */
-.plugin-statistics-daily-table th:nth-child(1), .plugin-statistics-recent-table th:nth-child(1) { width: 8%; }
-.plugin-statistics-daily-table th:nth-child(2) { width: 22%; }
-.plugin-statistics-daily-table th:nth-child(3), .plugin-statistics-recent-table th:nth-child(3) { width: 10%; }
-.plugin-statistics-daily-table th:nth-child(4) { width: 9%; }
-.plugin-statistics-daily-table th:nth-child(5) { width: 6%; }
-.plugin-statistics-daily-table th:nth-child(6) { width: 14%; }
-.plugin-statistics-daily-table th:nth-child(7) { width: 21%; }
-.plugin-statistics-daily-table th:nth-child(8) { width: 10%; }
+.plugin-statistics-recent-table th:nth-child(1) { width: 8%; }
+.plugin-statistics-daily-table th:nth-child(1) { width: 28%; }
+.plugin-statistics-daily-table th:nth-child(2) { width: 16%; }
+.plugin-statistics-daily-table th:nth-child(3) { width: 8%; }
+.plugin-statistics-daily-table th:nth-child(4) { width: 18%; }
+.plugin-statistics-daily-table th:nth-child(5) { width: 20%; }
+.plugin-statistics-daily-table th:nth-child(6) { width: 10%; }
+.plugin-statistics-recent-table th:nth-child(3) { width: 10%; }
 .plugin-statistics-recent-table th:nth-child(2) { width: 24%; }
 .plugin-statistics-recent-table th:nth-child(4) { width: 7%; }
 .plugin-statistics-recent-table th:nth-child(5) { width: 17%; }
 .plugin-statistics-recent-table th:nth-child(6) { width: 21%; }
 .plugin-statistics-recent-table th:nth-child(7) { width: 9%; }
 .plugin-statistics-recent-table th:nth-child(8) { width: 4%; }
+
+/* Keep caller and operation on separate lines within the same daily column. */
+/* 将每日用量的消费者与操作放在同列的独立两行中。 */
+.plugin-statistics-consumer-operation { display: grid; gap: 4px; }
+.plugin-statistics-consumer-operation > span:last-child { color: var(--muted-foreground); font-size: 11px; }
 
 /* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. */
 /* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。 */

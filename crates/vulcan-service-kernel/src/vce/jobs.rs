@@ -3127,7 +3127,13 @@ impl VceRuntimeManager {
         active: &VceActiveRefresh,
         work: VceJobWork,
     ) -> Result<RefreshRequest, String> {
+        // The first human-triggered run is initialization, even though its admission source is manual.
+        // 即使准入来源是手动操作，尚无已发布检查点的首次执行仍属于初始化。
+        // Preserve this distinction so Batch-capable models use the initialization transport policy.
+        // 保留该区分，使支持 Batch 的模型使用初始化传输策略。
+        let initializing = runtime.committed_projection.read().await.engine.checkpoint_version.is_none();
         let reason = match &work {
+            VceJobWork::Manual if initializing => RefreshReason::Initial,
             VceJobWork::Manual => RefreshReason::Manual,
             VceJobWork::Rebuild { repair, .. } => {
                 if *repair {
@@ -3673,6 +3679,7 @@ fn compaction_progress(
     phase: VceRefreshPhase,
 ) -> VceRefreshProgress {
     VceRefreshProgress {
+        activity: None,
         phase,
         operation_id: operation_id.to_owned(),
         unit: VceRefreshUnit::Tables,
@@ -4906,6 +4913,7 @@ mod tests {
                 .await
                 .expect("execution must start while supervised");
             observed_control.observe(VceRefreshProgress {
+                activity: None,
                 phase: vulcan_context_engine::VceRefreshPhase::Scanning,
                 operation_id: String::from("shared-gate-test"),
                 unit: vulcan_context_engine::VceRefreshUnit::Files,
@@ -4959,6 +4967,7 @@ mod tests {
                 }
             };
             let progress = VceRefreshProgress {
+                activity: None,
                 phase: vulcan_context_engine::VceRefreshPhase::Writing,
                 operation_id: String::from("progress-retry-test"),
                 unit: vulcan_context_engine::VceRefreshUnit::Blobs,
@@ -7494,6 +7503,7 @@ mod tests {
         let mut committing = running.clone();
         committing.sequence += 1;
         committing.progress = Some(VceRefreshProgress {
+            activity: None,
             phase: vulcan_context_engine::VceRefreshPhase::Committing,
             operation_id: base.job_id.clone(),
             unit: vulcan_context_engine::VceRefreshUnit::None,

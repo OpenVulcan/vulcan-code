@@ -754,6 +754,19 @@ pub(crate) fn map_vce_job(
         retry_of_job_id: job.retry_of_job_id,
         result_checkpoint_version: job.result_checkpoint_version,
         progress: job.progress.map(|progress| api::VceJobProgressSummary {
+            activity: progress.activity.map(|activity| api::VceEmbeddingActivitySummary {
+                stage: match activity.stage {
+                    vulcan_context_engine::VceEmbeddingActivityStage::Preparing => "preparing",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Requesting => "requesting",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Uploading => "uploading",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Submitting => "submitting",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Waiting => "waiting",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Polling => "polling",
+                    vulcan_context_engine::VceEmbeddingActivityStage::Collecting => "collecting",
+                }.to_owned(),
+                provider_batch_id: activity.provider_batch_id,
+                next_poll_at_unix_ms: activity.next_poll_at_unix_ms,
+            }),
             phase: match progress.phase {
                 VceRefreshPhase::Scanning => "scanning",
                 VceRefreshPhase::Reconciling => "reconciling",

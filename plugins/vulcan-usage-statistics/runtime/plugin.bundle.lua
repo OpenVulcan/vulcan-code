@@ -609,6 +609,11 @@ end
 -- Returns one schema-validated dashboard projection.
 -- 返回一个通过 Schema 校验的仪表盘投影。
 local function load_dashboard(input)
+    -- Explicit timestamps are one ordered interval; never silently replace malformed boundaries.
+    -- 显式时间戳必须组成有序区间；不静默替换错误边界。
+    if input.startAtMs ~= nil and input.endAtMs <= input.startAtMs then
+        error("The end time must be later than the start time")
+    end
     -- Read the commit revision before any paginated aggregate is consumed.
     -- 消费任何分页聚合前读取提交版本。
     -- The host changes this revision in the same transaction that replaces daily rows.
@@ -621,6 +626,9 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
     -- view selects required projections; omitted arguments retain the complete legacy response.
     -- view 选择所需投影；参数省略时保留完整旧响应。
     local view = input.view or "all"
+    -- Page projections read only their requested table and count, retaining the revision guard.
+    -- 分页投影仅读取请求的表格及数量，并保留修订一致性检查。
+    local page_only = view == "daily-page" or view == "recent-page" or view == "detail-pages"
     -- config and known_models bound cost aggregation to catalog and configured model identities.
     -- config 与 known_models 将费用聚合限制在目录与已配置模型身份内。
     local config = read_config()
@@ -642,6 +650,13 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
         { kind = "string", value = input.sortOrder or "newest" },
         { kind = "string", value = vulcan.json.encode(priced_model_ids) },
         { kind = "int64", value = 0 },
+        -- Select recent model pages before counting or applying the page limit; omitted callers keep all types.
+        -- 在计数与分页截取之前选择最近调用的模型类别；省略参数的调用方保留全部类型。
+        { kind = "string", value = input.recentModelType or "all" },
+        -- Zero denotes an omitted legacy bound; explicit inputs are positive Unix milliseconds.
+        -- 零表示旧调用省略边界；显式输入为正 Unix 毫秒数。
+        { kind = "int64", value = input.startAtMs or 0 },
+        { kind = "int64", value = input.endAtMs or 0 },
     }
     -- query binds one shared filter contract to every dashboard projection.
     -- query 为每个仪表盘投影绑定同一个筛选契约。
@@ -649,16 +664,33 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
     -- sql 是固定源码 SQL；返回系统数据库中的已解码行。
     local function query(sql)
         return sqlite_query([[
-WITH filtered_daily AS (
-    SELECT * FROM provider_usage_daily_v3
-    WHERE calendar_date >= date('now', 'localtime', '-' || (?1 - 1) || ' days')
-      AND (?2 = '' OR consumer_id = ?2)
-      AND (?5 = '' OR instr(lower(model_id), lower(?5)) > 0)
-), filtered_attempts AS (
+WITH filtered_attempts AS (
     SELECT * FROM provider_usage_attempts_v3
-    WHERE terminal_at_ms >= CAST(strftime('%s', date('now', 'localtime', '-' || (?1 - 1) || ' days'), 'utc') AS INTEGER) * 1000
+    WHERE terminal_at_ms >= CASE WHEN ?10 > 0 THEN ?10
+      ELSE CAST(strftime('%s', date('now', 'localtime', '-' || (?1 - 1) || ' days'), 'utc') AS INTEGER) * 1000 END
+      AND (?11 = 0 OR terminal_at_ms <= ?11)
       AND (?2 = '' OR consumer_id = ?2)
       AND (?5 = '' OR instr(lower(mapped_model), lower(?5)) > 0)
+), filtered_daily AS (
+    SELECT calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model AS model_id,
+      COUNT(*) AS attempt_count,
+      SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS successful_attempt_count,
+      SUM(CASE WHEN usage_availability IN ('partial', 'final') THEN 1 ELSE 0 END) AS reported_usage_attempt_count,
+      SUM(input_tokens) AS input_tokens, SUM(uncached_input_tokens) AS uncached_input_tokens,
+      SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_write_tokens) AS cache_write_tokens,
+      SUM(output_tokens) AS output_tokens, SUM(reasoning_tokens) AS reasoning_tokens, SUM(total_tokens) AS total_tokens
+    FROM filtered_attempts
+    GROUP BY calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model
+), range_usage AS (
+    SELECT provider_id, service_entry_id, consumer_id, operation, model_id,
+      SUM(attempt_count) AS attempt_count, SUM(successful_attempt_count) AS successful_attempt_count,
+      SUM(reported_usage_attempt_count) AS reported_usage_attempt_count,
+      SUM(input_tokens) AS input_tokens, SUM(uncached_input_tokens) AS uncached_input_tokens,
+      SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_write_tokens) AS cache_write_tokens,
+      SUM(output_tokens) AS output_tokens, SUM(reasoning_tokens) AS reasoning_tokens, SUM(total_tokens) AS total_tokens,
+      MAX(calendar_date) AS latest_date
+    FROM filtered_daily
+    GROUP BY provider_id, service_entry_id, consumer_id, operation, model_id
 ), timed_attempts AS (
     SELECT *,
       CASE WHEN terminal_at_ms >= dispatched_at_ms THEN terminal_at_ms - dispatched_at_ms END AS request_duration_ms,
@@ -667,13 +699,19 @@ WITH filtered_daily AS (
       CASE WHEN first_token_at_ms >= dispatched_at_ms AND terminal_at_ms >= first_token_at_ms
         THEN terminal_at_ms - first_token_at_ms END AS output_duration_ms
     FROM filtered_attempts
+), recent_model_attempts AS (
+    SELECT * FROM timed_attempts
+    WHERE ?9 = 'all'
+       OR (?9 = 'llm' AND operation IN ('conversation', 'conversation_respond', 'compact', 'warmup'))
+       OR (?9 = 'embedding' AND operation = 'embedding_create')
+       OR (?9 = 'rerank' AND operation = 'rerank_documents')
 ), page_offsets AS (SELECT ?3 AS daily_offset, ?4 AS recent_offset, ?6 AS sort_order, ?7 AS priced_models, ?8 AS cost_offset)
 ]] .. sql, filter_params)
     end
     local model_overrides = config.modelOverrides
-    local daily = (view == "all" or view == "details") and query([[
+    local daily = (view == "all" or view == "details" or view == "daily-page" or view == "detail-pages") and query([[
 , daily_timing AS (
-    SELECT calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model AS model_id,
+    SELECT provider_id, service_entry_id, consumer_id, operation, mapped_model AS model_id,
       AVG(request_duration_ms) AS requestDurationMs,
       AVG(first_token_latency_ms) AS firstTokenLatencyMs,
       SUM(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN output_duration_ms END) AS outputDurationMs,
@@ -681,9 +719,9 @@ WITH filtered_daily AS (
         SUM(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN output_duration_ms END) AS outputTokensPerSecond,
       COUNT(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN 1 END) AS timedAttemptCount
     FROM timed_attempts
-    GROUP BY calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model
+    GROUP BY provider_id, service_entry_id, consumer_id, operation, mapped_model
 )
-SELECT calendar_date AS calendarDate, provider_id AS providerId,
+SELECT provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
        model_id AS modelId, attempt_count AS attemptCount,
        successful_attempt_count AS successfulAttemptCount,
@@ -691,13 +729,14 @@ SELECT calendar_date AS calendarDate, provider_id AS providerId,
        input_tokens AS inputTokens, uncached_input_tokens AS uncachedInputTokens,
        cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens,
        output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens,
-       total_tokens AS totalTokens, aggregate_revision AS aggregateRevision,
+       total_tokens AS totalTokens,
+       COALESCE((SELECT CAST(meta_value AS INTEGER) FROM provider_usage_meta WHERE meta_key = 'aggregate_revision'), 0) AS aggregateRevision,
        requestDurationMs, firstTokenLatencyMs, outputDurationMs, outputTokensPerSecond,
        COALESCE(timedAttemptCount, 0) AS timedAttemptCount
- FROM filtered_daily
- LEFT JOIN daily_timing USING (calendar_date, provider_id, service_entry_id, consumer_id, operation, model_id)
- ORDER BY CASE WHEN ?6 = 'oldest' THEN calendar_date END ASC,
-          CASE WHEN ?6 = 'newest' THEN calendar_date END DESC,
+ FROM range_usage
+ LEFT JOIN daily_timing USING (provider_id, service_entry_id, consumer_id, operation, model_id)
+ ORDER BY CASE WHEN ?6 = 'oldest' THEN latest_date END ASC,
+          CASE WHEN ?6 = 'newest' THEN latest_date END DESC,
           provider_id, service_entry_id, consumer_id, operation, model_id
 LIMIT 100 OFFSET (SELECT daily_offset FROM page_offsets);
 ]]) or vulcan.json.array()
@@ -765,7 +804,7 @@ SELECT calendar_date AS date, seriesKey, label, value
 FROM projected
 ORDER BY date, seriesKey;
 ]]) or vulcan.json.array()
-    local recent_attempts = (view == "all" or view == "details") and query([[
+    local recent_attempts = (view == "all" or view == "details" or view == "recent-page" or view == "detail-pages") and query([[
 SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
        attempts.operation, attempts.provider_id AS providerId,
        attempts.service_entry_id AS serviceEntryId,
@@ -791,7 +830,7 @@ SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
         CASE WHEN attempts.output_duration_ms > 0 AND attempts.output_tokens IS NOT NULL
           THEN attempts.output_tokens * 1000.0 / attempts.output_duration_ms END AS outputTokensPerSecond,
         CASE WHEN attempts.output_duration_ms > 0 AND attempts.output_tokens IS NOT NULL THEN 1 ELSE 0 END AS timedAttemptCount
- FROM timed_attempts AS attempts
+ FROM recent_model_attempts AS attempts
 ORDER BY CASE WHEN ?6 = 'oldest' THEN attempts.terminal_at_ms END ASC,
          CASE WHEN ?6 = 'newest' THEN attempts.terminal_at_ms END DESC, attempts.attempt_id DESC
 LIMIT 50 OFFSET (SELECT recent_offset FROM page_offsets);
@@ -810,6 +849,33 @@ LIMIT 50 OFFSET (SELECT recent_offset FROM page_offsets);
             )
         end
         attempt.billingDetailsJson = nil
+    end
+    if page_only then
+        -- Return only requested slices; never calculate overview costs, account snapshots or unrelated counts.
+        -- 仅返回请求切片；不计算概览费用、账号快照或无关表格数量。
+        local page = { view = view, aggregateRevision = initial_revision }
+        if view ~= "recent-page" then
+            local count_rows = query([[SELECT COUNT(*) AS count FROM range_usage;]])
+            page.daily = daily
+            page.dailyCount = count_rows[1].count
+        end
+        if view ~= "daily-page" then
+            local count_rows = query([[SELECT COUNT(*) AS count FROM recent_model_attempts;]])
+            page.recentAttempts = recent_attempts
+            page.recentCount = count_rows[1].count
+        end
+        -- Capture the closing revision after both page rows and counts have been read.
+        -- 在分页记录与数量均读取后捕获结束修订号。
+        local page_revision_rows = sqlite_query([[
+SELECT COALESCE(MAX(CAST(meta_value AS INTEGER)), 0) AS dashboardRevision,
+       CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS generatedAtMs
+FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
+]])
+        if initial_revision ~= page_revision_rows[1].dashboardRevision then
+            error("Vulcan Usage Statistics: statistics changed during loading; refresh to read a consistent page")
+        end
+        page.generatedAtMs = page_revision_rows[1].generatedAtMs
+        return page
     end
     local accounts = (view == "all" or view == "maintenance") and sqlite_query([[
 SELECT provider_id AS providerId, connection_id AS connectionId,
@@ -835,8 +901,8 @@ LIMIT 500;
     end
     local meta_rows = query([[
 SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS generatedAtMs,
-       (SELECT COUNT(*) FROM filtered_daily) AS dailyCount,
-       (SELECT COUNT(*) FROM filtered_attempts) AS recentCount,
+       (SELECT COUNT(*) FROM range_usage) AS dailyCount,
+       (SELECT COUNT(*) FROM recent_model_attempts) AS recentCount,
        (SELECT json_group_array(consumer_id) FROM
            (SELECT DISTINCT consumer_id FROM provider_usage_daily_v3 ORDER BY consumer_id)) AS consumerIdsJson,
        COALESCE(MAX(CASE WHEN meta_key = 'schema_revision'
@@ -874,7 +940,7 @@ SELECT model_id AS modelId, COUNT(*) AS rowCount,
        SUM(cache_read_tokens) AS cacheReadTokens,
        SUM(cache_write_tokens) AS cacheWriteTokens,
        SUM(output_tokens) AS outputTokens
-FROM filtered_daily
+FROM range_usage
 WHERE model_id IN (SELECT value FROM json_each(?7))
 GROUP BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
          cache_write_tokens IS NULL, output_tokens IS NULL

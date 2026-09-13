@@ -36,6 +36,7 @@ use crate::ports::{
 };
 use crate::query::{QueryError, QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 use crate::refresh_control::{
+    VceEmbeddingActivity, VceEmbeddingActivityStage,
     VceRefreshControl, VceRefreshFailure, VceRefreshPhase, VceRefreshProgress,
     VceRefreshProviderBatchState, VceRefreshUnit,
 };
@@ -1447,6 +1448,7 @@ impl VceEngine {
             .filter(|manifest| manifest.state != VceEmbeddingRunState::Succeeded)
             .map(|manifest| manifest.generation);
         control.observe(VceRefreshProgress {
+            activity: None,
             phase: VceRefreshPhase::Reconciling,
             operation_id: request_id.clone(),
             unit: VceRefreshUnit::Files,
@@ -1628,6 +1630,7 @@ impl VceEngine {
             let publication = match control.begin_commit() {
                 Ok(()) => {
                     control.observe(VceRefreshProgress {
+                        activity: None,
                         phase: VceRefreshPhase::Committing,
                         operation_id: request_id.clone(),
                         unit: VceRefreshUnit::None,
@@ -1647,6 +1650,7 @@ impl VceEngine {
                                 // before the manifest transitions to published.
                                 // 提交是一次原子宿主操作；在清单转为已发布前报告其完成边界。
                                 control.observe(VceRefreshProgress {
+                                    activity: None,
                                     phase: VceRefreshPhase::Committing,
                                     operation_id: request_id.clone(),
                                     unit: VceRefreshUnit::None,
@@ -1709,6 +1713,7 @@ impl VceEngine {
         self.last_refresh = Some(summary);
         control.finish();
         control.observe(VceRefreshProgress {
+            activity: None,
             phase: VceRefreshPhase::Complete,
             operation_id: request_id.clone(),
             unit: VceRefreshUnit::None,
@@ -2408,6 +2413,7 @@ impl VceEngine {
             for record in &records {
                 context.control.check()?;
                 context.control.observe(VceRefreshProgress {
+                    activity: None,
                     phase: VceRefreshPhase::Chunking,
                     operation_id: format!("{}:prepare:{}", context.refresh_id, record.path),
                     unit: VceRefreshUnit::Files,
@@ -2439,7 +2445,7 @@ impl VceEngine {
                     ))
                 })?;
                 let blob_request_id = format!("{}:blob:{blob_name}", context.refresh_id);
-                match self.prepare_blob(record, content, &blob_request_id, &context) {
+                match self.prepare_blob(record, content, &blob_request_id, &context, blob_names.len() as u64) {
                     Ok(PreparedBlobResult::Ready(blob)) => {
                         blob_slots.push(PreparedBlobSlot::Ready(Box::new(blob)))
                     }
@@ -2679,6 +2685,7 @@ impl VceEngine {
             let operation_id = format!("{}:stage:{batch_index}", context.refresh_id);
             context.control.check()?;
             context.control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Writing,
                 operation_id: context.refresh_id.to_owned(),
                 unit: VceRefreshUnit::Blobs,
@@ -2699,6 +2706,7 @@ impl VceEngine {
             validate_stage_receipt(&request, &receipt)?;
             staged.extend(receipt.staged_blob_names);
             context.control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Writing,
                 operation_id: context.refresh_id.to_owned(),
                 unit: VceRefreshUnit::Blobs,
@@ -2864,6 +2872,7 @@ impl VceEngine {
             for record in &records {
                 context.control.check()?;
                 context.control.observe(VceRefreshProgress {
+                    activity: None,
                     phase: VceRefreshPhase::Chunking,
                     operation_id: format!("{}:prepare:{}", context.refresh_id, record.path),
                     unit: VceRefreshUnit::Files,
@@ -2922,7 +2931,7 @@ impl VceEngine {
                     .flatten();
                 let prepared_result = match restored {
                     Some(result) => Ok(result),
-                    None => self.prepare_blob(record, content, &blob_request_id, &context),
+                    None => self.prepare_blob(record, content, &blob_request_id, &context, blob_names.len() as u64),
                 };
                 match prepared_result {
                     Ok(PreparedBlobResult::Ready(blob)) => {
@@ -2980,6 +2989,10 @@ impl VceEngine {
             });
         }
 
+        // Leave the last filename before potentially expensive global planning and manifest persistence.
+        // 在可能耗时的全局规划与清单持久化之前离开最后一个文件名状态。
+        observe_embedding_activity(context.control, context.refresh_id, VceEmbeddingActivityStage::Preparing,
+            Some((0, blob_names.len() as u64)), 0, None, None);
         let configured_max_inputs = self.config.indexing.embedding_max_inputs;
         let provider_max_inputs = context.ai.embedding_max_inputs();
         let effective_max_inputs = provider_max_inputs.map_or(configured_max_inputs, |limit| {
@@ -3494,6 +3507,7 @@ impl VceEngine {
             validate_stage_receipt(&request, &receipt)?;
             staged.extend(receipt.staged_blob_names);
             context.control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Writing,
                 operation_id: context.refresh_id.to_owned(),
                 unit: VceRefreshUnit::Blobs,
@@ -3757,6 +3771,9 @@ impl VceEngine {
         content: &str,
         request_id: &str,
         context: &RefreshStageContext<'_>,
+        // Preserve the admitted parent denominator during per-file child observations.
+        // 在逐文件子进度观察期间保留已准入的父级总量。
+        overall_total: u64,
     ) -> Result<PreparedBlobResult, VceError> {
         // Preserve one admitted staging context across content and path embedding without copying dependencies.
         // 在内容及路径向量之间保留同一准入暂存上下文，不复制依赖。
@@ -3817,13 +3834,14 @@ impl VceEngine {
                     .prepare_with_chunks(pending, analysis.chunks)?;
                 control.check()?;
                 control.observe(VceRefreshProgress {
+                    activity: None,
                     phase: VceRefreshPhase::Chunking,
                     operation_id: format!("{request_id}:chunking"),
                     unit: VceRefreshUnit::Files,
                     completed: 1,
                     total: Some(1),
                     overall_completed: 0,
-                    overall_total: None,
+                    overall_total: Some(overall_total),
                     provider_batch_state: None,
                     current_path: Some(record.path.clone()),
                 });
@@ -3912,6 +3930,7 @@ impl VceEngine {
         let mut completed_batches = Vec::new();
         if let Some(control) = control {
             control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Embedding,
                 operation_id: format!("{request_id}:{}", purpose.as_str()),
                 unit: VceRefreshUnit::Batches,
@@ -3932,6 +3951,7 @@ impl VceEngine {
             if let Some(control) = control {
                 control.check()?;
                 control.observe(VceRefreshProgress {
+                    activity: None,
                     phase: VceRefreshPhase::Embedding,
                     operation_id: format!("{request_id}:{}", purpose.as_str()),
                     unit: VceRefreshUnit::Batches,
@@ -4414,6 +4434,8 @@ impl VceEngine {
                         control,
                     )
                     .await?;
+                    observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Uploading,
+                        overall, 0, Some(plan.batches.len() as u64), Some(record));
                     record.state = VceEmbeddingRemoteBatchState::Uploading;
                     record.error = None;
                     record.updated_at_unix_ms = current_unix_epoch_millis();
@@ -4480,6 +4502,8 @@ impl VceEngine {
                     ));
                     wait_until_remote_deadline(deadline, control).await?;
                 }
+                observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Submitting,
+                    overall, 0, Some(plan.batches.len() as u64), Some(record));
                 record.state = VceEmbeddingRemoteBatchState::Submitting;
                 record.error = None;
                 record.snapshot = None;
@@ -4518,6 +4542,8 @@ impl VceEngine {
                             .await
                             .map_err(VceError::Port)?;
                         last_submission_unix_ms = Some(record.updated_at_unix_ms);
+                        observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Waiting,
+                            overall, 0, Some(plan.batches.len() as u64), Some(record));
                     }
                     Err(error) => {
                         record.state = if matches!(error, VcePortError::SubmissionUnknown { .. }) {
@@ -4754,6 +4780,8 @@ impl VceEngine {
                 control.check()?;
                 match record.state {
                     VceEmbeddingRemoteBatchState::Submitted => {
+                        observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Waiting,
+                            overall, completed_logical_batches, Some(plan.batches.len() as u64), Some(record));
                         wait_for_remote_poll(record, control).await?;
                         if let Some(last_poll) = last_status_poll_unix_ms {
                             wait_until_remote_deadline(
@@ -4769,6 +4797,8 @@ impl VceEngine {
                                 "submitted remote embedding Batch has no provider identity",
                             ))
                         })?;
+                        observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Polling,
+                            overall, completed_logical_batches, Some(plan.batches.len() as u64), Some(record));
                         let snapshot = ai
                             .embedding_batch_status(
                                 batch_request.clone(),
@@ -4846,6 +4876,7 @@ impl VceEngine {
                             total_provider_requests,
                             &snapshot,
                             overall,
+                            record.next_poll_not_before_unix_ms,
                         );
                         if record.state == VceEmbeddingRemoteBatchState::Submitted {
                             // One active status observation per task and round prevents the first slow task
@@ -4855,6 +4886,8 @@ impl VceEngine {
                         }
                     }
                     VceEmbeddingRemoteBatchState::Ready => {
+                        observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Collecting,
+                            overall, completed_logical_batches, Some(plan.batches.len() as u64), Some(record));
                         let snapshot = record.snapshot.clone().ok_or_else(|| {
                             VceError::InvalidRequest(String::from(
                                 "ready remote embedding Batch has no completed snapshot",
@@ -5351,6 +5384,8 @@ impl VceEngine {
                     .map_err(VceError::InvalidRequest)?;
                 manifest.updated_at_unix_ms = current_unix_epoch_millis();
                 persist_manifest_batch_record(index, manifest, manifest_position).await?;
+                observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Requesting,
+                    overall, completed_batches, Some(plan.batches.len() as u64), None);
                 let response = match ai
                     .embed(VceEmbeddingRequest {
                         context: VceAiRequestContext::new(
@@ -5420,6 +5455,7 @@ impl VceEngine {
             vectors.extend(batch_vectors);
             completed_batches = completed_batches.saturating_add(1);
             control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Embedding,
                 operation_id: format!("{request_id}:{}", purpose.as_str()),
                 unit: VceRefreshUnit::Batches,
@@ -6070,6 +6106,37 @@ fn latest_remote_submission_unix_ms(records: &[VceEmbeddingRemoteBatchRecord]) -
         .max()
 }
 
+/// Publish the exact awaited embedding action before entering network or durable planning work.
+/// 在进入网络或持久规划工作之前发布精确等待的向量动作。
+/// Counters describe validated batches; record supplies only acknowledged provider metadata.
+/// 计数描述已校验批次；record 仅提供已确认的供应商元数据。
+fn observe_embedding_activity(
+    control: &VceRefreshControl,
+    request_id: &str,
+    stage: VceEmbeddingActivityStage,
+    overall: Option<(u64, u64)>,
+    completed: u64,
+    total: Option<u64>,
+    record: Option<&VceEmbeddingRemoteBatchRecord>,
+) {
+    control.observe(VceRefreshProgress {
+        activity: Some(VceEmbeddingActivity {
+            stage,
+            provider_batch_id: record.and_then(|record| record.submission.as_ref()).map(|submission| submission.provider_batch_id.clone()),
+            next_poll_at_unix_ms: record.and_then(|record| record.next_poll_not_before_unix_ms),
+        }),
+        phase: VceRefreshPhase::Embedding,
+        operation_id: request_id.to_owned(),
+        unit: if total.is_some() { VceRefreshUnit::Batches } else { VceRefreshUnit::None },
+        completed,
+        total,
+        overall_completed: overall.map_or(0, |(completed, _)| completed),
+        overall_total: overall.map(|(_, total)| total),
+        provider_batch_state: None,
+        current_path: None,
+    });
+}
+
 /// Publish remote Batch progress in the existing VCE refresh progress contract.
 /// 通过现有 VCE 刷新进度契约发布远端 Batch 进度。
 fn observe_remote_batch_progress(
@@ -6081,6 +6148,7 @@ fn observe_remote_batch_progress(
     overall: Option<(u64, u64)>,
 ) {
     control.observe(VceRefreshProgress {
+        activity: None,
         phase: VceRefreshPhase::Embedding,
         operation_id: format!("{request_id}:{}", purpose.as_str()),
         unit: VceRefreshUnit::Batches,
@@ -6103,8 +6171,14 @@ fn observe_remote_request_progress(
     total: u64,
     snapshot: &crate::ports::VceEmbeddingBatchSnapshot,
     overall: Option<(u64, u64)>,
+    next_poll_at_unix_ms: Option<u64>,
 ) {
     control.observe(VceRefreshProgress {
+        activity: Some(VceEmbeddingActivity {
+            stage: VceEmbeddingActivityStage::Waiting,
+            provider_batch_id: Some(snapshot.submission.provider_batch_id.clone()),
+            next_poll_at_unix_ms,
+        }),
         phase: VceRefreshPhase::Embedding,
         operation_id: format!("{request_id}:{}:provider", purpose.as_str()),
         unit: VceRefreshUnit::Requests,
@@ -8258,6 +8332,7 @@ mod tests {
             20,
             &snapshot,
             Some((6, 30)),
+            Some(123_456),
         );
 
         let observed = observed.lock().expect("progress observations");
@@ -8265,6 +8340,7 @@ mod tests {
         assert_eq!(observed[0].unit, VceRefreshUnit::Requests);
         assert_eq!(observed[0].completed, 12);
         assert_eq!(observed[0].overall_completed, 6);
+        assert_eq!(observed[0].activity.as_ref().unwrap().next_poll_at_unix_ms, Some(123_456));
         assert_eq!(
             observed[0].provider_batch_state,
             Some(VceRefreshProviderBatchState::Finalizing)
@@ -9213,9 +9289,20 @@ mod tests {
         ai.embedding_batch_capabilities = Some(fake_file_batch_capabilities());
         let events = Arc::clone(&ai.embedding_batch_events);
         let synchronous_sizes = Arc::clone(&ai.embedding_batch_sizes);
+        // Record actual lifecycle observations alongside the fake provider's transport calls.
+        // 在伪供应商传输调用旁记录真实生命周期观察。
+        let progress_events = Arc::new(Mutex::new(Vec::<VceRefreshProgress>::new()));
+        // The observer owns only its shared event buffer.
+        // 观察器仅持有共享事件缓冲区。
+        let observed_events = Arc::clone(&progress_events);
+        // Capture each state before the corresponding awaited provider boundary.
+        // 在相应供应商等待边界之前捕获每个状态。
+        let control = VceRefreshControl::default().with_observer(Arc::new(move |progress| {
+            observed_events.lock().unwrap().push(progress);
+        }));
 
         let result = engine
-            .refresh(
+            .refresh_observed(
                 RefreshRequest::full(
                     "remote-initial-build",
                     RefreshReason::Initial,
@@ -9230,6 +9317,7 @@ mod tests {
                 &index,
                 &ai,
                 &source,
+                &control,
             )
             .await
             .expect("remote initial build");
@@ -9237,6 +9325,16 @@ mod tests {
         assert_eq!(result.indexed_blobs.len(), 1);
         assert_eq!(commits.lock().unwrap().len(), 1);
         assert!(synchronous_sizes.lock().unwrap().is_empty());
+        // Initial Batch work must expose upload, submission, polling and collection without claiming a direct call.
+        // 首次 Batch 工作必须展示上传、提交、轮询与取回，不能声称是同步调用。
+        let activities = progress_events.lock().unwrap().iter().filter_map(|progress| progress.activity.clone()).collect::<Vec<_>>();
+        for stage in [VceEmbeddingActivityStage::Preparing, VceEmbeddingActivityStage::Uploading,
+            VceEmbeddingActivityStage::Submitting, VceEmbeddingActivityStage::Waiting,
+            VceEmbeddingActivityStage::Polling, VceEmbeddingActivityStage::Collecting] {
+            assert!(activities.iter().any(|activity| activity.stage == stage), "missing activity {stage:?}");
+        }
+        assert!(!activities.iter().any(|activity| activity.stage == VceEmbeddingActivityStage::Requesting));
+        assert!(activities.iter().filter(|activity| activity.stage == VceEmbeddingActivityStage::Waiting).all(|activity| activity.provider_batch_id.is_some()));
         let events = events.lock().unwrap().clone();
         assert!(!events.is_empty());
         assert_eq!(

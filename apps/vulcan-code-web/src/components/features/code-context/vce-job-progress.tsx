@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import type { VceJobSummary } from "@/types";
 import { isVceJobActive } from "./use-vce-project-job";
 
@@ -115,6 +116,20 @@ export function VceJobProgress(props: {
     interrupted: copy("已中断", "Interrupted"),
   };
   const progress = job.progress;
+  // Display the explicit host activity; counters alone cannot identify a Batch submission.
+  // 展示宿主明确报告的活动；仅凭计数无法识别 Batch 提交。
+  const activity = progress?.activity;
+  // Each label separates local preparation, synchronous requests and acknowledged remote work.
+  // 每项文案区分本地准备、同步请求与已确认的远端工作。
+  const activityLabels = {
+    preparing: copy("正在准备向量请求与持久化计划，尚未提交向量。", "Preparing embedding requests and the durable plan; embeddings have not been submitted."),
+    requesting: copy("正在请求同步向量接口，等待当前请求返回。", "Calling the synchronous embedding endpoint; waiting for the current response."),
+    uploading: copy("正在上传批量向量输入文件，尚未提交 Batch 任务。", "Uploading embedding input; the Batch task has not been submitted yet."),
+    submitting: copy("正在提交批量向量任务，等待供应商确认。", "Submitting the embedding Batch; waiting for provider acknowledgement."),
+    waiting: copy("批量向量任务已提交，正在等待供应商处理；系统会自动查询状态。", "Embedding Batch submitted; waiting for provider processing. Status will be checked automatically."),
+    polling: copy("正在查询已提交的批量向量任务状态。", "Checking the submitted embedding Batch status."),
+    collecting: copy("正在获取并校验批量向量结果。", "Retrieving and validating embedding Batch results."),
+  };
   // An active receipt error means terminal persistence needs explicit recovery, so cancellation stays available.
   // 活动作业带有回执错误时表示终态持久化需要显式恢复，因此仍保持取消入口可用。
   const recoveryRequired = active && job.error !== null;
@@ -141,7 +156,7 @@ export function VceJobProgress(props: {
     && progress.overallTotal !== null
     && progress.overallTotal > 0;
   return (
-    <section className="space-y-2 rounded-lg border bg-muted/20 p-3" aria-label={compact ? copy("物理索引整理进度", "Physical index compaction progress") : copy("语义索引进度", "Semantic index progress")}>
+    <section className="min-w-0 w-full space-y-2 overflow-hidden rounded-lg border bg-muted/20 p-3" aria-label={compact ? copy("物理索引整理进度", "Physical index compaction progress") : copy("语义索引进度", "Semantic index progress")}>
       <div className="flex items-center justify-between gap-3">
         <strong className="text-sm">{stateLabels[job.state]}</strong>
         {active && props.onCancel ? <Button type="button" size="sm" variant="ghost" disabled={props.cancelPending || (!recoveryRequired && (job.state === "cancelling" || progress?.phase === "committing" || (progress?.phase === "complete" && !job.followupRequested)))} onClick={props.onCancel}>{recoveryRequired ? copy("恢复并取消", "Recover and cancel") : compact ? copy("取消整理", "Cancel compaction") : job.followupRequested ? copy("取消更新及后续同步", "Cancel update and follow-up") : copy("取消更新", "Cancel update")}</Button> : null}
@@ -151,18 +166,23 @@ export function VceJobProgress(props: {
           {job.followupRequested ? <p className="text-xs text-primary" role="status">{copy("已合并一次后续手动同步；本次结束后核对文件，不受自动间隔限制。", "One manual follow-up is scheduled to reconcile files after this update, without the automatic cooldown.")}</p> : null}
           <p className="text-xs text-muted-foreground">{progress ? phaseLabels[progress.phase] : compact ? copy("整理作业尚未开始，不会调用模型", "Compaction has not started and will not call a model") : copy("当前批次尚未开始扫描或调用模型", "This batch has not started file scans or model calls")}{progress && progress.unit !== "none" ? ` · ${progress.completed}${progress.total !== null ? ` / ${progress.total}` : ""} ${unitLabels[progress.unit]}` : ""}</p>
           {progress?.providerBatchState ? <p className="text-xs text-muted-foreground" role="status">{providerBatchStateLabels[progress.providerBatchState]}</p> : null}
-          {overallMeasured ? (
+          {activity ? <div className="space-y-1 text-xs text-muted-foreground" role="status">
+            <p>{activityLabels[activity.stage]}</p>
+            {activity.providerBatchId ? <p className="truncate" title={activity.providerBatchId}>{copy("批量任务", "Batch task")}: {activity.providerBatchId}</p> : null}
+            {activity.nextPollAtUnixMs !== null ? <p>{copy("下次状态查询不早于", "Next status check no earlier than")}: {new Date(activity.nextPollAtUnixMs).toLocaleTimeString(props.chinese ? "zh-CN" : "en-US")}</p> : null}
+          </div> : null}
+          {(
             <div className="space-y-1">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>{copy("整体进度", "Overall progress")}</span>
-                <span>{progress.overallCompleted ?? 0} / {progress.overallTotal}</span>
+                <span>{overallMeasured ? `${progress.overallCompleted ?? 0} / ${progress.overallTotal}` : copy("正在确定范围", "Determining scope")}</span>
               </div>
-              <progress className="h-1.5 w-full accent-primary" aria-label={copy("整体进度", "Overall progress")} value={progress.overallCompleted ?? 0} max={progress.overallTotal!} />
+              <Progress className="h-1.5 w-full" aria-label={copy("整体进度", "Overall progress")} value={overallMeasured ? progress.overallCompleted ?? 0 : null} max={overallMeasured ? progress.overallTotal! : undefined} />
             </div>
-          ) : null}
-          <div className="text-xs text-muted-foreground">{copy("当前执行范围", "Current execution scope")}</div>
-          <progress className="h-1.5 w-full accent-primary" aria-label={copy("当前阶段进度", "Current phase progress")} value={measured ? progress.completed : undefined} max={measured ? progress.total! : undefined} />
-          {progress?.currentPath ? <p className="truncate text-xs text-muted-foreground" title={progress.currentPath}>{progress.currentPath}</p> : null}
+          )}
+          <div className="text-xs text-muted-foreground">{copy("当前阶段进度", "Current phase progress")}</div>
+          <Progress className="h-1.5 w-full" aria-label={copy("当前阶段进度", "Current phase progress")} value={measured ? progress.completed : null} max={measured ? progress.total! : undefined} />
+          <p className="h-4 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground" title={progress?.currentPath ?? undefined}>{progress?.currentPath ?? "\u00a0"}</p>
           {compact && job.compaction ? <div className="space-y-1 rounded-md border bg-background/60 p-2">{job.compaction.tables.map((table) => (
             <p className="text-xs text-muted-foreground" key={table.role}>{table.role === "content" ? copy("内容向量表", "Content vector table") : copy("路径向量表", "Path vector table")} · {copy("片段", "fragments")} {table.plannedFragmentCount} → {table.currentFragmentCount} · {copy("轮次", "round")} {table.round} · {compactionTableStateLabels[table.state]}</p>
           ))}</div> : null}

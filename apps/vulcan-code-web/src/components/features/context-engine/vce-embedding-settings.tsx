@@ -10,6 +10,7 @@ import type { PublicAiInferenceRoute, PublicAiInternalInferenceCandidate, Public
   VceConfigurationCapabilityStatus, VceEmbeddingDecision, VceEmbeddingPreflight } from "@/types";
 import { preferredVceDimension, vceDimensionDomain, vceDimensionSupported } from "./vce-embedding-dimensions";
 import { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
+import { VceHelpTooltip } from "./vce-help-tooltip";
 
 // Saved host state and shared mutation callbacks for the embedding-only draft editor.
 // 向量专属草稿编辑器使用的宿主已保存状态及共享修改回调。
@@ -184,21 +185,17 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
   };
 
   return <section className="space-y-4 px-4 py-4" aria-label={copy("向量模型与维度", "Embedding model and dimensions")}>
-    {/* Let the test action occupy a separate row in narrow settings panes, keeping the model explanation readable. */}
-    {/* 在窄设置面板中让测试操作单独占行，保留模型说明的可读宽度。 */}
-    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 @xl/vce:grid-cols-[auto_minmax(0,1fr)_auto]">
+    {/* Align purpose, model, parameters and actions with the other inference routes. */}
+    {/* 将用途、模型、参数与操作对齐到其他推理路由。 */}
+    <div className="grid items-center gap-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_10rem_14rem]">
+      <div className="flex min-w-0 items-center gap-3">
       {props.status.available ? <CheckCircle2 className="mt-0.5 size-5 text-[var(--vcn-content-success)]" /> : <CircleAlert className="mt-0.5 size-5 text-[var(--vcn-content-warning)]" />}
       <div className="min-w-0 flex-1">
-        <h4 className="text-sm font-medium">{copy("Embedding 向量模型", "Embedding model")}</h4>
-        <p className="mt-1 text-xs text-muted-foreground">{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</p>
+        <h4 className="flex items-center gap-1 text-sm font-medium">{copy("Embedding 向量模型", "Embedding model")}<VceHelpTooltip label={copy("向量模型说明", "Embedding model notes")}>{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</VceHelpTooltip></h4>
       </div>
-      <Button className="col-start-2 justify-self-start @xl/vce:col-start-auto" size="sm" variant="outline" disabled={disabled || dirty || !props.route || props.dimension === undefined} onClick={() => void props.onTest()}>
-        {props.testing ? <LoaderCircle className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{copy("测试已保存模型", "Test saved model")}
-      </Button>
-    </div>
-    <div className="flex flex-wrap items-end gap-3">
-      <div className="min-w-56 flex-1 space-y-1.5">
-        <span className="text-xs text-muted-foreground">{copy("模型与账号", "Model and account")}</span>
+      </div>
+      <div className="min-w-0 space-y-1.5">
+        <span className="text-xs text-muted-foreground @4xl/vce:hidden">{copy("模型与账号", "Model and account")}</span>
         <Combobox ariaLabel={copy("Embedding 向量模型", "Embedding model")} className="h-10" disabled={disabled || props.candidates.length === 0}
           options={vceRoutePickerOptions(props.candidates)} value={selected ? draftKey : undefined}
           placeholder={draftRoute?.model_id ?? copy("选择模型与账号", "Select model and account")}
@@ -206,8 +203,8 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
           emptyText={copy("没有符合条件的模型", "No compatible models")}
           onValueChange={(value) => { const candidate = candidateByKey.get(value); if (candidate) changeRoute(candidate.route); }} />
       </div>
-      {draftRoute ? <div className="w-40 space-y-1.5">
-        <label className="text-xs text-muted-foreground" htmlFor="vce-embedding-dimension">{copy("向量维度", "Dimensions")}</label>
+      <div className="min-w-0 space-y-1.5">{draftRoute ? <>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground" htmlFor="vce-embedding-dimension">{copy("向量维度", "Dimensions")}<VceHelpTooltip label={copy("维度说明", "Dimension notes")}>{copy("维度必须明确；不使用供应商默认档位。", "Dimensions must be explicit; provider defaults are not used.")}</VceHelpTooltip></label>
         {domain?.kind === "discrete" ? <Combobox ariaLabel={copy("向量维度", "Dimensions")} className="h-10" disabled={disabled}
           options={domain.values.map((value) => ({ value: String(value), label: String(value) }))}
           value={domain.values.includes(dimension) ? dimensionText : undefined} placeholder={copy("选择明确维度", "Choose dimensions")}
@@ -216,20 +213,25 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
           : <Input id="vce-embedding-dimension" type="number" className="h-10" value={dimensionText} disabled={disabled || !domain}
             min={domain?.kind === "range" ? domain.minimum : undefined} max={domain?.kind === "range" ? domain.maximum : undefined} step={1}
             onChange={(event) => { invalidate(); setDimensionText(event.target.value); }} />}
-      </div> : null}
+      </> : null}</div>
+      <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
+      <Button size="sm" variant="outline" disabled={disabled || dirty || !props.route || props.dimension === undefined} onClick={() => void props.onTest()}>
+        {props.testing ? <LoaderCircle className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{copy("测试", "Test")}
+      </Button>
       <Button variant="ghost" size="sm" disabled={disabled || !draftRoute} onClick={() => changeRoute(null)}><Trash2 className="size-3.5" />{copy("清除", "Clear")}</Button>
-      {dirty ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => {
-        invalidate(); setDraftRoute(props.route ?? null); setDimensionText(initialDimensionText(props));
-      }}>{copy("还原已保存设置", "Restore saved settings")}</Button> : null}
-    </div>
-    <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-      <span className="text-muted-foreground">{dirty ? copy("更改尚未保存；已有项目不会自动重建。", "Unsaved changes; existing projects will not rebuild automatically.")
-        : props.dimension === undefined && draftRoute ? copy("请明确选择维度后保存。", "Select and save an explicit dimension.")
-          : props.testSummary ?? copy("维度必须明确；不使用供应商默认档位。", "Dimensions must be explicit; provider defaults are not used.")}</span>
       <Button size="sm" variant="outline" disabled={disabled || !validDraft || (!draftRoute && !props.route)} onClick={() => void inspect()}>
         {busy === "preflight" ? <LoaderCircle className="size-3.5 animate-spin" /> : null}{dirty ? copy("检查变更", "Review changes") : copy("检查项目兼容性", "Review project compatibility")}
       </Button>
+      {dirty ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => {
+        invalidate(); setDraftRoute(props.route ?? null); setDimensionText(initialDimensionText(props));
+      }}>{copy("还原已保存设置", "Restore saved settings")}</Button> : null}
+      </div>
     </div>
+    {dirty || (props.dimension === undefined && draftRoute) || props.testSummary ? <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+      <span className="text-muted-foreground">{dirty ? copy("更改尚未保存；已有项目不会自动重建。", "Unsaved changes; existing projects will not rebuild automatically.")
+        : props.dimension === undefined && draftRoute ? copy("请明确选择维度后保存。", "Select and save an explicit dimension.")
+          : props.testSummary ?? null}</span>
+    </div> : null}
     {!validDraft && draftRoute ? <p className="text-xs text-[var(--vcn-content-warning)]">{copy("请选择模型明确支持的正整数维度。", "Choose a positive dimension explicitly supported by this model.")}</p> : null}
     {error ? <p role="alert" className="break-words text-xs text-destructive">{error}</p> : null}
     {!dirty && props.status.issue ? <p className="break-words text-xs text-[var(--vcn-content-warning)]">{props.status.issue}</p> : null}

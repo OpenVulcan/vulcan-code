@@ -365,6 +365,7 @@ impl VceProjectSourceAdapter {
     ) -> Result<VceSourceManifest, String> {
         control.check().map_err(|error| error.to_string())?;
         control.observe(VceRefreshProgress {
+            activity: None,
             phase: VceRefreshPhase::Scanning,
             operation_id: operation_id.to_owned(),
             unit: VceRefreshUnit::Files,
@@ -422,6 +423,7 @@ impl VceProjectSourceAdapter {
                 }
             }
             control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Scanning,
                 operation_id: operation_id.to_owned(),
                 unit: VceRefreshUnit::Files,
@@ -466,6 +468,7 @@ impl VceProjectSourceAdapter {
         let total = relative_paths.len() as u64;
         control.check().map_err(|error| error.to_string())?;
         control.observe(VceRefreshProgress {
+            activity: None,
             phase: VceRefreshPhase::Scanning,
             operation_id: operation_id.to_owned(),
             unit: VceRefreshUnit::Files,
@@ -495,6 +498,7 @@ impl VceProjectSourceAdapter {
                 }
             }
             control.observe(VceRefreshProgress {
+                activity: None,
                 phase: VceRefreshPhase::Scanning,
                 operation_id: operation_id.to_owned(),
                 unit: VceRefreshUnit::Files,

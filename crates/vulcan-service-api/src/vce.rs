@@ -73,6 +73,10 @@ pub enum VceJobStateSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceJobProgressSummary {
+    /// Exact optional embedding activity, including acknowledged Batch identity and poll deadline.
+    /// 精确可选向量活动，包含已确认 Batch 身份与轮询时间。
+    #[serde(default)]
+    pub activity: Option<VceEmbeddingActivitySummary>,
     /// Exact core phase: scanning, reconciling, chunking, embedding, writing, committing, complete.
     /// 精确核心阶段：扫描、核对、切块、向量化、写入、提交、完成。
     pub phase: String,
@@ -102,6 +106,22 @@ pub struct VceJobProgressSummary {
     /// Optional source-relative path, never source content or credentials.
     /// 可选源码相对路径，绝不含源码正文或凭据。
     pub current_path: Option<String>,
+}
+
+/// User-visible embedding lifecycle metadata, with no source content or credentials.
+/// 面向用户的向量生命周期元数据，不包含源码内容或凭据。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceEmbeddingActivitySummary {
+    /// Exact core activity stage.
+    /// 精确核心活动阶段。
+    pub stage: String,
+    /// Provider-issued task identifier, only after confirmed submission.
+    /// 供应商签发的任务标识，仅在提交确认后存在。
+    pub provider_batch_id: Option<String>,
+    /// Earliest permitted automatic status check.
+    /// 最早允许自动查询状态的时刻。
+    pub next_poll_at_unix_ms: Option<u64>,
 }
 
 /// Management-safe stable job receipt returned immediately after durable admission.

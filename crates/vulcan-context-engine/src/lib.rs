@@ -92,7 +92,7 @@ pub use ports::{
 pub use query::{QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 pub use refresh_control::{
     VceCancelOutcome, VceRefreshControl, VceRefreshFailure, VceRefreshFailureObserver,
-    VceRefreshObserver, VceRefreshPhase, VceRefreshProgress, VceRefreshProviderBatchState,
+    VceEmbeddingActivity, VceEmbeddingActivityStage, VceRefreshObserver, VceRefreshPhase, VceRefreshProgress, VceRefreshProviderBatchState,
     VceRefreshUnit,
 };
 pub use retrieval::{

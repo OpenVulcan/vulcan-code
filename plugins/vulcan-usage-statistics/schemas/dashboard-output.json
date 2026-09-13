@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "view": { "enum": ["all", "overview", "details", "maintenance"] },
+    "view": { "enum": ["all", "overview", "details", "maintenance", "daily-page", "recent-page", "detail-pages"] },
     "generatedAtMs": { "type": "integer" },
     "schemaRevision": { "type": "integer", "minimum": 0 },
     "aggregateRevision": { "type": "integer", "minimum": 0 },
@@ -65,7 +65,14 @@
       "items": { "$ref": "#/$defs/accountSummary" }
     }
   },
-  "required": [
+  "required": ["view", "generatedAtMs", "aggregateRevision"],
+  "allOf": [
+    { "if": { "properties": { "view": { "enum": ["daily-page", "detail-pages"] } } },
+      "then": { "required": ["daily", "dailyCount"] } },
+    { "if": { "properties": { "view": { "enum": ["recent-page", "detail-pages"] } } },
+      "then": { "required": ["recentAttempts", "recentCount"] } },
+    { "if": { "properties": { "view": { "enum": ["all", "overview", "details", "maintenance"] } } },
+      "then": { "required": [
     "view",
     "generatedAtMs",
     "schemaRevision",
@@ -81,6 +88,7 @@
     "series",
     "recentAttempts",
     "accounts"
+  ] } }
   ],
   "additionalProperties": false,
   "$defs": {
@@ -135,7 +143,6 @@
     "dailySummary": {
       "type": "object",
       "properties": {
-        "calendarDate": { "type": "string", "format": "date" },
         "providerId": { "type": "string", "minLength": 1 },
         "serviceEntryId": { "type": "string", "minLength": 1 },
         "consumerId": { "type": "string", "minLength": 1 },
@@ -165,7 +172,6 @@
         "timedAttemptCount": { "type": "integer", "minimum": 0 }
       },
       "required": [
-        "calendarDate",
         "providerId",
         "serviceEntryId",
         "consumerId",

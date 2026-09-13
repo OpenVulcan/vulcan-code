@@ -111,6 +111,9 @@ export function createPluginPanel(sdk) {
   // EmptyState is the shared host empty presentation.
   // EmptyState 是共享宿主空状态展示组件。
   const EmptyState = sdk.components.EmptyState;
+  // HelpTooltip keeps secondary explanations available without collapsible sections.
+  // HelpTooltip 保留次要说明入口，不再使用折叠区块。
+  const HelpTooltip = sdk.components.HelpTooltip;
   // text resolves one plugin locale key with an explicit English source fallback.
   // text 使用明确的英语源码回退解析一个插件语言键。
   const text = (key, fallback) => sdk.t(key, fallback);
@@ -440,7 +443,14 @@ export function createPluginPanel(sdk) {
     return h("section", { style: PANEL_STYLE },
       h("header", null,
         h("div", null,
-          h("h2", { style: { fontSize: "18px", fontWeight: 650, margin: 0 } }, text("title", "Context7 documentation")),
+          h("div", { style: ROW_STYLE },
+            h("h2", { style: { fontSize: "18px", fontWeight: 650, margin: 0 } }, text("title", "Context7 documentation")),
+            h(HelpTooltip, { ariaLabel: text("aboutTitle", "What is Context7?"), content: h("div", { style: { display: "grid", gap: "8px", maxWidth: "360px" } },
+              h("strong", null, text("aboutTitle", "What is Context7?")),
+              h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("aboutDescription", "Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant excerpts directly to the active task.")),
+              h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard.")),
+            ) }),
+          ),
           h("p", { style: { ...MUTED_STYLE, margin: "4px 0 0" } }, text("subtitle", "Configure authentication and inspect request quota and local usage.")),
         ),
       ),
@@ -453,18 +463,11 @@ export function createPluginPanel(sdk) {
           h("summary", { style: { cursor: "pointer" } }, text("errorDetails", "Error details")),
           h("pre", { style: { margin: "8px 0 0", maxHeight: "160px", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, error)),
       ) : null,
-      h("details", { style: { color: "var(--muted-foreground)", fontSize: "12px" } },
-        h("summary", { style: { cursor: "pointer", padding: "4px 0" } }, text("aboutTitle", "What is Context7?")),
-        h("div", { style: { display: "grid", gap: "8px", padding: "8px 0" } },
-        h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("aboutDescription", "Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant excerpts directly to the active task.")),
-        h("p", { style: { ...MUTED_STYLE, margin: 0, fontSize: "13px" } }, text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard.")),
-        h("div", { style: ROW_STYLE },
+      h("nav", { style: ROW_STYLE, "aria-label": text("quickLinks", "Quick links") },
           h("span", { style: MUTED_STYLE }, text("quickLinks", "Quick links")),
           officialLink(CONTEXT7_DASHBOARD_URL, text("dashboardLink", "Context7 dashboard")),
           officialLink(CONTEXT7_API_KEY_DOCS_URL, text("apiKeyDocsLink", "Get a free API key")),
           officialLink(CONTEXT7_USAGE_DOCS_URL, text("usageDocsLink", "API and usage documentation")),
-        ),
-        ),
       ),
       h("article", { style: CARD_STYLE },
         h("div", { style: ROW_STYLE },
@@ -492,14 +495,16 @@ export function createPluginPanel(sdk) {
           h("span", { style: MUTED_STYLE }, text("connectionTestHint", "Testing consumes one Context7 request from the current allowance.")),
         ),
       ),
-      config ? h("details", { style: { border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px 14px", background: "var(--card)" } },
-        h("summary", { style: { cursor: "pointer", fontWeight: 600 } }, text("behaviorTitle", "Request behavior")),
-        h("div", { style: { display: "grid", gap: "10px", paddingTop: "12px" } },
-        h("label", { style: ROW_STYLE },
+      config ? h("article", { style: CARD_STYLE },
+        h("strong", null, text("behaviorTitle", "Request behavior")),
+        h("div", { style: { display: "grid", gap: "16px", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", alignItems: "center" } },
+        h("div", { style: ROW_STYLE },
+          h("label", { style: ROW_STYLE },
           h("input", { checked: config.defaultFastMode, disabled: saving, onChange: (event) => updateSettings({ ...config, defaultFastMode: event.target.checked }), type: "checkbox" }),
           h("span", null, text("defaultFastMode", "Fast mode by default")),
+          ),
+          h(HelpTooltip, { ariaLabel: text("defaultFastMode", "Fast mode by default"), content: text("defaultFastModeHint", "Skip Context7 LLM reranking for lower latency and potentially lower relevance.") }),
         ),
-        h("p", { style: { ...MUTED_STYLE, margin: 0 } }, text("defaultFastModeHint", "Skip Context7 LLM reranking for lower latency and potentially lower relevance.")),
         h("div", { style: ROW_STYLE },
           h("span", null, text("timeout", "Request timeout")),
           h(SelectControl, {
@@ -509,6 +514,8 @@ export function createPluginPanel(sdk) {
             options: TIMEOUT_OPTIONS.map((value) => ({ value: String(value), label: `${value / 1000} s` })),
             value: String(config.requestTimeoutMs),
           }),
+        ),
+        h("div", { style: ROW_STYLE },
           h("span", null, text("retention", "Local statistics retention")),
           h(SelectControl, {
             ariaLabel: text("retention", "Local statistics retention"),
@@ -517,8 +524,10 @@ export function createPluginPanel(sdk) {
             options: RETENTION_OPTIONS.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: value }) })),
             value: String(config.retentionDays),
           }),
-          h(Button, { disabled: saving || !configDirty.current, onClick: () => void saveSettings(), size: "sm", type: "button" }, saving ? text("saving", "Saving…") : text("saveSettings", "Save settings")),
         ),
+        ),
+        h("div", { style: { ...ROW_STYLE, justifyContent: "flex-end" } },
+          h(Button, { disabled: saving || !configDirty.current, onClick: () => void saveSettings(), size: "sm", type: "button" }, saving ? text("saving", "Saving…") : text("saveSettings", "Save settings")),
         ),
       ) : null,
       h("article", { style: CARD_STYLE },

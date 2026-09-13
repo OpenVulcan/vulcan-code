@@ -352,7 +352,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).toContain("检查当前实现");
     expect(markup).toContain('aria-label="复制用户提示词"');
     expect(markup).toContain('aria-label="编辑用户提示词"');
-    expect(markup).toContain("处理过程");
+    expect(markup).toContain("已工作");
     expect(markup).toContain("rg current-call-chain");
     expect(markup).toContain("tool-presentation-card");
     expect(markup).toContain("turn-stats-row");

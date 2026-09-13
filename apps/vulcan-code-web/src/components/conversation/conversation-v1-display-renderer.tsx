@@ -446,7 +446,7 @@ function ConversationV1ProcessGroup(
         onClick={() => setExpanded((current) => !current)}
         type="button"
       >
-        <span>{t("conversation.process.header")}</span>
+        <span>{t(props.node.active ? "conversation.process.working" : "conversation.process.worked")}</span>
         <ChevronDown aria-hidden="true" className="work-process-toggle-icon" size={14} />
       </button>
       <div className="work-process-body" hidden={!expanded}>

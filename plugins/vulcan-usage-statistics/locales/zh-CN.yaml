@@ -1,13 +1,13 @@
 name: Vulcan 用量统计
-capability: 通过系统 VLDB 查询和清理 Provider Token 事实，并使用插件自有价目表即时估算参考费用
+capability: 通过系统 VLDB 查询 Provider Token 事实，并使用插件自有价目表即时估算参考费用
 messages:
   tokens.details: Token 明细
   timing.request: 请求总时长
   timing.column: 延迟
   timing.firstShort: 首 Token
-  timing.averageFirstShort: 平均首 Token
+  timing.averageFirstShort: 首 Token
   timing.totalShort: 总耗时
-  timing.averageTotalShort: 平均耗时
+  timing.averageTotalShort: 耗时
   timing.unrecorded: 未记录
   timing.averageRequest: 平均请求时长
   timing.firstToken: 首 Token 延迟
@@ -146,16 +146,22 @@ messages:
   trend.range: 最近 30 天
   trend.aria: 按模型分组的每日 Token 用量折线图
   trend.empty: 当前范围暂无趋势数据
-  daily.title: 每日模型用量
-  daily.empty: 暂无每日用量事实
+  daily.title: 模型用量
+  daily.empty: 此时间范围内暂无用量
   daily.date: 日期
   daily.provider: 模型 / 供应商
   daily.consumer: 消费者
+  daily.consumerOperation: 消费者 / 操作
+  daily.averageDuration: 平均耗时
   daily.operation: 操作
   daily.attempts: 调用
   daily.tokens: Token
   daily.cost: 参考估算
   recent.title: 最近真实调用
+  recent.modelTypes: 模型类别
+  recent.group.llm: 对话模型
+  recent.group.embedding: 向量模型
+  recent.group.rerank: 重排序模型
   recent.empty: 暂无真实调用记录
   recent.time: 时间
   recent.model: 模型 / 供应商
@@ -187,8 +193,22 @@ messages:
   sections.pricing: 模型定价
   sections.maintenance: 维护
   range.label: 时间范围
+  range.now: 当前时刻
+  range.description: 选择本地日期与时间。
+  range.today: 当天
+  range.start: 开始时间
+  range.end: 结束时间
+  range.followNow: 结束时间跟随当前时刻
+  range.invalid: 结束时间必须晚于开始时间。
+  range.confirm: 确定
+  cost.item: 项目
+  cost.unitPerMillion: 单价 / 百万 Token
+  cost.noNonzero: 暂无非零费用项
   range.days: "最近 {{days}} 天"
   page.previous: 上一页
+  page.loading: 正在更新此表格…
+  range.last24Hours: 最近24小时
+  range.lastDays: 最近{{days}}天
   page.next: 下一页
   pricing.search: 搜索模型
   pricing.filter: 定价筛选

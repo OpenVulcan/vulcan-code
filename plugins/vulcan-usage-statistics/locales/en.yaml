@@ -1,13 +1,13 @@
 name: Vulcan Usage Statistics
-capability: Query and clear Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
+capability: Query Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
 messages:
   tokens.details: Token details
   timing.request: Request duration
   timing.column: Latency
   timing.firstShort: First token
-  timing.averageFirstShort: Avg first token
+  timing.averageFirstShort: First token
   timing.totalShort: Total
-  timing.averageTotalShort: Avg total
+  timing.averageTotalShort: Duration
   timing.unrecorded: Not recorded
   timing.averageRequest: Average request duration
   timing.firstToken: First-token latency
@@ -96,8 +96,22 @@ messages:
   sections.pricing: Model pricing
   sections.maintenance: Maintenance
   range.label: Time range
+  range.now: Now
+  range.description: Choose local dates and times.
+  range.today: Today
+  range.start: Start time
+  range.end: End time
+  range.followNow: End time follows now
+  range.invalid: End time must be later than start time.
+  range.confirm: Confirm
+  cost.item: Item
+  cost.unitPerMillion: Price / 1M Token
+  cost.noNonzero: No nonzero cost items
   range.days: "Last {{days}} days"
   page.previous: Previous
+  page.loading: Updating this table…
+  range.last24Hours: Last 24 hours
+  range.lastDays: Last {{days}} days
   page.next: Next
   pricing.search: Search models
   pricing.filter: Price filter
@@ -182,16 +196,22 @@ messages:
   trend.range: Last 30 days
   trend.aria: Daily token usage line chart grouped by model
   trend.empty: No trend data in this range
-  daily.title: Daily model usage
-  daily.empty: No daily usage facts
+  daily.title: Model usage
+  daily.empty: No usage in this range
   daily.date: Date
   daily.provider: Provider / model
   daily.consumer: Consumer
+  daily.consumerOperation: Consumer / operation
+  daily.averageDuration: Average duration
   daily.operation: Operation
   daily.attempts: Attempts
   daily.tokens: Tokens
   daily.cost: Reference estimate
   recent.title: Recent physical attempts
+  recent.modelTypes: Model types
+  recent.group.llm: Conversation models
+  recent.group.embedding: Embedding models
+  recent.group.rerank: Reranking models
   recent.empty: No physical attempt records
   recent.time: Time
   recent.model: Provider / model

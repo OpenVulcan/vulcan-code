@@ -233,7 +233,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(popupOnlyMarkup).toContain("answer after reasoning");
     expect(inlineMarkup).toContain('class="thinking-block"');
     expect(inlineMarkup).toContain("思考过程");
-    expect(inlineMarkup).not.toContain("处理过程");
+    expect(inlineMarkup).not.toContain("已工作");
   });
 
   it("connects one hydrated controller to the standalone React test host", async () => {
@@ -508,7 +508,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).not.toContain("资源：101, 102");
     expect(markup).toContain("Checking");
     expect(markup).toContain("result");
-    expect(markup).toContain("处理过程");
+    expect(markup).toContain("已工作");
     expect(markup).toContain('class="thinking-block"');
     expect(markup).toContain("思考过程");
     expect(markup).toContain('class="message-row user conversation-v1-event"');

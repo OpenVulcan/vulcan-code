@@ -90,10 +90,57 @@ pub enum VceRefreshProviderBatchState {
     Cancelled,
 }
 
+/// Exact action currently awaited at the embedding boundary, including confirmed provider identity.
+/// 向量边界当前等待的精确动作，包含已确认的供应商任务身份。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VceEmbeddingActivity {
+    /// Stable activity stage; never inferred from completed counters.
+    /// 稳定活动阶段，绝不从完成计数推断。
+    pub stage: VceEmbeddingActivityStage,
+    /// Provider-issued Batch identity; absent until submission is acknowledged.
+    /// 供应商签发的 Batch 身份；提交确认前为空。
+    pub provider_batch_id: Option<String>,
+    /// Earliest permitted automatic status query, respecting the frozen provider rate policy.
+    /// 遵循冻结供应商速率策略的最早自动状态查询时间。
+    pub next_poll_at_unix_ms: Option<u64>,
+}
+
+/// Observable preparation, synchronous request and remote Batch lifecycle boundaries.
+/// 可观测的准备、同步请求与远端 Batch 生命周期边界。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceEmbeddingActivityStage {
+    /// Preparing the durable request plan; no submission has happened here.
+    /// 正在准备持久请求计划；此阶段尚未提交。
+    Preparing,
+    /// Awaiting one synchronous embedding response.
+    /// 正在等待一个同步向量响应。
+    Requesting,
+    /// Uploading the provider Batch input file.
+    /// 正在上传供应商 Batch 输入文件。
+    Uploading,
+    /// Submitting a Batch, before an acknowledgement is available.
+    /// 正在提交 Batch，尚未取得确认。
+    Submitting,
+    /// Batch submission was acknowledged; waiting for the permitted status query time.
+    /// Batch 提交已确认，正在等待允许查询状态的时刻。
+    Waiting,
+    /// Querying the acknowledged Batch status.
+    /// 正在查询已确认 Batch 的状态。
+    Polling,
+    /// Retrieving and validating the completed Batch results.
+    /// 正在获取并校验已完成 Batch 的结果。
+    Collecting,
+}
+
 /// Immutable phase observation without host UI, database, or provider dependencies.
 /// 不依赖宿主界面、数据库或供应商的不可变阶段观察。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VceRefreshProgress {
+    /// Optional exact embedding activity, absent for older receipts and other phases.
+    /// 可选的精确向量活动；旧回执与其他阶段为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<VceEmbeddingActivity>,
     /// Real phase reached by the caller.
     /// 调用方实际到达的阶段。
     pub phase: VceRefreshPhase,

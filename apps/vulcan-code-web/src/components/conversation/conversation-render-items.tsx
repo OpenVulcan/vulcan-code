@@ -619,7 +619,12 @@ export function ConversationProcessGroup(props: {
     : null;
   const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
   const durationLabel = formatWorkProcessDuration(displayedDurationMs, locale);
-  const headerText = durationLabel ? `${t("conversation.process.header")} ${durationLabel}` : t("conversation.process.header");
+  // Use the owning process lifecycle so completed work stays terminal while another turn runs.
+  // 使用所属过程的生命周期，避免其他回合运行时将已完成工作显示为进行中。
+  const workLabel = t(props.process.running ? "conversation.process.working" : "conversation.process.worked");
+  // Append the existing measured duration without changing timer or stopped-state semantics.
+  // 附加现有实测耗时，不改变计时器或停止状态语义。
+  const headerText = durationLabel ? `${workLabel} ${durationLabel}` : workLabel;
   const stoppedText = durationLabel
     ? t("conversation.process.stoppedAfter").replace("{duration}", durationLabel)
     : t("conversation.process.stopped");

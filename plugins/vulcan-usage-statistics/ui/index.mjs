@@ -10,6 +10,22 @@ const MAX_DAILY_ROWS = 100;
 // MAX_RECENT_ATTEMPTS 限制单次面板渲染的物理请求证据数量。
 const MAX_RECENT_ATTEMPTS = 50;
 
+// Resolve a shortcut using local calendar days, except the exact trailing 24-hour shortcut.
+// 按本地自然日计算快捷范围，最近 24 小时快捷项除外。
+// days is 0, 1, 7, 14 or 30; now is Unix milliseconds; returns the committed query bounds.
+// days 为 0、1、7、14 或 30；now 为 Unix 毫秒；返回查询边界。
+export function presetTimeRange(days, now = Date.now()) {
+  // Calendar arithmetic preserves local midnight across daylight-saving transitions.
+  // 自然日运算在夏令时切换时仍保留本地零点。
+  const start = new Date(now);
+  if (days === 1) start.setTime(now - 86400000);
+  else {
+    start.setDate(start.getDate() - Math.max(0, days - 1));
+    start.setHours(0, 0, 0, 0);
+  }
+  return { startAtMs: start.getTime(), endAtMs: days === 0 ? null : now };
+}
+
 // CHART_COLORS maps stable model identities onto the inherited chart palette.
 // CHART_COLORS 将稳定模型身份映射到继承的图表调色板。
 const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--muted-foreground)"];
@@ -185,8 +201,107 @@ export function createPluginPanel(sdk) {
   // 返回带明确估算标记的值，或返回其不可用的精确原因。
   function formatReferenceEstimate(record) {
       if (record.estimatedCost === null || record.estimatedCost === undefined) return "-";
-      return `${formatMoney(record.estimatedCost, sdk.locale)}${record.estimatedCurrency ? ` ${record.estimatedCurrency}` : ""}`;
+      return currencyAmount(formatMoney(record.estimatedCost, sdk.locale), record.estimatedCurrency);
     }
+
+  // Render dollar amounts with their symbol while retaining exact decimal text and approximation marks.
+  // 使用美元符号渲染金额，同时保留精确小数文本与近似标记。
+  // value is formatted or exact decimal text; currency is the declared code; returns display text.
+  // value 为格式化或精确小数文本；currency 为声明币种；返回展示文本。
+  function currencyAmount(value, currency) {
+    if (currency === "USD") return value.startsWith("≈") ? `≈$${value.slice(1)}` : `$${value}`;
+    return currency ? `${value} ${currency}` : value;
+  }
+
+  // Identify exact decimal zero without rounding small positive costs away.
+  // 识别精确十进制零，不将较小正费用舍入为零。
+  // value is nullable decimal text; returns true only for explicitly recorded zero.
+  // value 为可空小数文本；仅对明确记录的零返回 true。
+  function isZeroCost(value) { return typeof value === "string" && /^0(?:\.0+)?$/.test(value); }
+
+  // Format local editable date/time text without applying a UTC offset to the displayed clock.
+  // 格式化本地可编辑日期时间，不对显示时钟施加 UTC 偏移。
+  // milliseconds is a Unix timestamp; returns the native datetime-local input format.
+  // milliseconds 为 Unix 时间戳；返回原生 datetime-local 输入格式。
+  function localDateTimeValue(milliseconds) {
+    // Read the local wall clock from the exact timestamp.
+    // 从精确时间戳读取本地时钟。
+    const date = new Date(milliseconds);
+    return `${formatLocalDateKey(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  }
+
+  // Display the committed range with a live end marker when requested.
+  // 展示已提交范围，并按需显示实时结束标记。
+  // range has startAtMs and nullable endAtMs; returns a compact local range label.
+  // range 包含 startAtMs 与可空 endAtMs；返回紧凑本地范围标签。
+  function timeRangeLabel(range) {
+    return `${localDateTimeValue(range.startAtMs).replace("T", " ")} — ${range.endAtMs === null ? text("range.now", "Now") : localDateTimeValue(range.endAtMs).replace("T", " ")}`;
+  }
+
+  // Stage a date/time interval and commit only after explicit confirmation.
+  // 暂存日期时间区间，仅在明确确认后提交。
+  // value owns the active bounds; onChange receives validated bounds; returns the range picker.
+  // value 持有当前边界；onChange 接收有效边界；返回时间范围选择器。
+  function TimeRangeControl({ value, onChange }) {
+    // Keep dialog visibility and draft fields isolated from the active query.
+    // 将弹窗可见性与草稿字段和当前查询隔离。
+    const [open, setOpen] = React.useState(false);
+    // Start and end use local input values until confirmation converts them into timestamps.
+    // 开始与结束使用本地输入值，直到确认时转为时间戳。
+    const [start, setStart] = React.useState("");
+    const [end, setEnd] = React.useState("");
+    // Preserve exact shortcut timestamps until a date/time field is edited manually.
+    // 在手动编辑日期时间字段前保留快捷项的精确时间戳。
+    const [exactBounds, setExactBounds] = React.useState(null);
+    // A following end is captured afresh for each explicit statistics query.
+    // 跟随结束时间在每次显式统计查询时重新取值。
+    const [followNow, setFollowNow] = React.useState(true);
+    // Validation feedback belongs to the draft, never to already displayed statistics.
+    // 校验反馈属于草稿，不属于已展示的统计。
+    const [rangeError, setRangeError] = React.useState("");
+    return h(React.Fragment, null,
+      h(Button, { type: "button", size: "sm", variant: "outline", "aria-label": text("range.label", "Time range"), onClick: () => {
+        setStart(localDateTimeValue(value.startAtMs)); setEnd(localDateTimeValue(value.endAtMs ?? Date.now()));
+        setExactBounds({ startAtMs: value.startAtMs, endAtMs: value.endAtMs ?? Date.now() });
+        setFollowNow(value.endAtMs === null); setRangeError(""); setOpen(true);
+      } }, timeRangeLabel(value)),
+      h(sdk.components.Dialog, { open, onOpenChange: setOpen },
+        h(sdk.components.DialogContent, { className: "plugin-statistics-range-dialog" },
+          h(sdk.components.DialogTitle, null, text("range.label", "Time range")),
+          h(sdk.components.DialogDescription, null, text("range.description", "Choose local dates and times.")),
+          h("div", { className: "plugin-statistics-range-presets" }, ...[0, 1, 7, 14, 30].map((days) => h(Button, {
+            key: days, type: "button", size: "sm", variant: "outline", onClick: () => {
+              // Only Today follows now; other shortcuts capture a fixed endpoint when selected.
+              // 仅当天跟随当前时刻；其他快捷项在选择时固定结束时间。
+              const now = Date.now();
+              const bounds = presetTimeRange(days, now);
+              setExactBounds({ startAtMs: bounds.startAtMs, endAtMs: now });
+              setStart(localDateTimeValue(bounds.startAtMs)); setEnd(localDateTimeValue(now)); setFollowNow(days === 0); setRangeError("");
+            },
+          }, days === 0 ? text("range.today", "Today") : days === 1 ? text("range.last24Hours", "Last 24 hours") : interpolate(text("range.lastDays", "Last {{days}} days"), { days })))),
+          h("div", { className: "plugin-statistics-range-fields" },
+            h("label", null, h("span", null, text("range.start", "Start time")), h("input", { type: "datetime-local", value: start, onChange: (event) => { setStart(event.target.value); setExactBounds(null); } })),
+            h("label", null, h("span", null, text("range.end", "End time")), h("input", { type: "datetime-local", value: end, disabled: followNow, onChange: (event) => { setEnd(event.target.value); setExactBounds(null); } })),
+          ),
+          h("label", { className: "plugin-statistics-range-follow" }, h("input", { type: "checkbox", checked: followNow, onChange: (event) => setFollowNow(event.target.checked) }), text("range.followNow", "End time follows now")),
+          rangeError ? h("p", { role: "alert" }, rangeError) : null,
+          h("div", { className: "plugin-statistics-range-actions" },
+            h(Button, { type: "button", variant: "ghost", onClick: () => setOpen(false) }, text("clear.cancel", "Cancel")),
+            h(Button, { type: "button", onClick: () => {
+              // Reject missing or reversed times before issuing a query.
+              // 发起查询前拒绝缺失或倒置的时间。
+              const startAtMs = exactBounds === null ? new Date(start).getTime() : exactBounds.startAtMs;
+              const endAtMs = followNow ? Date.now() : exactBounds === null ? new Date(end).getTime() : exactBounds.endAtMs;
+              if (!Number.isFinite(startAtMs) || !Number.isFinite(endAtMs) || startAtMs <= 0 || endAtMs <= startAtMs) {
+                setRangeError(text("range.invalid", "End time must be later than start time.")); return;
+              }
+              onChange({ startAtMs, endAtMs: followNow ? null : endAtMs }); setOpen(false);
+            } }, text("range.confirm", "Confirm")),
+          ),
+        ),
+      ),
+    );
+  }
 
   // interpolate replaces exact named locale placeholders without evaluating arbitrary templates.
   // interpolate 替换精确命名的语言占位符，不执行任意模板。
@@ -229,17 +344,17 @@ export function createPluginPanel(sdk) {
     return `${year}-${month}-${day}`;
   }
 
-  // localCalendarDates returns an inclusive ordered local-date range ending today.
-  // localCalendarDates 返回截至今天的有序本地自然日闭区间。
-  function localCalendarDates(days) {
-    // today is normalized to local midnight before date arithmetic.
-    // today 在日期运算前规范化到本地午夜。
-    const today = new Date();
+  // Return ordered local calendar keys covering the supplied timestamp bounds.
+  // 返回覆盖给定时间戳边界的有序本地日期键。
+  function localCalendarDates(range) {
+    // Normalize the inclusive end to local midnight for calendar arithmetic.
+    // 将闭区间终点规范化到本地午夜以进行日期运算。
+    const today = new Date(range.endAtMs ?? Date.now());
     today.setHours(0, 0, 0, 0);
     // start is the first requested local calendar date.
     // start 是请求的首个本地自然日。
-    const start = new Date(today);
-    start.setDate(start.getDate() - days + 1);
+    const start = new Date(range.startAtMs);
+    start.setHours(0, 0, 0, 0);
     // dates accumulates every local date exactly once.
     // dates 恰好一次累积每个本地日期。
     const dates = [];
@@ -251,7 +366,7 @@ export function createPluginPanel(sdk) {
 
   // buildHeatmapCells fills the shared calendar grid and derives five non-zero intensity bands.
   // buildHeatmapCells 填充共享日历点阵并派生五级非零强度区间。
-  function buildHeatmapCells(rows, days) {
+  function buildHeatmapCells(rows, range) {
     // rowsByDate maps exact ISO keys to complete daily activity facts.
     // rowsByDate 将精确 ISO 键映射到完整每日活动事实。
     const rowsByDate = new Map(rows.map((row) => [row.date, row]));
@@ -266,7 +381,7 @@ export function createPluginPanel(sdk) {
     const thresholds = nonZeroValues.length === 0
       ? []
       : [1, 2, 3, 4, 5].map((level) => nonZeroValues[Math.ceil((nonZeroValues.length * level) / 5) - 1]);
-    return localCalendarDates(days).map((date) => {
+    return localCalendarDates(range).map((date) => {
       // row is the complete aggregate for this date when activity exists.
       // row 是存在活动时当前日期的完整聚合。
       const row = rowsByDate.get(date);
@@ -316,10 +431,10 @@ export function createPluginPanel(sdk) {
 
   // buildLineSeries aligns sparse model rows onto one selected-range local-date axis.
   // buildLineSeries 将稀疏模型行对齐到所选范围的本地自然日横轴。
-  function buildLineSeries(rows, days) {
+  function buildLineSeries(rows, range) {
     // dates is the complete fixed chart x-axis.
     // dates 是完整的固定图表横轴。
-    const dates = localCalendarDates(days);
+    const dates = localCalendarDates(range);
     // groups accumulates exact values by stable series key and date.
     // groups 按稳定序列键与日期累积精确数值。
     const groups = new Map();
@@ -564,19 +679,31 @@ export function createPluginPanel(sdk) {
   // record is a priced runtime projection; returns the estimate and its exact reference-price breakdown.
   // record 是运行时定价投影；返回估算和精确参考价格明细。
   function estimateDetails(record) {
+    // Exclude only explicitly zero dimensions; unknown costs retain their explanation.
+    // 仅排除明确为零的费用维度；未知费用保留说明。
+    const dimensions = record.pricingDetails === null ? [] : record.pricingDetails.dimensions.filter((dimension) => !isZeroCost(dimension.cost));
     return h("div", { className: "plugin-statistics-estimate-cell" },
       record.estimatedCost === null ? null : h("span", null, formatReferenceEstimate(record)),
       h(HelpTooltip, { ariaLabel: text("cost.details", "Reference cost details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
         h("strong", null, text("cost.details", "Reference cost details")),
         record.pricingDetails === null ? h("p", null, text("pricing.unpriced", "Unpriced"))
-          : h(React.Fragment, null, ...record.pricingDetails.dimensions.map((dimension) => h("div", { className: "plugin-statistics-cost-dimension", key: dimension.tokenField },
-            h("strong", null, text(`tokens.${dimension.tokenField}`, dimension.tokenField)),
-            facts([[text("cost.component", "Estimated cost"), dimension.cost === null ? null : `${dimension.cost} ${record.pricingDetails.currency}`],
-              [text("cost.unitPrice", "Unit price"), `${dimension.perMillion} ${record.pricingDetails.currency} / 1M Token`]]))),
+          : h(React.Fragment, null,
+          dimensions.length === 0 ? h("p", null, text("cost.noNonzero", "No nonzero cost items")) : h("table", { className: "plugin-statistics-cost-table" },
+            h("thead", null, h("tr", null,
+              h("th", null, text("cost.item", "Item")),
+              h("th", null, text("cost.component", "Estimated cost")),
+              h("th", null, text("cost.unitPerMillion", "Price / 1M Token")),
+            )),
+            h("tbody", null, ...dimensions.map((dimension) => h("tr", { key: dimension.tokenField },
+              h("td", null, text(`tokens.${dimension.tokenField}`, dimension.tokenField)),
+              h("td", null, dimension.cost === null ? text("pricing.incompleteUsage", "Required usage is incomplete") : currencyAmount(dimension.cost, record.pricingDetails.currency)),
+              h("td", null, currencyAmount(dimension.perMillion, record.pricingDetails.currency)),
+            ))),
+          ),
           facts([[text("pricing.source", "Price source"), text(record.pricingMatchStatus === "override_exact" || record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]])),
         h("div", { className: "plugin-statistics-cost-total" }, facts([[text("cost.total", "Total reference estimate"), record.estimatedCost === null
           ? text(record.pricingMatchStatus === "unmatched" ? "pricing.unpriced" : "pricing.incompleteUsage", "Estimate unavailable")
-          : `${record.estimatedCost} ${record.estimatedCurrency}`]])),
+          : currencyAmount(record.estimatedCost, record.estimatedCurrency)]])),
         h("p", null, text("cost.referenceOnly", "Calculated from recorded usage and current reference prices; this is not a provider bill.")),
       ) }),
     );
@@ -604,10 +731,10 @@ export function createPluginPanel(sdk) {
     const [section, setSection] = React.useState("overview");
     // dashboardView requests only projections used by the active task area.
     // dashboardView 仅请求当前任务区域使用的投影。
-    const dashboardView = section === "details" ? "details" : section === "maintenance" ? "maintenance" : "overview";
-    // rangeDays applies the same bounded calendar range to every usage query.
-    // rangeDays 为每个用量查询应用相同的有界自然日范围。
-    const [rangeDays, setRangeDays] = React.useState(30);
+    const dashboardView = section === "details" ? "details" : "overview";
+    // Apply one exact time interval to all usage queries; null end follows query time.
+    // 为所有用量查询应用同一精确时间区间；空终点跟随查询时刻。
+    const [timeRange, setTimeRange] = React.useState(() => presetTimeRange(30));
     // modelQuery and sortOrder bind explicit search and chronological ordering to the server.
     // modelQuery 与 sortOrder 将明确搜索和时间排序绑定到服务端。
     const [modelQuery, setModelQuery] = React.useState("");
@@ -617,6 +744,9 @@ export function createPluginPanel(sdk) {
     // dailyOffset 与 recentOffset 选择独立的服务端分页。
     const [dailyOffset, setDailyOffset] = React.useState(0);
     const [recentOffset, setRecentOffset] = React.useState(0);
+    // Select a server-filtered model category; switching categories starts at its first page.
+    // 选择服务端筛选的模型类别；切换类别时从该类别首页开始。
+    const [recentModelType, setRecentModelType] = React.useState("llm");
     // pricingSearch and pricingFilter narrow the complete declared price catalog.
     // pricingSearch 与 pricingFilter 筛选完整声明的定价目录。
     const [pricingSearch, setPricingSearch] = React.useState("");
@@ -625,6 +755,10 @@ export function createPluginPanel(sdk) {
     // pricingDirectory is a server page across all retained usage, catalog and override models.
     // pricingDirectory 是横跨全部保留用量、目录与覆盖模型的服务端分页。
     const [pricingDirectory, setPricingDirectory] = React.useState(null);
+    // Committed pricing scope and page keep retained rows and pagination labels consistent.
+    // 已提交定价作用域与页码确保保留记录和分页标签一致。
+    const pricingDirectoryScope = React.useRef(null);
+    const [pricingDirectoryPage, setPricingDirectoryPage] = React.useState(0);
     const [pricingDirectoryLoading, setPricingDirectoryLoading] = React.useState(false);
     const [pricingDirectoryError, setPricingDirectoryError] = React.useState("");
     // settingsError is independent of database loading so price configuration stays available.
@@ -670,20 +804,14 @@ export function createPluginPanel(sdk) {
     // loading prevents overlapping dashboard reads.
     // loading 防止仪表盘读取重叠。
     const [loading, setLoading] = React.useState(true);
+    // Table navigation retains the dashboard and owns its own loading and error feedback.
+    // 表格导航保留仪表盘，并独立管理加载与错误反馈。
+    const [tableRefresh, setTableRefresh] = React.useState({ daily: false, recent: false, error: "" });
     // error stores the latest bounded host query diagnostic.
     // error 保存最近一条有界宿主查询诊断。
     const [error, setError] = React.useState("");
-    // clearPreview stores the revision-bound destructive maintenance preview.
-    // clearPreview 保存绑定修订的破坏性维护预览。
-    const [clearPreview, setClearPreview] = React.useState(null);
-    // clearBusy prevents concurrent preview and apply operations.
-    // clearBusy 防止预览与应用操作并发执行。
-    const [clearBusy, setClearBusy] = React.useState(false);
-    // clearBusyRef serializes preview and apply through the complete host operation.
-    // clearBusyRef 在完整宿主操作期间串行化预览与应用。
-    const clearBusyRef = React.useRef(false);
-    // notice stores the latest successful maintenance result.
-    // notice 保存最近一次维护成功结果。
+    // notice stores the latest successful price configuration result.
+    // notice 保存最近一次价格配置成功结果。
     const [notice, setNotice] = React.useState("");
     // hiddenSeries stores user-hidden model lines without changing persisted statistics.
     // hiddenSeries 保存用户隐藏的模型折线，且不修改持久化统计。
@@ -699,22 +827,53 @@ export function createPluginPanel(sdk) {
       // sequence captures the exact filter request represented by this response.
       // sequence 捕获当前响应代表的精确筛选请求。
       const sequence = ++requestSequence.current;
-      setLoading(true);
-      setError("");
+      // Track the exact tables changed relative to the last successfully displayed filters.
+      // 相对最近成功展示的筛选条件，记录发生变化的精确表格。
+      let changedTables = null;
       try {
         // argumentsValue captures the declared query contract for exact request deduplication.
         // argumentsValue 捕获声明的查询契约，以精确合并相同请求。
         const argumentsValue = {
           view: dashboardView,
-          rangeDays, consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
-          dailyOffset, recentOffset, modelQuery, sortOrder,
+          startAtMs: timeRange.startAtMs, endAtMs: timeRange.endAtMs ?? Date.now(), consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
+          dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder,
         };
         // key compares only immutable action arguments, never SQL or runtime guesses.
         // key 仅比较不可变 Action 参数，不使用 SQL 或运行时猜测。
-        const key = JSON.stringify(argumentsValue);
-        // Same-filter retries retain readable results; another scope must never inherit those values.
-        // 同筛选重试保留可读结果；其他作用域绝不能继承这些值。
-        if (dashboardKey.current !== key) setDashboard(null);
+        const key = JSON.stringify({ ...argumentsValue, endAtMs: timeRange.endAtMs });
+        // Returning to the committed page invalidates pending navigation without reloading the dashboard.
+        // 返回已提交分页时使待完成导航失效，不重新加载仪表盘。
+        if (!force && dashboardKey.current === key) {
+          setTableRefresh({ daily: false, recent: false, error: "" });
+          return;
+        }
+        // Paging changes only the relevant table; range, search and view changes replace the scope.
+        // 翻页仅改变对应表格；时间、搜索及页面切换会替换统计作用域。
+        if (!force && dashboardKey.current !== null) {
+          // Compare declared action arguments from the committed and requested pages.
+          // 对比已提交分页与请求分页的声明式 Action 参数。
+          const previous = JSON.parse(dashboardKey.current);
+          const next = JSON.parse(key);
+          if (["view", "startAtMs", "endAtMs", "consumerId", "modelQuery", "sortOrder"].every((field) => previous[field] === next[field])) {
+            // Both tables may change when the user navigates before an earlier response completes.
+            // 用户在前一次响应完成前导航时，两张表格可能同时变化。
+            const daily = previous.dailyOffset !== dailyOffset;
+            const recent = previous.recentOffset !== recentOffset || previous.recentModelType !== recentModelType;
+            if (daily || recent) changedTables = { daily, recent };
+          }
+        }
+        setTableRefresh({ daily: changedTables?.daily ?? false, recent: changedTables?.recent ?? false, error: "" });
+        setLoading(changedTables === null);
+        if (changedTables === null) {
+          setError("");
+          if (dashboardKey.current !== key) { setDashboard(null); dashboardKey.current = null; }
+        }
+        // Request only the changed table projections; dashboard metadata remains owned by full refreshes.
+        // 仅请求发生变化的表格投影；仪表盘元数据仍由完整刷新维护。
+        if (changedTables !== null) {
+          argumentsValue.view = changedTables.daily && changedTables.recent ? "detail-pages"
+            : changedTables.daily ? "daily-page" : "recent-page";
+        }
         if (force || dashboardInFlight.current?.key !== key) {
           dashboardInFlight.current = { key, promise: sdk.invoke("dashboard-get", argumentsValue) };
         }
@@ -726,14 +885,27 @@ export function createPluginPanel(sdk) {
         });
         if (mountedRef.current && sequence === requestSequence.current) {
           dashboardKey.current = key;
-          setDashboard(nextDashboard);
+          // Publish only the requested table slices; unrelated summaries and rows stay mounted.
+          // 仅发布请求的表格切片；无关摘要和记录保持挂载。
+          setDashboard((previous) => changedTables === null ? nextDashboard : {
+            ...previous,
+            ...(changedTables.daily ? { daily: nextDashboard.daily, dailyCount: nextDashboard.dailyCount } : {}),
+            ...(changedTables.recent ? { recentAttempts: nextDashboard.recentAttempts, recentCount: nextDashboard.recentCount } : {}),
+          });
+          setTableRefresh({ daily: false, recent: false, error: "" });
         }
       } catch (reason) {
-        if (mountedRef.current && sequence === requestSequence.current) setError(reason instanceof Error ? reason.message : String(reason));
+        if (mountedRef.current && sequence === requestSequence.current) {
+          // Preserve the original host diagnostic within the failed request's UI boundary.
+          // 在失败请求所属界面范围内保留宿主原始诊断。
+          const message = reason instanceof Error ? reason.message : String(reason);
+          if (changedTables === null) setError(message);
+          else setTableRefresh({ ...changedTables, error: message });
+        }
       } finally {
         if (mountedRef.current && sequence === requestSequence.current) setLoading(false);
       }
-    }, [rangeDays, consumerFilter, dailyOffset, recentOffset, modelQuery, sortOrder, dashboardView]);
+    }, [timeRange, consumerFilter, dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder, dashboardView]);
 
     // Post-write refresh follows the currently rendered scope even if the user navigated during the write.
     // 即使用户在写入期间切换页面，写入后的刷新也遵循当前渲染作用域。
@@ -793,49 +965,6 @@ export function createPluginPanel(sdk) {
       void persistPricingOverrides(nextOverrides, text("pricing.resetDone", "Restored catalog price"));
     }, [persistPricingOverrides, pricingSettings, selectedPricingModel]);
 
-    // previewClear reads the exact destructive scope without modifying system statistics.
-    // previewClear 读取精确破坏范围，且不修改系统统计。
-    const previewClear = React.useCallback(async () => {
-      if (clearBusyRef.current) return;
-      clearBusyRef.current = true;
-      setClearBusy(true);
-      setError("");
-      setNotice("");
-      try {
-        const preview = await sdk.invoke("statistics-clear-preview", {});
-        if (mountedRef.current) setClearPreview(preview);
-      } catch (reason) {
-        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
-      } finally {
-        clearBusyRef.current = false;
-        if (mountedRef.current) setClearBusy(false);
-      }
-    }, [clearBusy]);
-
-    // applyClear deletes history only when the preview revision is still current.
-    // applyClear 仅在预览修订仍然有效时删除历史。
-    const applyClear = React.useCallback(async () => {
-      if (clearBusyRef.current || !clearPreview) return;
-      clearBusyRef.current = true;
-      setClearBusy(true);
-      setError("");
-      try {
-        const result = await sdk.invoke("statistics-clear-apply", {
-          expectedAggregateRevision: clearPreview.aggregateRevision,
-        });
-        if (mountedRef.current) {
-          setClearPreview(null);
-          setNotice(`${text("clear.success", "Cleared historical statistics")}: ${formatInteger(result.clearedAttemptCount)} ${text("clear.attempts", "attempts")}`);
-        }
-        await currentRefresh.current(true);
-      } catch (reason) {
-        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
-      } finally {
-        clearBusyRef.current = false;
-        if (mountedRef.current) setClearBusy(false);
-      }
-    }, [clearPreview]);
-
     // toggleSeries changes only local chart visibility and never reloads statistics.
     // toggleSeries 仅改变本地图表可见性，绝不重新加载统计。
     const toggleSeries = React.useCallback((id) => {
@@ -877,11 +1006,22 @@ export function createPluginPanel(sdk) {
       // active 与 timer 防止旧搜索响应，并合并快速搜索编辑。
       let active = true;
       setPricingDirectoryLoading(true);
-      setPricingDirectory(null);
+      // A different search cannot inherit rows; another page of the same search retains them.
+      // 不同搜索不能继承记录；相同搜索的另一分页保留已有记录。
+      const scope = JSON.stringify({ search: pricingSearch, filter: pricingFilter });
+      if (pricingDirectoryScope.current !== scope) {
+        setPricingDirectory(null);
+        setPricingDirectoryPage(0);
+        pricingDirectoryScope.current = null;
+      }
       setPricingDirectoryError("");
       const timer = window.setTimeout(() => {
         void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * 25 })
-          .then((result) => { if (active) setPricingDirectory(result); })
+          .then((result) => { if (active) {
+            pricingDirectoryScope.current = scope;
+            setPricingDirectory(result);
+            setPricingDirectoryPage(pricingPage);
+          } })
           .catch((reason) => { if (active) setPricingDirectoryError(reason instanceof Error ? reason.message : String(reason)); })
           .finally(() => { if (active) setPricingDirectoryLoading(false); });
       }, 200);
@@ -920,6 +1060,17 @@ export function createPluginPanel(sdk) {
     const filteredAttempts = dashboard?.recentAttempts.filter(
       (row) => consumerFilter === ALL_CONSUMERS || row.consumerId === consumerFilter,
     ) ?? [];
+    // Display counts from the committed page while a replacement page is pending or failed.
+    // 新分页等待或失败时，计数继续采用已提交分页的位置。
+    const displayedPage = dashboardKey.current === null ? { dailyOffset: 0, recentOffset: 0 } : JSON.parse(dashboardKey.current);
+    // Render navigation feedback within its owning card without collapsing the table height.
+    // 在所属卡片内渲染导航反馈，不收缩表格高度。
+    // kind selects a declared table; returns its pending or retry feedback, or no node.
+    // kind 选择已声明表格；返回加载、重试提示或空节点。
+    const tableFeedback = (kind) => !tableRefresh[kind] ? null : h("div", { role: tableRefresh.error ? "alert" : "status", className: "plugin-statistics-table-feedback" },
+      tableRefresh.error || text("page.loading", "Updating this table…"),
+      tableRefresh.error ? h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => void refresh() }, text("error.retry", "Retry")) : null,
+    );
     // summary is a display-only projection over already persisted host facts.
     // summary 是对已持久化宿主事实的纯展示投影。
     const summary = dashboard ? {
@@ -929,10 +1080,10 @@ export function createPluginPanel(sdk) {
     } : summarizeDaily([]);
     // heatmapCells contains the complete activity grid for the selected range.
     // heatmapCells 包含所选范围内完整对齐的活动点阵。
-    const heatmapCells = buildHeatmapCells(dashboard?.heatmap ?? [], rangeDays);
+    const heatmapCells = buildHeatmapCells(dashboard?.heatmap ?? [], timeRange);
     // allSeries contains every runtime-projected model line.
     // allSeries 包含运行时投影的全部模型折线。
-    const allSeries = buildLineSeries(dashboard?.series ?? [], rangeDays);
+    const allSeries = buildLineSeries(dashboard?.series ?? [], timeRange);
     // visibleSeries excludes locally hidden lines without changing the action result.
     // visibleSeries 排除本地隐藏折线，但不改变 Action 结果。
     const visibleSeries = allSeries.filter((series) => !hiddenSeries.has(series.id));
@@ -962,7 +1113,7 @@ export function createPluginPanel(sdk) {
         }),
       ),
       h("nav", { className: "plugin-control-navigation", "aria-label": text("sections.label", "Statistics sections") },
-        ...["overview", "details", "pricing", "maintenance"].map((value) => h(Button, {
+        ...["overview", "details", "pricing"].map((value) => h(Button, {
           key: value, type: "button", size: "sm", variant: section === value ? "secondary" : "ghost",
           "aria-pressed": section === value, onClick: () => setSection(value),
         }, text(`sections.${value}`, value))),
@@ -974,7 +1125,7 @@ export function createPluginPanel(sdk) {
             "aria-label": loading ? text("refreshing", "Refreshing") : text("refresh", "Refresh"),
             className: "plugin-statistics-refresh-button",
             disabled: loading,
-            onClick: () => void refresh(),
+            onClick: () => void refresh(true),
             size: "sm",
             title: loading ? text("refreshing", "Refreshing") : text("refresh", "Refresh"),
             type: "button",
@@ -991,10 +1142,9 @@ export function createPluginPanel(sdk) {
             strokeLinejoin: "round",
             strokeWidth: "1.75",
           }))),
-          h(SelectControl, {
-            ariaLabel: text("range.label", "Time range"), value: String(rangeDays),
-            options: [7, 30, 90, 365].map((days) => ({ value: String(days), label: interpolate(text("range.days", "Last {{days}} days"), { days }) })),
-            onValueChange: (value) => { setRangeDays(Number(value)); setDailyOffset(0); setRecentOffset(0); },
+          h(TimeRangeControl, {
+            value: timeRange,
+            onChange: (value) => { setTimeRange(value); setDailyOffset(0); setRecentOffset(0); },
           }),
           consumerIds.length > 0 ? h(SelectControl, {
             ariaLabel: text("consumer.label", "Consumer"),
@@ -1006,16 +1156,6 @@ export function createPluginPanel(sdk) {
             ],
             onValueChange: (value) => { setConsumerFilter(value); setDailyOffset(0); setRecentOffset(0); },
           }) : null,
-          h(Button, {
-            hidden: section !== "maintenance",
-            "aria-busy": clearBusy,
-            disabled: clearBusy || loading,
-            onClick: () => void previewClear(),
-            size: "sm",
-            title: text("clear.preview", "Preview clearing history"),
-            type: "button",
-            variant: "outline",
-          }, clearBusy ? text("clear.previewing", "Preparing preview") : text("clear.preview", "Preview clearing history")),
         ),
         modelQuery ? h("div", { className: "plugin-statistics-toolbar" },
           h(Badge, { variant: "outline" }, `${text("pricing.model", "Model")}: ${modelQuery}`),
@@ -1026,7 +1166,7 @@ export function createPluginPanel(sdk) {
         dashboard ? h("div", { className: "plugin-statistics-toolbar" },
           h(Badge, { variant: "outline" }, text("source.host", "Host data")),
           h(Badge, { variant: "outline" },
-            `${text("pricing.catalog", "Reference catalog")} · ${dashboard.pricingCatalog.currency} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`,
+            `${text("pricing.catalog", "Reference catalog")} · ${currencyAmount("", dashboard.pricingCatalog.currency).trim()} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`,
           ),
           h("span", { className: "plugin-statistics-privacy" },
             `${text("revision", "Revision")} ${formatInteger(dashboard.aggregateRevision)} · ${formatTimestamp(dashboard.generatedAtMs)}`,
@@ -1060,33 +1200,6 @@ export function createPluginPanel(sdk) {
           onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
       ),
       notice ? h("p", { className: "plugin-statistics-privacy" }, notice) : null,
-      clearPreview ? h("article", { className: "plugin-statistics-card", hidden: section !== "maintenance" },
-        h("div", { className: "plugin-statistics-section-header" },
-          h("div", null,
-            h("strong", null, text("clear.title", "Clear historical statistics")),
-            h("p", { className: "plugin-statistics-privacy" },
-              `${text("clear.previewSummary", "This will permanently remove")}: ${formatInteger(clearPreview.attemptCount)} ${text("clear.attempts", "attempts")} · ${formatInteger(clearPreview.totalTokens)} ${text("clear.tokens", "tokens")}`,
-            ),
-          ),
-          h("div", { className: "plugin-statistics-toolbar" },
-            h(Button, {
-              disabled: clearBusy,
-              onClick: () => setClearPreview(null),
-              size: "sm",
-              type: "button",
-              variant: "outline",
-            }, text("clear.cancel", "Cancel")),
-            h(Button, {
-              "aria-busy": clearBusy,
-              disabled: clearBusy,
-              onClick: () => void applyClear(),
-              size: "sm",
-              type: "button",
-              variant: "destructive",
-            }, clearBusy ? text("clear.applying", "Clearing") : text("clear.apply", "Confirm clear")),
-          ),
-        ),
-      ) : null,
       !dashboard && !error && section !== "pricing" ? h(EmptyState, {
         title: text("status.loading", "Loading system statistics"),
         description: text("loading.description", "Reading the authoritative host statistics database."),
@@ -1123,7 +1236,7 @@ export function createPluginPanel(sdk) {
             h("div", { className: "plugin-statistics-section-header" }, h("strong", null, text("cost.title", "Reference cost for the selected range")),
               h(Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setSection("pricing") }, text("sections.pricing", "Model pricing"))),
             ...(dashboard?.summary.costs ?? []).map((cost) => h("div", { className: "plugin-statistics-cost", key: cost.currency },
-              h("strong", { className: "plugin-statistics-cost-value", title: cost.amount === null ? "" : cost.amount }, cost.amount === null ? "-" : `${formatMoney(cost.amount, sdk.locale)} ${cost.currency}`),
+              h("strong", { className: "plugin-statistics-cost-value", title: cost.amount === null ? "" : cost.amount }, cost.amount === null ? "-" : currencyAmount(formatMoney(cost.amount, sdk.locale), cost.currency)),
               h("p", { className: "plugin-statistics-privacy" }, interpolate(text("cost.coverage", "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"), {
                 priced: formatInteger(cost.pricedRows), unpriced: formatInteger(cost.unpricedRows), incomplete: formatInteger(cost.incompleteRows),
               })),
@@ -1157,7 +1270,7 @@ export function createPluginPanel(sdk) {
         h("article", { className: "plugin-statistics-card", hidden: section !== "overview" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("trend.title", "Daily token usage")),
-            h(Badge, { variant: "outline" }, interpolate(text("range.days", "Last {{days}} days"), { days: rangeDays })),
+            h(Badge, { variant: "outline" }, timeRangeLabel(timeRange)),
           ),
           h("div", { className: "plugin-statistics-chart-wrap" },
             h(TimeSeriesLineChart, {
@@ -1170,7 +1283,7 @@ export function createPluginPanel(sdk) {
           ),
           h(ChartLegend, { items: legendItems, onToggle: toggleSeries }),
         ),
-        h("article", { className: "plugin-statistics-card", hidden: section !== "pricing" },
+        h("article", { className: "plugin-statistics-card plugin-statistics-paged-card", "aria-busy": pricingDirectoryLoading, hidden: section !== "pricing" },
           h("div", { className: "plugin-statistics-section-header" },
             h("div", null,
               h("strong", null, text("pricing.title", "Model reference prices")),
@@ -1225,9 +1338,9 @@ export function createPluginPanel(sdk) {
                 ),
             settingsError ? h("p", { role: "alert" }, settingsError) : null,
           ))),
-          h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${pricingDirectory.currency}` : ""),
-          pricingDirectoryLoading ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices")) : null,
-          pricingDirectoryError ? h("div", { role: "alert" }, text("pricing.loadError", "Unable to load model prices"),
+          h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${currencyAmount("", pricingDirectory.currency).trim()}` : ""),
+          pricingDirectoryLoading ? h("p", { role: "status", className: "plugin-statistics-table-feedback" }, text("pricing.loading", "Loading model prices")) : null,
+          pricingDirectoryError ? h("div", { role: "alert", className: "plugin-statistics-table-feedback" }, text("pricing.loadError", "Unable to load model prices"),
             h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => setPricingRetry((revision) => revision + 1) }, text("error.retry", "Retry")),
             h("details", null, h("summary", null, text("error.details", "Error details")), h("pre", { className: "plugin-control-error-details" }, pricingDirectoryError))) : null,
           h("div", { className: "plugin-statistics-table-wrap" }, h("table", { className: "plugin-statistics-table" },
@@ -1246,37 +1359,39 @@ export function createPluginPanel(sdk) {
             ))),
           )),
           h("div", { className: "plugin-statistics-toolbar" },
-            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || pricingPage === 0, onClick: () => setPricingPage((value) => value - 1) }, text("page.previous", "Previous")),
-            h("span", null, `${Math.min(pricingPage * 25 + 1, pricingDirectory?.totalCount ?? 0)}–${Math.min(pricingPage * 25 + 25, pricingDirectory?.totalCount ?? 0)} / ${pricingDirectory?.totalCount ?? 0}`),
-            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || (pricingPage + 1) * 25 >= (pricingDirectory?.totalCount ?? 0), onClick: () => setPricingPage((value) => value + 1) }, text("page.next", "Next")),
+            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || pricingDirectoryPage === 0, onClick: () => setPricingPage(pricingDirectoryPage - 1) }, text("page.previous", "Previous")),
+            h("span", null, `${Math.min(pricingDirectoryPage * 25 + 1, pricingDirectory?.totalCount ?? 0)}–${Math.min(pricingDirectoryPage * 25 + 25, pricingDirectory?.totalCount ?? 0)} / ${pricingDirectory?.totalCount ?? 0}`),
+            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || (pricingDirectoryPage + 1) * 25 >= (pricingDirectory?.totalCount ?? 0), onClick: () => setPricingPage(pricingDirectoryPage + 1) }, text("page.next", "Next")),
           ),
         ),
-        h("article", { className: "plugin-statistics-card", hidden: section !== "details" || !dashboard },
+        h("article", { className: "plugin-statistics-card plugin-statistics-paged-card", "aria-busy": tableRefresh.daily && !tableRefresh.error, hidden: section !== "details" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
-            h("strong", null, text("daily.title", "Daily model usage")),
-            h(Badge, { variant: "outline" }, `${dailyOffset + filteredDaily.length} / ${dashboard?.dailyCount ?? 0}`),
+            h("strong", null, text("daily.title", "Model usage")),
+            h(Badge, { variant: "outline" }, `${displayedPage.dailyOffset + filteredDaily.length} / ${dashboard?.dailyCount ?? 0}`),
           ),
+          tableFeedback("daily"),
           filteredDaily.length === 0 ? h(EmptyState, {
-            title: text("daily.empty", "No daily usage facts"),
+            title: text("daily.empty", "No usage in this range"),
           }) : h("div", { className: "plugin-statistics-table-wrap" },
             h("table", { className: "plugin-statistics-table plugin-statistics-daily-table" },
               h("thead", null, h("tr", null,
-                h("th", null, text("daily.date", "Date")),
                 h("th", null, text("daily.provider", "Provider / model")),
-                h("th", null, text("daily.consumer", "Consumer")),
-                h("th", null, text("daily.operation", "Operation")),
+                h("th", null, text("daily.consumerOperation", "Consumer / operation")),
                 h("th", null, text("daily.attempts", "Attempts")),
                 h("th", null, text("daily.tokens", "Tokens")),
-                h("th", null, text("timing.column", "Latency")),
+                h("th", null, text("daily.averageDuration", "Average duration")),
                 h("th", null, text("daily.cost", "Reference estimate")),
               )),
               h("tbody", null, ...filteredDaily.slice(0, MAX_DAILY_ROWS).map((row) => h("tr", {
-                key: `${row.calendarDate}/${row.providerId}/${row.serviceEntryId}/${row.consumerId}/${row.operation}/${row.modelId}`,
+                key: `${row.providerId}/${row.serviceEntryId}/${row.consumerId}/${row.operation}/${row.modelId}`,
               },
-                h("td", null, row.calendarDate),
                 h("td", null, modelIdentity(row)),
-                h("td", { className: "plugin-statistics-consumer", title: row.consumerId }, consumerLabel(row.consumerId)),
-                h("td", { className: "plugin-statistics-operation", title: row.operation }, operationLabel(row.operation)),
+                h("td", { className: "plugin-statistics-consumer" },
+                  h("div", { className: "plugin-statistics-consumer-operation" },
+                    h("span", { title: row.consumerId }, consumerLabel(row.consumerId)),
+                    h("span", { title: row.operation }, operationLabel(row.operation)),
+                  ),
+                ),
                 h("td", null, `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`),
                 h("td", null, tokenDetails(row, true)),
                 h("td", null, latencyDetails(row, true)),
@@ -1284,14 +1399,22 @@ export function createPluginPanel(sdk) {
               ))),
             ),
           ),
-          pageControls(dailyOffset, MAX_DAILY_ROWS, dashboard?.dailyCount ?? 0, setDailyOffset, loading),
+          pageControls(displayedPage.dailyOffset, MAX_DAILY_ROWS, dashboard?.dailyCount ?? 0, setDailyOffset, loading || (tableRefresh.daily && !tableRefresh.error)),
         ),
-        h("article", { className: "plugin-statistics-card", hidden: section !== "details" || !dashboard },
+        h("article", { className: "plugin-statistics-card plugin-statistics-paged-card", "aria-busy": tableRefresh.recent && !tableRefresh.error, hidden: section !== "details" },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("recent.title", "Recent physical attempts")),
-            h(Badge, { variant: "outline" }, `${recentOffset + filteredAttempts.length} / ${dashboard?.recentCount ?? 0}`),
+            dashboard ? h(Badge, { variant: "outline" }, `${displayedPage.recentOffset + filteredAttempts.length} / ${dashboard.recentCount}`) : null,
           ),
-          filteredAttempts.length === 0 ? h(EmptyState, {
+          h("nav", { className: "plugin-control-navigation", "aria-label": text("recent.modelTypes", "Model types") },
+            ...[{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }].map(({ value, label }) => h(Button, {
+              key: value, type: "button", size: "sm", variant: recentModelType === value ? "secondary" : "ghost",
+              "aria-pressed": recentModelType === value,
+              onClick: () => { setRecentModelType(value); setRecentOffset(0); },
+            }, text(`recent.group.${value}`, label))),
+          ),
+          tableFeedback("recent"),
+          !dashboard ? null : filteredAttempts.length === 0 ? h(EmptyState, {
             title: text("recent.empty", "No physical attempt records"),
           }) : h("div", { className: "plugin-statistics-table-wrap" },
             h("table", { className: "plugin-statistics-table plugin-statistics-recent-table" },
@@ -1322,36 +1445,7 @@ export function createPluginPanel(sdk) {
               ))),
             ),
           ),
-          pageControls(recentOffset, MAX_RECENT_ATTEMPTS, dashboard?.recentCount ?? 0, setRecentOffset, loading),
-        ),
-        h("article", { className: "plugin-statistics-card", hidden: section !== "maintenance" || !dashboard },
-          h("div", { className: "plugin-statistics-section-header" },
-            h("strong", null, text("accounts.title", "Account usage snapshots")),
-            h(Badge, { variant: "outline" }, formatInteger(dashboard?.accounts.length ?? 0)),
-          ),
-          !dashboard || dashboard.accounts.length === 0 ? h(EmptyState, {
-            title: text("accounts.empty", "No account usage snapshots"),
-          }) : h("div", { className: "plugin-statistics-table-wrap" },
-            h("table", { className: "plugin-statistics-table" },
-              h("thead", null, h("tr", null,
-                h("th", null, text("accounts.time", "Observed")),
-                h("th", null, text("accounts.provider", "Provider")),
-                h("th", null, text("accounts.connection", "Connection")),
-                h("th", null, text("accounts.kind", "Snapshot kind")),
-              )),
-              h("tbody", null, ...dashboard.accounts.map((account) => h("tr", {
-                key: `${account.providerId}/${account.connectionId}/${account.snapshotKind}`,
-              },
-                h("td", null, formatTimestamp(account.observedAtMs)),
-                h("td", null, account.providerId),
-                h("td", null, account.connectionId),
-                h("td", null, account.snapshotKind),
-              ))),
-            ),
-          ),
-        ),
-        h("p", { className: "plugin-statistics-privacy", hidden: section !== "maintenance" },
-          text("privacy", "Vulcan persists Token facts only. Reference prices and estimates remain plugin-owned and are recomputed for each dashboard query."),
+          pageControls(displayedPage.recentOffset, MAX_RECENT_ATTEMPTS, dashboard?.recentCount ?? 0, setRecentOffset, loading || (tableRefresh.recent && !tableRefresh.error)),
         ),
       ) : null,
     );
