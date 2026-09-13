@@ -1,11 +1,6 @@
 /* Presents real UI primitives on a stable, independently scrollable acceptance surface. */
 /* 在稳定且独立滚动的验收表面中展示真实 UI 基础组件。 */
 .visual-lab {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow-y: auto;
-  padding: 18px 20px 28px;
   background: var(--vcn-surface-page);
   color: var(--vcn-content-primary);
 }
@@ -13,7 +8,7 @@
 .visual-lab-intro {
   display: grid;
   gap: 6px;
-  max-width: 780px;
+  max-width: none;
   margin-bottom: 20px;
 }
 
@@ -39,7 +34,7 @@
 
 .visual-lab-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -52,6 +47,12 @@
   border: 1px solid var(--vcn-border-subtle);
   border-radius: var(--vcn-radius-lg);
   background: var(--vcn-surface-panel);
+}
+
+/* Category switches preserve mounted demos without displaying inactive component families. */
+/* 分类切换保留已挂载演示，但不展示非当前组件分组。 */
+.visual-lab-section[hidden] {
+  display: none;
 }
 
 .visual-lab-section-heading {

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import { useI18n } from "@/i18n";
 import type {
   LogEntrySummary,
@@ -33,6 +33,9 @@ export function LogsArea(props: {
   logs: LogEntrySummary[];
 }) {
   const { t, locale } = useI18n();
+  // Select one local diagnostic category without changing recording or retention settings.
+  // 选择本地诊断分类，不改变记录或保留设置。
+  const [category, setCategory] = React.useState("startup");
   // Local view filters never change the underlying diagnostic retention or execution policy.
   // 本地视图筛选不改变诊断保留或执行策略。
   const [logFilter, setLogFilter] = React.useState("");
@@ -106,14 +109,19 @@ export function LogsArea(props: {
   }
 
   return (
-    <Tabs className="settings-diagnostics-page" defaultValue="startup">
-      <TabsList variant="line" aria-label={locale === "zh-CN" ? "诊断分类" : "Diagnostics categories"}>
-        <TabsTrigger value="startup">{t("settings.diagnostics.startupStatus")}</TabsTrigger>
-        <TabsTrigger value="logs">{t("settings.diagnostics.logs")}</TabsTrigger>
-        <TabsTrigger value="trace">{t("settings.diagnostics.providerRequestTrace")}</TabsTrigger>
-      </TabsList>
-      <TabsContent value="startup"><StartupPanel startup={props.startup} /></TabsContent>
-      <TabsContent value="logs">
+    <WorkspaceDirectoryLayout contentClassName="settings-diagnostics-page" navigation={
+      <WorkspaceDirectoryMenu ariaLabel={locale === "zh-CN" ? "诊断分类" : "Diagnostics categories"} heading={t("workspaceToolPanel.category")}>
+        {([
+          ["startup", t("settings.diagnostics.startupStatus")],
+          ["logs", t("settings.diagnostics.logs")],
+          ["trace", t("settings.diagnostics.providerRequestTrace")],
+        ] as const).map(([id, label]) => <button key={id} type="button"
+          className={`workspace-tool-panel-menu-row ${category === id ? "active" : ""}`}
+          aria-current={category === id ? "page" : undefined} onClick={() => setCategory(id)}>{label}</button>)}
+      </WorkspaceDirectoryMenu>
+    }>
+      {category === "startup" ? <StartupPanel startup={props.startup} /> : null}
+      {category === "logs" ? <section>
         <PanelTitle icon={<History size={17} />} title={t("settings.diagnostics.logs")} />
         <Input aria-label={locale === "zh-CN" ? "筛选诊断日志" : "Filter diagnostic logs"} placeholder={locale === "zh-CN" ? "搜索级别、来源或内容" : "Search level, source, or message"} value={logFilter} onChange={(event) => setLogFilter(event.target.value)} />
         <div className="diagnostic-log-rows">
@@ -126,8 +134,8 @@ export function LogsArea(props: {
           ))}
         </div>
         {visibleLogs.length === 0 ? <p className="settings-muted-line">{locale === "zh-CN" ? "暂无匹配的诊断日志" : "No matching diagnostic logs"}</p> : null}
-      </TabsContent>
-      <TabsContent value="trace">
+      </section> : null}
+      {category === "trace" ? <section>
         <div className="provider-trace-settings">
           <article>
             {/* Keep the setting and its current state together, with recording details always visible below.
@@ -205,8 +213,8 @@ export function LogsArea(props: {
             ) : null}
           </article>
         </div>
-      </TabsContent>
-    </Tabs>
+      </section> : null}
+    </WorkspaceDirectoryLayout>
   );
 }
 
@@ -232,11 +240,6 @@ function StartupPanel(props: {
           </div>
         ))}
       </div>
-      <details className="settings-diagnostics-explanation"><summary>{t("settings.diagnostics.logs")}</summary><div className="log-preview">
-        {props.startup.recentLogs.map((line, index) => (
-          <code key={`${index}:${line}`}>{line}</code>
-        ))}
-      </div></details>
     </section>
   );
 }

@@ -94,12 +94,13 @@ export function PluginWorkspaceMenu(props: {
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
     { icon: <ScanSearch size={15} />, id: "context-engine", label: t("area.contextEngine") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
-    ...pluginRows,
   ];
 
   return (
-    <WorkspaceDirectoryMenu ariaLabel={t("workspaceToolPanel.skillsSettingsMenu")} heading={t("workspaceToolPanel.menu")}>
-      {rows.map((row) => (
+    <div className="flex flex-col gap-5">
+    {[{ label: t("skills.navigation.builtins"), items: rows }, { label: t("skills.navigation.externalPlugins"), items: pluginRows }].map((group) => (
+    <WorkspaceDirectoryMenu key={group.label} ariaLabel={group.label} heading={group.label}>
+      {group.items.map((row) => (
         <button
           className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
           key={row.id}
@@ -112,6 +113,8 @@ export function PluginWorkspaceMenu(props: {
         </button>
       ))}
     </WorkspaceDirectoryMenu>
+    ))}
+    </div>
   );
 }
 

@@ -26,7 +26,10 @@ describe("PluginWorkspaceMenu", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain("语义引擎");
-    expect(markup.indexOf("语义引擎")).toBeLessThan(markup.indexOf("插件管理"));
+    expect(markup).toContain("代码语义索引");
+    expect(markup.indexOf("代码语义索引")).toBeLessThan(markup.indexOf("插件管理"));
+    expect(markup).toContain('aria-label="内置插件与管理"');
+    expect(markup).toContain('aria-label="插件列表"');
+    expect(markup.indexOf("插件管理")).toBeLessThan(markup.indexOf('aria-label="插件列表"'));
   });
 });

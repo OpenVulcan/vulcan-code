@@ -9,7 +9,7 @@ vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) =
 // button resolves an exact visible action in the real component tree, including portals.
 // button 在真实组件树（含浮层）中解析可见文字完全匹配的操作。
 function button(name: string): HTMLButtonElement {
-  const found = Array.from(document.querySelectorAll("button")).find((item) => item.textContent === name);
+  const found = Array.from(document.querySelectorAll("button")).find((item) => item.textContent === name && !item.closest('[hidden]'));
   if (!found) throw new Error(`Missing button: ${name}`);
   return found;
 }
@@ -26,18 +26,22 @@ describe("visual lab local interactions", () => {
   afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
   it("labels fixtures and responds to actions, navigation and keyboard card activation", async () => {
     expect(host.textContent).toContain("synthetic samples");
+    await act(async () => button("Actions and status").click());
     await act(async () => button("Primary").click());
     expect(host.querySelector("header [role=status]")?.textContent).toBe("Demo action: Primary");
+    await act(async () => button("Navigation and feedback").click());
     await act(async () => button("Other page").click());
     expect(button("Other page").getAttribute("aria-current")).toBe("page");
     await act(async () => button("Nested folder").click());
     expect(button("Nested folder").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => button("Content surfaces").click());
     const card = host.querySelector<HTMLElement>('[data-slot="card"][role="button"]')!;
     await act(async () => card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(host.querySelector("header [role=status]")?.textContent).toContain("Interactive card");
     expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-label")).toBe("Demo progress");
   });
   it("persists checkbox and radio changes through real menu close and reopen", async () => {
+    await act(async () => button("Menus and overlays").click());
     await act(async () => button("Open dropdown").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     const checkbox = document.querySelector<HTMLElement>('[role="menuitemcheckbox"]')!;
     expect(checkbox.getAttribute("aria-checked")).toBe("true");
@@ -50,6 +54,7 @@ describe("visual lab local interactions", () => {
     expect(Array.from(document.querySelectorAll('[role="menuitemradio"]')).find((item) => item.textContent === "Compact density")?.getAttribute("aria-checked")).toBe("true");
   });
   it("returns focus to each actual modal launcher", async () => {
+    await act(async () => button("Modal surfaces").click());
     for (const launcher of ["Dialog", "Confirmation", "Sheet"]) {
       const trigger = button(launcher);
       await act(async () => { trigger.focus(); trigger.click(); });
@@ -61,6 +66,7 @@ describe("visual lab local interactions", () => {
     }
   });
   it("opens the context menu from Shift F10 and preserves its checked state", async () => {
+    await act(async () => button("Menus and overlays").click());
     const trigger = host.querySelector<HTMLElement>(".visual-lab-context-target")!;
     await act(async () => { trigger.focus(); trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })); });
     expect(document.querySelector('[role="menuitemcheckbox"]')?.getAttribute("aria-checked")).toBe("true");

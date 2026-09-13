@@ -110,8 +110,8 @@ messages:
   range.days: "Last {{days}} days"
   page.previous: Previous
   page.loading: Updating this table…
-  range.last24Hours: Last 24 hours
-  range.lastDays: Last {{days}} days
+  range.last24Hours: 1 day
+  range.lastDays: '{{days}} days'
   page.next: Next
   pricing.search: Search models
   pricing.filter: Price filter

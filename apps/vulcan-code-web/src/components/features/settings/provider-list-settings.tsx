@@ -1,3 +1,4 @@
+import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { Boxes, KeyRound, ListChecks, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
@@ -184,8 +185,7 @@ export function CredentialManagementArea() {
     : undefined
 
   return (
-    <div className="credential-management-layout settings-local-directory-grid">
-      <nav className="settings-local-directory-nav" aria-label={t("settings.credentials.categoryAria")}>
+    <WorkspaceDirectoryLayout contentClassName="credential-management-surface" navigation={<WorkspaceDirectoryMenu ariaLabel={t("settings.credentials.categoryAria")} heading={t("settings.credentials.categoryAria")}>
         {directoryProviders.map((provider) => (
           <Button
             aria-current={activeProviderId === provider.id ? "page" : undefined}
@@ -200,11 +200,7 @@ export function CredentialManagementArea() {
             <small>{snapshot?.connections.filter((connection) => connection.provider_id === provider.id).length ?? 0}</small>
           </Button>
         ))}
-      </nav>
-      <div className="settings-direct-content credential-management-surface">
-        <div className="settings-local-directory-mobile">
-          <Combobox ariaLabel={t("settings.credentials.categoryAria")} placeholder={t("settings.credentials.selectProvider")} searchPlaceholder={t("settings.modelExperience.searchPlaceholder")} emptyText={t("settings.modelExperience.noProviders")} options={directoryProviders.map((provider) => ({ value: provider.id, label: localizedProviderName(provider.id, provider.display_name, t) }))} value={activeProviderId} onValueChange={setActiveProviderId} />
-        </div>
+      </WorkspaceDirectoryMenu>}>
         {activeProvider ? (
           <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
             <div className="flex min-w-0 items-center gap-3">
@@ -372,8 +368,7 @@ export function CredentialManagementArea() {
         }}
         open={deletingConnection !== null}
         />
-      </div>
-    </div>
+    </WorkspaceDirectoryLayout>
   )
 }
 

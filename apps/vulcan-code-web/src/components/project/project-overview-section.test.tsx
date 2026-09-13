@@ -79,7 +79,7 @@ describe("project overview authority and navigation", () => {
     await renderOverview({ vmmDraft: draft, agentLoaded: true, vceActivity: createVceActivityFixture() });
     expect(host.textContent).toContain("Project A memory (#7)");
     expect(host.textContent).toContain("已授权 1 个知识库 · 默认启用 1 个");
-    expect(host.textContent).toContain("可检索代码上下文");
+    expect(host.textContent).toContain("代码语义索引可检索");
     expect(host.textContent).toContain("此项目暂无当前会话运行快照");
     expect(host.textContent).not.toContain("当前会话: 记忆作用域已就绪");
     expect(host.textContent).not.toContain("secret-never-render");
@@ -106,7 +106,7 @@ describe("project overview authority and navigation", () => {
     const open = vi.fn();
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
     await renderOverview({ onOpenSection: open });
-    for (const label of ["记忆设置", "代码上下文设置", "知识库设置", "技能设置", "查看与清理附件"]) {
+    for (const label of ["记忆设置", "代码语义索引设置", "知识库设置", "技能设置", "查看与清理附件"]) {
       await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click());
     }
     expect(open.mock.calls.map(([section]) => section)).toEqual(["vmm", "code-context", "knowledge-bases", "agent-skills", "attachments"]);
@@ -123,13 +123,13 @@ describe("project overview authority and navigation", () => {
     await renderOverview({ vmmDraft: draft, vceActivity: index });
     expect(host.querySelector('[role="alert"]')!.textContent).toContain("记忆绑定目标 #7 不在当前目录中");
     expect(host.querySelector('[role="alert"]')!.textContent).toContain("embedding route unavailable");
-    expect(host.textContent).toContain("代码上下文暂不可检索");
+    expect(host.textContent).toContain("代码语义索引暂不可检索");
   });
   it("uses the existing locale mechanism for new status and action text", async () => {
     await renderOverview({}, "en-US");
     expect(host.textContent).toContain("Memory settings unavailable");
     expect(host.textContent).toContain("0 authorized libraries");
-    expect(host.querySelector('button[aria-label="Code context settings"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Code semantic index settings"]')).not.toBeNull();
   });
   it("discards a native catalog that returns after project navigation", async () => {
     // finishOld publishes an old catalog after the next project's own unbound catalog has arrived.

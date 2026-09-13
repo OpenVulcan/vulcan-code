@@ -63,18 +63,23 @@ describe("context settings draft navigation", () => {
         onDeleteArchivedConversations: vi.fn(async () => undefined),
       }} /></I18nProvider>))
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="edit policy"]')?.click())
-      // retryTab and contextTab exercise the actual Radix section navigation.
-      // retryTab 和 contextTab 操作真实 Radix 分区导航。
-      const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      // Directory actions change the visible category while keeping each editor mounted.
+      // 目录操作切换可见分类，同时保持各编辑器挂载。
+      const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button'))
       const retryTab = tabs.find((tab) => tab.textContent === "请求与重试")
       const contextTab = tabs.find((tab) => tab.textContent === "上下文与压缩")
-      await act(async () => retryTab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })))
-      await act(async () => contextTab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })))
+      expect(retryTab).toBeDefined()
+      expect(contextTab).toBeDefined()
+      await act(async () => retryTab!.click())
+      expect(retryTab!.getAttribute("aria-current")).toBe("page")
+      expect(container.querySelector('[aria-label="edit policy"]')?.closest('section[hidden]')).not.toBeNull()
+      await act(async () => contextTab!.click())
+      expect(contextTab!.getAttribute("aria-current")).toBe("page")
       expect(container.querySelector('[aria-label="edit policy"]')?.textContent).toBe("80")
       expect(container.textContent).toContain("系统默认有未保存更改")
       // saveButton is located within the active panel, not another independently mounted section.
       // saveButton 在活动面板内定位，不命中其他独立挂载分区。
-      const saveButton = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tabpanel"][data-state="active"] button')).find((button) => button.textContent?.includes("保存系统默认"))
+      const saveButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.context-basics-tabs > section:not([hidden]) button')).find((button) => button.textContent?.includes("保存系统默认"))
       expect(saveButton).toBeDefined()
       await act(async () => saveButton?.click())
       expect(service.savePolicy).toHaveBeenCalledExactlyOnceWith({ effective_context_window_percent: 80 })

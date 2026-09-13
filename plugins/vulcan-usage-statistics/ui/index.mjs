@@ -278,7 +278,7 @@ export function createPluginPanel(sdk) {
               setExactBounds({ startAtMs: bounds.startAtMs, endAtMs: now });
               setStart(localDateTimeValue(bounds.startAtMs)); setEnd(localDateTimeValue(now)); setFollowNow(days === 0); setRangeError("");
             },
-          }, days === 0 ? text("range.today", "Today") : days === 1 ? text("range.last24Hours", "Last 24 hours") : interpolate(text("range.lastDays", "Last {{days}} days"), { days })))),
+          }, days === 0 ? text("range.today", "Today") : days === 1 ? text("range.last24Hours", "1 day") : interpolate(text("range.lastDays", "{{days}} days"), { days })))),
           h("div", { className: "plugin-statistics-range-fields" },
             h("label", null, h("span", null, text("range.start", "Start time")), h("input", { type: "datetime-local", value: start, onChange: (event) => { setStart(event.target.value); setExactBounds(null); } })),
             h("label", null, h("span", null, text("range.end", "End time")), h("input", { type: "datetime-local", value: end, disabled: followNow, onChange: (event) => { setEnd(event.target.value); setExactBounds(null); } })),
@@ -511,11 +511,22 @@ export function createPluginPanel(sdk) {
     );
   }
 
+  // Exclude embedding and reranking operations, which return results without token generation timing.
+  // 排除返回完整结果、不具有 Token 生成计时的向量与重排序操作。
+  // record supplies the schema-required operation; returns whether token timing belongs in the presentation.
+  // record 提供 Schema 必需的 operation；返回展示是否应包含 Token 计时。
+  function usesTokenGenerationTiming(record) {
+    return record.operation !== "embedding_create" && record.operation !== "rerank_documents";
+  }
+
   // Render exact usage dimensions and the cache-read share of reported input.
   // 渲染精确用量维度，以及缓存读取占已报告输入的比例。
   // record is a daily or attempt projection; returns two icon rows and exact hover details.
   // record 是每日或请求投影；返回两行图标数值及精确悬停详情。
   function tokenDetails(record, aggregate = false) {
+    // The operation contract governs both visible timing and tooltip details.
+    // 操作契约同时决定可见计时与提示详情。
+    const tokenTiming = usesTokenGenerationTiming(record);
     // Only reported dimensions belong in the tooltip; zero remains a reported value.
     // 提示仅展示已报告的维度；零仍然属于已报告数值。
     const dimensions = ["inputTokens", "uncachedInputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "totalTokens"].filter((key) => record[key] !== null);
@@ -531,12 +542,12 @@ export function createPluginPanel(sdk) {
         facts(dimensions.map((key) => [text(`tokens.${key}`, key), formatInteger(record[key])])),
         h("div", { className: "plugin-statistics-cost-total" }, facts([
           [text(aggregate ? "timing.averageRequest" : "timing.request", "Request duration"), record.requestDurationMs === null ? null : `${(record.requestDurationMs / 1000).toFixed(3)} s`],
-          [text(aggregate ? "timing.averageFirstToken" : "timing.firstToken", "First-token latency"), record.firstTokenLatencyMs === null ? null : `${(record.firstTokenLatencyMs / 1000).toFixed(3)} s`],
-          [text(aggregate ? "timing.totalOutput" : "timing.output", "Output duration"), record.outputDurationMs === null ? null : `${(record.outputDurationMs / 1000).toFixed(3)} s`],
-          [text("timing.speed", "Output speed"), record.outputTokensPerSecond === null ? null : `${record.outputTokensPerSecond.toFixed(2)} tokens/s`],
+          [text(aggregate ? "timing.averageFirstToken" : "timing.firstToken", "First-token latency"), !tokenTiming || record.firstTokenLatencyMs === null ? null : `${(record.firstTokenLatencyMs / 1000).toFixed(3)} s`],
+          [text(aggregate ? "timing.totalOutput" : "timing.output", "Output duration"), !tokenTiming || record.outputDurationMs === null ? null : `${(record.outputDurationMs / 1000).toFixed(3)} s`],
+          [text("timing.speed", "Output speed"), !tokenTiming || record.outputTokensPerSecond === null ? null : `${record.outputTokensPerSecond.toFixed(2)} tokens/s`],
           [text("timing.samples", "Measured requests"), record.timedAttemptCount > 0 ? formatInteger(record.timedAttemptCount) : null],
         ])),
-        h("p", null, text("timing.formula", "Output speed uses paired output tokens and completion minus first-token duration; missing timing is not estimated.")),
+        tokenTiming ? h("p", null, text("timing.formula", "Output speed uses paired output tokens and completion minus first-token duration; missing timing is not estimated.")) : null,
         h("p", null, text("tokens.cacheSeparate", "Cache counts are already included in reported input; do not add them again.")),
       ) }),
     );
@@ -557,21 +568,24 @@ export function createPluginPanel(sdk) {
   // 渲染首 Token 延迟和完整请求耗时，在耗时旁展示生成速度。
   // record is a schema-validated attempt or daily projection; aggregate selects average labels.
   // record 是通过 Schema 校验的请求或每日投影；aggregate 选择平均值标签。
-  // Returns a compact two-line latency cell, or an explicit unrecorded state for historical data.
-  // 返回紧凑双行延迟单元格，历史数据缺失时返回明确的未记录状态。
+  // Returns operation-appropriate timing rows, or an explicit unrecorded state for historical data.
+  // 返回适用于当前操作的计时行，历史数据缺失时返回明确的未记录状态。
   function latencyDetails(record, aggregate = false) {
-    if (record.requestDurationMs === null && record.firstTokenLatencyMs === null) {
+    // Embedding and reranking retain request duration without a first-token placeholder.
+    // 向量与重排序仅保留请求耗时，不显示首 Token 占位。
+    const tokenTiming = usesTokenGenerationTiming(record);
+    if (record.requestDurationMs === null && (!tokenTiming || record.firstTokenLatencyMs === null)) {
       return h("span", { className: "plugin-statistics-latency-unknown" }, text("timing.unrecorded", "Not recorded"));
     }
     return h("div", { className: "plugin-statistics-latency" },
-      h("div", null,
+      tokenTiming ? h("div", null,
         h("span", null, text(aggregate ? "timing.averageFirstShort" : "timing.firstShort", "First token")),
-        h("span", null, record.firstTokenLatencyMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.firstTokenLatencyMs))),
+        h("span", null, record.firstTokenLatencyMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.firstTokenLatencyMs))) : null,
       h("div", null,
         h("span", null, text(aggregate ? "timing.averageTotalShort" : "timing.totalShort", "Total")),
         h("span", null,
           record.requestDurationMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.requestDurationMs),
-          record.outputTokensPerSecond === null ? null : ` (${record.outputTokensPerSecond.toFixed(1)} t/s)`)),
+          !tokenTiming || record.outputTokensPerSecond === null ? null : ` (${record.outputTokensPerSecond.toFixed(1)} t/s)`)),
     );
   }
 

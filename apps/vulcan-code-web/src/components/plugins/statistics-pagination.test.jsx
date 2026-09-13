@@ -120,3 +120,41 @@ it("keeps pricing rows and committed page numbers during loading, failure and re
   expect(pricing.textContent).toContain("26–50 / 60");
   expect(pricing.textContent).not.toContain("first-page-model");
 });
+
+// Exercise the actual table renderers with operation identities, independent of model naming.
+// 使用操作标识验证真实表格渲染，不依赖模型名称判断类型。
+it("hides token generation timing for embeddings and reranking in both tables", async () => {
+  // Nonzero token timing deliberately proves that unsupported metrics are hidden even in historical records.
+  // 故意提供非零 Token 计时，证明历史记录即使含值也不会显示不适用指标。
+  const rows = ["embedding_create", "rerank_documents", "conversation_respond"].map((operation) => ({
+    providerId: "provider", serviceEntryId: "entry", consumerId: "consumer", modelId: operation,
+    operation, attemptId: operation, terminalAtMs: 123456, status: "succeeded",
+    attemptCount: 1, successfulAttemptCount: 1,
+    inputTokens: 10, uncachedInputTokens: 10, outputTokens: null, cacheReadTokens: null,
+    cacheWriteTokens: null, reasoningTokens: null, totalTokens: 10,
+    requestDurationMs: 250, firstTokenLatencyMs: 100, outputDurationMs: 150,
+    outputTokensPerSecond: 20, timedAttemptCount: 1,
+    estimatedCost: null, estimatedCurrency: null, pricingDetails: null, pricingMatchStatus: "unpriced",
+  }));
+  await click("details");
+  // These stable cards receive independent aggregate and attempt responses through the real host boundary.
+  // 通过真实宿主边界向稳定卡片分别提供聚合和请求响应。
+  const [daily, recent] = [...host.querySelectorAll(".plugin-statistics-paged-card")].filter((card) => !card.hidden);
+  await click("Next", daily);
+  await act(async () => requests[0].resolve({ daily: rows, dailyCount: 103 }));
+  await click("Embedding models", recent);
+  await act(async () => requests[1].resolve({ recentAttempts: rows, recentCount: 3 }));
+  for (const card of [daily, recent]) {
+    // Each table must retain duration for every operation while only conversation requests expose token timing.
+    // 每张表都必须保留全部操作的耗时，仅对话请求展示 Token 计时。
+    const cells = card.querySelectorAll(".plugin-statistics-latency");
+    expect(cells).toHaveLength(3);
+    for (const cell of [cells[0], cells[1]]) {
+      expect(cell.textContent).toContain("0.250s");
+      expect(cell.textContent).not.toContain("First token");
+      expect(cell.textContent).not.toContain("t/s");
+    }
+    expect(cells[2].textContent).toContain("First token");
+    expect(cells[2].textContent).toContain("20.0 t/s");
+  }
+});

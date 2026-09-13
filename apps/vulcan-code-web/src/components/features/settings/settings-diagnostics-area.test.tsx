@@ -35,8 +35,8 @@ describe("runtime diagnostics provider request trace setting", () => {
   // Verifies the system setting is visibly off by default and explains its sensitive session-local output.
   // 验证系统设置默认明确关闭，并说明其包含敏感内容的会话本地输出位置。
   it("opens tracing on demand with its disabled state and privacy explanation", async () => {
-    // Use the real tab interaction so hidden categories are not mistaken for missing settings.
-    // 使用真实标签交互，避免将未打开分类误判为设置缺失。
+    // Use the real directory action so unopened categories are not mistaken for missing settings.
+    // 使用真实目录操作，避免将未打开分类误判为设置缺失。
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
@@ -53,9 +53,11 @@ describe("runtime diagnostics provider request trace setting", () => {
     // The first view contains startup diagnostics without the unrelated trace form.
     // 初始视图仅展示启动诊断，不混入无关追踪表单。
     expect(host.textContent).not.toContain("打开当前会话追踪目录");
-    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((entry) => entry.textContent === "Provider 请求追踪");
+    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button')).find((entry) => entry.textContent === "Provider 请求追踪");
     expect(tab).toBeDefined();
-    await act(async () => tab!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+    await act(async () => tab!.click());
+    expect(tab!.getAttribute("aria-current")).toBe("page");
+    expect(host.querySelector('.workspace-directory-content .provider-trace-settings')).not.toBeNull();
     const markup = host.innerHTML;
 
     expect(markup).toContain("Provider 请求追踪");

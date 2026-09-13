@@ -1,7 +1,7 @@
 import * as React from "react";
-import { Bell, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { toast } from "sonner";
-import { PanelTitle, StatusPill } from "@/components/shared/status";
+import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
@@ -210,7 +210,6 @@ export function NotificationSettingsArea() {
   // 即使无关偏好保存成功，也继续展示可操作的权限失败。
   const displayedError = permissionError || error;
   return <section className="settings-preferences-page settings-detail-panel notification-settings-page">
-    <PanelTitle icon={<Bell size={17} />} title={t("settings.notifications")} />
     <section className="settings-preferences-section">
       <div className="settings-preference-row">
         <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("开启时自动申请通知权限。设置保存在当前客户端，下次启动自动恢复。", "Enabling automatically requests notification permission. Settings are saved on this client and restored at the next launch.")}</p></div>

@@ -1,3 +1,4 @@
+import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import { Palette, Sparkles } from "lucide-react"
 import { useRef, useState, type CSSProperties, type ReactNode, type MouseEvent, type KeyboardEvent } from "react"
 
@@ -109,6 +110,9 @@ import { StatusPill } from "@/components/shared/status"
 // VisualLabSectionProps describes one independently reviewable component family.
 // VisualLabSectionProps 描述一个可独立验收的组件分组。
 interface VisualLabSectionProps {
+  // Hide inactive categories while keeping uncontrolled demo input state mounted.
+  // 隐藏非当前分类，同时保留已挂载演示输入框的非受控状态。
+  hidden: boolean
   // Visible examples rendered inside the section.
   // 分组内部展示的可见示例。
   children: ReactNode
@@ -163,7 +167,7 @@ function visualLabText(locale: string, zh: string, en: string): string {
 // VisualLabSection 为一个组件分组渲染统一的验收表面。
 function VisualLabSection(props: VisualLabSectionProps) {
   return (
-    <section className="visual-lab-section">
+    <section className="visual-lab-section" hidden={props.hidden}>
       <header className="visual-lab-section-heading">
         <h3>{props.title}</h3>
         <p>{props.description}</p>
@@ -201,6 +205,22 @@ export function VisualLabSettingsArea() {
   // text binds the current locale to the compact copy selector.
   // text 将当前语言绑定到紧凑文案选择器。
   const text = (zh: string, en: string) => visualLabText(locale, zh, en)
+  // Category navigation is local to the lab and never changes product configuration.
+  // 分类导航仅作用于实验室，不修改产品配置。
+  const [activeCategory, setActiveCategory] = useState("surfaces")
+  // Each existing component family owns one localized directory entry.
+  // 每个现有组件分组对应一个本地化目录入口。
+  const categories = [
+    { id: "surfaces", label: text("语义表面", "Semantic surfaces") },
+    { id: "actions", label: text("按钮与状态", "Actions and status") },
+    { id: "forms", label: text("表单控件", "Form controls") },
+    { id: "content", label: text("内容表面", "Content surfaces") },
+    { id: "modals", label: text("模态表面", "Modal surfaces") },
+    { id: "usage", label: text("自定义产品组件 · 用量", "Product components · Usage") },
+    { id: "navigation", label: text("导航与反馈", "Navigation and feedback") },
+    { id: "menus", label: text("菜单与浮层", "Menus and overlays") },
+  ]
+
   // dialogPreview identifies the modal surface currently opened from the fixed acceptance section.
   // dialogPreview 标识当前从固定验收区域打开的模态表面。
   const [dialogPreview, setDialogPreview] = useState<"dialog" | "alert" | "sheet" | null>(null)
@@ -282,7 +302,14 @@ export function VisualLabSettingsArea() {
   ]
 
   return (
-    <div className="visual-lab">
+    <WorkspaceDirectoryLayout contentClassName="visual-lab" navigation={
+      <WorkspaceDirectoryMenu ariaLabel={text("视觉实验室分类", "Visual lab categories")} heading={text("分类", "Categories")}>
+        {categories.map((category) => <button key={category.id} type="button"
+          className={`workspace-tool-panel-menu-row ${activeCategory === category.id ? "active" : ""}`}
+          aria-current={activeCategory === category.id ? "page" : undefined}
+          onClick={() => setActiveCategory(category.id)}>{category.label}</button>)}
+      </WorkspaceDirectoryMenu>
+    }>
       <header className="visual-lab-intro">
         <Badge variant="outline">
           <Palette />
@@ -301,6 +328,7 @@ export function VisualLabSettingsArea() {
       <div className="visual-lab-grid">
         <VisualLabSection
           description={text("页面、面板、浮层、弱背景和工具栏的基础层级。", "Base hierarchy for pages, panels, floating surfaces, subtle regions, and toolbars.")}
+          hidden={activeCategory !== "surfaces"}
           title={text("语义表面", "Semantic surfaces")}
         >
           <div className="visual-lab-token-grid">
@@ -310,6 +338,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("普通操作只选择明确等级和尺寸，不在业务页面重新设计。", "Ordinary actions select an approved hierarchy and size without page-owned skinning.")}
+          hidden={activeCategory !== "actions"}
           title={text("按钮与状态", "Actions and status")}
         >
           <div className="visual-lab-stack">
@@ -355,6 +384,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("输入、选择和布尔控件使用同一密度与状态语言。", "Inputs, selections, and boolean controls share one density and state language.")}
+          hidden={activeCategory !== "forms"}
           title={text("表单控件", "Form controls")}
         >
           <div className="visual-lab-stack">
@@ -412,6 +442,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("普通内容表面统一使用相同的边框、圆角、间距和状态。", "Ordinary content surfaces share borders, radii, spacing, and status treatments.")}
+          hidden={activeCategory !== "content"}
           title={text("内容表面", "Content surfaces")}
         >
           <div className="visual-lab-card-grid">
@@ -480,6 +511,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("普通弹窗、确认弹窗和侧边抽屉使用统一表面、尺寸与操作区。", "Dialogs, confirmations, and sheets share surface, sizing, and action-area contracts.")}
+          hidden={activeCategory !== "modals"}
           title={text("模态表面", "Modal surfaces")}
         >
           <div className="visual-lab-row">
@@ -531,6 +563,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("产品组件只接收确定的视图模型；统一验证正常、空、加载、部分、错误、长数字与窄宽度。", "Product components consume determined view models only; ready, empty, loading, partial, error, long-value, and narrow states are reviewed together.")}
+          hidden={activeCategory !== "usage"}
           title={text("自定义产品组件 · 用量", "Product components · Usage")}
         >
           <div className="grid items-start gap-3 xl:grid-cols-2">
@@ -544,6 +577,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("导航模式和进度状态用于后续统一前的固定对照。", "Navigation and progress states provide a stable reference for later unification.")}
+          hidden={activeCategory !== "navigation"}
           title={text("导航与反馈", "Navigation and feedback")}
         >
           <div className="visual-lab-stack">
@@ -596,6 +630,7 @@ export function VisualLabSettingsArea() {
 
         <VisualLabSection
           description={text("下拉菜单、右键菜单与轻量浮层共享表面、密度、选中状态和碰撞翻转规则。", "Dropdowns, context menus, and lightweight overlays share surfaces, density, selection states, and collision handling.")}
+          hidden={activeCategory !== "menus"}
           title={text("菜单与浮层", "Menus and overlays")}
         >
           <div className="visual-lab-stack">
@@ -666,6 +701,6 @@ export function VisualLabSettingsArea() {
           </div>
         </VisualLabSection>
       </div>
-    </div>
+    </WorkspaceDirectoryLayout>
   )
 }

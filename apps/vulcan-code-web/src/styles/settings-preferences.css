@@ -1,5 +1,19 @@
 /* Preference pages share section rhythm without nesting decorative cards. */
 /* 偏好设置页面使用一致分区节奏，不再嵌套装饰卡片。 */
+.settings-archive-page { height: 100%; overflow: hidden; }
+.settings-archive-page > :not(.settings-archive-table-scroll) { flex-shrink: 0; }
+.settings-archive-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+/* Only rows scroll; headers, batch actions and pagination remain available. */
+/* 仅表格行滚动，标题、批量操作和分页保持可用。 */
+.settings-archive-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+.settings-archive-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.settings-archive-table th { position: sticky; top: 0; z-index: 1; background: var(--background); color: var(--muted-foreground); font-weight: 500; }
+.settings-archive-table :is(th, td) { padding: 12px 10px; border-bottom: 1px solid var(--border); }
+.settings-archive-table tr[data-selected="true"] { background: var(--accent); }
+.settings-archive-selection { width: 90px; }
+.settings-archive-title { min-width: 180px; overflow-wrap: anywhere; }
+.settings-archive-actions { width: 180px; text-align: right; }
+.settings-archive-table .settings-archive-empty { text-align: center; padding: 40px 16px; color: var(--muted-foreground); }
 .settings-preferences-page {
   display: flex;
   flex-direction: column;
@@ -11,7 +25,7 @@
 /* 通知设置使用紧凑的开关分组，并常显平台说明。 */
 .notification-settings-page > * {
   width: 100%;
-  max-width: 960px;
+  max-width: none;
 }
 .notification-settings-page .settings-preferences-section {
   gap: 12px;
@@ -43,7 +57,7 @@
 /* 将 Git 偏好分为三个明确区域，同时保留统一保存操作。 */
 .git-commit-settings-page > * {
   width: 100%;
-  max-width: 960px;
+  max-width: none;
 }
 .git-commit-settings-page .settings-preferences-fields {
   gap: 16px;
@@ -150,68 +164,6 @@
   padding: 20px 24px;
 }
 
-.settings-feature-content > .model-list-layout,
-.settings-feature-content > .credential-management-layout {
-  height: 100%;
-  padding: 0;
-}
-
-/* Fill the page only for split panes; provider categories flow after their heading. */
-/* 仅分栏页填满高度；供应商分类在标题之后按内容自然排列。 */
-.settings-feature-content > .model-list-layout .settings-local-directory-grid,
-.settings-feature-content > .credential-management-layout {
-  min-height: 0;
-  height: 100%;
-}
-
-.settings-feature-content > .model-list-layout .settings-local-directory-grid,
-.settings-feature-content > .credential-management-layout {
-  align-items: stretch;
-  gap: 0;
-}
-
-.settings-feature-content > .model-list-layout .settings-local-directory-nav,
-.settings-feature-content > .credential-management-layout > .settings-local-directory-nav {
-  min-height: 0;
-  overflow-y: auto;
-  align-content: start;
-  padding: 16px 10px;
-}
-
-.settings-feature-content .model-list-surface,
-.settings-feature-content .credential-management-surface {
-  min-height: 0;
-  padding: 16px 24px;
-}
-
-.credential-management-layout {
-  container-type: inline-size;
-}
-
-.credential-management-layout .workspace-tool-panel-menu-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-.settings-diagnostics-page {
-  height: 100%;
-  min-height: 0;
-  padding: 16px 24px 0;
-  overflow: hidden;
-}
-
-.settings-diagnostics-page > [data-slot="tabs-list"] {
-  flex: 0 0 auto;
-  max-width: 100%;
-  overflow-x: auto;
-  justify-content: flex-start;
-  margin-bottom: 12px;
-}
-
-.settings-diagnostics-page > [data-slot="tabs-content"] {
-  min-height: 0;
-  overflow-y: auto;
-  padding-bottom: 24px;
-}
-
 .settings-diagnostics-page [data-slot="input"] {
   margin: 16px 0;
 }
@@ -220,7 +172,7 @@
 /* 将追踪开关集中在标题行，并分离说明信息与目录操作。 */
 .provider-trace-settings {
   width: 100%;
-  max-width: 960px;
+  max-width: none;
 }
 
 .provider-trace-header {
@@ -297,16 +249,9 @@
   .provider-trace-information > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
 
-.settings-diagnostics-startup,
-.settings-diagnostics-explanation {
+.settings-diagnostics-startup {
   display: grid;
   gap: 16px;
-}
-
-.settings-diagnostics-explanation > summary {
-  cursor: pointer;
-  color: var(--muted-foreground);
-  font-size: 12px;
 }
 
 .diagnostic-log-row {

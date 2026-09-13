@@ -1,13 +1,15 @@
 import * as React from "react";
+import { toast } from "sonner";
+import { VceActionButton } from "./vce-action-button";
 import {
   BrainCircuit,
   CheckCircle2,
   CircleAlert,
   Database,
   LoaderCircle,
-  Play,
+  Bug,
   RefreshCw,
-  Trash2,
+  Eraser,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -86,9 +88,6 @@ interface VceRouteFieldProps {
   // Whether this exact route is being tested.
   // 是否正在测试此精确路由。
   testing: boolean;
-  // Compact successful provider-test result.
-  // 紧凑的成功 Provider 测试结果。
-  testSummary?: string;
   // Complete route replacement callback.
   // 完整路由替换回调。
   onChange: (route: PublicAiInferenceRoute | null) => Promise<void>;
@@ -175,9 +174,6 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
   // busyKey serializes route mutations and explicit provider tests.
   // busyKey 串行化路由变更与显式 Provider 测试。
   const [busyKey, setBusyKey] = React.useState<string | null>(null);
-  // testSummaries retain compact facts from successful real embedding and rerank requests.
-  // testSummaries 保留真实向量与重排请求成功后的紧凑事实。
-  const [testSummaries, setTestSummaries] = React.useState<Partial<Record<VceRouteKind, string>>>({});
   const mutationInFlightRef = React.useRef(false);
   // Every settings read shares one observation sequence; late successes and errors lose authority.
   // 全部设置读取共享一个观察序号；迟到成功及错误失去权威。
@@ -201,7 +197,6 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
       setReadiness(nextReadiness);
       // Test summaries belong to a verified observation, not every future model shown in the same slot.
       // 测试摘要属于已验证观察，而非同一槽位以后显示的所有模型。
-      setTestSummaries({});
       setError(null);
       return { snapshot: nextSnapshot, sequence: admitted };
     } catch (cause) {
@@ -245,7 +240,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     {
       kind: "embedding",
       operation: "embedding_create",
-      label: copy("Embedding 向量模型", "Embedding model"),
+      label: copy("向量模型", "Embedding model"),
       description: copy(
         "复用宿主已验证的源码文档与查询向量能力；支持专用任务或 Provider 默认任务，维度必须可确定。",
         "Reuses host-validated document and query vectors through dedicated or provider-default tasks, with deterministic dimensions.",
@@ -255,7 +250,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
       kind: "query_rewrite",
       operation: "conversation_respond",
       purposeId: VCE_QUERY_REWRITE_PURPOSE_ID,
-      label: copy("LLM 查询改写模型", "LLM query rewrite model"),
+      label: copy("大语言模型", "Large language model"),
       description: copy(
         "生成严格 JSON 的代码检索查询变体；宿主固定关闭模型推理。",
         "Generates strict-JSON code-search variants with model reasoning fixed off by the host.",
@@ -264,7 +259,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     {
       kind: "rerank",
       operation: "rerank_documents",
-      label: copy("Rerank 重排模型", "Rerank model"),
+      label: copy("重排序模型", "Reranking model"),
       description: copy(
         "对语义候选进行二次排序；使用模型明确声明的禁用截断或 Provider 默认截断策略。",
         "Reorders semantic candidates with an explicitly declared disabled or provider-default truncation policy.",
@@ -284,7 +279,6 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     mutationInFlightRef.current = true;
     setBusyKey(`save:${definition.kind}`);
     setError(null);
-    setTestSummaries((current) => ({ ...current, [definition.kind]: undefined }));
     try {
       await savePublicAiInferenceRoute({
         consumerProfileId: VCE_CONSUMER_PROFILE_ID,
@@ -354,9 +348,9 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           `${result.resultCount} 条结果 · ${result.durationMs} ms`,
           `${result.resultCount} results · ${result.durationMs} ms`,
         );
-      setTestSummaries((current) => ({ ...current, [definition.kind]: detail }));
+      toast.success(copy("测试连通性成功", "Connection test succeeded"), { description: detail });
     } catch (cause) {
-      if (observationSequence.current === testObservation) setError(errorMessage(cause));
+      if (observationSequence.current === testObservation) toast.error(copy("测试连通性失败", "Connection test failed"), { description: errorMessage(cause) });
     } finally {
       mutationInFlightRef.current = false;
       setBusyKey(null);
@@ -381,7 +375,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold">{copy("语义引擎", "ContextEngine")}</h2>
+              <h2 className="text-base font-semibold">{copy("代码语义索引", "Code semantic index")}</h2>
               <span className={readiness?.ready
                 ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-success)] dark:text-emerald-300"
                 : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-warning)] dark:text-amber-300"}
@@ -451,8 +445,8 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           </div>
         ) : (
           <div className="divide-y">
-            <div className="hidden gap-4 px-4 py-2 text-xs text-muted-foreground @4xl/vce:grid @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_10rem_14rem]">
-              <span>{copy("用途", "Purpose")}</span><span>{copy("模型与账号", "Model and account")}</span><span>{copy("参数", "Parameters")}</span><span className="text-right">{copy("操作", "Actions")}</span>
+            <div className="hidden gap-4 px-4 py-2 text-xs text-muted-foreground @4xl/vce:grid @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_12rem]">
+              <span>{copy("用途", "Purpose")}</span><span>{copy("模型与账号", "Model and account")}</span><span className="text-right">{copy("操作", "Actions")}</span>
             </div>
             {definitions.map((definition) => {
               const route = routeForDefinition(profile, definition);
@@ -464,11 +458,10 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
                 return <VceEmbeddingSettings key={definition.kind} candidates={candidates}
                   route={profile?.embedding} dimension={profile?.embedding_dimensions}
                   status={readiness.embedding} disabled={busyKey !== null}
-                  testing={busyKey === "test:embedding"} testSummary={testSummaries.embedding}
+                  testing={busyKey === "test:embedding"}
                   onTest={() => testRoute(definition)}
                   onBusyChange={(busy) => { mutationInFlightRef.current = busy; setBusyKey(busy ? "draft:embedding" : null); }}
                   onSaved={async () => {
-                    setTestSummaries((current) => ({ ...current, embedding: undefined }));
                     // Use the same observation fence after embedding commits as every other route read.
                     // 向量提交后与其他路由读取使用相同的观察保护。
                     await reload();
@@ -487,7 +480,6 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
                   route={route}
                   status={status}
                   testing={busyKey === `test:${definition.kind}`}
-                  testSummary={testSummaries[definition.kind]}
                 />
               );
             })}
@@ -523,11 +515,11 @@ function VceRouteField(props: VceRouteFieldProps) {
   // selectedValue 仅在持久化路由仍是合格的精确候选项时存在。
   const selectedValue = candidateByKey.has(selectedKey) ? selectedKey : undefined;
   return (
-    <div className="grid items-center gap-4 px-4 py-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_10rem_14rem]">
-      <div className="flex min-w-0 items-start gap-3">
+    <div className="grid items-center gap-4 px-4 py-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_12rem]">
+      <div className="flex min-w-0 items-center gap-3">
         <span className={props.status?.available
-          ? "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
-          : "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[var(--vcn-content-warning)]"}
+          ? "flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
+          : "flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[var(--vcn-content-warning)]"}
         >
           {props.status?.available
             ? <CheckCircle2 className="size-4" />
@@ -559,35 +551,18 @@ function VceRouteField(props: VceRouteFieldProps) {
           )}
           value={selectedValue}
         />
-        {props.testSummary ? (
-          <p className="mt-2 text-xs text-[var(--vcn-content-success)] dark:text-emerald-300">{props.testSummary}</p>
-        ) : null}
         {props.status?.issue ? (
           <p className="mt-2 break-words text-xs text-[var(--vcn-content-warning)] dark:text-amber-300">{props.status.issue}</p>
         ) : null}
       </div>
-      <div aria-hidden="true" className="hidden @4xl/vce:block" />
       <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
         {props.onTest ? (
-          <Button
-            disabled={props.disabled || !props.route}
-            onClick={() => void props.onTest?.()}
-            size="sm"
-            variant="outline"
-          >
-            {props.testing ? <LoaderCircle className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-            {copy("测试", "Test")}
-          </Button>
+          <VceActionButton label={copy("测试连通性", "Test connectivity")}
+            disabled={props.disabled || !props.route} onClick={() => void props.onTest?.()}
+            icon={props.testing ? <LoaderCircle className="size-4 animate-spin" /> : <Bug className="size-4" />} />
         ) : null}
-        <Button
-          disabled={props.disabled || !props.route}
-          onClick={() => void props.onChange(null)}
-          size="sm"
-          variant="ghost"
-        >
-          <Trash2 className="size-3.5" />
-          {copy("清除", "Clear")}
-        </Button>
+        <VceActionButton label={copy("清除", "Clear")} disabled={props.disabled || !props.route}
+          onClick={() => void props.onChange(null)} icon={<Eraser className="size-4" />} />
       </div>
     </div>
   );

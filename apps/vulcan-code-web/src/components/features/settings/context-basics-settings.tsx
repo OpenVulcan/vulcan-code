@@ -1,3 +1,4 @@
+import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
@@ -9,7 +10,6 @@ import type { SettingsActionProps } from "@/components/features/settings/setting
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
@@ -332,6 +332,19 @@ export function ContextBasicsSettingsArea(props: {
   // t resolves localized settings copy.
   // t 解析本地化设置文案。
   const { t } = useI18n()
+  // Keep category selection independent of the mounted editors so unsaved drafts survive navigation.
+  // 分类选择独立于已挂载编辑器，使未保存草稿在导航切换后保留。
+  const [activeSection, setActiveSection] = React.useState(props.outputStyleSettings ? "conversation" : "context")
+  // Localized category entries retain the existing feature availability and save ownership.
+  // 本地化分类保持现有功能可用性及保存归属。
+  const sections = [
+    ...(props.outputStyleSettings ? [{ id: "conversation", label: t("settings.modelExperience.conversation") }] : []),
+    { id: "context", label: t("settings.modelExperience.context") },
+    { id: "nodes", label: t("settings.modelExperience.nodes") },
+    { id: "retry", label: t("settings.modelExperience.retry") },
+    { id: "media", label: t("settings.modelExperience.media") },
+    { id: "usage", label: t("settings.modelExperience.usage") },
+  ]
   // snapshot holds the authoritative configuration shared by the independent save sections.
   // snapshot 保存各独立保存分区共享的权威配置。
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
@@ -352,45 +365,39 @@ export function ContextBasicsSettingsArea(props: {
   }, [])
 
   return (
-    <div className="settings-direct-content context-basics-surface space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">{t("settings.contextBasics.title")}</h2>
-        <p className="text-sm text-muted-foreground">{t("settings.contextBasics.description")}</p>
-      </div>
+    <WorkspaceDirectoryLayout contentClassName="context-basics-surface space-y-4" navigation={
+      <WorkspaceDirectoryMenu ariaLabel={t("settings.contextBasics.title")} heading={t("workspaceToolPanel.category")}>
+        {sections.map((section) => <button key={section.id} type="button"
+          className={`workspace-tool-panel-menu-row ${activeSection === section.id ? "active" : ""}`}
+          aria-current={activeSection === section.id ? "page" : undefined} onClick={() => setActiveSection(section.id)}>{section.label}</button>)}
+      </WorkspaceDirectoryMenu>
+    }>
       {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-      <Tabs defaultValue={props.outputStyleSettings ? "conversation" : "context"} className="context-basics-tabs">
-        <TabsList variant="line" className="context-basics-navigation">
-          {props.outputStyleSettings ? <TabsTrigger value="conversation">{t("settings.modelExperience.conversation")}</TabsTrigger> : null}
-          <TabsTrigger value="context">{t("settings.modelExperience.context")}</TabsTrigger>
-          <TabsTrigger value="nodes">{t("settings.modelExperience.nodes")}</TabsTrigger>
-          <TabsTrigger value="retry">{t("settings.modelExperience.retry")}</TabsTrigger>
-          <TabsTrigger value="media">{t("settings.modelExperience.media")}</TabsTrigger>
-          <TabsTrigger value="usage">{t("settings.modelExperience.usage")}</TabsTrigger>
-        </TabsList>
-        {props.outputStyleSettings ? <TabsContent forceMount value="conversation">{props.outputStyleSettings}</TabsContent> : null}
+      <div className="context-basics-tabs">
+        {props.outputStyleSettings ? <section hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
         {snapshot ? (
           <>
             {/* Adopt only the saved section so late full snapshots cannot regress another independent editor. */}
             {/* 仅采用已保存分区，避免迟到的完整快照使另一独立编辑器倒退。 */}
-            <TabsContent forceMount value="context">
+            <section hidden={activeSection !== "context"}>
               <SystemContextWindowPolicyCard onSaved={(next) => setSnapshot((current) => current ? { ...current, contextWindowPolicyOverrides: next.contextWindowPolicyOverrides } : next)} policy={snapshot.contextWindowPolicyOverrides} />
-            </TabsContent>
-            <TabsContent forceMount value="nodes">
+            </section>
+            <section hidden={activeSection !== "nodes"}>
               <ContextCompactionWindowNodesCard nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, contextCompactionWindowNodes: next.contextCompactionWindowNodes } : next)} />
-            </TabsContent>
-            <TabsContent forceMount value="media">
+            </section>
+            <section hidden={activeSection !== "media"}>
               <MediaDeliveryPolicyCard settings={snapshot.mediaDelivery} onSaved={(next) => setSnapshot((current) => current ? { ...current, mediaDelivery: next.mediaDelivery } : next)} />
-            </TabsContent>
-            <TabsContent forceMount value="usage">
+            </section>
+            <section hidden={activeSection !== "usage"}>
               <AccountUsageRefreshCard intervalSeconds={snapshot.usageRefreshIntervalSeconds} onSaved={(next) => setSnapshot((current) => current ? { ...current, usageRefreshIntervalSeconds: next.usageRefreshIntervalSeconds } : next)} />
               {props.onOpenUsageStatistics ? <Button onClick={props.onOpenUsageStatistics} type="button" variant="outline">{t("settings.modelExperience.statistics")}</Button> : null}
-            </TabsContent>
+            </section>
           </>
         ) : !error ? <p className="settings-muted-line">{t("settings.contextBasics.loading")}</p> : null}
-        <TabsContent forceMount value="retry">
+        <section hidden={activeSection !== "retry"}>
           <ProviderRetrySettingsArea actions={props.actions} embedded settings={props.retrySettings} />
-        </TabsContent>
-      </Tabs>
-    </div>
+        </section>
+      </div>
+    </WorkspaceDirectoryLayout>
   )
 }

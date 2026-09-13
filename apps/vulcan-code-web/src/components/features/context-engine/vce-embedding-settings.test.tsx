@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { TooltipProvider } from "@/components/ui/tooltip";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,9 +58,9 @@ const testModel = vi.fn();
 // dimension is explicit saved intent or absence. Returns after effects settle, without triggering requests.
 // dimension 为明确已保存意图或缺失。副作用稳定后返回，不触发请求。
 async function render(dimension?: number) {
-  await act(async () => root.render(<VceEmbeddingSettings route={candidate("A").route} dimension={dimension}
+  await act(async () => root.render(<TooltipProvider><VceEmbeddingSettings route={candidate("A").route} dimension={dimension}
     candidates={[candidate("A"), candidate("B")]} status={{ configured: true, available: true }} disabled={false}
-    testing={false} onSaved={saved} onBusyChange={busy} onTest={testModel} />));
+    testing={false} onSaved={saved} onBusyChange={busy} onTest={testModel} /></TooltipProvider>));
 }
 
 // Find one exact button by its rendered text; throw when the production UI does not expose it.
@@ -67,7 +68,7 @@ async function render(dimension?: number) {
 // text is the user label. Returns the real DOM button, not a mocked callback.
 // text 为用户标签。返回真实文档按钮，不返回模拟回调。
 function button(text: string): HTMLButtonElement {
-  const found = [...host.querySelectorAll("button")].find((item) => item.textContent === text);
+  const found = [...document.querySelectorAll("button")].find((item) => item.textContent === text || item.getAttribute("aria-label") === text);
   if (!found) throw new Error(`Missing button: ${text}`);
   return found;
 }
@@ -109,12 +110,60 @@ afterEach(async () => {
 });
 
 describe("ContextEngine embedding draft workflow", () => {
+  // The same dialog retains its confirmed result across delayed saves and refreshed configuration.
+  // 同一弹窗在保存延迟及配置刷新期间保留已确认结果。
+  it("keeps compatibility results in one dialog until the save refresh finishes", async () => {
+    // Hold the save acknowledgement and subsequent parent refresh independently.
+    // 分别保留保存确认和后续父级刷新，以验证中间界面状态。
+    let acknowledgeSave!: (snapshot: object) => void;
+    let finishRefresh!: () => void;
+    rpc.save.mockReturnValue(new Promise((resolve) => { acknowledgeSave = resolve; }));
+    saved.mockReturnValue(new Promise<void>((resolve) => { finishRefresh = resolve; }));
+    await render(1024);
+    await click(button("检查项目兼容性"));
+    await click(document.querySelector('input[type="radio"]'));
+    // Capture the actual portal node so a replacement dialog cannot pass by sharing its label.
+    // 捕获真实弹窗节点，避免替换弹窗仅因标签相同而通过检查。
+    const dialog = document.querySelector('[role="dialog"]');
+    await click(button("确认保存"));
+    expect(dialog?.textContent).toContain("正在保存并更新状态");
+    await act(async () => acknowledgeSave({}));
+    expect(saved).toHaveBeenCalledOnce();
+    await render(2048);
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog?.textContent).toContain("确认使用 1024 维向量");
+    expect(dialog?.querySelector<HTMLInputElement>('input[type="radio"]')?.checked).toBe(true);
+    expect(button("正在保存").disabled).toBe(true);
+    await act(async () => finishRefresh());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await render(2048);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  // Saving a reviewed dimension closes the dialog and publishes the exact committed settings.
+  // 保存已审查维度后关闭弹窗，并发布精确的已提交设置。
+  it("saves the selected dimension through the dialog and closes after acknowledgement", async () => {
+    rpc.preflight.mockResolvedValue({ ...preflight("A"), projects: [] });
+    rpc.save.mockResolvedValue({});
+    await render(1024);
+    await click(button("向量维度"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await click(button("保存"));
+    expect(rpc.save).not.toHaveBeenCalled();
+    await click(button("确认保存"));
+    expect(rpc.save).toHaveBeenCalledWith(expect.objectContaining({ embeddingDimensions: 1024 }));
+    expect(saved).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
   // A dimension suggestion never persists a model or starts a provider request on mount.
   // 维度建议绝不在挂载时持久化模型或启动供应商请求。
   it("suggests an explicit dimension without an automatic save or test", async () => {
     await render();
-    expect(host.querySelector('[aria-label="向量维度"]')?.textContent).toBe("1024");
-    expect(button("测试已保存模型").disabled).toBe(true);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(button("测试连通性").disabled).toBe(true);
+    await click(button("向量维度"));
+    expect(document.querySelector('[role="dialog"] [aria-label="向量维度"]')?.textContent).toBe("1024");
     expect(rpc.preflight).not.toHaveBeenCalled(); expect(rpc.save).not.toHaveBeenCalled();
     expect(testModel).not.toHaveBeenCalled();
   });
@@ -122,22 +171,22 @@ describe("ContextEngine embedding draft workflow", () => {
   // 同名供应商选择保持草稿，直到每个项目获得明确且不预勾选的决定。
   it("uses the real searchable picker and requires explicit compatibility before save", async () => {
     await render(1024);
-    await click(host.querySelector('[aria-label="Embedding 向量模型"]'));
+    await click(document.querySelector('[aria-label="向量模型"]'));
     expect(document.querySelector('[placeholder="筛选模型、供应商或账号…"]')).not.toBeNull();
     const option = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes("Account B"));
     await click(option ?? null);
     expect(rpc.preflight).not.toHaveBeenCalled(); expect(rpc.save).not.toHaveBeenCalled();
-    await click(button("检查变更"));
+    await click(button("保存"));
     expect(rpc.preflight).toHaveBeenCalledWith(candidate("B").route, 1024);
     expect(button("确认保存").disabled).toBe(true);
-    expect([...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')].every((input) => !input.checked)).toBe(true);
-    await click(host.querySelector('input[type="radio"]'));
+    expect([...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].every((input) => !input.checked)).toBe(true);
+    await click(document.querySelector('input[type="radio"]'));
     await click(button("确认保存"));
     expect(rpc.save).toHaveBeenCalledWith({ consumerProfileId: "vce", operation: "embedding_create", route: candidate("B").route,
       embeddingDimensions: 1024, vceEmbeddingConfirmation: { preflightRevision: "review-revision",
         decisions: [{ projectId: "project-a", decision: "compatible" }] } });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("预检已过期");
-    expect(host.querySelector('[aria-label="模型变更确认"]')).toBeNull(); expect(saved).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("预检已过期");
+    expect(document.querySelector('[aria-label="模型变更确认"]')).toBeNull(); expect(saved).not.toHaveBeenCalled();
     expect(testModel).not.toHaveBeenCalled(); expect(busy).toHaveBeenLastCalledWith(false);
   });
   // Cancelling a populated compatibility review must neither save nor retain a checked decision.
@@ -146,26 +195,25 @@ describe("ContextEngine embedding draft workflow", () => {
   // 无输入或输出；真实选择器和取消按钮操作未保存的路由草稿。
   it("cancels reviewed compatibility without saving and requires fresh decisions on reopening", async () => {
     await render(1024);
-    await click(host.querySelector('[aria-label="Embedding 向量模型"]'));
+    await click(document.querySelector('[aria-label="向量模型"]'));
     // The candidate is selected from the actual searchable popup by its unique account identity.
     // 按唯一账号身份从实际可搜索弹窗选择候选。
     const option = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes("Account B"));
     if (!option) throw new Error("Account B fixture candidate is missing");
     await click(option);
-    await click(button("检查变更"));
-    await click(host.querySelector('input[type="radio"]'));
+    await click(button("保存"));
+    await click(document.querySelector('input[type="radio"]'));
     expect(button("确认保存").disabled).toBe(false);
     await click(button("取消"));
-    expect(host.querySelector('[aria-label="模型变更确认"]')).toBeNull();
+    expect(document.querySelector('[aria-label="模型变更确认"]')).toBeNull();
     expect(rpc.save).not.toHaveBeenCalled();
     expect(saved).not.toHaveBeenCalled();
     expect(testModel).not.toHaveBeenCalled();
-    await click(button("检查变更"));
+    await click(button("检查项目兼容性"));
     expect(button("确认保存").disabled).toBe(true);
-    expect([...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')].every((input) => !input.checked)).toBe(true);
+    expect([...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].every((input) => !input.checked)).toBe(true);
     await click(button("取消"));
-    await click(button("还原已保存设置"));
-    expect(host.querySelector('[aria-label="向量维度"]')?.textContent).toBe("1024");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(rpc.save).not.toHaveBeenCalled();
     expect(busy).toHaveBeenLastCalledWith(false);
   });
@@ -176,8 +224,8 @@ describe("ContextEngine embedding draft workflow", () => {
     rpc.preflight.mockResolvedValue(preflight("A", true));
     await render(2048);
     await click(button("检查项目兼容性"));
-    expect(host.querySelectorAll('input[type="radio"]')).toHaveLength(1);
-    expect(host.textContent).not.toContain("确认同一向量空间");
+    expect(document.querySelectorAll('input[type="radio"]')).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("确认同一向量空间");
     expect(button("确认保存").disabled).toBe(true);
     expect(rpc.save).not.toHaveBeenCalled();
   });
@@ -187,11 +235,11 @@ describe("ContextEngine embedding draft workflow", () => {
     await render(1024);
     await click(button("清除"));
     expect(rpc.save).not.toHaveBeenCalled();
-    await click(button("还原已保存设置"));
-    expect(host.querySelector('[aria-label="向量维度"]')?.textContent).toBe("1024");
+    await click(button("取消"));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await click(button("清除"));
     rpc.preflight.mockResolvedValue({ candidate: null, projects: [], revision: "remove-review" } satisfies VceEmbeddingPreflight);
-    await click(button("检查变更"));
+    await click(button("保存"));
     expect(rpc.preflight).toHaveBeenCalledWith(null, undefined);
     await click(button("确认保存"));
     expect(rpc.save).toHaveBeenCalledWith(expect.objectContaining({ route: null, embeddingDimensions: undefined,
@@ -206,8 +254,10 @@ describe("ContextEngine embedding draft workflow", () => {
     await render(1024); await click(button("检查项目兼容性"));
     await render(2048);
     await act(async () => resolve(preflight()));
-    expect(host.querySelector('[aria-label="向量维度"]')?.textContent).toBe("2048");
-    expect(host.querySelector('[aria-label="模型变更确认"]')).toBeNull();
+    await click(button("取消"));
+    await click(button("向量维度"));
+    expect(document.querySelector('[role="dialog"] [aria-label="向量维度"]')?.textContent).toBe("2048");
+    expect(document.querySelector('[aria-label="模型变更确认"]')).toBeNull();
     expect(rpc.save).not.toHaveBeenCalled(); expect(busy).toHaveBeenLastCalledWith(false);
   });
 });

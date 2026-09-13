@@ -688,7 +688,7 @@ export function ProjectSettingsDialog(props: {
         await vceActivity.reload();
       }
       if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.success("代码上下文设置已保存。");
+        toast.success("代码语义索引设置已保存。");
       }
       return saved;
     } catch (error) {

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ArchivedRestoreSettingsArea } from "./misc-settings-areas";
 import type { SettingsActionProps } from "./settings-action-types";
+import type { ConversationSummary } from "@/types";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
 
@@ -23,6 +24,63 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+});
+
+// Build local archive identities for selection tests; count controls size and no service is contacted.
+// 构建用于选择测试的本地归档标识；count 控制数量，不访问服务。
+function archiveFixtures(count: number): ConversationSummary[] {
+  return Array.from({ length: count }, (_, index) => ({ id: `archive-${index + 1}`, title: `会话${index + 1}`, status: "completed" }));
+}
+
+// Row operations must never consume an unrelated batch selection, and deletion requires confirmation.
+// 单行操作不得带入其他批量选择，删除必须经过确认。
+it("isolates row restore and confirmed deletion from selected conversations", async () => {
+  // Observe only exact identities passed to the synthetic lifecycle callbacks.
+  // 仅观察传入合成生命周期回调的精确标识。
+  const restore = vi.fn(async () => undefined);
+  const remove = vi.fn(async () => undefined);
+  await act(async () => root.render(<ArchivedRestoreSettingsArea
+    actions={{ onRestoreArchivedConversations: restore, onDeleteArchivedConversations: remove } as unknown as SettingsActionProps}
+    conversations={archiveFixtures(2)} projects={[]} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="选择会话 会话1"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="恢复会话 会话2"]')!.click());
+  expect(restore).toHaveBeenCalledExactlyOnceWith(["archive-2"]);
+  expect(host.querySelector('[aria-label="选择会话 会话1"]')?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="删除会话 会话2"]')!.click());
+  expect(remove).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="alertdialog"] ul')?.textContent).toBe("会话2");
+  // Find and cancel the actual confirmation action, preserving both archive and checkbox selection.
+  // 查找并取消真实确认操作，保留归档及复选框选择。
+  const cancel = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')).find((button) => button.textContent === "取消")!;
+  await act(async () => cancel.click());
+  expect(remove).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="删除会话 会话2"]')!.click());
+  // Only explicit confirmation admits the previously displayed row identity.
+  // 仅明确确认后才允许操作之前展示的单行标识。
+  const confirm = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')).find((button) => button.textContent === "彻底删除")!;
+  await act(async () => confirm.click());
+  expect(remove).toHaveBeenCalledExactlyOnceWith(["archive-2"]);
+  expect(host.querySelector('[aria-label="选择会话 会话1"]')?.getAttribute("aria-checked")).toBe("true");
+});
+
+// Select-all spans every page and batch restore receives exactly that cross-page set.
+// 全选覆盖所有分页，批量恢复接收精确的跨页集合。
+it("selects all pages and restores the entire selected batch", async () => {
+  // Twenty-one fixtures cross the component's twenty-row page boundary.
+  // 二十一项夹具跨过组件每页二十行的分页边界。
+  const conversations = archiveFixtures(21);
+  const restore = vi.fn(async () => undefined);
+  await act(async () => root.render(<ArchivedRestoreSettingsArea
+    actions={{ onRestoreArchivedConversations: restore, onDeleteArchivedConversations: vi.fn() } as unknown as SettingsActionProps}
+    conversations={conversations} projects={[]} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="全选归档会话"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="下一页"]')!.click());
+  expect(host.querySelector('[aria-label="选择会话 会话21"]')?.getAttribute("aria-checked")).toBe("true");
+  // The batch action is independent of which page is currently visible.
+  // 批量操作独立于当前可见分页。
+  const batchRestore = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("批量恢复"))!;
+  await act(async () => batchRestore.click());
+  expect(restore).toHaveBeenCalledExactlyOnceWith(conversations.map((conversation) => conversation.id));
 });
 
 // A rejected restore must preserve selected identities, release the guard, and allow an explicit retry.

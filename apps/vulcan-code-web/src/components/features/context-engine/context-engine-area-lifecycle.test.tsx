@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "sonner";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +10,7 @@ import { ContextEngineArea } from "./context-engine-area";
 
 // Replace transport only; the real global settings surface owns observation ordering.
 // 仅替换传输；真实全局设置界面负责观察顺序。
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const rpc = vi.hoisted(() => ({ settings: vi.fn(), readiness: vi.fn(), save: vi.fn(), test: vi.fn() }));
 vi.mock("@/service/settings-actions-service", () => ({ loadPublicAiSettings: rpc.settings, savePublicAiInferenceRoute: rpc.save, testPublicAiInferenceRoute: rpc.test }));
 vi.mock("@/service/vce-service", () => ({ loadVceConfigurationStatus: rpc.readiness }));
@@ -63,10 +66,10 @@ describe("ContextEngine observation lifetime", () => {
     // 保留生产测试调用，同时独立控制下一次权威读取。
     let resolveTest!: (value: PublicAiInferenceTestResult) => void;
     rpc.test.mockReturnValueOnce(new Promise<PublicAiInferenceTestResult>((resolve) => { resolveTest = resolve; }));
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={1} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={1} /></TooltipProvider>));
     // The explicit saved-model control is the sole entry into this mocked provider test.
     // 明确的已保存模型控件是本模拟供应商测试的唯一入口。
-    const test = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "测试已保存模型");
+    const test = [...host.querySelectorAll("button")].find((button) => !button.disabled && button.getAttribute("aria-label") === "测试连通性");
     expect(test?.disabled).toBe(false);
     await act(async () => test!.click());
     if (change === "dimension") rpc.settings.mockResolvedValue({ ...snapshot, inferenceProfiles: { vce: {
@@ -74,10 +77,11 @@ describe("ContextEngine observation lifetime", () => {
     await act(async () => resolveTest({ operation: "embedding_create", providerId: "provider", serviceEntryId: "service",
       connectionId: "account", modelId: change === "identity" ? "different-model" : "embedding-model",
       dimensions: 1024, resultCount: 1, durationMs: 23 }));
-    if (change === "unchanged") expect(host.textContent).toContain("1 条结果 · 1024 维 · 23 ms");
+    if (change === "unchanged") expect(toast.success).toHaveBeenCalledWith("测试连通性成功", { description: "1 条结果 · 1024 维 · 23 ms" });
     else {
       expect(host.textContent).not.toContain("1 条结果 · 1024 维 · 23 ms");
-      expect(host.textContent).toContain("模型配置或测试目标已变化");
+      expect(toast.error).toHaveBeenCalledWith("测试连通性失败", { description: expect.stringContaining("模型配置或测试目标已变化") });
+      expect(toast.success).not.toHaveBeenCalled();
     }
     expect(rpc.test).toHaveBeenCalledExactlyOnceWith({ consumerProfileId: "vce", operation: "embedding_create" });
     expect(rpc.save).not.toHaveBeenCalled();
@@ -103,25 +107,26 @@ describe("ContextEngine observation lifetime", () => {
     // 受控承诺使真实页面修改保持等待，不执行付费供应商请求。
     let resolveTest!: (value: PublicAiInferenceTestResult) => void;
     rpc.test.mockReturnValueOnce(new Promise<PublicAiInferenceTestResult>((resolve) => { resolveTest = resolve; }));
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={1} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={1} /></TooltipProvider>));
     // Select the only non-embedding test button by its exact visible label.
     // 按精确可见标签选择唯一非向量测试按钮。
-    const test = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "测试");
+    const test = [...host.querySelectorAll("button")].find((button) => !button.disabled && button.getAttribute("aria-label") === "测试连通性");
     expect(test).toBeDefined();
     await act(async () => test!.click());
     expect(rpc.test).toHaveBeenCalledExactlyOnceWith({ consumerProfileId: "vce", operation: "rerank_documents" });
     if (timing === "completed") {
       await act(async () => resolveTest(result));
-      expect(host.textContent).toContain("2 条结果 · 17 ms");
+      expect(toast.success).toHaveBeenCalledWith("测试连通性成功", { description: "2 条结果 · 17 ms" });
     }
     rpc.settings.mockResolvedValue({ ...snapshot, inferenceProfiles: { vce: { llm_routes: {},
       rerank: { ...route, model_id: "newer-model" } } } });
     // The final variant discovers the change only in the test's own post-execution reload.
     // 最后一种情况仅在测试自身执行后的重读中发现变化。
-    if (timing !== "refresh_race") await act(async () => root.render(<ContextEngineArea workbenchRevision={2} />));
+    if (timing !== "refresh_race") await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={2} /></TooltipProvider>));
     if (timing !== "completed") await act(async () => resolveTest(result));
     expect(host.textContent).toContain("newer-model");
     expect(host.textContent).not.toContain("2 条结果 · 17 ms");
+    expect(toast.success).toHaveBeenCalledTimes(timing === "completed" ? 1 : 0);
     expect(rpc.test).toHaveBeenCalledTimes(1);
     expect(rpc.save).not.toHaveBeenCalled();
   });
@@ -140,10 +145,10 @@ describe("ContextEngine observation lifetime", () => {
       vce: { llm_routes: { "code_retrieval.query_rewrite": route } },
     } });
     rpc.readiness.mockResolvedValue(createVceActivityFixture().configuration);
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={1} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={1} /></TooltipProvider>));
     // Only the configured LLM has an enabled clear action in this fixture.
     // 本夹具中仅已配置的 LLM 具有可用清除操作。
-    const clear = [...host.querySelectorAll("button")].find((button) => !button.disabled && button.textContent?.trim() === "清除");
+    const clear = [...host.querySelectorAll("button")].find((button) => !button.disabled && button.getAttribute("aria-label") === "清除");
     expect(clear).toBeDefined();
     rpc.save.mockResolvedValueOnce(snapshot);
     rpc.settings.mockResolvedValueOnce({ ...snapshot, inferenceProfiles: {
@@ -163,7 +168,7 @@ describe("ContextEngine observation lifetime", () => {
   // 无输入及返回值；验证两个读取入口共用响应权威。
   it("retires an explicit recheck when a newer workbench publication is read", async () => {
     rpc.readiness.mockResolvedValueOnce(createVceActivityFixture().configuration);
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={1} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={1} /></TooltipProvider>));
     // resolveOld holds the user-triggered read across the later publication.
     // resolveOld 使用户触发读取跨越稍后的发布。
     let resolveOld!: (status: VceGlobalConfigurationStatus) => void;
@@ -174,7 +179,7 @@ describe("ContextEngine observation lifetime", () => {
     const closed = createVceActivityFixture().configuration;
     closed.ready = false; closed.embedding.available = false;
     rpc.readiness.mockResolvedValueOnce(closed);
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={2} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={2} /></TooltipProvider>));
     await act(async () => resolveOld(createVceActivityFixture().configuration));
     expect(host.textContent).toContain("已关闭");
     expect(host.textContent).not.toContain("已就绪");
@@ -186,7 +191,7 @@ describe("ContextEngine observation lifetime", () => {
   // 无输入及返回值；主动重试恢复当前状态并清除错误。
   it("shows a current read failure and clears it only after a successful retry", async () => {
     rpc.readiness.mockRejectedValueOnce(new Error("current catalog failure"));
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={1} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={1} /></TooltipProvider>));
     expect(host.textContent).toContain("current catalog failure");
     rpc.readiness.mockResolvedValueOnce(createVceActivityFixture().configuration);
     await recheck();
@@ -208,7 +213,7 @@ describe("ContextEngine observation lifetime", () => {
     rpc.readiness.mockReturnValueOnce(new Promise<VceGlobalConfigurationStatus>((resolve, reject) => {
       resolveOld = resolve; rejectOld = reject;
     }));
-    await act(async () => root.render(<ContextEngineArea workbenchRevision={1} />));
+    await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={1} /></TooltipProvider>));
     // closed is a newer authoritative model revocation, not an inferred provider failure.
     // closed 为较新的权威模型撤销，不是推测的供应商失败。
     const closed = createVceActivityFixture().configuration;

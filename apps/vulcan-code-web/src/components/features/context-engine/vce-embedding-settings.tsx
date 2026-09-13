@@ -1,5 +1,7 @@
 import * as React from "react";
-import { CheckCircle2, CircleAlert, LoaderCircle, Play, Trash2 } from "lucide-react";
+import { CheckCircle2, CircleAlert, LoaderCircle, Bug, Eraser, Axis3D, ScanSearch } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { VceActionButton } from "./vce-action-button";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
@@ -22,10 +24,9 @@ interface VceEmbeddingSettingsProps {
   // Already eligible common model-filter candidates.
   // 已符合资格的通用模型过滤器候选。
   candidates: PublicAiInternalInferenceCandidate[];
-  // Host readiness and last explicit saved-model test result.
-  // 宿主就绪及最近一次明确已保存模型测试结果。
+  // Host-authoritative readiness for the saved embedding route.
+  // 宿主对已保存向量路由的权威就绪状态。
   status: VceConfigurationCapabilityStatus;
-  testSummary?: string;
   // Shared page mutation state; editing does not register or execute a model.
   // 页面共享修改状态；编辑不注册或执行模型。
   disabled: boolean;
@@ -69,10 +70,26 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
   const savedKey = props.route ? vceInferenceRouteKey(props.route) : "";
   const [draftRoute, setDraftRoute] = React.useState<PublicAiInferenceRoute | null>(props.route ?? null);
   const [dimensionText, setDimensionText] = React.useState(() => initialDimensionText(props));
+  // Modal contains draft dimensions and project compatibility decisions.
+  // 弹窗承载维度草稿及项目兼容性决定。
+  const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [dialogMode, setDialogMode] = React.useState<"dimensions" | "compatibility">("dimensions");
   const [review, setReview] = React.useState<VceEmbeddingPreflight | null>(null);
   const [decisions, setDecisions] = React.useState<Record<string, VceEmbeddingDecision>>({});
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<"preflight" | "save" | null>(null);
+  // Preserve the confirmed result while save acknowledgements refresh the underlying configuration.
+  // 保存确认刷新底层配置期间，保留用户已确认的检测结果。
+  const [savingReview, setSavingReview] = React.useState<{
+    // Exact review and explicit choices shown throughout the pending save.
+    // 整个保存等待期间展示的精确审查及明确选择。
+    review: VceEmbeddingPreflight;
+    decisions: Record<string, VceEmbeddingDecision>;
+  } | null>(null);
+  // Presentation is frozen only during saving; validation continues using the current authoritative draft.
+  // 仅保存期间冻结展示；校验仍使用当前权威草稿。
+  const displayedReview = savingReview?.review ?? review;
+  const displayedDecisions = savingReview?.decisions ?? decisions;
   // The sequence rejects stale responses after a draft change, committed replacement, or unmount.
   // 序号拒绝草稿变化、已提交替换或卸载后的过期响应。
   const sequence = React.useRef(0);
@@ -129,6 +146,8 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
   const changeRoute = (next: PublicAiInferenceRoute | null) => {
     invalidate();
     setDraftRoute(next);
+    setDialogMode("dimensions");
+    setDialogOpen(true);
     if (!next) { setDimensionText(""); return; }
     const capability = candidateByKey.get(vceInferenceRouteKey(next))?.capabilities.embedding;
     const nextDomain = capability ? vceDimensionDomain(capability) : null;
@@ -165,6 +184,7 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
     if (inFlight.current || disabled || !validDraft || !review || !allDecided) return;
     inFlight.current = true;
     const admitted = ++sequence.current;
+    setSavingReview({ review, decisions });
     setBusy("save"); props.onBusyChange(true); setError(null);
     try {
       const snapshot = await savePublicAiInferenceRoute({ consumerProfileId: "vce", operation: "embedding_create",
@@ -172,37 +192,70 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
         vceEmbeddingConfirmation: { preflightRevision: review.revision,
           decisions: Object.entries(decisions).map(([projectId, decision]) => ({ projectId, decision })) } });
       if (sequence.current === admitted) {
-        setReview(null); setDecisions({});
         await props.onSaved(snapshot);
+        if (mounted.current) setDialogOpen(false);
       }
     } catch (cause) {
       if (sequence.current === admitted) { setError(String(cause)); setReview(null); setDecisions({}); }
     } finally {
       inFlight.current = false;
-      if (mounted.current) setBusy(null);
+      if (mounted.current) { setBusy(null); setSavingReview(null); }
       props.onBusyChange(false);
     }
   };
 
+  // Discard unsaved edits when closing the modal; no configuration or index writes occur.
+  // 关闭弹窗时丢弃未保存编辑；不写入配置或索引。
+  const resetDraft = () => {
+    invalidate(); setDraftRoute(props.route ?? null); setDimensionText(initialDimensionText(props));
+  };
+
   return <section className="space-y-4 px-4 py-4" aria-label={copy("向量模型与维度", "Embedding model and dimensions")}>
-    {/* Align purpose, model, parameters and actions with the other inference routes. */}
-    {/* 将用途、模型、参数与操作对齐到其他推理路由。 */}
-    <div className="grid items-center gap-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_10rem_14rem]">
+    {/* Align purpose, model and icon actions with the other inference routes. */}
+    {/* 将用途、模型和图标操作对齐到其他推理路由。 */}
+    <div className="grid items-center gap-4 @4xl/vce:grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,2fr)_12rem]">
       <div className="flex min-w-0 items-center gap-3">
-      {props.status.available ? <CheckCircle2 className="mt-0.5 size-5 text-[var(--vcn-content-success)]" /> : <CircleAlert className="mt-0.5 size-5 text-[var(--vcn-content-warning)]" />}
+      <span className={props.status.available
+        ? "flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
+        : "flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[var(--vcn-content-warning)]"}>
+        {props.status.available ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}
+      </span>
       <div className="min-w-0 flex-1">
-        <h4 className="flex items-center gap-1 text-sm font-medium">{copy("Embedding 向量模型", "Embedding model")}<VceHelpTooltip label={copy("向量模型说明", "Embedding model notes")}>{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</VceHelpTooltip></h4>
+        <h4 className="flex items-center gap-1 text-sm font-medium">{copy("向量模型", "Embedding model")}<VceHelpTooltip label={copy("向量模型说明", "Embedding model notes")}>{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</VceHelpTooltip></h4>
       </div>
       </div>
       <div className="min-w-0 space-y-1.5">
         <span className="text-xs text-muted-foreground @4xl/vce:hidden">{copy("模型与账号", "Model and account")}</span>
-        <Combobox ariaLabel={copy("Embedding 向量模型", "Embedding model")} className="h-10" disabled={disabled || props.candidates.length === 0}
+        <Combobox ariaLabel={copy("向量模型", "Embedding model")} className="h-10" disabled={disabled || props.candidates.length === 0}
           options={vceRoutePickerOptions(props.candidates)} value={selected ? draftKey : undefined}
           placeholder={draftRoute?.model_id ?? copy("选择模型与账号", "Select model and account")}
           searchPlaceholder={copy("筛选模型、供应商或账号…", "Filter models, providers, or accounts…")}
           emptyText={copy("没有符合条件的模型", "No compatible models")}
           onValueChange={(value) => { const candidate = candidateByKey.get(value); if (candidate) changeRoute(candidate.route); }} />
       </div>
+      <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
+      <VceActionButton label={copy("向量维度", "Vector dimensions")}
+        tooltip={`${copy("向量维度", "Vector dimensions")}: ${props.dimension ?? copy("未设置", "Not configured")}`}
+        disabled={disabled || !draftRoute} icon={<Axis3D className="size-4" />}
+        onClick={() => { setDialogMode("dimensions"); setDialogOpen(true); }} />
+      <VceActionButton label={copy("测试连通性", "Test connectivity")}
+        disabled={disabled || dirty || !props.route || props.dimension === undefined}
+        onClick={() => void props.onTest()} icon={props.testing ? <LoaderCircle className="size-4 animate-spin" /> : <Bug className="size-4" />} />
+      <VceActionButton label={copy("检查项目兼容性", "Check project compatibility")}
+        disabled={disabled || !validDraft || (!draftRoute && !props.route)} icon={<ScanSearch className="size-4" />}
+        onClick={() => { setDialogMode("compatibility"); setDialogOpen(true); void inspect(); }} />
+      <VceActionButton label={copy("清除", "Clear")} disabled={disabled || !draftRoute}
+        onClick={() => changeRoute(null)} icon={<Eraser className="size-4" />} />
+      </div>
+    </div>
+    {props.status.issue ? <p className="break-words text-xs text-[var(--vcn-content-warning)]">{props.status.issue}</p> : null}
+    <Dialog open={dialogOpen} onOpenChange={(open) => { if (!disabled) { if (!open) resetDraft(); setDialogOpen(open); } }}>
+      <DialogContent size="md" scrollMode="body-scroll" showCloseButton={!disabled}>
+        <DialogHeader>
+          <DialogTitle>{dialogMode === "compatibility" ? copy("项目兼容性检查", "Project compatibility") : draftRoute ? copy("向量维度设置", "Vector dimensions") : copy("清除向量模型", "Clear embedding model")}</DialogTitle>
+          <DialogDescription>{copy("保存前检查已有项目的兼容性；保存设置不会自动重建索引。", "Review existing project compatibility before saving. Saving settings does not rebuild indexes automatically.")}</DialogDescription>
+        </DialogHeader>
+        {dialogMode === "dimensions" ? <>
       <div className="min-w-0 space-y-1.5">{draftRoute ? <>
         <label className="flex items-center gap-1 text-xs text-muted-foreground" htmlFor="vce-embedding-dimension">{copy("向量维度", "Dimensions")}<VceHelpTooltip label={copy("维度说明", "Dimension notes")}>{copy("维度必须明确；不使用供应商默认档位。", "Dimensions must be explicit; provider defaults are not used.")}</VceHelpTooltip></label>
         {domain?.kind === "discrete" ? <Combobox ariaLabel={copy("向量维度", "Dimensions")} className="h-10" disabled={disabled}
@@ -214,37 +267,21 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
             min={domain?.kind === "range" ? domain.minimum : undefined} max={domain?.kind === "range" ? domain.maximum : undefined} step={1}
             onChange={(event) => { invalidate(); setDimensionText(event.target.value); }} />}
       </> : null}</div>
-      <div className="flex flex-wrap items-center gap-2 @4xl/vce:justify-end">
-      <Button size="sm" variant="outline" disabled={disabled || dirty || !props.route || props.dimension === undefined} onClick={() => void props.onTest()}>
-        {props.testing ? <LoaderCircle className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{copy("测试", "Test")}
-      </Button>
-      <Button variant="ghost" size="sm" disabled={disabled || !draftRoute} onClick={() => changeRoute(null)}><Trash2 className="size-3.5" />{copy("清除", "Clear")}</Button>
-      <Button size="sm" variant="outline" disabled={disabled || !validDraft || (!draftRoute && !props.route)} onClick={() => void inspect()}>
-        {busy === "preflight" ? <LoaderCircle className="size-3.5 animate-spin" /> : null}{dirty ? copy("检查变更", "Review changes") : copy("检查项目兼容性", "Review project compatibility")}
-      </Button>
-      {dirty ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => {
-        invalidate(); setDraftRoute(props.route ?? null); setDimensionText(initialDimensionText(props));
-      }}>{copy("还原已保存设置", "Restore saved settings")}</Button> : null}
-      </div>
-    </div>
-    {dirty || (props.dimension === undefined && draftRoute) || props.testSummary ? <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-      <span className="text-muted-foreground">{dirty ? copy("更改尚未保存；已有项目不会自动重建。", "Unsaved changes; existing projects will not rebuild automatically.")
-        : props.dimension === undefined && draftRoute ? copy("请明确选择维度后保存。", "Select and save an explicit dimension.")
-          : props.testSummary ?? null}</span>
-    </div> : null}
-    {!validDraft && draftRoute ? <p className="text-xs text-[var(--vcn-content-warning)]">{copy("请选择模型明确支持的正整数维度。", "Choose a positive dimension explicitly supported by this model.")}</p> : null}
-    {error ? <p role="alert" className="break-words text-xs text-destructive">{error}</p> : null}
-    {!dirty && props.status.issue ? <p className="break-words text-xs text-[var(--vcn-content-warning)]">{props.status.issue}</p> : null}
-    {review ? <div className="space-y-3 rounded-lg border bg-muted/20 p-3" aria-label={copy("模型变更确认", "Confirm model changes")}>
-      <p className="text-sm font-medium">{review.candidate ? copy(`确认使用 ${review.candidate.dimension} 维向量`, `Confirm ${review.candidate.dimension}-dimension vectors`) : copy("确认清除向量模型", "Confirm embedding removal")}</p>
-      {review.projects.filter((project) => !project.compatible).map((project) => <fieldset key={project.impact.scope.project_id} className="space-y-2 rounded-md border bg-background p-3" disabled={disabled}>
+        </> : null}
+        {!validDraft && draftRoute ? <p className="text-xs text-[var(--vcn-content-warning)]">{copy("请选择模型明确支持的正整数维度。", "Choose a positive dimension explicitly supported by this model.")}</p> : null}
+        {error ? <p role="alert" className="break-words text-xs text-destructive">{error}</p> : null}
+        {busy === "preflight" ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />{copy("正在检查项目兼容性…", "Checking project compatibility…")}</p> : null}
+        {busy === "save" ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />{copy("正在保存并更新状态…", "Saving and updating status…")}</p> : null}
+    {displayedReview ? <div className="space-y-3 rounded-lg border bg-muted/20 p-3" aria-label={copy("模型变更确认", "Confirm model changes")}>
+      <p className="text-sm font-medium">{displayedReview.candidate ? copy(`确认使用 ${displayedReview.candidate.dimension} 维向量`, `Confirm ${displayedReview.candidate.dimension}-dimension vectors`) : copy("确认清除向量模型", "Confirm embedding removal")}</p>
+      {displayedReview.projects.filter((project) => !project.compatible).map((project) => <fieldset key={project.impact.scope.project_id} className="space-y-2 rounded-md border bg-background p-3" disabled={disabled}>
         <legend className="px-1 text-sm">{project.projectName}</legend>
         <p className="text-xs text-muted-foreground">{project.impact.hardRebuildReason
           ? copy(`已有索引 ${project.impact.scope.dimension} 维；本次变更必须重建，保存不会自动开始。`, `Existing index: ${project.impact.scope.dimension} dimensions. Rebuild required; saving will not start it.`)
           : copy(`包含 ${project.impact.sourceFingerprints.length} 个精确来源。名称相同也需要您确认兼容。`, `${project.impact.sourceFingerprints.length} exact origins. Matching names do not establish compatibility.`)}</p>
-        {!project.impact.hardRebuildReason ? <label className="flex items-start gap-2 text-xs"><input type="radio" name={`vce-compat-${project.impact.scope.project_id}`} checked={decisions[project.impact.scope.project_id] === "compatible"}
+        {!project.impact.hardRebuildReason ? <label className="flex items-start gap-2 text-xs"><input type="radio" name={`vce-compat-${project.impact.scope.project_id}`} checked={displayedDecisions[project.impact.scope.project_id] === "compatible"}
           onChange={() => setDecisions((current) => ({ ...current, [project.impact.scope.project_id]: "compatible" }))} />{copy("确认同一向量空间，继续使用已有索引", "Same vector space; keep using the existing index")}</label> : null}
-        <label className="flex items-start gap-2 text-xs"><input type="radio" name={`vce-compat-${project.impact.scope.project_id}`} checked={decisions[project.impact.scope.project_id] === "rebuild"}
+        <label className="flex items-start gap-2 text-xs"><input type="radio" name={`vce-compat-${project.impact.scope.project_id}`} checked={displayedDecisions[project.impact.scope.project_id] === "rebuild"}
           onChange={() => setDecisions((current) => ({ ...current, [project.impact.scope.project_id]: "rebuild" }))} />{copy("需要重建，保留旧库并等待我手动操作", "Rebuild required; retain the old index until I start rebuilding")}</label>
         <details className="text-xs text-muted-foreground"><summary>{copy("查看精确来源", "Inspect exact origins")}</summary>
           <p className="mt-1 break-all">{project.impact.scope.project_id} · {project.impact.scope.root_hash}</p>
@@ -252,10 +289,17 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
           {project.impact.hardRebuildReason ? <p className="mt-1">{project.impact.hardRebuildReason}</p> : null}
         </details>
       </fieldset>)}
-      {review.projects.every((project) => project.compatible) ? <p className="text-xs text-muted-foreground">{copy("没有需要重新确认的已初始化索引。", "No initialized index requires a new compatibility decision.")}</p> : null}
-      {!review.candidate ? <p className="text-xs text-muted-foreground">{copy("引擎将不可用，已有项目索引保留。", "The engine becomes unavailable; existing indexes are retained.")}</p> : null}
-      <div className="flex justify-end gap-2"><Button size="sm" variant="ghost" disabled={disabled} onClick={() => { setReview(null); setDecisions({}); }}>{copy("取消", "Cancel")}</Button>
-        <Button size="sm" disabled={disabled || !validDraft || !allDecided} onClick={() => void save()}>{busy === "save" ? <LoaderCircle className="size-3.5 animate-spin" /> : null}{copy("确认保存", "Confirm and save")}</Button></div>
+      {displayedReview.projects.every((project) => project.compatible) ? <p className="text-xs text-muted-foreground">{copy("没有需要重新确认的已初始化索引。", "No initialized index requires a new compatibility decision.")}</p> : null}
+      {!displayedReview.candidate ? <p className="text-xs text-muted-foreground">{copy("引擎将不可用，已有项目索引保留。", "The engine becomes unavailable; existing indexes are retained.")}</p> : null}
     </div> : null}
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" disabled={disabled} onClick={() => { resetDraft(); setDialogOpen(false); }}>{copy("取消", "Cancel")}</Button>
+          <Button size="sm" disabled={disabled || !validDraft || (review !== null && !allDecided)} onClick={() => void (review ? save() : inspect())}>
+            {busy === "save" ? <LoaderCircle className="size-4 animate-spin" /> : null}
+            {busy === "save" ? copy("正在保存", "Saving") : review ? copy("确认保存", "Confirm and save") : dialogMode === "compatibility" ? copy("重新检查", "Check again") : copy("保存", "Save")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   </section>;
 }

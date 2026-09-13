@@ -756,7 +756,7 @@
   width: 100%;
   min-width: 0;
 }
-.context-basics-tabs > [data-slot="tabs-content"][data-state="inactive"],
+.context-basics-tabs > section[hidden],
 .provider-management-categories > section[hidden] {
   display: none;
 }
@@ -776,24 +776,48 @@
 }
 .settings-retry-toggle > span { min-width: 0; }
 
-.context-basics-navigation {
-  max-width: 100%;
-  overflow-x: auto;
-  flex-shrink: 0;
-  justify-content: flex-start;
-}
-
-.context-basics-tabs > [data-slot="tabs-content"] > section {
-  border: 0;
-  border-radius: 0;
-  padding: 12px 0;
-  box-shadow: none;
-}
-
-.context-basics-tabs > [data-slot="tabs-content"] > section > fieldset {
+.context-basics-tabs > section > section {
   border: 0;
   border-radius: 0;
   padding: 0;
+  box-shadow: none;
+}
+
+/* Category headings lead the form; bounded groups separate settings from explanatory copy. */
+/* 子分类标题引导表单阅读，有边界的分组区分设置项与说明文字。 */
+.context-basics-tabs > section > section > div:first-child:has(h3),
+.context-basics-tabs .settings-retry-section > .panel-title {
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.context-basics-tabs > section > section > div:first-child > h3,
+.context-basics-tabs .settings-retry-section > .panel-title > h2 {
+  font-size: 18px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.context-basics-tabs > section > section > div:first-child > h3 + p {
+  margin-top: 6px;
+  line-height: 1.6;
+}
+
+.context-basics-tabs > section > section > fieldset:not(.settings-form-grid),
+.context-basics-tabs .settings-retry-section > fieldset > article {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--card);
+}
+
+.context-basics-tabs > section > section > fieldset > legend,
+.context-basics-tabs .settings-retry-section > fieldset > article > strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
 }
 
 .context-basics-node-grid {
@@ -823,50 +847,6 @@
   min-width: 0;
 }
 
-.settings-local-directory-grid {
-  display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
-  align-items: start;
-  gap: 16px;
-}
-
-.settings-local-directory-nav {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  border-right: 1px solid var(--border);
-  padding-right: 12px;
-}
-
-.settings-local-directory-nav .workspace-tool-panel-menu-row {
-  width: 100%;
-  text-align: left;
-}
-
-/* Keep long provider names inside one directory row while preserving full text on hover.
-   将供应商长名称限制在单行目录内，同时通过悬停保留完整文本。 */
-.settings-local-directory-nav .settings-directory-label {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.settings-local-directory-nav .workspace-tool-panel-menu-row > small {
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.settings-local-directory-mobile {
-  display: none;
-  padding-bottom: 12px;
-}
-
-.settings-local-directory-mobile [data-slot="select-trigger"] {
-  width: 100%;
-}
-
 .model-list-layout .settings-model-sticky-controls {
   position: static;
   top: auto;
@@ -882,9 +862,6 @@
 }
 
 @container (max-width: 720px) {
-  .settings-local-directory-grid { grid-template-columns: minmax(0, 1fr); }
-  .settings-local-directory-nav { display: none; }
-  .settings-local-directory-mobile { display: block; }
   /* Short filters share one row below search so narrow lists retain useful reading space. */
   /* 短筛选项在搜索框下并排，给窄窗列表保留有效阅读空间。 */
   .model-list-surface .settings-model-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }

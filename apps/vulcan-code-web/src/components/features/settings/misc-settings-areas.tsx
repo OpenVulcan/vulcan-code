@@ -1,6 +1,5 @@
 import * as React from "react"
 import {
-  Archive,
   ChevronLeft,
   ChevronRight,
   GitCommitHorizontal,
@@ -325,9 +324,9 @@ export function ArchivedRestoreSettingsArea(props: {
   // 在 React 提交忙碌状态前同步加锁，防止重复提交破坏性请求。
   const operationRunningRef = React.useRef(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
-  // deleteConfirmationOpen controls the component-based permanent-delete confirmation.
-  // deleteConfirmationOpen 控制基于组件的彻底删除确认框。
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = React.useState(false)
+  // Freeze the exact row or batch identities being confirmed, independently of checkbox selection.
+  // 固定正在确认的单行或批量标识，与复选框选择独立。
+  const [deleteTargetIds, setDeleteTargetIds] = React.useState<string[]>([])
   const pageCount = Math.max(1, Math.ceil(archivedConversations.length / ARCHIVED_CONVERSATION_PAGE_SIZE))
   const visibleConversations = archivedConversations.slice(
     (currentPage - 1) * ARCHIVED_CONVERSATION_PAGE_SIZE,
@@ -370,10 +369,11 @@ export function ArchivedRestoreSettingsArea(props: {
       : new Set())
   }, [archivedConversations])
 
-  // runArchivedConversationAction executes one batch lifecycle operation after UI confirmation.
-  // runArchivedConversationAction 在界面确认后执行一次批量生命周期操作。
-  const runArchivedConversationAction = React.useCallback(async (kind: "restore" | "delete") => {
-    const conversationIds = Array.from(selectedConversationIds)
+  // Execute the requested operation only for its explicit identities, preserving unrelated selections.
+  // 仅对明确传入标识执行指定操作，保留其他勾选项。
+  // kind selects restore/delete; conversationIds names the exact targets. Resolves after completion or visible failure.
+  // kind 选择恢复或删除；conversationIds 指定精确目标。完成或展示失败后返回。
+  const runArchivedConversationAction = React.useCallback(async (kind: "restore" | "delete", conversationIds: string[]) => {
     if (conversationIds.length === 0 || operationRunningRef.current) {
       return
     }
@@ -386,39 +386,23 @@ export function ArchivedRestoreSettingsArea(props: {
       } else {
         await props.actions.onDeleteArchivedConversations(conversationIds)
       }
-      setSelectedConversationIds(new Set())
+      setSelectedConversationIds((current) => new Set(Array.from(current).filter((id) => !conversationIds.includes(id))))
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error))
     } finally {
       operationRunningRef.current = false
       setOperation("idle")
     }
-  }, [props.actions, selectedConversationIds])
+  }, [props.actions])
 
   return (
-    <section className="panel full-height settings-detail-panel">
-      <PanelTitle icon={<Archive size={17} />} title={text("归档恢复", "Archived restore")} />
-      <div className="settings-summary-strip">
-        <Badge variant="secondary">{archivedConversations.length}</Badge>
-        <span>{text("恢复归档会话后，可在原项目中继续对话。", "Restore archived conversations to continue them in their original projects.")}</span>
-      </div>
-      <div className="settings-card-actions">
-        <div className="inline-flex items-center gap-2 whitespace-nowrap">
-          <label className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
-            <Checkbox
-              aria-label={text("全选归档会话", "Select all archived conversations")}
-              checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
-              disabled={archivedConversations.length === 0 || operation !== "idle"}
-              onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
-            />
-            <span>{text("全选", "Select all")}</span>
-          </label>
-          <span className="settings-muted-line">{text(`已选择 ${selectedCount} 项`, `${selectedCount} selected`)}</span>
-        </div>
+    <section className="settings-preferences-page settings-detail-panel settings-archive-page">
+      <div className="settings-archive-toolbar">
+        <span className="settings-muted-line">{text(`已选择 ${selectedCount} 项`, `${selectedCount} selected`)}</span>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             disabled={selectedCount === 0 || operation !== "idle"}
-            onClick={() => void runArchivedConversationAction("restore")}
+            onClick={() => void runArchivedConversationAction("restore", Array.from(selectedConversationIds))}
             type="button"
           >
             <RotateCcw size={14} />
@@ -427,54 +411,69 @@ export function ArchivedRestoreSettingsArea(props: {
           <Button
             variant="destructive"
             disabled={selectedCount === 0 || operation !== "idle"}
-            onClick={() => setDeleteConfirmationOpen(true)}
+            onClick={() => setDeleteTargetIds(Array.from(selectedConversationIds))}
             type="button"
           >
             <Trash2 size={14} />
-            <span>{operation === "deleting" ? text("删除中", "Deleting") : text("彻底删除", "Delete permanently")}</span>
+            <span>{operation === "deleting" ? text("删除中", "Deleting") : text("批量删除", "Delete selected")}</span>
           </Button>
         </div>
       </div>
       {actionError ? <div className="settings-validation-error" role="alert"><p>{text("操作失败，选择已保留，请重试。", "The operation failed. Your selection is preserved; please retry.")}</p><details><summary>{text("查看详情", "View details")}</summary><pre>{actionError}</pre></details></div> : null}
-      <AlertDialog onOpenChange={setDeleteConfirmationOpen} open={deleteConfirmationOpen}>
+      <AlertDialog onOpenChange={(open) => { if (!open) setDeleteTargetIds([]) }} open={deleteTargetIds.length > 0}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{text("彻底删除归档会话", "Permanently delete archived conversations")}</AlertDialogTitle>
             <AlertDialogDescription>
               {text(
-                `确定彻底删除已选择的 ${selectedCount} 个归档会话吗？删除后无法恢复。`,
-                `Permanently delete ${selectedCount} selected archived conversations? This cannot be undone.`,
+                `确定彻底删除已选择的 ${deleteTargetIds.length} 个归档会话吗？删除后无法恢复。`,
+                `Permanently delete ${deleteTargetIds.length} archived conversations? This cannot be undone.`,
               )}
             </AlertDialogDescription>
+            <ul className="max-h-40 overflow-auto text-sm">{deleteTargetIds.map((id) => <li key={id}>{archivedConversations.find((conversation) => conversation.id === id)?.title}</li>)}</ul>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{text("取消", "Cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void runArchivedConversationAction("delete")} variant="destructive">
+            <AlertDialogAction disabled={operation !== "idle" || deleteTargetIds.length === 0} onClick={() => void runArchivedConversationAction("delete", deleteTargetIds)} variant="destructive">
               {text("彻底删除", "Delete permanently")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <div className="settings-target-list">
-        {archivedConversations.length === 0 ? (
-          <p className="settings-muted-line">{text("暂无归档会话。", "No archived conversations.")}</p>
-        ) : visibleConversations.map((conversation) => (
-          <article className="settings-target-row" key={conversation.id}>
-            <div className="settings-target-row-main">
-              <Checkbox
-                aria-label={text(`选择会话 ${conversation.title}`, `Select conversation ${conversation.title}`)}
-                checked={selectedConversationIds.has(conversation.id)}
-                disabled={operation !== "idle"}
-                onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)}
-              />
-              <div>
-              <strong>{conversation.title}</strong>
-              <span title={conversation.projectId ?? undefined}>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? text("原项目不可用", "Original project unavailable") : text("独立会话", "Standalone conversation")}{conversation.lastUpdatedLabel ? ` · ${conversation.lastUpdatedLabel}` : ""}</span>
-              </div>
-            </div>
-            <Badge variant="secondary">{text("已归档", "Archived")}</Badge>
-          </article>
-        ))}
+      <div className="settings-archive-table-scroll">
+        <table className="settings-archive-table">
+          <caption className="sr-only">{text("归档会话", "Archived conversations")}</caption>
+          <thead><tr>
+            <th className="settings-archive-selection"><label className="inline-flex items-center gap-2 whitespace-nowrap">
+            <Checkbox
+              aria-label={text("全选归档会话", "Select all archived conversations")}
+              checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
+              disabled={archivedConversations.length === 0 || operation !== "idle"}
+              onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
+            />
+              <span>{text("全选", "Select all")}</span></label></th>
+            <th>{text("会话名称", "Conversation")}</th>
+            <th>{text("所属项目", "Project")}</th>
+            <th>{text("最近更新", "Last updated")}</th>
+            <th className="settings-archive-actions">{text("操作", "Actions")}</th>
+          </tr></thead>
+          <tbody>{archivedConversations.length === 0 ? <tr><td colSpan={5} className="settings-archive-empty">{text("暂无归档会话。", "No archived conversations.")}</td></tr>
+            : visibleConversations.map((conversation) => <tr key={conversation.id} data-selected={selectedConversationIds.has(conversation.id)}>
+              <td><Checkbox aria-label={text(`选择会话 ${conversation.title}`, `Select conversation ${conversation.title}`)}
+                checked={selectedConversationIds.has(conversation.id)} disabled={operation !== "idle"}
+                onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} /></td>
+              <td className="settings-archive-title">{conversation.title}</td>
+              <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? text("原项目不可用", "Original project unavailable") : text("独立会话", "Standalone conversation")}</td>
+              <td className="whitespace-nowrap text-muted-foreground">{conversation.lastUpdatedLabel}</td>
+              <td><div className="flex justify-end gap-2">
+                <Button size="sm" variant="outline" aria-label={text(`恢复会话 ${conversation.title}`, `Restore conversation ${conversation.title}`)} disabled={operation !== "idle"}
+                  onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{text("恢复", "Restore")}</Button>
+                <Button size="sm" variant="ghost" className="text-destructive" aria-label={text(`删除会话 ${conversation.title}`, `Delete conversation ${conversation.title}`)} disabled={operation !== "idle"}
+                  onClick={() => setDeleteTargetIds([conversation.id])}><Trash2 size={14} />{text("删除", "Delete")}</Button>
+              </div></td>
+            </tr>)}
+          </tbody>
+        </table>
       </div>
       {archivedConversations.length > 0 ? (
         <div className="settings-pagination">

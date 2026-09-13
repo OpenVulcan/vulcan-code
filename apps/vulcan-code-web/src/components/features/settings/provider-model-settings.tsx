@@ -1,3 +1,4 @@
+import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import {
   Search,
@@ -227,9 +228,7 @@ export function ModelListSettingsArea() {
     !groupedProviders.some((group) => group.provider.id === record.providerId && group.models.has(record.modelId))
   )) ?? []
   return (
-    <div className="model-list-layout">
-      <div className="settings-local-directory-grid">
-        <nav className="settings-local-directory-nav" aria-label={t("settings.models.provider")}>
+    <WorkspaceDirectoryLayout contentClassName="model-list-layout model-list-surface" navigation={<WorkspaceDirectoryMenu ariaLabel={t("settings.models.provider")} heading={t("settings.models.provider")}>
           {groupedProviders.map((group) => (
             <button
               className={`workspace-tool-panel-menu-row ${selectedGroup?.provider.id === group.provider.id ? "active" : ""}`}
@@ -247,22 +246,7 @@ export function ModelListSettingsArea() {
               <small>{group.models.size}</small>
             </button>
           ))}
-        </nav>
-      <div className="settings-direct-content model-list-surface">
-        <div className="settings-local-directory-mobile">
-          <Combobox
-            ariaLabel={t("settings.models.provider")}
-            placeholder={t("settings.models.noProviderSelected")}
-            searchPlaceholder={t("settings.modelExperience.searchPlaceholder")}
-            emptyText={t("settings.modelExperience.noProviders")}
-            value={selectedGroup?.provider.id ?? ""}
-            onValueChange={setSelectedProviderId}
-            options={groupedProviders.map((group) => ({
-              value: group.provider.id,
-              label: `${localizedProviderName(group.provider.id, group.provider.display_name, t)} · ${group.models.size}`,
-            }))}
-          />
-        </div>
+        </WorkspaceDirectoryMenu>}>
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
         {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
           <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
@@ -615,9 +599,7 @@ export function ModelListSettingsArea() {
           : null}
         providerId={selectedGroup?.provider.id ?? null}
       />
-      </div>
-      </div>
-    </div>
+    </WorkspaceDirectoryLayout>
   )
 }
 

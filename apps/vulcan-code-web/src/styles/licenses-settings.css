@@ -1,6 +1,10 @@
 /* License browsing owns a fixed local directory and one lazily loaded original body. */
 /* 许可证浏览使用固定局部目录，且一次仅懒加载一份原始正文。 */
 .settings-license-panel { container-type: inline-size; gap: 0; font-family: var(--font-sans); font-size: 13px; line-height: 1.6; }
+/* Allocate the remaining page height to browsing, keeping the summary and search stationary. */
+/* 将页面剩余高度分配给浏览区，摘要和搜索保持固定。 */
+.settings-preferences-page.settings-license-panel { height: 100%; min-height: 0; overflow: hidden; }
+.settings-license-panel > :not(.settings-license-browser) { flex-shrink: 0; }
 .settings-license-panel > .settings-hint { margin: 6px 0 0; color: var(--muted-foreground); font-size: 12px; }
 .settings-license-summary > strong { font-size: 14px; font-weight: 600; }
 .settings-license-summary,
@@ -12,8 +16,8 @@
 .settings-license-toolbar > input { flex: 1 1 16rem; min-width: 0; }
 .settings-license-summary > span,
 .settings-license-group-heading > span { color: var(--muted-foreground); font-size: 12px; }
-.settings-license-browser { display: grid; grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
-.settings-license-directory { display: grid; gap: 0.3rem; min-width: 0; padding-right: 0.75rem; border-right: 1px solid var(--border); }
+.settings-license-browser { display: grid; flex: 1 1 0; min-height: 0; grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr); gap: 1rem; align-items: stretch; }
+.settings-license-directory { display: grid; align-content: start; gap: 0.3rem; min-width: 0; min-height: 0; overflow: auto; padding-right: 0.75rem; border-right: 1px solid var(--border); }
 .settings-license-directory > button { justify-content: space-between; width: 100%; min-width: 0; height: 36px; gap: 10px; white-space: nowrap; text-align: left; font-size: 13px; font-weight: 500; }
 /* Scroll only the overflowing name on hover or keyboard focus, keeping counts stationary. */
 /* 悬停或键盘聚焦时仅滚动超长名称，数量保持固定。 */
@@ -28,14 +32,17 @@
   .settings-license-directory > button:is(:hover, :focus-visible) .settings-license-name > span { animation: none; }
 }
 .settings-license-directory > button > span:last-child { flex-shrink: 0; }
-.settings-license-content { min-width: 0; }
+.settings-license-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.settings-license-content > :not(.settings-license-table-scroll) { flex-shrink: 0; }
 .settings-license-mobile-directory { display: none; }
 .settings-license-mobile-directory [data-slot="select-value"] { display: block; -webkit-line-clamp: unset; white-space: normal; overflow-wrap: anywhere; }
 .settings-license-type-options { max-width: calc(100vw - 1rem); }
 .settings-license-type-options [data-slot="select-item"] { white-space: normal; overflow-wrap: anywhere; }
 .settings-license-group-heading h3,
 .settings-license-body-heading h3 { font-size: 14px; font-weight: 600; margin: 0; }
-.settings-license-table-scroll { overflow: auto; max-height: min(44rem, 64dvh); margin-block: 0.75rem; }
+/* Scroll the dependency rows within available space instead of imposing a viewport-height cap. */
+/* 依赖行在可用空间内滚动，不再限制为视口高度的固定比例。 */
+.settings-license-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; margin-top: 0.75rem; }
 .settings-license-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
 .settings-license-table th,
 .settings-license-table td { border-bottom: 1px solid var(--border); padding: 10px 8px; vertical-align: middle; }
@@ -53,7 +60,6 @@
 .settings-license-error { border: 1px solid var(--destructive); border-radius: var(--radius); padding: 0.85rem; overflow-wrap: anywhere; }
 @container (max-width: 760px) {
   .settings-license-browser { grid-template-columns: minmax(0, 1fr); }
-  .settings-license-table-scroll { max-height: 60dvh; }
   .settings-license-directory { display: none; }
   .settings-license-mobile-directory { display: block; margin-bottom: 0.85rem; }
   .settings-license-mobile-directory > button { width: 100%; height: auto; min-height: 2.5rem; white-space: normal; }

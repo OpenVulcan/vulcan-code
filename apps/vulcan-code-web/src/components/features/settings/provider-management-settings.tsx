@@ -1,3 +1,4 @@
+import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import {
   CircleAlert,
@@ -332,26 +333,7 @@ export function ProviderManagementArea() {
     : []
 
   return (
-    <div className="settings-direct-content provider-management-surface space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold">{t("settings.providers.managementTitle")}</h2>
-        <p className="text-sm text-muted-foreground">
-          {t("settings.providers.managementDescription")}
-        </p>
-      </div>
-
-      {error ? (
-        <div className="rounded-xl border border-destructive/40 p-4 text-sm text-destructive">
-          {error}
-          {!snapshot ? <Button className="mt-2" onClick={() => void refresh()} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : null}
-        </div>
-      ) : null}
-
-      <div className="settings-local-directory-grid">
-          <nav
-            className="settings-local-directory-nav"
-            aria-label={t("settings.providers.managementTitle")}
-          >
+    <WorkspaceDirectoryLayout contentClassName="provider-management-surface space-y-6" navigation={<WorkspaceDirectoryMenu ariaLabel={t("settings.providers.managementTitle")} heading={t("settings.providers.managementTitle")}>
             {([
               ["system", t("settings.providers.system"), systemProviders.length],
               ["functional", t("settings.providers.functional"), functionalProviders.length],
@@ -365,22 +347,18 @@ export function ProviderManagementArea() {
                 onClick={() => setCategory(value)}
                 type="button"
               >
-                <span>{label}</span>{count !== null ? <small>{count}</small> : null}
+                <span className="settings-directory-label">{label}</span>{count !== null ? <small>{count}</small> : null}
               </button>
             ))}
-          </nav>
-      <div className="provider-management-categories">
-        <div className="settings-local-directory-mobile">
-          <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger aria-label={t("settings.providers.managementTitle")}><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">{t("settings.providers.system")}</SelectItem>
-              <SelectItem value="functional">{t("settings.providers.functional")}</SelectItem>
-              <SelectItem value="custom">{t("settings.providers.custom")}</SelectItem>
-              <SelectItem value="catalog">{t("settings.providers.catalog")}</SelectItem>
-            </SelectContent>
-          </Select>
+          </WorkspaceDirectoryMenu>}>
+      {error ? (
+        <div className="rounded-xl border border-destructive/40 p-4 text-sm text-destructive">
+          {error}
+          {!snapshot ? <Button className="mt-2" onClick={() => void refresh()} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : null}
         </div>
+      ) : null}
+
+      <div className="provider-management-categories">
         <section hidden={category !== "system"}>
           <SystemProviderTable
             busyProviderId={busyProviderId}
@@ -460,7 +438,6 @@ export function ProviderManagementArea() {
           />
         </section>
         {category === "catalog" ? <ProviderManifestStatusPanel /> : null}
-      </div>
       </div>
 
       <CustomProviderDialog
@@ -562,7 +539,7 @@ export function ProviderManagementArea() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </WorkspaceDirectoryLayout>
   )
 }
 
