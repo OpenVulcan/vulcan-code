@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
+import { Button } from "@/components/ui/button";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
 import { useTerminalDisplayConnectionState } from "@/components/terminal/use-terminal-display-connection-epoch";
 import {
@@ -203,10 +205,29 @@ export interface ProjectFloatingTerminalLayerProps {
 
 // ProjectFloatingTerminalLayer renders project-owned terminal controls independently of conversation selection.
 // ProjectFloatingTerminalLayer 独立于会话选择渲染项目持有的终端控制功能。
+// Parameters: props supplies project identity and floating-window controls; returns project-owned terminal management without transferring conversation ownership.
+// 参数：props 提供项目身份与浮动窗口控制；返回不转移会话归属的项目终端管理界面。
 export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayerProps) {
+  const { t } = useI18n();
   // projectId is the explicit workbench-owned project identity and never derives from conversation state.
   // projectId 是工作台明确持有的项目标识，绝不从对话状态推导。
   const projectId = props.project?.id ?? null;
+  // visibleProjectId prevents delayed creation from claiming another project's keyboard focus.
+  // visibleProjectId 防止延迟完成的创建操作抢占另一项目的键盘焦点。
+  const visibleProjectId = React.useRef(projectId);
+  React.useLayoutEffect(() => {
+    visibleProjectId.current = projectId;
+    return () => { visibleProjectId.current = null; };
+  }, [projectId]);
+  // catalogRevision invalidates reads started before an explicit lifecycle mutation.
+  // catalogRevision 使明确生命周期变更之前发起的目录读取失效。
+  const catalogRevision = React.useRef(new Map<string, number>());
+  // catalogReload provides an explicit retry without creating or stopping any terminal.
+  // catalogReload 提供不创建或停止任何终端的明确重试入口。
+  const [catalogReload, setCatalogReload] = React.useState(0);
+  // catalogLoading separates failed initial reads from active loading.
+  // catalogLoading 将首次读取失败与实际加载中区分开。
+  const [catalogLoading, setCatalogLoading] = React.useState(false);
   // projectStates retains independent UI state while users switch between projects.
   // projectStates 在用户切换项目时保留相互独立的界面状态。
   const projectStates = React.useRef(projectTerminalUiStateCache);
@@ -253,7 +274,8 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
     updater: (current: ProjectTerminalUiState) => ProjectTerminalUiState,
   ) => {
     if (!projectId) return;
-    const current = getOrCreateProjectTerminalUiState(projectStates.current, projectId);
+    const current = projectStates.current.get(projectId);
+    if (!current) return;
     projectStates.current.set(projectId, updater(current));
     setStateRevision((revision) => revision + 1);
   }, [projectId]);
@@ -300,8 +322,19 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   // setBusyAction serializes lifecycle mutations for the captured project.
   // setBusyAction 串行化所捕获项目的生命周期变更。
   const setBusyAction = React.useCallback((action: React.SetStateAction<string | null>) => {
+    if (projectId && action === null) {
+      catalogRevision.current.set(projectId, (catalogRevision.current.get(projectId) ?? 0) + 1);
+    }
     updateActiveState((current) => ({ ...current, busyAction: resolveStateAction(action, current.busyAction) }));
-  }, [updateActiveState]);
+  }, [projectId, updateActiveState]);
+  // beginLifecycleAction synchronously locks the captured project before React can rerender.
+  // beginLifecycleAction 在 React 重新渲染前同步锁定所捕获的项目。
+  const beginLifecycleAction = React.useCallback((action: string): boolean => {
+    if (!projectId || !projectStates.current.has(projectId) || projectStates.current.get(projectId)?.busyAction) return false;
+    catalogRevision.current.set(projectId, (catalogRevision.current.get(projectId) ?? 0) + 1);
+    setBusyAction(action);
+    return true;
+  }, [projectId, setBusyAction]);
   // setError publishes an explicit failure only to the captured project UI.
   // setError 仅向所捕获项目的界面发布明确故障。
   const setError = React.useCallback((action: React.SetStateAction<string | null>) => {
@@ -336,20 +369,31 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   React.useEffect(() => {
     if (!expanded || !projectId) return;
     const attachedProjectId = projectId;
+    const readRevision = catalogRevision.current.get(attachedProjectId) ?? 0;
     let cancelled = false;
+    setCatalogLoading(true);
+    setError(null);
+    // Parameters: none; reads the mounted project captured by this effect. Returns after the read settles and publishes only if its project/version still owns the view.
+    // 参数：无，读取此 effect 捕获的已挂载项目。在读取结束后返回，仅当项目及版本仍拥有视图时发布结果。
     const loadCatalog = async () => {
       try {
         const nextCatalog = await listProjectTerminals(attachedProjectId);
-        if (!cancelled && nextCatalog) applyCatalog(nextCatalog, setCatalog, setSelectedTerminalId, setSelectedShellId);
+        if (!cancelled && (catalogRevision.current.get(attachedProjectId) ?? 0) === readRevision && nextCatalog) {
+          applyCatalog(nextCatalog, setCatalog, setSelectedTerminalId, setSelectedShellId);
+        }
       } catch (loadError) {
-        if (!cancelled) setError(terminalErrorMessage(loadError));
+        if (!cancelled && (catalogRevision.current.get(attachedProjectId) ?? 0) === readRevision) {
+          setError(terminalErrorMessage(loadError));
+        }
+      } finally {
+        if (!cancelled) setCatalogLoading(false);
       }
     };
     void loadCatalog();
     return () => {
       cancelled = true;
     };
-  }, [expanded, projectId, setCatalog, setError, setSelectedShellId, setSelectedTerminalId]);
+  }, [catalogReload, expanded, projectId, setCatalog, setError, setSelectedShellId, setSelectedTerminalId]);
 
   if (!props.project) return null;
   const project = props.project;
@@ -365,7 +409,9 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   // Returns nothing after updating this project's UI state.
   // 更新当前项目的界面状态后无返回值。
   const handleSelectTerminal = (terminalId: string): void => {
-    setWorkspaceInputOwner({ kind: "project_terminal", terminalId });
+    if (visibleProjectId.current === project.id && projectStates.current.get(project.id)?.expanded) {
+      setWorkspaceInputOwner({ kind: "project_terminal", terminalId });
+    }
     updateActiveState((current) => ({
       ...current,
       selectedTerminalId: terminalId,
@@ -374,12 +420,30 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
       renameDraft: "",
     }));
   };
+  // handleTerminalTabKeyDown applies vertical-tab keyboard navigation to enabled terminal choices.
+  // handleTerminalTabKeyDown 为可用终端选项提供垂直标签键盘导航。
+  // Parameters: event is a terminal-tab key event; moves focus and selection among enabled tabs and returns no value.
+  // 参数：event 是终端页签键盘事件；在可用页签间移动焦点和选择，不返回值。
+  const handleTerminalTabKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]:not(:disabled)'));
+    const index = tabs.indexOf(event.target as HTMLButtonElement);
+    if (index < 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+      : (index + (event.key === "ArrowDown" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[nextIndex].focus();
+    tabs[nextIndex].click();
+  };
 
   // handleCreateTerminal creates one isolated host using the explicitly selected shell.
   // handleCreateTerminal 使用明确选择的 Shell 创建一个隔离宿主。
+  // Parameters: none; uses the exact selected shell and current project. Returns after guarded host creation, granting focus only to the still-visible owner.
+  // 参数：无，使用精确选中 Shell 与当前项目。在受保护宿主创建后返回，仅向仍可见归属授予焦点。
   const handleCreateTerminal = async () => {
-    if (!catalog || !selectedShellId || busyAction) return;
-    setBusyAction("create");
+    if (!catalog || !selectedShellId || !catalog.shells.some((shell) => shell.id === selectedShellId)
+      || !beginLifecycleAction("create")) return;
     setError(null);
     try {
       const nextCatalog = await createProjectTerminal({
@@ -403,25 +467,27 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
 
   // handleStopTerminal stops the selected child while retaining its output tab.
   // handleStopTerminal 停止选中的子进程，同时保留其输出标签页。
+  // Parameters: terminal is the exact selected summary; returns a promise after stopping that child, retaining its tab and exposing failure.
+  // 参数：terminal 是精确选中摘要；返回停止该子进程后的 Promise，保留标签并暴露失败。
   const handleStopTerminal = async (terminal: ProjectTerminalSummary) => {
-    if (terminal.status !== "running" || busyAction) return;
-    setBusyAction("stop");
+    if (terminal.status !== "running" || !beginLifecycleAction("stop")) return;
     setError(null);
     try {
       await stopProjectTerminal(project.id, terminal.id);
+      setTerminalConfirmation((current) => current?.projectId === project.id ? null : current);
     } catch (stopError) {
       setError(terminalErrorMessage(stopError));
     } finally {
-      setTerminalConfirmation(null);
       setBusyAction(null);
     }
   };
 
   // handleCloseTerminal removes the selected tab after stopping its isolated host.
   // handleCloseTerminal 在停止隔离宿主后移除选中的标签页。
+  // Parameters: terminal identifies the exact host/tab; returns a promise after close completes, retaining confirmation on failure.
+  // 参数：terminal 标识精确宿主和标签；返回关闭完成后的 Promise，失败时保留确认。
   const handleCloseTerminal = async (terminal: ProjectTerminalSummary) => {
-    if (busyAction) return;
-    setBusyAction("close");
+    if (!beginLifecycleAction("close")) return;
     setError(null);
     try {
       const nextCatalog = await closeProjectTerminal(project.id, terminal.id);
@@ -429,25 +495,27 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
         releaseProjectTerminalInputOwner(terminal.id);
         clearProjectTerminalInputBuffer(project.id, terminal.id);
         applyCatalog(nextCatalog, setCatalog, setSelectedTerminalId, setSelectedShellId);
+        setTerminalConfirmation((current) => current?.projectId === project.id ? null : current);
       }
     } catch (closeError) {
       setError(terminalErrorMessage(closeError));
     } finally {
-      setTerminalConfirmation(null);
       setBusyAction(null);
     }
   };
 
   // handleRenameTerminal persists one validated name without restarting the terminal process.
   // handleRenameTerminal 持久化一个已验证名称，而不重启终端进程。
+  // Parameters: none; uses the selected terminal and raw name draft. Returns after validation and guarded rename, preserving the draft on failure.
+  // 参数：无，使用选中终端及原始名称草稿。在校验和受保护重命名后返回，失败时保留草稿。
   const handleRenameTerminal = async () => {
     if (!selectedTerminal || renamingTerminalId !== selectedTerminal.id || busyAction) return;
     const name = renameDraft.trim();
     if (!name) {
-      setError("终端名称不能为空。");
+      setError(t("workspaceAudit.emptyName"));
       return;
     }
-    setBusyAction("rename");
+    if (!beginLifecycleAction("rename")) return;
     setError(null);
     try {
       const nextCatalog = await renameProjectTerminal(project.id, selectedTerminal.id, name);
@@ -462,6 +530,8 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
 
   // header renders terminal identity plus window commands owned by the generic floating container.
   // header 渲染终端标识及通用浮动容器持有的窗口命令。
+  // Parameters: floatingControls exposes window commands owned by the floating layer; returns terminal identity and window-action React content.
+  // 参数：floatingControls 暴露浮动层持有的窗口命令；返回终端身份与窗口操作的 React 内容。
   const header = (floatingControls: ProjectFloatingLayerControls) => (
     <div className="project-terminal-header" data-workspace-input-preserve-owner="true">
       <span
@@ -470,31 +540,31 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
       >
         <TerminalSquare size={15} />
         <span className="project-terminal-current-title-copy">
-          <strong>{selectedTerminal?.name ?? "项目终端"}</strong>
+          <strong>{selectedTerminal?.name ?? t("workspaceAudit.terminal")}</strong>
           <small>{project.name}</small>
         </span>
       </span>
       <div className="project-terminal-header-actions">
         <button
-          aria-label={sidebarCollapsed ? "展开项目终端列表" : "折叠项目终端列表"}
+          aria-label={t(sidebarCollapsed ? "workspaceAudit.expandList" : "workspaceAudit.collapseList")}
           onClick={() => setSidebarCollapsed((current) => !current)}
-          title={sidebarCollapsed ? "展开终端列表" : "折叠终端列表"}
+          title={t(sidebarCollapsed ? "workspaceAudit.expandList" : "workspaceAudit.collapseList")}
           type="button"
         >
           {sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
         </button>
         <button
-          aria-label={floatingControls.maximized ? "还原项目终端窗口" : "最大化项目终端窗口"}
+          aria-label={t(floatingControls.maximized ? "workspaceAudit.restore" : "workspaceAudit.maximize")}
           onClick={floatingControls.toggleMaximized}
-          title={floatingControls.maximized ? "还原" : "最大化"}
+          title={t(floatingControls.maximized ? "workspaceAudit.restore" : "workspaceAudit.maximize")}
           type="button"
         >
           {floatingControls.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
         <button
-          aria-label="收起项目终端"
+          aria-label={t("workspaceAudit.minimize")}
           onClick={minimizeProjectTerminal}
-          title="收起"
+          title={t("workspaceAudit.minimize")}
           type="button"
         >
           <Minus size={14} />
@@ -517,9 +587,18 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
         projectId={project.id}
       >
         <div className="project-terminal-body" data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}>
-          {error ? <div className="project-terminal-error" role="alert">{error}</div> : null}
+          {error ? <div className="project-terminal-error" role="alert">{error}
+            {catalog ? <Button disabled={catalogLoading || busyAction !== null} size="sm" variant="outline"
+              onClick={() => setCatalogReload((current) => current + 1)}>{t("workspaceAudit.retry")}</Button> : null}
+          </div> : null}
           {!catalog ? (
-            <div className="project-terminal-placeholder">正在加载项目终端…</div>
+            <div className="project-terminal-placeholder" role="status">
+              {catalogLoading ? t("workspaceAudit.terminalLoading") : (
+                <Button size="sm" variant="outline" onClick={() => setCatalogReload((current) => current + 1)}>
+                  {t("workspaceAudit.retry")}
+                </Button>
+              )}
+            </div>
           ) : (
             <>
               <aside
@@ -529,20 +608,24 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
               >
                 {sidebarCollapsed ? (
                   <div
-                    aria-label="项目终端编号列表"
+                    aria-label={t("workspaceAudit.numberedList")}
                     aria-orientation="vertical"
                     className="project-terminal-compact-session-list"
                     role="tablist"
+                    onKeyDown={handleTerminalTabKeyDown}
                   >
                     {catalog.terminals.map((terminal, index) => (
                       <button
                         aria-controls={`project-terminal-panel-${terminal.id}`}
-                        aria-label={`切换到终端 ${index + 1}：${terminal.name}`}
+                        aria-label={t("workspaceAudit.switchTerminal").replace("{index}", String(index + 1)).replace("{name}", terminal.name)}
                         aria-selected={terminal.id === selectedTerminalId}
                         className="project-terminal-compact-session-button"
                         data-active={terminal.id === selectedTerminalId ? "true" : "false"}
                         data-status={terminal.status}
+                        disabled={busyAction !== null}
                         key={terminal.id}
+                        id={`project-terminal-tab-${terminal.id}`}
+                        tabIndex={terminal.id === selectedTerminalId ? 0 : -1}
                         onClick={() => handleSelectTerminal(terminal.id)}
                         role="tab"
                         title={`${index + 1} · ${terminal.name} · ${terminal.shellId}`}
@@ -561,7 +644,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                     value={selectedShellId ?? undefined}
                   >
                     <SelectTrigger
-                      aria-label="选择新终端 Shell"
+                      aria-label={t("workspaceAudit.chooseShell")}
                       className="project-terminal-select-trigger"
                       size="sm"
                     >
@@ -574,21 +657,22 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                     </SelectContent>
                   </Select>
                   <button
-                    aria-label="新建项目终端"
+                    aria-label={t("workspaceAudit.create")}
                     className="project-terminal-sidebar-add"
-                    disabled={!selectedShellId || busyAction !== null}
+                    disabled={!catalog.shells.some((shell) => shell.id === selectedShellId) || busyAction !== null}
                     onClick={() => void handleCreateTerminal()}
-                    title="新建终端"
+                    title={t("workspaceAudit.create")}
                     type="button"
                   >
                     <Plus size={14} />
                   </button>
                     </div>
                     <div
-                  aria-label="项目终端列表"
+                  aria-label={t("workspaceAudit.list")}
                   aria-orientation="vertical"
                   className="project-terminal-session-list"
                   role="tablist"
+                  onKeyDown={handleTerminalTabKeyDown}
                     >
                       {catalog.terminals.map((terminal) => (
                     <div
@@ -597,14 +681,13 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                       data-status={terminal.status}
                       key={terminal.id}
                     >
-                      <span className="sr-only" id={`project-terminal-tab-${terminal.id}`}>
-                        {terminal.name}
-                      </span>
                       {renamingTerminalId === terminal.id && selectedTerminalId === terminal.id ? (
                         <input
-                          aria-label="终端名称"
+                          aria-label={t("workspaceAudit.name")}
                           autoFocus
                           className="project-terminal-session-rename-input"
+                          disabled={busyAction !== null}
+                          id={`project-terminal-tab-${terminal.id}`}
                           maxLength={128}
                           onChange={(event) => setRenameDraft(event.target.value)}
                           onKeyDown={(event) => {
@@ -627,8 +710,11 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                           aria-controls={`project-terminal-panel-${terminal.id}`}
                           aria-selected={terminal.id === selectedTerminalId}
                           className="project-terminal-session-select"
+                          disabled={busyAction !== null}
                           onClick={() => handleSelectTerminal(terminal.id)}
                           role="tab"
+                          id={`project-terminal-tab-${terminal.id}`}
+                          tabIndex={terminal.id === selectedTerminalId ? 0 : -1}
                           title={`${terminal.name} · ${terminal.shellId}`}
                           type="button"
                         >
@@ -638,7 +724,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                       )}
                       <div className="project-terminal-session-actions">
                         <button
-                          aria-label={`${renamingTerminalId === terminal.id ? "保存" : "编辑"}${terminal.name}名称`}
+                          aria-label={t(renamingTerminalId === terminal.id ? "workspaceAudit.saveName" : "workspaceAudit.editName").replace("{name}", terminal.name)}
                           disabled={busyAction !== null}
                           onClick={() => {
                             if (renamingTerminalId === terminal.id) {
@@ -648,26 +734,26 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                             handleSelectTerminal(terminal.id);
                             beginRename(terminal);
                           }}
-                          title={renamingTerminalId === terminal.id ? "保存名称" : "编辑名称"}
+                          title={t(renamingTerminalId === terminal.id ? "workspaceAudit.saveName" : "workspaceAudit.editName").replace("{name}", terminal.name)}
                           type="button"
                         >
                           {renamingTerminalId === terminal.id ? <Check size={13} /> : <Pencil size={12} />}
                         </button>
                         <button
-                          aria-label={`停止${terminal.name}`}
+                          aria-label={t("workspaceAudit.stop").replace("{name}", terminal.name)}
                           disabled={terminal.status !== "running" || busyAction !== null}
                           onClick={() => setTerminalConfirmation({
                             projectId: project.id,
                             terminalId: terminal.id,
                             action: "stop",
                           })}
-                          title="停止终端"
+                          title={t("workspaceAudit.stopTitle")}
                           type="button"
                         >
                           <Square fill="currentColor" size={9} strokeWidth={0} />
                         </button>
                         <button
-                          aria-label={`关闭${terminal.name}`}
+                          aria-label={t("workspaceAudit.close").replace("{name}", terminal.name)}
                           disabled={busyAction !== null}
                           onClick={() => {
                             if (terminal.status === "running") {
@@ -680,7 +766,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                               void handleCloseTerminal(terminal);
                             }
                           }}
-                          title="关闭终端"
+                          title={t("workspaceAudit.closeTitle")}
                           type="button"
                         >
                           <X size={12} />
@@ -717,7 +803,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                 ) : (
                   <div className="project-terminal-empty">
                     <TerminalSquare size={24} />
-                    <span>点击左侧 + 新建项目终端</span>
+                    <span>{t("workspaceAudit.empty")}</span>
                   </div>
                 )}
               </div>
@@ -728,23 +814,25 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
       <AlertDialog
         open={confirmationTerminal !== null}
         onOpenChange={(open) => {
-          if (!open && busyAction === null) setTerminalConfirmation(null);
+          if (!open && !projectStates.current.get(project.id)?.busyAction) setTerminalConfirmation(null);
         }}
       >
         <AlertDialogContent layerClassName="z-[1000]">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {terminalConfirmation?.action === "close" ? "关闭运行中的终端？" : "停止当前终端？"}
+              {t(terminalConfirmation?.action === "close" ? "workspaceAudit.closeConfirm" : "workspaceAudit.stopConfirm")}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {terminalConfirmation?.action === "close"
-                ? `“${confirmationTerminal?.name ?? "当前终端"}”仍在运行。确认后将停止完整进程树并移除该终端。`
-                : `确认后将停止“${confirmationTerminal?.name ?? "当前终端"}”的完整进程树，但保留终端输出标签。`}
+                ? t("workspaceAudit.closeDescription").replace("{name}", confirmationTerminal?.name ?? t("workspaceAudit.terminal"))
+                : t("workspaceAudit.stopDescription").replace("{name}", confirmationTerminal?.name ?? t("workspaceAudit.terminal"))}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {error ? <p className="text-destructive break-words" role="alert">{error}</p> : null}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busyAction !== null}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={busyAction !== null}>{t("workspaceAudit.cancel")}</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               disabled={!confirmationTerminal || busyAction !== null}
               onClick={(event) => {
                 event.preventDefault();
@@ -753,7 +841,8 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                 else void handleStopTerminal(confirmationTerminal);
               }}
             >
-              {busyAction ? "处理中…" : "确认"}
+              {busyAction ? t("workspaceAudit.processing") : t(terminalConfirmation?.action === "close"
+                ? "workspaceAudit.close" : "workspaceAudit.stop").replace("{name}", confirmationTerminal?.name ?? "")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -789,6 +878,8 @@ export function pruneRemovedProjectTerminalUiState<T>(
 
 // ProjectTerminalPane owns the visible subscription and ordered xterm input for one project terminal.
 // ProjectTerminalPane 为一个项目终端持有可见订阅与有序 xterm 输入。
+// Parameters: props identifies the project terminal, display snapshot and interaction callbacks; returns one ordered terminal viewport and its live status.
+// 参数：props 标识项目终端、显示快照及交互回调；返回一个有序终端视口及其实时状态。
 function ProjectTerminalPane(props: {
   // Exact owning project identity.
   // 精确的归属项目标识。
@@ -812,6 +903,7 @@ function ProjectTerminalPane(props: {
   // 发布明确的输入、调整尺寸或订阅失败。
   onError: (message: string | null) => void;
 }) {
+  const { t } = useI18n();
   // connectionState detaches display delivery during interruption and forces a new checkpoint after recovery.
   // connectionState 在中断期间解除显示交付，并在恢复后强制获取新检查点。
   const { connectionAvailable, connectionEpoch } = useTerminalDisplayConnectionState();
@@ -1194,7 +1286,7 @@ function ProjectTerminalPane(props: {
       role="tabpanel"
     >
       <TerminalViewport
-        ariaLabel={`${props.terminal.name} 项目终端`}
+        ariaLabel={`${props.terminal.name} · ${t("workspaceAudit.terminal")}`}
         autoFocus={props.visible && props.autoFocus}
         chunks={chunks}
         focusRequestNonce={props.focusRequestNonce}
@@ -1211,11 +1303,11 @@ function ProjectTerminalPane(props: {
           || props.terminal.status !== "running"}
       />
       {props.visible && props.terminal.status === "running" && !displayAttached ? (
-        <div className="project-terminal-status" role="status">正在连接当前终端…</div>
+        <div className="project-terminal-status" role="status">{t("workspaceAudit.connecting")}</div>
       ) : null}
       {props.terminal.status !== "running" ? (
         <div className="project-terminal-status" role="status">
-          {projectTerminalStatusLabel(props.terminal)}
+          {projectTerminalStatusLabel(props.terminal, t)}
         </div>
       ) : null}
     </div>
@@ -1316,11 +1408,12 @@ function terminalErrorMessage(error: unknown): string {
 
 // projectTerminalStatusLabel returns a compact terminal lifecycle explanation.
 // projectTerminalStatusLabel 返回紧凑的终端生命周期说明。
-function projectTerminalStatusLabel(terminal: ProjectTerminalSummary): string {
-  if (terminal.failureReason) return `终端异常：${terminal.failureReason}`;
-  if (terminal.status === "completed") return `终端已退出${terminal.exitCode === null ? "" : `（退出码 ${terminal.exitCode}）`}`;
-  if (terminal.status === "stopped") return "终端已停止";
-  if (terminal.status === "failed") return "终端启动或运行失败";
+function projectTerminalStatusLabel(terminal: ProjectTerminalSummary, t: (key: TranslationKey) => string): string {
+  if (terminal.failureReason) return t("workspaceAudit.terminalFailure").replace("{error}", terminal.failureReason);
+  if (terminal.status === "completed") return terminal.exitCode == null ? t("workspaceAudit.exited")
+    : t("workspaceAudit.exitedWithCode").replace("{code}", String(terminal.exitCode));
+  if (terminal.status === "stopped") return t("workspaceAudit.stopped");
+  if (terminal.status === "failed") return t("workspaceAudit.failed");
   return terminal.status;
 }
 

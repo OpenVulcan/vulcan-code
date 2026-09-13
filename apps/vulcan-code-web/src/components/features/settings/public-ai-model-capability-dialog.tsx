@@ -43,6 +43,12 @@ import type {
 export function ContextWindowPolicyEditor(props: {
   onChange: (value: PublicAiContextWindowPolicyOverrides | undefined) => void
   value?: PublicAiContextWindowPolicyOverrides
+  // Optional source-specific inherited values; omitted outside contexts with a verified default layer.
+  // 可选的来源专属继承值；未核实默认层的场景不传入。
+  inheritanceHints?: Partial<Record<keyof PublicAiContextWindowPolicyOverrides, string>>
+  // Locks the complete editor while its owning section persists an immutable draft.
+  // 所属分区持久化不可变草稿时锁定完整编辑器。
+  disabled?: boolean
 }) {
   const { t } = useI18n()
   // updateNumber preserves the sparse shape while parsing only safe integer input.
@@ -75,7 +81,7 @@ export function ContextWindowPolicyEditor(props: {
     props.onChange(Object.keys(next).length > 0 ? next : undefined)
   }, [props])
   return (
-    <fieldset className="space-y-3 rounded-lg border p-4">
+    <fieldset disabled={props.disabled} className="space-y-3 rounded-lg border p-4">
       <legend className="px-1 text-sm font-medium">{t("settings.contextWindowPolicy.title")}</legend>
       <p className="text-xs text-muted-foreground">{t("settings.contextWindowPolicy.description")}</p>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -89,6 +95,7 @@ export function ContextWindowPolicyEditor(props: {
             type="number"
             value={props.value?.effective_context_window_percent ?? ""}
           />
+          {props.value?.effective_context_window_percent === undefined && props.inheritanceHints?.effective_context_window_percent ? <small className="text-muted-foreground">{props.inheritanceHints.effective_context_window_percent}</small> : null}
         </label>
         <label className="grid gap-1 text-sm">
           <span>{t("settings.contextWindowPolicy.autoCompactPercent")}</span>
@@ -100,6 +107,7 @@ export function ContextWindowPolicyEditor(props: {
             type="number"
             value={props.value?.auto_compact_percent ?? ""}
           />
+          {props.value?.auto_compact_percent === undefined && props.inheritanceHints?.auto_compact_percent ? <small className="text-muted-foreground">{props.inheritanceHints.auto_compact_percent}</small> : null}
         </label>
         <label className="grid gap-1 text-sm">
           <span>{t("settings.contextWindowPolicy.autoCompactTokenLimit")}</span>
@@ -110,10 +118,12 @@ export function ContextWindowPolicyEditor(props: {
             type="number"
             value={props.value?.auto_compact_token_limit ?? ""}
           />
+          {props.value?.auto_compact_token_limit === undefined && props.inheritanceHints?.auto_compact_token_limit ? <small className="text-muted-foreground">{props.inheritanceHints.auto_compact_token_limit}</small> : null}
         </label>
         <label className="grid gap-1 text-sm">
           <span>{t("settings.contextWindowPolicy.scope")}</span>
           <Select
+            disabled={props.disabled}
             onValueChange={(value) => updateScope(value === "inherit" ? "" : value)}
             value={props.value?.auto_compact_scope ?? "inherit"}
           >
@@ -126,6 +136,7 @@ export function ContextWindowPolicyEditor(props: {
               <SelectItem value="body_after_prefix">{t("settings.contextWindowPolicy.scopeBodyAfterPrefix")}</SelectItem>
             </SelectContent>
           </Select>
+          {props.value?.auto_compact_scope === undefined && props.inheritanceHints?.auto_compact_scope ? <small className="text-muted-foreground">{props.inheritanceHints.auto_compact_scope}</small> : null}
         </label>
         <label className="grid gap-1 text-sm">
           <span>{t("settings.contextWindowPolicy.fallbackBuffer")}</span>
@@ -136,6 +147,7 @@ export function ContextWindowPolicyEditor(props: {
             type="number"
             value={props.value?.fallback_buffer_tokens ?? ""}
           />
+          {props.value?.fallback_buffer_tokens === undefined && props.inheritanceHints?.fallback_buffer_tokens ? <small className="text-muted-foreground">{props.inheritanceHints.fallback_buffer_tokens}</small> : null}
         </label>
       </div>
       <Button
@@ -187,7 +199,10 @@ const REASONING_EFFORT_LABEL_KEYS = {
 // PublicAiModelCapabilityDialog displays effective values and saves only explicitly touched fields.
 // PublicAiModelCapabilityDialog 显示有效值，并且只保存用户明确触碰过的字段。
 export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
+  // A synchronous lock preserves one atomic model write and its visible draft.
+  // 同步锁保持一次原子模型写入及其可见草稿。
+  const savingRef = React.useRef(false)
   // isCustomProvider is the exact ownership boundary for editable capability declarations.
   // isCustomProvider 是可编辑能力声明的精确所有权边界。
   const isCustomProvider = props.providerId?.startsWith("custom:") ?? false
@@ -332,7 +347,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // persist saves the complete visible model layer or removes it to restore provider inheritance.
   // persist 保存完整可见模型层，或移除该层以恢复供应商继承。
   const persist = React.useCallback(async (restore: boolean) => {
-    if (!props.providerId || !props.model) {
+    if (savingRef.current || !props.providerId || !props.model) {
       return
     }
     if (!restore && (!Number.isSafeInteger(contextLimit) || contextLimit <= 0)) {
@@ -347,6 +362,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
       setError(t("settings.customModels.defaultsReasoningInvalid"))
       return
     }
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -365,6 +381,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [contextLimit, isCustomProvider, outputLimit, props, reasoningEfforts, reasoningEnabled, settingsToPersist, t])
@@ -382,31 +399,32 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   return (
     <Dialog
       onOpenChange={(open) => {
-        if (!open && saving) {
+        if (!open && savingRef.current) {
           return
         }
         props.onOpenChange(open)
       }}
       open={props.open}
     >
-      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-[680px]">
+      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
-            {props.scope === "provider" ? "供应商默认能力" : t("settings.modelCapabilities.title")}
+            {props.scope === "provider" ? (locale === "zh-CN" ? "供应商默认能力" : "Provider default capabilities") : t("settings.modelCapabilities.title")}
           </DialogTitle>
           <DialogDescription className="flex flex-wrap items-center gap-2">
             <span>
-              {props.providerDisplayName} · {props.scope === "provider" ? "全部模型" : props.model?.display_name}
+              {props.providerDisplayName} · {props.scope === "provider" ? (locale === "zh-CN" ? "全部模型" : "All models") : props.model?.display_name}
             </span>
             <Badge variant={props.overrides ? "secondary" : "outline"}>
               {props.scope === "provider"
-                ? (props.overrides ? "供应商自定义" : "继承目录")
+                ? (props.overrides ? (locale === "zh-CN" ? "供应商自定义" : "Provider override") : (locale === "zh-CN" ? "继承目录" : "Catalog inheritance"))
                 : t(props.overrides
                   ? "settings.modelCapabilities.modelSource"
                   : "settings.modelCapabilities.inheritedSource")}
             </Badge>
           </DialogDescription>
         </DialogHeader>
+        <fieldset className="min-h-0 flex-1 space-y-4 overflow-y-auto" disabled={saving}>
         <div className="grid gap-4 sm:grid-cols-2">
           <DirectModelNumberInput
             label={t("settings.modelCapabilities.contextLimit")}
@@ -420,6 +438,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
           />
         </div>
         <ContextWindowPolicyEditor
+          disabled={saving}
           onChange={(value) => { markField("context_window_policy"); setContextWindowPolicy(value) }}
           value={contextWindowPolicy}
         />
@@ -427,22 +446,23 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
           <>
             <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
             <fieldset className="space-y-2 rounded-lg border p-4">
-              <legend className="px-1 text-sm font-medium">结构化输出</legend>
+              <legend className="px-1 text-sm font-medium">{locale === "zh-CN" ? "结构化输出" : "Structured output"}</legend>
               <Select
+                disabled={saving}
                 onValueChange={(value) => {
                   markField("structured_output")
                   setStructuredOutput(value as PublicAiStructuredOutputCapability)
                 }}
                 value={structuredOutput}
               >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={locale === "zh-CN" ? "结构化输出" : "Structured output"}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="json_object">JSON Object</SelectItem>
                   <SelectItem value="json_schema">JSON Schema</SelectItem>
-                  <SelectItem value="unsupported">不支持</SelectItem>
+                  <SelectItem value="unsupported">{locale === "zh-CN" ? "不支持" : "Unsupported"}</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">未明确声明时默认使用 JSON Object。</p>
+              <p className="text-xs text-muted-foreground">{locale === "zh-CN" ? "未明确声明时默认使用 JSON Object。" : "Defaults to JSON Object when not declared."}</p>
             </fieldset>
             <fieldset className="rounded-lg border p-4">
               <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
@@ -456,6 +476,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
               <label className="flex items-center justify-between gap-3 text-sm">
                 <span>{t(reasoningEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
                 <Switch
+                  disabled={saving}
                   checked={reasoningEnabled}
                   onCheckedChange={(enabled) => {
                     markField("reasoning")
@@ -475,7 +496,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                   <label className="flex items-center gap-2 text-xs" key={effort}>
                     <Checkbox
                       checked={reasoningEfforts.includes(effort)}
-                      disabled={!reasoningEnabled || (
+                      disabled={saving || !reasoningEnabled || (
                         effort !== "none"
                         && reasoningEfforts.includes(effort)
                         && reasoningEfforts.filter((candidate) => candidate !== "none").length === 1
@@ -499,7 +520,8 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             />
           </>
         ) : null}
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+        </fieldset>
         <DialogFooter className="sm:justify-between">
           <Button disabled={saving || (!props.overrides && !dirty && !edited)} onClick={restore} type="button" variant="ghost">
             <RotateCcw className="mr-2 size-4" />
@@ -657,6 +679,7 @@ export function ReasoningProjectionEditor(props: {
   onChange: (projection: PublicAiCustomModelRequestProjection) => void
   projection: PublicAiCustomModelRequestProjection
 }) {
+  const { locale } = useI18n()
   const normalizedProjection = normalizeRequestProjection(props.projection)
   const updateMutation = React.useCallback((effort: string, mutation: PublicAiCustomRequestMutation) => {
     const currentProjection = normalizeRequestProjection(props.projection)
@@ -670,9 +693,9 @@ export function ReasoningProjectionEditor(props: {
   }, [props])
   return (
     <fieldset className="space-y-3 rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">请求投影（详细模式）</legend>
+      <legend className="px-1 text-sm font-medium">{locale === "zh-CN" ? "请求投影（详细模式）" : "Request projection (advanced)"}</legend>
       <p className="text-xs text-muted-foreground">
-        每个思考档位可配置供应商字段，例如 thinking.type=disabled 或 reasoning_effort=low。
+        {locale === "zh-CN" ? "每个思考档位可配置供应商字段，例如 thinking.type=disabled 或 reasoning_effort=low。" : "Configure provider fields per reasoning effort, such as thinking.type=disabled or reasoning_effort=low."}
       </p>
       {props.efforts.map((effort) => {
         const mutation = normalizedProjection.reasoning[effort] ?? { set: {}, delete: [] }
@@ -685,7 +708,7 @@ export function ReasoningProjectionEditor(props: {
               // 使用行索引保持输入节点稳定，避免编辑字段路径时每个字符都重建输入框并丢失焦点。
               <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" key={`${effort}:set:${index}`}>
                 <Input
-                  aria-label={`${effort} 字段名`}
+                  aria-label={`${effort} ${locale === "zh-CN" ? "字段名" : "field name"}`}
                   onChange={(event) => {
                     // Rebuild in the original row order so the stable index key remains stable during typing.
                     // 按原始行顺序重建对象，确保输入过程中稳定的索引 key 不会因字段名变化而改变。
@@ -695,16 +718,16 @@ export function ReasoningProjectionEditor(props: {
                     ]))
                     updateMutation(effort, { ...mutation, set: nextSet })
                   }}
-                  placeholder="字段名，例如 thinking.type"
+                  placeholder={locale === "zh-CN" ? "字段名，例如 thinking.type" : "Field name, e.g. thinking.type"}
                   value={path}
                 />
                 <Input
-                  aria-label={`${effort} 字段值`}
+                  aria-label={`${effort} ${locale === "zh-CN" ? "字段值" : "field value"}`}
                   onChange={(event) => updateMutation(effort, {
                     ...mutation,
                     set: { ...mutation.set, [path]: projectionValue(event.target.value) },
                   })}
-                  placeholder="值，例如 disabled"
+                  placeholder={locale === "zh-CN" ? "值，例如 disabled" : "Value, e.g. disabled"}
                   value={projectionValueText(value)}
                 />
                 <Button
@@ -717,7 +740,7 @@ export function ReasoningProjectionEditor(props: {
                   type="button"
                   variant="ghost"
                 >
-                  删除
+                  {locale === "zh-CN" ? "删除" : "Remove"}
                 </Button>
               </div>
             ))}
@@ -726,13 +749,13 @@ export function ReasoningProjectionEditor(props: {
               // 编辑删除路径时保持删除行稳定，避免输入焦点随字符变化而丢失。
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]" key={`${effort}:delete:${index}`}>
                 <Input
-                  aria-label={`${effort} 删除字段名`}
+                  aria-label={`${effort} ${locale === "zh-CN" ? "删除字段名" : "field to delete"}`}
                   onChange={(event) => {
                     const nextDelete = [...mutation.delete]
                     nextDelete[index] = event.target.value
                     updateMutation(effort, { ...mutation, delete: nextDelete })
                   }}
-                  placeholder="删除字段，例如 thinking.type"
+                  placeholder={locale === "zh-CN" ? "删除字段，例如 thinking.type" : "Field to delete, e.g. thinking.type"}
                   value={path}
                 />
                 <Button
@@ -744,7 +767,7 @@ export function ReasoningProjectionEditor(props: {
                   type="button"
                   variant="ghost"
                 >
-                  删除
+                  {locale === "zh-CN" ? "删除" : "Remove"}
                 </Button>
               </div>
             ))}
@@ -757,7 +780,7 @@ export function ReasoningProjectionEditor(props: {
               type="button"
               variant="outline"
             >
-              添加字段
+              {locale === "zh-CN" ? "添加字段" : "Add field"}
             </Button>
             <Button
               onClick={() => updateMutation(effort, {
@@ -768,7 +791,7 @@ export function ReasoningProjectionEditor(props: {
               type="button"
               variant="outline"
             >
-              添加删除字段
+              {locale === "zh-CN" ? "添加删除字段" : "Add deletion"}
             </Button>
           </div>
         )

@@ -184,13 +184,13 @@ export interface TextDocumentDialogProps {
 export function TextDocumentDialog(props: TextDocumentDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="plugin-text-document-dialog">
+      <DialogContent className="plugin-text-document-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
           {props.description ? <DialogDescription>{props.description}</DialogDescription> : null}
         </DialogHeader>
         {props.loading ? (
-          <div className="plugin-text-document-state">{props.loadingLabel ?? "Loading"}</div>
+          <div className="plugin-text-document-state" role="status">{props.loadingLabel ?? "Loading"}</div>
         ) : props.error ? (
           <div className="plugin-text-document-state error" role="alert">{props.error}</div>
         ) : (
@@ -311,10 +311,12 @@ export function MetricCard(props: MetricCardProps) {
     <section className="plugin-metric-card">
       <div className="plugin-metric-card-header">
         {Icon ? <Icon aria-hidden="true" size={14} /> : null}
-        <div className="plugin-metric-card-label">{props.label}</div>
+        <div className="plugin-metric-card-label" title={props.label}>{props.label}</div>
       </div>
-      <div className="plugin-metric-card-value">{props.value}</div>
-      <div className="plugin-metric-card-detail">{props.detail ?? "\u00a0"}</div>
+      {/* Preserve complete text when compact cards truncate it; rich nodes retain their own interactions. */}
+      {/* 紧凑卡片截断时保留完整文本提示；富内容节点维持各自交互。 */}
+      <div className="plugin-metric-card-value" title={typeof props.value === "string" || typeof props.value === "number" ? String(props.value) : undefined}>{props.value}</div>
+      <div className="plugin-metric-card-detail" title={typeof props.detail === "string" || typeof props.detail === "number" ? String(props.detail) : undefined}>{props.detail ?? "\u00a0"}</div>
     </section>
   );
 }
@@ -383,8 +385,10 @@ export function ActivityHeatmapLegend(props: ActivityHeatmapLegendProps) {
   );
 }
 
-// ActivityHeatmap renders a keyboard-focusable seven-row calendar point grid.
-// ActivityHeatmap 渲染一个支持键盘聚焦的七行日历点阵。
+// ActivityHeatmap renders short ranges by day and longer ranges as a keyboard-focusable weekly calendar.
+// ActivityHeatmap 按日显示短范围，并将较长范围显示为支持键盘聚焦的按周日历。
+// Parameters: props contains the ordered real range and localized labels. Returns: every supplied day exactly once.
+// 参数：props 包含有序真实范围与本地化名称。返回值：每个提供的日期恰好出现一次。
 export function ActivityHeatmap(props: ActivityHeatmapProps) {
   if (props.cells.length === 0) {
     return <EmptyState title={props.emptyLabel ?? "No activity"} />;
@@ -398,6 +402,12 @@ export function ActivityHeatmap(props: ActivityHeatmapProps) {
   // weekColumnCount is the complete number of rendered weekly columns.
   // weekColumnCount 是渲染出的完整周列数。
   const weekColumnCount = Math.ceil((leadingEmptyCellCount + props.cells.length) / 7);
+  // dailyLayout gives a month-or-shorter range meaningful horizontal space without reserving annual columns.
+  // dailyLayout 为不超过一个月的范围提供有意义的横向空间，不预留年度列。
+  const dailyLayout = props.cells.length <= 31;
+  // columns matches labels and data positions to the actual rendered range.
+  // columns 将标签和数据位置与实际渲染范围对齐。
+  const columns = dailyLayout ? `repeat(${props.cells.length}, minmax(18px, 1fr))` : `repeat(${weekColumnCount}, 11px)`;
   // monthLabels contains the first visible month and every subsequent month boundary.
   // monthLabels 包含首个可见月份与此后的每个月份边界。
   const monthLabels = props.cells.flatMap((cell, index) => {
@@ -405,25 +415,27 @@ export function ActivityHeatmap(props: ActivityHeatmapProps) {
       return [];
     }
     return [{
-      column: Math.floor((leadingEmptyCellCount + index) / 7) + 1,
+      column: dailyLayout ? index + 1 : Math.floor((leadingEmptyCellCount + index) / 7) + 1,
       date: cell.date,
       label: props.formatMonth ? props.formatMonth(cell.date) : cell.date.slice(0, 7),
     }];
   });
   return (
     <div className="plugin-activity-heatmap-scroll">
-      <div className="plugin-activity-heatmap-content">
+      <div className="plugin-activity-heatmap-content" data-layout={dailyLayout ? "days" : "weeks"}
+        style={dailyLayout ? { minWidth: props.cells.length * 18 + (props.cells.length - 1) * 3 } : undefined}>
         <div
           aria-hidden="true"
           className="plugin-activity-month-labels"
-          style={{ gridTemplateColumns: `repeat(${weekColumnCount}, 11px)` }}
+          style={{ gridTemplateColumns: columns }}
         >
           {monthLabels.map((month) => (
             <span key={month.date} style={{ gridColumnStart: month.column }}>{month.label}</span>
           ))}
         </div>
-        <div className="plugin-activity-heatmap" role="grid" aria-label={props.ariaLabel}>
-          {Array.from({ length: leadingEmptyCellCount }, (_, index) => (
+        <div className="plugin-activity-heatmap" role="grid" aria-label={props.ariaLabel}
+          style={dailyLayout ? { gridTemplateColumns: columns } : undefined}>
+          {Array.from({ length: dailyLayout ? 0 : leadingEmptyCellCount }, (_, index) => (
             <span aria-hidden="true" className="plugin-activity-cell placeholder" key={`placeholder-${index}`} />
           ))}
           {props.cells.map((cell) => {
@@ -447,6 +459,9 @@ export function ActivityHeatmap(props: ActivityHeatmapProps) {
             );
           })}
         </div>
+        {dailyLayout ? <div className="plugin-activity-day-labels" aria-hidden="true" style={{ gridTemplateColumns: columns }}>
+          {props.cells.map((cell) => <span key={cell.date}>{Number(cell.date.slice(-2))}</span>)}
+        </div> : null}
       </div>
     </div>
   );
@@ -653,6 +668,7 @@ export function ChartLegend(props: ChartLegendProps) {
         <button
           className="plugin-chart-legend-item"
           data-visible={item.visible !== false}
+          aria-pressed={props.onToggle ? item.visible !== false : undefined}
           key={item.id}
           type="button"
           onClick={() => props.onToggle?.(item.id)}

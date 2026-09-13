@@ -6,6 +6,7 @@
     windows_subsystem = "windows"
 )]
 
+mod desktop_notifications;
 mod desktop_shell;
 
 /// Starts the Tauri desktop application.

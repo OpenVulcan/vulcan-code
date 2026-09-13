@@ -1,6 +1,17 @@
 name: Vulcan RTK
 capability: 命令路由、Git 上下文压缩与 Token 节省统计
 messages:
+  sections.label: RTK 区域
+  sections.settings: 基础设置
+  sections.routes: 路由选择
+  sections.statistics: 使用统计
+  routes.search: 搜索路由
+  routes.noMatches: 没有匹配的路由
+  retry: 重试
+  settingsLoadFailed: 无法加载 RTK 设置
+  stats.loadFailed: 无法加载 RTK 统计
+  actionFailed: 操作未完成
+  errorDetails: 查看错误详情
   navigationLabel: RTK 设置
   title: RTK 命令路由
   hookBadge: 声明式 Hook

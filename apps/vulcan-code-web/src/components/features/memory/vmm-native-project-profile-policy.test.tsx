@@ -69,6 +69,10 @@ it("saves only the selected memory project's rules and restores inheritance expl
     expect(run).toHaveBeenCalledExactlyOnceWith("native_project_profile_policy", { projectId: 2 })
     expect(view.container.querySelector("#profile-user-stable-baseMs")).toBeNull()
     expect(view.container.textContent).toContain("个人画像始终使用全局规则")
+    // Each of the nine unit controls identifies its own level and duration field.
+    // 九个单位控件分别标识自身的等级和期限字段。
+    expect(new Set(Array.from(view.container.querySelectorAll('[role="combobox"][aria-label]')).map((entry) => entry.getAttribute("aria-label"))).size).toBe(9)
+    expect(view.container.textContent).toContain("每个单位只影响相邻数值")
     await view.edit("0")
     expect(view.button("保存项目覆盖").disabled).toBe(true)
     await view.edit("31")

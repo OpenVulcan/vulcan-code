@@ -1,4 +1,5 @@
 import React from "react";
+import { runConversationControlAction } from "./conversation-control-feedback";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -359,9 +360,13 @@ function MarkdownCodeBlock(props: {
             {wrapped ? <Text size={14} /> : <TextWrap size={14} />}
           </button>
           <button
+            aria-label={copied ? t("markdown.copied") : t("markdown.copyCode")}
             className="markdown-code-action"
             onClick={() => {
-              void copyMarkdownCode(code).then(() => setCopied(true));
+              setCopied(false);
+              void runConversationControlAction(
+                () => copyMarkdownCode(code), t("conversation.control.copyFailed"),
+              ).then((success) => setCopied(success));
             }}
             title={copied ? t("markdown.copied") : t("markdown.copyCode")}
             type="button"
@@ -475,9 +480,14 @@ async function copyMarkdownCode(code: string): Promise<void> {
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
   document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  try {
+    textarea.select();
+    // The legacy browser API reports denial as false instead of rejecting a promise.
+    // 旧浏览器接口通过 false 报告拒绝，而不是拒绝 Promise。
+    if (!document.execCommand("copy")) throw new Error("Clipboard copy was rejected.");
+  } finally {
+    textarea.remove();
+  }
 }
 
 const MARKDOWN_CODE_LANGUAGE_LABELS: Record<string, string> = {

@@ -13,6 +13,8 @@ interface StartupDownloadProgressProps {
 
 // StartupDownloadProgress renders byte progress only while one download is incomplete.
 // StartupDownloadProgress 仅在某个下载未完成时渲染字节进度。
+// Parameters: props supplies the current optional download step and accessible label; returns measured or indeterminate download progress when active.
+// 参数：props 提供当前可选下载步骤及可访问标签；活动时返回实测或不定下载进度。
 export function StartupDownloadProgress(props: StartupDownloadProgressProps) {
   // progress contains a validated active byte-transfer snapshot or null outside downloads.
   // progress 包含已校验的活动字节传输快照，非下载阶段为 null。
@@ -24,11 +26,12 @@ export function StartupDownloadProgress(props: StartupDownloadProgressProps) {
     <div className="startup-download-progress" aria-label={props.label}>
       <div className="startup-download-progress-heading">
         <span>{props.label}</span>
-        <span>{progress.kind === "determinate" ? `${formatDownloadBytes(progress.completedBytes)} / ${formatDownloadBytes(progress.totalBytes)}` : props.step?.message}</span>
+        <span title={progress.kind === "indeterminate" ? props.step?.message ?? undefined : undefined}>{progress.kind === "determinate" ? `${formatDownloadBytes(progress.completedBytes)} / ${formatDownloadBytes(progress.totalBytes)}` : props.step?.message}</span>
       </div>
       <div
         className="conversation-loading-bar startup-download-progress-bar"
         role="progressbar"
+        aria-label={props.label}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={progress.kind === "determinate" ? Math.round(progress.percent) : undefined}

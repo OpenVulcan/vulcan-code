@@ -17,7 +17,7 @@ import {
   TimeSeriesLineChart,
 } from "@/components/plugins/plugin-host-components";
 import { useI18n } from "@/i18n";
-import { loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
+import { invalidatePersistentPluginUiModules, loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
 import {
   invokePluginAction,
   loadPluginUiModule,
@@ -182,6 +182,9 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
   // error stores bounded module-load or Action diagnostics.
   // error 保存有边界的模块加载或 Action 诊断。
   const [error, setError] = React.useState("");
+  // retryRevision represents an explicit reload of the authenticated module after a failure.
+  // retryRevision 表示失败后显式重新加载已认证模块。
+  const [retryRevision, setRetryRevision] = React.useState(0);
   // openPluginExternalUrl keeps allowlist overrides behind a direct trusted-host toast action.
   // openPluginExternalUrl 将白名单绕过限制在可信宿主 Toast 的直接操作之后。
   //
@@ -261,8 +264,14 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     let cancelled = false;
     setPanel(null);
     setError("");
-    void loadPersistentPluginUiModule(props.plugin.id, props.mount.id, loadPluginUiModule)
-      .then(({ namespace: moduleNamespace, source: moduleSource }) => {
+    // Load plugin-only styles at the actual mount boundary and wait before exposing any plugin component.
+    // 在实际挂载边界加载插件专用样式，并等待完成后再展示任何插件组件。
+    // Each retry creates a fresh import request rather than retaining a rejected application-level promise.
+    // 每次重试重新发起导入请求，不保留应用层已拒绝 Promise。
+    void Promise.all([
+      loadPersistentPluginUiModule(props.plugin.id, props.mount.id, loadPluginUiModule),
+      import("@/styles/plugin-host-components.css"),
+    ]).then(([{ namespace: moduleNamespace, source: moduleSource }]) => {
         if (cancelled) {
           return;
         }
@@ -299,13 +308,22 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [locale, props.mount.id, props.plugin.id, sdk]);
+  }, [locale, props.mount.id, props.plugin.id, sdk, retryRevision]);
 
   if (error) {
-    return <div className="skill-empty-state warning">{error}</div>;
+    return <div className="space-y-2 rounded-md border border-border bg-card p-4 text-sm text-foreground" role="alert">
+      <p>{locale.startsWith("zh") ? "插件页面加载失败" : "Unable to load plugin page"}</p>
+      <Button size="sm" variant="outline" onClick={() => {
+        invalidatePersistentPluginUiModules(props.plugin.id);
+        setRetryRevision((revision) => revision + 1);
+      }}>{locale.startsWith("zh") ? "重试" : "Retry"}</Button>
+      <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary>
+        <pre className="max-w-full whitespace-pre-wrap break-words text-xs text-muted-foreground">{error}</pre>
+      </details>
+    </div>;
   }
   if (Panel === null) {
-    return <div className="skill-empty-state">{t("skills.plugins.loadingPage")}</div>;
+    return <div className="rounded-md border border-border bg-card p-4 text-sm text-muted-foreground" role="status">{t("skills.plugins.loadingPage")}</div>;
   }
   return <Panel />;
 }

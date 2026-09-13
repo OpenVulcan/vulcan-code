@@ -1,0 +1,1589 @@
+/* Feature-only rules load with exact lazy owners; shared overrides stay global. */
+/* 功能专有规则随准确懒加载归属载入；共用覆盖保留全局。 */
+.agent-skill-page-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.agent-skill-page-body:has(> .skill-warning-list) {
+  grid-template-rows: minmax(0, 96px) minmax(0, 1fr);
+}
+
+.skill-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.skill-summary-card,
+.skill-empty-card,
+.skill-card,
+.skill-warning-row {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 11px;
+}
+
+.skill-summary-card,
+.skill-empty-card,
+.skill-card,
+.skill-warning-row,
+.skill-meta-grid,
+.skill-tool-row > div {
+  display: grid;
+  gap: 6px;
+}
+
+.skill-summary-card span,
+.skill-summary-card small,
+.skill-meta-grid span,
+.skill-card small,
+.skill-empty-card span,
+.skill-warning-row span,
+.skill-tool-row span {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-catalog-toolbar-main,
+.agent-import-inline-form {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-catalog-search-input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.agent-catalog-search-input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.agent-catalog-status-select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+}
+
+.agent-catalog-notice {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-import-inline-form input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.agent-import-inline-form input:first-child {
+  flex: 1 1 260px;
+}
+
+.agent-import-inline-form.remote input:first-child {
+  flex-basis: 320px;
+}
+
+.agent-import-inline-form.remote input:nth-child(2) {
+  flex: 0 1 160px;
+}
+
+.agent-import-inline-form.package input:first-child {
+  flex: 0 1 160px;
+}
+
+.agent-import-inline-form.package input:nth-child(2) {
+  flex: 1 1 320px;
+}
+
+.agent-category-floating-menu .workspace-tool-panel-menu-list {
+  max-height: min(52vh, 420px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.agent-category-floating-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+}
+
+.agent-editor-form {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 16px;
+  overflow: hidden;
+}
+.agent-editor-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 2px 4px 2px 2px;
+  scrollbar-gutter: stable;
+}
+
+.agent-editor-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: min(820px, calc(100dvh - 32px));
+}
+
+.agent-editor-form > [data-slot="dialog-footer"] {
+  margin: 0;
+  padding: 12px 0 0;
+  border-radius: 0;
+  background: var(--popover);
+}
+
+.agent-editor-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* Fold read-only definitions so overrides remain the primary editing task. */
+/* 折叠只读定义，让用户覆盖项成为主要编辑内容。 */
+.agent-editor-definition > summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.agent-editor-definition > summary small {
+  margin-left: 12px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.agent-editor-definition[open] > summary {
+  margin-bottom: 12px;
+}
+
+.agent-editor-grid label,
+.agent-editor-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.agent-editor-grid > .wide {
+  grid-column: 1 / -1;
+}
+
+.agent-editor-grid span,
+.agent-editor-checkbox span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-editor-color-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.agent-editor-color-trigger {
+  width: 100%;
+  height: 32px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-editor-color-trigger.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-editor-color-trigger > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-editor-color-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+.agent-editor-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.agent-prompt-field textarea {
+  /* Bound document-sized prompts without truncating their editable contents. */
+  /* 限制文档级提示词的显示高度，不截断可编辑内容。 */
+  field-sizing: fixed;
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+}
+
+.agent-prompt-field.primary textarea {
+  min-height: 260px;
+}
+
+.agent-tool-policy-table {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.agent-tool-policy-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 280px) minmax(180px, 260px);
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-tool-policy-toolbar > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.agent-tool-policy-toolbar > [data-slot="segmented-control"] {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.agent-tool-policy-toolbar strong {
+  font-size: 13px;
+}
+
+.agent-tool-policy-toolbar span,
+.agent-tool-policy-main span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-tool-policy-toolbar input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.agent-tool-policy-list {
+  min-width: 0;
+  max-height: 300px;
+  display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.agent-tool-policy-row {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 150px);
+  align-items: center;
+  align-content: start;
+}
+
+.agent-tool-policy-main {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.agent-tool-policy-main > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.agent-tool-policy-main code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+/* Expand technical tool descriptions on demand without filling the policy selector. */
+/* 按需展开工具技术说明，避免占满策略选择列表。 */
+.agent-policy-description {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.agent-policy-description summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--muted-foreground);
+}
+
+.agent-tool-policy-mode {
+  align-self: center;
+}
+
+.agent-tool-policy-checkbox {
+  min-width: 0;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .agent-editor-grid,
+  .agent-tool-policy-toolbar,
+  .agent-tool-policy-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-tool-policy-mode,
+  .agent-tool-policy-checkbox {
+    width: 100%;
+  }
+
+  .agent-tool-policy-checkbox {
+    justify-content: flex-start;
+  }
+}
+
+.agent-editor-context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-editor-context span,
+.agent-editor-context strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-editor-context strong {
+  color: var(--foreground);
+}
+
+.agent-editor-checkbox {
+  align-content: end;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-toolbar input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.skill-toolbar input {
+  flex: 1 1 210px;
+}
+
+.lua-skill-install-form,
+.lua-skill-install-field {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-install-form {
+  gap: 14px;
+}
+
+.lua-skill-install-field span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-skill-install-field input {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.agent-skill-page-body > .skill-warning-list {
+  max-height: 96px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.skill-list-filter-row {
+  grid-template-columns: minmax(240px, 1fr) auto 144px;
+}
+
+.skill-list-filter-row.plugin-skill-filter-row {
+  grid-template-columns: minmax(240px, 1fr) 144px;
+}
+
+.skill-list-search-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-list-search-input input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.lua-settings-page-body {
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--background);
+}
+
+.lua-settings-toolbar h3,
+.lua-settings-section h4 {
+  margin: 0;
+}
+
+.lua-settings-toolbar h3 {
+  font-size: 16px;
+}
+
+.lua-settings-toolbar p,
+.lua-settings-section > p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lua-settings-restart-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--vcn-content-warning) 44%, var(--border));
+  border-radius: 999px;
+  background: var(--vcn-status-warning-background);
+  color: var(--vcn-content-warning);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.lua-settings-content {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 18px;
+}
+
+.lua-settings-section {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  padding: 14px;
+}
+
+.lua-settings-section h4 {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lua-settings-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lua-settings-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.lua-settings-field > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lua-settings-field small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.lua-settings-toggle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lua-settings-toggle > label {
+  cursor: pointer;
+}
+
+.lua-settings-help-trigger {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+.lua-settings-help-trigger:hover,
+.lua-settings-help-trigger:focus-visible {
+  color: var(--foreground);
+}
+
+.lua-managed-runtime-list {
+  min-width: 0;
+  display: grid;
+}
+
+.lua-managed-runtime-row {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.lua-managed-runtime-row:first-child {
+  border-top: 1px solid var(--border);
+}
+
+.lua-managed-runtime-row-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.lua-managed-runtime-row-name {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lua-managed-runtime-row-version {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-managed-runtime-row-action {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-managed-runtime-row.unavailable .lua-managed-runtime-row-action > span {
+  color: var(--destructive);
+}
+
+.lua-managed-runtime-row-progress {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.lua-managed-runtime-row-progress > span,
+.lua-managed-runtime-row-progress > small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.lua-managed-runtime-row-progress > progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--primary);
+}
+
+.lua-settings-restart-note,
+.lua-settings-feedback {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lua-settings-restart-note {
+  background: color-mix(in srgb, var(--muted) 70%, var(--card));
+  color: var(--muted-foreground);
+}
+
+.lua-settings-feedback.error {
+  border-color: color-mix(in srgb, var(--destructive) 38%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 9%, var(--card));
+  color: var(--destructive);
+}
+
+.lua-settings-feedback.success {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
+  color: var(--foreground);
+}
+
+.lua-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .lua-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lua-settings-toolbar .agent-catalog-toolbar-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.skill-card {
+  gap: 10px;
+}
+
+.agent-skill-card {
+  height: 196px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.agent-skill-card {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.subagent-definition-card {
+  height: 196px;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
+.agent-definition-row-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  padding: 0;
+}
+
+.agent-definition-row-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.agent-definition-row-color-marker {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--card);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--border);
+  pointer-events: none;
+}
+
+.agent-definition-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-definition-row-title-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-definition-title-button,
+.agent-definition-row-title-text {
+  min-width: 0;
+  max-width: min(360px, 100%);
+  color: var(--foreground);
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-definition-title-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.agent-definition-title-button:hover {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.agent-definition-row-badges {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.agent-definition-row-badges [data-slot="badge"] {
+  max-width: 160px;
+  font-size: 11px;
+}
+
+.agent-definition-row-main p,
+.agent-definition-row-path {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-definition-row-main p {
+  color: var(--foreground);
+}
+
+.vulcan-plugin-definition-row .agent-definition-row-path.warning {
+  color: var(--destructive);
+}
+
+.vulcan-plugin-component-details {
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.vulcan-plugin-component-details > summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.vulcan-plugin-component-group {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.vulcan-plugin-component-group > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.vulcan-plugin-install-panel,
+.vulcan-plugin-detail-mount {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.vulcan-plugin-install-heading,
+.vulcan-plugin-install-input-row,
+.vulcan-plugin-permission-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vulcan-plugin-install-heading > div {
+  min-width: 0;
+}
+
+.vulcan-plugin-install-heading p {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.vulcan-plugin-install-input-row input {
+  min-width: 0;
+  flex: 1;
+}
+
+.vulcan-plugin-permission-preview {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+
+.vulcan-plugin-permission-preview dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.vulcan-plugin-permission-preview dl > div {
+  display: grid;
+  grid-template-columns: minmax(92px, 130px) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.vulcan-plugin-permission-preview dt {
+  color: var(--muted-foreground);
+}
+
+.vulcan-plugin-permission-preview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.vulcan-plugin-permission-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.vulcan-plugin-permission-consent input {
+  margin-top: 2px;
+}
+
+.vulcan-plugin-permission-consent.warning {
+  color: var(--destructive);
+}
+
+.agent-catalog-issues {
+  display: grid;
+  gap: 6px;
+  margin: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--destructive) 6%, var(--background));
+  padding: 10px;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.agent-catalog-issues > div {
+  display: grid;
+  gap: 2px;
+}
+
+.agent-definition-detail-dialog {
+  width: min(94vw, 980px);
+  max-width: 980px;
+  max-height: 90vh;
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.agent-skill-editor-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.agent-definition-detail-body,
+.agent-skill-editor-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.agent-definition-prompt-preview {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.agent-skill-editor-body {
+  display: grid;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.agent-skill-editor-body fieldset {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px;
+}
+
+.agent-skill-editor-body legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-skill-form-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-skill-source-editor textarea {
+  min-height: 360px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  tab-size: 2;
+}
+
+.agent-skill-category-management-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.agent-skill-category-management-body,
+.agent-skill-category-management-list {
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.agent-skill-category-management-body {
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.agent-skill-category-management-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.agent-skill-category-management-list {
+  overflow-y: auto;
+}
+
+.agent-skill-category-management-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding: 9px 4px;
+}
+
+.agent-skill-category-management-marker {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: white;
+}
+
+.agent-skill-category-management-row > div:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-skill-category-management-row > div:nth-child(2) span,
+.agent-skill-category-management-row > span:nth-child(3) {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.agent-skill-category-management-row > div:last-child {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.agent-skill-category-management-row > div:last-child button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.agent-skill-category-management-row > div:last-child button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.agent-skill-form-span {
+  grid-column: 1 / -1;
+}
+
+.agent-skill-form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.agent-skill-form-error {
+  margin: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--destructive) 6%, var(--background));
+  color: var(--destructive);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+
+  .agent-skill-form-span {
+    grid-column: auto;
+  }
+
+}
+
+.skill-card-header {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-card-title {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-card-title-line {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-card-title-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.skill-card-header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-card-header strong span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.skill-card-badges {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.skill-card-badges [data-slot="badge"] {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.agent-source-origin-link,
+.agent-source-origin-detail-link {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.agent-source-origin-link {
+  max-width: 86px;
+  padding: 3px 7px;
+}
+
+.agent-source-origin-detail-link {
+  max-width: 100%;
+  padding: 4px 8px;
+}
+
+.agent-source-origin-link span,
+.agent-source-origin-detail-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-source-origin-link:hover,
+.agent-source-origin-detail-link:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.skill-card-title-meta [data-slot="badge"] {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.skill-card-enabled-badge {
+  background: color-mix(in srgb, hsl(142 62% 34%) 12%, transparent);
+  color: hsl(142 62% 34%);
+}
+
+.skill-card-summary {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-card-summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-card-metrics {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: start;
+  max-height: 42px;
+  overflow: hidden;
+}
+
+.skill-card-metrics span {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.lua-skill-action-menu {
+  min-width: 150px;
+}
+
+.lua-skill-action-menu [data-slot="dropdown-menu-item"] {
+  gap: 8px;
+}
+
+.skill-card p,
+.skill-tool-row p,
+.skill-body-preview {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-skill-card .skill-actions-row {
+  align-self: end;
+}
+
+.agent-skill-card > p {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.skill-tool-list,
+.skill-warning-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lua-skill-detail-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lua-skill-detail-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 10px;
+}
+
+.lua-skill-detail-grid > div.wide {
+  grid-column: 1 / -1;
+}
+
+.lua-skill-detail-grid span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-skill-detail-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.dialog-tool-list {
+  max-height: min(540px, calc(100vh - 220px));
+  min-height: 120px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.skill-tool-row {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  padding: 9px;
+}
+
+.skill-tool-row-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  align-items: start;
+  gap: 12px;
+}
+
+.skill-tool-row-header > div:first-child,
+.skill-tool-description {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-tool-control {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-sync-status {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: right;
+}
+
+.agent-skill-detail-body {
+  min-width: 0;
+  max-height: min(620px, calc(100vh - 190px));
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.skill-body-preview {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 10px;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.lua-skill-config-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 3px;
+  scrollbar-gutter: stable;
+}
+
+.lua-skill-config-summary,
+.lua-skill-config-field-heading,
+.lua-skill-config-field-footer,
+.lua-skill-config-orphaned > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lua-skill-config-summary > span {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.lua-skill-config-fields {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-config-group {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.lua-skill-config-group > h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.lua-skill-config-field {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 11px;
+}
+
+.lua-skill-config-field-heading {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.lua-skill-config-field-heading > label {
+  min-width: 0;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lua-skill-config-field-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.lua-skill-config-field > p,
+.lua-skill-config-issues p,
+.lua-skill-config-warning,
+.lua-skill-config-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lua-skill-config-field > p {
+  color: var(--muted-foreground);
+}
+
+.lua-skill-config-field-footer {
+  justify-content: space-between;
+}
+
+.lua-skill-config-field-footer > span,
+.lua-skill-config-secret-status {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.lua-skill-config-warning {
+  color: var(--vcn-content-warning);
+}
+
+.lua-skill-config-error,
+.lua-skill-config-issues {
+  color: var(--destructive);
+}
+
+.lua-skill-config-issues {
+  display: grid;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 34%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--destructive) 7%, transparent);
+  padding: 9px;
+}
+
+.lua-skill-config-advanced {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-config-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lua-skill-config-advanced[open] > summary {
+  margin-bottom: 10px;
+}
+
+.lua-skill-config-orphaned {
+  display: grid;
+  gap: 7px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.lua-skill-config-orphaned > div {
+  justify-content: space-between;
+}
+
+.lua-skill-config-orphaned code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .skill-list-filter-row,
+  .skill-list-filter-row.plugin-skill-filter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

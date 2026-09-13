@@ -4,7 +4,9 @@
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
 };
-use crate::agent_runtime::provider::resolve_public_ai_provider_blueprint;
+use crate::agent_runtime::provider::{
+    resolve_git_commit_summary_provider_blueprint, resolve_public_ai_provider_blueprint,
+};
 use crate::agent_runtime::provider_stream_projection::truncate_preview;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap_core::{
@@ -121,15 +123,37 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     // sessionId scopes the process-local immutable provider-route lease.
     // sessionId 确定进程内不可变供应商路由租约的作用域。
     let session_id = request.session_id.to_string();
-    let model_blueprint = resolve_public_ai_provider_blueprint(
-        public_ai_runtime.as_ref(),
-        session_id.as_str(),
-        request.provider_route_lease_identity.as_ref(),
-        request.reasoning_effort,
-        request.provider_id_override.as_deref(),
-        request.model_id_override.as_deref(),
-        request.connection_id_override.as_deref(),
-    )?;
+    // Git summaries are excluded from session V1 and may deliberately select another model.
+    // Git 总结不属于会话 V1，并且可以明确选择另一个模型。
+    // Preserve session ownership for accounting while keeping its route lease untouched.
+    // 保留统计中的会话归属，同时不触碰会话路由租约。
+    let model_blueprint = if request.prompt_purpose == ExecutionPromptPurpose::GitCommitSummary {
+        // summaryTarget must come from the service's validated model selection, never global defaults.
+        // summaryTarget 必须来自服务已校验的模型选择，绝不取全局默认值。
+        let (provider_id, model_id) = request
+            .provider_id_override
+            .as_deref()
+            .zip(request.model_id_override.as_deref())
+            .ok_or_else(|| {
+                String::from("Git commit summary requires an explicit provider and model target.")
+            })?;
+        resolve_git_commit_summary_provider_blueprint(
+            public_ai_runtime.as_ref(),
+            provider_id,
+            model_id,
+            request.reasoning_effort,
+        )?
+    } else {
+        resolve_public_ai_provider_blueprint(
+            public_ai_runtime.as_ref(),
+            session_id.as_str(),
+            request.provider_route_lease_identity.as_ref(),
+            request.reasoning_effort,
+            request.provider_id_override.as_deref(),
+            request.model_id_override.as_deref(),
+            request.connection_id_override.as_deref(),
+        )?
+    };
     after_precheck_trace(
         "after_precheck_25a3_provider_blueprint_ready",
         format!(

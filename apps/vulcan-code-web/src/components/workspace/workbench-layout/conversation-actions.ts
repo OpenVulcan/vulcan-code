@@ -587,6 +587,8 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
 
 // handleStopSubagentTask asks the backend to stop one running child task.
 // handleStopSubagentTask 请求后端停止单个运行中的子任务。
+// Parameters: parentConversationId owns the exact taskId. Returns after authoritative state application; rejects after failure feedback.
+// 参数：parentConversationId 持有精确 taskId。应用权威状态后返回；失败反馈后继续拒绝。
 const handleStopSubagentTask = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
   webuiClickTrace("subagent.stop.invoke", { parentConversationId, taskId });
   try {
@@ -599,6 +601,9 @@ const handleStopSubagentTask = React.useCallback(async (parentConversationId: st
     }
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    // Preserve rejection so the confirmation remains available for retry.
+    // 保留拒绝状态，让确认界面继续可供重试。
+    throw nextError;
   }
 }, []);
 

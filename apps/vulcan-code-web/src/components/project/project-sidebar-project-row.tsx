@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   SquarePen,
+  GripVertical,
 } from "lucide-react";
 
 import {
@@ -12,6 +13,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useI18n } from "@/i18n";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
@@ -78,7 +80,12 @@ export function SortableProjectRow(props: {
   // 使用共享侧栏样式渲染单个会话行。
   renderConversationRow: (conversation: ConversationSummary, compactPinned?: boolean) => React.ReactNode;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  // reorderLabel names the project and explains the independent keyboard sort interaction.
+  // reorderLabel 标明项目并说明独立的键盘排序交互。
+  const reorderLabel = locale === "zh-CN"
+    ? `调整项目 ${props.project.name} 顺序（空格开始，上下键移动，空格完成）`
+    : `Reorder project ${props.project.name} (Space to start, arrows to move, Space to finish)`;
   const sortable = useVerticalSortableItem(props.project.id);
   const folderName = projectFolderName(props.project.path);
   const showOriginalFolderName = folderName.length > 0 && folderName !== props.project.name;
@@ -128,9 +135,22 @@ export function SortableProjectRow(props: {
     >
       <div
         className={cn("project-folder-row", sortable.isDragging && "drag-source-row")}
-        {...(isSidebarCollapsed ? {} : sortable.attributes)}
-        {...(isSidebarCollapsed ? {} : sortable.listeners)}
       >
+        {!isSidebarCollapsed && (
+          <Button
+            ref={sortable.setActivatorNodeRef}
+            {...sortable.attributes}
+            {...sortable.listeners}
+            aria-label={reorderLabel}
+            title={reorderLabel}
+            className="project-reorder-handle"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+          >
+            <GripVertical aria-hidden="true" />
+          </Button>
+        )}
         {isSidebarCollapsed ? (
           <CollapsedProjectMenu
             conversations={props.conversations}

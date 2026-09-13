@@ -1,4 +1,5 @@
 import React from "react";
+import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { AskQuestionDialog } from "@/components/ask/AskQuestionDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,21 +10,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  ProjectFolderPickerDialog,
-  type ProjectFolderPickerDialogProps,
-} from "@/components/project/folder-picker-dialog";
+import type { ProjectFolderPickerDialogProps } from "@/components/project/folder-picker-dialog";
 import {
   ArchiveProjectDialog,
   RenameDialog,
   type RenameTarget,
 } from "@/components/project/project-action-dialogs";
 import type { ProjectIconDialogTarget, ProjectIconSelection } from "@/components/project/project-icon-contract";
-import {
+import type {
   ProjectSettingsDialog,
-  projectConversationCount,
-  type ProjectSettingsDialogTarget,
+  ProjectSettingsDialogTarget,
 } from "@/components/project/project-settings-dialog";
+import { projectConversationCount } from "@/components/project/project-settings-utils";
 import type {
   PendingQuestionSnapshot,
   ProjectSummary,
@@ -38,6 +36,43 @@ import type {
 // LazyProjectIconDialog prevents the complete icon catalogs from loading before the picker opens.
 // LazyProjectIconDialog 防止完整图标目录在选择器打开前加载。
 const LazyProjectIconDialog = React.lazy(() => import("@/components/project/project-icon-dialog").then((module) => ({ default: module.ProjectIconDialog })));
+// LazyProjectSettingsDialog loads project settings and its scoped styles only when the user opens it.
+// LazyProjectSettingsDialog 仅在用户打开时加载项目设置及其作用域样式。
+const LazyProjectSettingsDialog = React.lazy(() => import("@/components/project/project-settings-dialog").then((module) => ({ default: module.ProjectSettingsDialog })));
+
+/** Loads directory browsing only after opening the picker, retaining a closable recovery dialog on failure.
+ * 打开选择器后才加载目录浏览，失败时保留可以关闭及重试的弹窗。
+ * Parameters are the folder picker's unchanged callbacks and state. Returns its deferred dialog.
+ * 参数为目录选择器原有回调和状态。返回按需加载的弹窗。
+ */
+function DeferredProjectFolderPicker(props: ProjectFolderPickerDialogProps) {
+  // Locale remains available even when the picker module cannot be fetched.
+  // 即使无法获取选择器模块，仍可使用当前语言。
+  const { t, locale } = useI18n();
+  // Each explicit retry discards the rejected lazy instance.
+  // 每次明确重试都丢弃已拒绝的延迟实例。
+  const [attempt, setAttempt] = React.useState(0);
+  // Closing unmounts this owner, so reopening also starts a fresh loading attempt.
+  // 关闭后卸载当前所有者，重新打开也会重新尝试加载。
+  const LazyPicker = React.useMemo(() => React.lazy(() => import("@/components/project/folder-picker-dialog").then((module) => ({ default: module.ProjectFolderPickerDialog }))), [attempt]);
+  // recovery keeps loading and import errors inside the requested dialog, without losing workbench navigation.
+  // recovery 将加载及导入错误限制在当前弹窗内，不影响工作台导航。
+  const recovery = (error?: Error) => <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <DialogContent size="md">
+      <DialogHeader><DialogTitle>{props.title ?? t("projectFolderPicker.title")}</DialogTitle>
+        <DialogDescription>{error ? (locale === "zh-CN" ? "目录选择器加载失败" : "Unable to load the folder picker") : t("workspaceFiles.loading")}</DialogDescription>
+      </DialogHeader>
+      {error ? <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details> : null}
+      <DialogFooter>
+        <Button variant="outline" onClick={() => props.onOpenChange(false)}>{t("conversation.action.cancel")}</Button>
+        {error ? <Button onClick={() => setAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button> : null}
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
+  return <RenderErrorBoundary key={attempt} fallback={recovery}>
+    <React.Suspense fallback={recovery()}><LazyPicker {...props} /></React.Suspense>
+  </RenderErrorBoundary>;
+}
 
 // WorkbenchDialogsProps groups globally mounted workbench dialogs and their callbacks.
 // WorkbenchDialogsProps 汇总工作台全局挂载的对话框及其回调。
@@ -71,10 +106,10 @@ export interface WorkbenchDialogsProps {
   onCancelProjectIcon: () => void;
   // Confirms one project icon selection.
   // 确认一次项目图标选择。
-  onConfirmProjectIcon: (project: ProjectSummary, icon: ProjectIconSelection) => void;
+  onConfirmProjectIcon: (project: ProjectSummary, icon: ProjectIconSelection) => Promise<void>;
   // Resets one project icon override.
   // 还原一个项目图标覆盖。
-  onResetProjectIcon: (project: ProjectSummary) => void;
+  onResetProjectIcon: (project: ProjectSummary) => Promise<void>;
   // Current project settings dialog target.
   // 当前项目设置对话框目标。
   projectSettingsTarget: ProjectSettingsDialogTarget | null;
@@ -157,12 +192,12 @@ export interface WorkbenchDialogsProps {
 export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
   return (
     <>
-      <ProjectFolderPickerDialog
+      {props.projectFolderPickerOpen ? <DeferredProjectFolderPicker
         open={props.projectFolderPickerOpen}
         onBrowse={props.onBrowseProjectDirectories}
         onConfirm={props.onConfirmProjectFolder}
         onOpenChange={props.onProjectFolderPickerOpenChange}
-      />
+      /> : null}
       <RenameDialog
         target={props.renameTarget}
         onCancel={props.onCancelRename}
@@ -178,7 +213,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
           />
         </React.Suspense>
       ) : null}
-      <ProjectSettingsDialog
+      {props.projectSettingsTarget ? <React.Suspense fallback={null}><LazyProjectSettingsDialog
         target={props.projectSettingsTarget}
         settingsRevision={props.projectSettingsRevision}
         workbench={props.workbench}
@@ -190,7 +225,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
         onPreviewAttachmentCleanup={props.onPreviewAttachmentCleanup}
         onSaveVmmDraft={props.onSaveVmmDraft}
         onSetAgentSkillState={props.onSetAgentSkillState}
-      />
+      /></React.Suspense> : null}
       <ArchiveProjectDialog
         busy={props.archiveProjectSubmitting}
         conversationCount={props.archiveProjectTarget ? projectConversationCount(props.workbench, props.archiveProjectTarget.id) : 0}

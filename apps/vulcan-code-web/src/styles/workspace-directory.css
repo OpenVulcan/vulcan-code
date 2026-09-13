@@ -96,16 +96,36 @@
 .workspace-directory-catalog .skill-page-body { width: 100%; max-width: none; }
 .workspace-directory-catalog .skill-card-list { width: 100%; padding-right: 0; }
 .workspace-directory-catalog :is(.lua-skill-page-body .skill-card-list, .agent-skill-card-list) { grid-template-columns: minmax(0, 1fr); }
-.workspace-directory-catalog .agent-catalog-toolbar { padding: 0 0 14px; }
+/* Catalogs own a fixed toolbar and a scrolling list, so the directory must not add a second viewport. */
+/* 目录页自行管理固定工具栏与滚动列表，外部目录壳不再增加第二个视口。 */
+.workspace-directory-catalog:has(> :is(.agent-management-surface, .agent-skills-management-surface)) {
+  padding: 0;
+  overflow: hidden;
+}
+.workspace-directory-catalog :is(.agent-management-surface, .agent-skills-management-surface) {
+  overflow: hidden;
+}
+.workspace-directory-catalog :is(.agent-management-surface, .agent-skills-management-surface) .skill-card-list {
+  padding: 0 24px 20px;
+}
 
-/* Narrow panes keep every category reachable in a bounded menu above the independently scrolling body. */
-/* 窄面板将完整分类放入限高顶部菜单，正文独立滚动。 */
+/* Narrow panes keep categories in one horizontally scrollable row so navigation cannot consume the body. */
+/* 窄面板将分类放入单行横向滚动菜单，避免导航占据大半正文。 */
 @container directory-workspace (max-width: 720px) {
   .workspace-directory-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .workspace-directory-navigation { max-height: 156px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .workspace-directory-menu-list, .vmm-workspace-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 6px; }
+  .workspace-directory-navigation { max-height: 76px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .workspace-directory-menu-list, .vmm-workspace-nav { display: flex; flex-wrap: nowrap; gap: 6px; }
   .workspace-directory-heading, .vmm-nav-heading { display: none; }
   .vmm-nav-group { display: contents; }
-  .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) { margin: 0; }
+  .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) { width: auto; flex: 0 0 auto; margin: 0; white-space: nowrap; }
   .workspace-directory-content { padding: 16px 12px; }
+}
+
+/* Keep the agent search and short status selector on one line while a tablet-width pane still has room. */
+/* 平板宽度面板仍有空间时，将智能体搜索与短状态选择器保留在同一行。 */
+@container workspace-page (min-width: 480px) and (max-width: 720px) {
+  .agent-management-surface .agent-catalog-toolbar-heading { grid-template-columns: minmax(0, 1fr) auto; }
+  .agent-management-surface .agent-catalog-filter-row { grid-template-columns: minmax(0, 1fr) 128px; }
+  .agent-management-surface .agent-definition-row { grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; }
+  .agent-management-surface .agent-definition-row-actions { grid-column: auto; justify-content: flex-end; }
 }

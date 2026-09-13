@@ -1,4 +1,5 @@
 import React from "react";
+import { useI18n } from "@/i18n";
 
 import type { TerminalDisplayChunk } from "@/types";
 
@@ -57,9 +58,13 @@ const LazyTerminalViewportRuntime = React.lazy(() => import("./terminal-viewport
 
 // TerminalViewport loads the emulator only for a mounted visible terminal surface.
 // TerminalViewport 仅为已挂载的可见终端表面加载模拟器。
+// Parameters: props supplies the typed viewport contract; returns the lazy emulator with an accessible loading fallback.
+// 参数：props 提供类型化视口合同；返回带可访问加载占位的懒加载模拟器。
 export function TerminalViewport(props: TerminalViewportProps) {
+  const { t } = useI18n();
   return (
-    <React.Suspense fallback={<div className="terminal-viewport terminal-viewport-loading" aria-label={props.ariaLabel} />}>
+    <React.Suspense fallback={<div className="terminal-viewport terminal-viewport-loading" role="status"
+      aria-label={t("workspaceAudit.viewportLoading")} data-loading-label={t("workspaceAudit.viewportLoading")} />}>
       <LazyTerminalViewportRuntime {...props} />
     </React.Suspense>
   );

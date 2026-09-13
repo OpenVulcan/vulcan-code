@@ -102,7 +102,7 @@
 }
 
 .model-picker-scroll {
-  height: 310px;
+  max-height: 310px;
 }
 
 .model-picker-list {
@@ -237,6 +237,15 @@
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 13px;
+}
+
+/* Keep secondary provider names inside the fixed desktop row; full text remains in its title and accessible name.
+   将次要供应商名称限制在桌面固定行内；完整文本保留在标题提示与无障碍名称中。 */
+.model-picker-row-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-picker-row-id {

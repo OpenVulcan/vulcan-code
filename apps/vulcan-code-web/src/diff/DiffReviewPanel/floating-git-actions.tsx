@@ -1,4 +1,6 @@
 import { MoreHorizontal, Plus, RotateCcw, Undo2 } from "lucide-react";
+import * as React from "react";
+import { toast } from "sonner";
 
 import {
   DropdownMenu,
@@ -31,19 +33,33 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  const selectedFileDisabled = props.busy || !props.selectedFile;
-  const runAction = (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => {
-    if (props.busy) {
+  // Host state can lag one event; the local lock owns the complete action promise.
+  // 宿主状态可能晚一个事件，本地锁持有完整动作 Promise。
+  const pendingRef = React.useRef(false);
+  const [pending, setPending] = React.useState(false);
+  const busy = props.busy || pending;
+  const selectedFileDisabled = busy || !props.selectedFile;
+  const runAction = async (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => {
+    if (props.busy || pendingRef.current) {
       return;
     }
-    void props.onAction(action, file);
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      await props.onAction(action, file);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
   };
   if (props.mode === "staged") {
     return (
       <div className="diff-review-floating-actions">
         <button
           className="diff-review-floating-action-button"
-          disabled={props.busy}
+          disabled={busy}
           onClick={() => runAction("unstageAll")}
           type="button"
         >
@@ -55,7 +71,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
             <button
               aria-label={t("diffAction.moreStaging")}
               className="diff-review-floating-action-button icon-only"
-              disabled={props.busy}
+              disabled={busy}
               type="button"
             >
               <MoreHorizontal size={15} />
@@ -78,7 +94,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
     <div className="diff-review-floating-actions">
       <button
         className="diff-review-floating-action-button"
-        disabled={props.busy}
+        disabled={busy}
         onClick={() => runAction("restoreAll")}
         type="button"
       >
@@ -87,7 +103,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
       </button>
       <button
         className="diff-review-floating-action-button"
-        disabled={props.busy}
+        disabled={busy}
         onClick={() => runAction("stageAll")}
         type="button"
       >
@@ -99,7 +115,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
           <button
             aria-label={t("diffAction.moreStaging")}
             className="diff-review-floating-action-button icon-only"
-            disabled={props.busy}
+            disabled={busy}
             type="button"
           >
             <MoreHorizontal size={15} />

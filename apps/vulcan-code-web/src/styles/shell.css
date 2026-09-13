@@ -337,17 +337,20 @@
   z-index: 30;
   display: grid;
   place-items: center;
+  align-content: safe center;
+  overflow: auto;
   padding: 24px;
   background: color-mix(in srgb, var(--background) 78%, transparent);
   backdrop-filter: blur(10px);
 }
 
 .startup-progress-panel {
-  width: min(420px, calc(100vw - 48px));
+  width: min(420px, 100%);
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 72px;
-  transform: translateY(-4vh);
 }
 
 .startup-logo-stage {
@@ -381,10 +384,10 @@
 }
 
 .startup-progress-content {
+  min-width: 0;
   width: min(420px, 100%);
   display: grid;
   gap: 12px;
-  transform: translateY(24px);
 }
 
 .startup-progress-heading strong {

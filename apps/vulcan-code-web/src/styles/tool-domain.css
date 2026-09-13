@@ -1,0 +1,31 @@
+/* Scope result hierarchy to V1 tool bodies and inherit existing light/dark semantic tokens.
+ * 将结果层级限定在 V1 工具正文，继承既有明暗主题语义令牌。 */
+.v1-tool-domain { display: grid; gap: 12px; min-width: 0; padding: 12px 14px; font-size: 12px; container-type: inline-size; }
+.v1-tool-domain-section { min-width: 0; }
+.v1-tool-domain-section h4 { margin: 0 0 6px; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
+/* Package summaries keep common successful queries short and reserve space for actual problems.
+ * 技能包摘要压缩常见成功查询，仅为实际问题保留空间。 */
+.v1-tool-config-package { min-width: 0; }
+.v1-tool-config-package + .v1-tool-config-package { border-top: 1px solid var(--border); padding-top: 10px; }
+.v1-tool-config-heading { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.v1-tool-config-heading strong { overflow-wrap: anywhere; min-width: 0; }
+.v1-tool-config-state { margin-left: auto; color: var(--muted-foreground); font-size: 11px; }
+.v1-tool-config-state[data-complete="false"], .v1-tool-config-issues { color: var(--destructive); }
+.v1-tool-config-issues { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
+.v1-tool-domain-fields { display: grid; gap: 6px; margin: 0; }
+.v1-tool-domain-field { display: grid; grid-template-columns: minmax(70px, 105px) minmax(0, 1fr); gap: 8px; align-items: start; }
+.v1-tool-domain-field dt { color: var(--muted-foreground); overflow-wrap: anywhere; }
+.v1-tool-domain-field dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.v1-tool-domain-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.v1-tool-domain-list { display: grid; gap: 8px; min-width: 0; }
+.v1-tool-domain-list-item + .v1-tool-domain-list-item { border-top: 1px solid var(--border); padding-top: 8px; }
+.v1-tool-domain-muted { color: var(--muted-foreground); }
+.v1-tool-domain-error { color: var(--destructive); white-space: pre-wrap; overflow-wrap: anywhere; }
+.v1-tool-domain a { color: var(--primary); text-decoration: underline; overflow-wrap: anywhere; }
+.v1-tool-domain-markdown { max-height: 380px; overflow: auto; }
+.v1-tool-domain-raw { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
+.v1-tool-domain-raw-toggle { color: var(--muted-foreground); }
+.v1-tool-domain-raw-heading { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted-foreground); }
+.v1-tool-domain-raw-payload pre { max-height: 300px; margin: 0; overflow: auto; padding: 8px; font-size: 11px; background: var(--background); color: var(--foreground); user-select: text; }
+.v1-tool-card .v1-tool-card-failure-summary { padding: 4px 14px 8px; color: var(--destructive); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 420px) { .v1-tool-domain-field { grid-template-columns: minmax(0, 1fr); gap: 2px; } }

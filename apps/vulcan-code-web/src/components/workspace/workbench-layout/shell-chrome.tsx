@@ -4,7 +4,8 @@ import {
   WindowControls,
 } from "@/components/shell/app-chrome";
 import { shellClient } from "@/service/webui-service-runtime";
-import type { LocaleCode } from "@/i18n";
+import { useI18n, type LocaleCode } from "@/i18n";
+import { toast } from "sonner";
 import type { StartupSnapshot } from "@/types";
 import {
   initialThemeMode,
@@ -58,6 +59,9 @@ export function useWorkbenchShellChrome({
   locale,
   onChangeLocale,
 }: WorkbenchShellChromeOptions): WorkbenchShellChromeState {
+  // t translates shell failures without exposing backend details as the main message.
+  // t 翻译壳层失败提示，避免将后端详情作为主要文案。
+  const { t } = useI18n();
   // theme stores the current shadcn visual theme.
   // theme 保存当前 shadcn 视觉主题。
   const [theme, setTheme] = React.useState<ThemeMode>(() => initialThemeMode());
@@ -67,6 +71,27 @@ export function useWorkbenchShellChrome({
   // isWindowMaximized tracks the current Tauri window maximize state for the titlebar button.
   // isWindowMaximized 跟踪当前 Tauri 窗口最大化状态，用于标题栏按钮。
   const [isWindowMaximized, setIsWindowMaximized] = React.useState(false);
+  // lifecycle tracks request ownership across mount cleanup, including Strict Mode remounts.
+  // lifecycle 跟踪挂载清理前后的请求归属，包括严格模式重新挂载。
+  const lifecycle = React.useRef({ active: true, request: 0 });
+  // maximizing blocks overlapping native toggles from rapid button and titlebar activation.
+  // maximizing 阻止快速点击按钮和标题栏导致原生切换命令重叠。
+  const maximizing = React.useRef(false);
+  // reportWindowError gives ignored native callbacks the same visible failure path as buttons.
+  // reportWindowError 为原生回调提供与按钮相同的可见失败提示。
+  const reportWindowError = React.useCallback((error: unknown) => {
+    toast.error(t("appChrome.windowActionFailed"), {
+      description: error instanceof Error ? error.message : String(error),
+      id: "window-action-failed",
+    });
+  }, [t]);
+  React.useEffect(() => {
+    lifecycle.current = { active: true, request: 0 };
+    // mountedLifecycle is invalidated even if a later mount already owns the ref.
+    // mountedLifecycle 即使在后续挂载接管引用后，也会被原清理逻辑失效。
+    const mountedLifecycle = lifecycle.current;
+    return () => { mountedLifecycle.active = false; };
+  }, []);
   // windowDragRegionEnabled disables native dragging before a maximized titlebar can corrupt its restore bounds.
   // windowDragRegionEnabled 在最大化标题栏可能破坏还原边界前禁用原生拖动。
   const windowDragRegionEnabled = shouldEnableWindowDragRegion(
@@ -76,13 +101,24 @@ export function useWorkbenchShellChrome({
   // refreshWindowMaximizedState synchronizes the local titlebar state with Tauri.
   // refreshWindowMaximizedState 将本地标题栏状态与 Tauri 同步。
   const refreshWindowMaximizedState = React.useCallback(async () => {
-    setIsWindowMaximized(await shellClient.isWindowMaximized());
+    // owner and request ensure an older native reply cannot overwrite a newer resize state.
+    // owner 和 request 确保旧原生回包不能覆盖较新的窗口尺寸状态。
+    const owner = lifecycle.current;
+    const request = ++owner.request;
+    const maximized = await shellClient.isWindowMaximized();
+    if (owner.active && owner.request === request) setIsWindowMaximized(maximized);
   }, []);
   // toggleWindowMaximize toggles native maximize state and refreshes the icon.
   // toggleWindowMaximize 切换原生最大化状态并刷新图标。
   const toggleWindowMaximize = React.useCallback(async () => {
-    await shellClient.toggleWindowMaximize();
-    window.setTimeout(() => void refreshWindowMaximizedState(), 40);
+    if (maximizing.current) return;
+    maximizing.current = true;
+    try {
+      await shellClient.toggleWindowMaximize();
+      await refreshWindowMaximizedState();
+    } finally {
+      maximizing.current = false;
+    }
   }, [refreshWindowMaximizedState]);
   // handleTitlebarDoubleClick toggles maximize only from non-interactive titlebar space.
   // handleTitlebarDoubleClick 仅在非交互标题栏区域双击时切换最大化。
@@ -94,27 +130,42 @@ export function useWorkbenchShellChrome({
     if (target?.closest("[data-no-drag], button, a, input, textarea, select, [role='button'], [role='menuitem']")) {
       return;
     }
-    void toggleWindowMaximize();
-  }, [showWindowControls, toggleWindowMaximize]);
+    void toggleWindowMaximize().catch(reportWindowError);
+  }, [showWindowControls, toggleWindowMaximize, reportWindowError]);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.style.colorScheme = theme;
-    window.localStorage.setItem("vulcan-webui-theme", theme);
   }, [theme]);
 
+  // toggleTheme persists only the user's explicit selection; denied storage keeps the current session usable.
+  // toggleTheme 仅持久化用户明确选择；存储被拒绝时仍允许当前会话切换主题。
+  const toggleTheme = React.useCallback(() => {
+    // nextTheme is applied locally even when persistence is unavailable.
+    // nextTheme 即使无法持久化也会在当前客户端生效。
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    try {
+      window.localStorage.setItem("vulcan-webui-theme", nextTheme);
+    } catch {
+      toast.error(t("appChrome.themeSaveFailed"), { id: "theme-save-failed" });
+    }
+  }, [theme, t]);
+
   React.useEffect(() => {
     if (!showWindowControls) {
       return;
     }
-    void refreshWindowMaximizedState();
-  }, [refreshWindowMaximizedState, showWindowControls]);
+    void refreshWindowMaximizedState().catch(reportWindowError);
+  }, [refreshWindowMaximizedState, showWindowControls, reportWindowError]);
 
   React.useEffect(() => {
     if (!showWindowControls) {
       return;
     }
 
+    // cancelled and unlisten retain exact ownership of the asynchronous native subscription.
+    // cancelled 和 unlisten 保留异步原生订阅的精确归属。
     let cancelled = false;
     let unlisten: null | (() => void) = null;
 
@@ -124,17 +175,21 @@ export function useWorkbenchShellChrome({
       if (cancelled) {
         return;
       }
-      unlisten = await shellClient.subscribeWindowResize(() => {
-        void refreshWindowMaximizedState();
+      // release must run immediately if native setup finishes after component cleanup.
+      // 若原生初始化在组件清理后完成，release 必须立即执行。
+      const release = await shellClient.subscribeWindowResize(() => {
+        if (!cancelled) void refreshWindowMaximizedState().catch(reportWindowError);
       });
+      if (cancelled) release();
+      else unlisten = release;
     }
 
-    void subscribeWindowResize();
+    void subscribeWindowResize().catch((error) => { if (!cancelled) reportWindowError(error); });
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [refreshWindowMaximizedState, showWindowControls]);
+  }, [refreshWindowMaximizedState, showWindowControls, reportWindowError]);
 
   // shellChromeActions moves app-wide status and window controls into the shared content header.
   // shellChromeActions 将应用级状态与窗口控制移动到共享内容标题栏中。
@@ -148,7 +203,7 @@ export function useWorkbenchShellChrome({
               theme={theme}
               locale={locale}
               onChangeLocale={onChangeLocale}
-              onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+              onToggleTheme={toggleTheme}
             />
           )}
           isMaximized={isWindowMaximized}
@@ -161,7 +216,7 @@ export function useWorkbenchShellChrome({
           theme={theme}
           locale={locale}
           onChangeLocale={onChangeLocale}
-          onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+          onToggleTheme={toggleTheme}
         />
       )}
     </div>

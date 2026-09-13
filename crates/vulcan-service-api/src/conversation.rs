@@ -909,6 +909,9 @@ pub struct SessionContextCompactionWindowUpdateRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionVmmPolicySummary {
+    /// Final memory enablement for this exact session, independent of another client's selection.
+    /// 当前准确会话的最终记忆启用状态，独立于其他客户端的选择。
+    pub memory_enabled: bool,
     /// Precheck memory injection policy mode: inherit, enabled, or disabled.
     /// 前置记忆注入策略模式：继承、开启或关闭。
     pub precheck_mode: String,

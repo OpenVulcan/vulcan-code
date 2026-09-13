@@ -73,6 +73,8 @@ export interface DraftConversationPendingSubmission {
 
 // WorkspaceResizableBody renders the main chat area and optional right context panel.
 // WorkspaceResizableBody 渲染主会话区域与可选右侧上下文面板。
+// Parameters: props supplies page slots, context state and typed actions. Returns the header, content and adaptive context rail.
+// 参数：props 提供页面插槽、上下文状态与强类型动作。返回标题、正文及自适应上下文栏。
 export function WorkspaceResizableBody(props: {
   // Whether the right context panel is visible.
   // 右侧上下文面板是否可见。
@@ -169,7 +171,7 @@ export function WorkspaceResizableBody(props: {
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
   // Copies raw diff text from the right context panel.
   // 从右侧上下文面板复制原始 diff 文本。
-  onCopyRawDiff: (rawDiff: string) => void;
+  onCopyRawDiff: (rawDiff: string) => void | Promise<void>;
   // Copies plain text from the right context panel.
   // 从右侧上下文面板复制普通文本。
   onCopyText: WorkspaceContextPanelProps["onCopyText"];
@@ -235,6 +237,13 @@ export function WorkspaceResizableBody(props: {
   // dockedPanelWidth stores the user-adjustable non-floating context panel width.
   // dockedPanelWidth 保存用户可调整的非浮动上下文面板宽度。
   const [dockedPanelWidth, setDockedPanelWidth] = React.useState(WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH);
+  // dockedResizeCleanup owns global pointer listeners across cancellation, closure, and unmount.
+  // dockedResizeCleanup 持有全局指针监听，负责取消、关闭及卸载时的清理。
+  const dockedResizeCleanup = React.useRef<(() => void) | null>(null);
+  // Observe the actual layout bound so the accessible maximum matches both resize input methods.
+  // 观察实际布局边界，使无障碍最大值与两种缩放输入一致。
+  const dockedLayoutRef = React.useRef<HTMLDivElement | null>(null);
+  const [dockedPanelMaximum, setDockedPanelMaximum] = React.useState(WORKSPACE_CONTEXT_PANEL_MAX_WIDTH);
   React.useEffect(() => {
     let frameId: number | null = null;
     let timeoutId: number | null = null;
@@ -292,6 +301,48 @@ export function WorkspaceResizableBody(props: {
   // dockedPanelMounted indicates whether the non-floating panel remains in the flex layout.
   // dockedPanelMounted 表示非浮动面板是否仍保留在 flex 布局中。
   const dockedPanelMounted = rightPanelTransition.mounted && !renderedRightPanelFloating;
+  React.useEffect(() => () => { dockedResizeCleanup.current?.(); }, [dockedPanelOpen]);
+
+  // maximumDockedWidth applies the same actual container bound to pointer and keyboard resizing.
+  // maximumDockedWidth 为指针和键盘缩放应用相同的实际容器边界。
+  // Parameters: element belongs to the docked shell. Returns its usable panel maximum in CSS pixels, bounded by the global limits.
+  // 参数：element 属于停靠外壳。返回以 CSS 像素计的可用面板上限，并遵守全局界限。
+  const maximumDockedWidth = React.useCallback((element: HTMLElement): number => Math.max(
+    WORKSPACE_CONTEXT_PANEL_MIN_WIDTH,
+    Math.min(WORKSPACE_CONTEXT_PANEL_MAX_WIDTH,
+      (element.closest(".workspace-resizable-body-shell")?.getBoundingClientRect().width ?? window.innerWidth) - 800 - 9),
+  ), []);
+  React.useLayoutEffect(() => {
+    const element = dockedLayoutRef.current;
+    if (!element || !dockedPanelMounted) return;
+    // Container changes update the ARIA contract and clamp an already enlarged panel without a new drag.
+    // 容器变化更新 ARIA 合同，并在无需再次拖动时约束已经放大的面板。
+    // Parameters: none; the effect captures its actual shell element. Returns nothing and updates only layout state.
+    // 参数：无；副作用捕获其实际外壳元素。无返回值，仅更新布局状态。
+    const measure = (): void => {
+      const maximum = maximumDockedWidth(element);
+      setDockedPanelMaximum(maximum);
+      setDockedPanelWidth(current => Math.min(current, maximum));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [dockedPanelMounted, maximumDockedWidth]);
+
+  // handleDockedResizeKeyDown provides directional resizing and bounded Home/End shortcuts.
+  // handleDockedResizeKeyDown 提供方向键缩放和受边界约束的 Home/End 快捷键。
+  // Parameters: event is the focused separator's key event. Returns nothing; unsupported keys keep their native behavior.
+  // 参数：event 是焦点分隔条的键盘事件。无返回值；不支持的按键保留原生行为。
+  const handleDockedResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!dockedPanelOpen || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const maximum = maximumDockedWidth(event.currentTarget);
+    const next = event.key === "Home" ? WORKSPACE_CONTEXT_PANEL_MIN_WIDTH
+      : event.key === "End" ? maximum : dockedPanelWidth + (event.key === "ArrowLeft" ? 20 : -20);
+    setDockedPanelWidth(Math.min(maximum, Math.max(WORKSPACE_CONTEXT_PANEL_MIN_WIDTH, next)));
+  };
   // rightPanelMounted keeps one context panel instance alive across floating and docked modes.
   // rightPanelMounted 让同一个上下文面板实例在浮动与停靠模式切换时保持存活。
   const rightPanelMounted = rightPanelTransition.mounted;
@@ -302,22 +353,21 @@ export function WorkspaceResizableBody(props: {
   } as React.CSSProperties;
   // handleDockedResizePointerDown starts manual resizing for the docked context panel.
   // handleDockedResizePointerDown 启动停靠上下文面板的手动调整宽度。
+  // Parameters: event captures the left-pointer start position. Returns nothing and registers listeners until release or cancellation.
+  // 参数：event 捕获左键指针起始位置。无返回值，注册监听直至释放或取消。
   const handleDockedResizePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dockedPanelOpen) {
+    if (!dockedPanelOpen || event.button !== 0) {
       return;
     }
     event.preventDefault();
+    dockedResizeCleanup.current?.();
     const startX = event.clientX;
     const startWidth = dockedPanelWidth;
-    const shellWidth = event.currentTarget
-      .closest(".workspace-resizable-body-shell")
-      ?.getBoundingClientRect().width ?? window.innerWidth;
-    const maxWidth = Math.max(
-      WORKSPACE_CONTEXT_PANEL_MIN_WIDTH,
-      Math.min(WORKSPACE_CONTEXT_PANEL_MAX_WIDTH, shellWidth - 800 - 9),
-    );
+    const maxWidth = maximumDockedWidth(event.currentTarget);
     // clampDockedPanelWidth keeps manual resizing inside usable workspace bounds.
     // clampDockedPanelWidth 将手动调整宽度限制在可用工作区范围内。
+    // Parameters: width is the requested CSS-pixel width. Returns the clamped width for this captured drag boundary.
+    // 参数：width 是请求的 CSS 像素宽度。返回受本次拖动边界约束的宽度。
     const clampDockedPanelWidth = (width: number) => Math.min(
       maxWidth,
       Math.max(WORKSPACE_CONTEXT_PANEL_MIN_WIDTH, width),
@@ -329,12 +379,18 @@ export function WorkspaceResizableBody(props: {
     };
     // handlePointerUp clears document-level drag listeners after resizing.
     // handlePointerUp 在调整结束后清理文档级拖拽监听。
+    // Parameters: none. Returns nothing; both release and cancellation remove all listeners and clear cleanup ownership.
+    // 参数：无。无返回值；释放与取消都会移除全部监听并清除清理归属。
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+      dockedResizeCleanup.current = null;
     };
+    dockedResizeCleanup.current = handlePointerUp;
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerUp, { once: true });
   }, [dockedPanelOpen, dockedPanelWidth]);
   // selectedProjectId is the exact trusted project context for workspace plugin actions.
   // selectedProjectId 是工作区插件 Action 使用的精确可信项目上下文。
@@ -407,7 +463,7 @@ export function WorkspaceResizableBody(props: {
     ), mainContent);
 
   return (
-    <div className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context")}>
+    <div ref={dockedLayoutRef} className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context")}>
       <ConsoleHeader
         className={props.headerTitle ? "workspace-custom-header" : undefined}
         draftConversation={props.selectedDraftConversation}
@@ -432,9 +488,14 @@ export function WorkspaceResizableBody(props: {
             <div
               aria-label={t("workspacePanel.resizeRight")}
               aria-orientation="vertical"
+              aria-valuemin={WORKSPACE_CONTEXT_PANEL_MIN_WIDTH}
+              aria-valuemax={dockedPanelMaximum}
+              aria-valuenow={dockedPanelWidth}
               className={cn("workspace-context-resize-handle", rightPanelVisualState)}
               onPointerDown={handleDockedResizePointerDown}
+              onKeyDown={handleDockedResizeKeyDown}
               role="separator"
+              tabIndex={dockedPanelOpen ? 0 : -1}
             />
           </>
         ) : null}
@@ -446,6 +507,7 @@ export function WorkspaceResizableBody(props: {
               renderedRightPanelFloating && "is-floating",
             )}
             id="workspaceContext"
+            inert={!rightPanelTransition.visible}
           >
             <WorkspaceContextPanel
               activeTabId={props.contextPanelActiveTabId}

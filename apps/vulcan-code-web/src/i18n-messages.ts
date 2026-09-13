@@ -5,6 +5,227 @@ export type LocaleCode = "zh-CN" | "en-US"
 // TranslationKey describes text keys currently localized at the shell level.
 // TranslationKey 描述当前在外壳层支持本地化的文本键。
 export type TranslationKey =
+  | "ui.close"
+  | "ui.loading"
+  | "gitRepository.list"
+  | "gitRepository.primary"
+  | "gitRepository.nested"
+  | "gitRepository.branchUnknown"
+  | "gitRepository.changesUnknown"
+  | "gitRepository.changedFiles"
+  | "gitRepository.refreshing"
+  | "gitRepository.readFailed"
+  | "gitRepository.busy"
+  | "gitRepository.loading"
+  | "gitRepository.unavailable"
+  | "gitRepository.retryReview"
+  | "projectOverview.conversations"
+  | "projectOverview.pinned"
+  | "projectOverview.issues"
+  | "projectOverview.memoryLoading"
+  | "projectOverview.memoryUnknown"
+  | "projectOverview.native"
+  | "projectOverview.external"
+  | "projectOverview.enabled"
+  | "projectOverview.disabled"
+  | "projectOverview.override"
+  | "projectOverview.inherited"
+  | "projectOverview.unsaved"
+  | "projectOverview.missingOwner"
+  | "projectOverview.ownerUnknown"
+  | "projectOverview.nativeBinding"
+  | "projectOverview.unbound"
+  | "projectOverview.bindingUnknown"
+  | "projectOverview.externalBinding"
+  | "projectOverview.externalUnbound"
+  | "projectOverview.precheck"
+  | "projectOverview.writeback"
+  | "projectOverview.on"
+  | "projectOverview.off"
+  | "projectOverview.session"
+  | "projectOverview.scopeReady"
+  | "projectOverview.scopeNotReady"
+  | "projectOverview.precheckReady"
+  | "projectOverview.precheckNotReady"
+  | "projectOverview.postactionReady"
+  | "projectOverview.postactionNotReady"
+  | "projectOverview.runtimeUnknown"
+  | "projectOverview.memorySettings"
+  | "projectOverview.codeSettings"
+  | "projectOverview.knowledgeSettings"
+  | "projectOverview.skillSettings"
+  | "projectOverview.indexDisabled"
+  | "projectOverview.queryReady"
+  | "projectOverview.queryUnavailable"
+  | "projectOverview.indexUnknown"
+  | "projectOverview.watching"
+  | "projectOverview.notWatching"
+  | "projectOverview.pending"
+  | "projectOverview.files"
+  | "projectOverview.routesUnavailable"
+  | "projectOverview.knowledgeCount"
+  | "projectOverview.knowledgeFailed"
+  | "projectOverview.knowledgeLoading"
+  | "projectOverview.skillsLoading"
+  | "projectOverview.skillsUnknown"
+  | "projectOverview.skillsCount"
+  | "projectOverview.skillsInherited"
+  | "projectOverview.maintenance"
+  | "projectOverview.attachments"
+  | "projectOverview.details"
+  | "projectOverview.path"
+  | "projectOverview.copyPath"
+  | "projectOverview.copy"
+  | "projectOverview.copied"
+  | "projectOverview.copyFailed"
+  | "projectOverview.attachmentPath"
+  | "projectOverview.id"
+  | "settings.modelExperience.retryLoad"
+  | "settings.modelExperience.context"
+  | "settings.modelExperience.invalidValue"
+  | "settings.modelExperience.extensionSelectionHint"
+  | "settings.modelExperience.retainedEmbeddingInvalid"
+  | "settings.licenses.title"
+  | "settings.licenses.types"
+  | "settings.licenses.dependencies"
+  | "settings.licenses.scope"
+  | "settings.licenses.search"
+  | "settings.licenses.reload"
+  | "settings.licenses.loadError"
+  | "settings.licenses.loading"
+  | "settings.licenses.emptySearch"
+  | "settings.licenses.unknown"
+  | "settings.licenses.variants"
+  | "settings.licenses.dependency"
+  | "settings.licenses.version"
+  | "settings.licenses.source"
+  | "settings.licenses.body"
+  | "settings.licenses.previous"
+  | "settings.licenses.next"
+  | "settings.licenses.variant"
+  | "settings.licenses.variantHint"
+  | "settings.licenses.retry"
+  | "settings.licenses.loadingBody"
+  | "settings.modelExperience.conversation"
+  | "settings.modelExperience.nodes"
+  | "settings.modelExperience.retry"
+  | "settings.modelExperience.media"
+  | "settings.modelExperience.usage"
+  | "settings.modelExperience.scopeHint"
+  | "settings.modelExperience.inheritWindow"
+  | "settings.modelExperience.inheritCompact"
+  | "settings.modelExperience.inheritToken"
+  | "settings.modelExperience.inheritScope"
+  | "settings.modelExperience.inheritBuffer"
+  | "settings.modelExperience.savingSystem"
+  | "settings.modelExperience.dirtySystem"
+  | "settings.modelExperience.savedSystem"
+  | "settings.modelExperience.savingNodes"
+  | "settings.modelExperience.dirtyNodes"
+  | "settings.modelExperience.savedNodes"
+  | "settings.modelExperience.nodeIds"
+  | "settings.modelExperience.statistics"
+  | "settings.modelExperience.searchCustom"
+  | "settings.modelExperience.searchProvider"
+  | "settings.modelExperience.searchPlaceholder"
+  | "settings.modelExperience.noProviders"
+  | "settings.modelExperience.providerDetails"
+  | "settings.modelExperience.usageFilter"
+  | "settings.modelExperience.allUsages"
+  | "settings.modelExperience.conversationEnabled"
+  | "settings.modelExperience.internalEnabled"
+  | "settings.modelExperience.multimodalEnabled"
+  | "settings.modelExperience.capabilityFilter"
+  | "settings.modelExperience.allCapabilities"
+  | "settings.modelExperience.routes"
+  | "settings.modelExperience.routeAccounts"
+  | "settings.modelExperience.available"
+  | "settings.modelExperience.accountNotAdmitted"
+  | "settings.modelExperience.internalPurposes"
+  | "settings.modelExperience.candidateHint"
+  | "settings.modelExperience.noConversation"
+  | "settings.modelExperience.unavailableCandidates"
+  | "settings.modelExperience.disableCandidate"
+  | "settings.modelExperience.curationModel"
+  | "settings.modelExperience.embeddingModel"
+  | "settings.modelExperience.modelSearch"
+  | "settings.modelExperience.curationNoMatch"
+  | "settings.modelExperience.modelNoMatch"
+  | "knowledge.experience.targetChanged"
+  | "knowledge.experience.createTitle"
+  | "knowledge.experience.retrievalMode"
+  | "knowledge.experience.rawMode"
+  | "knowledge.experience.displayMode"
+  | "knowledge.experience.hybridMode"
+  | "knowledge.experience.reasoning"
+  | "knowledge.experience.reasoningPlaceholder"
+  | "knowledge.experience.reasoningHint"
+  | "knowledge.experience.dimensions"
+  | "knowledge.experience.dimensionsPlaceholder"
+  | "knowledge.experience.dimensionsInput"
+  | "knowledge.experience.dimensionsInvalid"
+  | "knowledge.experience.batch"
+  | "knowledge.experience.batchFallback"
+  | "knowledge.experience.compatibility"
+  | "knowledge.experience.compatibilityPlaceholder"
+  | "knowledge.experience.compatibilityHint"
+  | "knowledge.experience.compatibilityActive"
+  | "knowledge.experience.browseCorpus"
+  | "knowledge.experience.rawLibrary"
+  | "knowledge.experience.displayLibrary"
+  | "knowledge.experience.searchLayer"
+  | "knowledge.experience.rawSearch"
+  | "knowledge.experience.displaySearch"
+  | "knowledge.experience.hybridSearch"
+  | "knowledge.experience.viewProgress"
+  | "knowledge.experience.resume"
+  | "knowledge.experience.displayReady"
+  | "knowledge.experience.regenerate"
+  | "knowledge.experience.buildDisplay"
+  | "knowledge.experience.buildVectors"
+  | "knowledge.experience.saveSettings"
+  | "knowledge.experience.configure"
+  | "knowledge.experience.settingsTitle"
+  | "knowledge.experience.displayOperation"
+  | "knowledge.experience.vectorOperation"
+  | "knowledge.experience.background"
+  | "knowledge.experience.curating"
+  | "knowledge.experience.curatingNow"
+  | "knowledge.experience.embeddingNow"
+  | "knowledge.experience.curatingProgress"
+  | "knowledge.experience.embeddingProgress"
+  | "knowledge.experience.cancelling"
+  | "knowledge.experience.failed"
+  | "knowledge.experience.cancelled"
+  | "knowledge.experience.completed"
+  | "knowledge.experience.running"
+  | "knowledge.experience.waiting"
+  | "knowledge.experience.processing"
+  | "knowledge.experience.items"
+  | "knowledge.experience.llmRequests"
+  | "knowledge.experience.embeddingRequests"
+  | "knowledge.experience.retries"
+  | "knowledge.experience.generated"
+  | "knowledge.experience.inputTokens"
+  | "knowledge.experience.outputTokens"
+  | "knowledge.experience.cumulative"
+  | "knowledge.experience.cacheTokens"
+  | "knowledge.experience.currentRequest"
+  | "knowledge.experience.noRequest"
+  | "knowledge.experience.requestTokens"
+  | "knowledge.experience.preparing"
+  | "knowledge.experience.waitingStream"
+  | "knowledge.experience.recentRequests"
+  | "knowledge.experience.noHistory"
+  | "knowledge.experience.currentFile"
+  | "knowledge.experience.unknown"
+  | "settings.modelExperience.embeddingNoMatch"
+  | "settings.modelExperience.curationUnavailable"
+  | "settings.modelExperience.embeddingUnavailable"
+  | "settings.modelExperience.chooseCuration"
+  | "settings.modelExperience.chooseEmbedding"
+  | "settings.modelExperience.noCuration"
+  | "settings.modelExperience.noEmbedding"
   | "memory.workspace.read"
   | "memory.workspace.purpose"
   | "memory.workspace.actions"
@@ -15,10 +236,32 @@ export type TranslationKey =
   | "memory.workspace.search"
   | "memory.workspace.searchScope"
   | "memory.workspace.filters"
+  | "memory.workspace.all"
+  | "memory.workspace.bound"
+  | "memory.workspace.unbound"
+  | "memory.workspace.overrides"
+  | "memory.workspace.noMatches"
+  | "memory.workspace.selectedCount"
+  | "memory.workspace.clearFilters"
+  | "memory.workspace.dateHint"
+  | "memory.workspace.updatesAvailable"
+  | "memory.workspace.missingOutputs"
+  | "memory.workspace.missingSource"
+  | "memory.workspace.disabled"
+  | "memory.workspace.not_ready"
+  | "memory.workspace.ready"
   | "memory.workspace.selectSession"
   | "memory.workspace.editScope"
   | "memory.workspace.basic"
   | "memory.workspace.globalPolicy"
+  | "memory.workspace.recallPolicy"
+  | "memory.workspace.textPolicy"
+  | "memory.workspace.profilePolicy"
+  | "memory.workspace.rankingPolicy"
+  | "memory.workspace.retentionPolicy"
+  | "memory.advanced.catalogLoading"
+  | "memory.advanced.catalogFailed"
+  | "memory.advanced.catalogRetry"
   | "memory.workspace.scopeHint"
   | "memory.workspace.recordInfo"
   | "memory.workspace.projectRules"
@@ -79,7 +322,15 @@ export type TranslationKey =
   | "knowledge.filter.placeholder"
   | "knowledge.refresh"
   | "knowledge.emptyLibraries"
+  | "knowledge.librariesLoading"
+  | "knowledge.noMatchingLibraries"
+  | "knowledge.readFailed"
   | "knowledge.libraryCounts"
+  | "knowledge.indexStatus.empty"
+  | "knowledge.indexStatus.ready"
+  | "knowledge.indexStatus.dirty"
+  | "knowledge.indexStatus.rebuilding"
+  | "knowledge.indexStatus.failed"
   | "knowledge.defaultDescription"
   | "knowledge.saveName"
   | "knowledge.view"
@@ -195,6 +446,13 @@ export type TranslationKey =
   | "knowledge.composer.label"
   | "knowledge.composer.manage"
   | "knowledge.composer.noneAuthorized"
+  | "knowledge.composer.inherit"
+  | "knowledge.composer.loading"
+  | "knowledge.composer.readFailed"
+  | "knowledge.composer.saveFailed"
+  | "knowledge.composer.reloadFailed"
+  | "knowledge.composer.retry"
+  | "knowledge.composer.details"
   | "knowledge.package.import"
   | "knowledge.package.export"
   | "knowledge.package.exportPickerTitle"
@@ -232,6 +490,7 @@ export type TranslationKey =
   | "appChrome.theme"
   | "appChrome.theme.dark"
   | "appChrome.theme.light"
+  | "appChrome.themeSaveFailed"
   | "appChrome.language.zh"
   | "appChrome.scrollFeaturesLeft"
   | "appChrome.scrollFeaturesRight"
@@ -353,6 +612,8 @@ export type TranslationKey =
   | "conversation.submission.uploadFailed"
   | "conversation.submission.uploadFailedAttachmentKept"
   | "conversation.submission.uploadProgress"
+  | "conversation.submission.sizeUnknown"
+  | "conversation.submission.cancelFailed"
   | "conversation.submission.cancelling"
   | "conversation.loading.requesting"
   | "conversation.loading.locating"
@@ -556,6 +817,12 @@ export type TranslationKey =
   | "composer.capability.loading"
   | "composer.capability.loadFailed"
   | "composer.capability.retry"
+  | "composer.capability.unavailableEnabled"
+  | "composer.capability.disableUnavailable"
+  | "composer.capability.removeUnavailable"
+  | "composer.capability.unavailableDetails"
+  | "composer.capability.operationFailed"
+  | "composer.capability.errorDetails"
   | "composer.capability.rebuild"
   | "composer.capability.rebuilding"
   | "composer.capability.rebuildHint"
@@ -590,6 +857,8 @@ export type TranslationKey =
   | "composer.capability.mediaFixedRoute"
   | "composer.capability.mediaBackendNote"
   | "composer.capability.mediaBackendMissing"
+  | "composer.attachment.previewUnavailable"
+  | "composer.attachment.stagingPending"
   | "composer.capability.extensionHint"
   | "composer.capability.extensionProfileMissing"
   | "composer.capability.extensionConstraints"
@@ -620,6 +889,7 @@ export type TranslationKey =
   | "composer.contextWindow.locked"
   | "composer.contextWindow.defaultRestored"
   | "composer.contextWindow.previewUnavailable"
+  | "composer.contextWindow.saveFailed"
   | "composer.modelPicker.filter"
   | "composer.modelPicker.noMatches"
   | "composer.attachment.add"
@@ -630,6 +900,8 @@ export type TranslationKey =
   | "composer.attachment.processing"
   | "composer.attachment.preparationBlocked"
   | "composer.attachment.metadataOnly"
+  | "composer.attachment.details"
+  | "composer.attachment.failed"
   | "composer.attachment.retry"
   | "composer.attachment.unsupported"
   | "composer.attachment.maxLimit"
@@ -685,6 +957,7 @@ export type TranslationKey =
   | "composer.error.promptEmpty"
   | "composer.error.draftLoadFailed"
   | "composer.error.draftPersistFailed"
+  | "composer.error.draftChangedBeforeSubmission"
   | "composer.modelPicker.tooltipTitle"
   | "composer.modelPicker.currentModel"
   | "composer.modelPicker.currentProvider"
@@ -848,6 +1121,7 @@ export type TranslationKey =
   | "projectSettings.knowledgeBasesDescription"
   | "projectSettings.knowledgeBasesLoading"
   | "projectSettings.knowledgeBasesSaved"
+  | "projectSettings.knowledgeBasesSavedRefreshFailed"
   | "projectSettings.projectOverride"
   | "projectSettings.inheritGlobal"
   | "projectSettings.promptSkillCount"
@@ -876,9 +1150,12 @@ export type TranslationKey =
   | "projectSettings.overrideDisabledHint"
   | "projectSettings.vmmTransportHint"
   | "projectSettings.vmmNativeHostHint"
+  | "projectSettings.vmmNativeEnabled"
+  | "projectSettings.vmmAdvanced"
   | "projectSettings.saveVmm"
   | "projectSettings.vmmNativeBinding"
   | "projectSettings.vmmNativeOwner"
+  | "projectSettings.vmmNativeLinked"
   | "projectSettings.vmmNativeSaveBinding"
   | "projectSettings.vmmCreateBinding"
   | "projectSettings.vmmCreateAndBind"
@@ -945,6 +1222,49 @@ export type TranslationKey =
   | "workspaceFiles.copyRelativePath"
   | "workspaceFiles.copyFileContent"
   | "workspaceFiles.filterFiles"
+  | "workspaceAudit.connecting"
+  | "workspaceAudit.terminalFailure"
+  | "workspaceAudit.exited"
+  | "workspaceAudit.exitedWithCode"
+  | "workspaceAudit.stopped"
+  | "workspaceAudit.failed"
+  | "workspaceAudit.copyTruncated"
+  | "workspaceAudit.retry"
+  | "workspaceAudit.viewportLoading"
+  | "workspaceAudit.aiReadOnly"
+  | "workspaceAudit.restoreAi"
+  | "workspaceAudit.maximizeAi"
+  | "workspaceAudit.minimizeAi"
+  | "workspaceAudit.startupSteps"
+  | "workspaceAudit.terminalLoading"
+  | "workspaceAudit.emptyName"
+  | "workspaceAudit.terminal"
+  | "workspaceAudit.expandList"
+  | "workspaceAudit.collapseList"
+  | "workspaceAudit.restore"
+  | "workspaceAudit.maximize"
+  | "workspaceAudit.minimize"
+  | "workspaceAudit.numberedList"
+  | "workspaceAudit.switchTerminal"
+  | "workspaceAudit.chooseShell"
+  | "workspaceAudit.create"
+  | "workspaceAudit.list"
+  | "workspaceAudit.name"
+  | "workspaceAudit.saveName"
+  | "workspaceAudit.editName"
+  | "workspaceAudit.stop"
+  | "workspaceAudit.close"
+  | "workspaceAudit.stopTitle"
+  | "workspaceAudit.closeTitle"
+  | "workspaceAudit.empty"
+  | "workspaceAudit.closeConfirm"
+  | "workspaceAudit.stopConfirm"
+  | "workspaceAudit.closeDescription"
+  | "workspaceAudit.stopDescription"
+  | "workspaceAudit.cancel"
+  | "workspaceAudit.processing"
+  | "workspaceAudit.confirm"
+  | "workspaceAudit.openDirectory"
   | "workspaceFilePreview.openFile"
   | "workspaceFilePreview.emptyHint"
   | "workspaceFilePreview.loading"
@@ -1167,7 +1487,10 @@ export type TranslationKey =
   | "terminalState.stopped"
   | "terminalState.lost"
   | "terminalState.unknown"
-  | "toolPresentation.output.loading"
+| "toolPresentation.output.loading"
+| "toolPresentation.output.loadFailed"
+| "toolPresentation.output.retryLoad"
+| "toolPresentation.output.errorDetails"
   | "toolPresentation.output.waiting"
   | "toolPresentation.output.empty"
   | "toolPresentation.payload.input"
@@ -1303,6 +1626,10 @@ export type TranslationKey =
   | "markdown.wrap.enable"
   | "markdown.wrap.disable"
   | "markdown.copyCode"
+  | "conversation.control.copyFailed"
+  | "conversation.control.actionFailed"
+  | "conversation.control.detailFailed"
+  | "conversation.control.retry"
   | "markdown.copied"
   | "mediaPlayer.maximize"
   | "mediaPlayer.restore"
@@ -1515,6 +1842,12 @@ export type TranslationKey =
   | "memory.removal.userProfiles"
   | "memory.removal.retention"
   | "memory.removal.days"
+  | "memory.removal.expirySuffix"
+  | "memory.rules.invalidNumbers"
+  | "memory.rules.features"
+  | "memory.rules.retentionProfiles"
+  | "memory.advanced.invalidNumbers"
+  | "memory.projectProfile.durationHint"
   | "memory.removal.sources"
   | "memory.removal.confirm"
   | "memory.removal.failed"
@@ -1950,6 +2283,7 @@ export type TranslationKey =
   | "memory.maintenance.title"
   | "memory.maintenance.description"
   | "memory.maintenance.invalidResponse"
+  | "memory.maintenance.readFailed"
   | "memory.maintenance.runNow"
   | "memory.lexical.title"
   | "memory.lexical.description"
@@ -2392,7 +2726,6 @@ export type TranslationKey =
   | "settings.runtimeDiagnostics"
   | "settings.visualLab"
   | "settings.gitCommit"
-  | "settings.promptComposer"
   | "settings.aboutLicenses"
   | "settings.archivedRestore"
   | "settings.modelProviders.description"
@@ -3189,7 +3522,6 @@ export type TranslationKey =
   | "gitCommitDialog.commitAndPush"
   | "gitCommitDialog.push"
   | "gitCommitDialog.commitTo"
-  | "settings.promptComposer.description"
   | "settings.aboutLicenses.description"
   | "settings.archivedRestore.description"
   | "skills.action.refresh"
@@ -3370,6 +3702,227 @@ export type TranslationKey =
 // translations 保存外壳层本地化标签。
 export const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
   "zh-CN": {
+    "ui.close": "关闭",
+    "ui.loading": "加载中",
+    "settings.modelExperience.invalidValue": "当前值不在声明能力范围内",
+    "settings.modelExperience.extensionSelectionHint": "选择允许 AI 查询并按需调用的原生扩展模型。每个模型独立选择账号。",
+    "settings.modelExperience.retainedEmbeddingInvalid": "保留的向量维度或批量值无效，请切回向量模式修正后保存。",
+    "gitRepository.list": "Git 仓库",
+    "gitRepository.primary": "主仓库",
+    "gitRepository.nested": "嵌套仓库",
+    "gitRepository.branchUnknown": "分支待确认",
+    "gitRepository.changesUnknown": "变更待确认",
+    "gitRepository.changedFiles": "{count} 个变更文件",
+    "gitRepository.refreshing": "正在刷新",
+    "gitRepository.readFailed": "读取失败",
+    "gitRepository.busy": "操作进行中",
+    "gitRepository.loading": "正在读取仓库状态…",
+    "gitRepository.unavailable": "仓库状态尚未取得",
+    "gitRepository.retryReview": "打开审查并重试",
+    "projectOverview.conversations": "{count} 个会话",
+    "projectOverview.pinned": "已置顶",
+    "projectOverview.issues": "需要处理",
+    "projectOverview.memoryLoading": "正在读取记忆配置…",
+    "projectOverview.memoryUnknown": "记忆配置尚未取得",
+    "projectOverview.native": "本地原生",
+    "projectOverview.external": "外置服务",
+    "projectOverview.enabled": "配置已启用",
+    "projectOverview.disabled": "配置已关闭",
+    "projectOverview.override": "项目覆盖",
+    "projectOverview.inherited": "继承全局",
+    "projectOverview.unsaved": "存在未保存修改",
+    "projectOverview.missingOwner": "记忆绑定目标 #{id} 不在当前目录中",
+    "projectOverview.ownerUnknown": "绑定目标不在目录中",
+    "projectOverview.nativeBinding": "{name} (#{id}) · {count} 个连带召回项目",
+    "projectOverview.unbound": "尚未绑定记忆项目",
+    "projectOverview.bindingUnknown": "绑定信息尚未取得",
+    "projectOverview.externalBinding": "外置记忆项目 #{id}",
+    "projectOverview.externalUnbound": "尚未绑定外置记忆项目",
+    "projectOverview.precheck": "前置注入",
+    "projectOverview.writeback": "回合写回",
+    "projectOverview.on": "开启",
+    "projectOverview.off": "关闭",
+    "projectOverview.session": "当前会话",
+    "projectOverview.scopeReady": "记忆作用域已就绪",
+    "projectOverview.scopeNotReady": "记忆作用域未就绪",
+    "projectOverview.precheckReady": "前置已就绪",
+    "projectOverview.precheckNotReady": "前置未就绪",
+    "projectOverview.postactionReady": "后置已就绪",
+    "projectOverview.postactionNotReady": "后置未就绪",
+    "projectOverview.runtimeUnknown": "此项目暂无当前会话运行快照",
+    "projectOverview.memorySettings": "记忆设置",
+    "projectOverview.codeSettings": "代码上下文设置",
+    "projectOverview.knowledgeSettings": "知识库设置",
+    "projectOverview.skillSettings": "技能设置",
+    "projectOverview.indexDisabled": "代码上下文已关闭",
+    "projectOverview.queryReady": "可检索代码上下文",
+    "projectOverview.queryUnavailable": "代码上下文暂不可检索",
+    "projectOverview.indexUnknown": "索引状态尚未取得",
+    "projectOverview.watching": "正在监听源码",
+    "projectOverview.notWatching": "未监听源码",
+    "projectOverview.pending": "源码更新待同步",
+    "projectOverview.files": "{count} 个文件",
+    "projectOverview.routesUnavailable": "模型路由尚未就绪",
+    "projectOverview.knowledgeCount": "已授权 {total} 个知识库 · 默认启用 {enabled} 个",
+    "projectOverview.knowledgeFailed": "知识库绑定读取失败",
+    "projectOverview.knowledgeLoading": "正在读取知识库绑定…",
+    "projectOverview.skillsLoading": "正在读取技能覆盖…",
+    "projectOverview.skillsUnknown": "技能覆盖尚未取得",
+    "projectOverview.skillsCount": "{count} 项项目技能覆盖",
+    "projectOverview.skillsInherited": "技能配置继承全局",
+    "projectOverview.maintenance": "附件缓存按需统计，清理前先预览影响。",
+    "projectOverview.attachments": "查看与清理附件",
+    "projectOverview.details": "项目目录与存储详情",
+    "projectOverview.path": "项目目录",
+    "projectOverview.copyPath": "复制项目路径",
+    "projectOverview.copy": "复制路径",
+    "projectOverview.copied": "已复制",
+    "projectOverview.copyFailed": "复制失败，请选择路径文本复制",
+    "projectOverview.attachmentPath": "附件目录",
+    "projectOverview.id": "项目标识",
+    "settings.licenses.title": "关于与许可证",
+    "settings.licenses.types": "许可证类型",
+    "settings.licenses.dependencies": "依赖",
+    "settings.licenses.scope": "当前目录包含 Rust 桌面应用依赖；前端与 Lua 依赖尚未纳入此目录。",
+    "settings.licenses.search": "搜索许可证、依赖、版本或来源",
+    "settings.licenses.reload": "重新加载",
+    "settings.licenses.loadError": "许可证资源读取失败",
+    "settings.licenses.loading": "正在加载许可证目录…",
+    "settings.licenses.emptySearch": "没有匹配的许可证或依赖。",
+    "settings.licenses.unknown": "未知许可证",
+    "settings.licenses.variants": "份原始正文",
+    "settings.licenses.dependency": "依赖名称",
+    "settings.licenses.version": "版本",
+    "settings.licenses.source": "来源",
+    "settings.licenses.body": "正文",
+    "settings.licenses.previous": "上一页依赖",
+    "settings.licenses.next": "下一页依赖",
+    "settings.licenses.variant": "选择原始正文",
+    "settings.licenses.variantHint": "同类型许可证可能包含不同版权声明；每份正文保留各自实际覆盖的依赖。",
+    "settings.licenses.retry": "重试读取",
+    "settings.licenses.loadingBody": "正在读取原始正文…",
+    "settings.modelExperience.retryLoad": "重新加载设置",
+    "settings.modelExperience.context": "上下文与压缩",
+    "settings.modelExperience.conversation": "会话默认",
+    "settings.modelExperience.nodes": "压缩窗口节点",
+    "settings.modelExperience.retry": "请求与重试",
+    "settings.modelExperience.media": "媒体交付",
+    "settings.modelExperience.usage": "用量刷新",
+    "settings.modelExperience.scopeHint": "保存仅修改系统默认层；供应商、模型及会话覆盖仍独立生效。",
+    "settings.modelExperience.inheritWindow": "继承内置默认：原始模型窗口的 95%",
+    "settings.modelExperience.inheritCompact": "继承内置默认：原始模型窗口的 90%",
+    "settings.modelExperience.inheritToken": "内置默认未设固定 Token 上限，按比例计算",
+    "settings.modelExperience.inheritScope": "继承内置默认：总用量",
+    "settings.modelExperience.inheritBuffer": "继承内置默认：0 Token；仅在存在回退提示词时使用",
+    "settings.modelExperience.savingSystem": "正在保存系统默认…",
+    "settings.modelExperience.dirtySystem": "系统默认有未保存更改",
+    "settings.modelExperience.savedSystem": "当前系统默认已保存",
+    "settings.modelExperience.savingNodes": "正在保存节点…",
+    "settings.modelExperience.dirtyNodes": "压缩窗口节点有未保存更改",
+    "settings.modelExperience.savedNodes": "当前节点配置已保存",
+    "settings.modelExperience.nodeIds": "固定节点标识",
+    "settings.modelExperience.statistics": "查看统计与定价",
+    "settings.modelExperience.searchCustom": "搜索自定义供应商",
+    "settings.modelExperience.searchProvider": "搜索供应商",
+    "settings.modelExperience.searchPlaceholder": "搜索供应商名称或标识",
+    "settings.modelExperience.noProviders": "没有匹配的供应商",
+    "settings.modelExperience.providerDetails": "接入与协议详情",
+    "settings.modelExperience.usageFilter": "筛选模型用途",
+    "settings.modelExperience.allUsages": "全部用途",
+    "settings.modelExperience.conversationEnabled": "会话使用已开启",
+    "settings.modelExperience.internalEnabled": "内部使用已开启",
+    "settings.modelExperience.multimodalEnabled": "多模态理解候选已开启",
+    "settings.modelExperience.capabilityFilter": "筛选模型能力",
+    "settings.modelExperience.allCapabilities": "全部能力",
+    "settings.modelExperience.routes": "接入详情 · {count} 条路线",
+    "settings.modelExperience.routeAccounts": "该路线的凭据账号",
+    "settings.modelExperience.available": "可用",
+    "settings.modelExperience.accountNotAdmitted": "账号未准入此模型",
+    "settings.modelExperience.internalPurposes": "内部用途：{purposes}",
+    "settings.modelExperience.candidateHint": "理解候选已开启；默认模型在对应理解设置中独立选择。",
+    "settings.modelExperience.noConversation": "无会话响应能力",
+    "settings.modelExperience.unavailableCandidates": "不可用的理解候选",
+    "settings.modelExperience.disableCandidate": "关闭此候选",
+    "settings.modelExperience.curationModel": "整理模型",
+    "settings.modelExperience.embeddingModel": "向量模型",
+    "settings.modelExperience.modelSearch": "搜索模型、供应商或账号",
+    "settings.modelExperience.curationNoMatch": "没有匹配的整理模型",
+    "settings.modelExperience.modelNoMatch": "没有匹配的模型",
+    "knowledge.experience.targetChanged": "目标知识库已变化，请取消后重新确认。",
+    "knowledge.experience.createTitle": "创建资料库",
+    "knowledge.experience.retrievalMode": "检索模式",
+    "knowledge.experience.rawMode": "原始库 BM25（无模型成本）",
+    "knowledge.experience.displayMode": "LLM 整理显示库 + BM25",
+    "knowledge.experience.hybridMode": "LLM 整理显示库 + BM25 + 向量",
+    "knowledge.experience.reasoning": "思考级别",
+    "knowledge.experience.reasoningPlaceholder": "选择模型声明的思考级别",
+    "knowledge.experience.reasoningHint": "当前模型声明的级别会随资料库配置保存，并用于整理请求。",
+    "knowledge.experience.dimensions": "向量维度",
+    "knowledge.experience.dimensionsPlaceholder": "选择模型声明的维度",
+    "knowledge.experience.dimensionsInput": "输入模型支持的维度",
+    "knowledge.experience.dimensionsInvalid": "维度不在当前模型能力范围内",
+    "knowledge.experience.batch": "Embedding 批量（官方上限：{limit}）",
+    "knowledge.experience.batchFallback": "未声明，使用默认值 10",
+    "knowledge.experience.compatibility": "同维度兼容性确认（可选）",
+    "knowledge.experience.compatibilityPlaceholder": "模型更换但维度相同，确认可复用现有索引时填写原因",
+    "knowledge.experience.compatibilityHint": "填写后会保留旧索引并显示风险；维度不一致时仍会自动关闭向量检索。",
+    "knowledge.experience.compatibilityActive": "已人工确认同维度模型兼容，当前复用旧向量索引：{reason}",
+    "knowledge.experience.browseCorpus": "浏览内容层",
+    "knowledge.experience.rawLibrary": "原始库",
+    "knowledge.experience.displayLibrary": "显示库",
+    "knowledge.experience.searchLayer": "检索层",
+    "knowledge.experience.rawSearch": "原始库 BM25",
+    "knowledge.experience.displaySearch": "显示库 BM25",
+    "knowledge.experience.hybridSearch": "显示库混合检索",
+    "knowledge.experience.viewProgress": "查看生成进度",
+    "knowledge.experience.resume": "继续生成",
+    "knowledge.experience.displayReady": "显示库已完成",
+    "knowledge.experience.regenerate": "重新生成",
+    "knowledge.experience.buildDisplay": "生成显示库",
+    "knowledge.experience.buildVectors": "生成向量",
+    "knowledge.experience.saveSettings": "保存资料库配置",
+    "knowledge.experience.configure": "配置",
+    "knowledge.experience.settingsTitle": "资料库模型与检索配置",
+    "knowledge.experience.displayOperation": "生成资料库显示层",
+    "knowledge.experience.vectorOperation": "生成资料库向量索引",
+    "knowledge.experience.background": "后台运行",
+    "knowledge.experience.curating": "整理显示库",
+    "knowledge.experience.curatingNow": "正在整理显示库",
+    "knowledge.experience.embeddingNow": "正在生成向量索引",
+    "knowledge.experience.curatingProgress": "正在整理显示库 {done} / {total}（{percent}%）",
+    "knowledge.experience.embeddingProgress": "正在生成向量 {done} / {total}（{percent}%）",
+    "knowledge.experience.cancelling": "正在请求取消",
+    "knowledge.experience.failed": "操作失败",
+    "knowledge.experience.cancelled": "操作已取消",
+    "knowledge.experience.completed": "操作完成",
+    "knowledge.experience.running": "正在执行",
+    "knowledge.experience.waiting": "等待操作",
+    "knowledge.experience.processing": "处理中",
+    "knowledge.experience.items": "{done} / {total} 项",
+    "knowledge.experience.llmRequests": "LLM 请求",
+    "knowledge.experience.embeddingRequests": "向量请求",
+    "knowledge.experience.retries": "重试 {count}",
+    "knowledge.experience.generated": "生成 {count}",
+    "knowledge.experience.inputTokens": "输入 Token",
+    "knowledge.experience.outputTokens": "输出 Token",
+    "knowledge.experience.cumulative": "累计",
+    "knowledge.experience.cacheTokens": "缓存读 / 写",
+    "knowledge.experience.currentRequest": "当前请求",
+    "knowledge.experience.noRequest": "尚未发起请求",
+    "knowledge.experience.requestTokens": "输入 {input} / 输出 {output}",
+    "knowledge.experience.preparing": "文件扫描或索引准备阶段，暂时没有 LLM 流输出。",
+    "knowledge.experience.waitingStream": "等待 JSON 流输出…",
+    "knowledge.experience.recentRequests": "最近请求（最多 3 条）",
+    "knowledge.experience.noHistory": "暂无已完成请求记录。",
+    "knowledge.experience.currentFile": "当前文件：",
+    "knowledge.experience.unknown": "未提供",
+    "settings.modelExperience.embeddingNoMatch": "没有匹配的向量模型",
+    "settings.modelExperience.curationUnavailable": "已选整理模型不可用，请重新选择",
+    "settings.modelExperience.embeddingUnavailable": "已选向量模型不可用，请重新选择",
+    "settings.modelExperience.chooseCuration": "选择整理模型",
+    "settings.modelExperience.chooseEmbedding": "选择向量模型",
+    "settings.modelExperience.noCuration": "没有可用的整理模型",
+    "settings.modelExperience.noEmbedding": "没有可用的向量模型",
     "memory.workspace.read": "查看",
     "memory.workspace.purpose": "用途",
     "memory.workspace.actions": "操作",
@@ -3380,10 +3933,32 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.workspace.search": "语义查询",
     "memory.workspace.searchScope": "查询使用当前工作项目的召回范围，与会话浏览中选择的记忆项目独立。",
     "memory.workspace.filters": "筛选条件",
+    "memory.workspace.all": "全部",
+    "memory.workspace.bound": "已绑定",
+    "memory.workspace.unbound": "未绑定",
+    "memory.workspace.overrides": "有覆盖",
+    "memory.workspace.noMatches": "没有匹配结果",
+    "memory.workspace.selectedCount": "已选择 {count} 项",
+    "memory.workspace.clearFilters": "清除筛选",
+    "memory.workspace.dateHint": "按本地时区筛选最近活动；结束日期包含当天。",
+    "memory.workspace.updatesAvailable": "会话有更新，刷新后查看",
+    "memory.workspace.missingOutputs": "以下提取产物不在当前快照中，可刷新确认其状态：",
+    "memory.workspace.missingSource": "来源回合不在当前快照中，可能已移除或不属于当前查询范围。",
+    "memory.workspace.disabled": "当前作用域未启用记忆",
+    "memory.workspace.not_ready": "记忆尚未就绪，仍可配置会话策略",
+    "memory.workspace.ready": "记忆已就绪",
     "memory.workspace.selectSession": "选择会话查看原始对话、提炼结果与长期内容。",
     "memory.workspace.editScope": "编辑范围",
     "memory.workspace.basic": "启用与自动处理",
     "memory.workspace.globalPolicy": "全局处理规则",
+    "memory.workspace.recallPolicy": "召回与提炼",
+    "memory.workspace.textPolicy": "文本清洗",
+    "memory.workspace.profilePolicy": "画像期限",
+    "memory.workspace.rankingPolicy": "检索排序",
+    "memory.workspace.retentionPolicy": "定期清洗",
+    "memory.advanced.catalogLoading": "正在加载记忆项目…",
+    "memory.advanced.catalogFailed": "记忆项目目录加载失败。",
+    "memory.advanced.catalogRetry": "重新加载目录",
     "memory.workspace.scopeHint": "先选择范围。全局默认不会覆盖项目已有的独立设置。",
     "memory.workspace.recordInfo": "状态与记录信息",
     "memory.workspace.projectRules": "项目独立规则",
@@ -3444,7 +4019,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
       "knowledge.filter.placeholder": "筛选知识库",
       "knowledge.refresh": "刷新",
       "knowledge.emptyLibraries": "尚无知识库。",
+      "knowledge.librariesLoading": "正在读取知识库…",
+      "knowledge.noMatchingLibraries": "没有匹配的知识库。",
+      "knowledge.readFailed": "读取失败，请刷新重试。",
       "knowledge.libraryCounts": "{documents} 文档 · {chunks} 切片 · {status}",
+      "knowledge.indexStatus.empty": "暂无内容",
+      "knowledge.indexStatus.ready": "索引就绪",
+      "knowledge.indexStatus.dirty": "索引待更新",
+      "knowledge.indexStatus.rebuilding": "重建索引中",
+      "knowledge.indexStatus.failed": "索引失败",
       "knowledge.defaultDescription": "Markdown 原文、Jieba 分词与 BM25 检索。",
       "knowledge.saveName": "保存名称",
       "knowledge.view": "查看",
@@ -3560,6 +4143,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
       "knowledge.composer.label": "知识库",
       "knowledge.composer.manage": "知识库管理",
       "knowledge.composer.noneAuthorized": "当前项目没有已授权知识库",
+      "knowledge.composer.inherit": "使用项目默认",
+      "knowledge.composer.loading": "正在更新知识库…",
+      "knowledge.composer.readFailed": "暂时无法读取知识库选择。",
+      "knowledge.composer.saveFailed": "选择未确认保存，请刷新状态后重试。",
+      "knowledge.composer.reloadFailed": "选择已保存，暂时无法确认最新状态。",
+      "knowledge.composer.retry": "刷新状态",
+      "knowledge.composer.details": "查看详情",
       "knowledge.package.import": "导入完整库",
       "knowledge.package.export": "导出完整库",
       "knowledge.package.exportPickerTitle": "选择知识库包导出目录",
@@ -3597,6 +4187,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "appChrome.theme": "主题",
     "appChrome.theme.dark": "暗色",
     "appChrome.theme.light": "亮色",
+    "appChrome.themeSaveFailed": "主题已在本次会话生效，但无法保存到当前客户端。",
     "appChrome.language.zh": "中文",
     "appChrome.scrollFeaturesLeft": "向左滚动主功能区",
     "appChrome.scrollFeaturesRight": "向右滚动主功能区",
@@ -3717,6 +4308,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.submission.uploadFailed": "附件上传失败",
     "conversation.submission.uploadFailedAttachmentKept": "文件仍作为附件保留，本轮未发送文件内容。",
     "conversation.submission.uploadProgress": "媒体上传进度",
+    "conversation.submission.sizeUnknown": "尚未获得文件总大小",
+    "conversation.submission.cancelFailed": "未能取消上传，请重试。",
     "conversation.submission.cancelling": "正在取消上传",
     "conversation.loading.requesting": "正在请求会话数据",
     "conversation.loading.locating": "正在定位会话",
@@ -3920,12 +4513,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.loading": "正在加载会话能力…",
     "composer.capability.loadFailed": "会话能力加载失败",
     "composer.capability.retry": "重新加载",
+    "composer.capability.unavailableEnabled": "已保存的开启状态无法生效。请选择可用目标，或关闭此能力。",
+    "composer.capability.disableUnavailable": "关闭并保留选择",
+    "composer.capability.removeUnavailable": "移除选择",
+    "composer.capability.unavailableDetails": "查看已存模型与账号",
+    "composer.capability.operationFailed": "设置未保存，请重试。",
+    "composer.capability.errorDetails": "查看错误详情",
     "composer.capability.rebuild": "重建为默认配置",
     "composer.capability.rebuilding": "正在重建…",
     "composer.capability.rebuildHint": "可重新加载，或将当前会话的扩展能力设置重建为全局默认配置。重建会清除能力自定义选择，不影响对话记录、目标及其他配置。",
     "composer.capability.tooltipEmpty": "暂无已启用模块",
     "composer.capability.dialogTitle": "当前会话能力设置",
-    "composer.capability.dialogDescription": "每项能力只选择一个目标；点击保存后写入当前会话，并从下一次对话开始生效。",
+    "composer.capability.dialogDescription": "选择本会话的能力和执行目标。点击保存后，从下一次对话开始生效。",
     "composer.capability.source.nativeWithTargets": "模型原生 + {count} 个目标",
     "composer.capability.source.native": "模型原生",
     "composer.capability.source.targets": "{count} 个目标",
@@ -3967,6 +4566,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextWindow.locked": "已锁定当前会话的压缩窗口。",
     "composer.contextWindow.defaultRestored": "已恢复跟随模型的默认压缩窗口。",
     "composer.contextWindow.previewUnavailable": "当前预览会话不能保存压缩窗口。",
+    "composer.contextWindow.saveFailed": "压缩窗口未保存，请重试。",
     "composer.modelPicker.filter": "输入模型名称或 ID 过滤",
     "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
     "composer.attachment.add": "添加附件",
@@ -3977,6 +4577,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.processing": "正在确认上传资源",
     "composer.attachment.preparationBlocked": "仍有 {count} 个附件正在准备，完成后才能发送。",
     "composer.attachment.metadataOnly": "此附件不会直接交给模型理解，仅会作为附件清单告知模型。",
+    "composer.attachment.details": "查看附件详情",
+    "composer.attachment.failed": "附件处理失败",
     "composer.attachment.retry": "重试上传",
     "composer.attachment.unsupported": "无法暂存这些附件。",
     "composer.attachment.maxLimit": "最多只能添加 {count} 个附件。",
@@ -4032,6 +4634,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.error.promptEmpty": "请输入任务指令。",
     "composer.error.draftLoadFailed": "会话草稿加载失败，发送已暂停。",
     "composer.error.draftPersistFailed": "会话草稿保存失败，请重试。",
+    "composer.error.draftChangedBeforeSubmission": "草稿已变化，本次未发送，内容已保留。",
     "composer.modelPicker.tooltipTitle": "点击选择模型",
     "composer.modelPicker.currentModel": "当前模型：{model}",
     "composer.modelPicker.currentProvider": "当前供应商：{provider}",
@@ -4195,6 +4798,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.knowledgeBasesDescription": "授权决定本项目可使用的知识库；默认启用决定新会话继承项目设置时自动启用哪些库。",
     "projectSettings.knowledgeBasesLoading": "正在加载知识库授权…",
     "projectSettings.knowledgeBasesSaved": "知识库授权已保存。",
+    "projectSettings.knowledgeBasesSavedRefreshFailed": "授权已保存，但刷新失败。请重新读取当前状态。",
     "projectSettings.projectOverride": "项目覆盖",
     "projectSettings.inheritGlobal": "继承全局",
     "projectSettings.promptSkillCount": "{count} 个技能",
@@ -4220,12 +4824,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
     "projectSettings.enableProjectOverride": "启用项目覆盖",
     "projectSettings.overrideEnabledHint": "保存后当前项目使用下方设置。",
-    "projectSettings.overrideDisabledHint": "保存后清空项目覆盖并继承全局设置。",
+    "projectSettings.overrideDisabledHint": "关闭此开关并保存后，使用全局设置。",
     "projectSettings.vmmTransportHint": "项目级设置继承全局 gRPC 连接与 API Key；连接参数请在 VMM 记忆的全局配置中调整。",
-    "projectSettings.vmmNativeHostHint": "原生 VMM 使用 VulcanCode 宿主的 AI 能力与本地数据目录；外置连接参数不适用。",
+    "projectSettings.vmmNativeHostHint": "原生记忆使用本机数据目录和已配置的 AI 能力。",
+    "projectSettings.vmmNativeEnabled": "启用原生记忆",
+    "projectSettings.vmmAdvanced": "高级注入参数",
     "projectSettings.saveVmm": "保存 VMM 设置",
     "projectSettings.vmmNativeBinding": "原生记忆项目绑定",
     "projectSettings.vmmNativeOwner": "写入归属项目",
+    "projectSettings.vmmNativeLinked": "额外召回项目（仅查询）",
     "projectSettings.vmmNativeSaveBinding": "保存原生绑定",
     "projectSettings.vmmCreateBinding": "创建新的记忆项目绑定",
     "projectSettings.vmmCreateAndBind": "创建并绑定",
@@ -4292,6 +4899,49 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceFiles.copyRelativePath": "复制相对路径",
     "workspaceFiles.copyFileContent": "复制文件内容",
     "workspaceFiles.filterFiles": "筛选文件",
+    "workspaceAudit.connecting": "正在连接当前终端…",
+    "workspaceAudit.terminalFailure": "终端异常：{error}",
+    "workspaceAudit.exited": "终端已退出",
+    "workspaceAudit.exitedWithCode": "终端已退出（退出码 {code}）",
+    "workspaceAudit.stopped": "终端已停止",
+    "workspaceAudit.failed": "终端启动或运行失败",
+    "workspaceAudit.copyTruncated": "已复制预览内容；文件过长，内容已截断。",
+    "workspaceAudit.retry": "重试",
+    "workspaceAudit.viewportLoading": "正在加载终端组件…",
+    "workspaceAudit.aiReadOnly": "AI 控制 · 只读显示",
+    "workspaceAudit.restoreAi": "还原 AI 终端窗口",
+    "workspaceAudit.maximizeAi": "最大化 AI 终端窗口",
+    "workspaceAudit.minimizeAi": "收起 AI 终端",
+    "workspaceAudit.startupSteps": "已完成 {completed}/{total} 个步骤",
+    "workspaceAudit.terminalLoading": "正在加载项目终端…",
+    "workspaceAudit.emptyName": "终端名称不能为空。",
+    "workspaceAudit.terminal": "项目终端",
+    "workspaceAudit.expandList": "展开项目终端列表",
+    "workspaceAudit.collapseList": "折叠项目终端列表",
+    "workspaceAudit.restore": "还原项目终端窗口",
+    "workspaceAudit.maximize": "最大化项目终端窗口",
+    "workspaceAudit.minimize": "收起项目终端",
+    "workspaceAudit.numberedList": "项目终端编号列表",
+    "workspaceAudit.switchTerminal": "切换到终端 {index}：{name}",
+    "workspaceAudit.chooseShell": "选择新终端 Shell",
+    "workspaceAudit.create": "新建项目终端",
+    "workspaceAudit.list": "项目终端列表",
+    "workspaceAudit.name": "终端名称",
+    "workspaceAudit.saveName": "保存 {name} 名称",
+    "workspaceAudit.editName": "编辑 {name} 名称",
+    "workspaceAudit.stop": "停止 {name}",
+    "workspaceAudit.close": "关闭 {name}",
+    "workspaceAudit.stopTitle": "停止终端",
+    "workspaceAudit.closeTitle": "关闭终端",
+    "workspaceAudit.empty": "选择 Shell 后点击 + 新建项目终端",
+    "workspaceAudit.closeConfirm": "关闭运行中的终端？",
+    "workspaceAudit.stopConfirm": "停止当前终端？",
+    "workspaceAudit.closeDescription": "“{name}”仍在运行。确认后将停止完整进程树并移除该终端。",
+    "workspaceAudit.stopDescription": "确认后将停止“{name}”的完整进程树，但保留终端输出标签。",
+    "workspaceAudit.cancel": "取消",
+    "workspaceAudit.processing": "处理中…",
+    "workspaceAudit.confirm": "确认",
+    "workspaceAudit.openDirectory": "打开目录：{path}",
     "workspaceFilePreview.openFile": "打开文件",
     "workspaceFilePreview.emptyHint": "从文件树中选择代码或媒体文件。",
     "workspaceFilePreview.loading": "正在加载预览。",
@@ -4402,7 +5052,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "ask.confirm.submitBody": "按 Enter 确认提交，按 Esc 返回修改。",
     "ask.confirm.rejectBody": "终止后等待中的 ask 工具调用会失败结束，按 Esc 返回修改。",
     "ask.custom.textPlaceholder": "请输入回答",
-    "ask.custom.adjustCodex": "否，请告知 Codex 如何调整",
+    "ask.custom.adjustCodex": "其他回答",
     "ask.custom.description": "输入自定义回答。支持自动换行，按 Shift+Enter 手动换行。",
     "ask.validation.requiredAnswer": "请先填写“{header}”的回答。",
     "ask.validation.requiredOther": "请先填写“{header}”的其他回答。",
@@ -4514,7 +5164,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "terminalState.stopped": "已停止",
     "terminalState.lost": "已丢失",
     "terminalState.unknown": "未知",
-    "toolPresentation.output.loading": "正在加载输出...",
+"toolPresentation.output.loading": "正在加载输出...",
+"toolPresentation.output.loadFailed": "工具结果加载失败",
+"toolPresentation.output.retryLoad": "重新加载",
+"toolPresentation.output.errorDetails": "错误详情",
     "toolPresentation.output.waiting": "等待工具返回输出...",
     "toolPresentation.output.empty": "无输出",
     "toolPresentation.payload.input": "输入",
@@ -4606,7 +5259,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.native.turnDetails": "读取回合详情",
     "toolPresentation.native.memoryWrite": "写入记忆",
     "toolPresentation.native.memoryDelete": "删除记忆",
-    "toolPresentation.native.runtimeConfig": "更新运行配置",
+    "toolPresentation.native.runtimeConfig": "运行配置",
     "toolPresentation.file.count": "{count} 个文件",
     "toolPresentation.file.multiChange": "多文件变更",
     "toolPresentation.file.empty": "无可展示内容",
@@ -4650,6 +5303,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "markdown.wrap.enable": "开启自动换行",
     "markdown.wrap.disable": "关闭自动换行",
     "markdown.copyCode": "复制代码",
+    "conversation.control.copyFailed": "复制失败",
+    "conversation.control.actionFailed": "操作失败",
+    "conversation.control.detailFailed": "详情读取失败",
+    "conversation.control.retry": "重新读取",
     "markdown.copied": "已复制",
     "mediaPlayer.maximize": "最大化播放器",
     "mediaPlayer.restore": "还原播放器",
@@ -4818,8 +5475,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.sessionList.extraction": "提取状态",
     "memory.sessionList.allStates": "全部会话状态",
     "memory.sessionList.allExtraction": "全部提取状态",
-    "memory.sessionList.from": "最近活动起始日期（本地）",
-    "memory.sessionList.before": "最近活动截止日期（含当天，本地）",
+    "memory.sessionList.from": "开始日期",
+    "memory.sessionList.before": "结束日期",
     "memory.sessionList.sort": "排序方式",
     "memory.sessionList.newest": "最近活动优先",
     "memory.sessionList.oldest": "最早活动优先",
@@ -4862,6 +5519,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.removal.userProfiles": "关联用户画像（保留）",
     "memory.removal.retention": "从确认执行时起保留",
     "memory.removal.days": "天；到期后可由清洗任务永久清除。",
+    "memory.removal.expirySuffix": "；到期后可由清洗任务永久清除。",
+    "memory.rules.invalidNumbers": "次数与数量须为 0–4294967295 的整数；留空表示继承。请修正标记的输入后保存。",
+    "memory.rules.features": "功能与权限",
+    "memory.rules.retentionProfiles": "保留与画像",
+    "memory.advanced.invalidNumbers": "传输参数须为非负整数；留空表示继承。请修正标记的输入后保存。",
+    "memory.projectProfile.durationHint": "期限 = 基础期限 + 刷新次数 × 延长量，不超过最长保留。基础期限至少 1 毫秒且不大于最长保留；延长量可为 0；上限为 3650 天。每个单位只影响相邻数值，持久级始终不过期。",
     "memory.removal.sources": "查看准确来源会话与回合",
     "memory.removal.confirm": "确认移入回收站",
     "memory.removal.failed": "回收未完成，请查看动作错误并重新预览。预览过期或数据变化后不能继续使用原确认。",
@@ -5106,7 +5769,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.hostPolicy.overridden": "使用本项目覆盖",
     "memory.hostPolicy.inherit": "恢复本组全局继承",
     "memory.hostPolicy.saved": "本项目参数已保存，下一个命令生效。",
-    "memory.hostPolicy.connection": "启用连接与注入参数覆盖",
+    "memory.hostPolicy.connection": "为本项目单独设置",
     "memory.profilePolicy.title": "画像保留期限",
     "memory.profilePolicy.description": "分别设置固定用户画像和项目画像默认期限。只影响之后生成或修订的画像，不重写已有截止时间。",
     "memory.profilePolicy.user": "用户画像",
@@ -5297,6 +5960,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.title": "清洗与回收",
     "memory.maintenance.description": "启用周期清洗后按当前设置运行；这里可查看策略、预览人工清洗影响并维护回收站。",
     "memory.maintenance.invalidResponse": "原生 VMM 清洗接口返回了不匹配的结果。",
+    "memory.maintenance.readFailed": "读取失败，请刷新重试。",
     "memory.maintenance.runNow": "立即清洗",
     "memory.lexical.title": "全文检索索引",
     "memory.lexical.description": "使用 Jieba 分词搜索记忆摘要与详情。可从当前活跃记忆重新生成全文文档并重建索引，不调用模型、不重新生成向量。",
@@ -5739,7 +6403,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.runtimeDiagnostics": "运行诊断",
     "settings.visualLab": "视觉实验室",
     "settings.gitCommit": "Git 提交",
-    "settings.promptComposer": "提示词组合",
     "settings.aboutLicenses": "关于与许可证",
     "settings.archivedRestore": "归档恢复",
     "settings.modelProviders.description": "查看全部已实现供应商，并管理自定义兼容供应商。",
@@ -6327,7 +6990,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.providers": "供应商",
     "settings.providerTools.targets": "目标列表",
     "settings.providerTools.systemDefault": "系统默认配置",
-    "settings.providerTools.systemDefaultHint": "能力开关、默认模型与默认账号相互独立；新会话创建时复制此配置。",
+    "settings.providerTools.systemDefaultHint": "选择可用模型与账号后才能启用。目标失效时默认关闭；新会话创建时采用此配置。",
     "settings.providerTools.model": "模型",
     "settings.providerTools.account": "账号",
     "settings.providerTools.selectModel": "请选择模型",
@@ -6408,7 +7071,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.monitoringEnabled": "监听中",
     "gitCommitDialog.monitoringDisabled": "已关闭",
     "gitCommitDialog.monitoringManager": "GIT设置",
-    "gitCommitDialog.monitoringManagerDescription": "选择需要监听的仓库，并调整显示顺序。第一个启用仓库固定展开。",
+    "gitCommitDialog.monitoringManagerDescription": "选择需要监听的仓库并调整显示顺序。在仓库列表中切换当前操作对象。",
     "gitCommitDialog.moveRepositoryUp": "上移仓库",
     "gitCommitDialog.moveRepositoryDown": "下移仓库",
     "gitCommitDialog.open": "提交或推送",
@@ -6426,7 +7089,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.commitAndPush": "提交并推送",
     "gitCommitDialog.push": "推送",
     "gitCommitDialog.commitTo": "提交到",
-    "settings.promptComposer.description": "输入区 slash 指令、附件能力与推理选择。",
     "settings.aboutLicenses.description": "应用版本、许可证入口与合规说明。",
     "settings.archivedRestore.description": "归档项目与会话恢复入口。",
     "skills.action.refresh": "刷新",
@@ -6610,9 +7272,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.totalTokens": "总 Tokens",
     "composer.capability.mediaBackendMode": "后端模式",
     "composer.capability.mediaFixedRoute": "固定路由",
-    "composer.capability.mediaBackendNote": "当前会话可独立选择任意可用的后端、模型、账号与模型代替推理档位；会话选择覆盖系统默认值，工具参数结构不会变化。",
+    "composer.capability.mediaBackendNote": "此处的模型、账号和思考档位仅用于当前会话，不修改系统默认设置。",
     "composer.capability.mediaBackendMissing": "请先在模型设置中配置此媒体理解能力的可用后端模式。",
-    "composer.capability.extensionHint": "选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。",
+    "composer.attachment.previewUnavailable": "此文件类型暂不支持预览，仍可随消息发送。",
+    "composer.attachment.stagingPending": "正在暂存附件，完成后即可发送。",
+    "composer.capability.extensionHint": "可以选择多个模型，AI 会按需使用。",
     "composer.capability.extensionProfileMissing": "缺少已审核模型扩展说明，当前不可选择。",
     "composer.capability.extensionConstraints": "约束：{value}",
     "composer.capability.extensionLimitations": "限制：{value}",
@@ -6732,6 +7396,227 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providers.savePriority": "保存",
   },
   "en-US": {
+    "ui.close": "Close",
+    "ui.loading": "Loading",
+    "settings.modelExperience.invalidValue": "The current value is outside the declared capabilities",
+    "settings.modelExperience.extensionSelectionHint": "Choose native extension models that AI can discover and call as needed. Select an account for each model.",
+    "settings.modelExperience.retainedEmbeddingInvalid": "A retained embedding dimension or batch size is invalid. Switch to vector retrieval and correct it before saving.",
+    "gitRepository.list": "Git repositories",
+    "gitRepository.primary": "Primary",
+    "gitRepository.nested": "Nested",
+    "gitRepository.branchUnknown": "Branch unavailable",
+    "gitRepository.changesUnknown": "Changes unavailable",
+    "gitRepository.changedFiles": "{count} changed files",
+    "gitRepository.refreshing": "Refreshing",
+    "gitRepository.readFailed": "Read failed",
+    "gitRepository.busy": "Action in progress",
+    "gitRepository.loading": "Loading repository status…",
+    "gitRepository.unavailable": "Repository status unavailable",
+    "gitRepository.retryReview": "Open review and retry",
+    "projectOverview.conversations": "{count} conversations",
+    "projectOverview.pinned": "Pinned",
+    "projectOverview.issues": "Needs attention",
+    "projectOverview.memoryLoading": "Loading memory settings…",
+    "projectOverview.memoryUnknown": "Memory settings unavailable",
+    "projectOverview.native": "Local native",
+    "projectOverview.external": "External service",
+    "projectOverview.enabled": "Enabled in settings",
+    "projectOverview.disabled": "Disabled in settings",
+    "projectOverview.override": "Project override",
+    "projectOverview.inherited": "Inherited from global settings",
+    "projectOverview.unsaved": "Unsaved changes",
+    "projectOverview.missingOwner": "Memory owner #{id} is absent from the current catalog",
+    "projectOverview.ownerUnknown": "Owner absent from catalog",
+    "projectOverview.nativeBinding": "{name} (#{id}) · {count} linked recall projects",
+    "projectOverview.unbound": "No memory project bound",
+    "projectOverview.bindingUnknown": "Binding information unavailable",
+    "projectOverview.externalBinding": "External memory project #{id}",
+    "projectOverview.externalUnbound": "No external memory project bound",
+    "projectOverview.precheck": "Precheck injection",
+    "projectOverview.writeback": "Turn writeback",
+    "projectOverview.on": "On",
+    "projectOverview.off": "Off",
+    "projectOverview.session": "Current session",
+    "projectOverview.scopeReady": "Memory scope ready",
+    "projectOverview.scopeNotReady": "Memory scope not ready",
+    "projectOverview.precheckReady": "Precheck ready",
+    "projectOverview.precheckNotReady": "Precheck not ready",
+    "projectOverview.postactionReady": "Postaction ready",
+    "projectOverview.postactionNotReady": "Postaction not ready",
+    "projectOverview.runtimeUnknown": "No current-session runtime snapshot for this project",
+    "projectOverview.memorySettings": "Memory settings",
+    "projectOverview.codeSettings": "Code context settings",
+    "projectOverview.knowledgeSettings": "Knowledge settings",
+    "projectOverview.skillSettings": "Skill settings",
+    "projectOverview.indexDisabled": "Code context disabled",
+    "projectOverview.queryReady": "Code context searchable",
+    "projectOverview.queryUnavailable": "Code context currently unavailable",
+    "projectOverview.indexUnknown": "Index status unavailable",
+    "projectOverview.watching": "Watching source files",
+    "projectOverview.notWatching": "Not watching source files",
+    "projectOverview.pending": "Source updates pending",
+    "projectOverview.files": "{count} files",
+    "projectOverview.routesUnavailable": "Model routes not ready",
+    "projectOverview.knowledgeCount": "{total} authorized libraries · {enabled} enabled by default",
+    "projectOverview.knowledgeFailed": "Knowledge bindings could not be loaded",
+    "projectOverview.knowledgeLoading": "Loading knowledge bindings…",
+    "projectOverview.skillsLoading": "Loading skill overrides…",
+    "projectOverview.skillsUnknown": "Skill overrides unavailable",
+    "projectOverview.skillsCount": "{count} project skill overrides",
+    "projectOverview.skillsInherited": "Skills inherit global settings",
+    "projectOverview.maintenance": "Attachment statistics load on demand. Preview the impact before cleaning up.",
+    "projectOverview.attachments": "Inspect and clean attachments",
+    "projectOverview.details": "Project directory and storage details",
+    "projectOverview.path": "Project directory",
+    "projectOverview.copyPath": "Copy project path",
+    "projectOverview.copy": "Copy path",
+    "projectOverview.copied": "Copied",
+    "projectOverview.copyFailed": "Copy failed; select the path text to copy it",
+    "projectOverview.attachmentPath": "Attachment directory",
+    "projectOverview.id": "Project ID",
+    "settings.licenses.title": "About and licenses",
+    "settings.licenses.types": "license types",
+    "settings.licenses.dependencies": "dependencies",
+    "settings.licenses.scope": "This catalog covers Rust desktop application dependencies. Frontend and Lua dependencies are not yet included.",
+    "settings.licenses.search": "Search licenses, dependencies, versions or sources",
+    "settings.licenses.reload": "Reload",
+    "settings.licenses.loadError": "Could not read license resources",
+    "settings.licenses.loading": "Loading license catalog…",
+    "settings.licenses.emptySearch": "No matching licenses or dependencies.",
+    "settings.licenses.unknown": "Unknown license",
+    "settings.licenses.variants": "original bodies",
+    "settings.licenses.dependency": "Dependency",
+    "settings.licenses.version": "Version",
+    "settings.licenses.source": "Source",
+    "settings.licenses.body": "Body",
+    "settings.licenses.previous": "Previous dependency page",
+    "settings.licenses.next": "Next dependency page",
+    "settings.licenses.variant": "Select original body",
+    "settings.licenses.variantHint": "Licenses of the same type may carry different copyright notices; each original body retains its actual dependencies.",
+    "settings.licenses.retry": "Retry reading",
+    "settings.licenses.loadingBody": "Loading original body…",
+    "settings.modelExperience.retryLoad": "Reload settings",
+    "settings.modelExperience.context": "Context and compaction",
+    "settings.modelExperience.conversation": "Conversation defaults",
+    "settings.modelExperience.nodes": "Compaction window nodes",
+    "settings.modelExperience.retry": "Requests and retries",
+    "settings.modelExperience.media": "Media delivery",
+    "settings.modelExperience.usage": "Usage refresh",
+    "settings.modelExperience.scopeHint": "Saving changes only system defaults. Provider, model, and conversation overrides remain independent.",
+    "settings.modelExperience.inheritWindow": "Built-in default: 95% of the raw model window",
+    "settings.modelExperience.inheritCompact": "Built-in default: 90% of the raw model window",
+    "settings.modelExperience.inheritToken": "Built-in default: calculate by percentage, with no fixed token limit",
+    "settings.modelExperience.inheritScope": "Built-in default: total usage",
+    "settings.modelExperience.inheritBuffer": "Built-in default: 0 tokens; used only when a fallback prompt exists",
+    "settings.modelExperience.savingSystem": "Saving system defaults…",
+    "settings.modelExperience.dirtySystem": "System defaults have unsaved changes",
+    "settings.modelExperience.savedSystem": "Current system defaults are saved",
+    "settings.modelExperience.savingNodes": "Saving nodes…",
+    "settings.modelExperience.dirtyNodes": "Compaction window nodes have unsaved changes",
+    "settings.modelExperience.savedNodes": "Current node configuration is saved",
+    "settings.modelExperience.nodeIds": "Fixed node identifiers",
+    "settings.modelExperience.statistics": "View usage statistics and pricing",
+    "settings.modelExperience.searchCustom": "Search custom providers",
+    "settings.modelExperience.searchProvider": "Search providers",
+    "settings.modelExperience.searchPlaceholder": "Search provider name or identifier",
+    "settings.modelExperience.noProviders": "No matching providers",
+    "settings.modelExperience.providerDetails": "Access and protocol details",
+    "settings.modelExperience.usageFilter": "Filter model usage",
+    "settings.modelExperience.allUsages": "All uses",
+    "settings.modelExperience.conversationEnabled": "Conversation use enabled",
+    "settings.modelExperience.internalEnabled": "Internal use enabled",
+    "settings.modelExperience.multimodalEnabled": "Understanding candidate enabled",
+    "settings.modelExperience.capabilityFilter": "Filter model capabilities",
+    "settings.modelExperience.allCapabilities": "All capabilities",
+    "settings.modelExperience.routes": "Access details · {count} routes",
+    "settings.modelExperience.routeAccounts": "Credential accounts for this route",
+    "settings.modelExperience.available": "Available",
+    "settings.modelExperience.accountNotAdmitted": "Model disabled for this account",
+    "settings.modelExperience.internalPurposes": "Internal uses: {purposes}",
+    "settings.modelExperience.candidateHint": "Understanding candidate enabled. Select default models independently in understanding settings.",
+    "settings.modelExperience.noConversation": "Conversation responses unavailable",
+    "settings.modelExperience.unavailableCandidates": "Unavailable understanding candidates",
+    "settings.modelExperience.disableCandidate": "Disable this candidate",
+    "settings.modelExperience.curationModel": "Curation model",
+    "settings.modelExperience.embeddingModel": "Embedding model",
+    "settings.modelExperience.modelSearch": "Search model, provider, or account",
+    "settings.modelExperience.curationNoMatch": "No matching curation models",
+    "settings.modelExperience.modelNoMatch": "No matching models",
+    "knowledge.experience.targetChanged": "The target library has changed. Cancel and review the replacement again.",
+    "knowledge.experience.createTitle": "Create library",
+    "knowledge.experience.retrievalMode": "Retrieval mode",
+    "knowledge.experience.rawMode": "Raw library BM25 (no model cost)",
+    "knowledge.experience.displayMode": "LLM-curated display library + BM25",
+    "knowledge.experience.hybridMode": "LLM-curated display library + BM25 + vectors",
+    "knowledge.experience.reasoning": "Reasoning effort",
+    "knowledge.experience.reasoningPlaceholder": "Select a model-declared reasoning effort",
+    "knowledge.experience.reasoningHint": "The model-declared effort is saved with this library and used for curation requests.",
+    "knowledge.experience.dimensions": "Embedding dimensions",
+    "knowledge.experience.dimensionsPlaceholder": "Select model-declared dimensions",
+    "knowledge.experience.dimensionsInput": "Enter dimensions supported by the model",
+    "knowledge.experience.dimensionsInvalid": "Dimensions are outside the current model's capabilities",
+    "knowledge.experience.batch": "Embedding batch size (declared limit: {limit})",
+    "knowledge.experience.batchFallback": "Not declared; default is 10",
+    "knowledge.experience.compatibility": "Same-dimension compatibility confirmation (optional)",
+    "knowledge.experience.compatibilityPlaceholder": "Explain why the existing index can be reused after changing models without changing dimensions",
+    "knowledge.experience.compatibilityHint": "Providing a reason retains the existing index and displays the risk. Different dimensions still disable vector retrieval.",
+    "knowledge.experience.compatibilityActive": "Same-dimension compatibility was confirmed manually; the existing vector index is reused: {reason}",
+    "knowledge.experience.browseCorpus": "Browse corpus",
+    "knowledge.experience.rawLibrary": "Raw library",
+    "knowledge.experience.displayLibrary": "Display library",
+    "knowledge.experience.searchLayer": "Search corpus",
+    "knowledge.experience.rawSearch": "Raw library BM25",
+    "knowledge.experience.displaySearch": "Display library BM25",
+    "knowledge.experience.hybridSearch": "Display library hybrid search",
+    "knowledge.experience.viewProgress": "View generation progress",
+    "knowledge.experience.resume": "Resume generation",
+    "knowledge.experience.displayReady": "Display library ready",
+    "knowledge.experience.regenerate": "Regenerate",
+    "knowledge.experience.buildDisplay": "Build display library",
+    "knowledge.experience.buildVectors": "Build vectors",
+    "knowledge.experience.saveSettings": "Save library settings",
+    "knowledge.experience.configure": "Configure",
+    "knowledge.experience.settingsTitle": "Library models and retrieval settings",
+    "knowledge.experience.displayOperation": "Build library display layer",
+    "knowledge.experience.vectorOperation": "Build library vector index",
+    "knowledge.experience.background": "Run in background",
+    "knowledge.experience.curating": "Curate display library",
+    "knowledge.experience.curatingNow": "Curating display library",
+    "knowledge.experience.embeddingNow": "Building vector index",
+    "knowledge.experience.curatingProgress": "Curating display library {done} / {total} ({percent}%)",
+    "knowledge.experience.embeddingProgress": "Building vectors {done} / {total} ({percent}%)",
+    "knowledge.experience.cancelling": "Requesting cancellation",
+    "knowledge.experience.failed": "Operation failed",
+    "knowledge.experience.cancelled": "Operation cancelled",
+    "knowledge.experience.completed": "Operation completed",
+    "knowledge.experience.running": "Running",
+    "knowledge.experience.waiting": "Waiting for operation",
+    "knowledge.experience.processing": "Processing",
+    "knowledge.experience.items": "{done} / {total} items",
+    "knowledge.experience.llmRequests": "LLM requests",
+    "knowledge.experience.embeddingRequests": "Embedding requests",
+    "knowledge.experience.retries": "Retries {count}",
+    "knowledge.experience.generated": "Generated {count}",
+    "knowledge.experience.inputTokens": "Input tokens",
+    "knowledge.experience.outputTokens": "Output tokens",
+    "knowledge.experience.cumulative": "Cumulative",
+    "knowledge.experience.cacheTokens": "Cache read / write",
+    "knowledge.experience.currentRequest": "Current request",
+    "knowledge.experience.noRequest": "No request started",
+    "knowledge.experience.requestTokens": "Input {input} / output {output}",
+    "knowledge.experience.preparing": "File scanning or index preparation is in progress; no LLM stream is available yet.",
+    "knowledge.experience.waitingStream": "Waiting for JSON stream…",
+    "knowledge.experience.recentRequests": "Recent requests (up to 3)",
+    "knowledge.experience.noHistory": "No completed requests yet.",
+    "knowledge.experience.currentFile": "Current file: ",
+    "knowledge.experience.unknown": "Not provided",
+    "settings.modelExperience.embeddingNoMatch": "No matching embedding models",
+    "settings.modelExperience.curationUnavailable": "Selected curation model unavailable; select another",
+    "settings.modelExperience.embeddingUnavailable": "Selected embedding model unavailable; select another",
+    "settings.modelExperience.chooseCuration": "Select a curation model",
+    "settings.modelExperience.chooseEmbedding": "Select an embedding model",
+    "settings.modelExperience.noCuration": "No available curation models",
+    "settings.modelExperience.noEmbedding": "No available embedding models",
     "memory.workspace.read": "Browse",
     "memory.workspace.purpose": "Purpose",
     "memory.workspace.actions": "Actions",
@@ -6742,10 +7627,32 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.workspace.search": "Semantic search",
     "memory.workspace.searchScope": "Search uses the current workspace project recall scope, independently of the memory project selected for browsing.",
     "memory.workspace.filters": "Filters",
+    "memory.workspace.all": "All",
+    "memory.workspace.bound": "Bound",
+    "memory.workspace.unbound": "Unbound",
+    "memory.workspace.overrides": "Overrides",
+    "memory.workspace.noMatches": "No matching results",
+    "memory.workspace.selectedCount": "{count} selected",
+    "memory.workspace.clearFilters": "Clear filters",
+    "memory.workspace.dateHint": "Filters recent activity in local time; the end date includes the entire day.",
+    "memory.workspace.updatesAvailable": "Sessions have changed. Refresh to view updates.",
+    "memory.workspace.missingOutputs": "These referenced outputs are absent from this snapshot. Refresh to check their status:",
+    "memory.workspace.missingSource": "The source turn is absent from this snapshot. It may have been removed or be outside the current query scope.",
+    "memory.workspace.disabled": "Memory is disabled in this scope",
+    "memory.workspace.not_ready": "Memory is not ready; session policies remain editable",
+    "memory.workspace.ready": "Memory is ready",
     "memory.workspace.selectSession": "Select a session to read its conversation, extraction results, and retained content.",
     "memory.workspace.editScope": "Editing scope",
     "memory.workspace.basic": "Enablement and automation",
     "memory.workspace.globalPolicy": "Global processing rules",
+    "memory.workspace.recallPolicy": "Recall & extraction",
+    "memory.workspace.textPolicy": "Text cleanup",
+    "memory.workspace.profilePolicy": "Profile lifetimes",
+    "memory.workspace.rankingPolicy": "Retrieval ranking",
+    "memory.workspace.retentionPolicy": "Retention",
+    "memory.advanced.catalogLoading": "Loading memory projects…",
+    "memory.advanced.catalogFailed": "The memory project directory could not be loaded.",
+    "memory.advanced.catalogRetry": "Reload directory",
     "memory.workspace.scopeHint": "Choose a scope first. Global defaults do not replace existing project overrides.",
     "memory.workspace.recordInfo": "Status and record information",
     "memory.workspace.projectRules": "Project overrides",
@@ -6806,7 +7713,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
       "knowledge.filter.placeholder": "Filter libraries",
       "knowledge.refresh": "Refresh",
       "knowledge.emptyLibraries": "No knowledge libraries yet.",
+      "knowledge.librariesLoading": "Loading knowledge libraries…",
+      "knowledge.noMatchingLibraries": "No matching knowledge libraries.",
+      "knowledge.readFailed": "Could not load this content. Refresh to retry.",
       "knowledge.libraryCounts": "{documents} documents · {chunks} chunks · {status}",
+      "knowledge.indexStatus.empty": "No content",
+      "knowledge.indexStatus.ready": "Index ready",
+      "knowledge.indexStatus.dirty": "Index needs updating",
+      "knowledge.indexStatus.rebuilding": "Rebuilding index",
+      "knowledge.indexStatus.failed": "Index failed",
       "knowledge.defaultDescription": "Markdown source with Jieba tokenization and BM25 search.",
       "knowledge.saveName": "Save name",
       "knowledge.view": "View",
@@ -6922,6 +7837,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
       "knowledge.composer.label": "Knowledge",
       "knowledge.composer.manage": "Manage knowledge libraries",
       "knowledge.composer.noneAuthorized": "No knowledge libraries are authorized for this project",
+      "knowledge.composer.inherit": "Use project defaults",
+      "knowledge.composer.loading": "Updating knowledge libraries…",
+      "knowledge.composer.readFailed": "Knowledge selection could not be loaded.",
+      "knowledge.composer.saveFailed": "Save not confirmed. Refresh the state before trying again.",
+      "knowledge.composer.reloadFailed": "Selection saved. The latest state could not be loaded.",
+      "knowledge.composer.retry": "Refresh state",
+      "knowledge.composer.details": "View details",
       "knowledge.package.import": "Import library",
       "knowledge.package.export": "Export library",
       "knowledge.package.exportPickerTitle": "Select a package export directory",
@@ -6959,6 +7881,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "appChrome.theme": "Theme",
     "appChrome.theme.dark": "Dark",
     "appChrome.theme.light": "Light",
+    "appChrome.themeSaveFailed": "The theme is active for this session, but could not be saved on this client.",
     "appChrome.language.zh": "Chinese",
     "appChrome.scrollFeaturesLeft": "Scroll main features left",
     "appChrome.scrollFeaturesRight": "Scroll main features right",
@@ -7079,6 +8002,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.submission.uploadFailed": "Attachment upload failed",
     "conversation.submission.uploadFailedAttachmentKept": "The file remains attached. Its content was not sent in this turn.",
     "conversation.submission.uploadProgress": "Media upload progress",
+    "conversation.submission.sizeUnknown": "The total file size is not available yet",
+    "conversation.submission.cancelFailed": "Could not cancel the upload. Please retry.",
     "conversation.submission.cancelling": "Cancelling upload",
     "conversation.loading.requesting": "Requesting conversation data",
     "conversation.loading.locating": "Locating conversation",
@@ -7282,12 +8207,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.loading": "Loading session capabilities…",
     "composer.capability.loadFailed": "Failed to load session capabilities",
     "composer.capability.retry": "Reload",
+    "composer.capability.unavailableEnabled": "The saved activation cannot take effect. Choose an available target or turn off this capability.",
+    "composer.capability.disableUnavailable": "Turn off and keep selection",
+    "composer.capability.removeUnavailable": "Remove selection",
+    "composer.capability.unavailableDetails": "View saved model and account",
+    "composer.capability.operationFailed": "Settings were not saved. Please try again.",
+    "composer.capability.errorDetails": "View error details",
     "composer.capability.rebuild": "Rebuild default settings",
     "composer.capability.rebuilding": "Rebuilding…",
     "composer.capability.rebuildHint": "Reload, or rebuild this conversation's capability settings from global defaults. Rebuilding clears custom capability choices without changing history, goals, or other settings.",
     "composer.capability.tooltipEmpty": "No enabled modules",
     "composer.capability.dialogTitle": "Current session capabilities",
-    "composer.capability.dialogDescription": "Changes are saved to this session only after you click Save, and affect the next turn's cache hit rate.",
+    "composer.capability.dialogDescription": "Choose this session's capabilities and execution targets. Saved choices apply to subsequent turns.",
     "composer.capability.source.nativeWithTargets": "Native + {count} targets",
     "composer.capability.source.native": "Native model",
     "composer.capability.source.targets": "{count} targets",
@@ -7329,6 +8260,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextWindow.locked": "The compaction window is locked for this session.",
     "composer.contextWindow.defaultRestored": "The default model compaction window is restored.",
     "composer.contextWindow.previewUnavailable": "The preview session cannot save a compaction window.",
+    "composer.contextWindow.saveFailed": "The compaction window was not saved. Please retry.",
     "composer.modelPicker.filter": "Filter by model name or ID",
     "composer.modelPicker.noMatches": "No models match the current filter.",
     "composer.attachment.add": "Add attachment",
@@ -7339,6 +8271,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.processing": "Confirming uploaded resource",
     "composer.attachment.preparationBlocked": "{count} attachment(s) are still being prepared. Wait for completion before sending.",
     "composer.attachment.metadataOnly": "This attachment will be disclosed as metadata only and will not be sent for direct model understanding.",
+    "composer.attachment.details": "View attachment details",
+    "composer.attachment.failed": "Attachment preparation failed",
     "composer.attachment.retry": "Retry upload",
     "composer.attachment.unsupported": "These attachments could not be staged.",
     "composer.attachment.maxLimit": "You can add at most {count} attachments.",
@@ -7394,6 +8328,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.error.promptEmpty": "Enter a task instruction.",
     "composer.error.draftLoadFailed": "Failed to load the conversation draft. Sending is paused.",
     "composer.error.draftPersistFailed": "Failed to save the conversation draft. Try again.",
+    "composer.error.draftChangedBeforeSubmission": "The draft changed. Nothing was sent and your content was kept.",
     "composer.modelPicker.tooltipTitle": "Select model",
     "composer.modelPicker.currentModel": "Current model: {model}",
     "composer.modelPicker.currentProvider": "Current provider: {provider}",
@@ -7557,6 +8492,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.knowledgeBasesDescription": "Authorization controls which libraries this project may use. Default enablement controls which libraries new sessions inherit.",
     "projectSettings.knowledgeBasesLoading": "Loading knowledge-base access…",
     "projectSettings.knowledgeBasesSaved": "Knowledge-base access saved.",
+    "projectSettings.knowledgeBasesSavedRefreshFailed": "Access was saved, but refreshing failed. Reload the current state.",
     "projectSettings.projectOverride": "Project override",
     "projectSettings.inheritGlobal": "Inherit global",
     "projectSettings.promptSkillCount": "{count} skills",
@@ -7582,12 +8518,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.vmmLoading": "Loading project VMM settings...",
     "projectSettings.enableProjectOverride": "Enable project override",
     "projectSettings.overrideEnabledHint": "After saving, this project uses the settings below.",
-    "projectSettings.overrideDisabledHint": "After saving, project overrides are cleared and global settings are inherited.",
+    "projectSettings.overrideDisabledHint": "Switch off and save to use global settings.",
     "projectSettings.vmmTransportHint": "Project-level settings inherit the global gRPC connection and API Key; adjust connection parameters in global VMM memory settings.",
-    "projectSettings.vmmNativeHostHint": "Native VMM uses VulcanCode host AI capabilities and its local data directory; external connection settings do not apply.",
+    "projectSettings.vmmNativeHostHint": "Native memory uses the local data directory and configured AI capabilities.",
+    "projectSettings.vmmNativeEnabled": "Enable native memory",
+    "projectSettings.vmmAdvanced": "Advanced injection settings",
     "projectSettings.saveVmm": "Save VMM settings",
     "projectSettings.vmmNativeBinding": "Native memory project binding",
     "projectSettings.vmmNativeOwner": "Write owner project",
+    "projectSettings.vmmNativeLinked": "Additional recall projects (read only)",
     "projectSettings.vmmNativeSaveBinding": "Save native binding",
     "projectSettings.vmmCreateBinding": "Create a new memory project binding",
     "projectSettings.vmmCreateAndBind": "Create and bind",
@@ -7654,6 +8593,49 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceFiles.copyRelativePath": "Copy relative path",
     "workspaceFiles.copyFileContent": "Copy file content",
     "workspaceFiles.filterFiles": "Filter files",
+    "workspaceAudit.connecting": "Connecting to this terminal…",
+    "workspaceAudit.terminalFailure": "Terminal error: {error}",
+    "workspaceAudit.exited": "Terminal exited",
+    "workspaceAudit.exitedWithCode": "Terminal exited (code {code})",
+    "workspaceAudit.stopped": "Terminal stopped",
+    "workspaceAudit.failed": "Terminal failed to start or run",
+    "workspaceAudit.copyTruncated": "Preview copied; the long file content was truncated.",
+    "workspaceAudit.retry": "Retry",
+    "workspaceAudit.viewportLoading": "Loading terminal component…",
+    "workspaceAudit.aiReadOnly": "AI controlled · Read-only display",
+    "workspaceAudit.restoreAi": "Restore AI terminal window",
+    "workspaceAudit.maximizeAi": "Maximize AI terminal window",
+    "workspaceAudit.minimizeAi": "Minimize AI terminal",
+    "workspaceAudit.startupSteps": "{completed}/{total} steps completed",
+    "workspaceAudit.terminalLoading": "Loading project terminals…",
+    "workspaceAudit.emptyName": "Terminal name cannot be empty.",
+    "workspaceAudit.terminal": "Project terminal",
+    "workspaceAudit.expandList": "Expand project terminal list",
+    "workspaceAudit.collapseList": "Collapse project terminal list",
+    "workspaceAudit.restore": "Restore project terminal window",
+    "workspaceAudit.maximize": "Maximize project terminal window",
+    "workspaceAudit.minimize": "Minimize project terminal",
+    "workspaceAudit.numberedList": "Numbered project terminals",
+    "workspaceAudit.switchTerminal": "Switch to terminal {index}: {name}",
+    "workspaceAudit.chooseShell": "Select shell for a new terminal",
+    "workspaceAudit.create": "Create project terminal",
+    "workspaceAudit.list": "Project terminal list",
+    "workspaceAudit.name": "Terminal name",
+    "workspaceAudit.saveName": "Save name for {name}",
+    "workspaceAudit.editName": "Edit name for {name}",
+    "workspaceAudit.stop": "Stop {name}",
+    "workspaceAudit.close": "Close {name}",
+    "workspaceAudit.stopTitle": "Stop terminal",
+    "workspaceAudit.closeTitle": "Close terminal",
+    "workspaceAudit.empty": "Choose a shell, then select + to create a project terminal",
+    "workspaceAudit.closeConfirm": "Close the running terminal?",
+    "workspaceAudit.stopConfirm": "Stop this terminal?",
+    "workspaceAudit.closeDescription": "“{name}” is running. Confirmation stops its entire process tree and removes this terminal.",
+    "workspaceAudit.stopDescription": "Confirmation stops the entire process tree of “{name}” and keeps its output tab.",
+    "workspaceAudit.cancel": "Cancel",
+    "workspaceAudit.processing": "Processing…",
+    "workspaceAudit.confirm": "Confirm",
+    "workspaceAudit.openDirectory": "Open directory: {path}",
     "workspaceFilePreview.openFile": "Open file",
     "workspaceFilePreview.emptyHint": "Select a code or media file from the file tree.",
     "workspaceFilePreview.loading": "Loading preview.",
@@ -7764,7 +8746,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "ask.confirm.submitBody": "Press Enter to submit, or Esc to return to editing.",
     "ask.confirm.rejectBody": "Stopping will fail the waiting ask tool call. Press Esc to return to editing.",
     "ask.custom.textPlaceholder": "Enter an answer",
-    "ask.custom.adjustCodex": "No, tell Codex how to adjust",
+    "ask.custom.adjustCodex": "Other answer",
     "ask.custom.description": "Enter a custom answer. Lines wrap automatically; press Shift+Enter for a manual line break.",
     "ask.validation.requiredAnswer": "Please answer \"{header}\" first.",
     "ask.validation.requiredOther": "Please fill in the other answer for \"{header}\" first.",
@@ -7876,7 +8858,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "terminalState.stopped": "Stopped",
     "terminalState.lost": "Lost",
     "terminalState.unknown": "Unknown",
-    "toolPresentation.output.loading": "Loading output...",
+"toolPresentation.output.loading": "Loading output...",
+"toolPresentation.output.loadFailed": "Unable to load the tool result",
+"toolPresentation.output.retryLoad": "Reload",
+"toolPresentation.output.errorDetails": "Error details",
     "toolPresentation.output.waiting": "Waiting for tool output...",
     "toolPresentation.output.empty": "No output",
     "toolPresentation.payload.input": "Input",
@@ -7968,7 +8953,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.native.turnDetails": "Read turn details",
     "toolPresentation.native.memoryWrite": "Write memory",
     "toolPresentation.native.memoryDelete": "Delete memory",
-    "toolPresentation.native.runtimeConfig": "Update runtime config",
+    "toolPresentation.native.runtimeConfig": "Runtime configuration",
     "toolPresentation.file.count": "{count} files",
     "toolPresentation.file.multiChange": "Multiple file changes",
     "toolPresentation.file.empty": "No displayable content",
@@ -8012,6 +8997,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "markdown.wrap.enable": "Enable line wrap",
     "markdown.wrap.disable": "Disable line wrap",
     "markdown.copyCode": "Copy code",
+    "conversation.control.copyFailed": "Copy failed",
+    "conversation.control.actionFailed": "Action failed",
+    "conversation.control.detailFailed": "Could not load details",
+    "conversation.control.retry": "Load again",
     "markdown.copied": "Copied",
     "mediaPlayer.maximize": "Maximize player",
     "mediaPlayer.restore": "Restore player",
@@ -8180,8 +9169,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.sessionList.extraction": "Extraction status",
     "memory.sessionList.allStates": "All session states",
     "memory.sessionList.allExtraction": "All extraction states",
-    "memory.sessionList.from": "Activity from (local date)",
-    "memory.sessionList.before": "Activity through (inclusive local date)",
+    "memory.sessionList.from": "Start date",
+    "memory.sessionList.before": "End date",
     "memory.sessionList.sort": "Sort by",
     "memory.sessionList.newest": "Latest activity first",
     "memory.sessionList.oldest": "Earliest activity first",
@@ -8224,6 +9213,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.removal.userProfiles": "Related user profiles (kept)",
     "memory.removal.retention": "Retained from execution for",
     "memory.removal.days": "days; cleanup may permanently purge expired records.",
+    "memory.removal.expirySuffix": "; cleanup may permanently purge expired records.",
+    "memory.rules.invalidNumbers": "Counts must be integers from 0 to 4294967295. Leave blank to inherit. Correct the marked inputs before saving.",
+    "memory.rules.features": "Features and permissions",
+    "memory.rules.retentionProfiles": "Retention and profiles",
+    "memory.advanced.invalidNumbers": "Transport settings must be non-negative integers. Leave blank to inherit. Correct the marked inputs before saving.",
+    "memory.projectProfile.durationHint": "Lifetime = base + refresh count × extension, capped by maximum retention. Base must be at least 1 ms and no greater than the maximum; extension may be zero; the limit is 3650 days. Each unit applies only to its adjacent value. Persistent profiles never expire.",
     "memory.removal.sources": "Inspect exact source sessions and turns",
     "memory.removal.confirm": "Confirm move to recycle bin",
     "memory.removal.failed": "Recycling did not complete. Inspect the action error and request a fresh preview. Expired or changed plans cannot be confirmed again.",
@@ -8468,7 +9463,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.hostPolicy.overridden": "Using this project's override",
     "memory.hostPolicy.inherit": "Restore global inheritance for this group",
     "memory.hostPolicy.saved": "Project settings saved for the next command.",
-    "memory.hostPolicy.connection": "Override connection and injection settings",
+    "memory.hostPolicy.connection": "Customize this project",
     "memory.profilePolicy.title": "Profile lifetimes",
     "memory.profilePolicy.description": "Configure fixed-user lifetimes and project defaults independently. Applies to newly generated or revised profiles without rewriting existing deadlines.",
     "memory.profilePolicy.user": "User profiles",
@@ -8659,6 +9654,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.title": "Cleanup and recycle bin",
     "memory.maintenance.description": "Periodic cleanup follows the current settings when enabled. Inspect policy, preview manual cleanup, and maintain recycled data here.",
     "memory.maintenance.invalidResponse": "The native VMM retention API returned an unexpected result.",
+    "memory.maintenance.readFailed": "Could not load this status. Refresh to retry.",
     "memory.maintenance.runNow": "Run cleanup now",
     "memory.lexical.title": "Full-text search index",
     "memory.lexical.description": "Search memory summaries and details with Jieba. Recreate full-text documents from current active memories and rebuild the index without model calls or embedding generation.",
@@ -9101,7 +10097,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.runtimeDiagnostics": "Runtime diagnostics",
     "settings.visualLab": "Visual Lab",
     "settings.gitCommit": "Git commit",
-    "settings.promptComposer": "Prompt composer",
     "settings.aboutLicenses": "About and licenses",
     "settings.archivedRestore": "Archived restore",
     "settings.modelProviders.description": "Review all implemented providers and manage custom compatible providers.",
@@ -9689,7 +10684,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.providers": "Providers",
     "settings.providerTools.targets": "Targets",
     "settings.providerTools.systemDefault": "System defaults",
-    "settings.providerTools.systemDefaultHint": "The capability switch, default model, and default account are independent; new conversations copy this snapshot.",
+    "settings.providerTools.systemDefaultHint": "Select an available model and account before enabling. Unavailable targets remain off; new conversations use this configuration.",
     "settings.providerTools.model": "Model",
     "settings.providerTools.account": "Account",
     "settings.providerTools.selectModel": "Select a model",
@@ -9770,7 +10765,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.monitoringEnabled": "Monitoring on",
     "gitCommitDialog.monitoringDisabled": "Monitoring off",
     "gitCommitDialog.monitoringManager": "Git settings",
-    "gitCommitDialog.monitoringManagerDescription": "Choose repositories to monitor and adjust their display order. The first enabled repository stays expanded.",
+    "gitCommitDialog.monitoringManagerDescription": "Choose repositories to monitor and adjust their display order. Select a repository in the list to focus its actions.",
     "gitCommitDialog.moveRepositoryUp": "Move repository up",
     "gitCommitDialog.moveRepositoryDown": "Move repository down",
     "gitCommitDialog.open": "Commit or push",
@@ -9788,7 +10783,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.commitAndPush": "Commit and push",
     "gitCommitDialog.push": "Push",
     "gitCommitDialog.commitTo": "Commit to",
-    "settings.promptComposer.description": "Composer slash commands, attachment capability, and reasoning selection.",
     "settings.aboutLicenses.description": "Application version, license entry points, and compliance notes.",
     "settings.archivedRestore.description": "Archived project and conversation restore entry.",
     "skills.action.refresh": "Refresh",
@@ -9972,9 +10966,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.totalTokens": "Total tokens",
     "composer.capability.mediaBackendMode": "Backend mode",
     "composer.capability.mediaFixedRoute": "Fixed route",
-    "composer.capability.mediaBackendNote": "This session can independently select any available backend, model, account, and model-replacement reasoning effort. Session choices override system defaults without changing tool parameter schemas.",
+    "composer.capability.mediaBackendNote": "Model, account, and reasoning choices apply only to this session and leave system defaults unchanged.",
     "composer.capability.mediaBackendMissing": "Configure at least one available backend mode for this media-understanding capability in Model settings first.",
-    "composer.capability.extensionHint": "Choose models that AI can query for extension parameters and call on demand. Changing this set does not change registered tool names.",
+    "composer.attachment.previewUnavailable": "Preview is unavailable for this file type. It can still be sent with the message.",
+    "composer.attachment.stagingPending": "Staging attachments. Sending will be available when staging finishes.",
+    "composer.capability.extensionHint": "Select one or more models for the AI to use as needed.",
     "composer.capability.extensionProfileMissing": "No reviewed model-extension description is available, so this model cannot be selected.",
     "composer.capability.extensionConstraints": "Constraints: {value}",
     "composer.capability.extensionLimitations": "Limitations: {value}",

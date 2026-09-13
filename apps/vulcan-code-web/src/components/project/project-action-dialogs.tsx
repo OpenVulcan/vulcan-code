@@ -38,16 +38,35 @@ export function RenameDialog(props: {
   onCancel: () => void;
   // Confirms the edited name for the current target.
   // 确认当前目标的编辑后名称。
-  onConfirm: (target: RenameTarget, name: string) => void;
+  onConfirm: (target: RenameTarget, name: string) => Promise<void>;
 }) {
   const { t } = useI18n();
   // value stores the pending display name edited by the user.
   // value 保存用户正在编辑的显示名称。
   const [value, setValue] = React.useState("");
+  // busy and savingRef keep a single submission active and preserve the draft on failure.
+  // busy 与 savingRef 保持单次提交活动，并在失败后保留草稿。
+  const [busy, setBusy] = React.useState(false);
+  const savingRef = React.useRef(false);
+  // error belongs to this dialog lifetime and is not cleared by unrelated workbench updates.
+  // error 属于当前弹窗生命周期，不被无关工作台更新清除。
+  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setValue(props.target?.name ?? "");
+    setError(null);
   }, [props.target]);
+
+  // submit awaits the real rename result before allowing another operation.
+  // submit 等待真实重命名结果后才允许下一次操作。
+  const submit = async () => {
+    if (!props.target || savingRef.current) return;
+    savingRef.current = true;
+    setBusy(true); setError(null);
+    try { await props.onConfirm(props.target, value); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { savingRef.current = false; setBusy(false); }
+  };
 
   const title = props.target?.kind === "project" ? t("projectDialog.renameProjectTitle") : t("projectDialog.renameConversationTitle");
   const description = props.target?.kind === "project"
@@ -55,8 +74,8 @@ export function RenameDialog(props: {
     : t("projectDialog.renameConversationDescription");
 
   return (
-    <Dialog open={Boolean(props.target)} onOpenChange={(open) => !open && props.onCancel()}>
-      <DialogContent size="sm">
+    <Dialog open={Boolean(props.target)} onOpenChange={(open) => !open && !savingRef.current && props.onCancel()}>
+      <DialogContent size="sm" showCloseButton={!busy}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -65,20 +84,21 @@ export function RenameDialog(props: {
           className="dialog-form"
           onSubmit={(event) => {
             event.preventDefault();
-            if (props.target) {
-              props.onConfirm(props.target, value);
-            }
+            void submit();
           }}
         >
           <Input
             autoFocus
+            aria-label={title}
+            disabled={busy}
             value={value}
             onChange={(event) => setValue(event.target.value)}
             placeholder={t("projectDialog.renamePlaceholder")}
           />
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
-            <Button type="submit">{t("projectDialog.confirm")}</Button>
+            <Button disabled={busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
+            <Button disabled={busy || (props.target?.kind === "conversation" && !value.trim())} type="submit">{busy && <Spinner className="size-4" />}{t("projectDialog.confirm")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

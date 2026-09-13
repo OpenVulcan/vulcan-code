@@ -93,6 +93,9 @@ export interface ChatAreaProps {
   // Persists one current session VMM memory policy mode.
   // 持久化当前会话的单个 VMM 记忆策略模式。
   onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
+  // Opens the memory settings destination; navigation never changes persisted memory policy.
+  // 打开记忆设置目标；导航绝不改变持久记忆策略。
+  onOpenMemorySettings?: () => void;
   // Persists one selected conversation output-style override.
   // 持久化当前会话的输出风格覆盖。
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;

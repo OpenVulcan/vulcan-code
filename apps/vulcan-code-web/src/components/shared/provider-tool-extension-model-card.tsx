@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Info, ListChecks, ShieldAlert } from "lucide-react";
 
 import {
@@ -70,37 +70,19 @@ export function ProviderToolExtensionModelCard(
     props.onCheckedChange(!props.checked);
   };
 
-  /** Toggles the card from Enter or Space when the card itself owns focus.
-   * 当卡片本身获得焦点时，使用 Enter 或空格切换卡片。
-   */
-  const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (
-      props.checkboxDisabled
-      || event.target !== event.currentTarget
-      || (event.key !== "Enter" && event.key !== " ")
-    ) {
-      return;
-    }
-    event.preventDefault();
-    props.onCheckedChange(!props.checked);
-  };
-
   return (
     <article
-      aria-checked={props.checkboxDisabled ? undefined : props.checked}
-      aria-disabled={props.checkboxDisabled ? true : undefined}
-      aria-label={props.checkboxDisabled ? undefined : props.title}
+      aria-label={props.title}
       className="provider-tool-extension-model-card"
       data-disabled={props.checkboxDisabled ? "true" : undefined}
       onClick={handleCardClick}
-      onKeyDown={handleCardKeyDown}
-      role={props.checkboxDisabled ? undefined : "checkbox"}
-      tabIndex={props.checkboxDisabled ? -1 : 0}
     >
       <label
         className="provider-tool-extension-model-card-selection"
         data-extension-card-selection
       >
+        {/* The native checkbox owns keyboard selection; the account form retains independent semantics.
+            原生复选框持有键盘选择；账号表单保留独立语义。 */}
         <input
           aria-label={props.title}
           checked={props.checked}
@@ -117,7 +99,7 @@ export function ProviderToolExtensionModelCard(
           className="provider-tool-extension-model-card-header"
           data-extension-card-row="title"
         >
-          <strong>{props.title}</strong>
+          <strong title={props.title}>{props.title}</strong>
           <span className="provider-tool-extension-model-card-tooltips">
             <ProviderToolExtensionProfileTooltip
               accessibleLabel={props.summary}

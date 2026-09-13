@@ -22,6 +22,7 @@ import {
   resolveDirectCustomProviderDefaults,
 } from "@/components/features/settings/direct-provider-model-settings"
 import { useI18n } from "@/i18n"
+import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
 import { savePublicAiCustomProviderModelDefaults } from "@/service/settings-actions-service"
 import type {
   PublicAiCustomProviderModelDefaults,
@@ -58,14 +59,19 @@ const REASONING_EFFORT_LABEL_KEYS = {
 
 // CustomProviderModelDefaultsCard shows current values directly and persists edits without enable-overrides switches.
 // CustomProviderModelDefaultsCard 直接显示当前值，并在没有“启用覆盖”开关的情况下持久化修改。
+// Parameters: props supplies the exact provider and default capability policy; returns numeric drafts and explicit save/reset controls.
+// 参数：props 提供精确供应商及默认能力策略；返回数值草稿和显式保存、恢复控件。
 export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaultsCardProps) {
   const { t } = useI18n()
+  // mutationBoundary coordinates writes with sibling editors when this card is embedded.
+  // mutationBoundary 在本卡片嵌入时与同级编辑器协调写入。
+  const mutationBoundary = React.useContext(CustomProviderMutationContext)
   // contextLimit is the directly editable provider-wide context value.
   // contextLimit 是可直接编辑的供应商级上下文值。
-  const [contextLimit, setContextLimit] = React.useState(props.defaults.context_limit)
+  const [contextLimit, setContextLimit] = React.useState(String(props.defaults.context_limit))
   // outputLimit is the directly editable provider-wide output-token ceiling.
   // outputLimit 是可直接编辑的供应商级输出 Token 上限。
-  const [outputLimit, setOutputLimit] = React.useState(props.defaults.output_limit)
+  const [outputLimit, setOutputLimit] = React.useState(String(props.defaults.output_limit))
   // inputResources is the complete provider-wide non-text input set.
   // inputResources 是完整的供应商级非文本输入集合。
   const [inputResources, setInputResources] = React.useState(props.defaults.input_resources ?? [])
@@ -89,6 +95,9 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   // saving serializes provider-settings writes from this card.
   // saving 串行化本卡片发起的供应商设置写入。
   const [saving, setSaving] = React.useState(false)
+  // savingRef rejects overlapping writes before React updates control state.
+  // savingRef 在 React 更新控件状态前拒绝重叠写入。
+  const savingRef = React.useRef(false)
   // error contains the current actionable validation or service failure.
   // error 保存当前可操作的校验或服务错误。
   const [error, setError] = React.useState<string | null>(null)
@@ -96,8 +105,8 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   // resetDraft replaces every field with one authoritative defaults snapshot.
   // resetDraft 使用一份权威默认值快照替换全部字段。
   const resetDraft = React.useCallback((defaults: PublicAiCustomProviderModelDefaults) => {
-    setContextLimit(defaults.context_limit)
-    setOutputLimit(defaults.output_limit)
+    setContextLimit(String(defaults.context_limit))
+    setOutputLimit(String(defaults.output_limit))
     setInputResources(defaults.input_resources ?? [])
     setStructuredOutput(defaults.structured_output ?? "json_object")
     setReasoningEnabled(reasoningIsEnabled(defaults))
@@ -110,8 +119,8 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   // currentSettings is the complete semantic provider layer currently visible in the editor.
   // currentSettings 是编辑器当前显示的完整语义供应商层。
   const currentSettings = React.useMemo<PublicAiCustomProviderModelDefaults>(() => ({
-    context_limit: contextLimit,
-    output_limit: outputLimit,
+    context_limit: Number(contextLimit),
+    output_limit: Number(outputLimit),
     input_resources: inputResources,
     structured_output: structuredOutput,
     reasoning: reasoningEnabled ? "native" : "unsupported",
@@ -133,11 +142,12 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   // save validates and replaces the complete visible provider layer in one request.
   // save 校验并通过一次请求替换完整可见供应商层。
   const save = React.useCallback(async () => {
-    if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
+    if (savingRef.current) return
+    if (!Number.isSafeInteger(Number(contextLimit)) || Number(contextLimit) <= 0) {
       setError(t("settings.customModels.defaultsContextInvalid"))
       return
     }
-    if (!Number.isSafeInteger(outputLimit) || outputLimit <= 0 || outputLimit > contextLimit) {
+    if (!Number.isSafeInteger(Number(outputLimit)) || Number(outputLimit) <= 0 || Number(outputLimit) > Number(contextLimit)) {
       setError(t("settings.customModels.defaultsOutputInvalid"))
       return
     }
@@ -145,6 +155,8 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
       setError(t("settings.customModels.defaultsReasoningInvalid"))
       return
     }
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -155,17 +167,22 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      savingRef.current = false
+      mutationBoundary?.release()
       setSaving(false)
     }
-  }, [contextLimit, currentSettings, outputLimit, props, reasoningEfforts, reasoningEnabled, t])
+  }, [contextLimit, currentSettings, mutationBoundary, outputLimit, props, reasoningEfforts, reasoningEnabled, t])
 
   // restore removes the provider layer or discards an unsaved local draft.
   // restore 移除供应商层，或丢弃尚未保存的本地草稿。
   const restore = React.useCallback(async () => {
+    if (savingRef.current) return
     if (!props.customized) {
       resetDraft(props.defaults)
       return
     }
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -180,9 +197,11 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      savingRef.current = false
+      mutationBoundary?.release()
       setSaving(false)
     }
-  }, [props, resetDraft])
+  }, [mutationBoundary, props, resetDraft])
 
   return (
     <Card>
@@ -200,6 +219,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
         </div>
       </CardHeader>
       <CardContent className="space-y-4 border-t p-4">
+        <fieldset disabled={saving} className="min-w-0 space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <DirectNumberInput
             label={t("settings.customModels.contextLimit")}
@@ -230,7 +250,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
         <p className="text-xs text-muted-foreground">
           {t("settings.customModels.outputRecommendation").replace(
             "{count}",
-            Math.min(32_768, Math.floor(contextLimit / 4)).toLocaleString(),
+            Number.isSafeInteger(Number(contextLimit)) && Number(contextLimit) > 0 ? Math.min(32_768, Math.floor(Number(contextLimit) / 4)).toLocaleString() : "-",
           )}
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -289,7 +309,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
           onChange={setRequestProjection}
           projection={requestProjection}
         />
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
         <div className="flex flex-wrap justify-between gap-2">
           <Button
             disabled={saving || (!props.customized && !dirty)}
@@ -305,6 +325,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             {t("settings.customModels.defaultsSave")}
           </Button>
         </div>
+        </fieldset>
       </CardContent>
     </Card>
   )
@@ -312,14 +333,17 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
 
 // DirectNumberInput renders one locale-friendly integer field without browser steppers.
 // DirectNumberInput 渲染一个不带浏览器步进器且适合本地化的整数输入框。
-function DirectNumberInput(props: { label: string; onChange: (value: number) => void; value: number }) {
+// Parameters: props supplies the raw numeric draft, label and change handler; returns a plain text-backed integer field preserving invalid input.
+// 参数：props 提供原始数值草稿、标签及变更处理器；返回保留非法输入的文本型整数控件。
+function DirectNumberInput(props: { label: string; onChange: (value: string) => void; value: string }) {
   return (
     <label className="grid gap-2 text-sm font-medium">
       {props.label}
       <Input
         inputMode="numeric"
-        onChange={(event) => props.onChange(Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))}
-        value={props.value || ""}
+        onChange={(event) => props.onChange(event.target.value)}
+        aria-invalid={!Number.isSafeInteger(Number(props.value)) || Number(props.value) <= 0}
+        value={props.value}
       />
     </label>
   )

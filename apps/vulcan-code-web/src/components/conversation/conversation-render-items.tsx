@@ -1,4 +1,5 @@
 import React from "react";
+import { runConversationControlAction } from "./conversation-control-feedback";
 import {
   Check,
   ChevronDown,
@@ -918,9 +919,11 @@ export function ConversationRenderItemView(props: {
     if (!userBody) {
       return;
     }
-    await props.onCopyText(userBody);
-    setUserPromptCopied(true);
-  }, [props, userBody]);
+    setUserPromptCopied(false);
+    setUserPromptCopied(await runConversationControlAction(
+      () => props.onCopyText(userBody), t("conversation.control.copyFailed"),
+    ));
+  }, [props, userBody, t]);
   React.useLayoutEffect(() => {
     if (props.item.role !== "user" || !userBody) {
       setUserPromptOverflowing(false);
@@ -1099,9 +1102,11 @@ export function ConversationFinalAssistantMeta(props: {
     if (!finalAssistantRawText) {
       return;
     }
-    await props.onCopyText(finalAssistantRawText);
-    setFinalAssistantCopied(true);
-  }, [finalAssistantRawText, props]);
+    setFinalAssistantCopied(false);
+    setFinalAssistantCopied(await runConversationControlAction(
+      () => props.onCopyText(finalAssistantRawText), t("conversation.control.copyFailed"),
+    ));
+  }, [finalAssistantRawText, props, t]);
   const handleForkConversation = React.useCallback(async () => {
     if (!conversationId) {
       return;

@@ -63,6 +63,12 @@ export function useWorkspaceFilesRequestOwnership(scopeKey: string): WorkspaceFi
     activeScopeKeyRef.current = scopeKey;
     directoryRequestsByKeyRef.current.clear();
     activePreviewRequestRef.current = null;
+    // Unmounting also revokes asynchronous writers, including their notification side effects.
+    // 卸载也会撤销异步写入者及其通知副作用的执行权。
+    return () => {
+      directoryRequestsByKeyRef.current.clear();
+      activePreviewRequestRef.current = null;
+    };
   }, [scopeKey]);
 
   // beginDirectoryRequest claims one directory key in the current committed scope.

@@ -30,6 +30,7 @@
 }
 
 .diff-file-tree-row:hover .workspace-file-row-menu-trigger,
+.workspace-file-row-menu-trigger:focus-visible,
 .workspace-file-row-menu-trigger[aria-expanded="true"] {
   opacity: 1;
 }
@@ -56,10 +57,12 @@
 .workspace-files-filter-menu {
   width: max-content;
   min-width: 190px;
+  max-width: calc(100vw - 24px);
 }
 
 .workspace-files-filter-menu [data-slot="dropdown-menu-checkbox-item"] {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .workspace-file-preview {

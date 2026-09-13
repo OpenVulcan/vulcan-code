@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "view": { "enum": ["all", "overview", "details", "maintenance"] },
+    "rangeDays": { "type": "integer", "enum": [7, 30, 90, 365] },
+    "consumerId": { "type": "string", "maxLength": 256 },
+    "modelQuery": { "type": "string", "maxLength": 256 },
+    "sortOrder": { "type": "string", "enum": ["newest", "oldest"] },
+    "dailyOffset": { "type": "integer", "minimum": 0, "maximum": 10000000 },
+    "recentOffset": { "type": "integer", "minimum": 0, "maximum": 10000000 }
+  },
+  "additionalProperties": false
+}

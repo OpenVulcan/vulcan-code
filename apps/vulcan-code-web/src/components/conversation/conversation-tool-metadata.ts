@@ -108,10 +108,10 @@ export function turnStatsSummary(
   const translate = t ?? defaultTurnStatsTranslation;
   const parts = [
     formatTurnStatsTranslation(translate, "conversation.stats.providerCalls", {
-      count: String(numberMetadata(stats.provider_call_count ?? stats.providerCallCount)),
+      count: numberMetadata(stats.provider_call_count ?? stats.providerCallCount).toLocaleString("en-US"),
     }),
     formatTurnStatsTranslation(translate, "conversation.stats.toolCalls", {
-      count: String(numberMetadata(stats.tool_call_count ?? stats.toolCallCount)),
+      count: numberMetadata(stats.tool_call_count ?? stats.toolCallCount).toLocaleString("en-US"),
     }),
   ];
   const groupParts = turnStatsUsageGroupSummaries(stats, translate);
@@ -120,13 +120,13 @@ export function turnStatsSummary(
     parts.push(...groupParts);
   } else if (totalTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.totalTokens", {
-      count: String(totalTokens),
+      count: totalTokens.toLocaleString("en-US"),
     }));
   }
   const cachedTokens = numberMetadata(stats.cached_input_tokens ?? stats.cachedInputTokens);
   if (cachedTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.cachedTokens", {
-      count: String(cachedTokens),
+      count: cachedTokens.toLocaleString("en-US"),
     }));
   }
   const speed = numericMetadata(stats.output_tokens_per_second ?? stats.outputTokensPerSecond);
@@ -170,7 +170,7 @@ function turnStatsUsageGroupSummaries(
       ? "conversation.stats.totalTokens"
       : key;
     summaries.push(formatTurnStatsTranslation(translate, displayKey, {
-      count: String(totalTokens),
+      count: totalTokens.toLocaleString("en-US"),
     }));
   }
   return summaries;

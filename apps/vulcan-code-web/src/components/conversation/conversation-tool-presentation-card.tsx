@@ -1,4 +1,7 @@
 import * as React from "react";
+import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import { RenderErrorBoundary } from "@/app/render-error-boundary";
+import { Button } from "@/components/ui/button";
 import {
   Bot,
   Braces,
@@ -90,9 +93,68 @@ type ToolDetailLoader = (
   detailRef: ConversationDetailRef,
 ) => Promise<ToolDetailPayload | null>;
 
-// ToolPresentationCard renders one recognized tool presentation with shared expansion behavior.
-// ToolPresentationCard 使用共享展开行为渲染单个已识别工具展示。
-export function ToolPresentationCard(props: {
+/** Renders the original card and exposes failures from its existing read-only detail loader.
+ * 渲染原卡片，并公开既有只读详情加载器的失败。
+ * props retains the exact tool identity, expansion policy, and authoritative loader.
+ * props 保留精确工具身份、展开策略和权威加载器。
+ * Returns the card plus a retryable diagnostic without changing tool execution state.
+ * 返回卡片和可重读诊断，不改变工具执行状态。 */
+export function ToolPresentationCard(props: React.ComponentProps<typeof ToolPresentationCardContent>) {
+  // t localizes only the diagnostic controls, preserving original service errors verbatim.
+  // t 仅本地化诊断控件，原样保留服务错误。
+  const { t } = useI18n();
+  // failure belongs to this exact presentation rather than the last card rendered here.
+  // failure 属于当前精确展示，而不是此位置之前渲染的卡片。
+  const [failure, setFailure] = React.useState<{ owner: string; message: string } | null>(null);
+  // retryRevision invalidates the existing hydration effect without issuing a new tool call.
+  // retryRevision 使既有水合 effect 失效，不发起新的工具调用。
+  const [retryRevision, setRetryRevision] = React.useState(0);
+  // owner tracks the currently displayed identity when an older read completes asynchronously.
+  // owner 在旧读取异步结束时跟踪当前展示身份。
+  const owner = React.useRef(props.presentation.id);
+  owner.current = props.presentation.id;
+  /** Reads the same authoritative detail reference and preserves rejection for existing hydration logic.
+   * 读取相同权威详情引用，并保留拒绝供既有水合逻辑处理。 */
+  const loadDetail = React.useCallback<ToolDetailLoader>(async (detailRef) => {
+    try {
+      // payload remains nullable exactly as declared by the existing detail-loader contract.
+      // payload 完全按照既有详情加载合同保留可空性。
+      const payload = await props.onLoadToolDetail(detailRef);
+      if (owner.current === props.presentation.id) setFailure(null);
+      return payload;
+    } catch (error) {
+      if (owner.current === props.presentation.id) {
+        setFailure({ owner: props.presentation.id, message: error instanceof Error ? error.message : String(error) });
+      }
+      throw error;
+    }
+  }, [props.onLoadToolDetail, props.presentation.id, retryRevision]);
+  return (
+    <>
+      <ToolPresentationCardContent {...props} onLoadToolDetail={loadDetail} />
+      {failure?.owner === props.presentation.id ? (
+        <div className="markdown-tool-block" role="alert">
+          <details>
+            <summary>{t("conversation.control.detailFailed")}</summary>
+            <pre>{failure.message}</pre>
+          </details>
+          <Button size="sm" variant="outline" onClick={() => {
+            setFailure(null);
+            if (!props.requestProgress) props.onExpandedChange(props.presentation.id, true);
+            setRetryRevision((revision) => revision + 1);
+          }} type="button">{t("conversation.control.retry")}</Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// ToolPresentationCardContent renders one recognized tool presentation with shared expansion behavior.
+// ToolPresentationCardContent 使用共享展开行为渲染单个已识别工具展示。
+function ToolPresentationCardContent(props: {
+  // Exact canonical event retained by the branch projection; absent only for legacy transcripts.
+  // 分支投影保留的精确规范事件；仅旧版转录缺失。
+  v1ToolEvent?: ToolCallEvent;
   // Presentation model resolved by the adapter layer.
   // 由适配器层解析出的展示模型。
   presentation: ToolPresentation;
@@ -259,6 +321,7 @@ export function ToolPresentationCard(props: {
   if (props.presentation.kind === "native_semantic") {
     return (
       <NativeSemanticToolPresentationCard
+        v1ToolEvent={props.v1ToolEvent}
         expanded={expanded}
         presentation={props.presentation}
         requestProgress={props.requestProgress}
@@ -271,6 +334,7 @@ export function ToolPresentationCard(props: {
     if (props.presentation.titleKey) {
       return (
         <ModelExtensionToolPresentationCard
+          v1ToolEvent={props.v1ToolEvent}
           expanded={props.expanded}
           expandedFooter={props.expandedFooter}
           presentation={props.presentation}
@@ -282,6 +346,7 @@ export function ToolPresentationCard(props: {
     }
     return (
       <GenericToolMarkdownPresentationCard
+        v1ToolEvent={props.v1ToolEvent}
         expanded={expanded}
         expandedFooter={props.expandedFooter}
         presentation={props.presentation}
@@ -301,6 +366,9 @@ export function ToolPresentationCard(props: {
 // Returns: a stable tool header followed by the available independently folded payload cards.
 // 返回值：稳定工具标题，以及当前可用且可独立折叠的载荷卡片。
 function ModelExtensionToolPresentationCard(props: {
+  // Canonical event supplies the same domain projection as the direct V1 renderer.
+  // 规范事件提供与直接 V1 渲染器相同的领域投影。
+  v1ToolEvent?: ToolCallEvent;
   // Whether the main extension tool card is expanded.
   // 扩展工具主卡是否展开。
   expanded: boolean;
@@ -394,8 +462,8 @@ function ModelExtensionToolPresentationCard(props: {
           defaultInputExpanded={false}
           defaultOutputExpanded
           inputMarkdown={props.presentation.inputMarkdown ?? ""}
-          outputMarkdown={outputMarkdown}
-          outputSupplement={props.expandedFooter}
+          outputMarkdown={props.v1ToolEvent ? "" : outputMarkdown}
+          outputSupplement={props.v1ToolEvent?.output !== undefined ? <><BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} />{props.expandedFooter}</> : props.expandedFooter}
           presentationId={props.presentation.id}
         />
       </ConversationMeasuredCollapse>
@@ -406,6 +474,9 @@ function ModelExtensionToolPresentationCard(props: {
 // NativeSemanticToolPresentationCard renders known native tools without exposing raw tool ids.
 // NativeSemanticToolPresentationCard 渲染已知原生工具，且不暴露原始工具标识。
 function NativeSemanticToolPresentationCard(props: {
+  // Canonical event supplies declared native fields without parsing Markdown or guessing result paths.
+  // 规范事件提供原生声明字段，无需解析 Markdown 或猜测结果路径。
+  v1ToolEvent?: ToolCallEvent;
   // Whether the terminal semantic body is expanded.
   // 终态语义正文是否展开。
   expanded: boolean;
@@ -457,7 +528,7 @@ function NativeSemanticToolPresentationCard(props: {
     : hydratedBody ?? nativeSemanticCardMarkdown(props.presentation);
   // canExpand keeps every native semantic result inside the same explicit folded-card contract.
   // canExpand 让每个原生语义结果都遵循同一套显式折叠卡片契约。
-  const canExpand = Boolean(markdown);
+  const canExpand = Boolean(markdown || props.v1ToolEvent);
   // handleToggle changes only the exact card expansion identity owned by the transcript surface.
   // handleToggle 只改变转录界面持有的精确卡片展开身份。
   const handleToggle = React.useCallback(() => {
@@ -487,7 +558,7 @@ function NativeSemanticToolPresentationCard(props: {
         ) : null}
       </button>
       <ConversationMeasuredCollapse collapseId={`native-semantic:${props.presentation.id}`} expanded={canExpand && props.expanded}>
-        {canExpand && markdown ? (
+        {props.expanded && props.v1ToolEvent ? <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} /> : canExpand && markdown ? (
           <div className="markdown-tool-block native-semantic-tool-body">
             <MarkdownMessage content={markdown} eager />
           </div>
@@ -510,6 +581,9 @@ function nativeSemanticTargetLabel(presentation: NativeSemanticToolPresentation)
 // GenericToolMarkdownPresentationCard renders unknown tool output inline as Markdown.
 // GenericToolMarkdownPresentationCard 将未知工具输出以内联 Markdown 形式渲染。
 function GenericToolMarkdownPresentationCard(props: {
+  // Canonical event keeps unknown tool data behind the same bounded domain and raw-detail view.
+  // 规范事件让未知工具数据使用相同的有界领域与原始详情视图。
+  v1ToolEvent?: ToolCallEvent;
   // Whether raw details are expanded.
   // 原始详情是否展开。
   expanded: boolean;
@@ -550,7 +624,7 @@ function GenericToolMarkdownPresentationCard(props: {
   );
   // canExpand keeps every unknown tool payload inside a bounded folded card even without a legacy raw-detail RPC.
   // canExpand 即使没有旧 raw-detail RPC，也会把每个未知工具载荷放入有界折叠卡片。
-  const canExpand = Boolean(markdown || props.expandedFooter);
+  const canExpand = Boolean(markdown || props.expandedFooter || props.v1ToolEvent);
   // handleToggle opens only the expanded card content and never acts during request formation.
   // handleToggle 仅打开卡片展开内容，且绝不在请求构造阶段生效。
   const handleToggle = React.useCallback(() => {
@@ -583,7 +657,7 @@ function GenericToolMarkdownPresentationCard(props: {
         ) : null}
       </button>
       <ConversationMeasuredCollapse collapseId={`generic-tool:${props.presentation.id}`} expanded={canExpand && props.expanded}>
-        {markdown ? (
+        {props.expanded && props.v1ToolEvent ? <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} /> : markdown ? (
           <div className="markdown-tool-block generic-tool-markdown-body">
             <MarkdownMessage content={markdown} eager />
           </div>
@@ -592,6 +666,31 @@ function GenericToolMarkdownPresentationCard(props: {
       </ConversationMeasuredCollapse>
     </div>
   );
+}
+
+/** Shares exact result projection between the live branch surface and the direct V1 renderer.
+ * 在实际分支界面与直接 V1 渲染器之间共享精确结果投影。
+ * Parameters event and id identify authoritative payload and expansion ownership; returns readable result and folded raw details.
+ * 参数 event 与 id 标识权威载荷和展开归属；返回可读结果与折叠原始详情。 */
+function BranchToolDomainResult(props: { event: ToolCallEvent; id: string }) {
+  // Translation belongs to the stable card shell, including failures before the deferred module loads.
+  // 翻译由稳定卡片外壳提供，包括延迟模块尚未加载时的失败。
+  const { t } = useI18n();
+  // An explicit retry creates a fresh lazy instance instead of reusing React's cached rejection.
+  // 明确重试时创建新的延迟实例，避免复用 React 缓存的失败。
+  const [attempt, setAttempt] = React.useState(0);
+  // Domain rendering and projection are loaded only when this expanded result mounts.
+  // 仅在展开结果挂载时加载领域展示及投影。
+  const LazyDomain = React.useMemo(() => React.lazy(() => import("./conversation-branch-tool-domain")), [attempt]);
+  return <RenderErrorBoundary key={attempt} fallback={(error) => <div role="alert" className="grid gap-2">
+    <span>{t("toolPresentation.output.loadFailed")}</span>
+    <Button size="sm" variant="outline" onClick={() => setAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button>
+    <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details>
+  </div>}>
+    <React.Suspense fallback={<div role="status">{t("toolPresentation.output.loading")}</div>}>
+      <LazyDomain event={props.event} id={props.id} />
+    </React.Suspense>
+  </RenderErrorBoundary>;
 }
 
 // activeToolStatusLabel keeps transient progress visible and removes generic terminal success or failure labels.
@@ -1710,7 +1809,9 @@ function SubagentOrchestrationPresentationCard(props: {
       })
       .catch(() => {
         if (!cancelled) {
-          subagentOrchestrationPresentationDetailCache.set(detailCacheKey, presentation);
+          // A failed read must not populate the successful-detail cache or prevent explicit retries.
+          // 失败读取不能填充成功详情缓存，也不能阻止显式重读。
+          setHydratedPresentation(presentation);
         }
       });
     return () => {
@@ -3407,4 +3508,3 @@ function commandPresentationDetailCacheKey(presentation: CommandExecutionPresent
     detailRef.messageIndex ?? "",
   ].join(":");
 }
-

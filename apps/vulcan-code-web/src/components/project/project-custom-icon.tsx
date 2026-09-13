@@ -38,6 +38,10 @@ export function ProjectCustomIcon(props: { isOpen?: boolean; project: ProjectSum
       if (!cancelled) {
         setResolvedOption(option)
       }
+    }).catch(() => {
+      // A decorative chunk failure keeps the established folder icon without an unhandled rejection.
+      // 装饰性分块加载失败时保留既有文件夹图标，避免未处理的 Promise 拒绝。
+      if (!cancelled) setResolvedOption(null)
     })
     return () => {
       cancelled = true

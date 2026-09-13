@@ -14,6 +14,9 @@ mod restart_acceptance;
 #[path = "turn_details_acceptance_tests.rs"]
 mod turn_details_acceptance;
 
+#[path = "native_tool_dispatch_acceptance_tests.rs"]
+mod native_tool_dispatch_acceptance;
+
 #[path = "compaction_acceptance_tests.rs"]
 mod compaction_acceptance;
 
@@ -176,11 +179,14 @@ pub(super) fn embedding_response(host_request: &HostAiEmbeddingRequest) -> Embed
 /// 执行一个生产排队回合，生成一条记忆及交错的用户和项目画像。
 /// `data_plane` and `capability` belong to an isolated real controller and a fixture-only host AI route.
 /// `data_plane` 与 `capability` 属于隔离真实控制器及仅供夹具使用的宿主 AI 路由。
+/// `verify_tool_dispatch` selects the child-only public tool acceptance after extraction is physically verified.
+/// `verify_tool_dispatch` 在物理提炼验证后选择仅限子进程的公开工具验收。
 /// Returns after verifying completion, physical storage, profile reads and exact maintenance provenance.
 /// 在验证完成状态、物理存储、画像读取及准确维护来源后返回。
 pub(in crate::native_vmm) async fn verify_nonempty_analysis(
     data_plane: VmmDataPlaneHandle,
     capability: InferenceCapabilitySnapshot,
+    verify_tool_dispatch: bool,
 ) {
     // Only inference is deterministic; all native command, queue and persistence paths remain production code.
     // 仅推理使用确定性夹具；所有原生命令、队列及持久路径保持生产代码。
@@ -272,13 +278,13 @@ pub(in crate::native_vmm) async fn verify_nonempty_analysis(
     assert_eq!(saved.effective.recall, extraction);
     // Do not spawn a perpetual worker; call its actual bounded drain under explicit test ownership.
     // 不启动永久工作器；在测试明确拥有生命周期的前提下调用实际有界排空。
-    let client = NativeVmmClient::new(
+    let client = Arc::new(NativeVmmClient::new(
         runtime.clone(),
         data_plane.clone(),
         gate.clone(),
         Arc::new(AtomicBool::new(true)),
         Arc::new(Notify::new()),
-    );
+    ));
     client
         .post_action(PostActionRequest {
             host_project_id: "nonempty-host".to_owned(),
@@ -522,6 +528,18 @@ pub(in crate::native_vmm) async fn verify_nonempty_analysis(
     assert_eq!(records.turns[0].generated_profile_node_ids.len(), 3);
     assert_eq!(records.memories.len(), 1);
     assert_eq!(records.profile_nodes.len(), 3);
+    // Only the explicitly isolated child installs the process registry and executes public tool definitions.
+    // 仅显式隔离子进程安装进程注册表并执行公开工具定义。
+    if verify_tool_dispatch {
+        native_tool_dispatch_acceptance::verify(
+            client.clone(),
+            &maintenance,
+            project.id,
+            &search.results[0].hits[0],
+        )
+        .await;
+        return;
+    }
     global_config_save_acceptance::verify(
         &runtime,
         &data_plane,

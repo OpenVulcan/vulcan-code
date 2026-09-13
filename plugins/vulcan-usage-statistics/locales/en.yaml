@@ -1,6 +1,51 @@
 name: Vulcan Usage Statistics
 capability: Query and clear Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
 messages:
+  snapshot.retained: Showing the previous result until a refresh succeeds.
+  tokens.noComposition: Input/output share is unavailable
+  tokens.composition: "Input {{input}}% · Output {{output}}%"
+  tokens.cacheSeparate: Cache read share uses reported input; cache counts are not added to input/output.
+  cost.empty: No cost records in this range
+  pricing.editor: Model price editor
+  pricing.chooseModel: Select a model in the table below to edit its prices.
+  pricing.editModel: "Edit model · {{model}}"
+  status.unknown: Statistics health is unknown
+  sections.label: Statistics sections
+  sections.overview: Overview
+  sections.details: Usage details
+  sections.pricing: Model pricing
+  sections.maintenance: Maintenance
+  range.label: Time range
+  range.days: "Last {{days}} days"
+  page.previous: Previous
+  page.next: Next
+  pricing.search: Search models
+  pricing.filter: Price filter
+  pricing.filter.all: All models
+  pricing.filter.unpriced: Unpriced
+  pricing.filter.override: Custom overrides
+  pricing.filter.used: All models with retained usage
+  pricing.tableScope: Prices per 1M tokens. Used models include all retained records, independently of detail pagination.
+  pricing.loading: Loading model prices
+  cost.title: Reference cost for the selected range
+  cost.coverage: "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"
+  cost.partial: Partial coverage
+  pricing.source: Price source
+  pricing.unpriced: No price configured
+  pricing.incompleteUsage: Required usage is incomplete
+  pricing.loadError: Unable to load model prices
+  error.details: Error details
+  tokens.inputTokens: Input
+  tokens.outputTokens: Output
+  tokens.cacheReadTokens: Cache read
+  tokens.cacheWriteTokens: Cache write
+  tokens.cacheShare: Cache read / reported input
+  tokens.breakdown: Input, output and cache
+  usage.search: Search usage by model
+  usage.applySearch: Search
+  usage.order: Time order
+  usage.newest: Newest first
+  usage.oldest: Oldest first
   navigationLabel: Usage Statistics
   title: System Usage Statistics
   subtitle: The core stores Token facts only; this plugin computes non-persisted reference estimates from its own catalog.
@@ -47,7 +92,7 @@ messages:
   summary.usageCoverage: Usage coverage
   summary.usageCoverageDetail: Directly Provider-reported
   heatmap.title: Activity heatmap
-  heatmap.aria: Token activity heatmap for the last 365 days
+  heatmap.aria: Token activity heatmap for the selected range
   heatmap.empty: No token activity yet
   heatmap.tooltip: "{{date}}: {{value}} tokens · {{requests}} requests · {{successRate}} success · {{model}}"
   heatmap.noModel: No model
@@ -92,3 +137,5 @@ messages:
   clear.applying: Clearing
   clear.success: Cleared historical statistics
   privacy: Vulcan stores Token facts only in the dedicated system database. This trusted bundled plugin queries and clears that database, then recomputes reference estimates from its own catalog for each request.
+  error.retry: Retry
+  usage.clearSearch: Clear model search

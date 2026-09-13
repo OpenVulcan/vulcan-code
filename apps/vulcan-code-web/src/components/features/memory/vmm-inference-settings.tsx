@@ -116,6 +116,12 @@ export function VmmInferenceSettings({
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // loadRevision permits an explicit retry without remounting or changing persisted routes.
+  // loadRevision 允许明确重试，不重新挂载或改变持久化路由。
+  const [loadRevision, setLoadRevision] = React.useState(0)
+  // loadPending distinguishes an unfinished read from a settled catalog failure.
+  // loadPending 区分尚未完成的读取和已结束的目录加载失败。
+  const [loadPending, setLoadPending] = React.useState(true)
   const [editingCandidate, setEditingCandidate] =
     React.useState<PublicAiInternalInferenceCandidate | null>(null)
   const [testingOperation, setTestingOperation] = React.useState<PublicAiOperation | null>(null)
@@ -126,6 +132,8 @@ export function VmmInferenceSettings({
 
   React.useEffect(() => {
     let active = true
+    setLoadPending(true)
+    setError(null)
     void loadPublicAiSettings()
       .then((next) => {
         if (active) {
@@ -138,10 +146,11 @@ export function VmmInferenceSettings({
           setError(errorMessage(reason))
         }
       })
+      .finally(() => { if (active) setLoadPending(false) })
     return () => {
       active = false
     }
-  }, [])
+  }, [loadRevision])
 
   // runSnapshotMutation serializes authoritative inference-profile replacements.
   // runSnapshotMutation 串行化权威推理配置档替换。
@@ -301,9 +310,10 @@ export function VmmInferenceSettings({
           <p className="mt-0.5 text-xs text-muted-foreground">{t("settings.inference.subtitle")}</p>
         </div>
       </div>
-      {error ? <p className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
+      {error ? <p role="alert" className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
       {!snapshot ? (
-        <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
+        loadPending ? <p role="status" className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
+          : <Button type="button" variant="outline" onClick={() => setLoadRevision((current) => current + 1)}>{t("settings.modelExperience.retryLoad")}</Button>
       ) : (
         <>
           <div className="vmm-inference-routes">
@@ -527,9 +537,6 @@ function InferenceRouteField(props: {
   const selectedCandidate = selectedAccountKey
     ? candidateByRouteKey.get(selectedAccountKey)
     : undefined
-  // fallbackAttemptKey prevents repeated writes when an unavailable persisted account cannot be replaced.
-  // fallbackAttemptKey 防止不可用的已持久化账号替换失败时重复写入。
-  const fallbackAttemptKey = React.useRef<string | null>(null)
 
   // requestRouteChange confirms before committing the local model draft and exact route.
   // requestRouteChange 在提交本地模型草稿和精确路由前执行确认。
@@ -585,41 +592,6 @@ function InferenceRouteField(props: {
     setEnabledOverride(null)
   }, [persistedRouteKey])
 
-  React.useEffect(() => {
-    if (
-      !props.route
-      || accountCandidates.length === 0
-      || candidateByRouteKey.has(persistedRouteKey)
-    ) {
-      fallbackAttemptKey.current = null
-      return
-    }
-    if (props.disabled) {
-      return
-    }
-    // firstAvailableAccount is deterministic because backend candidates are sorted by account display name.
-    // firstAvailableAccount 是确定性的，因为后端候选按账号显示名称排序。
-    const firstAvailableAccount = accountCandidates[0]
-    // attemptKey changes only when either the unavailable route or its replacement changes.
-    // attemptKey 仅在不可用路由或替代路由发生变化时改变。
-    const attemptKey = `${persistedRouteKey}->${inferenceRouteKey(firstAvailableAccount.route)}`
-    if (fallbackAttemptKey.current === attemptKey) {
-      return
-    }
-    fallbackAttemptKey.current = attemptKey
-    void requestRouteChange(
-      firstAvailableAccount.route,
-      inferenceModelKey(firstAvailableAccount.route),
-    )
-  }, [
-    accountCandidates,
-    candidateByRouteKey,
-    persistedRouteKey,
-    props.disabled,
-    props.route,
-    requestRouteChange,
-  ])
-
   return (
     <div className="vmm-inference-route min-w-0">
       <div className="vmm-inference-heading flex min-w-0 flex-wrap items-center justify-between gap-2">
@@ -647,7 +619,7 @@ function InferenceRouteField(props: {
             <Checkbox
               aria-label={t("settings.inference.rerankEnabled")}
               checked={featureEnabled}
-              disabled={props.disabled}
+              disabled={props.disabled || (!featureEnabled && props.candidates.length === 0)}
               onCheckedChange={(checked) => {
                 void changeEnabledState(checked === true)
               }}
@@ -732,6 +704,7 @@ function InferenceRouteField(props: {
           </div>
         </div>
       </div>
+      {props.route && !selectedCandidate ? <p className="text-xs text-destructive" role="status">{t("settings.inference.unavailable")} · {t("settings.inference.selectAccount")}</p> : null}
       <div className="vmm-inference-actions flex justify-end gap-1.5">
         <Button
           aria-label={t("settings.inference.configureDefaults")}

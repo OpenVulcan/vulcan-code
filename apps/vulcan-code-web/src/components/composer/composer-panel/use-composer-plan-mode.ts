@@ -161,10 +161,11 @@ export function useComposerPlanMode(options: UseComposerPlanModeOptions): Compos
   const togglePlanMode = React.useCallback(() => {
     void setPlanMode(!planModeEnabled);
   }, [planModeEnabled, setPlanMode]);
-  // handleContainerKeyDown captures Shift+Tab without leaking the shortcut into surrounding surfaces.
-  // handleContainerKeyDown 捕获 Shift+Tab，且不让快捷键泄漏到外围界面。
+  // handleContainerKeyDown reserves Shift+Tab for the draft textarea, leaving toolbar and portal navigation intact.
+  // handleContainerKeyDown 仅为草稿文本框保留 Shift+Tab，保持工具栏与传送门导航完整。
   const handleContainerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Tab" || !event.shiftKey) {
+    if (event.key !== "Tab" || !event.shiftKey
+      || event.target !== event.currentTarget.querySelector("textarea")) {
       return;
     }
     event.preventDefault();

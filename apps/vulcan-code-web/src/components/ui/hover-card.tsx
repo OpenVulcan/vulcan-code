@@ -29,6 +29,8 @@ function HoverCardTrigger({
 
 // HoverCardContent renders hoverable card content in a shared portal.
 // HoverCardContent 在共享门户中渲染可驻留的卡片内容。
+// Parameters: props choose semantic width and native positioning options. Returns: wrapped content within the viewport width.
+// 参数：props 选择语义宽度及原生定位选项。返回值：在视口宽度内换行的内容。
 function HoverCardContent({
   className,
   align = "center",
@@ -49,6 +51,7 @@ function HoverCardContent({
           FLOATING_SURFACE_CLASS_NAME,
           FLOATING_MOTION_CLASS_NAME,
           floatingContentWidthClassName(width),
+          "min-w-0 [overflow-wrap:anywhere]",
           className,
         )}
         data-slot="hover-card-content"

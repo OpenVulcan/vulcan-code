@@ -216,6 +216,12 @@
   padding: 0;
 }
 
+/* Give image viewers a definite bounded height so their stage fits the remaining body after the header. */
+/* 图片查看器使用明确的受限高度，使舞台适配标题栏下方实际剩余正文空间。 */
+.generated-media-player-window:has(.generated-media-image-viewer) {
+  height: min(90dvh, 860px);
+}
+
 .generated-media-player-window.maximized {
   position: fixed !important;
   inset: var(--app-header-height) 0 0 0 !important;
@@ -235,7 +241,7 @@
   min-width: 0;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr) auto max-content;
   align-items: center;
   gap: 12px;
   box-sizing: border-box;
@@ -244,6 +250,8 @@
 }
 
 .generated-media-player-title {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   width: 100%;
   max-width: 640px;
@@ -269,6 +277,8 @@
 }
 
 .generated-media-player-actions {
+  grid-column: 3;
+  grid-row: 1;
   justify-self: end;
   display: inline-flex;
   align-items: center;
@@ -276,6 +286,8 @@
 }
 
 .generated-media-image-zoom-control {
+  grid-column: 2;
+  grid-row: 1;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -303,6 +315,27 @@
   text-align: center;
 }
 
+/* Keep window actions beside the title, with image tools on their own row in narrow windows. */
+/* 窄窗将图片工具移到独立一行，让标题与窗口操作始终可见。 */
+@media (max-width: 640px) {
+  .generated-media-player-header {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .generated-media-player-actions {
+    grid-column: 2;
+    gap: 6px;
+  }
+
+  .generated-media-player-header > .generated-media-image-zoom-control {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
+  }
+}
+
 .generated-media-player-body {
   position: relative;
   z-index: 1;
@@ -321,8 +354,8 @@
 .generated-media-image-viewer {
   position: relative;
   width: 100%;
-  height: min(72vh, 720px);
-  min-height: 360px;
+  height: 100%;
+  min-height: 0;
   display: grid;
   place-items: center;
   overflow: hidden;

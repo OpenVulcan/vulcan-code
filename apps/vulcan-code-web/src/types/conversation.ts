@@ -373,6 +373,9 @@ export interface SessionOutputStyleSummary {
 // SessionVmmPolicySummary describes session VMM policy override and effective state.
 // SessionVmmPolicySummary 描述会话 VMM 策略覆盖与最终状态。
 export interface SessionVmmPolicySummary {
+  // Final enablement belongs to this exact session, not the service's shared selection.
+  // 最终启用状态属于当前准确会话，而非服务端共享选择。
+  memoryEnabled: boolean;
   // Precheck memory injection policy mode: inherit, enabled, or disabled.
   // 前置记忆注入策略模式：跟随、开启或关闭。
   precheckMode: string;

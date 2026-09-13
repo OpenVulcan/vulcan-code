@@ -23,6 +23,8 @@ const workspaceFilePreviewMaxHighlightRows = 3_000;
 
 // WorkspaceFilePreview renders the selected file preview pane.
 // WorkspaceFilePreview 渲染当前选中文件预览区域。
+// Parameters: props supplies the selected preview, loading/error state and retry/permission callbacks; returns the matching code, media or explicit unavailable surface.
+// 参数：props 提供选中预览、加载和错误状态及重试和许可回调；返回对应代码、媒体或明确不可用界面。
 export function WorkspaceFilePreview(props: {
   // Selected file entry.
   // 当前选中文件条目。
@@ -51,6 +53,9 @@ export function WorkspaceFilePreview(props: {
   // Closes the current preview and opens the directory drawer.
   // 关闭当前预览并打开目录抽屉。
   onClosePreview: () => void;
+  // Reloads the exact selected file after a failed read.
+  // 读取失败后重新加载精确选中的文件。
+  onRetryPreview: () => void;
 }) {
   const { t } = useI18n();
   if (!props.entry) {
@@ -70,10 +75,13 @@ export function WorkspaceFilePreview(props: {
     );
   }
   if (props.loading) {
-    return <div className="workspace-file-preview empty">{t("workspaceFilePreview.loading")}</div>;
+    return <div className="workspace-file-preview empty" role="status">{t("workspaceFilePreview.loading")}</div>;
   }
   if (props.error) {
-    return <div className="workspace-file-preview empty error">{props.error}</div>;
+    return <div className="workspace-file-preview empty error" role="alert">
+      <span>{props.error}</span>
+      <Button size="sm" variant="outline" onClick={props.onRetryPreview}>{t("workspaceAudit.retry")}</Button>
+    </div>;
   }
   if (props.mediaPermissionEntry && props.entry.path === props.mediaPermissionEntry.path) {
     return (
@@ -107,7 +115,7 @@ export function WorkspaceFilePreview(props: {
     return (
       <div className="workspace-file-preview media">
         <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
-        <video controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
+        <video aria-label={props.preview.relativePath} controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
       </div>
     );
   }
@@ -176,6 +184,8 @@ function WorkspaceMediaPermissionPrompt(props: {
 
 // WorkspaceFilePreviewHeader renders the glass overlay title used to reopen the directory drawer.
 // WorkspaceFilePreviewHeader 渲染用于重新打开目录抽屉的玻璃覆盖标题。
+// Parameters: props identifies the preview title/path and directory action; returns the named control for reopening its directory.
+// 参数：props 标识预览标题和路径及目录操作；返回具有名称的重新打开目录控件。
 function WorkspaceFilePreviewHeader(props: {
   // Loaded preview response shown by the header.
   // 标题展示的已加载预览响应。
@@ -192,7 +202,8 @@ function WorkspaceFilePreviewHeader(props: {
   // iconClassName 保存与共享目录树行一致的文件类型色板。
   const iconClassName = workspaceFilePreviewIconClassName(props.preview);
   return (
-    <button className="workspace-file-preview-header" onClick={props.onClosePreview} type="button">
+    <button className="workspace-file-preview-header" onClick={props.onClosePreview} type="button"
+      aria-label={t("workspaceAudit.openDirectory").replace("{path}", props.preview.relativePath)}>
       <span className={`diff-file-tree-file-icon workspace-file-preview-format-icon ${iconClassName}`}>
         {iconLabel}
       </span>

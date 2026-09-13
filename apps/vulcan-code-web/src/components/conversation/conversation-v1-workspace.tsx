@@ -1,4 +1,5 @@
 import * as React from "react";
+import { runConversationControlAction } from "./conversation-control-feedback";
 
 import {
   ConversationV1SessionDisplayRenderer,
@@ -112,6 +113,9 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
   // historyLoading is process-local because the canonical cursor remains in the controller snapshot.
   // historyLoading 仅属于进程内，因为 canonical 游标仍保留在控制器快照中。
   const [historyLoading, setHistoryLoading] = React.useState(false);
+  // historyRequest owns one UI request independently from a previous session's completion.
+  // historyRequest 独立持有一次界面请求，避免上一会话的完成影响新会话。
+  const historyRequest = React.useRef<object | null>(null);
   // ownerReady prevents a stale previous-session window from rendering during owner handoff.
   // ownerReady 防止归属切换期间渲染上一会话的过期窗口。
   const ownerReady = props.snapshot.owner?.session_id === props.sessionId;
@@ -120,27 +124,38 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
   const events = ownerReady ? props.snapshot.events : [];
 
   React.useEffect(() => {
+    historyRequest.current = null;
     setHistoryLoading(false);
   }, [props.sessionId, props.snapshot.owner?.window_generation]);
 
   /** Loads one older complete-Turn page through the owner-bound V1 command.
    * 通过绑定归属的 V1 命令加载一页更早的完整 Turn。 */
   const handleLoadMoreHistory = React.useCallback(async () => {
-    if (!ownerReady || !props.snapshot.has_more || historyLoading) {
+    if (!ownerReady || !props.snapshot.has_more || historyRequest.current !== null) {
       return;
     }
     setHistoryLoading(true);
+    // request identifies this attempt so stale finally blocks cannot unlock a later attempt.
+    // request 标识本次尝试，防止过期 finally 解锁后续尝试。
+    const request = {};
+    historyRequest.current = request;
     try {
-      await props.onPreserveHistoryPrepend(() => props.commands.prependOlder());
+      await runConversationControlAction(
+        () => props.onPreserveHistoryPrepend(() => props.commands.prependOlder()),
+        t("conversation.control.actionFailed"),
+      );
     } finally {
-      setHistoryLoading(false);
+      if (historyRequest.current === request) {
+        historyRequest.current = null;
+        setHistoryLoading(false);
+      }
     }
   }, [
-    historyLoading,
     ownerReady,
     props.commands,
     props.onPreserveHistoryPrepend,
     props.snapshot.has_more,
+    t,
   ]);
 
   return (

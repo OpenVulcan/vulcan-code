@@ -284,7 +284,9 @@ export function UsagePanel(props: UsagePanelProps) {
         {showBody ? (
           <>
             {props.model.stateMessage ? <p className="rounded-md bg-muted/35 px-3 py-2 text-xs text-muted-foreground">{props.model.stateMessage}</p> : null}
-            {props.model.metrics?.length ? <div className="grid gap-2 sm:grid-cols-3">{props.model.metrics.map((metric) => <UsageMetric compact key={metric.id} {...metric} />)}</div> : null}
+            {/* Fit metrics to their actual panel width instead of the application's viewport. */}
+            {/* 根据实际面板宽度排列指标，避免依据整个应用视口挤压嵌入面板。 */}
+            {props.model.metrics?.length ? <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">{props.model.metrics.map((metric) => <UsageMetric compact key={metric.id} {...metric} />)}</div> : null}
             {props.model.tokenBreakdown ? <TokenUsageBreakdown {...props.model.tokenBreakdown} /> : null}
             {props.model.cost ? <CostSummary {...props.model.cost} /> : null}
             {props.model.models?.length && props.model.modelsTitle ? <ModelUsageList models={props.model.models} title={props.model.modelsTitle} /> : null}

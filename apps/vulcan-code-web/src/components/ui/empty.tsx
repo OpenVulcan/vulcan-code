@@ -18,7 +18,7 @@ function Empty({
       data-variant={variant}
       className={cn(
         surfaceVariants({ variant }),
-        "flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-4 border-dashed p-6 text-center text-balance",
+        "flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-4 border-dashed p-6 text-center text-balance [overflow-wrap:anywhere]",
         className
       )}
       {...props}
@@ -32,7 +32,7 @@ function EmptyHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="empty-header"
-      className={cn("flex max-w-sm flex-col items-center gap-2", className)}
+      className={cn("flex min-w-0 w-full max-w-sm flex-col items-center gap-2", className)}
       {...props}
     />
   )
@@ -89,7 +89,7 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
 
 // EmptyDescription renders guidance that explains how to leave the empty state.
 // EmptyDescription 渲染说明如何结束空状态的引导内容。
-function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
+function EmptyDescription({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="empty-description"

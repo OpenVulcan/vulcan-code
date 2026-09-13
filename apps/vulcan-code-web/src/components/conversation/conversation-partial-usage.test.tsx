@@ -7,6 +7,7 @@ import { projectConversationEventDisplay, projectConversationTranscriptDisplay }
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { TurnStatsTooltipCard } from "./conversation-turn-stats-card";
 import { ConversationV1TurnStatsCard } from "./conversation-v1-turn-stats-card";
+import { averageTurnOutputSpeed, usageMetricDisplay } from "./conversation-usage-display";
 
 // Render tooltip content in SSR so both real statistics-card bodies can be asserted.
 // 在 SSR 中渲染浮层内容，以断言两条真实统计卡的正文。
@@ -16,6 +17,40 @@ vi.mock("@/components/ui/tooltip", () => {
 });
 
 describe("partial usage display from old persisted V1 events", () => {
+  // Throughput requires exact measurements from the same completed turn, never partial usage or a zero divisor.
+  // 吞吐率要求同一已完成回合的精确测量，绝不使用部分用量或零分母。
+  it("keeps missing timings unknown and computes the established elapsed-turn average", () => {
+    expect(averageTurnOutputSpeed(106, 2000)).toBe(53);
+    expect(averageTurnOutputSpeed(0, 2000)).toBe(0);
+    expect(averageTurnOutputSpeed(106, 0)).toBeNull();
+    expect(averageTurnOutputSpeed(106, undefined)).toBeNull();
+    expect(averageTurnOutputSpeed(undefined, 2000)).toBeNull();
+    expect(averageTurnOutputSpeed(106, -1)).toBeNull();
+    expect(averageTurnOutputSpeed(Infinity, 2000)).toBeNull();
+  });
+
+  // Both UI paths must expose the same measured speed after projection from durable V1 facts.
+  // 两条界面路径必须在可靠 V1 事实投影后展示相同测得速度。
+  it("projects exact turn throughput into the live branch tooltip", () => {
+    const events = kimiPartialUsageEvents().map((summary) => summary.event.kind === "turn_stats" ? {
+      ...summary, event: { ...summary.event, duration_ms: 2000, buckets: { ...summary.event.buckets, total: { ...summary.event.buckets.total, usage: { ...summary.event.buckets.total.usage, output_tokens: 106 } } } },
+    } : summary);
+    const branch = projectConversationBranchPresentationV1("fixture", events, {
+      sessionId: "fixture", resources: new Map(), contentUrl: () => "", error: null, status: "ready",
+    }, (key) => key);
+    const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
+    const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
+    expect(markup).toContain("平均 53.0 tokens/s");
+    expect(markup).toContain("包含等待与工具执行");
+  });
+
+  // An absent measurement and an explicitly reported zero have different user-visible meanings.
+  // 缺失测量与明确上报零值具有不同的用户可见含义。
+  it("keeps reported zero distinct from missing usage", () => {
+    expect(usageMetricDisplay(0, "cache_read_tokens", null, "zh-CN")).toBe("0");
+    expect(usageMetricDisplay(null, "cache_read_tokens", null, "zh-CN")).toBe("-");
+    expect(usageMetricDisplay(undefined, "cache_read_tokens", undefined, "en-US")).toBe("-");
+  });
   it("shows known counts and the paired known-request ratio in the main branch card", () => {
     const events = kimiPartialUsageEvents();
     const original = JSON.stringify(events);
@@ -78,30 +113,30 @@ describe("partial usage display from old persisted V1 events", () => {
     expect(node.usage_coverage?.total.dimensions.cache_read_tokens.knownTokens).toBe(179456);
   });
 
-  it("displays empty cache as zero without modifying the old terminal summary", () => {
+  it("displays absent cache as a dash without modifying the old terminal summary", () => {
     const nodes = projectConversationTranscriptDisplay(projectConversationEventDisplay(kimiPartialUsageEvents().slice(-1)));
     const node = nodes.find((candidate) => candidate.kind === "turn_stats");
     if (!node || node.kind !== "turn_stats") throw new Error("expected terminal stats node");
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1TurnStatsCard node={node} /></I18nProvider>);
-    expect(markup).toContain("缓存 Tokens</span><strong>0</strong>");
-    expect(markup).toContain("无缓存输入</span><strong>0</strong>");
+    expect(markup).toContain("缓存 Tokens</span><strong>-</strong>");
+    expect(markup).toContain("无缓存输入</span><strong>-</strong>");
     expect(node.item.event.buckets.total.usage.cache_read_tokens).toBeUndefined();
-    expect(markup).toContain("暂无数据");
+    expect(markup).toContain("尚无完整输入用量，无法计算缓存命中率");
     expect(markup).not.toContain("91.8%");
     expect(markup).not.toContain("（已知）");
   });
 
-  // Empty values are a display default and must not be persisted as measured zero usage.
-  // 空值零是展示默认值，不得持久化为实测零用量。
+  // Missing values remain distinct from a measured zero, without changing persisted accounting.
+  // 缺失值与实测零保持不同，不改变持久化核算。
   it("uses the same empty-value default in the main card without adding rows", () => {
     // A historical summary can omit cache fields even when other dimensions are present.
     // 历史摘要可能缺少缓存字段，同时仍包含其他维度。
     const metadata = { turn_stats: { provider_call_count: 1, tool_call_count: 0, output_tokens: 1, total_tokens: 11 } };
-    // Render the actual main-card body so zero formatting and layout are verified together.
-    // 渲染真实主卡正文，同时验证零值格式与布局。
+    // Render the actual main-card body so missing-value formatting and layout are verified together.
+    // 渲染真实主卡正文，同时验证缺失值格式与布局。
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
-    expect(markup).toContain("缓存 Tokens</span><strong>0</strong>");
-    expect(markup).toContain("无缓存输入</span><strong>0</strong>");
+    expect(markup).toContain("缓存 Tokens</span><strong>-</strong>");
+    expect(markup).toContain("无缓存输入</span><strong>-</strong>");
     expect(markup.match(/class="turn-stats-metric-row"/g)).toHaveLength(3);
     expect(metadata.turn_stats).not.toHaveProperty("cached_input_tokens");
   });

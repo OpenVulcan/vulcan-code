@@ -282,10 +282,8 @@
   min-width: 0;
   display: grid;
   gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px 10px;
-  background: var(--background);
+  padding: 6px 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .knowledge-index-health-metrics strong {
@@ -412,6 +410,17 @@
 .knowledge-package-import-dialog {
   width: min(620px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+}
+
+/* The decision body scrolls independently while the package actions remain reachable. */
+/* 决策正文独立滚动，使知识库包操作始终可达。 */
+.knowledge-package-import-body {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .knowledge-package-import-body,
@@ -433,6 +442,8 @@
 .knowledge-package-summary > div {
   display: grid;
   gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-package-summary span,
@@ -543,9 +554,8 @@
 }
 
 .knowledge-viewer-title > h2 {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-viewer-search {
@@ -659,9 +669,8 @@
 
 .knowledge-viewer-document-header strong,
 .knowledge-viewer-document-header small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-viewer-document-header small {
@@ -719,6 +728,26 @@
   }
 }
 
+/* Narrow readers retain usable document width and a bounded independent directory. */
+/* 窄屏阅读器保留可用正文宽度及有界独立目录。 */
+@media (max-width: 600px) {
+  .knowledge-viewer-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(90px, 30%) minmax(0, 1fr);
+  }
+  .knowledge-viewer-tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .knowledge-viewer-header,
+  .knowledge-viewer-search,
+  .knowledge-viewer-document-header {
+    flex-wrap: wrap;
+  }
+  .knowledge-viewer-title { flex-basis: 100%; }
+  .knowledge-viewer-markdown { padding: 12px; }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -737,15 +766,22 @@ body {
   background: var(--background);
 }
 
-button,
-textarea {
-  font: inherit;
+/* Keep the boot reset from overriding typography after the application loads. */
+/* 启动样式保留时，不覆盖应用加载后的组件字号与字重。 */
+@layer base {
+  button,
+  textarea {
+    font: inherit;
+  }
 }
 
 .loading-screen {
-  min-height: 100vh;
+  min-height: 0;
+  height: 100dvh;
+  overflow: auto;
   display: grid;
   place-items: center;
+  align-content: safe center;
   color: var(--muted-foreground);
   padding: 24px;
 }
@@ -754,15 +790,31 @@ textarea {
   color: var(--foreground);
 }
 
+/* Startup recovery uses the shared theme without importing the workbench button bundle. */
+/* 启动恢复沿用共享主题，不引入工作台按钮分块。 */
+.startup-reload-button {
+  justify-self: start;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  cursor: pointer;
+}
+.startup-reload-button:hover { background: var(--muted); }
+.startup-reload-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
 .startup-error-panel {
-  width: min(520px, calc(100vw - 48px));
+  width: min(520px, 100%);
+  min-width: 0;
   display: grid;
   justify-items: center;
   gap: 48px;
-  transform: translateY(-4vh);
 }
 
 .startup-error-content {
+  min-width: 0;
   width: 100%;
   display: grid;
   justify-items: start;
@@ -787,14 +839,26 @@ textarea {
   overflow-wrap: anywhere;
   color: var(--foreground);
   font-size: 13px;
+  max-height: min(32dvh, 240px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
 }
 
+/* Raw diagnostics stay readable on demand without pushing the recovery action outside the viewport.
+   原始诊断按需保持可读，不将恢复操作挤出视口。 */
+.startup-error-details { min-width: 0; width: 100%; }
+.startup-error-details summary { cursor: pointer; }
+.startup-error-details[open] summary { margin-bottom: 8px; }
+.startup-error-details summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
 .startup-progress-panel {
-  width: min(420px, calc(100vw - 48px));
+  width: min(420px, 100%);
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 72px;
-  transform: translateY(-4vh);
 }
 
 .startup-logo-stage {
@@ -828,10 +892,10 @@ textarea {
 }
 
 .startup-progress-content {
+  min-width: 0;
   width: min(420px, 100%);
   display: grid;
   gap: 12px;
-  transform: translateY(24px);
 }
 
 .conversation-loading-heading {
@@ -885,12 +949,14 @@ textarea {
 }
 
 .startup-download-progress {
+  min-width: 0;
   display: grid;
   gap: 7px;
   margin-top: 8px;
 }
 
 .startup-download-progress-heading {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -900,6 +966,11 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* Download messages are secondary status text; preserve the label and expose full text through its title.
+   下载消息属于次要状态文本；保留标签，并通过标题提示提供完整内容。 */
+.startup-download-progress-heading > span:first-child { flex: none; }
+.startup-download-progress-heading > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .startup-download-progress-bar {
   height: 5px;
 }
@@ -908,6 +979,15 @@ textarea {
   width: 34%;
   min-width: 34%;
   animation: startup-download-indeterminate 1.15s ease-in-out infinite;
+}
+
+/* Reduced motion preserves an unknown progress state while stopping decorative movement during boot.
+   减少动态效果时保留未知进度状态，并停止启动阶段的装饰运动。 */
+@media (prefers-reduced-motion: reduce) {
+  .startup-progress-bar .conversation-loading-bar-value,
+  .startup-download-progress-bar .conversation-loading-bar-value { transition: none; }
+  .startup-progress-bar .startup-download-progress-indeterminate,
+  .startup-download-progress-bar .startup-download-progress-indeterminate { animation: none; transform: none; }
 }
 
 @keyframes startup-download-indeterminate {
@@ -934,11 +1014,6 @@ textarea {
   stroke: currentColor;
   transition: stroke-dashoffset 180ms ease;
 }
-.composer-knowledge-menu {
-  min-width: 220px;
-  max-width: min(360px, calc(100vw - 24px));
-}
-
 .knowledge-import-warnings {
   max-height: 150px;
   margin: 8px 12px 0;

@@ -63,6 +63,14 @@ it("writes only caller groups, preserves sibling drafts and restores live inheri
     expect(onRunAction).toHaveBeenCalledExactlyOnceWith("native_host_project_policy", { hostProjectId: "host-a" })
     expect(container.textContent).toContain("继承当前全局设置")
     expect(container.querySelectorAll("#profile-user-transient-baseMs")).toHaveLength(0)
+    // Group disclosure changes no policy and never unmounts unsaved child editors.
+    // 配置组展开不改变策略，也不卸载带有未保存草稿的子编辑器。
+    const groups = Array.from(container.querySelectorAll<HTMLDetailsElement>(".project-vmm-policy-group"))
+    expect(groups).toHaveLength(3)
+    expect(groups.every((group) => !group.open)).toBe(true)
+    await act(async () => groups.forEach((group) => group.querySelector("summary")!.click()))
+    expect(onRunAction).toHaveBeenCalledTimes(1)
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "保存召回与提炼策略")!.disabled).toBe(true)
     await edit(container, "caller-policy-precheckHistoryTurnLimit", "2")
     await edit(container, "caller-policy-precheckMaxInputTokens", "512")
     await edit(container, "caller-policy-postactionMaxInputTokens", "1024")
@@ -80,6 +88,9 @@ it("writes only caller groups, preserves sibling drafts and restores live inheri
     await chooseMemoryOption(container.querySelector<HTMLButtonElement>("#caller-policy-postactionMemoryStability")!, "短期工作")
     await chooseMemoryOption(container.querySelector<HTMLButtonElement>("#caller-policy-postactionMemoryLevel")!, "阶段级")
     await edit(container, "vmm-text-budget", "512")
+    await act(async () => groups[2].querySelector("summary")!.click())
+    await act(async () => groups[2].querySelector("summary")!.click())
+    expect(container.querySelector<HTMLInputElement>("#vmm-text-budget")!.value).toBe("512")
     // The embedded ranking editor must persist only this host's explicit rerank prefix.
     // 内嵌排序编辑器必须仅持久化此宿主的显式重排前缀。
     await edit(container, "vmm-ranking-rerankTopN", "2")
@@ -128,6 +139,10 @@ it("writes only caller groups, preserves sibling drafts and restores live inheri
     await act(async () => buttons().filter((button) => button.textContent === "恢复本组全局继承")[0].click())
     expect(saved.overrides.recall).toBeNull()
     expect(saved.overrides.text?.maxFragmentTokens).toBe(512)
+    // An acknowledged recall action must not claim that another group's pending draft was saved.
+    // 已确认的召回动作不能宣称另一组待保存草稿已经保存。
+    expect(groups[0].querySelector('[role="status"]')?.textContent).toContain("本项目参数已保存")
+    expect(container.querySelector('.project-vmm-policy > [role="status"]')).toBeNull()
     expect(container.querySelector<HTMLInputElement>("#caller-policy-precheckHistoryTurnLimit")!.value).toBe("3")
     expect(container.querySelector<HTMLInputElement>("#caller-policy-postactionMemoryExpiryMs")!.value).toBe("180")
     expect(container.querySelector("#caller-policy-postactionMemoryLevel")!.textContent).toBe("稳定级")
@@ -136,6 +151,7 @@ it("writes only caller groups, preserves sibling drafts and restores live inheri
     await act(async () => buttons().filter((button) => button.textContent === "恢复本组全局继承")[1].click())
     expect(saved.overrides.retrieval).toBeNull()
     expect(saved.overrides.text?.maxFragmentTokens).toBe(512)
+    expect(groups[0].querySelector('[role="status"]')).toBeNull()
     expect(container.querySelector<HTMLInputElement>("#vmm-ranking-rerankTopN")!.value).toBe(String(rankingDefaults.rerankTopN))
     expect(onRunAction.mock.calls.every(([action]) => action.startsWith("native_host_project_policy"))).toBe(true)
   } finally {

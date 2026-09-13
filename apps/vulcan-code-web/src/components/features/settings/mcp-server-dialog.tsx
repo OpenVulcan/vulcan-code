@@ -1,3 +1,7 @@
+import { useMcpText } from "./mcp-text"
+import { Button } from "@/components/ui/button"
+import { createMcpDraft, validateMcpDraft } from "./mcp-form-model"
+import { McpStringRows, McpKeyValueRows } from "./mcp-form-fields"
 import * as React from "react"
 
 import {
@@ -11,8 +15,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
-import { useI18n } from "@/i18n"
 import type { McpServerSummary } from "@/types"
 
 // McpServerSaveRequest describes one MCP server configuration save request.
@@ -82,206 +84,82 @@ export interface McpSettingsActionProps {
   onRemoveMcpServer: (serverId: string) => Promise<void>
 }
 
-// McpServerDialog renders the MCP server add/edit form.
-// McpServerDialog 渲染 MCP 服务器新增/编辑表单。
+// McpServerDialog owns a draft for one open lifetime and retains it after service failures.
+// McpServerDialog 在单次打开期间拥有草稿，并在服务失败后保留它。
 export function McpServerDialog(props: {
-  // Service-backed MCP settings actions.
-  // 服务端支持的 MCP 设置动作。
-  actions: McpSettingsActionProps
-  // Whether the dialog is open.
-  // 弹窗是否打开。
-  open: boolean
-  // Updates the dialog open state.
-  // 更新弹窗打开状态。
-  onOpenChange: (open: boolean) => void
-  // Server being edited.
-  // 当前编辑的服务器。
-  server: McpServerSummary | null
+  actions: McpSettingsActionProps; open: boolean; onOpenChange: (open: boolean) => void; server: McpServerSummary | null
 }) {
-  const { locale } = useI18n()
-  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
-  const [name, setName] = React.useState("")
-  const [enabled, setEnabled] = React.useState(true)
-  const [transport, setTransport] = React.useState("stdio")
-  const [command, setCommand] = React.useState("")
-  const [argsText, setArgsText] = React.useState("")
-  const [url, setUrl] = React.useState("")
-  const [bearerToken, setBearerToken] = React.useState("")
-  const [headersText, setHeadersText] = React.useState("")
-  const [headersFromEnvText, setHeadersFromEnvText] = React.useState("")
-  const [oauthClientId, setOauthClientId] = React.useState("")
-  const [oauthClientSecret, setOauthClientSecret] = React.useState("")
-  const [oauthScopesText, setOauthScopesText] = React.useState("")
-  const [oauthRedirectUri, setOauthRedirectUri] = React.useState("")
-  const [cwd, setCwd] = React.useState("")
-  const [envText, setEnvText] = React.useState("")
-  const [envPassthroughText, setEnvPassthroughText] = React.useState("")
+  // text follows the shared application locale.
+  // text 遵循共享应用语言。
+  const text = useMcpText()
+
+  // draft and operation state belong to this modal, not the changing workbench snapshot.
+  // draft 与操作状态属于此弹窗，不随工作台快照变化。
+  const [draft, setDraft] = React.useState<McpServerSaveRequest>(() => createMcpDraft(null))
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState("")
+  const saving = React.useRef(false)
+  const openLifetime = React.useRef(false)
   React.useEffect(() => {
-    const server = props.server
-    setName(server?.name ?? "")
-    setEnabled(server?.enabled ?? true)
-    setTransport(server?.transport ?? "stdio")
-    setCommand(server?.command ?? "")
-    setArgsText((server?.args ?? []).join("\n"))
-    setUrl(server?.url ?? "")
-    setBearerToken(server?.bearerToken ?? "")
-    setHeadersText(formatKeyValueLines(server?.headers ?? []))
-    setHeadersFromEnvText(formatKeyValueLines(server?.headersFromEnv ?? []))
-    setOauthClientId(server?.oauthClientId ?? "")
-    setOauthClientSecret(server?.oauthClientSecret ?? "")
-    setOauthScopesText((server?.oauthScopes ?? []).join("\n"))
-    setOauthRedirectUri(server?.oauthRedirectUri ?? "")
-    setCwd(server?.cwd ?? "")
-    setEnvText(formatKeyValueLines(server?.env ?? []))
-    setEnvPassthroughText((server?.envPassthrough ?? []).join("\n"))
-  }, [props.server])
-  const save = React.useCallback(async () => {
-    await props.actions.onSaveMcpServer({
-      serverId: props.server?.id ?? null,
-      name,
-      enabled,
-      transport,
-      command,
-      args: parseLines(argsText),
-      url,
-      bearerToken,
-      headers: parseKeyValueLines(headersText),
-      headersFromEnv: parseKeyValueLines(headersFromEnvText),
-      oauthClientId,
-      oauthClientSecret,
-      oauthScopes: parseLines(oauthScopesText),
-      oauthRedirectUri,
-      cwd,
-      env: parseKeyValueLines(envText),
-      envPassthrough: parseLines(envPassthroughText),
-    })
-    props.onOpenChange(false)
-  }, [argsText, bearerToken, command, cwd, enabled, envPassthroughText, envText, headersFromEnvText, headersText, name, oauthClientId, oauthClientSecret, oauthRedirectUri, oauthScopesText, props, transport, url])
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent scrollMode="body-scroll" size="xl">
-        <DialogHeader>
-          <DialogTitle>{props.server ? text("编辑 MCP 服务器", "Edit MCP server") : text("添加 MCP 服务器", "Add MCP server")}</DialogTitle>
-          <DialogDescription>{text("多值字段每行一个；键值字段使用 KEY=VALUE。", "Use one line per value; key/value fields use KEY=VALUE.")}</DialogDescription>
-        </DialogHeader>
+    if (props.open && !openLifetime.current) { setDraft(createMcpDraft(props.server)); setError("") }
+    openLifetime.current = props.open
+  }, [props.open, props.server])
+  // change updates exactly one declared request field.
+  // change 仅更新一个已声明的请求字段。
+  const change = <K extends keyof McpServerSaveRequest>(key: K, value: McpServerSaveRequest[K]) => setDraft(current => ({ ...current, [key]: value }))
+  // save validates before dispatch and prevents duplicate submissions.
+  // save 在派发前校验，并阻止重复提交。
+  const save = async () => {
+    if (saving.current) return
+    const issue = validateMcpDraft(draft, text)
+    if (issue) { setError(issue); return }
+    saving.current = true; setBusy(true); setError("")
+    try { await props.actions.onSaveMcpServer(draft); props.onOpenChange(false) }
+    catch (failure) { setError(String(failure)) }
+    finally { saving.current = false; setBusy(false) }
+  }
+  return <Dialog open={props.open} onOpenChange={open => { if (!saving.current) props.onOpenChange(open) }}>
+    <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="xl">
+      <DialogHeader className="shrink-0"><DialogTitle>{draft.serverId ? text("编辑 MCP 服务器", "Edit MCP server") : text("添加 MCP 服务器", "Add MCP server")}</DialogTitle>
+        <DialogDescription>{text("保存后由运行时建立连接；状态以服务器详情为准。", "Runtime connects after saving.")}</DialogDescription>
+      </DialogHeader>
+      <div className="mcp-dialog-body">
+      <fieldset disabled={busy} className="mcp-form">
         <div className="settings-form-grid two">
-          <label className="settings-form-field">
-            <span>{text("名称", "Name")}</span>
-            <Input onChange={(event) => setName(event.target.value)} value={name} />
-          </label>
-          <div className="settings-form-field">
-            <span>{text("传输", "Transport")}</span>
-            <Select onValueChange={setTransport} value={transport}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="stdio">stdio</SelectItem>
-                <SelectItem value="http">http</SelectItem>
-                <SelectItem value="sse">sse</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <label className="settings-check-row inline">
-            <Switch checked={enabled} onCheckedChange={setEnabled} />
-            <span>{text("启用服务器", "Enable server")}</span>
-          </label>
-          {transport === "stdio" ? (
-            <>
-              <label className="settings-form-field">
-                <span>{text("命令", "Command")}</span>
-                <Input onChange={(event) => setCommand(event.target.value)} value={command} />
-              </label>
-              <label className="settings-form-field">
-                <span>{text("参数", "Arguments")}</span>
-                <Textarea onChange={(event) => setArgsText(event.target.value)} value={argsText} />
-              </label>
-              <label className="settings-form-field">
-                <span>CWD</span>
-                <Input onChange={(event) => setCwd(event.target.value)} value={cwd} />
-              </label>
-              <label className="settings-form-field">
-                <span>Env</span>
-                <Textarea onChange={(event) => setEnvText(event.target.value)} value={envText} />
-              </label>
-              <label className="settings-form-field">
-                <span>{text("环境透传", "Env passthrough")}</span>
-                <Textarea onChange={(event) => setEnvPassthroughText(event.target.value)} value={envPassthroughText} />
-              </label>
-            </>
-          ) : (
-            <>
-              <label className="settings-form-field">
-                <span>URL</span>
-                <Input onChange={(event) => setUrl(event.target.value)} value={url} />
-              </label>
-              <label className="settings-form-field">
-                <span>Bearer Token</span>
-                <Input onChange={(event) => setBearerToken(event.target.value)} type="password" value={bearerToken} />
-              </label>
-              <label className="settings-form-field">
-                <span>Headers</span>
-                <Textarea onChange={(event) => setHeadersText(event.target.value)} value={headersText} />
-              </label>
-              <label className="settings-form-field">
-                <span>Headers from env</span>
-                <Textarea onChange={(event) => setHeadersFromEnvText(event.target.value)} value={headersFromEnvText} />
-              </label>
-              <label className="settings-form-field">
-                <span>OAuth Client ID</span>
-                <Input onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
-              </label>
-              <label className="settings-form-field">
-                <span>OAuth Client Secret</span>
-                <Input onChange={(event) => setOauthClientSecret(event.target.value)} type="password" value={oauthClientSecret} />
-              </label>
-              <label className="settings-form-field">
-                <span>OAuth Scopes</span>
-                <Textarea onChange={(event) => setOauthScopesText(event.target.value)} value={oauthScopesText} />
-              </label>
-              <label className="settings-form-field">
-                <span>OAuth Redirect URI</span>
-                <Input onChange={(event) => setOauthRedirectUri(event.target.value)} value={oauthRedirectUri} />
-              </label>
-            </>
-          )}
+          <label className="settings-form-field"><span>{text("名称", "Name")}</span><Input value={draft.name} onChange={e => change("name", e.target.value)} /></label>
+          <div className="settings-form-field"><span>{text("传输", "Transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
+            <SelectTrigger aria-label={text("传输", "Transport")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="stdio">{text("本地进程", "stdio")}</SelectItem><SelectItem value="http">Streamable HTTP</SelectItem><SelectItem value="sse">SSE</SelectItem></SelectContent>
+          </Select></div>
+          <label className="settings-check-row inline"><Switch checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{text("启用", "Enabled")}</label>
         </div>
-        <DialogFooter>
-          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
-          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// localizedLiteral picks the display literal that matches the active locale.
-// localizedLiteral 按当前语言选择展示文本。
-function localizedLiteral(locale: string, zh: string, en: string): string {
-  return locale === "zh-CN" ? zh : en
-}
-
-// parseLines converts a multiline text area into a trimmed string list.
-// parseLines 将多行文本框转换为裁剪后的字符串列表。
-function parseLines(value: string): string[] {
-  return value.split(/\r?\n/g).map((line) => line.trim()).filter(Boolean)
-}
-
-// parseKeyValueLines converts KEY=VALUE lines into key/value rows.
-// parseKeyValueLines 将 KEY=VALUE 行转换为键值行。
-function parseKeyValueLines(value: string): Array<{ key: string; value: string }> {
-  return parseLines(value).map((line) => {
-    const separatorIndex = line.indexOf("=")
-    if (separatorIndex < 0) {
-      return { key: line, value: "" }
-    }
-    return {
-      key: line.slice(0, separatorIndex).trim(),
-      value: line.slice(separatorIndex + 1).trim(),
-    }
-  })
-}
-
-// formatKeyValueLines converts key/value rows into KEY=VALUE lines.
-// formatKeyValueLines 将键值行转换为 KEY=VALUE 行。
-function formatKeyValueLines(values: Array<{ key: string; value: string }>): string {
-  return values.map((entry) => `${entry.key}=${entry.value}`).join("\n")
+        {draft.transport === "stdio" ? <>
+          <label className="settings-form-field"><span>{text("可执行命令", "Executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
+          <p className="settings-muted-line">{text("只填可执行文件；每个参数占一行，不经过 Shell 拆分。", "Enter the executable only; each row is one exact argument.")}</p>
+          <McpStringRows label={text("参数", "Arguments")} values={draft.args} onChange={value => change("args", value)} placeholder="server.js" exact />
+          <label className="settings-form-field"><span>{text("工作目录", "Working directory")}</span><Input value={draft.cwd} onChange={e => change("cwd", e.target.value)} /></label>
+          <p className="settings-muted-line">{text("留空继承宿主进程工作目录。", "Empty inherits the host process working directory.")}</p>
+          <McpKeyValueRows label={text("显式环境变量", "Explicit environment")} values={draft.env} onChange={value => change("env", value)} secret />
+          <McpStringRows label={text("宿主环境变量透传", "Host environment passthrough")} values={draft.envPassthrough} onChange={value => change("envPassthrough", value)} placeholder="API_TOKEN" />
+          <details><summary>{text("环境继承说明", "Environment inheritance")}</summary><p className="settings-muted-line">{text("当前用户进程默认继承宿主环境。此列表保存显式透传声明，并非环境隔离白名单；同名显式值优先。", "User processes inherit the host environment. This list persists explicit passthrough declarations, not an isolation allowlist; explicit values take precedence.")}</p></details>
+        </> : <>
+          <label className="settings-form-field"><span>{text("端点 URL", "Endpoint URL")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
+          <details open><summary>{text("请求头与认证", "Headers and authentication")}</summary>
+            <label className="settings-form-field"><span>Bearer Token</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
+            <McpKeyValueRows headers label={text("静态请求头", "Static headers")} values={draft.headers} onChange={value => change("headers", value)} secret />
+            <McpKeyValueRows headers label={text("从环境变量取请求头", "Headers from environment")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
+            <p className="settings-muted-line">{text("右侧填写宿主变量名，例如 Authorization → ACCESS_TOKEN。使用变量完整值，不自动补 Bearer；同名静态头优先。", "Uses the complete environment value without adding Bearer; explicit headers take precedence.")}</p>
+          </details>
+          <details><summary>{text("OAuth 高级配置", "OAuth configuration")}</summary>
+            <label className="settings-form-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
+            <label className="settings-form-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
+            <McpStringRows label="OAuth scopes" values={draft.oauthScopes} onChange={value => change("oauthScopes", value)} placeholder="read" />
+            <label className="settings-form-field"><span>Redirect URI</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
+          </details>
+        </>}
+        {error && <p role="alert" className="mcp-error">{error}</p>}
+      </fieldset>
+      </div>
+      <DialogFooter className="shrink-0"><Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>{text("取消", "Cancel")}</Button><Button disabled={busy} onClick={() => void save()}>{busy ? text("正在保存", "Saving") : text("保存", "Save")}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>
 }

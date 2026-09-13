@@ -1,6 +1,10 @@
 //! Git commit-message generation service logic.
 //! Git 提交信息生成服务逻辑。
 
+#[cfg(test)]
+#[path = "commit_summary/live_acceptance_tests.rs"]
+mod live_acceptance_tests;
+
 use std::{path::Path, sync::Arc};
 
 use futures_util::StreamExt;
@@ -121,6 +125,8 @@ pub(crate) async fn service_generate_git_commit_message(
         agent_runtime,
         session_id,
         &repository_root_text,
+        &provider_id,
+        &model_id,
         reasoning_effort,
         prompt,
     )
@@ -522,10 +528,42 @@ async fn run_git_commit_summary_model(
     agent_runtime: AgentRuntimeBridge,
     session_id: SessionId,
     workspace_path: &str,
+    // Validated summary provider and model, independent from the conversation's route.
+    // 已校验的总结供应商和模型，独立于会话路由。
+    provider_id: &str,
+    model_id: &str,
     reasoning_effort: ReasoningEffortLevel,
     prompt: String,
 ) -> Result<ExecutionRunReport, String> {
-    let request = ExecutionPreparationRequest {
+    // request preserves the owner and carries the same target returned by the service response.
+    // request 保留所属会话，并携带与服务响应一致的目标。
+    let request = build_git_commit_summary_execution_request(
+        session_id,
+        workspace_path,
+        provider_id,
+        model_id,
+        reasoning_effort,
+        prompt,
+    );
+    run_git_commit_summary_stream(state, agent_runtime, request).await
+}
+
+/// Builds the tool-free summary request from the exact validated service target.
+/// 使用服务校验后的精确目标构建不含工具的总结请求。
+///
+/// Takes the owning session, repository, provider/model, reasoning and prepared prompt.
+/// 接收所属会话、仓库、供应商和模型、思考档位以及已准备的提示词。
+/// Returns an excluded non-session request retaining the original accounting owner.
+/// 返回排除于会话账本之外、同时保留原统计归属的请求。
+fn build_git_commit_summary_execution_request(
+    session_id: SessionId,
+    workspace_path: &str,
+    provider_id: &str,
+    model_id: &str,
+    reasoning_effort: ReasoningEffortLevel,
+    prompt: String,
+) -> ExecutionPreparationRequest {
+    ExecutionPreparationRequest {
         session_id,
         vce_retrieval_handler: None,
         execution_scope: ExecutionScope::ContextCompaction {
@@ -537,8 +575,8 @@ async fn run_git_commit_summary_model(
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
-        provider_id_override: None,
-        model_id_override: None,
+        provider_id_override: Some(provider_id.to_string()),
+        model_id_override: Some(model_id.to_string()),
         connection_id_override: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
@@ -585,7 +623,21 @@ async fn run_git_commit_summary_model(
         session_goal_context: None,
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),
-    };
+    }
+}
+
+/// Executes the frozen summary request and forwards its usage through the existing owner pipeline.
+/// 执行冻结的总结请求，通过已有归属链转发用量。
+///
+/// Takes shared service state, runtime handles and the validated summary request.
+/// 接收共享服务状态、运行时句柄与已校验的总结请求。
+/// Returns the terminal report or explicit execution/persistence failure.
+/// 返回终态报告或明确的执行、持久化失败。
+async fn run_git_commit_summary_stream(
+    state: SharedServiceBridgeState,
+    agent_runtime: AgentRuntimeBridge,
+    request: ExecutionPreparationRequest,
+) -> Result<ExecutionRunReport, String> {
     let mut stream = Box::pin(stream_runtime_run_with_intervention_plugins_and_public_ai(
         agent_runtime.provider_configuration.clone(),
         agent_runtime.agent_profile_catalog.clone(),
@@ -680,6 +732,43 @@ fn clean_generated_git_commit_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies a summary request preserves ownership and carries the selected model into execution.
+    /// 验证总结请求保留所属会话，并将选中模型传入执行链。
+    /// Returns normally only when no global/session target can substitute for the validated pair.
+    /// 仅当已校验的目标组合不会被全局或会话默认替换时正常返回。
+    #[test]
+    fn git_summary_request_preserves_explicit_target_and_owner() {
+        // owner identifies the real conversation without creating a synthetic accounting session.
+        // owner 标识真实会话，不创建虚构的统计会话。
+        let owner = SessionId::new_v4();
+        // request is built by the same function used immediately before stream execution.
+        // request 由实际流执行前使用的同一个函数构建。
+        let request = build_git_commit_summary_execution_request(
+            owner,
+            "D:/acceptance",
+            "summary-provider",
+            "summary-model",
+            ReasoningEffortLevel::Off,
+            String::from("Summarize the reviewed diff."),
+        );
+        assert_eq!(request.session_id, owner);
+        assert_eq!(
+            request.provider_id_override.as_deref(),
+            Some("summary-provider")
+        );
+        assert_eq!(request.model_id_override.as_deref(), Some("summary-model"));
+        assert_eq!(
+            request.prompt_purpose,
+            ExecutionPromptPurpose::GitCommitSummary
+        );
+        assert!(request.provider_route_lease_identity.is_none());
+        assert!(request.connection_id_override.is_none());
+        assert!(request.conversation_hook_turn_id.is_none());
+        assert!(
+            matches!(request.execution_scope, ExecutionScope::ContextCompaction { node_id } if node_id == SessionNodeId::from(owner))
+        );
+    }
 
     /// Verifies blank Git context bodies do not create empty protocol sections.
     /// 验证空白 Git 上下文正文不会创建空协议区块。

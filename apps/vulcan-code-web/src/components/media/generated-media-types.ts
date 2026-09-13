@@ -44,8 +44,8 @@ export interface GeneratedMediaImageOffset {
   y: number;
 }
 
-// GENERATED_MEDIA_MIN_ZOOM is the smallest image zoom ratio allowed in media viewers.
-// GENERATED_MEDIA_MIN_ZOOM 是媒体查看器允许的最小图片缩放比例。
+// GENERATED_MEDIA_MIN_ZOOM is the ordinary zoom floor; a measured full-image fit may require a smaller scale.
+// GENERATED_MEDIA_MIN_ZOOM 是普通缩放下限；实测完整图片适配可能需要更小比例。
 export const GENERATED_MEDIA_MIN_ZOOM = 0.1;
 
 // GENERATED_MEDIA_MAX_ZOOM is the largest image zoom ratio allowed in media viewers.

@@ -75,6 +75,9 @@ interface TurnDetailView {
 // VmmContentPageProps 定义内容管理状态与服务操作。
 interface VmmContentPageProps {
   busy: boolean
+  // notice carries the controller's actual operation feedback into active write confirmations.
+  // notice 将控制器的实际操作反馈传入当前写入确认框。
+  notice?: string
   // Only deployment and selected host identities are consumed by this content view.
   // 此内容视图仅消费部署方式和选中的宿主身份。
   snapshot: Pick<VmmMemorySnapshot, "selectedProjectId" | "selectedConversationId"> & {
@@ -94,6 +97,7 @@ function VmmContentPage({
   snapshot,
   result,
   onRunAction,
+  notice = "",
 }: VmmContentPageProps) {
   const { t } = useI18n()
   // contentMode separates physical browsing from the host recall scope.
@@ -327,17 +331,18 @@ function VmmContentPage({
       <AlertDialog
         open={deleteHit !== null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !busy) {
             setDeleteHit(null)
             setDeleteReason("")
           }
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("memory.content.deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>{t("memory.content.deleteDescription")}</AlertDialogDescription>
           </AlertDialogHeader>
+          {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
           <div className="space-y-2">
             <Label htmlFor="vmm-memory-delete-reason">{t("memory.content.deleteReason")}</Label>
             <Input
@@ -348,7 +353,7 @@ function VmmContentPage({
             />
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={busy}
               onClick={(event) => {
@@ -366,11 +371,13 @@ function VmmContentPage({
       <Dialog
         open={writeOpen}
         onOpenChange={(open) => {
-          setWriteOpen(open)
+          if (!busy) setWriteOpen(open)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
+        <DialogContent className="flex min-h-0 flex-col" size="md" scrollMode="fixed-footer" showCloseButton={!busy}
+          onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}
+          onInteractOutside={(event) => { if (busy) event.preventDefault() }}>
+          <DialogHeader className="shrink-0">
             <DialogTitle>{t("memory.content.addTitle")}</DialogTitle>
             <DialogDescription>
               {t(snapshot.experienceState.deployment === "native"
@@ -378,7 +385,8 @@ function VmmContentPage({
                 : "memory.content.description")}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+            {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
             <div className="space-y-2">
               <Label htmlFor="vmm-write-summary">{t("memory.content.summary")}</Label>
               <Input
@@ -399,8 +407,8 @@ function VmmContentPage({
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button onClick={() => setWriteOpen(false)} type="button" variant="outline">
+          <DialogFooter className="shrink-0">
+            <Button disabled={busy} onClick={() => setWriteOpen(false)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
             <Button

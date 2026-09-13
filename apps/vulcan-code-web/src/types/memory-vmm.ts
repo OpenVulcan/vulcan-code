@@ -349,6 +349,9 @@ export interface VmmConfigDraftSummary {
 // VmmProjectScopeSummary describes one project-level VMM scope.
 // VmmProjectScopeSummary 描述单个项目级 VMM 作用域。
 export interface VmmProjectScopeSummary {
+  // Resolved enablement for a new conversation in this exact host project.
+  // 当前准确宿主项目中新会话的已解析启用状态。
+  memoryEnabled: boolean;
   projectId: string;
   name: string;
   path: string;

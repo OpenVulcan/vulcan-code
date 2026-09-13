@@ -2,15 +2,10 @@ import React from "react";
 import {
   Archive,
   Copy,
-  ExternalLink,
   FileText,
   FolderCog,
   FolderOpen,
-  GitBranch,
-  Link,
-  MailOpen,
   Palette,
-  PanelTopOpen,
   Pencil,
   Pin,
   PinOff,
@@ -30,6 +25,22 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
+
+// moveFlyoutFocus applies the menu keyboard contract to real buttons and returns whether it handled the key.
+// moveFlyoutFocus 将菜单键盘契约应用于真实按钮，返回是否处理了该按键。
+function moveFlyoutFocus(event: React.KeyboardEvent<HTMLDivElement>, close: () => void): void {
+  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  // items are the already rendered enabled actions; identity remains in each existing click callback.
+  // items 是已经渲染的启用操作；身份仍保留在每个现有点击回调中。
+  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')];
+  if (items.length === 0) return;
+  event.preventDefault(); event.stopPropagation();
+  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+    : event.key === "ArrowUp" ? (index <= 0 ? items.length - 1 : index - 1) : (index + 1) % items.length;
+  items[next].focus();
+}
 
 // CollapsedFeatureMenuItem describes one feature entry in the collapsed navigation flyout.
 // CollapsedFeatureMenuItem 描述折叠导航悬浮菜单中的单个功能入口。
@@ -123,6 +134,9 @@ export function CollapsedFeatureMenu(props: {
     <>
       <div
         className="collapsed-project-hover-root collapsed-feature-hover-root"
+        onFocus={openFlyout}
+        onBlur={(event) => { if (!(event.relatedTarget instanceof Element) || !event.relatedTarget.closest(".collapsed-feature-flyout")) scheduleClose(); }}
+        onKeyDown={(event) => { if (event.key === "Escape") { clearCloseTimer(); setFlyoutOpen(false); event.stopPropagation(); } }}
         onMouseEnter={openFlyout}
         onMouseLeave={scheduleClose}
         ref={anchorRef}
@@ -133,6 +147,9 @@ export function CollapsedFeatureMenu(props: {
         <div
           aria-label={props.label}
           className="collapsed-project-flyout collapsed-feature-flyout"
+          onFocus={clearCloseTimer}
+          onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) scheduleClose(); }}
+          onKeyDown={(event) => moveFlyoutFocus(event, () => { anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus(); setFlyoutOpen(false); })}
           onMouseEnter={openFlyout}
           onMouseLeave={scheduleClose}
           role="menu"
@@ -251,6 +268,9 @@ export function CollapsedProjectMenu(props: {
     <>
       <div
         className="collapsed-project-hover-root"
+        onFocus={openFlyout}
+        onBlur={(event) => { if (!(event.relatedTarget instanceof Element) || !event.relatedTarget.closest(".collapsed-project-flyout")) scheduleClose(); }}
+        onKeyDown={(event) => { if (event.key === "Escape") { clearCloseTimer(); setFlyoutOpen(false); event.stopPropagation(); } }}
         onMouseEnter={openFlyout}
         onMouseLeave={scheduleClose}
         ref={anchorRef}
@@ -261,6 +281,9 @@ export function CollapsedProjectMenu(props: {
         <div
           aria-label={t("projectMenu.conversationsAria").replace("{project}", props.project.name)}
           className="collapsed-project-flyout"
+          onFocus={clearCloseTimer}
+          onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) scheduleClose(); }}
+          onKeyDown={(event) => moveFlyoutFocus(event, () => { anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus(); setFlyoutOpen(false); })}
           onMouseEnter={openFlyout}
           onMouseLeave={scheduleClose}
           role="menu"
@@ -332,10 +355,6 @@ export function ProjectContextMenu(props: {
           <TerminalSquare size={15} />
           <span>{t("projectMenu.openTerminal")}</span>
         </ContextMenuItem>
-        <ContextMenuItem disabled>
-          <PanelTopOpen size={15} />
-          <span>{t("projectMenu.createWorktree")}</span>
-        </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("rename", props.project)}>
           <Pencil size={15} />
           <span>{t("projectMenu.renameProject")}</span>
@@ -404,10 +423,6 @@ export function ConversationContextMenu(props: {
           <Archive size={15} />
           <span>{t("conversationMenu.archive")}</span>
         </ContextMenuItem>
-        <ContextMenuItem disabled>
-          <MailOpen size={15} />
-          <span>{t("conversationMenu.markUnread")}</span>
-        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.conversation)}>
           <FolderOpen size={15} />
@@ -424,24 +439,6 @@ export function ConversationContextMenu(props: {
         <ContextMenuItem onSelect={() => props.onAction("copy-session-id", props.conversation)}>
           <FileText size={15} />
           <span>{t("conversationMenu.copySessionId")}</span>
-        </ContextMenuItem>
-        <ContextMenuItem disabled>
-          <Link size={15} />
-          <span>{t("conversationMenu.copyDeepLink")}</span>
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem disabled>
-          <GitBranch size={15} />
-          <span>{t("conversationMenu.forkLocal")}</span>
-        </ContextMenuItem>
-        <ContextMenuItem disabled>
-          <GitBranch size={15} />
-          <span>{t("conversationMenu.forkWorktree")}</span>
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem disabled>
-          <ExternalLink size={15} />
-          <span>{t("conversationMenu.openNewWindow")}</span>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

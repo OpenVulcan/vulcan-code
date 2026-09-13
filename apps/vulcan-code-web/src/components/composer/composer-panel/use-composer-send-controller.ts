@@ -5,7 +5,10 @@ import type {
   ComposerSubmission,
 } from "@/components/composer/composer-model";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
-import type { ComposerDraftSubmissionSnapshot } from "@/components/composer/composer-panel/use-composer-session-draft";
+import {
+  ComposerDraftChangedBeforeSubmissionError,
+  type ComposerDraftSubmissionSnapshot,
+} from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useI18n } from "@/i18n";
 import type { ComposerAttachmentSummary } from "@/types";
 
@@ -47,7 +50,7 @@ export interface UseComposerSendControllerOptions {
   captureSessionSettings: () => ComposerSubmission["sessionSettings"];
   // Consumes the captured draft settings after the backend accepts the submission.
   // 在后端接受提交后消费已捕获的草稿设置。
-  clearSessionSettings: () => void;
+  clearSessionSettings: (snapshot: ComposerSubmission["sessionSettings"]) => void;
   // Flushes pending provider/model configuration writes before submission.
   // 在提交前刷新仍在进行的供应商/模型配置写入。
   beforeSubmit?: () => Promise<boolean>;
@@ -80,6 +83,9 @@ export interface UseComposerSendControllerOptions {
 // ComposerSendController exposes the single send/stop transaction boundary consumed by ComposerPanel.
 // ComposerSendController 暴露 ComposerPanel 使用的唯一发送/停止事务边界。
 export interface ComposerSendController {
+  // Whether the current draft owner's stop request is awaiting backend acknowledgement or user choice.
+  // 当前草稿所有者的停止请求是否正在等待后端确认或用户选择。
+  isStopping: boolean;
   // Whether a new goal may automatically submit its first backend turn.
   // 新目标是否可以自动提交第一个后端轮次。
   canAutoSubmitCreatedGoal: boolean;
@@ -113,6 +119,12 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   // submittingRef synchronously blocks duplicate sends before React state commits.
   // submittingRef 在 React 状态提交前同步拦截重复发送。
   const submittingRef = React.useRef(false);
+  // stoppingSlotsRef deduplicates requests synchronously per owner without blocking another conversation's stop.
+  // stoppingSlotsRef 按所有者同步去重，且不阻止另一会话的停止请求。
+  const stoppingSlotsRef = React.useRef(new Set<string>());
+  // stoppingSlots projects pending stop owners into the visible button state.
+  // stoppingSlots 将待确认的停止所有者投影为可见按钮状态。
+  const [stoppingSlots, setStoppingSlots] = React.useState<ReadonlySet<string>>(() => new Set());
   // submissionVersionRef advances whenever any local submission acquires the gate.
   // submissionVersionRef 在任一本地提交获取门控时递增。
   const submissionVersionRef = React.useRef(0);
@@ -123,6 +135,15 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   // conversationRunningRef 向跨目标保存保留的回调暴露最新后端运行状态。
   const conversationRunningRef = React.useRef(options.isConversationRunning);
   conversationRunningRef.current = options.isConversationRunning;
+  // goalOwnerRef identifies a continuous visit, matching the goal editor's cancellation on navigation.
+  // goalOwnerRef 标识一次连续访问，与目标编辑器在导航时取消后续操作的规则一致。
+  const goalOwnerRef = React.useRef({ draftSlotKey: options.draftSlotKey });
+  if (goalOwnerRef.current.draftSlotKey !== options.draftSlotKey) {
+    goalOwnerRef.current = { draftSlotKey: options.draftSlotKey };
+  }
+  // goalOwnerAtRender binds retained goal-save callbacks to their original visit, including an away-and-back transition.
+  // goalOwnerAtRender 将保留的目标保存回调绑定到原始访问，也可区分离开后返回同一槽位。
+  const goalOwnerAtRender = goalOwnerRef.current;
   // submissionSettings combines runtime controls shared by both submission paths.
   // submissionSettings 合并两条提交路径共享的运行时控件。
   const submissionSettings = React.useMemo<ComposerSubmissionSettings>(() => ({
@@ -148,35 +169,47 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     submissionVersionRef.current += 1;
     setIsSubmitting(true);
     return true;
-  }, []);
+  }, [options.isDraftReplacementActive]);
   // finishSubmission releases both synchronous and React-visible submission gates.
   // finishSubmission 释放同步门控与 React 可见提交门控。
   const finishSubmission = React.useCallback(() => {
     submittingRef.current = false;
     setIsSubmitting(false);
-  }, [options.isDraftReplacementActive]);
+  }, []);
   // isSubmissionActive exposes the synchronous gate to other draft-mutating transactions.
   // isSubmissionActive 向其他草稿变更事务暴露同步门控。
   const isSubmissionActive = React.useCallback(() => submittingRef.current, []);
   // requestStop routes one stop request and optionally records an explicit stop-button trace.
   // requestStop 路由一次停止请求，并可选记录显式停止按钮追踪。
   const requestStop = React.useCallback(async (traceExplicitStop: boolean) => {
-    if (traceExplicitStop) {
-      options.onTrace?.("composer.stop", {
-        isConversationRunning: options.isConversationRunning,
-        draftChars: options.draftInput.trim().length,
-        attachmentCount: options.attachments.length,
-      });
-    }
-    // stopped records whether the backend completed or confirmed the requested stop flow.
-    // stopped 记录后端是否完成或确认请求的停止流程。
-    const stopped = await options.onStopConversationRun();
-    if (!stopped) {
-      toast.error(t("composer.error.stopCurrentFailed"));
+    // stopOwner remains bound to this request even if the user navigates while awaiting confirmation.
+    // stopOwner 即使在等待确认期间用户切换页面，也始终绑定本次请求。
+    const stopOwner = options.draftSlotKey;
+    if (stoppingSlotsRef.current.has(stopOwner)) return;
+    stoppingSlotsRef.current.add(stopOwner);
+    setStoppingSlots(new Set(stoppingSlotsRef.current));
+    try {
+      if (traceExplicitStop) {
+        options.onTrace?.("composer.stop", {
+          isConversationRunning: options.isConversationRunning,
+          draftChars: options.draftInput.trim().length,
+          attachmentCount: options.attachments.length,
+        });
+      }
+      // stopped records whether the backend completed or confirmed the requested stop flow.
+      // stopped 记录后端是否完成或确认请求的停止流程。
+      const stopped = await options.onStopConversationRun();
+      if (!stopped) {
+        toast.error(t("composer.error.stopCurrentFailed"));
+      }
+    } finally {
+      stoppingSlotsRef.current.delete(stopOwner);
+      setStoppingSlots(new Set(stoppingSlotsRef.current));
     }
   }, [
     options.attachments.length,
     options.draftInput,
+    options.draftSlotKey,
     options.isConversationRunning,
     options.onStopConversationRun,
     options.onTrace,
@@ -216,13 +249,25 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       if (options.beforeSubmit && !(await options.beforeSubmit())) {
         return;
       }
+      // Freeze owner-local delivery decisions before clearing changes attachment preparation refs.
+      // 在清空草稿改变附件准备 ref 前，冻结属于该所有者的传输决策。
+      const submittedAttachments = options.projectAttachmentsForSubmission
+        ? options.projectAttachmentsForSubmission(options.attachments)
+        : options.attachments;
+      // Freeze explicit session settings before awaiting durable draft writes or another render.
+      // 在等待草稿持久写入或下一次渲染前，冻结显式会话设置。
+      const submittedSessionSettings = options.captureSessionSettings();
       // submittedDraft binds failure recovery to the exact slot consumed by this send.
       // submittedDraft 将失败恢复绑定到本次发送消费的精确草稿槽。
       let submittedDraft: ComposerDraftSubmissionSnapshot;
       try {
         submittedDraft = await options.clearForSubmission();
-      } catch {
-        toast.error(t("composer.error.draftPersistFailed"));
+      } catch (error) {
+        if (error instanceof ComposerDraftChangedBeforeSubmissionError) {
+          toast.info(t("composer.error.draftChangedBeforeSubmission"));
+        } else {
+          toast.error(t("composer.error.draftPersistFailed"));
+        }
         return;
       }
       // sent records whether the workbench runtime accepted this complete submission.
@@ -230,16 +275,14 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       const sent = await options.onSubmitPrompt({
         draftSlotKey: submittedDraft.draftSlotKey,
         prompt,
-        attachments: options.projectAttachmentsForSubmission
-          ? options.projectAttachmentsForSubmission(submittedDraft.attachments)
-          : submittedDraft.attachments,
+        attachments: submittedAttachments,
         ...submissionSettings,
-        sessionSettings: options.captureSessionSettings(),
+        sessionSettings: submittedSessionSettings,
       });
       if (!sent) {
         options.restoreFailedSubmission(submittedDraft);
       } else {
-        options.clearSessionSettings();
+        options.clearSessionSettings(submittedSessionSettings);
       }
     } finally {
       finishSubmission();
@@ -247,7 +290,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   }, [
     beginSubmission,
     finishSubmission,
-    options.attachments.length,
+    options.attachments,
     options.beforeSubmit,
     options.captureSessionSettings,
     options.clearSessionSettings,
@@ -271,7 +314,8 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   // submitCreatedGoal 在没有其他提交或后端运行启动时发送已持久化目标文本。
   const submitCreatedGoal = React.useCallback(async (objective: string) => {
     if (
-      submissionVersionRef.current !== submissionVersionAtRender
+      goalOwnerRef.current !== goalOwnerAtRender
+      || submissionVersionRef.current !== submissionVersionAtRender
       || submittingRef.current
       || conversationRunningRef.current
       || !beginSubmission()
@@ -285,6 +329,12 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       if (options.beforeSubmit && !(await options.beforeSubmit())) {
         return;
       }
+      // Persistence may outlive the original visit or overlap an independently started run; keep the goal without dispatching another turn.
+      // 持久化可能跨越原始访问或与独立启动的运行重叠；此时保留目标，不再分派额外轮次。
+      if (goalOwnerRef.current !== goalOwnerAtRender || conversationRunningRef.current) return;
+      // submittedSessionSettings retains the precise settings object accepted by this generated first turn.
+      // submittedSessionSettings 保留生成首轮所接受的精确设置对象。
+      const submittedSessionSettings = options.captureSessionSettings();
       // sent records whether the workbench runtime accepted the generated first turn.
       // sent 记录工作台运行时是否接受生成的首轮。
       const sent = await options.onSubmitPrompt({
@@ -292,12 +342,12 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
         prompt: objective,
         attachments: [],
         ...submissionSettings,
-        sessionSettings: options.captureSessionSettings(),
+        sessionSettings: submittedSessionSettings,
       });
       if (!sent) {
         options.restoreInputToSlot(submissionDraftSlotKey, objective);
       } else {
-        options.clearSessionSettings();
+        options.clearSessionSettings(submittedSessionSettings);
       }
     } finally {
       finishSubmission();
@@ -305,6 +355,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   }, [
     beginSubmission,
     finishSubmission,
+    goalOwnerAtRender,
     options.draftSlotKey,
     options.beforeSubmit,
     options.captureSessionSettings,
@@ -316,6 +367,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   ]);
 
   return {
+    isStopping: stoppingSlots.has(options.draftSlotKey),
     canAutoSubmitCreatedGoal,
     isSubmissionActive,
     sendDraft,

@@ -1,4 +1,4 @@
-import { Brain, Send, Square } from "lucide-react";
+import { Brain, LoaderCircle, Send, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ComposerSelectControl,
@@ -17,6 +17,9 @@ import type {
 // ComposerPanelToolbarRightProps carries the send/stop and reasoning controls for the composer toolbar.
 // ComposerPanelToolbarRightProps 承载输入区工具栏的发送/停止与推理控件。
 export interface ComposerPanelToolbarRightProps {
+  // Exact draft owner; changing it dismisses selectors and isolates pending capacity mutations.
+  // 精确草稿所有者；变更时关闭选择器，并隔离未完成的容量修改。
+  draftSlotKey: string;
   // Accessible label for the reasoning selector.
   // 推理选择器的无障碍标签。
   reasoningAriaLabel: string;
@@ -56,6 +59,9 @@ export interface ComposerPanelToolbarRightProps {
   // Whether unresolved capability choices block a new submission.
   // 未解决的能力选择是否阻止新提交。
   sendBlocked: boolean;
+  // Whether this conversation's stop request is awaiting acknowledgement or confirmation.
+  // 此会话的停止请求是否正在等待回应或确认。
+  stopPending: boolean;
   // Reasoning selector open signal.
   // 推理选择器打开信号。
   reasoningPickerOpenSignal: number;
@@ -88,6 +94,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
   return (
     <div className="composer-toolbar-right">
       <ContextUsageOrb
+        key={`context:${props.draftSlotKey}`}
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
         modelContextLimit={props.modelContextLimit}
         onNodeChange={props.onSetSessionContextCompactionWindow}
@@ -97,6 +104,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
       />
       {props.reasoningEffortOptions.length > 0 ? (
         <ComposerSelectControl
+          key={`reasoning:${props.draftSlotKey}`}
           ariaLabel={props.reasoningAriaLabel}
           className="reasoning no-indicator"
           disabled={props.reasoningEffortOptions.length === 1}
@@ -113,12 +121,15 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
       <Button
         aria-label={stopOnly ? props.stopAriaLabel : props.sendAriaLabel}
         className={cn("send-button", stopOnly && "running")}
-        disabled={!stopOnly && props.sendBlocked}
+        aria-busy={stopOnly && props.stopPending}
+        disabled={stopOnly ? props.stopPending : props.sendBlocked}
         onClick={props.onSend}
         size="icon"
         type="button"
       >
-        {stopOnly ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
+        {stopOnly ? (props.stopPending
+          ? <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
+          : <Square fill="currentColor" size={15} strokeWidth={0} />) : <Send size={18} />}
       </Button>
     </div>
   );

@@ -97,7 +97,7 @@ export interface SettingsSubAreaGroup {
 // activeSettingsHeaderSummary 返回当前设置页的标题与说明。
 export function activeSettingsHeaderSummary(activeArea: SettingsSubAreaId, t: ReturnType<typeof useI18n>["t"]): SettingsHeaderSummary {
   const area = settingsSubAreas(t);
-  const entry = area.find((item) => item.id === activeArea);
+  const entry = area.find((item) => item.id === (activeArea === "prompt-composer" ? "context-basics" : activeArea));
   return {
     title: entry?.label ?? t("area.settings"),
     detail: entry?.description ?? t("area.settings.description"),
@@ -156,7 +156,6 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "visual-lab", label: t("settings.visualLab"), icon: <Palette size={16} />, description: t("settings.visualLab.description") },
         { id: "notifications", label: t("settings.notifications"), icon: <Bell size={16} />, description: t("settings.notifications.description") },
         { id: "git-commit", label: t("settings.gitCommit"), icon: <GitCommitHorizontal size={16} />, description: t("settings.gitCommit.description") },
-        { id: "prompt-composer", label: t("settings.promptComposer"), icon: <FileText size={16} />, description: t("settings.promptComposer.description") },
         { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },
         { id: "archived-restore", label: t("settings.archivedRestore"), icon: <Archive size={16} />, description: t("settings.archivedRestore.description") },
       ],

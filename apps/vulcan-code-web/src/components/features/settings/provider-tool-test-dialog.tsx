@@ -6,6 +6,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -66,6 +67,8 @@ interface JsonSchemaProperty {
 
 // ProviderToolTestDialog executes and renders one real Search or Extract diagnostic.
 // ProviderToolTestDialog 执行并渲染一次真实 Search 或 Extract 诊断。
+// Parameters: props supplies an exact diagnostic target and dialog state; returns schema-backed inputs, explicit execution and result/error output.
+// 参数：props 提供精确诊断目标与弹窗状态；返回基于 Schema 的输入、显式执行和结果或错误输出。
 export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
   // t resolves every operator-visible diagnostic label.
   // t 解析全部面向操作员的诊断标签。
@@ -115,8 +118,23 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
   // result contains one normalized successful provider response.
   // result 包含一份规范化成功供应商响应。
   const [result, setResult] = React.useState<PublicAiProviderToolTestResult | null>(null);
+  // requestSequence binds a paid diagnostic response to one exact target generation.
+  // requestSequence 将付费诊断响应绑定到一个精确目标代次。
+  const requestSequence = React.useRef(0);
+  // requestBusy prevents a second dispatch before React publishes pending state.
+  // requestBusy 在 React 发布等待状态之前阻止第二次分派。
+  const requestBusy = React.useRef(false);
+  // initializedTarget ignores unrelated snapshot object refreshes while preserving user input.
+  // initializedTarget 忽略无关快照对象刷新，同时保留用户输入。
+  const initializedTarget = React.useRef<string | null>(null);
+  React.useEffect(() => () => { requestSequence.current += 1; }, []);
 
   React.useEffect(() => {
+    const identity = props.target ? JSON.stringify([props.target.connectionId, props.target.target.target_id]) : null;
+    if (initializedTarget.current === identity) return;
+    initializedTarget.current = identity;
+    requestSequence.current += 1;
+    requestBusy.current = false;
     // searchLimit reads the exact selected target default instead of inventing a provider fallback.
     // searchLimit 读取精确所选目标默认值，而不是构造供应商兜底值。
     const searchLimit = schemaProperty(props.target, "max_results");
@@ -178,7 +196,7 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
   // extractReady 在分派前校验声明的 URL 数量与 HTTPS 契约。
   const extractReady = urlValues.length >= minimumUrls
     && urlValues.length <= maximumUrls
-    && urlValues.every((value) => value.startsWith("https://"));
+    && urlValues.every(isValidHttpsUrl);
   // canSubmit reports whether the active form can start one real request.
   // canSubmit 表示当前表单是否可以启动一次真实请求。
   const canSubmit = Boolean(props.target)
@@ -187,11 +205,18 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
 
   // submitTest projects only fields declared by the selected target schema.
   // submitTest 仅投影所选目标 Schema 声明的字段。
+  // Parameters: event is the submitted target form; returns after validating declared inputs and awaiting the exact guarded diagnostic request.
+  // 参数：event 是目标表单提交事件；在校验声明输入并等待精确受保护诊断请求后返回。
   async function submitTest(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (!props.target || !canSubmit) {
+    if (!props.target || !canSubmit || requestBusy.current || !event.currentTarget.reportValidity()) {
       return;
     }
+    requestBusy.current = true;
+    // sequence identifies this exact request so stale completions cannot release a newer request.
+    // sequence 标识此精确请求，防止旧请求完成时释放新请求。
+    const sequence = requestSequence.current + 1;
+    requestSequence.current = sequence;
     // arguments is the exact provider-native object accepted by the frozen target.
     // arguments 是冻结目标接受的精确供应商原生对象。
     const argumentsValue = isSearch
@@ -227,11 +252,14 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
         },
         arguments: argumentsValue,
       });
-      setResult(nextResult);
+      if (requestSequence.current === sequence) setResult(nextResult);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (requestSequence.current === sequence) setError(errorMessage(reason));
     } finally {
-      setPending(false);
+      if (requestSequence.current === sequence) {
+        requestBusy.current = false;
+        setPending(false);
+      }
     }
   }
 
@@ -239,16 +267,16 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
     <Dialog
       open={props.target !== null}
       onOpenChange={(open) => {
-        if (!open && !pending) {
+        if (!open && !requestBusy.current) {
           props.onClose();
         }
       }}
     >
       <DialogContent
-        className="max-h-[min(85vh,720px)] overflow-y-auto sm:max-w-3xl"
+        className="flex max-h-[min(85vh,720px)] flex-col overflow-hidden p-0 sm:max-w-3xl"
         showCloseButton={!pending}
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
           <DialogTitle>
             {isSearch
               ? t("settings.providerTools.testSearchTitle")
@@ -261,12 +289,14 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
           </DialogDescription>
         </DialogHeader>
         {props.target ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex shrink-0 flex-wrap gap-2 px-5">
             <Badge variant="outline">{props.target.target.display_name}</Badge>
             <Badge variant="secondary">{props.target.connectionDisplayName}</Badge>
           </div>
         ) : null}
-        <form className="grid gap-4" onSubmit={(event) => void submitTest(event)}>
+        <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void submitTest(event)}>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <fieldset disabled={pending} className="min-w-0 space-y-4">
           {isSearch ? (
             <SearchTestFields
               excludeDomains={excludeDomains}
@@ -304,15 +334,17 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
             {t("settings.providerTools.testConsumesQuota")}
           </p>
           {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-          <div className="flex justify-end">
+          </fieldset>
+          {result ? <ProviderToolTestResults result={result} /> : null}
+          </div>
+          <DialogFooter className="shrink-0 px-5 py-3">
             <Button disabled={!canSubmit} type="submit">
               {pending
                 ? t("settings.providerTools.testRunning")
                 : t("settings.providerTools.test")}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-        {result ? <ProviderToolTestResults result={result} /> : null}
       </DialogContent>
     </Dialog>
   );
@@ -886,6 +918,15 @@ function schemaDefaultString(property: JsonSchemaProperty | null): string | null
   return typeof property?.default === "string" && property.default !== ""
     ? property.default
     : null;
+}
+
+// isValidHttpsUrl rejects malformed addresses before a real quota-consuming diagnostic dispatch.
+// isValidHttpsUrl 在实际消耗配额的诊断分派前拒绝格式错误的地址。
+// Parameters: value is the raw URL draft; returns true only for a parseable HTTPS URL.
+// 参数：value 是原始 URL 草稿；仅对可解析的 HTTPS URL 返回 true。
+function isValidHttpsUrl(value: string): boolean {
+  try { const url = new URL(value); return url.protocol === "https:" && url.hostname.length > 0; }
+  catch { return false; }
 }
 
 // splitNonEmptyLines normalizes one operator-entered newline list.

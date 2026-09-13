@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -14,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
+import { isOptionalUnsignedDraft } from "./vmm-draft-number"
 import type { VmmConfigDraftSummary, VmmProjectScopeSummary } from "@/types"
 
 // VmmRulesPageProps defines one editable rules draft and explicit application targets.
@@ -50,6 +50,9 @@ function VmmRulesPage({
   onApply,
 }: VmmRulesPageProps) {
   const { t } = useI18n()
+  // Numeric drafts match the backend's optional u32 contract and stay unchanged on invalid input.
+  // 数字草稿对应后端可选 u32 契约，无效输入保留原文。
+  const numbersValid = [draft.implicitMemoryTurns, draft.profileRefreshTurns, draft.profileNodeLimit].every((value) => isOptionalUnsignedDraft(value, 32))
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
@@ -60,7 +63,7 @@ function VmmRulesPage({
             {t("memory.rules.description")}
           </p>
         </div>
-        <Button disabled={busy || !draftReady} onClick={() => void onApply(scope, scope === "project" ? projectId : null, draft)} type="button">
+        <Button disabled={busy || !draftReady || !numbersValid} onClick={() => void onApply(scope, scope === "project" ? projectId : null, draft)} type="button">
           <Save className="size-4" aria-hidden="true" />
           {t("memory.rules.applySettings")}
         </Button>
@@ -79,15 +82,15 @@ function VmmRulesPage({
           {notice}
         </p>
       ) : null}
+      {!numbersValid ? <p role="alert" className="text-sm text-destructive">{t("memory.rules.invalidNumbers")}</p> : null}
 
       <fieldset disabled={busy || !draftReady} className="grid min-w-0 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BrainCircuit className="size-4" aria-hidden="true" />
-              {t("memory.rules.title")}
+              {t("memory.rules.features")}
             </CardTitle>
-            <CardDescription>{t("memory.rules.description")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1">
             <RuleSwitch
@@ -127,7 +130,7 @@ function VmmRulesPage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Settings2 className="size-4" aria-hidden="true" />
-              {t("memory.rules.profileRefresh")}
+              {t("memory.rules.retentionProfiles")}
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -197,7 +200,8 @@ function NumberSetting({
       <Input
         id={inputId}
         inputMode="numeric"
-        onChange={(event) => onChange(event.target.value.replace(/\D+/g, ""))}
+        aria-invalid={!isOptionalUnsignedDraft(value, 32)}
+        onChange={(event) => onChange(event.target.value)}
         value={value}
       />
     </div>

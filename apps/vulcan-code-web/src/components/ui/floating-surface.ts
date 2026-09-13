@@ -15,16 +15,16 @@ export const FLOATING_MOTION_CLASS_NAME =
 // MENU_ITEM_CLASS_NAME provides one density and interaction language for ordinary menu rows.
 // MENU_ITEM_CLASS_NAME 为普通菜单行提供统一的密度与交互语言。
 export const MENU_ITEM_CLASS_NAME =
-  "relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+  "relative flex min-w-0 cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm [overflow-wrap:anywhere] outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 // MENU_CHECKABLE_ITEM_CLASS_NAME reserves trailing space for checkbox and radio indicators.
 // MENU_CHECKABLE_ITEM_CLASS_NAME 为复选与单选指示器预留尾部空间。
 export const MENU_CHECKABLE_ITEM_CLASS_NAME =
-  "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+  "relative flex min-w-0 cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm [overflow-wrap:anywhere] outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 // MENU_LABEL_CLASS_NAME provides one hierarchy for non-interactive menu labels.
 // MENU_LABEL_CLASS_NAME 为不可交互的菜单标签提供统一层级。
-export const MENU_LABEL_CLASS_NAME = "px-1.5 py-1 text-xs font-medium text-muted-foreground data-inset:pl-7"
+export const MENU_LABEL_CLASS_NAME = "min-w-0 px-1.5 py-1 text-xs font-medium [overflow-wrap:anywhere] text-muted-foreground data-inset:pl-7"
 
 // MENU_SEPARATOR_CLASS_NAME provides one subtle divider for grouped commands.
 // MENU_SEPARATOR_CLASS_NAME 为分组命令提供统一的弱分隔线。
@@ -32,7 +32,7 @@ export const MENU_SEPARATOR_CLASS_NAME = "-mx-1 my-1 h-px bg-border"
 
 // MENU_SHORTCUT_CLASS_NAME provides one trailing shortcut treatment.
 // MENU_SHORTCUT_CLASS_NAME 为尾部快捷键文本提供统一样式。
-export const MENU_SHORTCUT_CLASS_NAME = "ml-auto text-xs tracking-widest text-muted-foreground"
+export const MENU_SHORTCUT_CLASS_NAME = "ml-auto shrink-0 text-xs tracking-widest text-muted-foreground"
 
 // FLOATING_CONTENT_WIDTH_CLASS_NAME maps semantic width choices to stable layout classes.
 // FLOATING_CONTENT_WIDTH_CLASS_NAME 将语义宽度选项映射为稳定的布局类。

@@ -158,13 +158,17 @@ function ConversationRowLeading(props: {
       <span className={cn("conversation-tree-leading-actions", isRunning && "running")} aria-hidden="false">
         <span
           aria-label={props.isPinned ? t("conversationMenu.unpin") : t("conversationMenu.pin")}
-          className="conversation-tree-quick-action"
+          className="conversation-tree-quick-action focus-visible:outline-2 focus-visible:outline-ring"
           onClick={(event) => {
             event.stopPropagation();
             props.onAction("pin", props.conversation);
           }}
           onMouseDown={(event) => event.preventDefault()}
           role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); }
+          }}
         >
           {props.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
         </span>
@@ -209,12 +213,16 @@ function ConversationRowTrailing(props: {
       >
         <span
           aria-label={t("conversationRow.confirmArchive")}
-          className="conversation-tree-confirm-action"
+          className="conversation-tree-confirm-action focus-visible:outline-2 focus-visible:outline-ring"
           onClick={(event) => {
             event.stopPropagation();
             props.onAction("archive", props.conversation);
           }}
           role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); }
+          }}
         >
           {t("projectDialog.confirm")}
         </span>
@@ -229,13 +237,17 @@ function ConversationRowTrailing(props: {
       <span className="conversation-tree-quick-actions" aria-hidden="false">
         <span
           aria-label={t("conversationMenu.archive")}
-          className="conversation-tree-quick-action"
+          className="conversation-tree-quick-action focus-visible:outline-2 focus-visible:outline-ring"
           onClick={(event) => {
             event.stopPropagation();
             props.onRequestArchiveConfirm();
           }}
           onMouseDown={(event) => event.preventDefault()}
           role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); }
+          }}
         >
           <Archive size={13} />
         </span>

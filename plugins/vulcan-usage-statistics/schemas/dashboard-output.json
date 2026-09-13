@@ -2,10 +2,44 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "view": { "enum": ["all", "overview", "details", "maintenance"] },
     "generatedAtMs": { "type": "integer" },
     "schemaRevision": { "type": "integer", "minimum": 0 },
     "aggregateRevision": { "type": "integer", "minimum": 0 },
     "healthStatus": { "type": "string", "minLength": 1 },
+    "dailyCount": { "type": "integer", "minimum": 0 },
+    "consumerIds": { "type": "array", "items": { "type": "string" } },
+    "recentCount": { "type": "integer", "minimum": 0 },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "costs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "currency": { "type": "string" },
+              "amount": { "type": ["string", "null"] },
+              "pricedRows": { "type": "integer", "minimum": 0 },
+              "incompleteRows": { "type": "integer", "minimum": 0 },
+              "unpricedRows": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["currency", "amount", "pricedRows", "incompleteRows", "unpricedRows"],
+            "additionalProperties": false
+          }
+        },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "reported": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "inputTokens": { "$ref": "#/$defs/nullableInteger" },
+        "outputTokens": { "$ref": "#/$defs/nullableInteger" },
+        "cacheReadTokens": { "$ref": "#/$defs/nullableInteger" },
+        "cacheWriteTokens": { "$ref": "#/$defs/nullableInteger" }
+      },
+      "required": ["costs", "attempts", "successes", "reported", "totalTokens", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"],
+      "additionalProperties": false
+    },
     "pricingCatalog": { "$ref": "#/$defs/pricingCatalog" },
     "daily": {
       "type": "array",
@@ -32,10 +66,15 @@
     }
   },
   "required": [
+    "view",
     "generatedAtMs",
     "schemaRevision",
     "aggregateRevision",
     "healthStatus",
+    "dailyCount",
+    "consumerIds",
+    "recentCount",
+    "summary",
     "pricingCatalog",
     "daily",
     "heatmap",

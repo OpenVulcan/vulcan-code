@@ -489,11 +489,11 @@
 }
 
 .conversation-session-commit-delta .added {
-  color: #238636;
+  color: var(--vcn-content-success);
 }
 
 .conversation-session-commit-delta .removed {
-  color: #da3633;
+  color: var(--vcn-content-danger);
 }
 
 .conversation-session-commit-branch-input,

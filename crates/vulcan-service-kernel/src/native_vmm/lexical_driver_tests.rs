@@ -1146,7 +1146,65 @@ async fn real_controller_nonempty_analysis_materializes_memory_and_profiles() {
     crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::verify_nonempty_analysis(
         bootstrap_vmm_data_plane(&controller).await.expect("nonempty data plane"),
         super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
+        false,
     ).await;
+}
+
+/// Runs public native-tool registration, manager exposure and physical execution in a private child process.
+/// 在私有子进程内运行公开原生工具注册、管理器暴露与物理执行。
+/// The exact test-name marker selects the child branch once; parent never installs a global client.
+/// 准确测试名标记仅选择一次子进程分支；父进程绝不安装全局客户端。
+#[tokio::test]
+async fn real_controller_native_tool_dispatch_in_isolated_process() {
+    // test_name is the exact harness selector, preventing accidental recursion or unrelated test execution.
+    // test_name 是准确测试框架选择器，防止意外递归或执行无关测试。
+    let test_name = concat!(
+        module_path!(),
+        "::real_controller_native_tool_dispatch_in_isolated_process"
+    )
+    .strip_prefix("vulcan_service_kernel::")
+    .expect("local test module path");
+    // marker belongs only to this acceptance subprocess, never to application configuration.
+    // marker 仅属于本验收子进程，绝不属于应用配置。
+    let marker = std::env::var("VULCAN_NATIVE_TOOL_DISPATCH_CHILD");
+    if marker.as_deref() != Ok(test_name) {
+        assert!(
+            matches!(marker, Err(std::env::VarError::NotPresent)),
+            "Unexpected native dispatch child marker"
+        );
+        // output captures the single child test evidence and releases its process-local registry on exit.
+        // output 捕获唯一子测试证据，并在退出时释放其进程局部注册表。
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env("VULCAN_NATIVE_TOOL_DISPATCH_CHILD", test_name)
+            .output()
+            .expect("start isolated native tool dispatch child");
+        assert!(
+            output.status.success(),
+            "Native tool child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("NATIVE_TOOL_DISPATCH_ACCEPTANCE_COMPLETE"),
+            "Child did not execute the exact native-tool acceptance"
+        );
+        return;
+    }
+    assert!(
+        vulcan_vmm::process_native_vmm_client().is_err(),
+        "Child begins with an empty process registry"
+    );
+    // All SQLite/vector data and Core resources remain under the existing isolated controller fixture.
+    // 全部 SQLite/向量数据与 Core 资源均位于既有隔离控制器夹具内。
+    let (_temporary, controller) = isolated_controller().await;
+    crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::verify_nonempty_analysis(
+        bootstrap_vmm_data_plane(&controller).await.expect("native tool data plane"),
+        super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
+        true,
+    ).await;
+    println!("NATIVE_TOOL_DISPATCH_ACCEPTANCE_COMPLETE");
 }
 
 /// Verifies the installed asynchronous VMM Hook after a real durable V1 compaction.

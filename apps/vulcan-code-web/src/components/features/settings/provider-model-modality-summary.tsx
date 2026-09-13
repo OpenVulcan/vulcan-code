@@ -154,7 +154,9 @@ function modelModalityIcon(modality: ProviderModelModality): React.ReactNode {
 
 // modelModalityLabel maps one closed modality identifier to its localized label.
 // modelModalityLabel 将一个封闭多模态标识映射为本地化标签。
-function modelModalityLabel(
+// Parameters: modality is a declared closed identifier and t resolves locale text; returns the corresponding human-readable resource label.
+// 参数：modality 是已声明封闭标识，t 解析本地化文案；返回对应的可读资源标签。
+export function modelModalityLabel(
   modality: ProviderModelModality,
   t: ReturnType<typeof useI18n>["t"],
 ): string {

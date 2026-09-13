@@ -5,6 +5,9 @@ import type { AgentActionProps } from "@/components/features/agents/agent-area-t
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/components/ui/button";
+import { RenderErrorBoundary } from "@/app/render-error-boundary";
+import { useI18n } from "@/i18n";
 import type {
   MainAreaId,
   SettingsSubAreaId,
@@ -37,11 +40,30 @@ const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/kno
 
 // FeatureLoadBoundary provides one stable non-layout-shifting fallback for deferred feature chunks.
 // FeatureLoadBoundary 为延迟功能分块提供一个稳定且不改变布局的加载回退。
-function FeatureLoadBoundary(props: { children: ReactNode }) {
+export function FeatureLoadBoundary(props: {
+  // children is the selected lazy feature subtree.
+  // children 是所选延迟加载功能子树。
+  children: ReactNode;
+  // regionKey clears failed navigation while preserving healthy page state.
+  // regionKey 清除已失败的导航，同时保留正常页面状态。
+  regionKey: string;
+}) {
+  // locale keeps recovery text aligned with the current application language.
+  // locale 使恢复文案与当前应用语言一致。
+  const { locale } = useI18n();
   return (
+    <RenderErrorBoundary resetKey={props.regionKey} fallback={(error) => (
+      <section role="alert" className="m-4 space-y-3 rounded-lg border p-4">
+        <p className="text-sm font-medium">{locale === "zh-CN" ? "此页面暂时无法显示。" : "This page could not be displayed."}</p>
+        <p className="text-xs text-muted-foreground">{locale === "zh-CN" ? "其他页面仍可使用。重新加载应用会结束当前页面操作，请先保留未保存的内容。" : "Other pages remain available. Preserve any unsaved work before reloading the application."}</p>
+        <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{locale === "zh-CN" ? "错误详情" : "Error details"}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{error.message}</pre></details>
+        <Button variant="outline" onClick={() => window.location.reload()}>{locale === "zh-CN" ? "重新加载应用" : "Reload application"}</Button>
+      </section>
+    )}>
     <React.Suspense fallback={<div className="flex min-h-32 items-center justify-center"><Spinner /></div>}>
       {props.children}
     </React.Suspense>
+    </RenderErrorBoundary>
   );
 }
 
@@ -80,6 +102,12 @@ export function FeatureContent(props: {
   // Opens credential management for memory inference prerequisites.
   // 为记忆推理前置条件打开凭据管理。
   onOpenCredentialManagement: () => void;
+  // Opens the available statistics plugin through the owning workspace navigation.
+  // 通过所属工作区导航打开可用统计插件。
+  onOpenUsageStatistics?: () => void;
+  // Opens the global diagnostics route through the owning feature shell.
+  // 通过所属功能外壳打开全局诊断路由。
+  onOpenDiagnostics?: () => void;
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps;
@@ -93,14 +121,14 @@ export function FeatureContent(props: {
   if (props.activeArea === "agent-skills") {
     return (
       <div className="feature-content">
-        <FeatureLoadBoundary><LazyAgentSkillsArea actions={props.agentSkillActions} workbench={props.workbench} /></FeatureLoadBoundary>
+        <FeatureLoadBoundary regionKey={props.activeArea}><LazyAgentSkillsArea actions={props.agentSkillActions} workbench={props.workbench} /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "skills") {
     return (
       <div className="feature-content">
-        <FeatureLoadBoundary><LazySkillsArea
+        <FeatureLoadBoundary regionKey={`${props.activeArea}:${props.activeSkillSubArea}`}><LazySkillsArea
           activeTab={props.activeSkillSubArea}
           skillActions={props.luaSkillActions}
           workbench={props.workbench}
@@ -111,7 +139,7 @@ export function FeatureContent(props: {
   if (props.activeArea === "agents") {
     return (
       <div className="feature-content">
-        <FeatureLoadBoundary><LazyAgentsArea
+        <FeatureLoadBoundary regionKey={props.activeArea}><LazyAgentsArea
           actions={props.agentActions}
           workbench={props.workbench}
         /></FeatureLoadBoundary>
@@ -121,7 +149,7 @@ export function FeatureContent(props: {
   if (props.activeArea === "memory") {
     return (
       <div className="feature-content">
-        <FeatureLoadBoundary><LazyMemoryArea
+        <FeatureLoadBoundary regionKey={`${props.activeArea}:${props.activeMemorySubArea}`}><LazyMemoryArea
           activeSection={props.activeMemorySubArea}
           actions={props.memoryActions}
           onOpenCredentialManagement={props.onOpenCredentialManagement}
@@ -134,15 +162,17 @@ export function FeatureContent(props: {
   if (props.activeArea === "knowledge") {
     return (
       <div className="feature-content">
-        <FeatureLoadBoundary><LazyKnowledgeBaseArea /></FeatureLoadBoundary>
+        <FeatureLoadBoundary regionKey={props.activeArea}><LazyKnowledgeBaseArea /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "settings") {
     return (
-      <div className="feature-content">
-        <FeatureLoadBoundary><LazySettingsFeatureContent
+      <div className="feature-content settings-feature-content">
+        <FeatureLoadBoundary regionKey={`${props.activeArea}:${props.activeSettingsSubArea}`}><LazySettingsFeatureContent
           activeSettingsSubArea={props.activeSettingsSubArea}
+          onOpenUsageStatistics={props.onOpenUsageStatistics}
+          onOpenDiagnostics={props.onOpenDiagnostics}
           actions={props.settingsActions}
           startup={props.startup}
           workbench={props.workbench}

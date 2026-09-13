@@ -1,4 +1,5 @@
 import React from "react";
+import { toast } from "sonner";
 import {
   ArrowDown,
   Bot,
@@ -175,10 +176,10 @@ export interface WorkspaceContextPanelProps {
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
-  onCopyRawDiff: (rawDiff: string) => void;
+  onCopyRawDiff: (rawDiff: string) => void | Promise<void>;
   // Copies plain text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制普通文本。
-  onCopyText: (text: string) => void;
+  onCopyText: (text: string) => void | Promise<void>;
   // Resolves one local media path into a WebUI-renderable URL.
   // 将单个本地媒体路径解析为 WebUI 可渲染 URL。
   resolveMediaSourceUrl: (path: string) => string;
@@ -281,6 +282,8 @@ export interface WorkspaceContextPanelProps {
 
 // WorkspaceContextPanel renders the dynamic right context tab workspace.
 // WorkspaceContextPanel 渲染动态右侧上下文页签工作区。
+// Parameters: props supplies the selected route, ordered tabs and typed service callbacks. Returns the context workspace.
+// 参数：props 提供选中路由、有序页签及强类型服务回调。返回上下文工作区。
 export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
   // activeTab stores the currently visible opened tab.
   // activeTab 保存当前可见的已打开页签。
@@ -340,7 +343,8 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
             onCloseTab={(tab) => {
               if (tab.kind === "files") {
                 void import("@/components/workspace/WorkspaceFilesPanelHost")
-                  .then((module) => module.forgetWorkspaceFilesPanelCacheInstance(tab.id));
+                  .then((module) => module.forgetWorkspaceFilesPanelCacheInstance(tab.id))
+                  .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
               }
               if (tab.kind === "subagent" && tab.subagentTaskId) {
                 subagentScrollSnapshots.current.delete(tab.subagentTaskId);
@@ -366,6 +370,8 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
 
 // WorkspaceContextTabBar renders opened tabs plus switcher and add menus.
 // WorkspaceContextTabBar 渲染已打开页签以及切换与新增菜单。
+// Parameters: props supplies tab order, active identity, DOM references and callbacks. Returns the navigable tab strip.
+// 参数：props 提供页签顺序、活动身份、DOM 引用和回调。返回可导航的页签栏。
 function WorkspaceContextTabBar(props: {
   // Opened tabs in visual order.
   // 按视觉顺序排列的已打开页签。
@@ -386,6 +392,24 @@ function WorkspaceContextTabBar(props: {
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
+  // The tablist owns arrow navigation; close/add controls retain their independent native keyboard behavior.
+  // 页签列表持有方向键导航；关闭/新增控件保留独立原生键盘行为。
+  // Parameters: event is a bubbling tablist key event. Returns nothing; supported keys move focus and selection together.
+  // 参数：event 是向页签列表冒泡的键盘事件。无返回值；支持的按键同步移动焦点与选择。
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!(event.target instanceof HTMLButtonElement) || event.target.getAttribute("role") !== "tab") return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    // DOM tab order exactly mirrors props.tabs and excludes each separate close button.
+    // DOM 页签顺序与 props.tabs 精确一致，并排除各自独立的关闭按钮。
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const currentIndex = buttons.indexOf(event.target);
+    if (currentIndex < 0 || buttons.length === 0) return;
+    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+      : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+    event.preventDefault();
+    props.onActivateTab(props.tabs[nextIndex].id);
+    buttons[nextIndex].focus();
+  };
   return (
     <div className="context-dynamic-tabbar">
       {props.tabs.length > 1 ? (
@@ -396,7 +420,7 @@ function WorkspaceContextTabBar(props: {
         />
       ) : null}
       <WorkspaceContextAddMenu onOpenTab={props.onOpenTab} />
-      <div className="context-dynamic-tab-strip" role="tablist">
+      <div className="context-dynamic-tab-strip" role="tablist" onKeyDown={handleTabKeyDown}>
         {props.tabs.map((tab) => (
           <WorkspaceContextTabButton
             active={tab.id === props.activeTabId}
@@ -420,6 +444,8 @@ function WorkspaceContextTabBar(props: {
 
 // WorkspaceContextTabButton renders one dynamic tab with hover close affordance.
 // WorkspaceContextTabButton 渲染一个带悬停关闭入口的动态页签。
+// Parameters: props identifies the tab, active state and scoped actions. Returns separate select and close buttons.
+// 参数：props 标识页签、活动状态与作用域化动作。返回独立的选择和关闭按钮。
 function WorkspaceContextTabButton(props: {
   // Opened tab represented by this button.
   // 当前按钮代表的已打开页签。
@@ -464,6 +490,7 @@ function WorkspaceContextTabButton(props: {
         className="context-dynamic-tab-label"
         onClick={() => props.onActivateTab(props.tab.id)}
         role="tab"
+        tabIndex={props.active ? 0 : -1}
         title={displayTitle}
         type="button"
       >
@@ -604,14 +631,12 @@ function WorkspaceContextLauncher(props: {
       <WorkspaceContextLauncherCard
         description={t("workspaceContext.launcher.filesDescription")}
         kind="files"
-        shortcut="Ctrl+P"
         title={t("contextPanel.files")}
         onOpenTab={props.onOpenTab}
       />
       <WorkspaceContextLauncherCard
         description={t("workspaceContext.launcher.reviewDescription")}
         kind="review"
-        shortcut="Ctrl+Shift+G"
         title={t("contextPanel.review")}
         onOpenTab={props.onOpenTab}
       />
@@ -627,6 +652,8 @@ function WorkspaceContextLauncher(props: {
 
 // WorkspaceContextLauncherCard renders one empty-panel action card.
 // WorkspaceContextLauncherCard 渲染一个空面板操作卡片。
+// Parameters: props supplies the exact kind, localized labels and opening callback. Returns one native action button.
+// 参数：props 提供精确种类、本地化文案与打开回调。返回一个原生操作按钮。
 function WorkspaceContextLauncherCard(props: {
   // Context tab kind opened by this card.
   // 当前卡片打开的上下文页签类型。
@@ -637,9 +664,6 @@ function WorkspaceContextLauncherCard(props: {
   // Secondary description.
   // 次级说明。
   description: string;
-  // Optional shortcut hint.
-  // 可选快捷键提示。
-  shortcut?: string;
   // Opens one tab kind.
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
@@ -649,7 +673,6 @@ function WorkspaceContextLauncherCard(props: {
       {workspaceContextTabIcon(props.kind, 22)}
       <strong>{props.title}</strong>
       <span>{props.description}</span>
-      {props.shortcut ? <kbd>{props.shortcut}</kbd> : null}
     </button>
   );
 }
@@ -724,6 +747,7 @@ function WorkspaceContextTabContent(args: {
     return (
       <div className="context-tab-content subagent-tab-content">
         <WorkspaceSubagentPanel
+          key={args.activeTab.id}
           tab={args.activeTab}
           props={args.props}
           expandedStates={args.subagentExpandedStates}
@@ -754,6 +778,8 @@ function WorkspaceContextTabContent(args: {
 
 // WorkspaceSubagentPanel renders a read-only subagent transcript inside the right context rail.
 // WorkspaceSubagentPanel 在右侧上下文栏中渲染只读子代理转录。
+// Parameters: args supplies the tab-owned task and retained transcript view state. Returns transcript and lifecycle controls.
+// 参数：args 提供页签持有的任务及保留的转录视图状态。返回转录和生命周期控件。
 function WorkspaceSubagentPanel(args: {
   // Active subagent tab descriptor.
   // 当前活动的子代理页签描述。
@@ -783,6 +809,12 @@ function WorkspaceSubagentPanel(args: {
   // closeSubmitting stores whether the close request is currently in flight.
   // closeSubmitting 保存关闭请求是否正在提交。
   const [closeSubmitting, setCloseSubmitting] = React.useState(false);
+  // taskMutation blocks duplicate and competing lifecycle requests before React commits disabled state.
+  // taskMutation 在 React 提交禁用状态前阻止重复及相互冲突的生命周期请求。
+  const taskMutation = React.useRef(false);
+  // taskActionError retains the original failure inside the active confirmation.
+  // taskActionError 在当前确认弹窗内保留原始失败原因。
+  const [taskActionError, setTaskActionError] = React.useState<string | null>(null);
   // scrollRef owns the read-only transcript viewport inside this tab.
   // scrollRef 持有该页签内只读转录视口。
   const scrollRef = React.useRef<HTMLElement | null>(null);
@@ -841,29 +873,43 @@ function WorkspaceSubagentPanel(args: {
   });
   // handleStopConfirmed executes the single-task stop after confirmation.
   // handleStopConfirmed 在确认后执行单任务停止。
+  // Parameters: none; the mounted tab owns the parent/task ids. Returns after the request or visible failure handling finishes.
+  // 参数：无；挂载页签持有父会话/任务标识。请求或可见失败处理结束后返回。
   const handleStopConfirmed = React.useCallback(async () => {
-    if (!parentConversationId || !taskId || stopSubmitting) {
+    if (!parentConversationId || !taskId || taskMutation.current) {
       return;
     }
+    taskMutation.current = true;
+    setTaskActionError(null);
     setStopSubmitting(true);
     try {
       await args.props.onStopSubagentTask(parentConversationId, taskId);
       setStopConfirmOpen(false);
+    } catch (error) {
+      setTaskActionError(error instanceof Error ? error.message : String(error));
     } finally {
+      taskMutation.current = false;
       setStopSubmitting(false);
     }
   }, [args.props, parentConversationId, stopSubmitting, taskId]);
   // handleCloseConfirmed closes the child-agent lifecycle after confirmation.
   // handleCloseConfirmed 在确认后关闭子智能体生命周期。
+  // Parameters: none; the mounted tab owns the parent/task ids. Returns after success closes the dialog or failure preserves it.
+  // 参数：无；挂载页签持有父会话/任务标识。成功关闭弹窗或失败保留弹窗后返回。
   const handleCloseConfirmed = React.useCallback(async () => {
-    if (!parentConversationId || !taskId || closeSubmitting) {
+    if (!parentConversationId || !taskId || taskMutation.current) {
       return;
     }
+    taskMutation.current = true;
+    setTaskActionError(null);
     setCloseSubmitting(true);
     try {
       await args.props.onCloseSubagentTask(parentConversationId, taskId);
       setCloseConfirmOpen(false);
+    } catch (error) {
+      setTaskActionError(error instanceof Error ? error.message : String(error));
     } finally {
+      taskMutation.current = false;
       setCloseSubmitting(false);
     }
   }, [args.props, closeSubmitting, parentConversationId, taskId]);
@@ -980,7 +1026,7 @@ function WorkspaceSubagentPanel(args: {
             <Button
               className="workspace-subagent-stop-button"
               disabled={closeSubmitting}
-              onClick={() => setStopConfirmOpen(true)}
+              onClick={() => { setTaskActionError(null); setStopConfirmOpen(true); }}
               type="button"
               variant="outline"
             >
@@ -992,7 +1038,7 @@ function WorkspaceSubagentPanel(args: {
             <Button
               className="workspace-subagent-stop-button"
               disabled={stopSubmitting}
-              onClick={() => setCloseConfirmOpen(true)}
+              onClick={() => { setTaskActionError(null); setCloseConfirmOpen(true); }}
               type="button"
               variant="outline"
             >
@@ -1011,6 +1057,7 @@ function WorkspaceSubagentPanel(args: {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
+            {taskActionError ? <p role="alert" className="text-sm text-destructive">{taskActionError}</p> : null}
             <Button disabled={stopSubmitting} onClick={() => setStopConfirmOpen(false)} type="button" variant="outline">
               {t("conversation.action.cancel")}
             </Button>
@@ -1030,6 +1077,7 @@ function WorkspaceSubagentPanel(args: {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
+            {taskActionError ? <p role="alert" className="text-sm text-destructive">{taskActionError}</p> : null}
             <Button disabled={closeSubmitting} onClick={() => setCloseConfirmOpen(false)} type="button" variant="outline">
               {t("conversation.action.cancel")}
             </Button>

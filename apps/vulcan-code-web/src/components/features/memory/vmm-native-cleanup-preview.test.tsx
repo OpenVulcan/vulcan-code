@@ -96,3 +96,52 @@ it("routes the page through preview before confirmation and discards a rejected 
     container.remove()
   }
 })
+
+// Pending cleanup actions must retain their sole request owner before React commits disabled controls.
+// React 提交控件禁用状态前，等待中的清洗动作必须保留唯一请求所有者。
+it.each(["native_retention_preview", "native_retention_run"])("admits %s once across synchronous duplicate clicks", async (pendingAction) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
+  // finish settles the accepted request after duplicate events have been inspected.
+  // finish 在检查重复事件后结束已接受的请求。
+  let finish!: (result: VmmMemoryActionResult | null) => void
+  // pending holds the actual first request; the parent channel rejects concurrent attempts with null.
+  // pending 保持真实首个请求；父级通道以 null 拒绝并发尝试。
+  const pending = new Promise<VmmMemoryActionResult | null>((resolve) => { finish = resolve })
+  // admitted tracks the exclusive parent channel independently of React's rendered busy state.
+  // admitted 独立于 React 已渲染的忙碌状态，记录父级独占通道。
+  let admitted = false
+  const onRunAction = vi.fn(async (action: string): Promise<VmmMemoryActionResult | null> => {
+    if (action === pendingAction) {
+      if (admitted) return null
+      admitted = true
+      return pending
+    }
+    if (action !== "native_retention_preview") return null
+    return { action, summary: "", kind: "native_retention_preview", request: {}, response: preview,
+      data: { kind: "native_retention_preview", value: preview } }
+  })
+  // container and root host the real page without touching any persistent memory.
+  // container 与 root 挂载真实页面，不接触任何持久化记忆。
+  const container = document.createElement("div")
+  const root = createRoot(container)
+  document.body.append(container)
+  try {
+    await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><VmmNativeMaintenancePage busy={false} onRunAction={onRunAction} /></I18nProvider>))
+    // trigger is either the preview button or the confirmation for the exact server preview.
+    // trigger 是预览按钮，或准确服务端预览对应的确认按钮。
+    let trigger = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "预览清洗")!
+    if (pendingAction === "native_retention_run") {
+      await act(async () => trigger.click())
+      trigger = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')).find((button) => button.textContent === "立即清洗")!
+    }
+    await act(async () => { trigger.click(); trigger.click() })
+    expect(onRunAction.mock.calls.filter(([action]) => action === pendingAction)).toHaveLength(1)
+    expect(trigger.disabled).toBe(true)
+    if (pendingAction === "native_retention_run") expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+  } finally {
+    await act(async () => { finish(null) })
+    await act(async () => root.unmount())
+    container.remove()
+    vi.unstubAllGlobals()
+  }
+})

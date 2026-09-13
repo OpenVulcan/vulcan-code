@@ -121,6 +121,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   sessionVmmPoliciesByConversation: [{
     conversationId: "preview",
     sessionVmmPolicy: {
+      memoryEnabled: true,
       precheckMode: "inherit",
       precheckEnabled: true,
       memoryWritebackMode: "inherit",
@@ -521,7 +522,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       injectionDescription: "VMM recalled memory",
     },
     projectScopes: [
-      { projectId: "vulcan-workmem", name: "Vulcan Code", path: "D:/openvulcan/vulcan-code", hasOverride: false },
+      { projectId: "vulcan-workmem", name: "Vulcan Code", path: "D:/openvulcan/vulcan-code", hasOverride: false, memoryEnabled: true },
     ],
     selectedProjectId: "vulcan-workmem",
     selectedConversationId: "preview-session",

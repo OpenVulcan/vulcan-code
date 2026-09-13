@@ -66,6 +66,18 @@ export interface ChatAreaComposerDockLayerProps {
 export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps) {
   const chatAreaProps = props.chatAreaProps;
   const workbench = chatAreaProps.workbench;
+  // Resolve visibility from the local session/project; another client may own the shared snapshot selection.
+  // 从本地会话/项目解析可见性；共享快照的选择可能由另一客户端持有。
+  const memoryEnabled = props.conversationId
+    ? workbench.sessionVmmPolicy?.memoryEnabled
+    : props.projectId
+      ? workbench.vmmMemory.projectScopes.find((project) => project.projectId === props.projectId)?.memoryEnabled
+      : workbench.vmmMemory.globalDraft.enabled;
+  // Native host readiness is process-wide; external endpoint health is valid only for its projected scope.
+  // 原生宿主就绪属于进程级；外链端点健康仅对其投影作用域有效。
+  const memoryReady = workbench.vmmMemory.globalDraft.backendMode === "native"
+    || (workbench.vmmMemory.selectedProjectId === props.projectId && workbench.vmmMemory.selectedConversationId === props.conversationId)
+    ? workbench.vmmMemory.runtime.processReady : undefined;
   return (
     <ComposerDock
       attachmentCapabilities={workbench.composerAttachmentCapabilities ?? []}
@@ -76,7 +88,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       sessionProviderUsage={props.isEmptyConversation ? null : workbench.sessionProviderUsage ?? null}
       contextCompactionWindowNodes={workbench.contextCompactionWindowNodes ?? []}
       sessionContextCompactionWindowNodeId={
-        props.isEmptyConversation ? null : workbench.sessionContextCompactionWindowNodeId ?? null
+        props.conversationId ? workbench.sessionContextCompactionWindowNodeId ?? null : null
       }
       emptyMode={props.isEmptyConversation}
       onScrollToBottom={props.onScrollToBottom}
@@ -105,17 +117,18 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       isConversationRunning={props.isConversationRunning}
       thinkingDisplayMode={props.thinkingDisplayMode}
       reasoningSelection={workbench.reasoningSelection ?? null}
-      sessionGoal={props.isEmptyConversation ? null : workbench.sessionGoal ?? null}
+      // Saved settings belong to a durable session even before its first visible message.
+      // 已保存设置归属持久会话，在第一条可见消息之前也必须保留。
+      sessionGoal={props.conversationId ? workbench.sessionGoal ?? null : null}
       sessionTodolist={props.isEmptyConversation ? null : props.sessionTodolist}
       sessionReviewSummary={props.isEmptyConversation ? null : props.sessionReviewSummary}
-      sessionPlanMode={props.isEmptyConversation ? null : workbench.sessionPlanMode ?? null}
-      sessionVmmPolicy={props.isEmptyConversation ? null : workbench.sessionVmmPolicy ?? null}
+      sessionPlanMode={props.conversationId ? workbench.sessionPlanMode ?? null : null}
+      sessionVmmPolicy={props.conversationId ? workbench.sessionVmmPolicy ?? null : null}
       outputStyleCatalog={workbench.outputStyleCatalog}
       sessionOutputStyle={props.conversationId ? workbench.sessionOutputStyle ?? null : null}
-        vmmAvailable={
-          workbench.vmmMemory.effective.enabled
-          && workbench.vmmMemory.runtime.processReady
-        }
+      vmmAvailable={memoryEnabled === true}
+      vmmStatus={memoryEnabled === false ? "disabled" : memoryEnabled !== true || memoryReady === undefined ? undefined : memoryReady ? "ready" : "not_ready"}
+      onOpenMemorySettings={chatAreaProps.onOpenMemorySettings}
       runtimeCue={props.isEmptyConversation ? null : props.runtimeCue}
       runtimeStatusHost={props.runtimeStatusHost}
       todolistStatusHost={props.todolistStatusHost}

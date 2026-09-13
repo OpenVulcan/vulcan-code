@@ -1,8 +1,6 @@
 import React from "react";
 import {
-  BadgeCheck,
   ChevronsUpDown,
-  LogOut,
   Settings,
   Undo2,
 } from "lucide-react";
@@ -19,6 +17,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { useI18n } from "@/i18n";
 import type { MainAreaId } from "@/types";
@@ -45,6 +44,9 @@ export function SidebarBrandMenu(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // state hides the clipped header shortcut from both pointer and keyboard navigation in icon mode.
+  // state 在图标模式中同时从指针和键盘导航移除被裁剪的头部快捷入口。
+  const { state } = useSidebar();
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -62,7 +64,7 @@ export function SidebarBrandMenu(props: {
           </div>
           {/* The header action keeps settings and back navigation in the same expanded slot. */}
           {/* 头部动作让设置与返回导航共用展开态的同一位置。 */}
-          <button
+          {state === "expanded" ? <button
             aria-label={props.activeArea === "settings" ? t("settings.backToWorkspace") : t("global.openSettings")}
             className="sidebar-brand-settings-button"
             onClick={() => props.onSelectArea(props.activeArea === "settings" ? "chat" : "settings")}
@@ -71,7 +73,7 @@ export function SidebarBrandMenu(props: {
             type="button"
           >
             {props.activeArea === "settings" ? <Undo2 size={15} /> : <Settings size={15} />}
-          </button>
+          </button> : null}
         </div>
       </SidebarMenuItem>
     </SidebarMenu>
@@ -112,20 +114,11 @@ export function SidebarUserMenu(props: {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem className="sidebar-profile-menu-item">
-                <BadgeCheck size={15} />
-                <span>{t("sidebar.user.account")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="sidebar-profile-menu-item" onClick={props.onOpenSettings}>
+              <DropdownMenuItem className="sidebar-profile-menu-item" onSelect={props.onOpenSettings}>
                 <Settings size={15} />
                 <span>{t("area.settings")}</span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="sidebar-profile-menu-item muted">
-              <LogOut size={15} />
-              <span>{t("sidebar.user.logout")}</span>
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

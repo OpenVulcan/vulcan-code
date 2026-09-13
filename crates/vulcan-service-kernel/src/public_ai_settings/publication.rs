@@ -951,7 +951,53 @@ where
     // required route disappears or becomes incompatible.
     // VCE 消费已提交的公共 AI 代际；任一必需路由消失或不兼容时关闭全部项目运行时。
     crate::vce::schedule_vce_reconciliation(app.clone(), state.clone());
+    schedule_native_memory_revalidation(app.clone(), state.clone());
     Ok(workbench)
+}
+
+/// Revalidates native memory against the latest committed AI generation and publishes its readiness.
+/// 基于最新已提交 AI 代际重验原生记忆，并发布就绪状态。
+/// `app` delivers the refreshed snapshot; `state` supplies the process-local runtime. Returns nothing.
+/// `app` 投递刷新快照；`state` 提供进程内运行时。无返回值。
+fn schedule_native_memory_revalidation(app: ServiceEventEmitter, state: SharedServiceBridgeState) {
+    // Runtime ownership is copied without retaining the service lock across an asynchronous wait.
+    // 复制运行时所有权，不跨异步等待持有服务锁。
+    let runtime = state
+        .lock()
+        .ok()
+        .and_then(|guard| guard.service_runtime.clone());
+    let Some(runtime) = runtime else { return };
+    runtime.spawn(async move {
+        // Serialize with every AI writer and read current capabilities after admission, never a queued before-image.
+        // 与所有 AI 写入串行，准入后读取当前能力，绝不使用排队时的旧镜像。
+        let _transaction = crate::begin_public_ai_configuration_transaction().await;
+        // Native validation does not perform inference or modify user memory; it refreshes capability/config caches.
+        // 原生校验不执行推理或修改用户记忆，仅刷新能力及配置缓存。
+        let maintenance = state.lock().ok().and_then(|guard| {
+            // Only the active native backend owns this cache; external mode must not activate native resources.
+            // 只有活动原生后端拥有该缓存；外链模式不得激活原生资源。
+            let configuration = &guard.agent_runtime.as_ref()?.provider_configuration.vmm;
+            let effective = vulcan_vmm::VmmEffectiveConfig::resolve(configuration, None, None);
+            if !effective.enabled || effective.backend_mode != vulcan_vmm::VmmBackendMode::Native {
+                return None;
+            }
+            guard.native_vmm_maintenance.clone()
+        });
+        let Some(maintenance) = maintenance else {
+            return;
+        };
+        if let Err(error) = maintenance.validate_host_ai().await {
+            eprintln!("[webui-service] Native memory capability revalidation failed: {error}");
+        }
+        // Failed readiness must also reach the browser; the transaction prevents stale completion after a newer save.
+        // 失败就绪状态也必须送达浏览器；事务阻止旧完成结果落在更新保存之后。
+        match crate::refresh_workbench_snapshot(state).await {
+            Ok(workbench) => emit_workbench_event(&app, &workbench),
+            Err(error) => {
+                eprintln!("[webui-service] Native memory readiness publication failed: {error}")
+            }
+        }
+    });
 }
 
 #[cfg(test)]

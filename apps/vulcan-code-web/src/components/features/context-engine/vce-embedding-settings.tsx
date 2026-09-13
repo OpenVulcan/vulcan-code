@@ -187,7 +187,7 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
     {/* Let the test action occupy a separate row in narrow settings panes, keeping the model explanation readable. */}
     {/* 在窄设置面板中让测试操作单独占行，保留模型说明的可读宽度。 */}
     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 @xl/vce:grid-cols-[auto_minmax(0,1fr)_auto]">
-      {props.status.available ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <CircleAlert className="mt-0.5 size-5 text-amber-600" />}
+      {props.status.available ? <CheckCircle2 className="mt-0.5 size-5 text-[var(--vcn-content-success)]" /> : <CircleAlert className="mt-0.5 size-5 text-[var(--vcn-content-warning)]" />}
       <div className="min-w-0 flex-1">
         <h4 className="text-sm font-medium">{copy("Embedding 向量模型", "Embedding model")}</h4>
         <p className="mt-1 text-xs text-muted-foreground">{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</p>
@@ -230,9 +230,9 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
         {busy === "preflight" ? <LoaderCircle className="size-3.5 animate-spin" /> : null}{dirty ? copy("检查变更", "Review changes") : copy("检查项目兼容性", "Review project compatibility")}
       </Button>
     </div>
-    {!validDraft && draftRoute ? <p className="text-xs text-amber-700">{copy("请选择模型明确支持的正整数维度。", "Choose a positive dimension explicitly supported by this model.")}</p> : null}
+    {!validDraft && draftRoute ? <p className="text-xs text-[var(--vcn-content-warning)]">{copy("请选择模型明确支持的正整数维度。", "Choose a positive dimension explicitly supported by this model.")}</p> : null}
     {error ? <p role="alert" className="break-words text-xs text-destructive">{error}</p> : null}
-    {!dirty && props.status.issue ? <p className="break-words text-xs text-amber-700">{props.status.issue}</p> : null}
+    {!dirty && props.status.issue ? <p className="break-words text-xs text-[var(--vcn-content-warning)]">{props.status.issue}</p> : null}
     {review ? <div className="space-y-3 rounded-lg border bg-muted/20 p-3" aria-label={copy("模型变更确认", "Confirm model changes")}>
       <p className="text-sm font-medium">{review.candidate ? copy(`确认使用 ${review.candidate.dimension} 维向量`, `Confirm ${review.candidate.dimension}-dimension vectors`) : copy("确认清除向量模型", "Confirm embedding removal")}</p>
       {review.projects.filter((project) => !project.compatible).map((project) => <fieldset key={project.impact.scope.project_id} className="space-y-2 rounded-md border bg-background p-3" disabled={disabled}>

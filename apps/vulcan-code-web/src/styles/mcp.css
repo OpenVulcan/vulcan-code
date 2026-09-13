@@ -1,0 +1,35 @@
+/* Scope MCP layout and schema inspection to the existing theme tokens. */
+/* 将 MCP 布局与 Schema 检查限定在现有主题令牌内。 */
+.mcp-workspace { display: grid; grid-template-columns: minmax(15rem, .8fr) minmax(0, 2fr); gap: 1rem; min-width: 0; }
+.mcp-directory, .mcp-detail { display: flex; flex-direction: column; gap: .85rem; min-width: 0; padding: 1rem; }
+.mcp-filter-row, .mcp-tabs { display: flex; gap: .4rem; flex-wrap: wrap; }
+.mcp-filter-row > * { min-width: 0; }
+.mcp-server-list { display: flex; flex-direction: column; gap: .35rem; max-height: 65vh; overflow: auto; }
+.mcp-server-row { display: flex; flex-direction: column; text-align: left; gap: .25rem; border: 1px solid var(--border); border-radius: var(--radius); padding: .75rem; background: var(--background); cursor: pointer; overflow-wrap: anywhere; }
+.mcp-server-row[data-active="true"] { background: var(--accent); border-color: var(--ring); }
+.mcp-server-row span { font-size: .8rem; color: var(--muted-foreground); }
+.mcp-server-row .mcp-error { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mcp-detail > header small { overflow-wrap: anywhere; }
+.mcp-server-row [data-status="connected"] { color: var(--foreground); font-weight: 600; }
+.mcp-error { color: var(--destructive); overflow-wrap: anywhere; }
+.mcp-overview { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); gap: .6rem 1rem; }
+.mcp-overview dt { color: var(--muted-foreground); }
+.mcp-overview dd { margin: 0; overflow-wrap: anywhere; }
+.mcp-tool, .mcp-schema { border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; margin-top: .6rem; }
+.mcp-detail summary, .mcp-form summary { cursor: pointer; padding: .3rem 0; overflow-wrap: anywhere; }
+.mcp-detail pre, .mcp-form pre { max-height: 26rem; overflow: auto; padding: .6rem; background: var(--muted); border-radius: var(--radius); font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-schema-fields { display: grid; gap: .7rem; }
+.mcp-schema-field { padding-left: .6rem; border-left: 2px solid var(--border); overflow-wrap: anywhere; font-size: .85rem; }
+.mcp-schema-field > span { color: var(--muted-foreground); }
+/* A normal flex child owns scrolling; fieldset's anonymous box must not paint across the fixed footer. */
+/* 普通弹性子元素持有滚动；fieldset 的匿名盒不得绘制到固定页脚内。 */
+.mcp-dialog-body { min-width: 0; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
+.mcp-form { display: flex; flex-direction: column; gap: .8rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+.mcp-form-rows { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; min-width: 0; }
+.mcp-form-rows-header { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.mcp-form-rows-header > strong { margin-right: auto; }
+.mcp-form-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .4rem; }
+.mcp-form-row.pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto; }
+.mcp-delete-confirm { padding: .75rem; border: 1px solid var(--destructive); border-radius: var(--radius); }
+@media (max-width: 900px) { .mcp-workspace { grid-template-columns: minmax(0, 1fr); } .mcp-server-list { max-height: 18rem; } }
+@media (max-width: 560px) { .mcp-form-row.pair { grid-template-columns: minmax(0, 1fr); } .mcp-overview { grid-template-columns: minmax(0, 1fr); } }

@@ -47,8 +47,14 @@ export type RequestStopConversationRunChoice = (
 // initialThemeMode returns the persisted shadcn theme, defaulting to light.
 // initialThemeMode 返回持久化的 shadcn 主题，默认使用亮色。
 export function initialThemeMode(): ThemeMode {
-  const stored = window.localStorage.getItem("vulcan-webui-theme");
-  return stored === "light" || stored === "dark" ? stored : "light";
+  try {
+    // Storage may be unavailable in restricted browser contexts; rendering must remain usable.
+    // 受限浏览器环境可能不提供存储权限，界面仍须保持可用。
+    const stored = window.localStorage.getItem("vulcan-webui-theme");
+    return stored === "light" || stored === "dark" ? stored : "light";
+  } catch {
+    return "light";
+  }
 }
 
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
@@ -58,8 +64,11 @@ export function webuiClickTrace(_action: string, _detail: Record<string, unknown
   // 保留为空实现兼容钩子，避免改变现有点击路径，同时不再输出开发日志。
 }
 
-// copyText writes transcript detail text to the system clipboard when available.
-// copyText 在可用时将转录详情文本写入系统剪贴板。
+// copyText writes the supplied transcript text and rejects when the clipboard cannot accept it.
+// copyText 写入传入的转录文本，剪贴板无法接收时明确拒绝，以便调用方显示失败。
 export async function copyText(text: string): Promise<void> {
-  await navigator.clipboard?.writeText(text);
+  if (typeof navigator.clipboard?.writeText !== "function") {
+    throw new Error("Clipboard writing is unavailable in this client.");
+  }
+  await navigator.clipboard.writeText(text);
 }

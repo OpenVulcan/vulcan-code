@@ -28,6 +28,7 @@ import {
   type AdvancedModelTextDraft,
 } from "@/components/features/settings/custom-provider-model-drafts"
 import { CustomProviderModelDefaultsCard } from "@/components/features/settings/custom-provider-model-defaults-card"
+import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
 import {
   directCustomModelSettingsDraft,
   directProviderModelSettingsEqual,
@@ -340,6 +341,8 @@ function ProtocolPreferenceCard(props: {
   )
 }
 
+// Parameters: props identifies the provider and controlled dialog callbacks; returns the coordinated model catalog, capability and account editors.
+// 参数：props 标识供应商与受控弹窗回调；返回协同的模型目录、能力及账号编辑器。
 export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProps) {
   const { t } = useI18n()
   const [manualModels, setManualModels] = React.useState<PublicAiCustomModelDefinition[]>([])
@@ -351,6 +354,24 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   // manualModelsDirty 从唯一权威的脏模型身份集合派生。
   const manualModelsDirty = dirtyManualModelIds.size > 0
   const [saving, setSaving] = React.useState(false)
+  // savingRef serializes provider-level mutations before React updates the controls.
+  // savingRef 在 React 更新控件前串行化供应商级变更。
+  const savingRef = React.useRef(false)
+  // mutationBoundary prevents nested account, capability and defaults editors from racing one another.
+  // mutationBoundary 防止嵌套账号、能力和默认值编辑器彼此竞态。
+  const mutationBoundary = React.useMemo(() => ({
+    // acquire freezes all sibling controls before any asynchronous mutation begins.
+    // acquire 在异步变更开始前冻结全部同级控件。
+    acquire: () => {
+      if (savingRef.current) return false
+      savingRef.current = true
+      setSaving(true)
+      return true
+    },
+    // release restores navigation only after the owning operation has settled.
+    // release 仅在所属操作结束后恢复导航。
+    release: () => { savingRef.current = false; setSaving(false) },
+  }), [])
   const [error, setError] = React.useState<string | null>(null)
   const [removeConfirmationOpen, setRemoveConfirmationOpen] = React.useState(false)
   const [manualDialogOpen, setManualDialogOpen] = React.useState(false)
@@ -511,7 +532,8 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   const persistManualModels = React.useCallback(async (
     replacement: PublicAiCustomModelDefinition[] = manualModels,
   ) => {
-    if (!props.provider) return null
+    if (!props.provider || savingRef.current) return null
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -526,6 +548,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
       setError(errorMessage(reason))
       return null
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [acceptSnapshot, advancedTextDrafts, manualModels, props.provider, t])
@@ -535,9 +558,10 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   const persistProtocolPreferences = React.useCallback(async (
     preferences: { modelId: string; preference: PublicAiCustomModelProtocolPreference }[],
   ) => {
-    if (!props.provider) {
+    if (!props.provider || savingRef.current) {
       return
     }
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -549,6 +573,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [props, protocolPreferences])
@@ -627,7 +652,8 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   // synchronizeAll refreshes every exact credential and preserves successful sibling results.
   // synchronizeAll 刷新每个精确凭据，并保留同级账号中已经成功的结果。
   const synchronizeAll = React.useCallback(async () => {
-    if (!props.provider || !props.snapshot) return
+    if (!props.provider || !props.snapshot || savingRef.current) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     // failures retains every account-scoped failure instead of stopping after the first account.
@@ -635,7 +661,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
     const failures: string[] = []
     // connections is the immutable provider-scoped work queue captured before synchronization starts.
     // connections 是同步开始前捕获的不可变供应商作用域工作队列。
-    const connections = props.snapshot.connections.filter((item) => item.provider_id === props.provider?.id)
+    const connections = props.snapshot.connections.filter((item) => item.provider_id === props.provider?.id && item.enabled)
     for (const connection of connections) {
       try {
         props.onSaved(await syncPublicAiConnection(connection.id))
@@ -651,12 +677,15 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
     if (failures.length > 0) {
       setError(failures.join("\n"))
     }
+    savingRef.current = false
     setSaving(false)
   }, [props])
 
   // synchronizeConnection refreshes one exact credential without discarding local advanced edits.
   // synchronizeConnection 刷新一个精确凭据且不会丢弃本地高级编辑。
   const synchronizeConnection = React.useCallback(async (connectionId: string) => {
+    if (savingRef.current || !props.snapshot?.connections.some((connection) => connection.id === connectionId && connection.enabled)) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -670,6 +699,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
         // 原始同步失败仍是面向用户的可操作错误。
       }
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [props])
@@ -677,6 +707,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   // requestDialogOpenChange protects local advanced edits from an accidental close.
   // requestDialogOpenChange 防止本地高级编辑因误关闭而丢失。
   const requestDialogOpenChange = React.useCallback((open: boolean) => {
+    if (savingRef.current) return
     if (!open && manualModelsDirty) {
       setDiscardConfirmationOpen(true)
       return
@@ -696,12 +727,14 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   }, [manualModels, persistManualModels, selectedRow])
 
   return (
+    <CustomProviderMutationContext.Provider value={mutationBoundary}>
     <Dialog onOpenChange={requestDialogOpenChange} open={props.open}>
       <DialogContent className="flex h-[min(860px,94vh)] w-[min(1180px,96vw)] max-w-[min(1180px,96vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1180px,96vw)]">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle>{t("settings.customModels.title").replace("{provider}", props.provider?.display_name ?? "")}</DialogTitle>
           <DialogDescription>{t("settings.customModels.description")}</DialogDescription>
         </DialogHeader>
+        <fieldset disabled={saving} className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Tabs className="min-h-0 flex-1 gap-0" defaultValue="models">
           <div className="shrink-0 border-b px-4 py-2">
             <TabsList variant="line">
@@ -709,7 +742,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
               <TabsTrigger className="px-4" value="provider-settings">{t("settings.customModels.pageProviderSettings")}</TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent className="m-0 min-h-0 overflow-hidden" value="models">
+          <TabsContent className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden" forceMount value="models">
             <div className="grid h-full min-h-0 md:grid-cols-[320px_minmax(0,1fr)]">
           <section className={`${mobileDetailOpen ? "max-md:hidden" : ""} flex min-h-0 flex-col border-r`}>
             <div className="space-y-3 border-b p-3">
@@ -741,8 +774,8 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                       onClick={() => { setSelectedModelId(row.id); setMobileDetailOpen(true) }}
                       type="button"
                     >
-                      <span className="block truncate text-sm font-medium">{row.displayName}</span>
-                      <span className="block truncate font-mono text-xs text-muted-foreground">{row.id}</span>
+                      <span className="block whitespace-normal break-words text-sm font-medium">{row.displayName}</span>
+                      <span className="block break-all font-mono text-xs text-muted-foreground">{row.id}</span>
                       <span className="mt-1 flex flex-wrap gap-1">
                         {row.accounts.some(accountActuallyDiscoveredModel) ? <Badge variant="outline"><Cloud className="mr-1 size-3" />{t("settings.customModels.sourceApi")}</Badge> : null}
                         {row.manualDefinition ? <Badge variant="outline"><FilePlus2 className="mr-1 size-3" />{t("settings.customModels.sourceManual")}</Badge> : null}
@@ -795,7 +828,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                         selectedConnectionId={selectedAccount?.connection.id ?? null}
                       />
                     </TabsContent>
-                    <TabsContent value="capabilities">
+                    <TabsContent className="data-[state=inactive]:hidden" forceMount value="capabilities">
                       <CapabilityOverridesEditor onSaved={acceptSnapshot} providerId={props.provider.id} row={selectedRow} />
                     </TabsContent>
                     <TabsContent className="space-y-4" value="advanced">
@@ -832,7 +865,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
           </section>
             </div>
           </TabsContent>
-          <TabsContent className="m-0 min-h-0 overflow-hidden" value="provider-settings">
+          <TabsContent className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden" forceMount value="provider-settings">
             {props.provider && props.snapshot && providerDefaults ? (
               <ScrollArea className="h-full">
                 <div className="mx-auto grid w-full max-w-[1120px] items-start gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)]">
@@ -844,6 +877,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                     snapshot={props.snapshot}
                   />
                   <CustomProviderModelDefaultsCard
+                    key={props.provider.id}
                     customized={Boolean(props.snapshot.customProviderModelDefaults?.[props.provider.id])}
                     defaults={providerDefaults}
                     onSaved={acceptSnapshot}
@@ -854,6 +888,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
             ) : null}
           </TabsContent>
         </Tabs>
+        </fieldset>
         {error ? <p className="whitespace-pre-wrap border-t bg-destructive/5 px-5 py-3 text-sm text-destructive">{error}</p> : null}
       </DialogContent>
       {providerDefaults ? <ManualModelDialog
@@ -896,15 +931,15 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
           rows={rows}
         />
       ) : null}
-      <AlertDialog onOpenChange={setRemoveConfirmationOpen} open={removeConfirmationOpen}>
+      <AlertDialog onOpenChange={(open) => { if (!savingRef.current) setRemoveConfirmationOpen(open) }} open={removeConfirmationOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.customModels.remove")}</AlertDialogTitle>
             <AlertDialogDescription>{t("settings.customModels.removeConfirm").replace("{name}", selectedRow?.displayName ?? "")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void removeManualDefinition()} variant="destructive">{t("settings.customModels.remove")}</AlertDialogAction>
+            <AlertDialogCancel disabled={saving}>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); void removeManualDefinition() }} variant="destructive">{t("settings.customModels.remove")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -948,11 +983,14 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
         saving={saving}
       />
     </Dialog>
+    </CustomProviderMutationContext.Provider>
   )
 }
 
 // TemplateReviewDialog groups deterministic matches and unmatched offline capability records.
 // TemplateReviewDialog 对确定性命中与无命中的离线能力记录进行分组。
+// Parameters: props supplies provider templates and review actions; returns matched/unmatched groups and guarded explicit application controls.
+// 参数：props 提供供应商模板与审阅操作；返回命中和未命中分组及受保护的显式应用控件。
 function TemplateReviewDialog(props: {
   onOpenChange: (open: boolean) => void
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
@@ -961,9 +999,15 @@ function TemplateReviewDialog(props: {
   rows: CustomProviderModelRow[]
 }) {
   const { t } = useI18n()
+  // Nested template decisions share the provider dialog's mutation boundary.
+  // 嵌套模板决策共享供应商弹窗的变更边界。
+  const mutationBoundary = React.useContext(CustomProviderMutationContext)
   const [records, setRecords] = React.useState<PublicAiCustomModelTemplateSuggestionsRecord[]>([])
   const [loading, setLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  // savingRef protects atomic template decisions from duplicate clicks and accidental closing.
+  // savingRef 防止原子模板决策因重复点击或意外关闭而重叠。
+  const savingRef = React.useRef(false)
   const [error, setError] = React.useState<string | null>(null)
   // modelIdsSignature changes only when the provider model union changes, not after a decision save.
   // modelIdsSignature 仅在供应商模型并集变化时改变，不会因保存决策而改变。
@@ -980,6 +1024,7 @@ function TemplateReviewDialog(props: {
     if (modelIds.length === 0) {
       setRecords([])
       setError(null)
+      setLoading(false)
       return
     }
     let active = true
@@ -1023,9 +1068,11 @@ function TemplateReviewDialog(props: {
   const saveDecisions = React.useCallback(async (
     decisions: PublicAiCustomModelTemplateDecisionBatchItem[],
   ) => {
-    if (decisions.length === 0) {
+    if (decisions.length === 0 || savingRef.current) {
       return
     }
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -1036,12 +1083,14 @@ function TemplateReviewDialog(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      savingRef.current = false
+      mutationBoundary?.release()
       setSaving(false)
     }
-  }, [props])
+  }, [mutationBoundary, props])
 
   return (
-    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
+    <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
       <DialogContent className="flex h-[min(760px,92vh)] w-[min(840px,94vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle>{t("settings.customModels.reviewTemplatesTitle")}</DialogTitle>
@@ -1069,7 +1118,7 @@ function TemplateReviewDialog(props: {
           </div>
         </ScrollArea>
         <DialogFooter className="border-t px-5 py-3">
-          <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.close")}</Button>
+          <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.close")}</Button>
           {exactRecords.length > 0 ? (
             <Button disabled={saving || loading} onClick={() => void saveDecisions(exactRecords.map((record) => ({
               modelId: record.modelId,
@@ -1283,6 +1332,8 @@ function CapabilityFact(props: { label: string; source: string; value: string })
 
 // AccountAvailabilityEditor renders exact source/effective states and explicit manual overrides.
 // AccountAvailabilityEditor 渲染精确源/有效状态与显式手工覆盖。
+// Parameters: props identifies the exact account/model capability state and mutation actions; returns access, validation and reset controls.
+// 参数：props 标识精确账号模型能力状态与变更操作；返回访问、验证及恢复控件。
 function AccountAvailabilityEditor(props: {
   onAccountSelected: (connectionId: string) => void
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
@@ -1291,11 +1342,17 @@ function AccountAvailabilityEditor(props: {
   selectedConnectionId: string | null
 }) {
   const { t } = useI18n()
+  // Account validation and membership writes share the provider-level lock.
+  // 账号验证与成员关系写入共享供应商级锁。
+  const mutationBoundary = React.useContext(CustomProviderMutationContext)
   const [savingConnectionId, setSavingConnectionId] = React.useState<string | null>(null)
   const [validationTarget, setValidationTarget] = React.useState<CustomProviderModelAccountState | null>(null)
   const [validatingConnectionId, setValidatingConnectionId] = React.useState<string | null>(null)
   const [validationResult, setValidationResult] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // mutationBusy serializes membership changes and quota-consuming account validation.
+  // mutationBusy 串行化成员关系变更和消耗配额的账号验证。
+  const mutationBusy = React.useRef(false)
 
   // saveAvailability immediately persists one direct account-model membership choice or restoration.
   // saveAvailability 立即持久化一个直接账号模型成员关系选择或还原操作。
@@ -1303,6 +1360,9 @@ function AccountAvailabilityEditor(props: {
     connectionId: string,
     enabled: boolean | undefined,
   ) => {
+    if (mutationBusy.current) return
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    mutationBusy.current = true
     setSavingConnectionId(connectionId)
     setError(null)
     try {
@@ -1314,16 +1374,20 @@ function AccountAvailabilityEditor(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      mutationBusy.current = false
+      mutationBoundary?.release()
       setSavingConnectionId(null)
     }
-  }, [props])
+  }, [mutationBoundary, props])
 
   // validateAccount sends one user-confirmed minimal paid request before releasing a pending account.
   // validateAccount 在解除待验证账号隔离前发送一次用户确认的最小付费请求。
   const validateAccount = React.useCallback(async () => {
-    if (!validationTarget) {
+    if (!validationTarget || mutationBusy.current || !validationTarget.connection.enabled) {
       return
     }
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    mutationBusy.current = true
     setValidatingConnectionId(validationTarget.connection.id)
     setError(null)
     setValidationResult(null)
@@ -1343,9 +1407,11 @@ function AccountAvailabilityEditor(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      mutationBusy.current = false
+      mutationBoundary?.release()
       setValidatingConnectionId(null)
     }
-  }, [props, t, validationTarget])
+  }, [mutationBoundary, props, t, validationTarget])
 
   return (
     <div className="space-y-3">
@@ -1370,7 +1436,7 @@ function AccountAvailabilityEditor(props: {
               {t("settings.customModels.viewAccountCapabilities")}
             </Button>
             <Button
-              disabled={!accountExposesModel(account) || validatingConnectionId !== null}
+              disabled={!account.connection.enabled || !accountExposesModel(account) || validatingConnectionId !== null || savingConnectionId !== null}
               onClick={() => {
                 setError(null)
                 setValidationResult(null)
@@ -1388,7 +1454,7 @@ function AccountAvailabilityEditor(props: {
                 {account.availabilityOverride !== undefined ? (
                   <Button
                     aria-label={t("settings.modelCapabilities.restore")}
-                    disabled={savingConnectionId === account.connection.id}
+                    disabled={savingConnectionId !== null || validatingConnectionId !== null}
                     onClick={() => void saveAvailability(account.connection.id, undefined)}
                     size="icon"
                     title={t("settings.modelCapabilities.restore")}
@@ -1404,7 +1470,7 @@ function AccountAvailabilityEditor(props: {
                 <Switch
                   aria-label={`${account.connection.display_name} · ${t("settings.customModels.accountAvailable")}`}
                   checked={accountIncludesModel(account)}
-                  disabled={savingConnectionId !== null}
+                  disabled={savingConnectionId !== null || validatingConnectionId !== null}
                   onCheckedChange={(enabled) => void saveAvailability(account.connection.id, enabled)}
                 />
               </div>
@@ -1416,7 +1482,7 @@ function AccountAvailabilityEditor(props: {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       <AlertDialog
         onOpenChange={(open) => {
-          if (!open && validatingConnectionId === null) {
+          if (!open && !mutationBusy.current) {
             setValidationTarget(null)
           }
         }}
@@ -1447,8 +1513,13 @@ function AccountAvailabilityEditor(props: {
 
 // CapabilityOverridesEditor displays effective values while persisting only touched model fields.
 // CapabilityOverridesEditor 显示有效值，但只持久化用户触碰过的模型字段。
+// Parameters: props supplies one model and effective capability values; returns touched-field override drafts with shared mutation guards.
+// 参数：props 提供一个模型及生效能力值；返回带共享变更守卫的已编辑字段覆盖草稿。
 function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettingsSnapshot) => void; providerId: string; row: CustomProviderModelRow }) {
   const { t } = useI18n()
+  // Capability saves keep sibling defaults, navigation and account editors frozen until settlement.
+  // 能力保存在结束前冻结同级默认值、导航及账号编辑器。
+  const mutationBoundary = React.useContext(CustomProviderMutationContext)
   // draft is the complete visible model-level setting set, never a second enablement gate.
   // draft 是完整可见的模型级设置集合，不再是二次启用开关。
   const [draft, setDraft] = React.useState<PublicAiModelCapabilityOverrides>(() => directCustomModelSettingsDraft(props.row))
@@ -1456,6 +1527,9 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
   // baselineDraft 是衡量本地语义变更所依据的权威值。
   const [baselineDraft, setBaselineDraft] = React.useState<PublicAiModelCapabilityOverrides>(() => directCustomModelSettingsDraft(props.row))
   const [saving, setSaving] = React.useState(false)
+  // savingRef blocks duplicate writes while preserving invalid raw numeric input for correction.
+  // savingRef 阻止重复写入，同时保留无效原始数值输入供修正。
+  const savingRef = React.useRef(false)
   const [error, setError] = React.useState<string | null>(null)
   const [edited, setEdited] = React.useState(false)
   // touchedFields preserves provider inheritance when one visible field is edited.
@@ -1516,6 +1590,7 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
   // persist writes the visible model layer or removes it to restore provider inheritance.
   // persist 写入可见模型层，或移除该层以恢复供应商继承。
   const persist = React.useCallback(async (restore: boolean) => {
+    if (savingRef.current) return
     if (!restore && (!Number.isSafeInteger(draft.context_limit) || (draft.context_limit ?? 0) <= 0)) {
       setError(t("settings.modelCapabilities.contextInvalid"))
       return
@@ -1528,6 +1603,8 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
       setError(t("settings.customModels.defaultsReasoningInvalid"))
       return
     }
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -1542,9 +1619,11 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      savingRef.current = false
+      mutationBoundary?.release()
       setSaving(false)
     }
-  }, [draft, props, settingsToPersist, t])
+  }, [draft, mutationBoundary, props, settingsToPersist, t])
 
   // restore discards an unsaved draft locally or removes an existing persisted model layer.
   // restore 在本地丢弃未保存草稿，或移除已持久化模型层。
@@ -1567,14 +1646,14 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
   // reasoningEnabled 将配对的支持与控制契约投影为一个清晰开关。
   const reasoningEnabled = draft.reasoning !== "unsupported" && draft.reasoning_control !== "fixed_off"
   return (
-    <div className="space-y-4 rounded-lg border p-4">
+    <fieldset disabled={saving} className="min-w-0 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">{t("settings.modelCapabilities.overlayHint")}</p>
         <Badge variant={props.row.capabilityOverrides ? "default" : "outline"}>{t(props.row.capabilityOverrides ? "settings.modelCapabilities.modelSource" : "settings.modelCapabilities.inheritedSource")}</Badge>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.contextLimit")}<Input inputMode="numeric" onChange={(event) => updateDraft("context_limit", (current) => ({ ...current, context_limit: Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10) }))} value={draft.context_limit ?? ""} /></label>
-        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.outputLimit")}<Input inputMode="numeric" onChange={(event) => updateDraft("output_limit", (current) => ({ ...current, output_limit: Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10) }))} value={draft.output_limit ?? ""} /></label>
+        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.contextLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("context_limit", (current) => ({ ...current, context_limit: value === "" ? undefined : Number(value) })) }} value={draft.context_limit ?? ""} /></label>
+        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.outputLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("output_limit", (current) => ({ ...current, output_limit: value === "" ? undefined : Number(value) })) }} value={draft.output_limit ?? ""} /></label>
       </div>
       <ContextWindowPolicyEditor
         onChange={(value) => updateDraft("context_window_policy", (current) => ({ ...current, context_window_policy: value }))}
@@ -1601,12 +1680,14 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       <div className="flex justify-end gap-2"><Button disabled={saving || (!props.row.capabilityOverrides && !dirty && !edited)} onClick={restore} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
-    </div>
+    </fieldset>
   )
 }
 
 // AdvancedModelEditor edits manual identity metadata and protocol-specific exact declarations.
 // AdvancedModelEditor 编辑手工身份元数据与协议专属精确声明。
+// Parameters: props supplies the manual model and protocol declarations; returns raw JSON/identity drafts and guarded atomic-save controls.
+// 参数：props 提供手工模型与协议声明；返回原始 JSON、身份草稿及受保护的原子保存控件。
 function AdvancedModelEditor(props: {
   customized: boolean
   dirty: boolean
@@ -1625,7 +1706,7 @@ function AdvancedModelEditor(props: {
   // model 始终是可见的继承或显式定义，并且可以立即编辑。
   const model = props.manualDefinition
   return (
-    <div className="space-y-4">
+    <fieldset disabled={props.saving} className="min-w-0 space-y-4">
       <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.displayName")}<Input onChange={(event) => props.onUpdate((current) => ({ ...current, display_name: event.target.value }))} value={model.display_name} /></label>
       <Accordion collapsible type="single">
         <AccordionItem value="json">
@@ -1655,12 +1736,14 @@ function AdvancedModelEditor(props: {
         </AccordionItem>
       </Accordion>
       <div className="flex flex-wrap justify-end gap-2">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 className="mr-2 size-4" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
-    </div>
+    </fieldset>
   )
 }
 
 // ManualModelDialog asks for a real model ID before any model object is created.
 // ManualModelDialog 在创建任何模型对象前要求输入真实模型 ID。
+// Parameters: props supplies existing model identities and creation callbacks; returns a real-ID form with template selection and duplicate protection.
+// 参数：props 提供现有模型身份与创建回调；返回包含真实 ID、模板选择及重复保护的表单。
 function ManualModelDialog(props: {
   defaults: PublicAiCustomProviderModelDefaults
   existingIds: Set<string>
@@ -1672,12 +1755,18 @@ function ManualModelDialog(props: {
   open: boolean
 }) {
   const { t } = useI18n()
+  // Creation shares the provider write boundary while retaining its local close guard.
+  // 创建共享供应商写入边界，同时保留局部关闭守卫。
+  const mutationBoundary = React.useContext(CustomProviderMutationContext)
   const [modelId, setModelId] = React.useState("")
   const [displayName, setDisplayName] = React.useState("")
   const [suggestions, setSuggestions] = React.useState<PublicAiCommonModelTemplateSuggestion[]>([])
   const [choice, setChoice] = React.useState("defaults")
   const [suggestionLoading, setSuggestionLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  // savingRef freezes the exact model identity throughout its atomic creation request.
+  // savingRef 在原子创建请求期间冻结精确模型身份。
+  const savingRef = React.useRef(false)
   const [error, setError] = React.useState<string | null>(null)
   React.useEffect(() => {
     if (!props.open) {
@@ -1716,28 +1805,31 @@ function ManualModelDialog(props: {
   // submit persists the real identity first and then applies the explicit local template choice.
   // submit 先持久化真实身份，再应用明确的本地模板选择。
   const submit = React.useCallback(async () => {
+    if (savingRef.current || suggestionLoading) return
     const id = modelId.trim()
     if (!id) { setError(t("settings.customModels.modelIdRequired")); return }
     if (props.existingIds.has(id)) { setError(t("settings.customModels.duplicateId").replace("{model}", id)); return }
     const selected = suggestions.find((suggestion) => suggestion.template_key === choice)
     const firstSuggestion = suggestions[0]
     const decision = selected ? { decision: "applied" as const, selection: { template_key: selected.template_key, template_revision: selected.template_revision, context_limit: selected.context_limit, supports_text_input: selected.supports_text_input, supports_text_output: selected.supports_text_output, input_resources: selected.input_resources, output_resources: [] } } : firstSuggestion ? { decision: "rejected" as const, template_key: firstSuggestion.template_key, template_revision: firstSuggestion.template_revision } : undefined
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
-    try { await props.onSaved(newManualModel(id, displayName.trim() || id), decision) } catch (reason) { setError(errorMessage(reason)) } finally { setSaving(false) }
-  }, [choice, displayName, modelId, props, suggestions, t])
+    try { await props.onSaved(newManualModel(id, displayName.trim() || id), decision) } catch (reason) { setError(errorMessage(reason)) } finally { savingRef.current = false; mutationBoundary?.release(); setSaving(false) }
+  }, [choice, displayName, modelId, mutationBoundary, props, suggestionLoading, suggestions, t])
 
   const selectedSuggestion = suggestions.find((suggestion) => suggestion.template_key === choice)
   const summarySource = selectedSuggestion?.template_key ?? t("settings.customModels.templateKeepDefaults")
 
   return (
-    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
-      <DialogContent className="max-w-xl">
+    <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] max-w-xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t("settings.customModels.addManual")}</DialogTitle>
           <DialogDescription>{t("settings.customModels.manualDescription")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <fieldset disabled={saving} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto">
           <label className="grid gap-2 text-sm font-medium">
             {t("settings.customModels.modelId")}
             <Input autoFocus onChange={(event) => setModelId(event.target.value)} value={modelId} />
@@ -1789,9 +1881,9 @@ function ManualModelDialog(props: {
             </dl>
           </div>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        </div>
-        <DialogFooter>
-          <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button>
+        </fieldset>
+        <DialogFooter className="shrink-0">
+          <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button>
           <Button
             disabled={shouldBlockManualModelSubmission(saving, suggestionLoading)}
             onClick={() => void submit()}

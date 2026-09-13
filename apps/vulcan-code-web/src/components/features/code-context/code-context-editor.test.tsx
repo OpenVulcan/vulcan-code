@@ -152,6 +152,35 @@ afterEach(async () => {
 });
 
 describe("project semantic settings editor", () => {
+  // A failed initial status retry must remain visible even before an overview exists.
+  // 首次状态重试失败，即使尚无概览也必须保持可见。
+  it("keeps an unavailable-overview retry rejection visible", async () => {
+    rpc.reload.mockRejectedValue(new Error("Synthetic reload denied"));
+    await renderEditor(null, "Initial status failed");
+    await click("重新读取状态");
+    expect(host.textContent).toContain("Synthetic reload denied");
+  });
+
+  // A rejected management read is unknown integrity, never a clean successful check.
+  // 被拒绝的管理读取表示完整性未知，绝不表示检查成功且无问题。
+  it("does not display clean integrity after management reads fail", async () => {
+    rpc.overview.mockRejectedValue(new Error("Synthetic management denied"));
+    await renderEditor(createVceActivityFixture());
+    await click("查看索引详情与统计");
+    expect(host.textContent).toContain("尚未取得完整性检查结果");
+    expect(host.textContent).not.toContain("未发现完整性问题");
+  });
+
+  // Running synchronization admits the single follow-up already defined by the shared job contract.
+  // 运行中的同步允许共享作业契约定义的单次后续同步。
+  it("keeps the guarded follow-up synchronization action available", async () => {
+    rpc.jobs.mockResolvedValue({ projectId: "project-a", jobId: "sync-job", kind: "synchronize", state: "running", sequence: 1,
+      createdAtUnixMs: 1, updatedAtUnixMs: 1, sourceCheckpointVersion: 1, resultCheckpointVersion: null, followupRequested: false, error: null, progress: null } satisfies VceJobSummary);
+    await renderEditor(createVceActivityFixture());
+    const followup = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("本次完成后再同步"));
+    expect(followup).toBeDefined();
+    expect(followup!.disabled).toBe(false);
+  });
   // An expected replacement-read race is rendered as localized status, never as a red activity error.
   // 预期的替换读取竞争显示为本地化状态，绝不显示为红色活动错误。
   it("renders replacement progress as neutral localized status", async () => {

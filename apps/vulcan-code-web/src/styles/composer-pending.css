@@ -195,7 +195,7 @@
   font-size: 13px;
   line-height: 1.5;
   padding-bottom: 10px;
-  border-bottom: 1px solid rgb(255 255 255 / 10%);
+  border-bottom: 1px solid var(--border);
 }
 
 .composer-goal-details-metrics {
@@ -206,13 +206,15 @@
 }
 
 .composer-goal-details-metrics dt {
-  color: rgb(244 244 244 / 58%);
+  /* Match the shared popover surface in both light and dark themes. */
+  /* 在浅色与深色主题中匹配共享浮层表面。 */
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 
 .composer-goal-details-metrics dd {
   margin: 0;
-  color: #f4f4f4;
+  color: var(--popover-foreground);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -349,16 +351,16 @@
   position: absolute;
   top: 5px;
   right: 5px;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   padding: 0;
-  border: 0;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: #ef4444;
-  color: white;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--vcn-content-danger);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -421,37 +423,101 @@
   right: 6px;
   bottom: 6px;
   display: inline-flex;
-  color: #d97706;
+  color: var(--vcn-content-warning);
   cursor: help;
   filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--background) 80%, transparent));
   pointer-events: auto;
   z-index: 4;
 }
 
+/* Actionable diagnostics share the notice position while retaining a visible keyboard focus.
+   可操作诊断沿用说明位置，同时保留可见键盘焦点。 */
+button.composer-attachment-warning {
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  padding: 0;
+  cursor: pointer;
+}
+
+button.composer-attachment-warning:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.composer-attachment-notice-tooltip {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+.composer-attachment-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(320px, var(--radix-popover-content-available-height));
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* One scroll owner keeps diagnostic text reachable even when a long filename fills a short window.
+   单一滚动容器保证长文件名占满矮窗口时仍可阅读诊断文本。 */
+.composer-attachment-detail > * {
+  flex: none;
+}
+
+.composer-attachment-detail-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.composer-attachment-detail-text:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .composer-attachment-retry {
   position: absolute;
-  inset: 0;
+  left: 6px;
+  bottom: 6px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 0;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--muted-foreground) 46%, transparent);
-  color: white;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  color: var(--foreground);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   z-index: 3;
 }
 
-.composer-attachment-tile.attachment-degraded:hover .composer-attachment-retry,
-.composer-attachment-tile.attachment-degraded:focus-within .composer-attachment-retry,
 .composer-attachment-retry:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
   outline: 2px solid var(--ring);
   outline-offset: -3px;
+}
+
+.composer-attachment-retry:hover {
+  background: var(--accent);
+}
+
+/* Touch pointers cannot reveal removal through hover, so keep the action discoverable.
+   触控指针无法通过悬停显示移除，因此持续展示该操作。 */
+@media (hover: none) {
+  .composer-attachment-remove {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }

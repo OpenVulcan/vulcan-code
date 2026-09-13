@@ -2,6 +2,7 @@ import * as React from "react";
 import { ChartNoAxesCombined, KeyRound, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, IconButton } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -180,6 +181,14 @@ export function VulcanPluginsPanel(props: {
   // actionRunningRef closes the repeat-click window before React commits the busy state.
   // actionRunningRef 在 React 提交忙碌状态前关闭重复点击窗口。
   const actionRunningRef = React.useRef(false);
+  // pendingDestructive retains exact public identities without retaining secret values.
+  // pendingDestructive 保留精确公开身份，不保留秘密值。
+  const [pendingDestructive, setPendingDestructive] = React.useState<
+    { kind: "uninstall"; plugin: PluginSummary } | { kind: "secret"; pluginId: string; serverId: string; secretKey: string } | null
+  >(null);
+  // mutationBusy synchronizes every lifecycle, installation and credential control on this page.
+  // mutationBusy 同步当前页面所有生命周期、安装与凭据控件。
+  const mutationBusy = installBusy || busyPluginId !== null || secretBusyKey !== null;
   // vulcanPlugins keeps ordinary Lua Skill rows on their existing catalog page.
   // vulcanPlugins 使普通 Lua Skill 行继续留在原有技能目录页面。
   const vulcanPlugins = React.useMemo(
@@ -224,6 +233,7 @@ export function VulcanPluginsPanel(props: {
     }
     actionRunningRef.current = true;
     setBusyPluginId(plugin.id);
+    setInstallError("");
     try {
       // requestedEnabled retries cleanup without accidentally re-enabling a warning-state plugin.
       // requestedEnabled 会重试清理，避免意外重新启用处于警告状态的插件。
@@ -231,6 +241,8 @@ export function VulcanPluginsPanel(props: {
         ? false
         : !plugin.desiredEnabled;
       await props.actions.onSetVulcanPluginEnabled(plugin.id, requestedEnabled);
+    } catch (reason) {
+      setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       actionRunningRef.current = false;
       setBusyPluginId(null);
@@ -241,9 +253,10 @@ export function VulcanPluginsPanel(props: {
   // inspectPluginPackage 校验当前路径并重置此前的所有授权决定。
   const inspectPluginPackage = React.useCallback(async () => {
     const sourcePath = installSourcePath.trim();
-    if (!sourcePath || installBusy) {
+    if (!sourcePath || actionRunningRef.current) {
       return;
     }
+    actionRunningRef.current = true;
     setInstallBusy(true);
     setInstallError("");
     setPermissionPreview(null);
@@ -255,6 +268,7 @@ export function VulcanPluginsPanel(props: {
     } catch (reason: unknown) {
       setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      actionRunningRef.current = false;
       setInstallSecretDrafts({});
       setInstallBusy(false);
     }
@@ -263,7 +277,7 @@ export function VulcanPluginsPanel(props: {
   // installInspectedPlugin installs only the unchanged path and exact host-projected capability set.
   // installInspectedPlugin 仅使用未变化路径与宿主投影的精确能力集合安装插件。
   const installInspectedPlugin = React.useCallback(async () => {
-    if (permissionPreview === null || !authorizationConfirmed || installBusy) {
+    if (permissionPreview === null || !authorizationConfirmed || actionRunningRef.current) {
       return;
     }
     const requiresRegistryConsent = permissionPreview.permissions.includes("dependency_registry_network");
@@ -278,6 +292,7 @@ export function VulcanPluginsPanel(props: {
     if (initialSecrets.some((secret) => secret.value.length === 0)) {
       return;
     }
+    actionRunningRef.current = true;
     setInstallBusy(true);
     setInstallError("");
     try {
@@ -299,6 +314,7 @@ export function VulcanPluginsPanel(props: {
     } catch (reason: unknown) {
       setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      actionRunningRef.current = false;
       setInstallSecretDrafts({});
       setInstallBusy(false);
     }
@@ -316,24 +332,19 @@ export function VulcanPluginsPanel(props: {
   // uninstallPlugin confirms and removes only one disabled user-installed plugin.
   // uninstallPlugin 经确认后仅移除单个已停用的用户安装插件。
   const uninstallPlugin = React.useCallback(async (plugin: PluginSummary) => {
-    if (installBusy || plugin.extension?.origin !== "userInstalled" || plugin.runtimeState !== "disabled") {
+    if (actionRunningRef.current || plugin.extension?.origin !== "userInstalled" || plugin.runtimeState !== "disabled") {
       return;
     }
-    const confirmed = window.confirm(
-      locale.startsWith("zh")
-        ? `确定卸载用户插件“${plugin.name}”吗？此操作会删除插件包、配置和隔离环境。`
-        : `Uninstall user plugin “${plugin.name}”? Its package, configuration, and isolated environments will be removed.`,
-    );
-    if (!confirmed) {
-      return;
-    }
+    actionRunningRef.current = true;
     setInstallBusy(true);
     setInstallError("");
     try {
       await props.actions.onUninstallUserPlugin(plugin.id);
+      setPendingDestructive(null);
     } catch (reason: unknown) {
       setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      actionRunningRef.current = false;
       setInstallBusy(false);
     }
   }, [installBusy, locale, props.actions]);
@@ -347,9 +358,10 @@ export function VulcanPluginsPanel(props: {
   ) => {
     const draftKey = `${pluginId}:${serverId}:${secretKey}`;
     const value = secretDrafts[draftKey] ?? "";
-    if (!value || secretBusyKey !== null) {
+    if (!value || actionRunningRef.current) {
       return;
     }
+    actionRunningRef.current = true;
     setSecretBusyKey(draftKey);
     setSecretError("");
     try {
@@ -357,6 +369,7 @@ export function VulcanPluginsPanel(props: {
     } catch (reason: unknown) {
       setSecretError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      actionRunningRef.current = false;
       setSecretDrafts((current) => ({ ...current, [draftKey]: "" }));
       setSecretBusyKey(null);
     }
@@ -370,20 +383,19 @@ export function VulcanPluginsPanel(props: {
     secretKey: string,
   ) => {
     const draftKey = `${pluginId}:${serverId}:${secretKey}`;
-    if (secretBusyKey !== null || !window.confirm(
-      locale.startsWith("zh")
-        ? `确定删除 Secret“${secretKey}”吗？已启用服务器会先通过就绪检查。`
-        : `Delete secret “${secretKey}”? An enabled server must pass readiness before the change commits.`,
-    )) {
+    if (actionRunningRef.current) {
       return;
     }
+    actionRunningRef.current = true;
     setSecretBusyKey(draftKey);
     setSecretError("");
     try {
       await props.actions.onDeletePluginMcpSecret(pluginId, serverId, secretKey);
+      setPendingDestructive(null);
     } catch (reason: unknown) {
       setSecretError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      actionRunningRef.current = false;
       setSecretDrafts((current) => ({ ...current, [draftKey]: "" }));
       setSecretBusyKey(null);
     }
@@ -404,7 +416,7 @@ export function VulcanPluginsPanel(props: {
         <div className="vulcan-plugin-install-input-row">
           <input
             aria-label={locale.startsWith("zh") ? "本地插件目录" : "Local plugin directory"}
-            disabled={installBusy}
+            disabled={mutationBusy}
             onChange={(event) => {
               setInstallSourcePath(event.target.value);
               setPermissionPreview(null);
@@ -416,7 +428,7 @@ export function VulcanPluginsPanel(props: {
             value={installSourcePath}
           />
           <Button
-            disabled={installBusy || installSourcePath.trim().length === 0}
+            disabled={mutationBusy || installSourcePath.trim().length === 0}
             onClick={() => void inspectPluginPackage()}
             size="sm"
             type="button"
@@ -425,7 +437,10 @@ export function VulcanPluginsPanel(props: {
             {locale.startsWith("zh") ? "检查" : "Inspect"}
           </Button>
         </div>
-        {installError ? <div className="skill-empty-state warning">{installError}</div> : null}
+        {installError ? <div className="skill-empty-state warning" role="alert">
+          <p>{locale.startsWith("zh") ? "插件操作失败，请重试。" : "Plugin action failed. Try again."}</p>
+          <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
+        </div> : null}
         {permissionPreview ? (
           <div className="vulcan-plugin-permission-preview">
             <div className="vulcan-plugin-permission-title">
@@ -495,7 +510,7 @@ export function VulcanPluginsPanel(props: {
                       <input
                         aria-label={`${requirement.serverId} ${requirement.secretKey}`}
                         autoComplete="new-password"
-                        disabled={installBusy}
+                        disabled={mutationBusy}
                         onChange={(event) => setInstallSecretDrafts((current) => ({
                           ...current,
                           [draftKey]: event.target.value,
@@ -519,7 +534,7 @@ export function VulcanPluginsPanel(props: {
               </div>
             ) : null}
             <Button
-              disabled={installBusy
+              disabled={mutationBusy
                  || !authorizationConfirmed
                  || (inspectedInstalledPlugin !== undefined
                    && (inspectedInstalledPlugin.extension?.origin !== "userInstalled" || inspectedInstalledPlugin.runtimeState !== "disabled"))
@@ -558,7 +573,10 @@ export function VulcanPluginsPanel(props: {
           </SelectContent>
         </Select>
       </div>
-      {secretError ? <div className="vulcan-plugin-install-error">{secretError}</div> : null}
+      {secretError ? <div className="vulcan-plugin-install-error" role="alert">
+        <p>{locale.startsWith("zh") ? "凭据操作失败，请重试。" : "Credential action failed. Try again."}</p>
+        <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{secretError}</pre></details>
+      </div> : null}
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (
           <div className="skill-empty-state">
@@ -613,9 +631,11 @@ export function VulcanPluginsPanel(props: {
                   </div>
                 </div>
                 <p>{localizedCapability}</p>
-                <span className={`agent-definition-row-path ${plugin.diagnostics.length > 0 ? "warning" : ""}`}>
-                  {plugin.diagnostics.length > 0 ? plugin.diagnostics.join("；") : plugin.id}
-                </span>
+                <span className="agent-definition-row-path">{plugin.id}</span>
+                {plugin.diagnostics.length > 0 ? <details className="vulcan-plugin-component-details text-[var(--vcn-content-warning)]">
+                  <summary>{locale.startsWith("zh") ? "查看插件诊断" : "View plugin diagnostics"}</summary>
+                  <pre className="plugin-control-error-details">{plugin.diagnostics.join("\n")}</pre>
+                </details> : null}
                 {plugin.skillCount > 0 || plugin.agentCount > 0 ? (
                   <details className="vulcan-plugin-component-details">
                     <summary>{locale.startsWith("zh") ? "查看只读组件" : "View read-only components"}</summary>
@@ -674,7 +694,7 @@ export function VulcanPluginsPanel(props: {
                               <input
                                 aria-label={`${server.name} ${secretKey}`}
                                 autoComplete="new-password"
-                                disabled={secretBusyKey !== null}
+                                disabled={mutationBusy}
                                 onChange={(event) => setSecretDrafts((current) => ({
                                   ...current,
                                   [draftKey]: event.target.value,
@@ -684,7 +704,7 @@ export function VulcanPluginsPanel(props: {
                                 value={secretDrafts[draftKey] ?? ""}
                               />
                               <Button
-                                disabled={secretBusyKey !== null || !(secretDrafts[draftKey] ?? "")}
+                                disabled={mutationBusy || !(secretDrafts[draftKey] ?? "")}
                                 onClick={() => void storePluginMcpSecret(plugin.id, server.id, secretKey)}
                                 size="sm"
                                 type="button"
@@ -694,8 +714,8 @@ export function VulcanPluginsPanel(props: {
                               </Button>
                               <IconButton
                                 aria-label={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
-                                disabled={secretBusyKey !== null}
-                                onClick={() => void deletePluginMcpSecret(plugin.id, server.id, secretKey)}
+                                disabled={mutationBusy}
+                                onClick={() => { setSecretError(""); setPendingDestructive({ kind: "secret", pluginId: plugin.id, serverId: server.id, secretKey }); }}
                                 size="sm"
                                 title={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
                                 type="button"
@@ -715,8 +735,8 @@ export function VulcanPluginsPanel(props: {
               {plugin.extension?.origin === "userInstalled" ? (
                 <IconButton
                   aria-label={locale.startsWith("zh") ? "卸载用户插件" : "Uninstall user plugin"}
-                  disabled={installBusy || plugin.runtimeState !== "disabled"}
-                  onClick={() => void uninstallPlugin(plugin)}
+                  disabled={mutationBusy || plugin.runtimeState !== "disabled"}
+                  onClick={() => { setInstallError(""); setPendingDestructive({ kind: "uninstall", plugin }); }}
                   size="sm"
                   title={plugin.runtimeState === "disabled"
                     ? (locale.startsWith("zh") ? "卸载" : "Uninstall")
@@ -731,7 +751,7 @@ export function VulcanPluginsPanel(props: {
                 aria-busy={busyPluginId === plugin.id}
                 checked={plugin.desiredEnabled}
                 aria-label={toggleLabel}
-                disabled={!plugin.available || busyPluginId !== null || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining"}
+                disabled={!plugin.available || mutationBusy || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining"}
                 onCheckedChange={() => void togglePlugin(plugin)}
                 title={toggleLabel}
               />
@@ -740,6 +760,25 @@ export function VulcanPluginsPanel(props: {
           );
         })}
       </div>
+      <AlertDialog open={pendingDestructive !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingDestructive(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pendingDestructive?.kind === "uninstall" ? (locale.startsWith("zh") ? "卸载插件" : "Uninstall plugin") : (locale.startsWith("zh") ? "删除凭据" : "Delete credential")}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingDestructive?.kind === "uninstall"
+              ? (locale.startsWith("zh") ? `卸载“${pendingDestructive.plugin.name}”会删除插件包、配置和隔离环境。` : `Uninstalling “${pendingDestructive.plugin.name}” removes its package, configuration and isolated environment.`)
+              : pendingDestructive ? (locale.startsWith("zh") ? `删除凭据“${pendingDestructive.secretKey}”？已启用服务器必须先通过就绪检查。` : `Delete credential “${pendingDestructive.secretKey}”? Enabled servers must first pass readiness checks.`) : ""}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {(pendingDestructive?.kind === "uninstall" ? installError : secretError) ? <p role="alert" className="text-sm text-destructive">{pendingDestructive?.kind === "uninstall" ? installError : secretError}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={mutationBusy}>{locale.startsWith("zh") ? "取消" : "Cancel"}</AlertDialogCancel>
+            <AlertDialogAction disabled={mutationBusy} onClick={(event) => {
+              event.preventDefault();
+              if (pendingDestructive?.kind === "uninstall") void uninstallPlugin(pendingDestructive.plugin);
+              else if (pendingDestructive) void deletePluginMcpSecret(pendingDestructive.pluginId, pendingDestructive.serverId, pendingDestructive.secretKey);
+            }}>{mutationBusy ? (locale.startsWith("zh") ? "处理中…" : "Working…") : (locale.startsWith("zh") ? "确认" : "Confirm")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

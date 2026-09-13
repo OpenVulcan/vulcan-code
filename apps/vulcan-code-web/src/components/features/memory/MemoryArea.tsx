@@ -469,6 +469,7 @@ export function MemoryArea(props: {
             {nativeDeployment ? (
               <VmmContentPage
                 busy={operationBusy}
+                notice={notice}
                 onRunAction={runAction}
                 result={result}
                 snapshot={props.snapshot}
@@ -476,6 +477,7 @@ export function MemoryArea(props: {
             ) : (
               <VmmDataPage
                 busy={operationBusy}
+                notice={notice}
                 onRunAction={runAction}
                 result={result}
                 snapshot={props.snapshot}
@@ -494,6 +496,7 @@ export function MemoryArea(props: {
           <main className="vmm-memory-main vmm-status-page">
             <VmmProfilePage
               busy={operationBusy}
+              notice={notice}
               onRunAction={runAction}
               result={result}
               snapshot={props.snapshot}

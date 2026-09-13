@@ -167,6 +167,9 @@ export function WorkbenchApp(props: {
   // shutdownForceClosePending prevents duplicate force-close commands while the native window is closing.
   // shutdownForceClosePending 防止原生窗口关闭期间重复发送强制关闭命令。
   const [shutdownForceClosePending, setShutdownForceClosePending] = React.useState(false);
+  // shutdownForceCloseGuard prevents two click events from issuing concurrent force-close commands.
+  // shutdownForceCloseGuard 阻止两个点击事件发出并发强制关闭命令。
+  const shutdownForceCloseGuard = React.useRef(false);
 
   React.useEffect(() => {
     appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
@@ -196,6 +199,8 @@ export function WorkbenchApp(props: {
   // forceCloseAfterShutdownFailure asks the native shell to admit the confirmed close exactly once.
   // forceCloseAfterShutdownFailure 请求原生壳接受已经确认的单次强制关闭。
   const forceCloseAfterShutdownFailure = React.useCallback(async () => {
+    if (shutdownForceCloseGuard.current) return;
+    shutdownForceCloseGuard.current = true;
     setShutdownForceClosePending(true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -203,6 +208,7 @@ export function WorkbenchApp(props: {
       setShutdownForceClosePending(false);
       setShutdownFailure(null);
     } catch (closeError) {
+      shutdownForceCloseGuard.current = false;
       setShutdownForceClosePending(false);
       setShutdownFailure((current) => {
         const diagnostic = closeError instanceof Error ? closeError.message : String(closeError);
@@ -255,6 +261,7 @@ export function WorkbenchApp(props: {
         toast.dismiss(SHUTDOWN_PERSIST_TOAST_ID);
         // Keep the exact native diagnostic in the controlled dialog for retry and force-close decisions.
         // 将原生精确诊断保留在受控弹窗中，供重试和强制关闭决策使用。
+        shutdownForceCloseGuard.current = false;
         setShutdownForceClosePending(false);
         setShutdownFailure(event.payload);
       });
@@ -783,7 +790,7 @@ export function WorkbenchApp(props: {
         <AlertDialog
           open={shutdownFailure !== null}
           onOpenChange={(open) => {
-            if (!open && !shutdownForceClosePending) {
+            if (!open && !shutdownForceCloseGuard.current) {
               setShutdownFailure(null);
             }
           }}
@@ -810,6 +817,7 @@ export function WorkbenchApp(props: {
                 {webuiAppTranslation(shutdownLocale, "app.shutdown.persistFailed.cancel")}
               </AlertDialogCancel>
               <AlertDialogAction
+                variant="destructive"
                 disabled={shutdownForceClosePending}
                 onClick={(event) => {
                   event.preventDefault();

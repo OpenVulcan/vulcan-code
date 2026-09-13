@@ -57,7 +57,7 @@ import {
   validateLuaSkillConfig,
 } from "@/service/skills-actions-service";
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
-import { applyPreviewProjectAction, applyPreviewProjectIcon, applyPreviewProjectOrder } from "@/state/workbench-preview-actions";
+import { applyPreviewProjectIcon } from "@/state/workbench-preview-actions";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { toast } from "sonner";
 
@@ -132,7 +132,7 @@ interface WorkbenchProjectActionsOptions {
 export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptions) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const {
     workbenchState,
     setWorkbenchState,
@@ -185,6 +185,10 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setWorkbenchState,
   ]);
 
+  // pinRequests prevents duplicate toggles while their authoritative state is still being read.
+  // pinRequests 在读取权威状态期间阻止同一项目重复切换置顶。
+  const pinRequests = React.useRef(new Set<string>());
+
   // handleProjectMenuAction executes immediate project-tree context menu commands.
   // handleProjectMenuAction 执行可立即处理的项目树右键菜单命令。
   const handleProjectMenuAction = React.useCallback(async (action: ProjectMenuAction, project: ProjectSummary) => {
@@ -220,19 +224,32 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
         return;
       }
 
-      const preview = applyPreviewProjectAction(workbenchState, project.id, action);
-      applyProjectActionSnapshot(preview.snapshot, "local");
-      await toggleProjectPinned(project.id);
-      toast.success(formatProjectActionTranslation(
-        t,
-        project.pinned ? "projectActions.unpinned" : "projectActions.pinned",
-        { project: project.name },
-      ));
+      if (pinRequests.current.has(project.id)) return;
+      pinRequests.current.add(project.id);
+      try {
+        await toggleProjectPinned(project.id);
+        // The toggle RPC acknowledges no target value; only a revisioned read can establish its outcome.
+        // 切换 RPC 不返回目标值；仅带版本的读取能确定其实际结果。
+        try {
+          const snapshot = await loadWorkbenchSnapshot();
+          if (acceptServiceWorkbenchSnapshot(snapshot)) {
+            setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+          }
+          toast.success(t("projectActions.listUpdated"));
+        } catch (readError) {
+          toast.warning(locale === "zh-CN"
+            ? "置顶操作已提交，但状态刷新失败，请刷新项目列表。"
+            : "The pin change was submitted, but its state could not be refreshed. Refresh the project list.", {
+            description: readError instanceof Error ? readError.message : String(readError),
+          });
+        }
+      } finally {
+        pinRequests.current.delete(project.id);
+      }
     } catch (nextError) {
-      applyProjectActionSnapshot(workbenchState, "local");
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [applyProjectActionSnapshot, t, workbenchState]);
+  }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setArchiveProjectTarget, setProjectIconTarget, setProjectSettingsTarget, setRemoveProjectTarget, setRenameTarget, setWorkbenchState, t]);
 
   // handleProjectSettingsVmmSave persists the project-scoped VMM settings draft.
   // handleProjectSettingsVmmSave 持久化项目级 VMM 设置草稿。
@@ -361,30 +378,24 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // handleProjectIconConfirm 持久化选择的项目图标覆盖。
   const handleProjectIconConfirm = React.useCallback(async (project: ProjectSummary, icon: ProjectIconSelection) => {
     const normalizedIcon = normalizeProjectIconSelection(icon);
-    try {
-      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot, "local");
-      await setProjectIcon(project.id, normalizedIcon);
-      setProjectIconTarget(null);
-      toast.success(formatProjectActionTranslation(t, "projectActions.iconUpdated", { project: project.name }));
-    } catch (error) {
-      applyProjectActionSnapshot(workbenchState, "local");
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }, [applyProjectActionSnapshot, t, workbenchState]);
+    await setProjectIcon(project.id, normalizedIcon);
+    // Apply the acknowledged icon to current state without rolling back unrelated workbench changes.
+    // 将已确认图标应用到当前状态，不回滚无关工作台变化。
+    setWorkbenchState(current => applyPreviewProjectIcon(current, project.id, normalizedIcon).snapshot);
+    setProjectIconTarget(null);
+    toast.success(formatProjectActionTranslation(t, "projectActions.iconUpdated", { project: project.name }));
+  }, [setProjectIconTarget, setWorkbenchState, t]);
 
   // handleProjectIconReset clears the selected project icon override.
   // handleProjectIconReset 清除选择的项目图标覆盖。
   const handleProjectIconReset = React.useCallback(async (project: ProjectSummary) => {
-    try {
-      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot, "local");
-      await resetProjectIcon(project.id);
-      setProjectIconTarget(null);
-      toast.success(formatProjectActionTranslation(t, "projectActions.iconReset", { project: project.name }));
-    } catch (error) {
-      applyProjectActionSnapshot(workbenchState, "local");
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }, [applyProjectActionSnapshot, t, workbenchState]);
+    await resetProjectIcon(project.id);
+    // The void RPC acknowledges persistence; only the exact icon fields are projected locally afterward.
+    // void RPC 确认持久化完成；之后仅在本地投影精确图标字段。
+    setWorkbenchState(current => applyPreviewProjectIcon(current, project.id, null).snapshot);
+    setProjectIconTarget(null);
+    toast.success(formatProjectActionTranslation(t, "projectActions.iconReset", { project: project.name }));
+  }, [setProjectIconTarget, setWorkbenchState, t]);
 
   // handleCreateConversation creates and selects a new empty conversation for a project.
   // handleCreateConversation 为项目创建并选中一个新的空白会话。
@@ -424,33 +435,32 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // handleReorderProjects persists a same-section project order using the existing order model.
   // handleReorderProjects 使用现有顺序模型持久化同一分区内的项目排序。
   const handleReorderProjects = React.useCallback(async (projectIds: string[]) => {
-    setWorkbenchState((current) => applyPreviewProjectOrder(current, projectIds).snapshot);
     try {
       const snapshot = await reorderProjects(projectIds);
-      if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
+      if (!snapshot) {
+        throw new Error(locale === "zh-CN" ? "排序未返回权威状态，请刷新项目列表后重试。" : "Reordering returned no authoritative state. Refresh the project list and try again.");
+      }
+      if (acceptServiceWorkbenchSnapshot(snapshot)) {
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      try {
-        const snapshot = await loadWorkbenchSnapshot();
-        applyProjectActionSnapshot(snapshot);
-      } catch {
-        // Keep the optimistic order when the refresh fallback is unavailable.
-        // 刷新回退不可用时保留乐观排序结果。
-      }
     }
-  }, [applyProjectActionSnapshot]);
+  }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setWorkbenchState]);
 
   // handleExpandedProjectIdsChange persists project folder expansion without reapplying stale snapshots.
   // handleExpandedProjectIdsChange 持久化项目文件夹展开状态，但不重新套用可能过期的快照。
   const handleExpandedProjectIdsChange = React.useCallback((projectIds: string[]) => {
     expandedProjectIdsLocallyEditedRef.current = true;
     setWorkbenchState((current) => ({ ...current, expandedProjectIds: projectIds }));
-    void setExpandedTaskProjects(projectIds).catch((nextError) => {
-      console.warn("persist expanded projects failed", nextError);
+    void setExpandedTaskProjects(projectIds).then((snapshot) => {
+      if (!snapshot) throw new Error(locale === "zh-CN" ? "保存未返回确认状态。" : "Saving returned no acknowledged state.");
+    }).catch((nextError) => {
+      toast.warning(locale === "zh-CN" ? "当前展开视图已保留，但未能保存；重新打开时可能恢复原状态。" : "The expanded view is kept locally, but could not be saved; reopening may restore the previous state.", {
+        description: nextError instanceof Error ? nextError.message : String(nextError),
+      });
     });
-  }, []);
+  }, [expandedProjectIdsLocallyEditedRef, locale, setWorkbenchState]);
 
   return {
     applyProjectActionSnapshot,

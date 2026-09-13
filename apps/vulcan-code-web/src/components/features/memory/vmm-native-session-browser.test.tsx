@@ -34,7 +34,7 @@ function turnRecord(turnId: number): VmmNativeTurnRecordSummary {
 
 // Mounts actual browser, archive dialog and provenance components with controlled service responses.
 // 通过受控服务响应挂载实际浏览器、归档对话框及来源组件。
-async function mount(options: { stale?: boolean; failCatalog?: boolean; failDetail?: boolean; mixed?: boolean; busy?: boolean; turns?: boolean } = {}) {
+async function mount(options: { stale?: boolean; failCatalog?: boolean; failDetail?: boolean; mixed?: boolean; busy?: boolean; turns?: boolean; turnCount?: number; updates?: boolean } = {}) {
   // Captures the previewed server impact so confirmation cannot replace the selected source IDs.
   // 捕获已预览的服务端影响，使确认不能替换所选来源 ID。
   let removalImpact: VmmNativeRemovalImpact | null = null
@@ -47,7 +47,7 @@ async function mount(options: { stale?: boolean; failCatalog?: boolean; failDeta
       if (options.mixed) rows[1].status = "archived"
       return result(action, { kind: "native_session_list", value: { projectId: query.vmmProjectId, storageVersion: 42, total: 21, offset: query.offset, limit: query.limit, sessions: rows } })
     }
-    if (action === "native_memory_records") return options.failDetail ? null : result(action, { kind: "native_memory_records", value: { projectId: Number(payload!.vmmProjectId), storageVersion: 42, selectedSessionSourceId: payload!.sessionSourceId as string | undefined, sessions: [session(0)], memories: [], turns: options.turns ? [turnRecord(2), turnRecord(10)] : [], profileNodes: [] } })
+    if (action === "native_memory_records") return options.failDetail ? null : result(action, { kind: "native_memory_records", value: { projectId: Number(payload!.vmmProjectId), storageVersion: 42, selectedSessionSourceId: payload!.sessionSourceId as string | undefined, sessions: [session(0)], memories: [], turns: options.turnCount ? Array.from({ length: options.turnCount }, (_, index) => turnRecord(index + 1)) : options.turns ? [turnRecord(2), turnRecord(10)] : [], profileNodes: [] } })
     if (action === "native_removal_preview") {
       const query = payload as unknown as VmmNativeRemovalQuery
       removalImpact = { query, storageVersion: 42, hotWindowSize: 3, sessionSourceIds: query.selection.kind === "sessions" ? query.selection.ids : ["source-0"], turnIds: query.selection.kind === "turns" ? query.selection.ids : [], pendingTurnIds: [], hotWindowTurnIds: [], memoryIds: [], vectorMemoryIds: [], projectProfileNodeIds: [], userProfileNodeIds: [], contextEvidence: [] }
@@ -62,10 +62,13 @@ async function mount(options: { stale?: boolean; failCatalog?: boolean; failDeta
     throw new Error(`Unexpected action ${action}`)
   })
   const container = document.createElement("div")
+  // Read-only background checks use a separate injected channel and never touch foreground action history.
+  // 只读后台检查使用独立注入通道，绝不修改前台动作历史。
+  const onCheckUpdates = vi.fn(async (query: VmmNativeSessionListQuery) => result("native_session_list", { kind: "native_session_list", value: { projectId: query.vmmProjectId, storageVersion: 43, total: options.updates ? 22 : 21, offset: query.offset, limit: query.limit, sessions: Array.from({ length: 20 }, (_, index) => session(index)) } }))
   const root = createRoot(container)
   document.body.append(container)
-  await act(async () => root.render(<StrictMode><I18nProvider initialLocale="zh-CN"><VmmNativeSessionBrowser busy={options.busy ?? false} snapshot={{ selectedProjectId: "host", selectedConversationId: "different-host-session" }} onRunAction={onRunAction} /></I18nProvider></StrictMode>))
-  return { container, onRunAction, dispose: async () => { await act(async () => root.unmount()); container.remove() } }
+  await act(async () => root.render(<StrictMode><I18nProvider initialLocale="zh-CN"><VmmNativeSessionBrowser busy={options.busy ?? false} snapshot={{ selectedProjectId: "host", selectedConversationId: "different-host-session" }} onRunAction={onRunAction} onCheckUpdates={onCheckUpdates} /></I18nProvider></StrictMode>))
+  return { container, onRunAction, onCheckUpdates, dispose: async () => { await act(async () => root.unmount()); container.remove() } }
 }
 
 // Finds the visible button by its exact user-facing label and returns the real DOM control.
@@ -75,6 +78,62 @@ function button(container: ParentNode, label: string): HTMLButtonElement {
   if (!found) throw new Error(`Button not found: ${label}`)
   return found
 }
+
+// Verifies polling never replaces reading position or selection and uses the independent read channel.
+// 验证轮询绝不替换阅读位置或选择，并使用独立读取通道。
+it("announces background changes without replacing the retained list or foreground state", async () => {
+  vi.useFakeTimers()
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
+  const view = await mount({ updates: true })
+  try {
+    await act(async () => view.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    expect(view.onCheckUpdates).toHaveBeenCalledTimes(1)
+    expect(view.onRunAction).toHaveBeenCalledTimes(2)
+    expect(view.container.textContent).toContain("会话有更新，刷新后查看")
+    expect(view.container.textContent).toContain("共 21 个会话")
+    expect(view.container.textContent).toContain("已选 20 个会话")
+    await act(async () => { await vi.advanceTimersByTimeAsync(45000) })
+    expect(view.onCheckUpdates).toHaveBeenCalledTimes(1)
+  } finally { await view.dispose(); vi.useRealTimers(); vi.restoreAllMocks() }
+})
+
+// Pauses list reads while its detail replaces the visible surface, then resumes after returning.
+// 详情替换可见列表时暂停列表读取，返回后恢复检查。
+it("pauses hidden-list polling while a session detail is open", async () => {
+  vi.useFakeTimers()
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
+  // The real navigation keeps the list mounted, reproducing the hidden timer lifetime.
+  // 真实导航保留列表挂载，复现隐藏计时器的生命周期。
+  const view = await mount()
+  try {
+    await act(async () => button(view.container, "显示标题 0").click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(45000) })
+    expect(view.onCheckUpdates).not.toHaveBeenCalled()
+    await act(async () => view.container.querySelector<HTMLButtonElement>(".vmm-session-detail > button")!.click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    expect(view.onCheckUpdates).toHaveBeenCalledTimes(1)
+    expect(view.container.textContent).toContain("共 21 个会话")
+  } finally { await view.dispose(); vi.useRealTimers(); vi.restoreAllMocks() }
+})
+
+// Measures a large synthetic response while checking bounded DOM and exact second-page record ownership.
+// 测量大规模合成响应，同时检查有界 DOM 及第二页准确记录归属。
+it("bounds large session-detail rendering and pages without another full record download", async () => {
+  const view = await mount({ turnCount: 5000 })
+  try {
+    const started = performance.now()
+    await act(async () => button(view.container, "显示标题 0").click())
+    const detail = view.container.querySelector(".vmm-session-detail")!
+    expect(detail.querySelectorAll('button.pl-10')).toHaveLength(30)
+    expect(detail.textContent).toContain("1–30 / 5000")
+    await act(async () => button(detail, "下一页").click())
+    expect(detail.textContent).toContain("31–60 / 5000")
+    expect(detail.textContent).toContain("原始回合 31")
+    expect(view.onRunAction.mock.calls.filter(([action]) => action === "native_memory_records")).toHaveLength(1)
+    console.info(`Native memory synthetic detail: 5000 turns, 30 rendered rows, open + next page ${(performance.now() - started).toFixed(1)}ms`)
+  } finally { await view.dispose() }
+})
 
 it("loads only a bounded summary page and opens exact source identity without project-body prefetch", async () => {
   const view = await mount()

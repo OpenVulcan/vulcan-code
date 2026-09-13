@@ -10,6 +10,17 @@ import type {
 import { ComposerAttachmentStrip } from "./composer-attachment-controls";
 
 describe("ComposerAttachmentStrip", () => {
+  it.each(["uploading", "awaiting_provider_confirmation"] as const)("does not invent a percentage for %s without byte totals", (phase) => {
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="en-US"><TooltipProvider>
+      <ComposerAttachmentStrip attachments={[{ assetId: "file", kind: "file", fileName: "archive.zip", localPath: "synthetic/archive.zip", mimeType: "application/zip" }]}
+        preparations={{ file: { attachmentId: "file", blocksSubmission: true, deliveryPlan: "upload_reference", generation: 1, phase, reason: "upload", transferId: "transfer" } }}
+        resolvePreview={() => null} onOpenMedia={() => undefined} />
+    </TooltipProvider></I18nProvider>);
+    expect(markup).not.toContain("0%"); expect(markup).not.toContain("99%");
+    expect(markup).toContain("motion-safe:animate-spin");
+    expect(markup).toContain("Preview is unavailable for this file type");
+    expect(markup).toMatch(/composer-attachment-open[^>]*disabled/);
+  });
   it("keeps metadata-only detail behind an accessible tooltip trigger", () => {
     // attachment is one exact staged video shown in the composer strip.
     // attachment 是输入区附件条中展示的一条精确已暂存视频。

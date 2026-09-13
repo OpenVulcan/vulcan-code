@@ -9815,9 +9815,12 @@ dependencies = [
 name = "vulcan-code-tauri"
 version = "0.1.0"
 dependencies = [
+ "notify-rust",
+ "serde",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
+ "tempfile",
  "tokio",
  "vulcan-host-tools",
  "vulcan-provider-adapters",
@@ -9825,6 +9828,7 @@ dependencies = [
  "vulcan-service-api",
  "vulcan-service-host",
  "vulcan-service-kernel",
+ "windows 0.62.2",
 ]
 
 [[package]]

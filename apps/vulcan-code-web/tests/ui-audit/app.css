@@ -1,0 +1,4 @@
+@import "../../src/styles.css";
+/* Scan all production utility classes before lazy navigation; HMR remains disabled. */
+/* 在懒加载导航前扫描全部生产工具类；保持热更新关闭。 */
+@source "../../src";

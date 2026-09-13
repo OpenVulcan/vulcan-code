@@ -82,6 +82,9 @@
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-group-label {
+  /* Hidden section actions must also leave keyboard navigation and the accessibility tree. */
+  /* 已隐藏的分组操作也必须退出键盘导航及无障碍树。 */
+  visibility: hidden;
   height: 0;
   opacity: 0;
   padding-top: 0;
@@ -370,6 +373,7 @@
 }
 
 .vcn-sidebar[data-collapsible="icon"] .sidebar-brand-settings-button {
+  visibility: hidden;
   width: 0;
   height: 0;
   margin-left: 0;

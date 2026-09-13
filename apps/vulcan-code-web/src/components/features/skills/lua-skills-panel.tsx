@@ -1,6 +1,7 @@
 import * as React from "react";
 import { PackagePlus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -63,7 +64,13 @@ export function LuaSkillsPanel(props: {
   // Lua Skill 行。
   skills: LuaSkillSummary[];
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  // actionError retains the latest lifecycle failure instead of leaving an unhandled rejection.
+  // actionError 保留最近的生命周期失败，避免未处理的拒绝。
+  const [actionError, setActionError] = React.useState("");
+  // pendingUninstall retains the exact user package awaiting explicit removal confirmation.
+  // pendingUninstall 保留等待明确删除确认的精确用户包。
+  const [pendingUninstall, setPendingUninstall] = React.useState<LuaSkillSummary | null>(null);
   // searchQuery stores the free-text LuaSkills filter.
   // searchQuery 保存 LuaSkills 自由文本筛选词。
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -137,8 +144,11 @@ export function LuaSkillsPanel(props: {
     }
     actionRunningRef.current = true;
     setBusyAction(label);
+    setActionError("");
     try {
       await action();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       actionRunningRef.current = false;
       setBusyAction(null);
@@ -147,6 +157,10 @@ export function LuaSkillsPanel(props: {
 
   return (
     <div className="skill-page-body lua-skill-page-body">
+      {actionError ? <div role="alert" className="skill-empty-state warning">
+        <p>{locale.startsWith("zh") ? "技能操作失败，请重试。" : "Skill action failed. Try again."}</p>
+        <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{actionError}</pre></details>
+      </div> : null}
       <div className="agent-catalog-filter-row skill-list-filter-row">
         <label className="agent-catalog-search-input skill-list-search-input">
           <Search size={15} />
@@ -186,6 +200,7 @@ export function LuaSkillsPanel(props: {
             onOpenDetail={(selectedSkill) => setDetailSkillId(selectedSkill.skillId)}
             onOpenConfig={(selectedSkill) => setConfigSkillId(selectedSkill.skillId)}
             onOpenTools={(selectedSkill) => setToolsSkillId(selectedSkill.skillId)}
+            onRequestUninstall={(selectedSkill) => { setActionError(""); setPendingUninstall(selectedSkill); }}
             onRunAction={runAction}
             skill={skill}
           />
@@ -200,6 +215,25 @@ export function LuaSkillsPanel(props: {
           }
         }}
       />
+      <AlertDialog open={pendingUninstall !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingUninstall(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{locale.startsWith("zh") ? "卸载技能" : "Uninstall skill"}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingUninstall ? (locale.startsWith("zh") ? `确认移除技能包“${pendingUninstall.displayName}”？` : `Remove skill package “${pendingUninstall.displayName}”?`) : ""}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {actionError ? <details role="alert" className="text-sm text-destructive"><summary>{locale.startsWith("zh") ? "卸载失败，请重试" : "Uninstall failed. Retry."}</summary><pre className="plugin-control-error-details">{actionError}</pre></details> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busyAction !== null}>{t("skills.action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={busyAction !== null} onClick={(event) => {
+              event.preventDefault();
+              if (pendingUninstall) void runAction("uninstall", async () => {
+                await props.actions.onUninstallLuaSkill(pendingUninstall.skillId);
+                setPendingUninstall(null);
+              });
+            }}>{busyAction !== null ? (locale.startsWith("zh") ? "处理中…" : "Working…") : t("skills.action.delete")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <LuaSkillToolsDialog
         actions={props.actions}
         busy={busyAction !== null}
@@ -238,7 +272,13 @@ export function LuaSkillInstallDialog(props: {
   // 更新安装弹窗打开状态。
   onOpenChange: (open: boolean) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  // installError keeps failed installation feedback in the still-open form.
+  // installError 将安装失败反馈保留在仍打开的表单内。
+  const [installError, setInstallError] = React.useState("");
+  // installFormId links the fixed footer to the independently scrolling form.
+  // installFormId 将固定页脚关联到独立滚动的表单。
+  const installFormId = React.useId();
   // sourceType stores the selected install source kind.
   // sourceType 保存当前选择的安装来源类型。
   const [sourceType, setSourceType] = React.useState<"github" | "url">("github");
@@ -256,6 +296,7 @@ export function LuaSkillInstallDialog(props: {
     if (props.open) {
       setSourceType("github");
       setSource("");
+      setInstallError("");
       installingRef.current = false;
       setInstalling(false);
     }
@@ -270,9 +311,12 @@ export function LuaSkillInstallDialog(props: {
     }
     installingRef.current = true;
     setInstalling(true);
+    setInstallError("");
     try {
       await props.actions.onInstallLuaSkill("", source, sourceType);
       props.onOpenChange(false);
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : String(error));
     } finally {
       installingRef.current = false;
       setInstalling(false);
@@ -281,12 +325,12 @@ export function LuaSkillInstallDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={(open) => !installingRef.current && props.onOpenChange(open)}>
-      <DialogContent size="md">
+      <DialogContent size="md" scrollMode="fixed-footer" className="grid-rows-[auto_minmax(0,1fr)_auto]">
         <DialogHeader>
           <DialogTitle>{t("skills.lua.installTitle")}</DialogTitle>
           <DialogDescription>{t("skills.lua.installDescription")}</DialogDescription>
         </DialogHeader>
-        <form className="lua-skill-install-form" onSubmit={submitInstall}>
+        <form id={installFormId} className="lua-skill-install-form min-h-0 overflow-y-auto" onSubmit={submitInstall}>
           <label className="lua-skill-install-field">
             <span>{t("skills.lua.sourceType")}</span>
             <Select disabled={installing} value={sourceType} onValueChange={(value) => setSourceType(value as "github" | "url")}>
@@ -309,15 +353,22 @@ export function LuaSkillInstallDialog(props: {
               onChange={(event) => setSource(event.target.value)}
             />
           </label>
+          {installError ? <div role="alert">
+            <p>{locale.startsWith("zh") ? "技能安装失败，可修改来源后重试。" : "Skill installation failed. Check the source and retry."}</p>
+            <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
+          </div> : null}
+        </form>
           <DialogFooter>
             <Button disabled={installing} onClick={() => props.onOpenChange(false)} type="button" variant="secondary">{t("skills.action.cancel")}</Button>
-            <Button disabled={installing || source.trim().length === 0} type="submit">
+            <Button disabled={installing || source.trim().length === 0} form={installFormId} type="submit">
               <PackagePlus size={15} />
               <span>{installing ? t("skills.action.installing") : t("skills.action.install")}</span>
             </Button>
           </DialogFooter>
-        </form>
       </DialogContent>
     </Dialog>
   );
 }
+// The standalone install dialog can load before SkillsArea and owns the same directory rules.
+// 独立安装弹窗可能早于 SkillsArea 载入，并拥有同一组目录规则。
+import "@/styles/skill-directory.css";

@@ -31,6 +31,9 @@ export interface ComposerPanelAttachmentPreviewStripProps {
   // Handler that removes one staged attachment.
   // 移除单个暂存附件的处理器。
   onRemove: (index: number) => void;
+  // Restores the owning input after the last confirmed removal, without crossing draft owners.
+  // 最后一次确认移除后恢复所属输入框焦点，不跨越草稿归属。
+  onEmptyAfterRemoval?: () => void;
   // Handler that retries one failed provider upload.
   // 重试单个失败供应商上传的处理器。
   onRetry: (attachmentId: string) => void;
@@ -51,7 +54,9 @@ export function ComposerPanelAttachmentPreviewStrip(props: ComposerPanelAttachme
         }
         return {
           kind: media.kind,
-          sourceUrl: media.kind === "image" ? props.resolveMediaSourceUrl(media.localPath) : undefined,
+          // Staging explicitly provides an optional derivative; thumbnails use it while the media descriptor retains the canonical path.
+          // 暂存明确提供可选派生图；缩略图使用派生图，媒体描述仍保留规范原始路径。
+          sourceUrl: media.kind === "image" ? props.resolveMediaSourceUrl(media.previewLocalPath ?? media.localPath) : undefined,
         };
       }}
       onOpenMedia={(attachment) => {
@@ -61,6 +66,7 @@ export function ComposerPanelAttachmentPreviewStrip(props: ComposerPanelAttachme
         }
       }}
       onRemove={props.onRemove}
+      onEmptyAfterRemoval={props.onEmptyAfterRemoval}
       onRetry={props.onRetry}
     />
   );

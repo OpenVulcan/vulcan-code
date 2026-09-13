@@ -17,6 +17,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_clear_selected_provider_api_trace_directory",
     "service_save_provider_retry_settings",
     "service_output_style_catalog",
+    "service_license_catalog",
+    "service_license_body",
     "service_save_prompt_output_style",
     "service_public_ai_settings_snapshot",
     "service_provider_usage_dashboard",
@@ -79,6 +81,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_generate_git_commit_message",
     "service_run_git_commit_action",
     "service_save_mcp_server_configuration",
+    "service_mcp_runtime_snapshot",
+    "service_mcp_server_capabilities",
     "service_remove_mcp_server_configuration",
 ];
 
@@ -159,6 +163,14 @@ pub(super) async fn dispatch(
         "service_output_style_catalog" => {
             rpc_json_result(service_output_style_catalog(state).await)
         }
+        "service_license_catalog" => rpc_json_result(crate::licenses::service_license_catalog().await),
+        "service_license_body" => rpc_json_result(
+            crate::licenses::service_license_body(
+                rpc_required_param(params, "sectionId")?,
+                rpc_required_param(params, "expectedSha256")?,
+            )
+            .await,
+        ),
         "service_save_prompt_output_style" => rpc_json_result(
             service_save_prompt_output_style(app, state, rpc_required_param(params, "request")?)
                 .await,
@@ -564,6 +576,8 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_mcp_runtime_snapshot" => rpc_json_result(service_mcp_runtime_snapshot(state)),
+        "service_mcp_server_capabilities" => rpc_json_result(service_mcp_server_capabilities(state, rpc_required_param(params, "serverId")?).await),
         "service_remove_mcp_server_configuration" => rpc_json_result(
             service_remove_mcp_server_configuration(
                 app,

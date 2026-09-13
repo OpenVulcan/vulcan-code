@@ -361,6 +361,43 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     );
 }
 
+/// Verifies project drafts cannot select a backend different from global execution authority.
+/// 验证项目草稿不能选择与全局执行权威不同的后端。
+#[test]
+fn project_draft_uses_the_executable_global_backend() {
+    // Both legacy directions must project the globally executed backend without changing persisted layers.
+    // 两种历史冲突方向均必须投影全局执行后端，同时不修改持久层。
+    for (global_mode, stale_project_mode) in [
+        (
+            vulcan_vmm::VmmBackendMode::Native,
+            vulcan_vmm::VmmBackendMode::ExternalGrpc,
+        ),
+        (
+            vulcan_vmm::VmmBackendMode::ExternalGrpc,
+            vulcan_vmm::VmmBackendMode::Native,
+        ),
+    ] {
+        // Global and project retain their original conflicting declarations for this regression.
+        // 全局与项目保留本回归所需的原始冲突声明。
+        let global = vulcan_vmm::VmmConfigLayer {
+            backend_mode: Some(global_mode),
+            ..Default::default()
+        };
+        let project = vulcan_vmm::VmmConfigLayer {
+            backend_mode: Some(stale_project_mode),
+            ..Default::default()
+        };
+        // The same resolver is used by execution and by the project-load service.
+        // 执行和项目加载服务使用相同解析器。
+        let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&global, Some(&project), None);
+        assert_eq!(
+            vmm_config_draft_summary(&project, &effective, true, false).backend_mode,
+            global_mode.as_str()
+        );
+        assert_eq!(project.backend_mode, Some(stale_project_mode));
+    }
+}
+
 /// Verifies persisted external transport secrets never cross the WebUI snapshot boundary.
 /// 验证持久化外置传输秘密绝不跨过 WebUI 快照边界。
 #[test]
@@ -573,6 +610,36 @@ fn vmm_memory_snapshot_ignores_blank_selected_session_project_id() {
     );
 
     assert_eq!(snapshot.selected_project_id.as_deref(), Some("project-a"));
+
+    // Unique in-memory cache keys prevent either project scope from reading or modifying user files.
+    // 唯一内存缓存键防止两个项目作用域读取或修改用户文件。
+    let mut scoped_workspace = workspace;
+    for (index, project) in scoped_workspace.task_projects.iter_mut().enumerate() {
+        project.path = std::env::temp_dir()
+            .join(format!("vulcan-memory-scope-{session_id}-{index}"))
+            .display()
+            .to_string();
+        update_cached_project_vmm_layer(
+            &project.path,
+            vulcan_vmm::VmmConfigLayer {
+                enabled: Some(index == 0),
+                ..Default::default()
+            },
+        );
+    }
+    // The peer is disabled even when the globally selected project is enabled.
+    // 即使全局选中的项目已启用，其他项目仍保持关闭。
+    let mut configuration = ProviderConfigurationFile::default();
+    configuration.vmm.enabled = Some(true);
+    let scoped_snapshot = vmm_memory_snapshot(&scoped_workspace, &configuration, None, None);
+    assert!(scoped_snapshot.project_scopes[0].memory_enabled);
+    assert!(!scoped_snapshot.project_scopes[1].memory_enabled);
+    // Global deactivation must close every project without erasing their explicit overrides.
+    // 全局关闭必须关闭所有项目，但不能抹掉项目的显式覆盖。
+    configuration.vmm.enabled = Some(false);
+    let disabled_snapshot = vmm_memory_snapshot(&scoped_workspace, &configuration, None, None);
+    assert!(disabled_snapshot.project_scopes.iter().all(|scope| !scope.memory_enabled));
+    assert!(disabled_snapshot.project_scopes.iter().all(|scope| scope.has_override));
 }
 
 /// Verifies catalog refresh resolves exact global default ids to visible identity values.

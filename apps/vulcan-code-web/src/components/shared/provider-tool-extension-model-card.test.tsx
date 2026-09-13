@@ -36,7 +36,7 @@ describe("ProviderToolExtensionModelCard", () => {
     const checkboxOffset = markup.indexOf("type=\"checkbox\"");
     // titleOffset identifies the model title following the checkbox.
     // titleOffset 标识勾选框之后的模型标题。
-    const titleOffset = markup.indexOf("<strong>MiniMax Hailuo 2.3 Fast</strong>");
+    const titleOffset = markup.indexOf('<strong title="MiniMax Hailuo 2.3 Fast">MiniMax Hailuo 2.3 Fast</strong>');
     // firstTooltipOffset identifies the first profile icon placed in the title row.
     // firstTooltipOffset 标识标题行中的第一个档案图标。
     const firstTooltipOffset = markup.indexOf('data-extension-profile-tooltip="summary"');
@@ -109,18 +109,16 @@ describe("ProviderToolExtensionModelCard", () => {
     expect(onCheckedChange).toHaveBeenCalledWith(true);
 
     onCheckedChange.mockClear();
-    // card receives a semantic checkbox role and supports both standard keyboard toggles.
-    // card 拥有语义化 checkbox 角色，并支持两种标准键盘切换方式。
+    // Only the native checkbox owns selection semantics; the containing article does not duplicate its tab stop.
+    // 仅原生复选框持有选择语义；外层文章容器不重复占用键盘停靠点。
     const card = container.querySelector("article") as HTMLElement;
-    expect(card.getAttribute("role")).toBe("checkbox");
-    act(() => {
-      card.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    });
-    act(() => {
-      card.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: " " }));
-    });
-    expect(onCheckedChange).toHaveBeenNthCalledWith(1, true);
-    expect(onCheckedChange).toHaveBeenNthCalledWith(2, true);
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(card.getAttribute("role")).toBeNull();
+    expect(card.hasAttribute("tabindex")).toBe(false);
+    expect(container.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).toHaveLength(1);
+    expect(checkbox.tabIndex).toBe(0);
+    act(() => checkbox.click());
+    expect(onCheckedChange).toHaveBeenCalledExactlyOnceWith(true);
 
     onCheckedChange.mockClear();
     // accountRegion includes both the selector and its surrounding click area.
@@ -140,5 +138,27 @@ describe("ProviderToolExtensionModelCard", () => {
     expect(onCheckedChange).not.toHaveBeenCalled();
 
     act(() => root.unmount());
+  });
+
+  it("keeps disabled selection inert while the independent account control remains operable", () => {
+    // Selection and account callbacks own separate actions even while only the selection is disabled.
+    // 即使只有选择被禁用，选择与账号回调仍持有独立操作。
+    const onCheckedChange = vi.fn();
+    const onAccount = vi.fn();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      act(() => root.render(<TooltipProvider><ProviderToolExtensionModelCard
+        accountControl={<button type="button" onClick={onAccount}>Account</button>}
+        characteristics={null} checked checkboxDisabled constraints="Constraints" limitations="Limitations"
+        modelId="model" onCheckedChange={onCheckedChange} providerId="provider" summary="Summary" title="Model"
+      /></TooltipProvider>));
+      act(() => container.querySelector<HTMLElement>("strong")!.click());
+      act(() => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+      act(() => container.querySelector<HTMLButtonElement>('[data-extension-card-section="account"] button')!.click());
+      expect(onCheckedChange).not.toHaveBeenCalled();
+      expect(onAccount).toHaveBeenCalledOnce();
+      expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
+    } finally { act(() => root.unmount()); }
   });
 });

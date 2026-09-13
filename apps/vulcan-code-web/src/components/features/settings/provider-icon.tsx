@@ -107,7 +107,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
-  tavily: { light: tavilyIcon, transparent: true },
+  tavily: { light: tavilyIcon, monochrome: true, transparent: true },
   tokenrhythm: { light: tokenRhythmIcon, monochrome: true, transparent: true },
   vertex: { light: vertexIcon },
   zhipu: { light: zhipuIcon },
@@ -240,7 +240,7 @@ export function ProviderIcon({
       {category === "relay" ? (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-1 -right-1 inline-flex size-3.5 items-center justify-center rounded-full border border-background bg-amber-500 text-[8px] font-bold leading-none text-black shadow-sm"
+          className="pointer-events-none absolute -bottom-1 -right-1 inline-flex size-3.5 items-center justify-center rounded-full border border-background bg-[var(--vcn-status-warning-background)] text-[8px] font-bold leading-none text-[var(--vcn-content-warning)] shadow-sm"
         >
           R
         </span>

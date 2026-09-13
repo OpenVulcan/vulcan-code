@@ -28,7 +28,9 @@ export default defineConfig(({ mode }) => {
       format: "es",
     },
     test: {
-      exclude: [...configDefaults.exclude, "scripts/*.test.mjs"],
+      // The full-workbench audit requires its isolated transport aliases and dedicated Vitest configuration.
+      // 完整工作台验收依赖隔离传输别名及其专属 Vitest 配置。
+      exclude: [...configDefaults.exclude, "scripts/*.test.mjs", "tests/ui-audit/**"],
     },
     server: isRelease
       ? undefined

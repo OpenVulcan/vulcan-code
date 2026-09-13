@@ -3,6 +3,30 @@
 
 use super::*;
 
+/// Returns complete catalogs from the published Agent MCP generation without network traffic.
+/// 从已发布的 Agent MCP 代次返回完整目录，不发起网络请求。
+pub(super) fn service_mcp_runtime_snapshot(
+    state: SharedServiceBridgeState,
+) -> Result<serde_json::Value, String> {
+    let runtime = agent_mcp_runtime_from_state(&state)?;
+    serde_json::to_value(runtime.server_inspections()).map_err(|error| error.to_string())
+}
+
+/// Reads optional metadata for one existing connection and discards retired generation results.
+/// 读取单个现有连接的可选元数据，并丢弃已退休代次的结果。
+pub(super) async fn service_mcp_server_capabilities(
+    state: SharedServiceBridgeState,
+    server_id: String,
+) -> Result<serde_json::Value, String> {
+    let runtime = agent_mcp_runtime_from_state(&state)?;
+    let capabilities = runtime.server_capabilities(&server_id).await?;
+    let current = agent_mcp_runtime_from_state(&state)?;
+    if !runtime.shares_server_partition(&current, &server_id) {
+        return Err(String::from("MCP 配置已经变化，请重新读取详情。"));
+    }
+    Ok(capabilities)
+}
+
 /// WebUI 设置页发送的 MCP 服务器配置保存请求。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -234,6 +258,7 @@ pub(super) fn key_value_inputs_to_map(
     inputs: Vec<KeyValueInput>,
     subject_label: &str,
     value_label: &str,
+    preserve_value: bool,
 ) -> Result<BTreeMap<String, String>, String> {
     let mut map = BTreeMap::new();
     for input in inputs {
@@ -248,7 +273,14 @@ pub(super) fn key_value_inputs_to_map(
         if value.is_empty() {
             return Err(format!("{subject_label} 的{value_label}不能为空。"));
         }
-        if map.insert(key.to_string(), value.to_string()).is_some() {
+        // Environment values are process arguments too; meaningful surrounding whitespace must survive saving.
+        // 环境变量值同样是进程输入；有意义的前后空白必须在保存后保留。
+        let saved_value = if preserve_value {
+            input.value.clone()
+        } else {
+            value.to_string()
+        };
+        if map.insert(key.to_string(), saved_value).is_some() {
             return Err(format!("{subject_label} `{key}` 重复，请保留一条即可。"));
         }
     }
@@ -297,19 +329,16 @@ pub(super) fn mcp_server_entry_from_request(
                     enabled: request.enabled,
                     transport,
                     command: command.to_string(),
-                    args: request
-                        .args
-                        .into_iter()
-                        .map(|arg| arg.trim().to_string())
-                        .filter(|arg| !arg.is_empty())
-                        .collect(),
+                    // Preserve exact argv boundaries, including intentional whitespace and empty arguments.
+                    // 保留精确 argv 边界，包括有意传入的空白与空参数。
+                    args: request.args,
                     url: None,
                     bearer_token: None,
                     headers: BTreeMap::new(),
                     headers_from_env: BTreeMap::new(),
                     oauth: None,
                     cwd: trim_to_option(&request.cwd),
-                    env: key_value_inputs_to_map(request.env, "环境变量", "值")?,
+                    env: key_value_inputs_to_map(request.env, "环境变量", "值", true)?,
                     env_passthrough: request
                         .env_passthrough
                         .into_iter()
@@ -341,11 +370,12 @@ pub(super) fn mcp_server_entry_from_request(
                     args: Vec::new(),
                     url: Some(url.to_string()),
                     bearer_token: trim_to_option(&request.bearer_token),
-                    headers: key_value_inputs_to_map(request.headers, "请求头", "值")?,
+                    headers: key_value_inputs_to_map(request.headers, "请求头", "值", false)?,
                     headers_from_env: key_value_inputs_to_map(
                         request.headers_from_env,
                         "来自环境变量的请求头",
                         "环境变量名",
+                        false,
                     )?,
                     oauth,
                     cwd: None,

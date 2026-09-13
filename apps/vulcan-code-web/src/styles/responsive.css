@@ -11,6 +11,13 @@
   overscroll-behavior: contain;
 }
 
+/* Inner-scrolling dialogs must override the unlayered fallback above to preserve fixed actions. */
+/* 内部滚动弹窗必须覆盖上述未分层默认规则，确保操作区始终固定。 */
+[data-slot="dialog-content"][data-scroll-mode="fixed-footer"],
+[data-slot="dialog-content"][data-scroll-mode="content-scroll"] {
+  overflow: hidden;
+}
+
 :where([data-slot="dialog-header"]) {
   padding-right: 28px;
 }
@@ -386,7 +393,7 @@
   }
 
   .model-picker-scroll {
-    height: min(310px, 48dvh);
+    max-height: min(310px, 48dvh);
   }
 
   .model-picker-group-row {
@@ -420,9 +427,9 @@
   }
 
   .composer-capability-dialog {
+    --composer-dialog-padding: 16px;
     width: calc(100vw - 24px);
     height: calc(100dvh - 24px);
-    padding: 16px;
   }
 
   .composer-capability-dialog-grid {
@@ -498,6 +505,37 @@
 
   :is([data-slot="dialog-content"], .settings-form-field) input {
     font-size: 16px;
+  }
+}
+
+/* Short capability dialogs scroll one body instead of squeezing two independent panes below their usable height. */
+/* 低高度能力弹窗统一滚动正文，避免两个独立面板被挤压至不可用高度。 */
+@media (max-height: 480px) {
+  .composer-capability-dialog {
+    height: calc(100dvh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .composer-capability-dialog-body {
+    display: block;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .composer-capability-dialog-grid {
+    display: block;
+  }
+
+  .composer-capability-dialog-left {
+    overflow: visible;
+    padding: 0 0 8px;
+    margin-bottom: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .composer-capability-dialog-right {
+    overflow: visible;
   }
 }
 

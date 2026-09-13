@@ -466,11 +466,11 @@
 }
 
 .conversation-session-review-delta .added {
-  color: #238636;
+  color: var(--vcn-content-success);
 }
 
 .conversation-session-review-delta .removed {
-  color: #da3633;
+  color: var(--vcn-content-danger);
 }
 
 .conversation-session-terminal-list {

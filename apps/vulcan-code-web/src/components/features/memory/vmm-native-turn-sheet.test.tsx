@@ -65,3 +65,21 @@ it("opens following and preceding turn details from the native sheet", async () 
     container.remove()
   }
 })
+
+// Referenced-but-missing outputs must never be rendered as a successful empty extraction.
+// 被引用但缺失的产物绝不能渲染为成功的空提取。
+it("distinguishes missing extraction references from a turn with no generated outputs", async () => {
+  // The source ledger declares exact generated identities while the current detail snapshot omits them.
+  // 来源账本声明准确产物身份，而当前详情快照不包含这些产物。
+  const turn = { ...fixture(1, [], []), generatedMemoryIds: [71], generatedProfileNodeIds: [82] }
+  const container = document.createElement("div")
+  const root = createRoot(container)
+  document.body.append(container)
+  try {
+    await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><NativeTurnSheet turn={turn} turns={[turn]} memories={[]} profiles={[]} onClose={() => {}} onOpenTurn={() => {}} onOpenMemory={() => {}} onOpenProfile={() => {}} /></I18nProvider>))
+    expect(document.body.textContent).toContain("以下提取产物不在当前快照中")
+    expect(document.body.textContent).toContain("#71")
+    expect(document.body.textContent).toContain("#82")
+    expect(document.body.textContent).not.toContain("没有生成记忆")
+  } finally { await act(async () => root.unmount()); container.remove() }
+})

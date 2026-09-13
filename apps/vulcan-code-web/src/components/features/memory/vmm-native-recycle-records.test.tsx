@@ -69,6 +69,9 @@ it("loads lazily and preserves the observed version when paging", async () => {
     expect(dialogButton("下一页").disabled).toBe(true)
     await act(async () => dialogButton("上一页").click())
     expect(view.onRunAction.mock.calls.at(-1)?.[1]?.expectedStorageVersion).toBe(41)
+    await act(async () => document.querySelector('[role="dialog"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })))
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+    await vi.waitFor(() => expect(document.activeElement).toBe(view.container.querySelector("button")))
   } finally { await view.dispose() }
 })
 

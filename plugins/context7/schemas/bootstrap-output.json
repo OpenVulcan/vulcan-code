@@ -59,8 +59,9 @@
       "additionalProperties": false
     },
     "credential": { "$ref": "#/$defs/credentialStatus" },
+    "usageError": { "type": ["string", "null"] },
     "usage": {
-      "type": "object",
+      "type": ["object", "null"],
       "properties": {
         "revision": { "type": "integer", "minimum": 0 },
         "rangeDays": { "type": "integer", "enum": [7, 30, 90, 365] },

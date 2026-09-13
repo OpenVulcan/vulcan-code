@@ -1,0 +1,23 @@
+/* Keep project facts readable inside both desktop and narrow project settings content. */
+/* 保持项目事实在桌面与窄项目设置正文中清晰可读。 */
+.project-overview { display: grid; gap: 18px; min-width: 0; container-type: inline-size; }
+.project-overview-identity { display: flex; align-items: center; gap: 12px; }
+.project-overview-identity > div { min-width: 0; }
+.project-overview-path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 3px 0 7px; }
+.project-overview-identity h3 { margin: 0 0 3px; font-size: 17px; }
+.project-overview-identity span, .project-overview small, .project-overview-maintenance, .project-overview-details { color: var(--muted-foreground); font-size: 12px; }
+.project-overview-capabilities { display: grid; }
+.project-overview-capabilities section { display: flex; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.project-overview-capabilities section > div { min-width: 0; }
+.project-overview-capabilities p { margin: 5px 0; font-size: 13px; overflow-wrap: anywhere; }
+.project-overview-capabilities small { display: block; line-height: 1.7; }
+.project-overview-capabilities button { flex-shrink: 0; align-self: center; }
+.project-overview-maintenance { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.project-overview-issues { padding: 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--destructive); }
+.project-overview-issues p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.project-overview-issues details { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.project-overview-issues summary { cursor: pointer; }
+.project-overview-details summary { cursor: pointer; }
+.project-overview-details dl { display: grid; gap: 5px; }
+.project-overview-details dd { margin: 0 0 8px; color: var(--foreground); overflow-wrap: anywhere; user-select: text; }
+@container (max-width: 440px) { .project-overview-capabilities section, .project-overview-maintenance { align-items: flex-start; flex-direction: column; gap: 8px; } .project-overview-capabilities button { align-self: flex-start; } }

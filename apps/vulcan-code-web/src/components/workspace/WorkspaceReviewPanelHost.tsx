@@ -80,6 +80,8 @@ const WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS = 15_000;
 
 // WorkspaceReviewPanelHost owns Git diff review state for the right context panel.
 // WorkspaceReviewPanelHost 持有右侧上下文面板的 Git diff 审核状态。
+// Parameters: props supplies selected route identity and typed diff/Git IO. Returns the current-source review surface.
+// 参数：props 提供选中路由身份与强类型 diff/Git 输入输出。返回当前来源的评审界面。
 export function WorkspaceReviewPanelHost(props: {
   // Current draft conversation selection when the selected route is not persisted yet.
   // 当前路由尚未持久化时对应的草稿会话选择。
@@ -95,7 +97,7 @@ export function WorkspaceReviewPanelHost(props: {
   reviewFocusRequest: WorkspaceReviewFocusRequest;
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
-  onCopyRawDiff: (rawDiff: string) => void;
+  onCopyRawDiff: (rawDiff: string) => void | Promise<void>;
   // Loads one live workspace Git diff snapshot.
   // 加载一次实时工作区 Git diff 快照。
   loadWorkspaceDiffSnapshot: (
@@ -270,6 +272,9 @@ export function WorkspaceReviewPanelHost(props: {
   // lastHydratedReviewPanelCacheKeyRef limits cache hydration to actual project or repository changes.
   // lastHydratedReviewPanelCacheKeyRef 将缓存水合限制为真实项目或仓库变化。
   const lastHydratedReviewPanelCacheKeyRef = React.useRef<string | null>(null);
+  // Distinguish project restoration from a deliberate repository choice in the current project.
+  // 区分项目恢复与当前项目内用户主动选择的仓库。
+  const lastHydratedWorkspaceCacheKeyRef = React.useRef<string | null>(null);
   // pendingReviewSourceHydrationRef prevents the previous repository state from overwriting a cached target.
   // pendingReviewSourceHydrationRef 防止旧仓库状态覆盖正在水合的目标缓存。
   const pendingReviewSourceHydrationRef = React.useRef<string | null>(null);
@@ -567,6 +572,10 @@ export function WorkspaceReviewPanelHost(props: {
 
   // handleWorkspaceGitFileAction executes a Git mutation and refreshes the active review snapshot.
   // handleWorkspaceGitFileAction 执行一次 Git 变更操作并刷新当前审核快照。
+  // Parameters: action selects the exact Git operation; optional file restricts its pathspecs. Returns a rejecting promise on failure.
+  // 参数：action 指定精确 Git 操作；可选 file 限制路径规格。失败时返回拒绝的 Promise。
+  // Successful completion includes shared-state refresh; only the still-owned source may replace the visible review snapshot.
+  // 成功完成包括共享状态刷新；仅仍被持有的来源可替换可见评审快照。
   const handleWorkspaceGitFileAction = React.useCallback(async (
     action: WorkspaceGitFileActionKind,
     file?: DiffFile | null,
@@ -630,18 +639,19 @@ export function WorkspaceReviewPanelHost(props: {
         activeSurfaceId,
         requestSelection.repositoryKey,
       );
-      if (!requestOwnership.ownsMutationRequest(ownedRequest) || !selectionStillActive) {
+      if (!requestOwnership.ownsMutationRequest(ownedRequest)
+        || diffReviewSelectionStableKey(latestDiffReviewSelectionRef.current) !== requestSelectionKey) {
         return;
       }
       await handleRefreshWorkspaceDiff(requestSelection);
     } catch (error) {
-      if (!requestOwnership.ownsMutationRequest(ownedRequest)) {
-        return;
+      // Preserve the rejected action for its awaiting control; only the active source owns inline feedback.
+      // 为等待动作的控件保留拒绝结果；仅当前来源拥有内联反馈。
+      if (requestOwnership.ownsMutationRequest(ownedRequest)
+        && diffReviewSelectionStableKey(latestDiffReviewSelectionRef.current) === requestSelectionKey) {
+        setWorkspaceReviewError(error instanceof Error ? error.message : String(error));
       }
-      // message normalizes mutation and shared-refresh failures for the active route.
-      // message 归一化当前路由的变更与共享刷新失败。
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.gitOperationFailed", { error: message }));
+      throw error;
     } finally {
       if (requestOwnership.finishMutationRequest(ownedRequest)) {
         setWorkspaceGitActionPending(false);
@@ -708,12 +718,16 @@ export function WorkspaceReviewPanelHost(props: {
     }
     lastHydratedReviewPanelCacheKeyRef.current = reviewSourceCacheKey;
     pendingReviewSourceHydrationRef.current = reviewSourceCacheKey;
-    // cachedEntry is the repository-level review snapshot retained across panel unmounts.
-    // cachedEntry 是面板卸载期间按仓库保留的审核快照。
-    const cachedEntry = workspaceReviewPanelCache.get(reviewSourceCacheKey)
-      ?? workspaceReviewPanelCache.get(reviewPanelCacheKey)
-      ?? null;
-    setDiffReviewSelection(cachedEntry?.selection ?? DEFAULT_WORKSPACE_REVIEW_SELECTION);
+    // A project restores its last source; an uncached repository must retain the user's new selection.
+    // 项目恢复上次来源；未缓存的仓库必须保留用户的新选择。
+    const projectChanged = lastHydratedWorkspaceCacheKeyRef.current !== reviewPanelCacheKey;
+    lastHydratedWorkspaceCacheKeyRef.current = reviewPanelCacheKey;
+    const cachedEntry = workspaceReviewPanelCache.get(projectChanged ? reviewPanelCacheKey : reviewSourceCacheKey) ?? null;
+    if (cachedEntry) {
+      setDiffReviewSelection(cachedEntry.selection);
+    } else if (projectChanged) {
+      setDiffReviewSelection(DEFAULT_WORKSPACE_REVIEW_SELECTION);
+    }
     setWorkspaceReviewSnapshot(cachedEntry?.snapshot ?? null);
     setWorkspaceReviewPath(cachedEntry?.workspacePath ?? workspacePath);
     setWorkspaceReviewKey(cachedEntry?.reviewKey ?? null);
@@ -732,13 +746,17 @@ export function WorkspaceReviewPanelHost(props: {
       pendingReviewSourceHydrationRef.current = null;
       return;
     }
-    rememberWorkspaceReviewPanelCache(reviewSourceCacheKey, {
+    // Retain both the selected source and its repository snapshot for reopening and project navigation.
+    // 同时保留选中来源与仓库快照，支持重开面板和项目导航。
+    const cacheEntry: WorkspaceReviewPanelCacheEntry = {
       snapshot: workspaceReviewSnapshot,
       selection: diffReviewSelection,
       workspacePath: workspaceReviewPath,
       reviewKey: workspaceReviewKey,
       error: workspaceReviewError,
-    });
+    };
+    rememberWorkspaceReviewPanelCache(reviewSourceCacheKey, cacheEntry);
+    rememberWorkspaceReviewPanelCache(reviewPanelCacheKey, cacheEntry);
   }, [
     diffReviewSelection,
     hydratedReviewPanelCacheKey,

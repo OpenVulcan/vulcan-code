@@ -1,12 +1,17 @@
 import { LogsArea } from "@/components/features/settings/settings-diagnostics-area";
+// Settings-only styles follow this lazy route instead of inflating the initial workbench stylesheet.
+// 仅属于设置的样式随此懒加载路由载入，避免膨胀初始工作台样式表。
+import "@/styles/settings-pages.css";
+import "@/styles/settings-preferences.css";
+import "@/styles/visual-lab.css";
 import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area";
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area";
 import {
-  AboutLicensesSettingsArea,
   ArchivedRestoreSettingsArea,
   GitCommitSettingsArea,
-  PromptComposerSettingsArea,
+  OutputStyleSettingsSection,
 } from "@/components/features/settings/misc-settings-areas";
+import { AboutLicensesSettingsArea } from "@/components/features/settings/about-licenses-settings-area";
 import {
   ModelListSettingsArea,
 } from "@/components/features/settings/provider-model-settings";
@@ -59,6 +64,12 @@ export interface SettingsFeatureContentProps {
   // Workbench snapshot used by settings pages.
   // 设置页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
+  // Opens the exact enabled statistics plugin mount, when available.
+  // 存在时打开精确的已启用统计插件挂载点。
+  onOpenUsageStatistics?: () => void;
+  // Opens the dedicated global diagnostics page from server details.
+  // 从服务器详情打开独立的全局运行诊断页面。
+  onOpenDiagnostics?: () => void;
 }
 
 // SettingsFeatureContent routes settings sub pages to their specialized modules.
@@ -80,7 +91,7 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
     return <ModelListSettingsArea />;
   }
   if (props.activeSettingsSubArea === "mcp-servers") {
-    return <McpSettingsArea actions={props.actions} logs={props.workbench.logs} modules={props.workbench.modules} servers={props.workbench.mcpServers ?? []} startup={props.startup} />;
+    return <McpSettingsArea actions={props.actions} logs={props.workbench.logs} modules={props.workbench.modules} servers={props.workbench.mcpServers ?? []} startup={props.startup} onOpenDiagnostics={props.onOpenDiagnostics} />;
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return (
@@ -101,17 +112,15 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
   }
-  if (props.activeSettingsSubArea === "context-basics") {
-    return <ContextBasicsSettingsArea actions={props.actions} retrySettings={props.workbench.providerRetry} />;
-  }
-  if (props.activeSettingsSubArea === "prompt-composer") {
+  // The retired composer page resolves to basics while preserving its useful default setting.
+  // 已移除的输入组合页跳转到基础设置，并保留有用的默认设置。
+  if (props.activeSettingsSubArea === "context-basics" || props.activeSettingsSubArea === "prompt-composer") {
     return (
-      <PromptComposerSettingsArea
+      <ContextBasicsSettingsArea
         actions={props.actions}
-        attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
-        outputStyleCatalog={props.workbench.outputStyleCatalog}
-        reasoningSelection={props.workbench.reasoningSelection ?? null}
-        slashCommands={props.workbench.composerSlashCommands ?? []}
+        retrySettings={props.workbench.providerRetry}
+        onOpenUsageStatistics={props.onOpenUsageStatistics}
+        outputStyleSettings={<OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />}
       />
     );
   }

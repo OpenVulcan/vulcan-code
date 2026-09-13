@@ -183,7 +183,10 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
   const [sessionId, setSessionId] = React.useState(SESSION_OVERVIEW_VALUE)
   // recordView separates raw turns from their generated memory and profile records.
   // recordView 分离原始回合及其生成的记忆、画像记录。
-  const [recordView, setRecordView] = React.useState("turns")
+  const [recordView, setRecordView] = React.useState<"turns" | "memories" | "profiles">("turns")
+  // Per-tab pages bound DOM work while retaining the full authoritative snapshot for source navigation.
+  // 每个标签页的分页约束 DOM 工作量，同时保留完整权威快照用于来源导航。
+  const [recordPages, setRecordPages] = React.useState({ turns: 0, memories: 0, profiles: 0 })
   const [selectedTurn, setSelectedTurn] = React.useState<VmmNativeTurnRecordSummary | null>(null)
   const [selectedMemory, setSelectedMemory] = React.useState<VmmNativeMemoryRecordSummary | null>(null)
   const [selectedProfile, setSelectedProfile] = React.useState<VmmNativeProfileRecordSummary | null>(null)
@@ -214,6 +217,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
     const sequence = requestSequenceRef.current + 1
     requestSequenceRef.current = sequence
     setRecords(null)
+    setRecordPages({ turns: 0, memories: 0, profiles: 0 })
     setSelectedTurn(null)
     setRemovalSessions([])
     setRemovalTurns([])
@@ -286,6 +290,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
     requestSequenceRef.current = sequence
     setRecords(null)
     setLoadError(false)
+    setRecordPages({ turns: 0, memories: 0, profiles: 0 })
     setRemovalSessions([])
     setRemovalTurns([])
     setSelectedTurn(null)
@@ -333,6 +338,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
     requestSequenceRef.current = sequence
     setLoadError(false)
     setRecords(null)
+    setRecordPages({ turns: 0, memories: 0, profiles: 0 })
     setRemovalSessions([])
     setRemovalTurns([])
     setLocalBusy(true)
@@ -375,20 +381,30 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
     () => nativeRecordCounts(records?.turns ?? [], records?.memories ?? []),
     [records],
   )
+  // Current totals come from the received collection, never from the current render page.
+  // 当前总数来自接收的集合，绝不来自当前渲染页。
+  const recordTotal = records ? (recordView === "turns" ? records.turns.length : recordView === "memories" ? records.memories.length : records.profileNodes.length) : 0
+  const recordPage = Math.min(recordPages[recordView], Math.max(0, Math.ceil(recordTotal / 30) - 1))
 
   return (
     <Card>
-      <CardHeader className="gap-1">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
+        <div className="min-w-0 space-y-1">
         <CardTitle className="flex items-center gap-2 text-base">
           <Database className="size-4" aria-hidden="true" />
           {selectedSession ? nativeSessionLabel(selectedSession) : t("memory.nativeRecords.title")}
         </CardTitle>
         <CardDescription>{t("memory.nativeRecords.description")}</CardDescription>
+        </div>
+        <Button className="shrink-0" disabled={effectiveBusy} type="button" variant="outline" onClick={() => {
+          if (!projectId) { loadedContextRef.current = null; setCatalogRefreshVersion((current) => current + 1); return }
+          if (sessionId !== SESSION_OVERVIEW_VALUE) void loadSessionRecords(sessionId)
+          else void loadProjectRecords(Number(projectId), null)
+        }}><RefreshCw className={`size-4 ${effectiveBusy ? "animate-spin" : ""}`} aria-hidden="true" />{t("memory.nativeRecords.refresh")}</Button>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-3">
         {loadError ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionList.detailFailed")}</p> : null}
-        <div className={initialSelection ? "flex justify-end" : "grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"}>
-          {!initialSelection ? <>
+        {!initialSelection ? <div className="grid gap-3 md:grid-cols-2 md:items-end">
           <div className="space-y-2">
             <Label>{t("memory.nativeRecords.project")}</Label>
             <Select
@@ -428,29 +444,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               </SelectContent>
             </Select>
           </div>
-          </> : null}
-          <Button
-            disabled={effectiveBusy}
-            onClick={() => {
-              if (!projectId) {
-                loadedContextRef.current = null
-                setCatalogRefreshVersion((current) => current + 1)
-                return
-              }
-              const selected = sessionId === SESSION_OVERVIEW_VALUE ? null : sessionId
-              if (selected) {
-                void loadSessionRecords(selected)
-              } else {
-                void loadProjectRecords(Number(projectId), null)
-              }
-            }}
-            type="button"
-            variant="outline"
-          >
-            <RefreshCw className={`size-4 ${effectiveBusy ? "animate-spin" : ""}`} aria-hidden="true" />
-            {t("memory.nativeRecords.refresh")}
-          </Button>
-        </div>
+        </div> : null}
 
         {!catalog?.projects.length && !effectiveBusy && !loadError ? (
           <NativeRecordsEmpty
@@ -523,8 +517,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
           </section>
         ) : null}
 
-        {records && selectedSession ? <details><summary className="cursor-pointer text-sm text-muted-foreground">{t("memory.workspace.recordInfo")}</summary><NativeSessionSummary session={selectedSession} /></details> : null}
-        {records && selectedSession ? (
+        {records && selectedSession ? <div className="flex flex-wrap items-start gap-2">
           <VmmNativeSessionArchive
             key={`${records.projectId}:${selectedSession.sessionSourceId}:${selectedSession.status}`}
             projectId={records.projectId}
@@ -534,16 +527,18 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
             onRunAction={onRunAction}
             onRefresh={() => loadSessionRecords(selectedSession.sessionSourceId)}
           />
-        ) : null}
-        {records && selectedSession && (selectedSession.status === "active" || selectedSession.status === "archived") ? (
+        {(selectedSession.status === "active" || selectedSession.status === "archived") ? (
           <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "sessions", ids: [selectedSession.sessionSourceId] }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadSessionRecords(selectedSession.sessionSourceId)} />
         ) : null}
+          <details className="w-full text-xs"><summary className="cursor-pointer text-muted-foreground">{t("memory.workspace.recordInfo")}</summary><NativeSessionSummary session={selectedSession} /></details>
+        </div> : null}
 
         {records ? (
           <>
             <div className="vmm-section-tabs">
               {([['turns','memory.nativeRecords.turns',records.turns.length],['memories','memory.nativeRecords.memories',records.memories.length],['profiles','memory.nativeRecords.profileNodes',records.profileNodes.length]] as const).map(([id,label,count]) => <button key={id} type="button" aria-pressed={recordView === id} onClick={() => setRecordView(id)}>{t(label)} <span className="tabular-nums text-muted-foreground">{count}</span></button>)}
             </div>
+            {recordTotal > 30 ? <div className="flex items-center justify-between gap-2 text-sm"><span>{recordPage * 30 + 1}–{Math.min((recordPage + 1) * 30, recordTotal)} / {recordTotal}</span><div className="flex gap-2"><Button type="button" variant="outline" disabled={effectiveBusy || recordPage === 0} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage - 1 })) }}>{t("memory.sessionList.previous")}</Button><Button type="button" variant="outline" disabled={effectiveBusy || (recordPage + 1) * 30 >= recordTotal} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage + 1 })) }}>{t("memory.sessionList.next")}</Button></div></div> : null}
             <section hidden={recordView !== "turns"} className="space-y-3">
               <h3 className="text-sm font-medium">
                 {t(projectOverview
@@ -555,7 +550,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noTurns")}</p>
               ) : (
                 <div className="space-y-2">
-                  {records.turns.map((turn) => (
+                  {records.turns.slice(recordView === "turns" ? recordPage * 30 : 0, recordView === "turns" ? (recordPage + 1) * 30 : 30).map((turn) => (
                     <div className="relative" key={turn.turnId}>
                     <Checkbox className="absolute left-3 top-4" aria-label={`${t("memory.removal.selectTurn")} #${turn.turnId}`} checked={removalTurns.includes(`vmm-turn-${turn.turnId}`)} disabled={effectiveBusy || !Number.isSafeInteger(turn.turnId) || turn.turnId <= 0 || (!removalTurns.includes(`vmm-turn-${turn.turnId}`) && removalTurns.length >= 100)} onCheckedChange={(checked) => setRemovalTurns((current) => checked === true ? [...current, `vmm-turn-${turn.turnId}`] : current.filter((id) => id !== `vmm-turn-${turn.turnId}`))} />
                     <button
@@ -609,7 +604,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noMemories")}</p>
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">
-                  {records.memories.map((memory) => (
+                  {records.memories.slice(recordView === "memories" ? recordPage * 30 : 0, recordView === "memories" ? (recordPage + 1) * 30 : 30).map((memory) => (
                     <button
                       className="rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
                       key={memory.memoryId}
@@ -650,7 +645,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noProfileNodes")}</p>
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">
-                  {records.profileNodes.map((profile) => (
+                  {records.profileNodes.slice(recordView === "profiles" ? recordPage * 30 : 0, recordView === "profiles" ? (recordPage + 1) * 30 : 30).map((profile) => (
                     <button
                       className="rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
                       key={`${profile.target}-${profile.profileNodeId}`}
@@ -700,7 +695,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
         }}
         turn={selectedTurn}
       />
-      <NativeMemorySheet memory={selectedMemory} onClose={() => setSelectedMemory(null)} />
+      <NativeMemorySheet memory={selectedMemory} turns={records?.turns ?? []} onOpenTurn={(turn) => { setSelectedMemory(null); setSelectedTurn(turn) }} onClose={() => setSelectedMemory(null)} />
       <NativeProfileSheet profile={selectedProfile} onClose={() => setSelectedProfile(null)} />
     </Card>
   )
@@ -873,6 +868,10 @@ export function NativeTurnSheet({
   const generatedProfiles = turn
     ? profiles.filter((profile) => turn.generatedProfileNodeIds.includes(profile.profileNodeId))
     : []
+  // Missing referenced IDs are not empty extraction: the loaded snapshot may omit removed or unavailable outputs.
+  // 被引用但缺失的 ID 不代表空提取：加载快照可能不包含已移除或不可用的产物。
+  const missingMemoryIds = turn?.generatedMemoryIds.filter((id) => !generatedMemories.some((memory) => memory.memoryId === id)) ?? []
+  const missingProfileIds = turn?.generatedProfileNodeIds.filter((id) => !generatedProfiles.some((profile) => profile.profileNodeId === id)) ?? []
   return (
     <Sheet open={turn !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent className="overflow-y-auto" size="md">
@@ -912,7 +911,8 @@ export function NativeTurnSheet({
           ) : null}
           <section className="space-y-2">
             <h3 className="text-sm font-medium">{t("memory.nativeRecords.generatedMemories")}</h3>
-            {generatedMemories.length === 0 ? (
+            {missingMemoryIds.length > 0 ? <p className="text-sm text-muted-foreground">{t("memory.workspace.missingOutputs")} {missingMemoryIds.map((id) => `#${id}`).join(", ")}</p> : null}
+            {generatedMemories.length === 0 && missingMemoryIds.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noGeneratedMemories")}</p>
             ) : (
               <div className="space-y-2">
@@ -935,7 +935,8 @@ export function NativeTurnSheet({
           </section>
           <section className="space-y-2">
             <h3 className="text-sm font-medium">{t("memory.nativeRecords.generatedProfiles")}</h3>
-            {generatedProfiles.length === 0 ? (
+            {missingProfileIds.length > 0 ? <p className="text-sm text-muted-foreground">{t("memory.workspace.missingOutputs")} {missingProfileIds.map((id) => `#${id}`).join(", ")}</p> : null}
+            {generatedProfiles.length === 0 && missingProfileIds.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noGeneratedProfiles")}</p>
             ) : (
               <div className="space-y-2">
@@ -980,12 +981,21 @@ export function NativeTurnSheet({
 // NativeMemorySheet 展示一条完整持久记忆及其来源标识。
 function NativeMemorySheet({
   memory,
+  turns,
+  onOpenTurn,
   onClose,
 }: {
   memory: VmmNativeMemoryRecordSummary | null
+  // Loaded authoritative turns are the only permitted provenance navigation targets.
+  // 已加载权威回合是唯一允许的来源导航目标。
+  turns: VmmNativeTurnRecordSummary[]
+  onOpenTurn: (turn: VmmNativeTurnRecordSummary) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
+  // Resolve the declared source identity without fabricating missing records or crossing sessions.
+  // 解析声明的来源身份，不伪造缺失记录或跨会话导航。
+  const sourceTurn = memory?.sourceTurnId == null ? undefined : turns.find((turn) => turn.turnId === memory.sourceTurnId && turn.sessionSourceId === memory.sessionSourceId)
   return (
     <Sheet open={memory !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent className="overflow-y-auto" size="md">
@@ -1004,28 +1014,23 @@ function NativeMemorySheet({
               <Badge variant="outline">{t(nativeMemoryCategoryKey(memory.category))}</Badge>
             </div>
           ) : null}
-          {memory ? <NativeDetail label={t("memory.content.fullDetails")} value={memory.content} /> : null}
-          {memory?.sourceTurnId != null ? (
-            <NativeDetail label={t("memory.nativeRecords.sourceTurn")} value={`#${memory.sourceTurnId}`} />
-          ) : null}
-          {memory?.sessionSourceId ? (
-            <NativeDetail label={t("memory.nativeRecords.session")} value={memory.sessionSourceId} />
-          ) : null}
-          {memory ? (
-            <NativeDetail label={t("memory.nativeRecords.priority")} value={String(memory.priority)} />
-          ) : null}
-          {memory?.tags.length ? (
-            <NativeDetail label={t("memory.nativeRecords.tags")} value={memory.tags.join(", ")} />
-          ) : null}
-          {memory?.statusReason ? (
-            <NativeDetail label={t("memory.nativeRecords.statusReason")} value={memory.statusReason} />
-          ) : null}
-          {memory?.expiresAtUnixMs != null ? (
-            <NativeDetail
-              label={t("memory.nativeRecords.expiresAt")}
-              value={formatNativeTimestamp(memory.expiresAtUnixMs)}
-            />
-          ) : null}
+          {memory ? <>
+            <section className="space-y-2" aria-label={t("memory.content.fullDetails")}>
+              <h3 className="text-sm font-medium">{t("memory.content.fullDetails")}</h3>
+              <p className="whitespace-pre-wrap break-words text-sm leading-7">{memory.content}</p>
+            </section>
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t pt-4 text-sm">
+              {memory.sourceTurnId != null ? <>
+                <dt className="text-muted-foreground">{t("memory.nativeRecords.sourceTurn")}</dt>
+                <dd>{sourceTurn ? <Button className="h-auto p-0" type="button" variant="link" onClick={() => onOpenTurn(sourceTurn)}>#{sourceTurn.turnId}</Button> : <span className="text-muted-foreground">#{memory.sourceTurnId} · {t("memory.workspace.missingSource")}</span>}</dd>
+              </> : null}
+              {memory.sessionSourceId ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.session")}</dt><dd className="break-all text-xs" title={memory.sessionSourceId}>{memory.sessionSourceId}</dd></> : null}
+              <dt className="text-muted-foreground">{t("memory.nativeRecords.priority")}</dt><dd>{memory.priority}</dd>
+              {memory.tags.length > 0 ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.tags")}</dt><dd className="break-words">{memory.tags.join(", ")}</dd></> : null}
+              {memory.statusReason ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.statusReason")}</dt><dd className="break-words">{memory.statusReason}</dd></> : null}
+              {memory.expiresAtUnixMs != null ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.expiresAt")}</dt><dd>{formatNativeTimestamp(memory.expiresAtUnixMs)}</dd></> : null}
+            </dl>
+          </> : null}
         </div>
       </SheetContent>
     </Sheet>

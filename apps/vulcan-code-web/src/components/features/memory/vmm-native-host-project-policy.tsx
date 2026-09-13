@@ -32,6 +32,8 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
   const [draft, setDraft] = React.useState<ReturnType<typeof recallDraft> | null>(null)
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  // saved belongs only to the recall editor; delegated editors own their own acknowledgement labels.
+  // saved 仅属于召回编辑器；委托编辑器自行持有确认提示。
   const [saved, setSaved] = React.useState(false)
   // Refresh is explicit and retries a failed initial read without remounting unrelated project settings.
   // 刷新是显式操作，可重试失败的首次读取而不重新挂载无关项目设置。
@@ -81,7 +83,7 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
       if (!mounted.current) return null
       if (result?.data.kind !== "native_host_project_policy" || result.data.value.hostProjectId !== hostProjectId) throw new Error(t("memory.policy.invalidResponse"))
       accept(result.data.value, group === "recall")
-      setSaved(true)
+      setSaved(group === "recall")
       return result
     } catch (reason) {
       if (mounted.current) setError(String(reason))
@@ -107,6 +109,9 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
     return { ...result, kind: "native_runtime_policy", response: value, data: { kind: "native_runtime_policy", value } }
   }
   const parsed = draft ? parseRecallDraft(draft) : null
+  // Only explicit edits create an override; opening a group must not pin inherited defaults.
+  // 仅显式编辑生成覆盖；展开配置组不能固化继承的默认值。
+  const recallChanged = parsed && policy && recallKeys.some((key) => parsed[key] !== policy.effective.recall[key])
   const disabled = busy || pending
   // inheritance renders the current source and an explicit independent reset for one group.
   // inheritance 渲染当前来源及单个配置组的显式独立重置。
@@ -114,14 +119,22 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
     <span>{t(policy!.overrides[group] === null ? "memory.hostPolicy.inherited" : "memory.hostPolicy.overridden")}</span>
     <Button variant="outline" disabled={disabled || policy!.overrides[group] === null} onClick={() => void save(group, null)}>{t("memory.hostPolicy.inherit")}</Button>
   </div>
-  return <section className="space-y-4 rounded-lg border p-3">
-    <h3 className="font-medium">{t("memory.hostPolicy.title")}</h3>
+  // summary keeps each group's acknowledged source visible while its mounted editor is collapsed.
+  // summary 在已挂载的编辑器折叠时仍显示各组已确认的配置来源。
+  const summary = (group: keyof VmmNativeHostProjectPolicyOverrides, title: string) => <summary>
+    <span>{title}</span><small>{t(policy!.overrides[group] === null ? "projectSettings.inheritGlobal" : "projectSettings.projectOverride")}</small>
+  </summary>
+  return <section className="project-vmm-policy space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 className="font-medium">{t("memory.hostPolicy.title")}</h3>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={() => { initialLoadIssued.current = false; setRefresh((value) => value + 1); setSaved(false) }}>{t("memory.data.refresh")}</Button>
+    </div>
     <p className="text-sm text-muted-foreground">{t("memory.hostPolicy.description")}</p>
-    <Button variant="outline" disabled={disabled} onClick={() => { initialLoadIssued.current = false; setRefresh((value) => value + 1); setSaved(false) }}>{t("memory.data.refresh")}</Button>
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-    {saved ? <p role="status">{t("memory.hostPolicy.saved")}</p> : null}
     {policy && draft ? <>
-      <div className="space-y-3"><h4 className="font-medium">{t("memory.policy.title")}</h4>{inheritance("recall")}
+      <details className="project-vmm-policy-group">
+        {summary("recall", t("memory.policy.title"))}
+        <div className="space-y-3">{inheritance("recall")}
         <div className="grid gap-3 sm:grid-cols-2">{recallFields.map((field) => <div key={field.key} className="space-y-1">
           <Label htmlFor={`caller-policy-${field.key}`}>{t(field.label)}</Label>
           {field.key === "postactionMemoryExpiryMs" ? <VmmNativeDurationInput id={`caller-policy-${field.key}`} value={draft[field.key]} disabled={disabled} onChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }} /> : <Input id={`caller-policy-${field.key}`} type="number" min={field.min} max={field.max} step={field.step} disabled={disabled} value={draft[field.key]}
@@ -135,14 +148,20 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
         </div>)}</div>
         <p className="text-xs text-muted-foreground">{t("memory.policy.extractedHint")}</p>
         {!parsed ? <p role="alert">{t("memory.policy.invalidValues")}</p> : null}
-        <Button disabled={disabled || !parsed} onClick={() => { if (parsed) void save("recall", parsed) }}>{t("memory.policy.save")}</Button>
-      </div>
-      <div className="space-y-2">{inheritance("retrieval")}
+        {saved ? <p role="status">{t("memory.hostPolicy.saved")}</p> : null}
+        <Button disabled={disabled || !parsed || !recallChanged} onClick={() => { if (parsed) void save("recall", parsed) }}>{t("memory.policy.save")}</Button>
+        </div>
+      </details>
+      <details className="project-vmm-policy-group">
+        {summary("retrieval", t("memory.ranking.title"))}
+        {inheritance("retrieval")}
         <VmmNativeRetrievalPolicy settings={policy.effective.retrieval} defaults={policy.effective.retrievalDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
-      </div>
-      <div className="space-y-2">{inheritance("text")}
+      </details>
+      <details className="project-vmm-policy-group">
+        {summary("text", t("memory.textPolicy.title"))}
+        {inheritance("text")}
         <VmmNativeTextPolicy settings={policy.effective.text} defaults={policy.effective.textDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
-      </div>
+      </details>
     </> : pending ? <p className="text-sm">{t("memory.common.loading")}</p> : null}
   </section>
 }

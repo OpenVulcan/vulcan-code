@@ -1013,27 +1013,36 @@ fn decode_lancedb_column(column: LanceDbColumnPayload) -> Result<LanceDbColumnDe
 /// Returns unit for a non-empty statement without isolation-breaking keywords.
 /// 对不含破坏隔离关键字的非空语句返回空值。
 fn validate_sqlite_statement(sql: &str, access: SqliteStatementAccess) -> Result<(), String> {
-    // tokens contains SQL identifiers outside quoted strings and comments.
-    // tokens 包含引号字符串与注释之外的 SQL 标识符。
+    // tokens retain statement separators while excluding quoted text and comments.
+    // tokens 保留语句分隔符，同时排除引号文本与注释。
     let tokens = sqlite_policy_tokens(sql);
-    if tokens.is_empty() {
+    if tokens.is_empty() || tokens.first().is_some_and(|token| token == ";") {
         return Err("Plugin SQLite statement must not be empty.".to_string());
     }
-    for forbidden in [
-        "ATTACH",
-        "DETACH",
-        "VACUUM",
-        "LOAD_EXTENSION",
-        "BEGIN",
-        "COMMIT",
-        "END",
-        "ROLLBACK",
-        "SAVEPOINT",
-        "RELEASE",
-    ] {
-        if tokens.iter().any(|token| token == forbidden) {
-            return Err(format!("Plugin SQLite statement cannot use `{forbidden}`."));
+    // case_depth distinguishes expression END from transaction END, including nested CASE.
+    // case_depth 区分表达式 END 与事务 END，并支持嵌套 CASE。
+    let mut case_depth = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "CASE" => case_depth += 1,
+            "END" if case_depth > 0 => case_depth -= 1,
+            "END" => {
+                return Err("Plugin SQLite statement cannot use transaction `END`.".to_string());
+            }
+            ";" if index + 1 != tokens.len() || case_depth != 0 => {
+                return Err(
+                    "Plugin SQLite operation requires exactly one complete statement.".to_string(),
+                );
+            }
+            "ATTACH" | "DETACH" | "VACUUM" | "LOAD_EXTENSION" | "BEGIN" | "COMMIT" | "ROLLBACK"
+            | "SAVEPOINT" | "RELEASE" => {
+                return Err(format!("Plugin SQLite statement cannot use `{token}`."));
+            }
+            _ => {}
         }
+    }
+    if case_depth != 0 {
+        return Err("Plugin SQLite CASE expression must end within its statement.".to_string());
     }
     if matches!(access, SqliteStatementAccess::Read)
         && !matches!(tokens.first().map(String::as_str), Some("SELECT" | "WITH"))
@@ -1053,8 +1062,8 @@ fn validate_sqlite_statement(sql: &str, access: SqliteStatementAccess) -> Result
     Ok(())
 }
 
-/// Tokenizes policy-relevant SQL identifiers while skipping strings and comments.
-/// 在跳过字符串与注释的同时提取策略相关 SQL 标识符。
+/// Tokenizes policy-relevant SQL identifiers while skipping strings, comments and bind names.
+/// 在跳过字符串、注释与绑定参数名的同时提取策略相关 SQL 标识符。
 ///
 /// # Parameters
 /// 参数
@@ -1125,14 +1134,74 @@ fn sqlite_policy_tokens(sql: &str) -> Vec<String> {
             quote = Some(if character == '[' { ']' } else { character });
             continue;
         }
-        if character.is_ascii_alphanumeric() || character == '_' {
+        // SQLite treats named bind variables as one token, even when their name is CASE or END.
+        // SQLite 将命名绑定变量视为一个 Token，即使变量名为 CASE 或 END。
+        // A dollar sign inside an identifier remains part of that identifier, not a new parameter.
+        // 标识符内部的美元符号仍属于该标识符，而不是新参数。
+        if matches!(character, ':' | '@' | '#') || (character == '$' && current.is_empty()) {
+            push_sqlite_policy_token(&mut tokens, &mut current);
+            skip_sqlite_bind_name(&mut characters);
+            continue;
+        }
+        if character.is_ascii_alphanumeric()
+            || matches!(character, '_' | '$')
+            || !character.is_ascii()
+        {
             current.push(character.to_ascii_uppercase());
         } else {
             push_sqlite_policy_token(&mut tokens, &mut current);
+            // Preserve separators so CASE cannot authorize a following transaction statement.
+            // 保留分隔符，防止 CASE 授权后续事务语句。
+            if character == ';' {
+                tokens.push(";".to_string());
+            }
         }
     }
     push_sqlite_policy_token(&mut tokens, &mut current);
     tokens
+}
+
+/// Consumes the name of one SQLite bind variable after its prefix has been read.
+/// 在读取前缀后消费一个 SQLite 绑定变量名。
+///
+/// `characters` points immediately after a colon, at sign, hash or leading dollar sign.
+/// `characters` 位于冒号、艾特符号、井号或前导美元符号之后。
+/// Returns no value; advances only across SQLite identifier bytes, namespace pairs and a suffix.
+/// 不返回值；仅越过 SQLite 标识符字符、命名空间冒号对与可选后缀。
+fn skip_sqlite_bind_name(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    // has_identifier matches the bundled SQLite tokenizer's requirement for a parenthesized suffix.
+    // has_identifier 对齐内置 SQLite 分词器对括号后缀的标识符要求。
+    let mut has_identifier = false;
+    while let Some(&character) = characters.peek() {
+        if character.is_ascii_alphanumeric()
+            || matches!(character, '_' | '$')
+            || !character.is_ascii()
+        {
+            has_identifier = true;
+            characters.next();
+        } else if character == ':' && characters.clone().nth(1) == Some(':') {
+            characters.next();
+            characters.next();
+        } else if character == '(' && has_identifier {
+            characters.next();
+            // Tcl-style suffixes are a single bind name, not SQL; whitespace ends an invalid token.
+            // Tcl 风格后缀属于同一个绑定名称，不是 SQL；空白会终止无效 Token。
+            // This mirrors libsqlite3-sys 0.38.2 sqlite3GetToken; SQLite still validates the full SQL.
+            // 此处对齐 libsqlite3-sys 0.38.2 的 sqlite3GetToken；完整 SQL 仍由 SQLite 校验。
+            while let Some(&suffix_character) = characters.peek() {
+                if suffix_character == '\0' || suffix_character.is_ascii_whitespace() {
+                    break;
+                }
+                characters.next();
+                if suffix_character == ')' {
+                    break;
+                }
+            }
+            break;
+        } else {
+            break;
+        }
+    }
 }
 
 /// Moves one completed SQL policy token into the output list.
@@ -1248,6 +1317,87 @@ mod tests {
         assert!(validate_sqlite_statement("ROLLBACK", SqliteStatementAccess::Write).is_err());
     }
 
+    /// Accepts nested CASE aggregates while preserving all statement and write boundaries.
+    /// 接受嵌套 CASE 聚合，同时保留全部语句与写入边界。
+    /// No parameters; assertions verify expression tokens cannot authorize transactions.
+    /// 无参数；断言验证表达式 Token 不能授权事务。
+    #[test]
+    fn sqlite_policy_accepts_case_without_opening_transaction_boundaries() {
+        for sql in [
+            "SELECT CASE WHEN ?1 > 0 THEN CASE ?2 WHEN 1 THEN 2 ELSE 0 END ELSE 0 END;",
+            "WITH rows(value) AS (SELECT ?1) SELECT SUM(CASE WHEN value = 1 THEN 1 ELSE 0 END) FROM rows",
+            "SELECT 'CASE; END; COMMIT' AS label /* END; */; -- END",
+            "SELECT \"END\", [CASE], `COMMIT` FROM \"quoted table\"",
+        ] {
+            assert!(
+                validate_sqlite_statement(sql, SqliteStatementAccess::Read).is_ok(),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "END",
+            "END TRANSACTION",
+            "COMMIT",
+            "SELECT CASE WHEN 1 THEN 1 END; END",
+            "SELECT CASE WHEN 1 THEN 1; END",
+            "SELECT CASE WHEN 1 THEN 1",
+            "SELECT 1; SELECT 2",
+            "SELECT 1;;",
+            "WITH rows AS (SELECT 1) DELETE FROM usage",
+            "SELECT (INSERT INTO usage VALUES (1))",
+            "SELECT CASE WHEN 1 THEN load_extension('x') ELSE 0 END",
+            "SELECT CASE WHEN 1 THEN 1 END; ATTACH 'x' AS escaped",
+            "BEGIN; SELECT CASE WHEN 1 THEN 1 END; COMMIT",
+            "SAVEPOINT nested",
+            "RELEASE nested",
+        ] {
+            assert!(
+                validate_sqlite_statement(sql, SqliteStatementAccess::Read).is_err(),
+                "{sql}"
+            );
+        }
+        for sql in [";", "END", "COMMIT", "BEGIN", "ROLLBACK", "SELECT 1; END"] {
+            assert!(
+                validate_sqlite_statement(sql, SqliteStatementAccess::Write).is_err(),
+                "{sql}"
+            );
+        }
+    }
+
+    /// Keeps legal bind names out of policy keyword matching without hiding real SQL statements.
+    /// 将合法绑定名称排除在策略关键字匹配外，同时保留真实 SQL 语句检查。
+    /// No parameters; assertions cover all named prefixes, suffixes and adjacent transaction tokens.
+    /// 无参数；断言覆盖命名前缀、后缀与相邻事务 Token。
+    #[test]
+    fn sqlite_policy_distinguishes_named_parameters_from_keywords() {
+        for sql in [
+            "SELECT :case AS value",
+            "SELECT @case AS value",
+            "SELECT $case AS value",
+            "SELECT CASE WHEN :case > 0 THEN @end ELSE $rollback END AS value",
+            "SELECT $scope::case(END;COMMIT) AS value",
+            "SELECT :删除CASE AS value, price$case FROM data",
+        ] {
+            assert!(
+                validate_sqlite_statement(sql, SqliteStatementAccess::Read).is_ok(),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "SELECT :case; END",
+            "SELECT @end; COMMIT",
+            "SELECT $scope::case(END); ATTACH 'x' AS escaped",
+            "SELECT CASE WHEN :case > 0 THEN @end",
+            "SELECT :value + load_extension('x')",
+            "SELECT $value; DELETE FROM usage",
+        ] {
+            assert!(
+                validate_sqlite_statement(sql, SqliteStatementAccess::Read).is_err(),
+                "{sql}"
+            );
+        }
+    }
+
     /// Verifies plugin and LanceDB identifiers cannot escape their host-derived namespace.
     /// 验证插件与 LanceDB 标识符不能逃逸宿主派生命名空间。
     #[test]
@@ -1258,3 +1408,7 @@ mod tests {
         assert!(validate_lancedb_identifier("usage/vectors", "table").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "plugin_storage_runtime_tests.rs"]
+mod runtime_tests;

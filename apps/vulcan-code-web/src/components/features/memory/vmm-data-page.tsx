@@ -168,6 +168,9 @@ interface ManagementRecycleBatch {
 // VmmDataPageProps 定义记忆数据工作区输入。
 interface VmmDataPageProps {
   busy: boolean
+  // notice preserves controller feedback for the nested direct-memory editor.
+  // notice 为内嵌直接记忆编辑器保留控制器反馈。
+  notice?: string
   snapshot: VmmMemorySnapshot
   result: VmmMemoryActionResult | null
   onRunAction: (
@@ -424,10 +427,13 @@ export function VmmDataPage(props: VmmDataPageProps) {
     if (!impact) return
     setError("")
     try {
-      await props.onRunAction(impact.action === "purge" ? "management_purge" : "management_execute_removal", {
+      // completed is the actual mutation acknowledgement; a rejected concurrent call returns null.
+      // completed 是实际变更确认；被拒绝的并发调用返回 null。
+      const completed = await props.onRunAction(impact.action === "purge" ? "management_purge" : "management_execute_removal", {
         previewToken: impact.preview_token,
         confirmText: impact.action === "purge" ? purgePhrase : undefined,
       })
+      if (!completed) return
       setImpact(null)
       setPurgePhrase("")
       await loadSessions(false)
@@ -444,7 +450,10 @@ export function VmmDataPage(props: VmmDataPageProps) {
   const restoreBatch = React.useCallback(async (batchId: string) => {
     setError("")
     try {
-      await props.onRunAction("management_restore_batch", { batchId })
+      // completed prevents an unexecuted restore from being rendered as a successful refresh.
+      // completed 防止未执行的恢复被渲染为成功刷新。
+      const completed = await props.onRunAction("management_restore_batch", { batchId })
+      if (!completed) return
       await loadSessions(false)
       await loadRecycleBatches()
     } catch (requestError) {
@@ -518,10 +527,10 @@ export function VmmDataPage(props: VmmDataPageProps) {
       }}>
         <div className="max-w-full overflow-x-auto overflow-y-hidden pb-1">
           <TabsList className="justify-start">
-            <TabsTrigger value="sessions">{t("memory.data.sessions")}</TabsTrigger>
-            <TabsTrigger value="turns">{t("memory.data.turns")}</TabsTrigger>
-            <TabsTrigger value="recycle">{t("memory.data.recycleBin")}</TabsTrigger>
-            <TabsTrigger value="memories">{t("memory.data.memoryEntries")}</TabsTrigger>
+            <TabsTrigger value="sessions" disabled={props.busy}>{t("memory.data.sessions")}</TabsTrigger>
+            <TabsTrigger value="turns" disabled={props.busy}>{t("memory.data.turns")}</TabsTrigger>
+            <TabsTrigger value="recycle" disabled={props.busy}>{t("memory.data.recycleBin")}</TabsTrigger>
+            <TabsTrigger value="memories" disabled={props.busy}>{t("memory.data.memoryEntries")}</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="sessions" className="space-y-3">
@@ -666,7 +675,7 @@ export function VmmDataPage(props: VmmDataPageProps) {
           />
         </TabsContent>
         <TabsContent value="memories">
-          <VmmContentPage busy={props.busy} onRunAction={props.onRunAction} result={props.result} snapshot={props.snapshot} />
+          <VmmContentPage busy={props.busy} notice={props.notice} onRunAction={props.onRunAction} result={props.result} snapshot={props.snapshot} />
         </TabsContent>
       </Tabs>
       <ImpactDialog
@@ -821,7 +830,7 @@ function TurnWorkspace(props: {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Button onClick={props.onBack} size="sm" variant="ghost"><ChevronLeft className="size-4" />{t("memory.data.backToSessions")}</Button>
+        <Button disabled={props.busy} onClick={props.onBack} size="sm" variant="ghost"><ChevronLeft className="size-4" />{t("memory.data.backToSessions")}</Button>
         <div className="min-w-0">
           <h3 className="truncate font-semibold">{props.session.display_title}</h3>
           <p className="truncate text-xs text-muted-foreground">{props.session.project.path}</p>
@@ -982,8 +991,8 @@ function ImpactDialog(props: {
   const { t } = useI18n()
   const impact = props.impact
   return (
-    <Dialog open={Boolean(impact)} onOpenChange={(open) => { if (!open) props.onClose() }}>
-      <DialogContent>
+    <Dialog open={Boolean(impact)} onOpenChange={(open) => { if (!open && !props.busy) props.onClose() }}>
+      <DialogContent showCloseButton={!props.busy} onEscapeKeyDown={(event) => { if (props.busy) event.preventDefault() }} onPointerDownOutside={(event) => { if (props.busy) event.preventDefault() }}>
         <DialogHeader>
           <DialogTitle>{impact?.action === "purge" ? t("memory.data.purgeTitle") : t("memory.data.impactTitle")}</DialogTitle>
           <DialogDescription>{impact?.action === "purge" ? t("memory.data.purgeDescription") : t("memory.data.impactDescription")}</DialogDescription>
@@ -1001,7 +1010,7 @@ function ImpactDialog(props: {
         {impact?.action === "purge" ? (
           <div className="space-y-2">
             <Label htmlFor="vmm-purge-confirmation">{t("memory.data.purgeDescription")}</Label>
-            <Input id="vmm-purge-confirmation" onChange={(event) => props.onPurgePhraseChange(event.target.value)} placeholder={t("memory.data.purgePlaceholder")} value={props.purgePhrase} />
+            <Input disabled={props.busy} id="vmm-purge-confirmation" onChange={(event) => props.onPurgePhraseChange(event.target.value)} placeholder={t("memory.data.purgePlaceholder")} value={props.purgePhrase} />
           </div>
         ) : null}
         <DialogFooter>

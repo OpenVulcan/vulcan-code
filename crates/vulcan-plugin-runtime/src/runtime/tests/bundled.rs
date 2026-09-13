@@ -93,7 +93,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "value": 2
                 }
             ])
-        } else if sql.contains("FROM provider_usage_daily_v3") {
+        } else if sql.contains("AS calendarDate") {
             json!([
                 {
                     "calendarDate": "2026-08-15",
@@ -153,7 +153,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "aggregateRevision": 7
                 }
             ])
-        } else if sql.contains("FROM provider_usage_attempts_v3 AS attempts") {
+        } else if sql.contains("AS attemptId") {
             json!([{
                 "attemptId": "attempt-1",
                 "consumerId": "webui",
@@ -188,12 +188,34 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "totalTokens": 35,
                 "aggregateRevision": 7
             }])
-        } else if sql.contains("FROM provider_usage_meta") {
+        } else if sql.contains("AS dashboardRevision") {
+            // Both bounded revision reads observe the same host aggregate transaction in this stable fixture.
+            // 此稳定夹具中的两次有界版本读取观察到同一宿主聚合事务。
+            json!([{ "dashboardRevision": 7 }])
+        } else if sql.contains("AS generatedAtMs") {
             json!([{
                 "generatedAtMs": 1_500,
                 "schemaRevision": 1,
                 "aggregateRevision": 7,
                 "healthStatus": "ready"
+                ,"dailyCount": 3
+                ,"recentCount": 1
+                ,"consumerIdsJson": "[\"webui\"]"
+            }])
+        } else if sql.contains("AS rowCount") {
+            json!([
+                { "modelId": "gpt-5", "rowCount": 1, "uncachedInputTokens": 8,
+                  "cacheReadTokens": 2, "cacheWriteTokens": 0, "outputTokens": 20 },
+                { "modelId": "gpt-5", "rowCount": 1, "uncachedInputTokens": 1,
+                  "cacheReadTokens": 0, "cacheWriteTokens": 0, "outputTokens": null }
+            ])
+        } else if sql.contains("AS resultJson") {
+            json!([{ "resultJson": "{\"totalCount\":1,\"models\":[{\"modelId\":\"private-model\",\"attempts\":1}]}" }])
+        } else if sql.contains("AS attempts") {
+            json!([{
+                "attempts": 3, "successes": 3, "reported": 3, "totalTokens": 37,
+                "inputTokens": 12, "outputTokens": 21, "cacheReadTokens": 2,
+                "cacheWriteTokens": 0
             }])
         } else {
             return Err(format!("Unexpected recording VLDB query: {sql}"));
@@ -319,6 +341,10 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(dashboard["series"][0]["seriesKey"], "provider-1/gpt-5");
     assert_eq!(dashboard["series"][0]["value"], 35);
     assert_eq!(dashboard["pricingCatalog"]["entryCount"], 189);
+    assert_eq!(dashboard["summary"]["costs"][0]["amount"], "0.00021025");
+    assert_eq!(dashboard["summary"]["costs"][0]["pricedRows"], 1);
+    assert_eq!(dashboard["summary"]["costs"][0]["unpricedRows"], 1);
+    assert_eq!(dashboard["summary"]["costs"][0]["incompleteRows"], 1);
     assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
     assert_eq!(
         dashboard["recentAttempts"][0]["estimatedCost"],
@@ -387,6 +413,21 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
         "plugin-config-v1:gpt-5:2:20:0.2:0"
     );
     assert_eq!(overridden_dashboard["pricingCatalog"]["overrideCount"], 1);
+    // pricing_page validates the declared complete usage-directory action and unknown prices.
+    // pricing_page 验证声明的完整用量目录 Action 与未知价格。
+    let pricing_page = runtime
+        .block_on(manager.invoke_action(VulcanPluginActionRequest {
+            plugin_id: String::from("vulcan-usage-statistics"),
+            action_id: String::from("pricing-get"),
+            arguments: json!({ "filter": "unpriced", "search": "private", "offset": 0 }),
+            caller: crate::VulcanPluginActionCaller::PluginUi,
+            workspace_root: repository_root.to_path_buf(),
+            reuse_enabled_runtime: true,
+        }))
+        .expect("query the complete model pricing directory");
+    assert_eq!(pricing_page["totalCount"], 1);
+    assert_eq!(pricing_page["models"][0]["source"], "unpriced");
+    assert!(pricing_page["models"][0]["prices"].is_null());
     // clearPreview proves the real Lua bundle can query maintenance facts through the same binding.
     // clearPreview 证明真实 Lua Bundle 可以通过同一绑定查询维护事实。
     let clear_preview = runtime
@@ -417,17 +458,19 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(clear_result["clearedTokenCount"], 35);
     assert_eq!(clear_result["aggregateRevision"], 8);
     let calls = vldb.calls.lock().expect("lock recorded VLDB calls");
-    assert_eq!(calls.len(), 15);
-    assert!(calls[..14].iter().all(|call| {
+    // Each of two dashboard calls adds a start/end revision read; the final call remains the guarded clear write.
+    // 两次仪表盘调用各增加开始与结束版本读取；最后一项仍为受保护的清理写入。
+    assert_eq!(calls.len(), 24);
+    assert!(calls[..23].iter().all(|call| {
         call.plugin_id == "vulcan-usage-statistics"
             && call.operation == VulcanPluginVldbOperation::SqliteQuery
             && call.payload["binding"] == "system.statistics"
     }));
     assert_eq!(
-        calls[14].operation,
+        calls[23].operation,
         VulcanPluginVldbOperation::SqliteExecute
     );
-    assert_eq!(calls[14].payload["binding"], "system.statistics");
+    assert_eq!(calls[23].payload["binding"], "system.statistics");
     drop(calls);
     // unauthorizedSnapshot removes only the VLDB capability while preserving the enabled runtime lease.
     // unauthorizedSnapshot 仅移除 VLDB 能力，同时保留已启用的运行时租约。

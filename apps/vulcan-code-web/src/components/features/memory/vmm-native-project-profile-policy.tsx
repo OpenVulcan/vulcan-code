@@ -119,10 +119,11 @@ function ProjectProfileEditor({ projectId, busy, onRunAction }: Omit<Props, "pro
         {fields.map((field) => <div key={field} className="space-y-1">
           <Label htmlFor={`project-profile-${level}-${field}`}>{t(`memory.profilePolicy.${field}`)}</Label>
           <VmmNativeDurationInput id={`project-profile-${level}-${field}`} value={draft[level][field]} disabled={disabled}
+            unitLabel={`${t(`memory.profilePolicy.${level}`)} · ${t(`memory.profilePolicy.${field}`)} · ${t("memory.policy.durationUnit")}`}
             onChange={(value) => { setDraft({ ...draft, [level]: { ...draft[level], [field]: value } }); setSaved(false) }} />
         </div>)}
       </fieldset>)}
-      <p className="text-xs text-muted-foreground">{t("memory.profilePolicy.hint")}</p>
+      <p className="text-xs text-muted-foreground">{t("memory.projectProfile.durationHint")}</p>
       {!parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.policy.invalidValues")}</p> : null}
       {saved ? <p role="status">{t("memory.projectProfile.saved")}</p> : null}
       <div className="flex flex-wrap gap-2">

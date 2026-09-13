@@ -128,19 +128,21 @@ export function VmmNativeProfilePolicy({ settings, defaults, busy, onRunAction, 
   }
   return <Card className="w-full min-w-0">
     <CardHeader><CardTitle>{t("memory.profilePolicy.title")}</CardTitle><CardDescription>{t("memory.profilePolicy.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
+    <CardContent className="vmm-profile-policy-editor space-y-4">
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       {saved ? <p role="status">{t("memory.profilePolicy.saved")}</p> : null}
-      {roles.map((role) => <fieldset key={role} disabled={disabled} className="space-y-3 rounded-lg border p-3">
-        <legend className="px-1 font-medium">{t(`memory.profilePolicy.${role}`)}</legend>
-        {levels.map((level) => <fieldset key={level} className="grid gap-2 rounded-md border p-3 sm:grid-cols-3">
-          <legend className="px-1 text-sm">{t(`memory.profilePolicy.${level}`)}</legend>
-          {fields.map((field) => <div key={field} className="space-y-1">
+      {/* Keep semantic groups while using headings and dividers instead of nested frames. */}
+      {/* 保留语义分组，通过标题与分隔线区分层级，避免边框层层嵌套。 */}
+      {roles.map((role) => <fieldset key={role} disabled={disabled} className="min-w-0 space-y-4 border-0 p-0">
+        <legend className="mb-3 font-medium">{t(`memory.profilePolicy.${role}`)}</legend>
+        {levels.map((level) => <fieldset key={level} className="vmm-profile-lifetime-fields">
+          <legend className="pr-2 text-sm text-muted-foreground">{t(`memory.profilePolicy.${level}`)}</legend>
+          {fields.map((field) => <div key={field} className="min-w-0 space-y-1">
             <Label htmlFor={`profile-${role}-${level}-${field}`}>{t(`memory.profilePolicy.${field}`)}</Label>
             <Input id={`profile-${role}-${level}-${field}`} type="number" min={field === "stepMs" ? 0 : 1} step={1}
               value={draft[role][level][field]} onChange={(event) => edit(role, level, { ...draft[role][level], [field]: event.target.value })} />
           </div>)}
-          <div className="space-y-1 sm:col-span-3"><Label htmlFor={`profile-${role}-${level}-unit`}>{t("memory.profilePolicy.unit")}</Label>
+          <div className="col-span-full min-w-0 space-y-1"><Label htmlFor={`profile-${role}-${level}-unit`}>{t("memory.profilePolicy.unit")}</Label>
             <Select disabled={disabled} value={String(draft[role][level].unit)}
               onValueChange={(value) => edit(role, level, { ...draft[role][level], unit: Number(value) })}>
               <SelectTrigger id={`profile-${role}-${level}-unit`} className="w-full"><SelectValue /></SelectTrigger>

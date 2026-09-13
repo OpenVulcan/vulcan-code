@@ -2,7 +2,7 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { VmmNativeSessionRestart } from "./vmm-native-session-restart"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeMemorySessionSummary, VmmNativeSessionArchivePreview } from "@/types"
 
@@ -44,6 +44,23 @@ export function VmmNativeSessionArchive({ projectId, sessions, busy, onBusyChang
   const [preview, setPreview] = React.useState<VmmNativeSessionArchivePreview | null>(null)
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState(false)
+  // operation excludes duplicate clicks; identity invalidates a preview when the exact selection changes.
+  // operation 排除重复点击；identity 在准确选择改变时使预览失效。
+  const operation = React.useRef(false)
+  const identity = JSON.stringify([projectId, sessions.map((session) => [session.sessionSourceId, session.status])])
+  const identityRef = React.useRef(identity)
+  const generationRef = React.useRef(0)
+  const previewGeneration = React.useRef(-1)
+  if (identityRef.current !== identity) { identityRef.current = identity; generationRef.current += 1 }
+  // mounted prevents a departed page from publishing delayed confirmation feedback.
+  // mounted 防止已经离开的页面发布迟到确认反馈。
+  const mounted = React.useRef(true)
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  // Feedback belongs to the selected owner and source generation, just like the preview.
+  // 反馈与预览一样归属于选定项目和来源代次，切换选择后清除旧错误。
+  React.useEffect(() => { setError(false) }, [identity])
+  const visiblePreview = previewGeneration.current === generationRef.current ? preview : null
+
   // Only these two states admit a classification change; paused and metadata-free rows cannot.
   // 只有这两种状态允许分类变更；暂停及无元数据的记录不允许。
   const allActive = sessions.length > 0 && sessions.every((session) => session.status === "active")
@@ -54,7 +71,9 @@ export function VmmNativeSessionArchive({ projectId, sessions, busy, onBusyChang
   // Loads a read-only server preview for the fixed current selection; returns no local mutation.
   // 为固定当前选择加载只读服务端预览，不产生本地变更。
   const prepare = async () => {
-    if (busy || pending || !eligible) return
+    if (busy || operation.current || !eligible) return
+    operation.current = true
+    const generation = generationRef.current
     setPending(true)
     onBusyChange(true)
     setError(false)
@@ -62,43 +81,46 @@ export function VmmNativeSessionArchive({ projectId, sessions, busy, onBusyChang
       const result = await onRunAction("native_session_archive_preview", {
         vmmProjectId: projectId, sessionSourceIds: sessions.map((session) => session.sessionSourceId), archived: allActive,
       })
-      if (result?.data?.kind === "native_session_archive_preview") setPreview(result.data.value)
+      if (!mounted.current || generationRef.current !== generation) return
+      if (result?.data.kind === "native_session_archive_preview") { previewGeneration.current = generation; setPreview(result.data.value) }
       else setError(true)
-    } catch { setError(true) }
-    finally { setPending(false); onBusyChange(false) }
+    } catch { if (mounted.current && generationRef.current === generation) setError(true) }
+    finally { operation.current = false; if (mounted.current) setPending(false); onBusyChange(false) }
   }
 
   // Sends only the opaque preview identity; a failed/consumed preview requires a new preview.
   // 只发送不透明预览身份；失败或已消费的预览必须重新生成。
   const confirm = async () => {
-    if (busy || pending || !preview) return
+    if (busy || operation.current || !visiblePreview) return
+    operation.current = true
+    const generation = generationRef.current
     setPending(true)
     onBusyChange(true)
     setError(false)
     try {
-      const result = await onRunAction("native_session_archive", { previewId: preview.previewId, confirmed: true })
+      const result = await onRunAction("native_session_archive", { previewId: visiblePreview.previewId, confirmed: true })
+      if (!mounted.current || generationRef.current !== generation) return
       setPreview(null)
       if (result?.data?.kind === "native_session_archive") await onRefresh()
       else setError(true)
-    } catch { setPreview(null); setError(true) }
-    finally { setPending(false); onBusyChange(false) }
+    } catch { if (mounted.current && generationRef.current === generation) { setPreview(null); setError(true) } }
+    finally { operation.current = false; if (mounted.current) setPending(false); onBusyChange(false) }
   }
 
-  return <div className="space-y-2">
+  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !pending) setPreview(null) }}><div className="space-y-2">
     <div className="flex flex-wrap items-center gap-2">
       {sessions.length === 1 ? <NativeSessionStatus status={sessions[0].status} /> : null}
-      {eligible ? <Button type="button" variant="outline" disabled={busy || pending} onClick={() => void prepare()}>{t(actionKey)}</Button> : null}
+      {eligible ? <AlertDialogTrigger asChild><Button type="button" variant="outline" disabled={busy || pending} onClick={() => void prepare()}>{t(actionKey)}</Button></AlertDialogTrigger> : null}
       <VmmNativeSessionRestart projectId={projectId} sessions={sessions} busy={busy || pending} onBusyChange={onBusyChange} onRunAction={onRunAction} onRefresh={onRefresh} />
     </div>
     {error ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionArchive.failed")}</p> : null}
-    <AlertDialog open={preview !== null} onOpenChange={(open) => { if (!open && !pending) setPreview(null) }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t(preview?.selection.archived ? "memory.sessionArchive.archive" : "memory.sessionArchive.unarchive")}</AlertDialogTitle>
+          <AlertDialogTitle>{t(visiblePreview?.selection.archived ? "memory.sessionArchive.archive" : "memory.sessionArchive.unarchive")}</AlertDialogTitle>
           <AlertDialogDescription>{t("memory.sessionArchive.description")}</AlertDialogDescription>
         </AlertDialogHeader>
         <ul className="max-h-64 space-y-2 overflow-y-auto">
-          {preview?.selection.sessionSourceIds.map((sessionSourceId) => {
+          {visiblePreview?.selection.sessionSourceIds.map((sessionSourceId) => {
             // Titles are presentation only; the accepted preview identity remains authoritative.
             // 标题只用于展示；已接纳预览中的身份始终具有权威性。
             const session = sessions.find((item) => item.sessionSourceId === sessionSourceId)
@@ -110,9 +132,8 @@ export function VmmNativeSessionArchive({ projectId, sessions, busy, onBusyChang
         </ul>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy || pending}>{t("memory.common.cancel")}</AlertDialogCancel>
-          <AlertDialogAction disabled={busy || pending || !preview} onClick={(event) => { event.preventDefault(); void confirm() }}>{t("memory.sessionArchive.confirm")}</AlertDialogAction>
+          <AlertDialogAction disabled={busy || pending || !visiblePreview} onClick={(event) => { event.preventDefault(); void confirm() }}>{t("memory.sessionArchive.confirm")}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
-    </AlertDialog>
-  </div>
+  </div></AlertDialog>
 }

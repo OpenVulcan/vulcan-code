@@ -27,6 +27,8 @@ import type { ConversationSummary } from "@/types";
 
 // WorkspaceTitleMenu renders title-adjacent overflow actions without joining the native drag region.
 // WorkspaceTitleMenu 在标题旁渲染溢出操作，并避免加入原生拖动区域。
+// Parameters: props supplies the selected conversation, title and menu actions. Returns its menu or null without a conversation.
+// 参数：props 提供选中会话、标题与菜单动作。返回会话菜单；没有会话时返回 null。
 export function WorkspaceTitleMenu(props: {
   // Title text copied by the generic title action.
   // 通用标题操作复制的标题文本。
@@ -47,9 +49,6 @@ export function WorkspaceTitleMenu(props: {
   // hasConversationMenu determines whether conversation-only commands can be shown.
   // hasConversationMenu 判断是否可以展示仅会话可用的命令。
   const hasConversationMenu = Boolean(props.conversation && props.onConversationMenuAction);
-  if (!hasConversationMenu) {
-    return null;
-  }
 
   // handleCopyTitle copies the visible header title and reports completion.
   // handleCopyTitle 复制当前可见标题并反馈完成状态。
@@ -73,6 +72,10 @@ export function WorkspaceTitleMenu(props: {
     },
     [props],
   );
+
+  // Keep hook order stable when navigation removes or restores the conversation.
+  // 导航移除或恢复会话时，保持 Hook 调用顺序稳定。
+  if (!hasConversationMenu) return null;
 
   return (
     <DropdownMenu>

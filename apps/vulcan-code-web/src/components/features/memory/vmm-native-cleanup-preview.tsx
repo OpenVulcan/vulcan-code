@@ -18,21 +18,24 @@ interface CleanupPreviewProps {
   // Confirms the opaque preview identity through the parent action channel.
   // 通过父级动作通道确认不透明预览标识。
   onConfirm: () => void
+  // Restores the initiating control when an asynchronous preview is opened outside a dialog trigger.
+  // 在对话框触发器之外异步打开预览时，恢复发起控件的焦点。
+  onRestoreFocus?: () => void
 }
 
 // Renders project names, counts and expandable identities before explicit confirmation.
 // 在明确确认前渲染项目名称、计数及可展开标识。
 // Returns a controlled dialog; callbacks run only for deliberate user actions.
 // 返回受控对话框，仅在用户明确操作时运行回调。
-export function VmmNativeCleanupPreview({ preview, busy, onClose, onConfirm }: CleanupPreviewProps) {
+export function VmmNativeCleanupPreview({ preview, busy, onClose, onConfirm, onRestoreFocus }: CleanupPreviewProps) {
   const { t } = useI18n()
   return <AlertDialog open={preview !== null} onOpenChange={(open) => { if (!open && !busy) onClose() }}>
-    <AlertDialogContent className="max-h-[85vh] overflow-y-auto">
-      <AlertDialogHeader>
+    <AlertDialogContent className="flex max-h-[85dvh] min-h-0 flex-col overflow-hidden" size="md" onCloseAutoFocus={onRestoreFocus ? (event) => { event.preventDefault(); onRestoreFocus() } : undefined}>
+      <AlertDialogHeader className="shrink-0">
         <AlertDialogTitle>{t("memory.maintenance.cleanupPreviewTitle")}</AlertDialogTitle>
         <AlertDialogDescription>{t("memory.maintenance.cleanupPreviewDescription")}</AlertDialogDescription>
       </AlertDialogHeader>
-      <div className="space-y-3">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         {preview?.projects.map((project) => <section className="rounded-lg border p-3" key={project.projectId}>
           <h3 className="text-sm font-medium">{project.projectName}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{t("memory.maintenance.cleanupImpact")
@@ -51,7 +54,7 @@ export function VmmNativeCleanupPreview({ preview, busy, onClose, onConfirm }: C
           </details>
         </section>)}
       </div>
-      <AlertDialogFooter>
+      <AlertDialogFooter className="shrink-0">
         <AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel>
         <AlertDialogAction disabled={busy || preview === null} onClick={(event) => { event.preventDefault(); onConfirm() }}>
           <AlertTriangle className="mr-2 size-4" aria-hidden="true" />{t("memory.maintenance.runNow")}

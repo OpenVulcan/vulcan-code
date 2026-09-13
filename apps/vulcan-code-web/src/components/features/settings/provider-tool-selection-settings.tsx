@@ -2,6 +2,7 @@ import * as React from "react";
 import { FlaskConical } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import {
   Select,
@@ -14,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import {
   isModelExtensionCapability,
+  mediaUnderstandingCapabilityToggleDisabled,
   modelCapabilitiesSupportMediaUnderstanding,
 } from "@/lib/provider-tool-capabilities";
 import {
@@ -41,6 +43,8 @@ import { ProviderToolTestDialog } from "./provider-tool-test-dialog";
 
 // ProviderToolSelectionSettingsArea separates the system capability switch, default model, and default account.
 // ProviderToolSelectionSettingsArea 分离系统能力开关、默认模型与默认账号。
+// Parameters: props identifies the capability settings scope; returns stable default-target controls and explicit loading/error recovery.
+// 参数：props 标识能力设置范围；返回稳定默认目标控件及明确的加载和错误恢复界面。
 export function ProviderToolSelectionSettingsArea(props: {
   // Semantic capability configured by this settings page.
   // 当前设置页面配置的语义能力。
@@ -50,12 +54,16 @@ export function ProviderToolSelectionSettingsArea(props: {
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // loadAttempt retries failed initial reads without replaying a settings write.
+  // loadAttempt 重试失败的首次读取，不重放设置写入。
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
   // testTarget is the exact current model and account under diagnosis.
   // testTarget 是当前正在诊断的精确模型与账号。
   const [testTarget, setTestTarget] = React.useState<PublicAiProviderToolTargetSnapshot | null>(null);
 
   React.useEffect(() => {
     let active = true;
+    setError(null);
     void loadPublicAiSettings()
       .then((next) => {
         if (active) {
@@ -69,7 +77,7 @@ export function ProviderToolSelectionSettingsArea(props: {
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadAttempt]);
 
   const targets = snapshot?.providerToolTargets.filter(
     (target) => target.target.contract.capability === props.capability
@@ -116,12 +124,12 @@ export function ProviderToolSelectionSettingsArea(props: {
   const selectedTarget = targets.find((target) => (
     target.connectionId === defaultSelection?.connection_id
     && target.target.target_id === defaultSelection.target_id
-  )) ?? models[0] ?? null;
+  )) ?? null;
   const selectedModelId = selectedTarget?.target.target_id ?? "";
   const accounts = targets.filter((target) => target.target.target_id === selectedModelId);
   const selectedAccount = accounts.find((target) => (
     target.connectionId === defaultSelection?.connection_id
-  )) ?? accounts[0] ?? null;
+  )) ?? null;
   const enabled = snapshot?.providerToolEnabledCapabilities.includes(props.capability) ?? false;
 
   // saveExtensionSelections persists one complete native model-extension target set.
@@ -137,8 +145,10 @@ export function ProviderToolSelectionSettingsArea(props: {
       });
       setSnapshot(next);
       setError(null);
+      return true;
     } catch (reason) {
       setError(errorMessage(reason));
+      return false;
     } finally {
       setPending(false);
     }
@@ -159,8 +169,10 @@ export function ProviderToolSelectionSettingsArea(props: {
       });
       setSnapshot(next);
       setError(null);
+      return true;
     } catch (reason) {
       setError(errorMessage(reason));
+      return false;
     } finally {
       setPending(false);
     }
@@ -190,39 +202,23 @@ export function ProviderToolSelectionSettingsArea(props: {
           });
       setSnapshot(next);
       setError(null);
+      return true;
     } catch (reason) {
       setError(errorMessage(reason));
+      return false;
     } finally {
       setPending(false);
     }
   }, [mediaUnderstandingMode, props.capability]);
 
-  // saveEnabled persists only the system capability switch and initializes a missing default explicitly.
-  // saveEnabled 仅持久化系统能力开关，并在缺少默认值时显式初始化。
+  // saveEnabled preserves the selected understanding mode; ordinary tools may initialize their direct target.
+  // saveEnabled 保留已选理解模式；普通工具可以初始化其直连目标。
   const saveEnabled = React.useCallback(async (nextEnabled: boolean) => {
-    if (!snapshot) return;
+    if (!snapshot || (nextEnabled && !mediaUnderstandingMode && !selectedAccount)) return false;
     setPending(true);
     try {
       let next = snapshot;
-      if (nextEnabled && mediaUnderstandingMode && !mediaBackendSelection) {
-        if (selectedAccount) {
-          next = await savePublicAiMediaUnderstandingSelection({
-            capability: props.capability,
-            selection: {
-              mode: "provider_tool",
-              selection: {
-                connection_id: selectedAccount.connectionId,
-                target_id: selectedAccount.target.target_id,
-              },
-            },
-          });
-        } else if (mediaModelCandidates[0]) {
-          next = await savePublicAiMediaUnderstandingSelection({
-            capability: props.capability,
-            selection: modelReplacementSelection(mediaModelCandidates[0]),
-          });
-        }
-      } else if (nextEnabled && !defaultSelection && selectedAccount) {
+      if (nextEnabled && !mediaUnderstandingMode && !defaultSelection && selectedAccount) {
         next = await savePublicAiProviderToolSelection({
           capability: props.capability,
           selection: {
@@ -237,15 +233,15 @@ export function ProviderToolSelectionSettingsArea(props: {
       });
       setSnapshot(next);
       setError(null);
+      return true;
     } catch (reason) {
       setError(errorMessage(reason));
+      return false;
     } finally {
       setPending(false);
     }
   }, [
     defaultSelection,
-    mediaBackendSelection,
-    mediaModelCandidates,
     mediaUnderstandingMode,
     props.capability,
     selectedAccount,
@@ -255,32 +251,50 @@ export function ProviderToolSelectionSettingsArea(props: {
   return (
     <div className="settings-direct-content settings-capability-page">
       {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
-      {!snapshot ? (
+      {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
         <p className="settings-muted-line">{t("settings.providerTools.loading")}</p>
       ) : mediaUnderstandingMode ? (
         <MediaUnderstandingDefaults
           candidates={mediaModelCandidates}
           enabled={enabled}
-          onEnabledChange={(checked) => void saveEnabled(checked)}
-          onProviderTargetChange={(target) => void saveSelection(target)}
-           onSelectionChange={(selection) => void saveMediaBackendSelection(selection)}
+          key={props.capability}
+          onEnabledChange={saveEnabled}
+          onProviderTargetChange={saveSelection}
+           onSelectionChange={saveMediaBackendSelection}
            pending={pending}
            backendOptions={mediaBackendOptions}
            selection={mediaBackendSelection}
           targets={targets}
         />
-      ) : targets.length === 0 ? (
-        <div className="composer-capability-dialog-empty settings-capability-empty">
-          <span>{t("settings.providerTools.noTargets")}</span>
-        </div>
       ) : extensionMode ? (
         <section className="settings-provider-tool-defaults">
           <header className="settings-provider-tool-defaults-header">
             <span>
               <strong>{t("settings.providerTools.systemDefault")}</strong>
-              <small>选择允许 AI 查询并按需调用的原生扩展模型；工具名保持稳定。</small>
+              <small>{t("settings.modelExperience.extensionSelectionHint")}</small>
             </span>
           </header>
+          {targets.length === 0 ? (
+            <>
+              <p className="settings-muted-line">{t("settings.providerTools.noTargets")}</p>
+              <div className="settings-provider-tool-defaults-grid">
+                <label>
+                  <span>{t("settings.providerTools.model")}</span>
+                  <Select disabled value="">
+                    <SelectTrigger aria-label={t("settings.providerTools.model")}><SelectValue placeholder={t("settings.providerTools.model")} /></SelectTrigger>
+                    <SelectContent />
+                  </Select>
+                </label>
+                <label>
+                  <span>{t("settings.providerTools.account")}</span>
+                  <Select disabled value="">
+                    <SelectTrigger aria-label={t("settings.providerTools.account")}><SelectValue placeholder={t("settings.providerTools.account")} /></SelectTrigger>
+                    <SelectContent />
+                  </Select>
+                </label>
+              </div>
+            </>
+          ) : null}
           <div className="settings-provider-tool-extension-list">
             {uniqueProviderToolModels(targets).map((model) => {
               // modelTargets contains every configured account for one native extension model.
@@ -384,19 +398,20 @@ export function ProviderToolSelectionSettingsArea(props: {
               <small>{t("settings.providerTools.systemDefaultHint")}</small>
             </span>
             <Switch
-              aria-label={enabled
+              aria-label={enabled && Boolean(selectedAccount)
                 ? t("settings.providerTools.enabled")
                 : t("settings.providerTools.disabled")}
-              checked={enabled}
-              disabled={pending}
+              checked={enabled && Boolean(selectedAccount)}
+              disabled={pending || !selectedAccount}
               onCheckedChange={(checked) => void saveEnabled(checked)}
             />
           </header>
+          {targets.length === 0 ? <p className="settings-muted-line">{t("settings.providerTools.noTargets")}</p> : null}
           <div className="settings-provider-tool-defaults-grid">
             <label>
               <span>{t("settings.providerTools.model")}</span>
               <Select
-                disabled={pending}
+                disabled={pending || models.length === 0}
                 onValueChange={(targetId) => {
                   const compatible = targets.filter((target) => target.target.target_id === targetId);
                   const target = compatible.find((candidate) => (
@@ -406,7 +421,7 @@ export function ProviderToolSelectionSettingsArea(props: {
                 }}
                 value={selectedModelId}
               >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={t("settings.providerTools.model")}><SelectValue placeholder={t("settings.providerTools.model")} /></SelectTrigger>
                 <SelectContent>
                   {models.map((target) => (
                     <SelectItem key={target.target.target_id} value={target.target.target_id}>
@@ -426,7 +441,7 @@ export function ProviderToolSelectionSettingsArea(props: {
                 }}
                 value={selectedAccount?.connectionId ?? ""}
               >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={t("settings.providerTools.account")}><SelectValue placeholder={t("settings.providerTools.account")} /></SelectTrigger>
                 <SelectContent>
                   {accounts.map((target) => (
                     <SelectItem key={target.connectionId} value={target.connectionId}>
@@ -459,6 +474,8 @@ export function ProviderToolSelectionSettingsArea(props: {
 
 // MediaUnderstandingDefaults renders one closed mode, model, account, and reasoning selection.
 // MediaUnderstandingDefaults 渲染一个封闭模式、模型、账号与思考级别选择。
+// Parameters: props supplies the exact understanding capability, stored routes and save callbacks; returns both modes and only enables an available selected target.
+// 参数：props 提供精确理解能力、已存路由及保存回调；返回两种模式，并仅允许启用可用的已选目标。
 export function MediaUnderstandingDefaults(props: {
   // Exact admitted model-replacement account routes for the current media kind.
   // 当前媒体类型精确且已准入的模型代替账号路由。
@@ -468,13 +485,13 @@ export function MediaUnderstandingDefaults(props: {
   enabled: boolean;
   // Persists the independent system capability switch.
   // 持久化独立的系统能力开关。
-  onEnabledChange: (enabled: boolean) => void;
+  onEnabledChange: (enabled: boolean) => void | Promise<boolean | undefined>;
   // Persists one exact provider-tool target.
   // 持久化一个精确供应商工具目标。
-  onProviderTargetChange: (target: PublicAiProviderToolTargetSnapshot) => void;
+  onProviderTargetChange: (target: PublicAiProviderToolTargetSnapshot) => void | Promise<boolean>;
   // Persists one complete closed backend selection.
   // 持久化一个完整封闭后端选择。
-  onSelectionChange: (selection: PublicAiMediaUnderstandingBackendSelection) => void;
+  onSelectionChange: (selection: PublicAiMediaUnderstandingBackendSelection) => void | Promise<boolean>;
   // Disables controls while one authoritative snapshot mutation is pending.
   // 权威快照写入进行中时禁用控件。
   pending: boolean;
@@ -489,9 +506,22 @@ export function MediaUnderstandingDefaults(props: {
   targets: PublicAiProviderToolTargetSnapshot[];
 }) {
   const { t } = useI18n();
-  // mode reflects only the authoritative persisted active backend.
-  // mode 仅反映权威持久化的活动后端。
-  const mode = props.selection?.mode;
+  // mode retains an explicit empty editing mode without fabricating a persisted target.
+  // mode 保留显式选择的空编辑模式，不伪造持久化目标。
+  const [mode, setMode] = React.useState<PublicAiMediaUnderstandingBackendSelection["mode"]>(
+    props.selection?.mode ?? "provider_tool",
+  );
+  // switching prevents overlapping mode transitions before the parent receives its updated snapshot.
+  // switching 在父组件收到更新快照前防止模式切换重叠。
+  const [switching, setSwitching] = React.useState(false);
+  // transitionInFlight closes the synchronous double-click gap before React commits disabled controls.
+  // transitionInFlight 关闭 React 提交禁用控件前的同步双击间隙。
+  const transitionInFlight = React.useRef(false);
+  // Follow successful route changes while retaining empty mode edits across switch snapshots.
+  // 跟随成功保存的路由变更，同时在开关快照刷新时保留空模式编辑。
+  React.useEffect(() => {
+    if (props.selection) setMode(props.selection.mode);
+  }, [props.selection?.mode]);
   // providerSelection exists only while the provider-specific mode is selected.
   // providerSelection 仅在选择供应商专用模式时存在。
   const providerSelection = props.selection?.mode === "provider_tool"
@@ -554,7 +584,46 @@ export function MediaUnderstandingDefaults(props: {
     : props.backendOptions?.model_replacement?.reasoning_effort ?? "__default__";
   // backendAvailable prevents enabling a capability with no concrete execution route.
   // backendAvailable 防止在没有具体执行路由时启用能力。
-  const backendAvailable = props.targets.length > 0 || props.candidates.length > 0;
+  const backendAvailable = props.selection?.mode === mode && (mode === "provider_tool"
+    ? Boolean(selectedProviderTarget)
+    : Boolean(selectedModelCandidate));
+  // Effective presentation requires the exact selected executable target; a retained enabled bit alone is insufficient.
+  // 有效显示状态要求精确选中的可执行目标，单独保留的启用位不足以生效。
+  const presentationEnabled = props.enabled && backendAvailable;
+  // changeMode saves a valid retained route or disables an empty mode while preserving both stored routes.
+  // changeMode 保存有效保留路由，或关闭空模式默认，同时保留两条已存路由。
+  // The exact destination mode is committed only after its required save succeeds.
+  // 仅在必需保存成功后才提交精确的目标模式。
+  // Parameters: nextMode is the explicitly requested closed mode; returns a promise after its required save, retaining the old visible mode on failure.
+  // 参数：nextMode 是明确请求的封闭模式；返回所需保存结束后的 Promise，失败时保留旧可见模式。
+  const changeMode = async (nextMode: PublicAiMediaUnderstandingBackendSelection["mode"]) => {
+    if (transitionInFlight.current || props.pending || nextMode === mode) return;
+    transitionInFlight.current = true;
+    setSwitching(true);
+    try {
+      if (nextMode === "provider_tool") {
+        // target restores the retained exact route, then allows an explicit mode switch to initialize its first choice.
+        // target 恢复保留的精确路由，再允许显式模式切换初始化首个选项。
+        const target = selectedProviderTarget ?? props.targets[0];
+        if (target) {
+          if (await props.onProviderTargetChange(target) === false) return;
+        } else if (props.enabled && await props.onEnabledChange(false) === false) return;
+      } else {
+        // candidate preserves the retained route and only keeps reasoning supported by that exact route.
+        // candidate 保留已存路由，并只保留该精确路由支持的思考档位。
+        const candidate = selectedModelCandidate ?? props.candidates[0];
+        if (candidate) {
+          if (await props.onSelectionChange(modelReplacementSelection(candidate,
+            selectedModelCandidate ? supportedMediaReplacementReasoningEffort(candidate, persistedModelRoute?.reasoning_effort) : undefined,
+          )) === false) return;
+        } else if (props.enabled && await props.onEnabledChange(false) === false) return;
+      }
+      setMode(nextMode);
+    } finally {
+      transitionInFlight.current = false;
+      setSwitching(false);
+    }
+  };
   return (
     <section className="settings-provider-tool-defaults">
       <header className="settings-provider-tool-defaults-header">
@@ -563,80 +632,40 @@ export function MediaUnderstandingDefaults(props: {
           <small>{t("settings.providerTools.systemDefaultHint")}</small>
         </span>
         <Switch
-          aria-label={props.enabled
+          aria-label={presentationEnabled
             ? t("settings.providerTools.enabled")
             : t("settings.providerTools.disabled")}
-          checked={props.enabled}
+          checked={presentationEnabled}
           disabled={mediaUnderstandingCapabilityToggleDisabled(
-            props.pending,
+            props.pending || switching,
             backendAvailable,
-            props.enabled,
+            presentationEnabled,
           )}
           onCheckedChange={props.onEnabledChange}
         />
       </header>
-      {!backendAvailable ? (
-        <div className="composer-capability-dialog-empty settings-capability-empty">
-          <span>{t("settings.providerTools.noTargets")}</span>
-        </div>
-      ) : (
-        <div className="settings-provider-tool-defaults-grid">
-          <label>
+        <div className="settings-provider-tool-defaults-grid settings-media-understanding-grid">
+          <div className="settings-media-mode-field">
             <span>{t("settings.providerTools.mediaBackendMode")}</span>
-            <Select
-              disabled={props.pending}
-              onValueChange={(nextMode) => {
-                if (nextMode === "provider_tool") {
-                  const retainedTarget = props.targets.find((target) => (
-                    target.connectionId === props.backendOptions?.provider_tool?.connection_id
-                    && target.target.target_id === props.backendOptions?.provider_tool?.target_id
-                  )) ?? props.targets[0];
-                  if (retainedTarget) props.onProviderTargetChange(retainedTarget);
-                } else if (nextMode === "model_replacement") {
-                  const retainedCandidate = props.candidates.find((candidate) => (
-                    candidate.selection.provider_id === props.backendOptions?.model_replacement?.selection.provider_id
-                    && candidate.selection.model_id === props.backendOptions?.model_replacement?.selection.model_id
-                    && candidate.selection.connection_id === props.backendOptions?.model_replacement?.selection.connection_id
-                  ));
-                  const candidate = retainedCandidate ?? props.candidates[0];
-                  if (candidate) {
-                    props.onSelectionChange(modelReplacementSelection(
-                      candidate,
-                      retainedCandidate
-                        ? supportedMediaReplacementReasoningEffort(
-                          candidate,
-                          props.backendOptions?.model_replacement?.reasoning_effort,
-                        )
-                        : undefined,
-                    ));
-                  }
-                }
-              }}
-              value={mode ?? ""}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={t("settings.providerTools.selectBackendMode")} />
-              </SelectTrigger>
-              <SelectContent>
-                {props.targets.length > 0 ? (
-                  <SelectItem value="provider_tool">
-                    {t("settings.providerTools.providerToolMode")}
-                  </SelectItem>
-                ) : null}
-                {props.candidates.length > 0 ? (
-                  <SelectItem value="model_replacement">
-                    {t("settings.providerTools.modelReplacementMode")}
-                  </SelectItem>
-                ) : null}
-              </SelectContent>
-            </Select>
-          </label>
+            <div className="settings-media-mode-options" role="group" aria-label={t("settings.providerTools.mediaBackendMode")}>
+              <Button aria-pressed={mode === "provider_tool"} disabled={props.pending || switching} onClick={() => void changeMode("provider_tool")} type="button" variant={mode === "provider_tool" ? "secondary" : "outline"}>
+                {t("settings.providerTools.providerToolMode")}
+              </Button>
+              <Button aria-pressed={mode === "model_replacement"} disabled={props.pending || switching} onClick={() => void changeMode("model_replacement")} type="button" variant={mode === "model_replacement" ? "secondary" : "outline"}>
+                {t("settings.providerTools.modelReplacementMode")}
+              </Button>
+            </div>
+          </div>
           {mode === "provider_tool" ? (
             <>
               <label>
                 <span>{t("settings.providerTools.model")}</span>
-                <Select
-                  disabled={props.pending}
+                <Combobox
+                  ariaLabel={t("settings.providerTools.model")}
+                  emptyText={t("settings.modelExperience.modelNoMatch")}
+                  searchPlaceholder={t("settings.modelExperience.modelSearch")}
+                  placeholder={t("settings.providerTools.selectModel")}
+                  disabled={props.pending || providerModels.length === 0}
                   onValueChange={(modelKey) => {
                     // compatibleTarget retains the selected account when the new model exposes it.
                     // compatibleTarget 在新模型公开已选账号时保留该账号。
@@ -647,16 +676,13 @@ export function MediaUnderstandingDefaults(props: {
                     if (compatibleTarget) props.onProviderTargetChange(compatibleTarget);
                   }}
                   value={providerModelKey}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {providerModels.map((target) => (
-                      <SelectItem key={providerToolModelKey(target)} value={providerToolModelKey(target)}>
-                        {target.target.display_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={providerModels.map((target) => ({
+                    value: providerToolModelKey(target), label: target.target.display_name,
+                    description: target.target.provider_id,
+                    keywords: [target.target.provider_id, target.target.upstream_target_id,
+                      ...props.targets.filter((candidate) => providerToolModelKey(candidate) === providerToolModelKey(target)).flatMap((candidate) => [candidate.connectionId, candidate.connectionDisplayName])],
+                  }))}
+                />
               </label>
               <label>
                 <span>{t("settings.providerTools.account")}</span>
@@ -672,7 +698,7 @@ export function MediaUnderstandingDefaults(props: {
                   }}
                   value={selectedProviderTarget?.connectionId ?? ""}
                 >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder={t("settings.providerTools.selectAccount")} /></SelectTrigger>
                   <SelectContent>
                     {providerAccounts.map((target) => (
                       <SelectItem key={target.connectionId} value={target.connectionId}>
@@ -683,12 +709,16 @@ export function MediaUnderstandingDefaults(props: {
                 </Select>
               </label>
             </>
-          ) : mode === "model_replacement" ? (
+          ) : (
             <>
               <label>
                 <span>{t("settings.providerTools.model")}</span>
-                <Select
-                  disabled={props.pending}
+                <Combobox
+                  ariaLabel={t("settings.providerTools.model")}
+                  emptyText={t("settings.modelExperience.modelNoMatch")}
+                  searchPlaceholder={t("settings.modelExperience.modelSearch")}
+                  placeholder={t("settings.providerTools.selectModel")}
+                  disabled={props.pending || modelChoices.length === 0}
                   onValueChange={(modelKey) => {
                     // replacementCandidate is the first exact account route for the explicit model choice.
                     // replacementCandidate 是显式模型选择的首条精确账号路由。
@@ -700,21 +730,13 @@ export function MediaUnderstandingDefaults(props: {
                     }
                   }}
                   value={selectedModelKey}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t("settings.providerTools.selectModel")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {modelChoices.map((candidate) => (
-                      <SelectItem
-                        key={mediaUnderstandingModelKey(candidate)}
-                        value={mediaUnderstandingModelKey(candidate)}
-                      >
-                        {candidate.providerDisplayName} · {candidate.modelDisplayName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={modelChoices.map((candidate) => ({
+                    value: mediaUnderstandingModelKey(candidate), label: candidate.modelDisplayName,
+                    description: candidate.providerDisplayName,
+                    keywords: [candidate.selection.provider_id, candidate.selection.model_id,
+                      ...props.candidates.filter((route) => mediaUnderstandingModelKey(route) === mediaUnderstandingModelKey(candidate)).flatMap((route) => [route.connectionDisplayName, route.selection.connection_id ?? ""])],
+                  }))}
+                />
               </label>
               <label>
                 <span>{t("settings.providerTools.account")}</span>
@@ -786,31 +808,17 @@ export function MediaUnderstandingDefaults(props: {
                 </label>
               ) : null}
             </>
-          ) : (
-            <div className="composer-capability-dialog-empty settings-capability-empty">
-              <span>{t("settings.providerTools.noSelection")}</span>
-            </div>
           )}
         </div>
-      )}
+      {!backendAvailable ? (
+        <p className="settings-media-understanding-status" role="status">
+          {(mode === "provider_tool" ? props.targets.length : props.candidates.length) === 0
+            ? t("settings.providerTools.noTargets")
+            : t("settings.providerTools.noSelection")}
+        </p>
+      ) : null}
     </section>
   );
-}
-
-// mediaUnderstandingCapabilityToggleDisabled blocks invalid enablement while preserving stale-state cleanup.
-// mediaUnderstandingCapabilityToggleDisabled 阻止无效启用，同时保留清理失效旧状态的能力。
-//
-// Parameters: pending reports an active mutation, backendAvailable reports a concrete route, and enabled is persisted state.
-// 参数：pending 表示写入进行中，backendAvailable 表示存在具体路由，enabled 是持久化状态。
-//
-// Returns: true only when the switch must reject every state transition.
-// 返回值：仅当开关必须拒绝全部状态转换时返回 true。
-export function mediaUnderstandingCapabilityToggleDisabled(
-  pending: boolean,
-  backendAvailable: boolean,
-  enabled: boolean,
-): boolean {
-  return pending || (!backendAvailable && !enabled);
 }
 
 // isMediaUnderstandingCapability reports whether one capability uses the fixed media-understanding contract.

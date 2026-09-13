@@ -87,6 +87,13 @@ function lifecycleChangeSet(): PersistentChangeSet {
 }
 
 describe("V1 event-native tool presentation", () => {
+  // New public tool contracts use exact identities; lookalike names remain generic.
+  // 新公开工具契约使用精确身份；相似名称保持通用展示。
+  it.each(["codebase_retrieval", "submit_plan", "ask", "luaskill", "call_luaskill", "context7_resolve_library_id", "context7_query_docs", "debug_session_open", "debug_session_request", "debug_session_events", "debug_session_status", "debug_session_close"])("maps only the exact %s contract", (toolName) => {
+    expect(resolveV1ToolPresentation(toolItem({ toolName, input: {} })).kind).toBe("native");
+    expect(resolveV1ToolPresentation(toolItem({ toolName: `${toolName}_custom`, input: {} })).kind).toBe("generic");
+  });
+
   it("keeps +140/-208 totals consistent with retained and explicitly omitted rows", () => {
     const presentation = resolveV1ToolPresentation(toolItem({ changeset: lifecycleChangeSet() }));
     if (presentation.kind !== "file_change") throw new Error(`expected file_change, got ${presentation.kind}`);
@@ -359,8 +366,8 @@ describe("V1 event-native tool presentation", () => {
       },
       output: {
         host_result: {
-          kind: "ask_question",
-          payload: { answers: [["继续"]] },
+          kind: "ask",
+          payload: { tool_name: "ask", headers: ["范围"], answers: [["继续"]], display: { kind: "ask_question", questions: [{ header: "范围", question: "继续执行吗？", options: [], multiple: false, answers: ["继续"], answered: true }] } },
         },
       },
     }));
@@ -370,9 +377,9 @@ describe("V1 event-native tool presentation", () => {
       output: { model_output: "审核完成" },
     }));
 
-    expect(ask).toMatchObject({ kind: "generic", toolName: "ask", title: "ask" });
-    expect(ask.kind === "generic" ? ask.inputMarkdown : "").toContain("继续执行吗");
-    expect(ask.kind === "generic" ? ask.outputMarkdown : "").toContain("ask_question");
+    expect(ask).toMatchObject({ kind: "native", family: "ask", toolName: "ask", title: "向用户提问" });
+    expect(ask.domain.summary).toBe("1 个问题");
+    expect(ask.domain.sections[0].value).toEqual([{ header: "范围", question: "继续执行吗？", options: [], multiple: false, answers: ["继续"], answered: true }]);
     expect(subagent).toMatchObject({
       kind: "generic",
       toolName: "review-agent",

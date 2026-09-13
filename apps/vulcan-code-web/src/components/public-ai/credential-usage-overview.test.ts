@@ -10,6 +10,7 @@ import {
   credentialUsageIsNonPlanAccount,
   kimiUsageWindowLabel,
   usageWindowValue,
+  usageWindowPercentage,
   usageCapabilityRequiresManagementKey,
   usageCapabilitySupportsQuotaWindows,
 } from "./credential-usage-overview"
@@ -65,6 +66,19 @@ function testTranslation(key: TranslationKey): string {
   }
   return messages[key] ?? key
 }
+
+describe("unknown quota values", () => {
+  it("distinguishes missing remaining quota from an exhausted quota", () => {
+    // Both windows share one declared allowance; only the second reports an exact zero.
+    // 两个窗口具有相同的声明额度，仅第二个报告精确零值。
+    const unknown = { ...kimiUsageWindow("quota"), total: "100" };
+    const exhausted = { ...unknown, remaining: "0" };
+    expect(usageWindowPercentage(unknown)).toBeNull();
+    expect(usageWindowPercentage(exhausted)).toBe(0);
+    expect(usageWindowValue(unknown, testTranslation)).toContain("-");
+    expect(usageWindowValue(exhausted, testTranslation)).toContain("0 / 100");
+  });
+});
 
 describe("formatCurrencyAmount", () => {
   // Verifies provider decimal strings are rounded without floating-point conversion.

@@ -75,6 +75,19 @@ export interface ComposerDraftSubmissionSnapshot {
   attachments: ComposerAttachmentSummary[];
 }
 
+/** Signals that preflight outlived its exact draft owner or content; no draft was consumed.
+ * 表示预检已超出精确草稿所有者或内容的有效期；没有消费任何草稿。
+ */
+export class ComposerDraftChangedBeforeSubmissionError extends Error {
+  /** Creates a typed local cancellation without treating it as a persistence failure.
+   * 创建类型明确的本地取消原因，避免误报持久化失败；无参数，返回错误实例。
+   */
+  constructor() {
+    super("The composer draft changed before submission and was preserved.");
+    this.name = "ComposerDraftChangedBeforeSubmissionError";
+  }
+}
+
 /** ComposerQueuedDraftReplacementToken binds one queue edit to the owner that initiated it.
  * ComposerQueuedDraftReplacementToken 把一次队列编辑绑定到发起它的 owner。
  */
@@ -221,6 +234,8 @@ async function restoreInactiveMaterializedDraft(
 /** Owns draft hydration, persistence, attachment state, and submission rollback semantics.
  * 管理草稿恢复、持久化、附件状态与提交回滚语义。
  */
+// Parameters: options binds one conversation/project draft and persistence callbacks; returns draft handlers and submission capture/rollback operations.
+// 参数：options 绑定一份会话或项目草稿及持久化回调；返回草稿处理器和提交捕获、回滚操作。
 export function useComposerSessionDraft(
   options: UseComposerSessionDraftOptions,
 ): UseComposerSessionDraftState {
@@ -431,7 +446,19 @@ export function useComposerSessionDraft(
   }, [setAttachments, t]);
 
   const clearForSubmission = React.useCallback(async () => {
+    // Reject retained callbacks before any write: the active ref can belong to a later conversation.
+    // 在任何写入前拒绝过期回调：活动 ref 可能已经属于后来切换的会话。
     const owner = activeOwnerRef.current;
+    if (
+      owner.draftSlotKey !== draftKey
+      || owner.sessionId !== options.conversationId
+      || !draftStateMatches({ draftSlotKey: draftKey, input: draftInput, attachments }, inputRef.current, attachmentsRef.current)
+    ) {
+      throw new ComposerDraftChangedBeforeSubmissionError();
+    }
+    if (attachmentState.hasPendingAttachmentStaging()) {
+      throw new Error(t("composer.attachment.stagingPending"));
+    }
     if (
       hydratingOwnerKeyRef.current === owner.draftSlotKey
       || ownerApplyBlockRef.current?.draftSlotKey === owner.draftSlotKey
@@ -475,7 +502,7 @@ export function useComposerSessionDraft(
       }
     }
     return snapshot;
-  }, [attachments, draftInput, restoreFailedSubmission, setAttachments]);
+  }, [attachmentState.hasPendingAttachmentStaging, attachments, draftInput, draftKey, options.conversationId, restoreFailedSubmission, setAttachments, t]);
 
   const restoreInputToSlot = React.useCallback((targetDraftSlotKey: string, input: string) => {
     const currentOwner = activeOwnerRef.current;

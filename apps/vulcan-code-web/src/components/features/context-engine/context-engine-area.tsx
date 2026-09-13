@@ -382,8 +382,8 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold">{copy("语义引擎", "ContextEngine")}</h2>
               <span className={readiness?.ready
-                ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-700 dark:text-emerald-300"
-                : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300"}
+                ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-success)] dark:text-emerald-300"
+                : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-warning)] dark:text-amber-300"}
               >
                 {readiness?.ready ? copy("已就绪", "Ready") : copy("已关闭", "Closed")}
               </span>
@@ -522,8 +522,8 @@ function VceRouteField(props: VceRouteFieldProps) {
     <div className="grid gap-4 px-4 py-4 @3xl/vce:grid-cols-[minmax(0,0.9fr)_minmax(18rem,1.25fr)_auto] @3xl/vce:items-start">
       <div className="flex min-w-0 items-start gap-3">
         <span className={props.status?.available
-          ? "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
-          : "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-600"}
+          ? "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-[var(--vcn-content-success)]"
+          : "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[var(--vcn-content-warning)]"}
         >
           {props.status?.available
             ? <CheckCircle2 className="size-4" />
@@ -557,10 +557,10 @@ function VceRouteField(props: VceRouteFieldProps) {
           value={selectedValue}
         />
         {props.testSummary ? (
-          <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">{props.testSummary}</p>
+          <p className="mt-2 text-xs text-[var(--vcn-content-success)] dark:text-emerald-300">{props.testSummary}</p>
         ) : null}
         {props.status?.issue ? (
-          <p className="mt-2 break-words text-xs text-amber-700 dark:text-amber-300">{props.status.issue}</p>
+          <p className="mt-2 break-words text-xs text-[var(--vcn-content-warning)] dark:text-amber-300">{props.status.issue}</p>
         ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-2 @3xl/vce:justify-end">

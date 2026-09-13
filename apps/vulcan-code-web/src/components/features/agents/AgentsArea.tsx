@@ -2,10 +2,11 @@ import * as React from "react"
 import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
-import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
+import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
 import { SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls"
 import { Input } from "@/components/ui/input"
@@ -20,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { StatusPill } from "@/components/shared/status"
 import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { useI18n } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
@@ -183,6 +183,12 @@ export function AgentsArea(props: {
   // detailDefinition stores the agent selected for the details dialog.
   // detailDefinition 保存当前打开详情弹窗的智能体定义。
   const [detailDefinition, setDetailDefinition] = React.useState<SubagentDefinitionSummary | null>(null)
+  // definitionConfirmation binds a destructive definition action to its exact selected row.
+  // definitionConfirmation 将破坏性的定义操作绑定到准确的已选行。
+  const [definitionConfirmation, setDefinitionConfirmation] = React.useState<{ definition: SubagentDefinitionSummary; operation: "delete" | "restore" } | null>(null)
+  // actionError retains failure details without discarding an editor draft.
+  // actionError 保留失败详情且不丢弃编辑草稿。
+  const [actionError, setActionError] = React.useState<string | null>(null)
   // searchQuery stores the cross-locale keyword filter text.
   // searchQuery 保存跨语言关键词筛选文本。
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -234,16 +240,21 @@ export function AgentsArea(props: {
   //
   // Parameters: label identifies the busy indicator and action performs the service mutation.
   // 参数：label 标识忙碌提示，action 执行服务变更。
-  // Returns: a promise that settles after the accepted action releases the synchronous guard.
-  // 返回值：在已接受动作释放同步守卫后结束的 Promise。
+  // Returns: true only after an accepted action succeeds; rejected or failed actions return false.
+  // 返回值：只有已接受动作成功后才返回 true；未接受或失败的动作返回 false。
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
     if (busyActionRef.current || togglingAgentIdsRef.current.size > 0) {
-      return
+      return false
     }
     busyActionRef.current = true
     setBusyAction(label)
+    setActionError(null)
     try {
       await action()
+      return true
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error))
+      return false
     } finally {
       busyActionRef.current = false
       setBusyAction(null)
@@ -293,7 +304,7 @@ export function AgentsArea(props: {
   // submitEditorDraft 通过用户目录持久化当前草稿。
   const submitEditorDraft = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (busyActionRef.current) {
+    if (busyActionRef.current || togglingAgentIdsRef.current.size > 0) {
       return
     }
     const normalizedDraft = editorDraft ? normalizedAgentEditorDraftFileIdentity(editorDraft) : null
@@ -314,8 +325,9 @@ export function AgentsArea(props: {
       toast.error(error instanceof Error ? error.message : String(error))
       return
     }
-    await runAction("save", () => props.actions.onSaveAgentDefinition(request))
-    setEditorDraft(null)
+    if (await runAction("save", () => props.actions.onSaveAgentDefinition(request))) {
+      setEditorDraft(null)
+    }
   }, [editorDraft, props.actions, props.workbench.subagentCatalog.definitions, runAction, text])
 
   return (
@@ -325,7 +337,7 @@ export function AgentsArea(props: {
           <div className="agent-catalog-toolbar-heading">
             <p>{text("管理 Vulcan Code Agent 运行时消费的用户级智能体 Markdown 文件。", "Manage user-level agent Markdown files consumed by the Vulcan Code Agent runtime.")}</p>
             <div className="agent-catalog-toolbar-actions">
-              <IconButton aria-label={text("新增智能体", "New agent")} disabled={catalogActionDisabled} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} size="xs" title={text("新增智能体", "New agent")} type="button">
+              <IconButton aria-label={text("新增智能体", "New agent")} disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale))) }} size="xs" title={text("新增智能体", "New agent")} type="button">
                 <Plus size={15} />
               </IconButton>
               <IconButton aria-label={text("打开用户目录", "Open user directory")} disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="xs" title={text("打开用户目录", "Open user directory")} type="button">
@@ -358,16 +370,20 @@ export function AgentsArea(props: {
           </div>
         </section>
         <AgentCatalogIssues catalog={props.workbench.subagentCatalog} />
+        {actionError && !editorDraft ? (
+          <div role="alert" className="agent-catalog-issues">
+            <strong>{text("操作未完成，请重试。", "The action did not complete. Please retry.")}</strong>
+            <details><summary>{text("查看详情", "View details")}</summary><p>{actionError}</p></details>
+          </div>
+        ) : null}
         <div className="skill-card-list agent-skill-card-list">
           {props.workbench.subagentCatalog.definitions.length === 0 ? (
             <article className="skill-empty-card">
-              <StatusPill status="pending" label="pending" />
               <strong>{text("暂无智能体定义", "No agent definitions")}</strong>
               <span>{text("可以新增智能体，或打开用户目录后手动复制 Markdown 与元数据文件。", "Create an agent manually, or open the user directory and copy Markdown plus metadata files there.")}</span>
             </article>
           ) : visibleDefinitions.length === 0 ? (
             <article className="skill-empty-card">
-              <StatusPill status="pending" label="pending" />
               <strong>{text("没有匹配的智能体", "No matching agents")}</strong>
               <span>{text("调整分类、启停状态或搜索关键词。", "Adjust the category, enabled state, or search keywords.")}</span>
             </article>
@@ -378,15 +394,17 @@ export function AgentsArea(props: {
               categoryById={categoryById}
               definition={definition}
               key={definition.sourceKey}
-              onEdit={() => setEditorDraft(draftFromDefinition(definition, defaultAgentMetadataLocale(locale)))}
+              onEdit={() => { setActionError(null); setEditorDraft(draftFromDefinition(definition, defaultAgentMetadataLocale(locale))) }}
               onOpenDetail={setDetailDefinition}
-              onRunAction={runAction}
+              onRequestDelete={() => { setActionError(null); setDefinitionConfirmation({ definition, operation: "delete" }) }}
+              onRequestRestore={() => { setActionError(null); setDefinitionConfirmation({ definition, operation: "restore" }) }}
               onRunToggleAction={runToggleAction}
               toggleBusy={togglingAgentIds.has(definition.agentId)}
             />
           ))}
         </div>
         <AgentEditorForm
+          error={actionError}
           busy={catalogActionDisabled}
           draft={editorDraft}
           onCancel={() => setEditorDraft(null)}
@@ -405,6 +423,27 @@ export function AgentsArea(props: {
             }
           }}
         />
+        <AlertDialog open={definitionConfirmation !== null} onOpenChange={(open) => { if (!open && !busyActionRef.current) setDefinitionConfirmation(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{definitionConfirmation?.operation === "restore" ? text("恢复智能体默认值", "Restore agent defaults") : text("删除智能体", "Delete agent")}</AlertDialogTitle>
+              <AlertDialogDescription>{definitionConfirmation ? definitionConfirmation.operation === "restore"
+                ? text(`将移除“${localizedDefinitionName(definitionConfirmation.definition, locale)}”的用户覆盖，恢复系统定义。`, `Remove the user override for “${localizedDefinitionName(definitionConfirmation.definition, locale)}” and restore its system definition.`)
+                : text(`将删除“${localizedDefinitionName(definitionConfirmation.definition, locale)}”的用户定义文件。此操作无法在此页面撤销。`, `Delete the user definition file for “${localizedDefinitionName(definitionConfirmation.definition, locale)}”. This cannot be undone from this page.`) : ""}</AlertDialogDescription>
+            </AlertDialogHeader>
+            {actionError ? <p role="alert" className="max-h-24 overflow-auto break-words text-sm text-destructive">{actionError}</p> : null}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={catalogActionDisabled}>{text("取消", "Cancel")}</AlertDialogCancel>
+              <AlertDialogAction disabled={catalogActionDisabled} onClick={async (event) => {
+                event.preventDefault()
+                if (!definitionConfirmation) return
+                if (await runAction(definitionConfirmation.operation, () => definitionConfirmation.operation === "restore"
+                  ? props.actions.onRestoreAgentDefinitionDefault(definitionConfirmation.definition.agentId)
+                  : props.actions.onDeleteAgentDefinition(definitionConfirmation.definition.agentId))) setDefinitionConfirmation(null)
+              }} variant="destructive">{definitionConfirmation?.operation === "restore" ? text("恢复默认", "Restore defaults") : text("删除", "Delete")}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </section>
   )
@@ -492,6 +531,9 @@ function AgentCatalogIssues(props: {
 // AgentEditorForm renders the create/edit form for one agent definition.
 // AgentEditorForm 渲染单个智能体定义的新建或编辑表单。
 function AgentEditorForm(props: {
+  // Latest accepted action failure, retained with the editable draft until retry or dismissal.
+  // 最近已接受动作的失败信息，与可编辑草稿一起保留，直到重试或关闭。
+  error: string | null
   // Whether a catalog action is running.
   // 目录动作是否正在运行。
   busy: boolean
@@ -519,13 +561,18 @@ function AgentEditorForm(props: {
 }) {
   const { locale, t } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
+  // Keep initial focus at the title so opening a long editor never skips its first fields.
+  // 初始焦点放在标题上，避免打开长编辑表单时跳过开头字段。
+  const editorTitleRef = React.useRef<HTMLHeadingElement>(null)
   const draft = props.draft
   const editingSystemBackedDefinition = draft?.sourceScopeKey === "system" || Boolean(draft?.overrideOf)
   const readOnlySystemMetadata = Boolean(editingSystemBackedDefinition)
   const selectedMetadataLocale = draft?.metadataLocale ?? defaultAgentMetadataLocale(locale)
   const selectedMetadataName = draft?.localizedNames[selectedMetadataLocale] ?? ""
   const selectedMetadataDescription = draft?.localizedDescriptions[selectedMetadataLocale] ?? ""
-  const fixedModelValue = draft?.fixedModelProviderId && draft.fixedModelId ? `${draft.fixedModelProviderId}/${draft.fixedModelId}` : ""
+  const fixedModelValue = draft?.fixedModelProviderId && draft.fixedModelId
+    ? modelPickerGroupKey({ providerId: draft.fixedModelProviderId, modelId: draft.fixedModelId })
+    : ""
   const fixedModelMissingFromChoices = Boolean(fixedModelValue && !modelPickerChoiceExists(props.providers, fixedModelValue))
   const fixedModelUnavailable = Boolean(fixedModelValue && (draft?.fixedModelAvailable === false || fixedModelMissingFromChoices))
   const fixedModelUnavailableReason = draft?.fixedModelUnavailableReason || text("当前固定模型不在可用模型列表中，运行时会回退到会话模型。", "This fixed model is not in the available model list; runtime will fall back to the session model.")
@@ -575,9 +622,12 @@ function AgentEditorForm(props: {
         props.onCancel()
       }
     }}>
-      <DialogContent className="agent-editor-dialog">
+      <DialogContent className="agent-editor-dialog" size="xl" scrollMode="fixed-footer" onOpenAutoFocus={(event) => {
+        event.preventDefault()
+        editorTitleRef.current?.focus({ preventScroll: true })
+      }}>
         <DialogHeader>
-          <DialogTitle>{draft?.existing ? text("编辑智能体", "Edit agent") : text("新增智能体", "New agent")}</DialogTitle>
+          <DialogTitle ref={editorTitleRef} tabIndex={-1}>{draft?.existing ? text("编辑智能体", "Edit agent") : text("新增智能体", "New agent")}</DialogTitle>
           <DialogDescription>
             {editingSystemBackedDefinition
               ? text("系统内置智能体只允许保存用户侧元数据覆盖，例如工具策略和追加提示词。", "System agents only allow user metadata overrides, such as tool policy and appended prompts.")
@@ -586,6 +636,9 @@ function AgentEditorForm(props: {
         </DialogHeader>
         {draft ? (
           <form className="agent-editor-form" onSubmit={props.onSubmit}>
+            <div className="agent-editor-body">
+            <details className="agent-editor-definition" key={draft.agentId} open={readOnlySystemMetadata ? undefined : true}>
+              <summary>{text("基本信息与系统提示词", "Definition and system prompt")}{readOnlySystemMetadata ? <small>{text("内置定义 · 只读", "Built-in · read-only")}</small> : null}</summary>
             <div className="agent-editor-grid">
               <label>
                 <span>{text("技能文件名", "Skill file name")}</span>
@@ -634,23 +687,27 @@ function AgentEditorForm(props: {
               </label>
               <label className="wide agent-prompt-field primary">
                 <span>{text("系统提示词", "System prompt")}</span>
-                <Textarea autoFocus={!readOnlySystemMetadata} density="large" disabled={props.busy || readOnlySystemMetadata} rows={14} value={draft.systemPrompt} onChange={(event) => updateDraftField("systemPrompt", event.target.value)} />
+                <Textarea density="large" disabled={props.busy} readOnly={readOnlySystemMetadata} rows={10} value={draft.systemPrompt} onChange={(event) => updateDraftField("systemPrompt", event.target.value)} />
               </label>
+            </div>
+            </details>
+            <div className="agent-editor-grid">
               <label className="wide agent-prompt-field">
                 <span>{text("追加提示词", "Prompt append")}</span>
-                <Textarea autoFocus={readOnlySystemMetadata} disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
+                <Textarea disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
               </label>
               <div className="wide agent-editor-model-field">
                 <span>{text("模型", "Model")}</span>
                 <div className="settings-card-actions">
                   <ModelPickerControl
+                    selectionScope="model"
                     ariaLabel={text("选择智能体固定模型", "Choose fixed agent model")}
-                    fallbackLabel={text("选择模型", "Select model")}
+                    fallbackLabel={text("跟随会话模型", "Follow session model")}
                     filterPlaceholder={text("输入模型名称、ID 或 Provider 过滤", "Filter by model name, id, or provider")}
                     noMatchesLabel={text("当前过滤条件下没有匹配模型。", "No models match the current filter.")}
                     providers={props.providers}
                     value={fixedModelValue}
-                    unavailableValueLabel={fixedModelValue ? `${text("不可用", "Unavailable")}: ${fixedModelValue}` : undefined}
+                    unavailableValueLabel={fixedModelValue ? `${text("不可用", "Unavailable")}: ${draft.fixedModelProviderId}/${draft.fixedModelId}` : undefined}
                     disabled={props.busy}
                     onValueChange={(choice) => props.onDraftChange({
                       ...draft,
@@ -717,7 +774,14 @@ function AgentEditorForm(props: {
               {draft.definitionFile ? <span>{draft.definitionFile}</span> : null}
               {editingSystemBackedDefinition ? <strong>{text("仅保存用户侧元数据覆盖", "Only user metadata override will be saved")}</strong> : null}
             </div>
+            </div>
             <DialogFooter>
+              {props.error ? (
+                <div role="alert" className="min-w-0 flex-1 text-destructive">
+                  <strong>{text("保存失败，草稿已保留。", "Save failed. Your draft has been kept.")}</strong>
+                  <details><summary>{text("查看详情", "View details")}</summary><p className="max-h-24 overflow-auto break-words">{props.error}</p></details>
+                </div>
+              ) : null}
               <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="secondary">
                 <X size={15} />
                 <span>{text("取消", "Cancel")}</span>
@@ -904,6 +968,7 @@ function AgentCapabilityPolicyTable(props: {
           </SegmentedControlItem>
         </SegmentedControl>
         <input
+          aria-label={props.searchPlaceholder}
           disabled={props.disabled}
           placeholder={props.searchPlaceholder}
           value={filterText}
@@ -925,11 +990,12 @@ function AgentCapabilityPolicyTable(props: {
                   <span>{option.family}</span>
                 </div>
                 <code>{option.id}</code>
-                {option.description ? <p>{option.description}</p> : null}
+                {option.description ? <details className="agent-policy-description"><summary>{text("说明", "Description")}</summary><p>{option.description}</p></details> : null}
                 {option.detail ? <span>{option.detail}</span> : null}
               </div>
               <label className="agent-tool-policy-checkbox">
                 <Checkbox
+                  aria-label={`${policySelectionLabel(props.mode, locale)} ${option.label}`}
                   checked={checked}
                   disabled={props.disabled || props.mode === "all"}
                   onCheckedChange={(nextChecked) => {
@@ -1001,9 +1067,12 @@ function AgentDefinitionCard(props: {
   // Opens this definition in the detail dialog.
   // 在详情弹窗中打开当前定义。
   onOpenDetail: (definition: SubagentDefinitionSummary) => void
-  // Runs a labeled async action with page-level busy state.
-  // 使用页面级忙碌状态运行带标签的异步动作。
-  onRunAction: (label: string, action: () => Promise<void>) => Promise<void>
+  // Requests confirmation before deleting the current definition.
+  // 删除当前定义前请求确认。
+  onRequestDelete: () => void
+  // Requests confirmation before removing a system definition's user override.
+  // 移除系统定义的用户覆盖前请求确认。
+  onRequestRestore: () => void
   // Runs one enabled-state action with row-level busy state.
   // 使用行级忙碌状态运行单个启停动作。
   onRunToggleAction: (agentId: string, action: () => Promise<void>) => Promise<void>
@@ -1026,7 +1095,7 @@ function AgentDefinitionCard(props: {
   const scopeLabel = localizedAgentScopeLabel(definition.scopeKey, t)
   return (
     <article className="agent-definition-row">
-      <button className="agent-definition-row-icon" onClick={() => props.onOpenDetail(definition)} title={t("skills.action.details")} type="button">
+      <button aria-label={`${t("skills.action.details")} · ${displayName}`} className="agent-definition-row-icon" onClick={() => props.onOpenDetail(definition)} title={t("skills.action.details")} type="button">
         <span className="agent-definition-row-glyph">{fallbackIcon}</span>
         <span className="agent-definition-row-color-marker" style={{ backgroundColor: colorSwatchValue(definition.color) }} />
       </button>
@@ -1039,7 +1108,7 @@ function AgentDefinitionCard(props: {
             {definition.categoryId ? <Badge variant="outline" title={definition.categoryId}>{categoryLabel}</Badge> : null}
             {definition.packageId ? <Badge variant="outline">{definition.packageId}</Badge> : null}
             {definition.owningPluginId ? <Badge variant="outline">{definition.owningPluginId}</Badge> : null}
-            {definition.remoteUrl ? <Badge variant="outline">Remote</Badge> : null}
+            {definition.remoteUrl ? <Badge variant="outline">{text("远程", "Remote")}</Badge> : null}
             {fixedModelSelector ? (
               <Badge variant={fixedModelUnavailable ? "destructive" : "outline"} title={fixedModelTitle}>
                 {fixedModelUnavailable ? text("固定模型不可用", "Fixed model unavailable") : text("固定模型", "Fixed model")}
@@ -1075,12 +1144,17 @@ function AgentDefinitionCard(props: {
           <IconButton
             aria-label={text("删除", "Delete")}
             disabled={props.busy}
-            onClick={() => void props.onRunAction("delete", () => props.actions.onDeleteAgentDefinition(definition.agentId))}
+            onClick={props.onRequestDelete}
             title={text("删除", "Delete")}
             type="button"
             variant="destructive"
           >
             <Trash2 size={15} />
+          </IconButton>
+        ) : null}
+        {definition.canRestoreDefault ? (
+          <IconButton aria-label={text("恢复默认", "Restore defaults")} disabled={props.busy || props.toggleBusy} onClick={props.onRequestRestore} title={text("恢复默认", "Restore defaults")} type="button">
+            <RotateCcw size={15} />
           </IconButton>
         ) : null}
       </div>
@@ -1109,7 +1183,7 @@ function AgentDefinitionDetailDialog(props: {
   const scopeLabel = definition ? localizedAgentScopeLabel(definition.scopeKey, t) : null
   return (
     <Dialog open={props.open && definition !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="agent-skill-detail-dialog">
+      <DialogContent className="agent-skill-detail-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{displayName ?? text("智能体详情", "Agent details")}</DialogTitle>
           <DialogDescription>{scopeLabel ?? text("查看智能体定义。", "Inspect the agent definition.")}</DialogDescription>
@@ -1133,11 +1207,11 @@ function AgentDefinitionDetailDialog(props: {
               ) : null}
               <div>
                 <span>{text("工具策略", "Tool policy")}</span>
-                <strong>{definition.allowedToolCount} allow / {definition.disabledToolCount} deny</strong>
+                <strong>{text(`允许 ${definition.allowedToolCount} / 禁止 ${definition.disabledToolCount}`, `${definition.allowedToolCount} allow / ${definition.disabledToolCount} deny`)}</strong>
               </div>
               <div>
                 <span>Prompt Skills</span>
-                <strong>{definition.enabledPromptSkillCount} allow / {definition.disabledPromptSkillCount} deny</strong>
+                <strong>{text(`允许 ${definition.enabledPromptSkillCount} / 禁止 ${definition.disabledPromptSkillCount}`, `${definition.enabledPromptSkillCount} allow / ${definition.disabledPromptSkillCount} deny`)}</strong>
               </div>
               <div className="wide">
                 <span>{text("模型", "Model")}</span>
@@ -1149,7 +1223,7 @@ function AgentDefinitionDetailDialog(props: {
               </div>
               {definition.remoteUrl ? (
                 <div className="wide">
-                  <span>Remote URL</span>
+                  <span>{text("远程地址", "Remote URL")}</span>
                   <strong>{definition.remoteUrl}</strong>
                 </div>
               ) : null}
@@ -1324,13 +1398,9 @@ function normalizedAgentEditorDraftFileIdentity(draft: AgentEditorDraft): AgentE
 // modelPickerChoiceExists returns whether a provider/model key is currently selectable.
 // modelPickerChoiceExists 返回某个供应商/模型键当前是否可被选择。
 function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], value: string): boolean {
-  return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerChoiceKey({
+  return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerGroupKey({
     providerId: provider.sourceProviderId ?? provider.id,
-    connectionId: provider.connectionId ?? "",
-    providerName: provider.name,
     modelId: model.id,
-    modelName: model.name,
-    active: Boolean(model.active),
   }) === value))
 }
 
@@ -1984,3 +2054,6 @@ function localizedAgentScopeLabel(
       return t("skills.label.plugin")
   }
 }
+// Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
+// 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
+import "@/styles/skill-directory.css";

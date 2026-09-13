@@ -345,8 +345,42 @@ pub fn resolve_public_ai_provider_blueprint(
         leased_selection
     };
 
-    // protocolId is read from the exact immutable selection leased above.
-    // protocolId 从上方租用的精确不可变选择读取。
+    provider_blueprint_from_selection(selection, requested_reasoning_effort)
+}
+
+/// Freezes an explicit Git summary target without reading or mutating conversation leases.
+/// 冻结明确的 Git 总结目标，不读取或修改会话租约。
+///
+/// `runtime` owns the current catalog; provider/model IDs are the validated summary setting.
+/// `runtime` 持有当前目录；供应商和模型标识来自已校验的总结设置。
+/// Returns the frozen blueprint or an explicit target/reasoning error, with no fallback.
+/// 返回冻结蓝图或明确的目标、思考档位错误，不尝试替代目标。
+pub(crate) fn resolve_git_commit_summary_provider_blueprint(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    provider_id: &str,
+    model_id: &str,
+    requested_reasoning_effort: ReasoningEffortLevel,
+) -> Result<ProviderRuntimeBlueprint, String> {
+    // configuration and selection freeze one model-level route under current eligibility rules.
+    // configuration 与 selection 按当前准入规则冻结一条模型级路由。
+    let configuration = runtime.configuration_snapshot()?;
+    let selection = runtime.resolve_model_selection(&configuration, provider_id, model_id)?;
+    provider_blueprint_from_selection(selection, requested_reasoning_effort)
+}
+
+/// Projects one already resolved immutable selection into execution and accounting facts.
+/// 将已解析的不可变选择投影为执行和统计事实。
+///
+/// `selection` owns the exact route; `requested_reasoning_effort` is validated without substitution.
+/// `selection` 持有精确路由；`requested_reasoning_effort` 经过校验且不会被替换。
+/// Returns a complete execution blueprint, or the exact reasoning validation error.
+/// 返回完整执行蓝图，或精确的思考档位校验错误。
+fn provider_blueprint_from_selection(
+    selection: vulcan_provider_adapters::ResolvedPublicAiSelection,
+    requested_reasoning_effort: ReasoningEffortLevel,
+) -> Result<ProviderRuntimeBlueprint, String> {
+    // protocolId is read from the exact immutable selection, never resolved again.
+    // protocolId 从精确的不可变选择读取，绝不再次解析。
     let protocol_id = selection.route.protocol_route.protocol_profile_id.as_str();
     // Apply validated local narrowing to the immutable request blueprint so budgeting and
     // transport dispatch observe the same limits.
@@ -399,6 +433,135 @@ pub fn resolve_public_ai_provider_blueprint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies an independent summary target never replaces the live conversation lease.
+    /// 验证独立总结目标不会替换正在使用的会话租约。
+    /// Uses current signed OpenRouter bindings and local catalogs; performs no network or secret reads.
+    /// 使用当前签名的 OpenRouter 绑定和本地目录，不进行网络或秘密读取。
+    #[test]
+    fn git_summary_target_is_independent_from_conversation_lease() {
+        use vulcan_provider_adapters::{
+            ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
+            ProtocolModelVariant, PublicAiRuntime, parse_openrouter_model_catalog,
+        };
+        // runtime and configuration are isolated process-local authorities for two declared models.
+        // runtime 与 configuration 是两个已声明模型的进程内隔离权威。
+        let runtime = PublicAiRuntime::unavailable().expect("isolated runtime");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime.providers().unwrap(),
+                CredentialConnection {
+                    id: String::from("summary-test"),
+                    provider_id: String::from("openrouter"),
+                    service_entry_id: String::from("public-api"),
+                    credential_profile_id: String::from("api-key"),
+                    credential_mode: CredentialMode::Token,
+                    credential_id: String::from("summary-credential"),
+                    display_name: String::from("Summary test"),
+                    secret_reference: String::from("unused-summary-secret"),
+                    management_secret_reference: None,
+                    service_origin_override: None,
+                    prompt_cache_by_protocol: Default::default(),
+                },
+            )
+            .expect("isolated connection");
+        // catalog uses the documented provider parser, not hand-built resolved selections.
+        // catalog 使用正式供应商解析器，不手工构造解析后选择。
+        let mut catalog = parse_openrouter_model_catalog("summary-test", 1,
+            r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"Conversation","context_length":8192,"supported_parameters":["tools","temperature"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"openai/gpt-5.6-terra","name":"Summary","context_length":8192,"supported_parameters":["tools","temperature"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#
+        ).expect("documented source catalog");
+        for model in &mut catalog.models {
+            for profile in [
+                "openai-chat-completions.v1",
+                "openai-responses.v1",
+                "anthropic-messages.v1",
+            ] {
+                model.protocol_variants.insert(
+                    profile.to_string(),
+                    ProtocolModelVariant {
+                        capabilities: model.capabilities.clone(),
+                        capability_evidence: Default::default(),
+                        discovery_signature: String::from("summary-test-catalog"),
+                        catalog_generation: catalog.generation,
+                    },
+                );
+            }
+            configuration.set_model_enabled("openrouter", &model.id, true);
+        }
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-sol"),
+            connection_id: String::from("summary-test"),
+        });
+        runtime
+            .stage_source_catalog_for_testing(catalog)
+            .expect("source catalog");
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("configuration");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("effective catalog");
+        // before captures the exact original route before the independent request is prepared.
+        // before 记录独立请求准备之前的精确原始路由。
+        let before = resolve_public_ai_provider_blueprint(
+            &runtime,
+            "conversation-owner",
+            None,
+            ReasoningEffortLevel::Off,
+            None,
+            None,
+            None,
+        )
+        .expect("conversation lease");
+        // summary must freeze the selected model while preserving original session and global state.
+        // summary 必须冻结选中模型，同时保留原会话与全局状态。
+        let summary = resolve_git_commit_summary_provider_blueprint(
+            &runtime,
+            "openrouter",
+            "openai/gpt-5.6-terra",
+            ReasoningEffortLevel::Off,
+        )
+        .expect("independent summary");
+        assert_eq!(summary.model_id, "openai/gpt-5.6-terra");
+        assert_eq!(
+            summary.frozen_selection.as_ref().unwrap().model.id,
+            "openai/gpt-5.6-terra"
+        );
+        assert!(
+            resolve_git_commit_summary_provider_blueprint(
+                &runtime,
+                "openrouter",
+                "missing-model",
+                ReasoningEffortLevel::Off
+            )
+            .is_err()
+        );
+        assert_eq!(
+            runtime
+                .session_selection_lease("conversation-owner")
+                .unwrap()
+                .unwrap()
+                .route_revision,
+            before.route_revision
+        );
+        assert_eq!(
+            runtime.configuration_snapshot().unwrap().active,
+            configuration.active
+        );
+        // following resolves the validated conversation model without changing its established lease.
+        // following 解析已校验的会话模型，同时不改变其既有租约。
+        let following = resolve_git_commit_summary_provider_blueprint(
+            &runtime,
+            &before.provider_id,
+            &before.model_id,
+            ReasoningEffortLevel::Off,
+        )
+        .unwrap();
+        assert_eq!(following.model_id, before.model_id);
+    }
 
     /// Builds one deterministic persisted route identity for comparison tests.
     /// 为比较测试构建一份确定性的持久化路由身份。

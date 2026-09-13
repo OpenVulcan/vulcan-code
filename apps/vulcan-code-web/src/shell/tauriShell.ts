@@ -38,18 +38,18 @@ interface TauriWindowHandle {
   onFocusChanged: (handler: () => void) => Promise<() => void>;
 }
 
-// TauriNotificationApi exposes only official plugin calls used by the desktop shell facade.
-// TauriNotificationApi 仅暴露桌面壳门面使用的官方插件调用。
+// TauriNotificationApi exposes only native command calls used by the desktop shell facade.
+// TauriNotificationApi 仅暴露桌面壳门面使用的原生命令调用。
 interface TauriNotificationApi {
   // isPermissionGranted checks current desktop notification authorization.
   // isPermissionGranted 检查当前桌面通知授权。
-  isPermissionGranted: () => Promise<boolean>;
+  isPermissionGranted: () => Promise<boolean | null>;
   // requestPermission requests desktop notification authorization from a user action.
   // requestPermission 通过用户操作请求桌面通知授权。
   requestPermission: () => Promise<NotificationPermission>;
   // sendNotification presents one native desktop notification.
   // sendNotification 展示一条原生桌面通知。
-  sendNotification: (options: { title: string; body: string }) => void;
+  sendNotification: (options: { title: string; body: string }) => Promise<void>;
 }
 
 // TauriShellClient implements client-host actions through Tauri APIs.
@@ -58,15 +58,12 @@ export class TauriShellClient implements ShellClient {
   // windowPromise caches the dynamic current-window handle import.
   // windowPromise 缓存动态当前窗口句柄导入。
   private windowPromise: Promise<TauriWindowHandle> | null = null;
-  // notificationApiPromise caches the official notification plugin import.
-  // notificationApiPromise 缓存官方通知插件导入。
+  // notificationApiPromise caches the native notification command import.
+  // notificationApiPromise 缓存原生通知命令导入。
   private notificationApiPromise: Promise<TauriNotificationApi> | null = null;
-  // knownPermission preserves an explicit denial for the current shell lifetime.
-  // knownPermission 在当前壳生命周期内保留明确拒绝结果。
-  private knownPermission: ShellNotificationPermission | null = null;
 
-  // getNotificationCapability reports native notification support provided by the registered plugin.
-  // getNotificationCapability 报告已注册插件提供的原生通知支持。
+  // getNotificationCapability reports native notification support provided by the desktop commands.
+  // getNotificationCapability 报告桌面命令提供的原生通知支持。
   getNotificationCapability(): ShellNotificationCapability {
     return { shellKind: "tauri", supported: true, activationSupported: false };
   }
@@ -74,23 +71,18 @@ export class TauriShellClient implements ShellClient {
   // getNotificationPermission checks native authorization without prompting the user.
   // getNotificationPermission 检查原生授权状态，且不提示用户。
   async getNotificationPermission(): Promise<ShellNotificationPermission> {
-    // granted is the authoritative positive permission fact exposed by the official plugin.
-    // granted 是官方插件暴露的权威肯定权限事实。
+    // granted is the authoritative positive permission fact exposed by the native shell.
+    // granted 是原生壳暴露的权威肯定权限事实。
     const granted = await (await this.notificationApi()).isPermissionGranted();
-    if (granted) {
-      this.knownPermission = "granted";
-      return "granted";
-    }
-    return this.knownPermission === "denied" ? "denied" : "default";
+    return granted === null ? "default" : granted ? "granted" : "denied";
   }
 
   // requestNotificationPermission requests native authorization from an explicit settings action.
   // requestNotificationPermission 通过明确设置操作请求原生授权。
   async requestNotificationPermission(): Promise<ShellNotificationPermission> {
-    // permission stores the exact plugin response for subsequent non-prompting reads.
-    // permission 保存精确插件响应，供后续无提示读取。
+    // permission returns the current native registration and OS authorization result.
+    // permission 返回当前原生注册和操作系统授权结果。
     const permission = await (await this.notificationApi()).requestPermission();
-    this.knownPermission = permission;
     return permission;
   }
 
@@ -129,10 +121,10 @@ export class TauriShellClient implements ShellClient {
     };
   }
 
-  // showLocalNotification presents localized text through the official Tauri plugin.
-  // showLocalNotification 通过官方 Tauri 插件展示已本地化文案。
+  // showLocalNotification submits localized text and propagates native submission failures.
+  // showLocalNotification 提交已本地化文案，并传播原生提交失败。
   async showLocalNotification(request: ShellNotificationRequest): Promise<void> {
-    (await this.notificationApi()).sendNotification({ title: request.title, body: request.body });
+    await (await this.notificationApi()).sendNotification({ title: request.title, body: request.body });
   }
 
   // supportsWindowControls reports that Tauri exposes native window controls.
@@ -180,11 +172,24 @@ export class TauriShellClient implements ShellClient {
     return this.windowPromise;
   }
 
-  // notificationApi loads and returns the official Tauri notification plugin facade.
-  // notificationApi 加载并返回官方 Tauri 通知插件门面。
+  // notificationApi loads the native notification command facade and returns its asynchronous methods.
+  // notificationApi 加载原生通知命令门面，并返回其异步方法。
   private async notificationApi(): Promise<TauriNotificationApi> {
     if (!this.notificationApiPromise) {
-      this.notificationApiPromise = import("@tauri-apps/plugin-notification").then((api) => api as TauriNotificationApi);
+      // The 2.3.3 JS wrapper reads a Windows WebView permission cache and discards notify promises.
+      // 2.3.3 的 JS 包装读取 Windows WebView 权限缓存，并丢弃通知调用的 Promise。
+      // Dedicated desktop commands preserve application identity, native policy, and submission failures.
+      // 专用桌面命令保留应用身份、原生策略和通知提交失败。
+      this.notificationApiPromise = import("@tauri-apps/api/core").then(({ invoke }) => ({
+        isPermissionGranted: () => invoke<boolean | null>("notification_permission"),
+        requestPermission: async () => {
+          // permission is the exact PermissionState returned by the registered Tauri command.
+          // permission 是已注册 Tauri 命令返回的精确 PermissionState。
+          const permission = await invoke<"granted" | "denied" | "prompt" | "prompt-with-rationale">("request_notification_permission");
+          return permission === "prompt" || permission === "prompt-with-rationale" ? "default" : permission;
+        },
+        sendNotification: (options) => invoke<void>("show_notification", { options }),
+      }));
     }
     return this.notificationApiPromise;
   }

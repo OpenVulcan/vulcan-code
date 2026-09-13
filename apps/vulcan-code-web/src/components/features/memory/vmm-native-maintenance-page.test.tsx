@@ -22,6 +22,7 @@ describe("VMM native scheduled maintenance", () => {
     expect(markup).toContain("全文检索索引")
     expect(markup).toContain("重建全文索引")
     expect(markup).toContain("回收站")
-    expect(markup).toContain("当前筛选范围没有回收批次")
+    expect(markup).not.toContain("当前筛选范围没有回收批次")
+    expect(markup).toContain("加载")
   })
 })

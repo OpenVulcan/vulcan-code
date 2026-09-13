@@ -1,12 +1,21 @@
 name: Vulcan 用量统计
 capability: 通过系统 VLDB 查询和清理 Provider Token 事实，并使用插件自有价目表即时估算参考费用
 messages:
+  snapshot.retained: 当前显示上次读取结果，刷新成功后更新。
+  tokens.noComposition: 暂无可计算的输入与输出占比
+  tokens.composition: "输入 {{input}}% · 输出 {{output}}%"
+  tokens.cacheSeparate: 缓存读取比例以已报告输入为分母，缓存不重复计入输入与输出。
+  cost.empty: 此范围暂无费用记录
+  pricing.editor: 模型价格编辑器
+  pricing.chooseModel: 在下方表格选择模型，即可在此编辑价格。
+  pricing.editModel: "编辑模型 · {{model}}"
   navigationLabel: 使用统计
   title: 系统用量统计
-  subtitle: 内核只保存 Token 事实；本插件使用自有价目表即时计算且不持久化参考费用。
+  subtitle: 查看调用、用量与参考费用，管理模型价格。
   status.ready: 系统统计可用
   status.loading: 正在读取系统统计
   status.error: 系统统计加载失败
+  status.unknown: 统计健康状态未知
   status.succeeded: 成功
   status.failed: 失败
   status.cancelled: 已取消
@@ -17,7 +26,7 @@ messages:
   pricing.unmatched: 模型未匹配参考价目表
   pricing.incomplete: Token 事实不完整
   pricing.title: 模型参考价格
-  pricing.description: 覆盖价格仅属于本插件配置；估算会即时重算，绝不写入系统统计数据库。
+  pricing.description: 选择模型编辑四项单价。未定价字段保持空白；填写四项有效价格后保存，明确免费时填写零。
   pricing.model: 模型
   pricing.override: 自定义覆盖
   pricing.default: 目录默认值
@@ -47,7 +56,7 @@ messages:
   summary.usageCoverage: 用量覆盖率
   summary.usageCoverageDetail: Provider 直接报告
   heatmap.title: 活动热力图
-  heatmap.aria: 最近 365 天 Token 活动点阵图
+  heatmap.aria: 所选范围 Token 活动点阵图
   heatmap.empty: 暂无 Token 活动
   heatmap.tooltip: "{{date}}：{{value}} Token · {{requests}} 次请求 · 成功率 {{successRate}} · {{model}}"
   heatmap.noModel: 无模型
@@ -81,7 +90,7 @@ messages:
   accounts.provider: Provider
   accounts.connection: 连接
   accounts.kind: 快照类型
-  clear.title: 清理历史统计
+  clear.title: 清理全部历史统计（不受当前筛选影响）
   clear.preview: 预览清理
   clear.previewing: 正在生成预览
   clear.previewSummary: 此操作将永久删除
@@ -92,3 +101,41 @@ messages:
   clear.applying: 正在清理
   clear.success: 已清理历史统计
   privacy: Vulcan 只将 Token 事实写入独立系统数据库。本原生插件直接查询和清理该数据库，并在每次查询时基于插件自有价目表重新计算参考费用。
+  sections.label: 统计区域
+  sections.overview: 概览
+  sections.details: 用量明细
+  sections.pricing: 模型定价
+  sections.maintenance: 维护
+  range.label: 时间范围
+  range.days: "最近 {{days}} 天"
+  page.previous: 上一页
+  page.next: 下一页
+  pricing.search: 搜索模型
+  pricing.filter: 定价筛选
+  pricing.filter.all: 全部模型
+  pricing.filter.unpriced: 未定价
+  pricing.filter.override: 自定义覆盖
+  pricing.filter.used: 全部已有用量模型
+  pricing.tableScope: 每百万令牌单价；已有用量包含全部保留记录，不受明细分页影响。
+  pricing.loading: 正在加载价格目录
+  cost.title: 当前范围参考费用
+  cost.coverage: "{{priced}} 行可计算 · {{unpriced}} 行未定价 · {{incomplete}} 行用量不完整"
+  cost.partial: 部分覆盖
+  pricing.source: 价格来源
+  pricing.unpriced: 未配置价格
+  pricing.incompleteUsage: 必需用量不完整
+  pricing.loadError: 无法读取模型价格
+  error.details: 查看错误详情
+  tokens.inputTokens: 输入
+  tokens.outputTokens: 输出
+  tokens.cacheReadTokens: 缓存读取
+  tokens.cacheWriteTokens: 缓存写入
+  tokens.cacheShare: 缓存读取占已报告输入比例
+  tokens.breakdown: 输入、输出与缓存
+  usage.search: 按模型搜索用量
+  usage.applySearch: 搜索
+  usage.order: 时间排序
+  usage.newest: 最新在前
+  usage.oldest: 最早在前
+  error.retry: 重试
+  usage.clearSearch: 清除模型搜索

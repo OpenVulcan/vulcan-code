@@ -593,10 +593,62 @@ end
 --
 -- Returns one schema-validated dashboard projection.
 -- 返回一个通过 Schema 校验的仪表盘投影。
-local function load_dashboard()
+local function load_dashboard(input)
+    -- Read the commit revision before any paginated aggregate is consumed.
+    -- 消费任何分页聚合前读取提交版本。
+    -- The host changes this revision in the same transaction that replaces daily rows.
+    -- 宿主在替换每日记录的同一事务中更新此版本。
+    local initial_revision_rows = sqlite_query([[
+SELECT COALESCE(MAX(CAST(meta_value AS INTEGER)), 0) AS dashboardRevision
+FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
+]])
+    local initial_revision = initial_revision_rows[1].dashboardRevision
+    -- view selects required projections; omitted arguments retain the complete legacy response.
+    -- view 选择所需投影；参数省略时保留完整旧响应。
+    local view = input.view or "all"
+    -- config and known_models bound cost aggregation to catalog and configured model identities.
+    -- config 与 known_models 将费用聚合限制在目录与已配置模型身份内。
     local config = read_config()
+    local known_models = {}
+    for model_id in pairs(DEFAULT_PRICING_CATALOG.models) do known_models[model_id] = true end
+    for model_id in pairs(config.modelOverrides) do known_models[model_id] = true end
+    -- priced_model_ids contains at most the catalog size plus the schema-limited override count.
+    -- priced_model_ids 最多包含目录规模加 Schema 限制的覆盖数量。
+    local priced_model_ids = vulcan.json.array()
+    for model_id in pairs(known_models) do priced_model_ids[#priced_model_ids + 1] = model_id end
+    -- filter_params bind the optional bounded range and exact consumer without SQL interpolation.
+    -- filter_params 绑定可选有界范围与精确消费者，不进行 SQL 插值。
+    local filter_params = {
+        { kind = "int64", value = input.rangeDays or 365 },
+        { kind = "string", value = input.consumerId or "" },
+        { kind = "int64", value = input.dailyOffset or 0 },
+        { kind = "int64", value = input.recentOffset or 0 },
+        { kind = "string", value = input.modelQuery or "" },
+        { kind = "string", value = input.sortOrder or "newest" },
+        { kind = "string", value = vulcan.json.encode(priced_model_ids) },
+        { kind = "int64", value = 0 },
+    }
+    -- query binds one shared filter contract to every dashboard projection.
+    -- query 为每个仪表盘投影绑定同一个筛选契约。
+    -- sql is fixed source SQL; returns decoded rows from the system database.
+    -- sql 是固定源码 SQL；返回系统数据库中的已解码行。
+    local function query(sql)
+        return sqlite_query([[
+WITH filtered_daily AS (
+    SELECT * FROM provider_usage_daily_v3
+    WHERE calendar_date >= date('now', 'localtime', '-' || (?1 - 1) || ' days')
+      AND (?2 = '' OR consumer_id = ?2)
+      AND (?5 = '' OR instr(lower(model_id), lower(?5)) > 0)
+), filtered_attempts AS (
+    SELECT * FROM provider_usage_attempts_v3
+    WHERE terminal_at_ms >= CAST(strftime('%s', date('now', 'localtime', '-' || (?1 - 1) || ' days'), 'utc') AS INTEGER) * 1000
+      AND (?2 = '' OR consumer_id = ?2)
+      AND (?5 = '' OR instr(lower(mapped_model), lower(?5)) > 0)
+), page_offsets AS (SELECT ?3 AS daily_offset, ?4 AS recent_offset, ?6 AS sort_order, ?7 AS priced_models, ?8 AS cost_offset)
+]] .. sql, filter_params)
+    end
     local model_overrides = config.modelOverrides
-    local daily = sqlite_query([[
+    local daily = (view == "all" or view == "details") and query([[
 SELECT calendar_date AS calendarDate, provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
        model_id AS modelId, attempt_count AS attemptCount,
@@ -606,19 +658,20 @@ SELECT calendar_date AS calendarDate, provider_id AS providerId,
        cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens,
        output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens,
        total_tokens AS totalTokens, aggregate_revision AS aggregateRevision
- FROM provider_usage_daily_v3
- ORDER BY calendar_date DESC, provider_id, service_entry_id, consumer_id, operation, model_id
-LIMIT 500;
-]])
-    -- heatmap contains one exact aggregate per local calendar date for the shared 365-day grid.
-    -- heatmap 包含共享 365 天点阵所需的每个本地自然日精确聚合。
-    local heatmap = sqlite_query([[
-WITH filtered AS (
+ FROM filtered_daily
+ ORDER BY CASE WHEN ?6 = 'oldest' THEN calendar_date END ASC,
+          CASE WHEN ?6 = 'newest' THEN calendar_date END DESC,
+          provider_id, service_entry_id, consumer_id, operation, model_id
+LIMIT 100 OFFSET (SELECT daily_offset FROM page_offsets);
+]]) or vulcan.json.array()
+    -- heatmap contains one exact aggregate per local calendar date for the selected range.
+    -- heatmap 包含所选范围内的每个本地自然日精确聚合。
+    local heatmap = (view == "all" or view == "overview") and query([[
+, filtered AS (
     SELECT calendar_date, provider_id, model_id,
            COALESCE(total_tokens, 0) AS total_tokens,
            attempt_count, successful_attempt_count
-    FROM provider_usage_daily_v3
-    WHERE calendar_date >= date('now', 'localtime', '-364 days')
+    FROM filtered_daily
 ), daily AS (
     SELECT calendar_date, SUM(total_tokens) AS value,
            SUM(attempt_count) AS requests,
@@ -645,15 +698,14 @@ FROM daily d
 LEFT JOIN ranked_models r
     ON r.calendar_date = d.calendar_date AND r.model_rank = 1
 ORDER BY d.calendar_date;
-]])
-    -- series contains the top five model lines plus one stable Other line for the last 30 days.
-    -- series 包含最近 30 天前五个模型折线及一个稳定的其他折线。
-    local series = sqlite_query([[
-WITH ranked_models AS (
+]]) or vulcan.json.array()
+    -- series contains the top five model lines plus one stable Other line for the selected range.
+    -- series 包含所选范围前五个模型折线及一个稳定的其他折线。
+    local series = (view == "all" or view == "overview") and query([[
+, ranked_models AS (
     SELECT provider_id, model_id,
            SUM(COALESCE(total_tokens, 0)) AS metric_value
-    FROM provider_usage_daily_v3
-    WHERE calendar_date >= date('now', 'localtime', '-29 days')
+    FROM filtered_daily
     GROUP BY provider_id, model_id
     ORDER BY metric_value DESC, provider_id, model_id
     LIMIT 5
@@ -664,10 +716,9 @@ WITH ranked_models AS (
            CASE WHEN r.provider_id IS NULL THEN 'Other'
                 ELSE r.provider_id || ' / ' || r.model_id END AS label,
            COALESCE(d.total_tokens, 0) AS total_tokens
-    FROM provider_usage_daily_v3 d
+    FROM filtered_daily d
     LEFT JOIN ranked_models r
         ON r.provider_id = d.provider_id AND r.model_id = d.model_id
-    WHERE d.calendar_date >= date('now', 'localtime', '-29 days')
 ), projected AS (
     SELECT calendar_date, seriesKey, label, SUM(total_tokens) AS value
     FROM classified
@@ -676,8 +727,8 @@ WITH ranked_models AS (
 SELECT calendar_date AS date, seriesKey, label, value
 FROM projected
 ORDER BY date, seriesKey;
-]])
-    local recent_attempts = sqlite_query([[
+]]) or vulcan.json.array()
+    local recent_attempts = (view == "all" or view == "details") and query([[
 SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
        attempts.operation, attempts.provider_id AS providerId,
        attempts.service_entry_id AS serviceEntryId,
@@ -697,10 +748,11 @@ SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
         attempts.total_tokens AS totalTokens,
         attempts.provider_billing_details_json AS billingDetailsJson,
         attempts.terminal_at_ms AS terminalAtMs
- FROM provider_usage_attempts_v3 AS attempts
-ORDER BY attempts.terminal_at_ms DESC, attempts.attempt_id DESC
-LIMIT 200;
-    ]])
+ FROM filtered_attempts AS attempts
+ORDER BY CASE WHEN ?6 = 'oldest' THEN attempts.terminal_at_ms END ASC,
+         CASE WHEN ?6 = 'newest' THEN attempts.terminal_at_ms END DESC, attempts.attempt_id DESC
+LIMIT 50 OFFSET (SELECT recent_offset FROM page_offsets);
+    ]]) or vulcan.json.array()
     for _, row in ipairs(daily) do
         attach_reference_estimate(row, model_overrides)
     end
@@ -716,7 +768,7 @@ LIMIT 200;
         end
         attempt.billingDetailsJson = nil
     end
-    local accounts = sqlite_query([[
+    local accounts = (view == "all" or view == "maintenance") and sqlite_query([[
 SELECT provider_id AS providerId, connection_id AS connectionId,
        snapshot_kind AS snapshotKind,
        endpoint_profile_revision AS endpointProfileRevision,
@@ -733,13 +785,17 @@ FROM (
 WHERE rowNumber = 1
 ORDER BY providerId, connectionId, snapshotKind
 LIMIT 500;
-]])
+]]) or vulcan.json.array()
     for _, account in ipairs(accounts) do
         account.payload = decode_json_text(account.payloadJson, "payload_json")
         account.payloadJson = nil
     end
-    local meta_rows = sqlite_query([[
+    local meta_rows = query([[
 SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS generatedAtMs,
+       (SELECT COUNT(*) FROM filtered_daily) AS dailyCount,
+       (SELECT COUNT(*) FROM filtered_attempts) AS recentCount,
+       (SELECT json_group_array(consumer_id) FROM
+           (SELECT DISTINCT consumer_id FROM provider_usage_daily_v3 ORDER BY consumer_id)) AS consumerIdsJson,
        COALESCE(MAX(CASE WHEN meta_key = 'schema_revision'
                          THEN CAST(meta_value AS INTEGER) END), 0) AS schemaRevision,
        COALESCE(MAX(CASE WHEN meta_key = 'aggregate_revision'
@@ -752,11 +808,92 @@ FROM provider_usage_meta;
     if type(meta) ~= "table" then
         error("Vulcan Usage Statistics could not read system statistics metadata")
     end
+    -- summary_rows aggregate the entire selected range, independent of detail pagination.
+    -- summary_rows 聚合全部已选范围，不受明细分页影响。
+    local summary_rows = query([[
+SELECT COALESCE(SUM(attempt_count), 0) AS attempts,
+       COALESCE(SUM(successful_attempt_count), 0) AS successes,
+       COALESCE(SUM(reported_usage_attempt_count), 0) AS reported,
+       COALESCE(SUM(total_tokens), 0) AS totalTokens,
+       SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+       SUM(cache_read_tokens) AS cacheReadTokens, SUM(cache_write_tokens) AS cacheWriteTokens
+FROM filtered_daily;
+]])
+    -- cost_rows preserve each missing-usage combination instead of converting missing values to zero.
+    -- cost_rows 保留每种缺失用量组合，不把缺失值转为零。
+    -- Four nullable dimensions bound this projection to sixteen groups per priced model.
+    -- 四个可空维度将此投影限制为每个已定价模型最多十六组。
+    -- cost_sql pages bounded groups so maximum configured overrides cannot exceed host row limits.
+    -- cost_sql 对有界分组分页，确保最大配置覆盖数不会超过宿主行数限制。
+    local cost_sql = [[
+SELECT model_id AS modelId, COUNT(*) AS rowCount,
+       SUM(uncached_input_tokens) AS uncachedInputTokens,
+       SUM(cache_read_tokens) AS cacheReadTokens,
+       SUM(cache_write_tokens) AS cacheWriteTokens,
+       SUM(output_tokens) AS outputTokens
+FROM filtered_daily
+WHERE model_id IN (SELECT value FROM json_each(?7))
+GROUP BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
+         cache_write_tokens IS NULL, output_tokens IS NULL
+ORDER BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
+         cache_write_tokens IS NULL, output_tokens IS NULL
+LIMIT 1000 OFFSET (SELECT cost_offset FROM page_offsets);
+]]
+    -- cost_digits and cost_scale retain exact decimal arithmetic across the complete filtered range.
+    -- cost_digits 与 cost_scale 在完整筛选范围内保持精确十进制运算。
+    local cost_digits, cost_scale = "0", 0
+    local priced_rows, incomplete_rows = 0, 0
+    while true do
+      local cost_rows = query(cost_sql)
+      for _, row in ipairs(cost_rows) do
+        attach_reference_estimate(row, model_overrides)
+        if row.estimatedCost == vulcan.json.null then
+            incomplete_rows = incomplete_rows + row.rowCount
+        else
+            -- digits and scale are exact integer components of one model subtotal.
+            -- digits 与 scale 是单个模型小计的精确整数分量。
+            local digits, scale = parse_catalog_decimal(row.estimatedCost)
+            local next_scale = math.max(cost_scale, scale)
+            cost_digits = add_unsigned_integers(
+                cost_digits .. string.rep("0", next_scale - cost_scale),
+                digits .. string.rep("0", next_scale - scale)
+            )
+            cost_scale = next_scale
+            priced_rows = priced_rows + row.rowCount
+        end
+      end
+      if #cost_rows < 1000 then break end
+      filter_params[8].value = filter_params[8].value + 1000
+    end
+    -- Independent host queries do not share a read transaction; never publish mixed aggregate generations.
+    -- 独立宿主查询不共享读取事务；绝不发布混合聚合代次。
+    -- A changed revision requires an explicit reread, not an unbounded automatic retry while usage is arriving.
+    -- 版本变化时要求明确重新读取，不在用量持续到达时无限自动重试。
+    local completed_revision_rows = sqlite_query([[
+SELECT COALESCE(MAX(CAST(meta_value AS INTEGER)), 0) AS dashboardRevision
+FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
+]])
+    if initial_revision ~= meta.aggregateRevision
+        or initial_revision ~= completed_revision_rows[1].dashboardRevision then
+        error("Vulcan Usage Statistics: statistics changed during loading; refresh to read a consistent dashboard")
+    end
+    summary_rows[1].costs = {{
+        currency = DEFAULT_PRICING_CATALOG.currency,
+        amount = priced_rows > 0 and format_scaled_decimal(cost_digits, cost_scale) or vulcan.json.null,
+        pricedRows = priced_rows,
+        incompleteRows = incomplete_rows,
+        unpricedRows = meta.dailyCount - priced_rows - incomplete_rows,
+    }}
     return {
         generatedAtMs = meta.generatedAtMs,
+        view = view,
         schemaRevision = meta.schemaRevision,
         aggregateRevision = meta.aggregateRevision,
         healthStatus = meta.healthStatus,
+        dailyCount = meta.dailyCount,
+        recentCount = meta.recentCount,
+        summary = summary_rows[1],
+        consumerIds = decode_json_text(meta.consumerIdsJson, "consumerIdsJson"),
         pricingCatalog = {
             catalogId = DEFAULT_PRICING_CATALOG.catalog_id,
             revision = DEFAULT_PRICING_CATALOG.revision,
@@ -822,13 +959,69 @@ end
 -- Load the authoritative Provider usage dashboard from system VLDB.
 -- 从系统 VLDB 加载权威 Provider 用量仪表盘。
 --
--- args contains the schema-validated empty action arguments.
--- args 包含通过 Schema 校验的空 Action 参数。
+-- args contains the schema-validated range, consumer, model, order, view and page offsets.
+-- args 包含通过 Schema 校验的范围、消费者、模型、顺序、视图与分页偏移。
 -- Returns the dashboard in the managed plugin ABI envelope.
 -- 在受管插件 ABI 信封中返回仪表盘。
 function M.dashboard_get(args)
-    action_arguments(args)
-    return success(load_dashboard())
+    return success(load_dashboard(action_arguments(args)))
+end
+
+-- Query one complete, searchable pricing-directory page across catalog, overrides and retained usage.
+-- 在目录、覆盖与保留用量之间查询一页完整且可搜索的定价目录。
+-- args contains search, filter and offset; returns at most twenty-five priced model rows.
+-- args 包含 search、filter 与 offset；返回最多二十五个已投影模型行。
+function M.pricing_get(args)
+    local input = action_arguments(args)
+    local config = read_config()
+    -- catalog_ids and override_ids expose model identities only to the parameterized read.
+    -- catalog_ids 与 override_ids 仅向参数化读取提供模型身份。
+    local catalog_ids, override_ids = vulcan.json.array(), vulcan.json.array()
+    for model_id in pairs(DEFAULT_PRICING_CATALOG.models) do catalog_ids[#catalog_ids + 1] = model_id end
+    for model_id in pairs(config.modelOverrides) do override_ids[#override_ids + 1] = model_id end
+    local rows = sqlite_query([[
+WITH catalog AS (SELECT value AS model_id FROM json_each(?1)),
+overrides AS (SELECT value AS model_id FROM json_each(?2)),
+used AS (SELECT model_id, SUM(attempt_count) AS attempts FROM provider_usage_daily_v3 GROUP BY model_id),
+models AS (SELECT model_id FROM catalog UNION SELECT model_id FROM overrides UNION SELECT model_id FROM used),
+filtered AS (
+    SELECT m.model_id, COALESCE(u.attempts, 0) AS attempts
+    FROM models m LEFT JOIN used u ON m.model_id = u.model_id
+    WHERE (?3 = '' OR instr(lower(m.model_id), lower(?3)) > 0)
+      AND (?4 = 'all'
+        OR (?4 = 'used' AND u.model_id IS NOT NULL)
+        OR (?4 = 'override' AND m.model_id IN (SELECT model_id FROM overrides))
+        OR (?4 = 'unpriced' AND m.model_id NOT IN (SELECT model_id FROM catalog UNION SELECT model_id FROM overrides)))
+), page AS (SELECT * FROM filtered ORDER BY model_id LIMIT 25 OFFSET ?5)
+SELECT json_object('totalCount', (SELECT COUNT(*) FROM filtered),
+    'models', json((SELECT json_group_array(json_object('modelId', model_id, 'attempts', attempts)) FROM page))) AS resultJson;
+]], {
+        { kind = "string", value = vulcan.json.encode(catalog_ids) },
+        { kind = "string", value = vulcan.json.encode(override_ids) },
+        { kind = "string", value = input.search or "" },
+        { kind = "string", value = input.filter or "all" },
+        { kind = "int64", value = input.offset or 0 },
+    })
+    local result = decode_json_text(rows[1].resultJson, "pricing directory")
+    result.currency = DEFAULT_PRICING_CATALOG.currency
+    for _, row in ipairs(result.models) do
+        local configured = config.modelOverrides[row.modelId]
+        local catalog = DEFAULT_PRICING_CATALOG.models[row.modelId]
+        if configured ~= nil then
+            row.prices = configured
+            row.source = "override"
+        elseif catalog ~= nil then
+            row.prices = {
+                inputPerMillion = catalog.input_per_million, outputPerMillion = catalog.output_per_million,
+                cacheReadPerMillion = catalog.cache_read_per_million, cacheWritePerMillion = catalog.cache_write_per_million,
+            }
+            row.source = "catalog"
+        else
+            row.prices = vulcan.json.null
+            row.source = "unpriced"
+        end
+    end
+    return success(result)
 end
 
 -- Preview clearing all historical Provider statistics without mutating data.

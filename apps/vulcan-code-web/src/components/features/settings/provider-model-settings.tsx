@@ -8,11 +8,11 @@ import {
   filterProviderModels,
   type FilterableProviderModel,
 } from "@/components/features/settings/provider-model-filter"
-import { ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
+import { modelModalityLabel, ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
+import { providerModelModalities } from "@/components/features/settings/provider-model-modalities"
 import { providerPriority } from "@/components/features/settings/provider-ordering"
 import {
   buildProviderModelGroups,
-  compactServiceEntryName,
   type PublicModelProtocolRoute,
 } from "@/components/features/settings/provider-model-routes"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
@@ -21,12 +21,11 @@ import { PublicAiModelOverridesDialog } from "@/components/features/settings/pub
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Combobox } from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel"
-import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu"
 import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
@@ -55,12 +54,20 @@ export function ModelListSettingsArea() {
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // loadAttempt retries a failed catalog load only on explicit user action.
+  // loadAttempt 仅在用户显式操作时重试失败的目录加载。
+  const [loadAttempt, setLoadAttempt] = React.useState(0)
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
   const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
   const [editingCapabilityModel, setEditingCapabilityModel] = React.useState<PublicAiModel | null>(null)
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
-  const [menuExpanded, setMenuExpanded] = React.useState(true)
   const [searchQuery, setSearchQuery] = React.useState("")
+  // usageFilter narrows visible rows using independent backend-owned admission dimensions.
+  // usageFilter 使用相互独立的后端准入维度收窄可见模型。
+  const [usageFilter, setUsageFilter] = React.useState("all")
+  // capabilityFilter matches declared input resources or internal operations on at least one actual route.
+  // capabilityFilter 匹配至少一条真实路由声明的输入资源或内部操作。
+  const [capabilityFilter, setCapabilityFilter] = React.useState("all")
   const mutationInFlightRef = React.useRef(false)
 
   // runSnapshotMutation serializes full-snapshot writes so late responses cannot regress the UI.
@@ -90,6 +97,7 @@ export function ModelListSettingsArea() {
 
   React.useEffect(() => {
     let active = true
+    setError(null)
     void loadPublicAiSettings()
       .then((next) => {
         if (active) {
@@ -105,7 +113,7 @@ export function ModelListSettingsArea() {
     return () => {
       active = false
     }
-  }, [])
+  }, [loadAttempt])
 
   // groupedProviders keeps credential-backed model providers ordered by persisted priority.
   // groupedProviders 按持久化优先级排列由凭据支持的模型供应商。
@@ -164,8 +172,18 @@ export function ModelListSettingsArea() {
   // visibleModelRows applies page-local filters without changing catalog or persisted access state.
   // visibleModelRows 应用页面内筛选，不改变目录或持久化访问状态。
   const visibleModelRows = React.useMemo(
-    () => filterProviderModels(providerModelRows, searchQuery, "all"),
-    [providerModelRows, searchQuery],
+    () => filterProviderModels(providerModelRows, searchQuery, "all").filter((row) => {
+      if (capabilityFilter !== "all" && !row.routes.some((route) => (
+        providerModelModalities(route.model).input.some((modality) => modality === capabilityFilter)
+        || providerModelModalities(route.model).output.some((modality) => modality === capabilityFilter)
+      ))) return false
+      if (usageFilter === "all") return true
+      if (usageFilter === "conversation") return row.enabled && row.routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
+      if (!snapshot || !selectedGroup) return false
+      if (usageFilter === "internal") return internalStateForModel(snapshot, selectedGroup.provider.id, row.modelId)?.enabled === true
+      return snapshot.multimodalUnderstandingCandidateModels?.some((record) => record.providerId === selectedGroup.provider.id && record.modelId === row.modelId) === true
+    }),
+    [providerModelRows, searchQuery, usageFilter, capabilityFilter, snapshot, selectedGroup],
   )
   // blockedModelRoutes keeps backend diagnostics visible without admitting blocked routes to controls.
   // blockedModelRoutes 保持后端诊断可见，同时不把受阻路由放入可操作控件。
@@ -182,29 +200,21 @@ export function ModelListSettingsArea() {
   const selectedProviderLabel = selectedGroup
     ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
     : t("settings.models.noProviderSelected")
+  // unavailableAdmissions retain a cleanup path even when every route of an admitted model disappears.
+  // unavailableAdmissions 在已准入模型的全部路由消失后仍保留清理入口。
+  const unavailableAdmissions = snapshot?.multimodalUnderstandingCandidateModels?.filter((record) => (
+    !groupedProviders.some((group) => group.provider.id === record.providerId && group.models.has(record.modelId))
+  )) ?? []
   return (
-    <AdaptiveToolPanel
-      className="workspace-tool-panel-page workspace-skills-settings credential-management-layout model-list-layout"
-      contentClassName="workspace-skills-content credential-management-content model-list-content"
-      contentShellClassName="credential-management-content-shell"
-      expanded={menuExpanded}
-      minContentWidth={336}
-      panel={(
-        <WorkspaceToolPanelMenu
-          activeLabel={selectedProviderLabel}
-          ariaLabel={t("settings.models.provider")}
-          className="credential-management-menu"
-          collapseLabel={t("settings.models.collapseProviders")}
-          expanded={menuExpanded}
-          expandLabel={t("settings.models.expandProviders")}
-          heading={t("settings.models.provider")}
-          onExpandedChange={setMenuExpanded}
-        >
+    <div className="model-list-layout">
+      <div className="settings-local-directory-grid">
+        <nav className="settings-local-directory-nav" aria-label={t("settings.models.provider")}>
           {groupedProviders.map((group) => (
             <button
               className={`workspace-tool-panel-menu-row ${selectedGroup?.provider.id === group.provider.id ? "active" : ""}`}
               key={group.provider.id}
               onClick={() => setSelectedProviderId(group.provider.id)}
+              aria-current={selectedGroup?.provider.id === group.provider.id ? "page" : undefined}
               type="button"
             >
               <ProviderIcon
@@ -212,18 +222,28 @@ export function ModelListSettingsArea() {
                 className="size-5"
                 providerId={group.provider.id}
               />
-              <span>{localizedProviderName(group.provider.id, group.provider.display_name, t)}</span>
+              <span className="settings-directory-label" title={localizedProviderName(group.provider.id, group.provider.display_name, t)}>{localizedProviderName(group.provider.id, group.provider.display_name, t)}</span>
               <small>{group.models.size}</small>
             </button>
           ))}
-        </WorkspaceToolPanelMenu>
-      )}
-      panelWidth={176}
-      side="left"
-    >
+        </nav>
       <div className="settings-direct-content model-list-surface">
+        <div className="settings-local-directory-mobile">
+          <Combobox
+            ariaLabel={t("settings.models.provider")}
+            placeholder={t("settings.models.noProviderSelected")}
+            searchPlaceholder={t("settings.modelExperience.searchPlaceholder")}
+            emptyText={t("settings.modelExperience.noProviders")}
+            value={selectedGroup?.provider.id ?? ""}
+            onValueChange={setSelectedProviderId}
+            options={groupedProviders.map((group) => ({
+              value: group.provider.id,
+              label: `${localizedProviderName(group.provider.id, group.provider.display_name, t)} · ${group.models.size}`,
+            }))}
+          />
+        </div>
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
-        {!snapshot ? (
+        {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
           <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
         ) : (
           <section className="settings-model-list-pane" aria-label={t("settings.models.liveModels")}>
@@ -238,6 +258,13 @@ export function ModelListSettingsArea() {
               </div>
               <span className="settings-muted-line">{t("settings.models.memoryOnly")}</span>
             </div>
+            {unavailableAdmissions.length > 0 ? <section className="settings-model-unavailable-admissions" aria-label={t("settings.modelExperience.unavailableCandidates")}>
+              <strong>{t("settings.modelExperience.unavailableCandidates")}</strong>
+              {unavailableAdmissions.map((record) => <div className="settings-model-route-accounts" key={JSON.stringify([record.providerId, record.modelId])}>
+                <span>{record.providerId} · {record.modelId}</span>
+                <Button type="button" variant="outline" size="sm" disabled={pendingMutationKey !== null} onClick={() => runSnapshotMutation(`multimodal-candidate/${record.providerId}/${record.modelId}`, () => savePublicAiMultimodalUnderstandingCandidate({ providerId: record.providerId, modelId: record.modelId, enabled: false }))}>{t("settings.modelExperience.disableCandidate")}</Button>
+              </div>)}
+            </section> : null}
             {blockedModelRoutes.length > 0 ? (
               <section aria-label={t("settings.models.blockedRouteDiagnostics")}>
                 <div className="settings-split-column-title">
@@ -285,6 +312,22 @@ export function ModelListSettingsArea() {
                       value={searchQuery}
                     />
                   </div>
+                  <Select value={usageFilter} onValueChange={setUsageFilter}>
+                    <SelectTrigger aria-label={t("settings.modelExperience.usageFilter")}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{t("settings.modelExperience.allUsages")}</SelectItem>
+                      <SelectItem value="conversation">{t("settings.modelExperience.conversationEnabled")}</SelectItem>
+                      <SelectItem value="internal">{t("settings.modelExperience.internalEnabled")}</SelectItem>
+                      <SelectItem value="multimodal">{t("settings.modelExperience.multimodalEnabled")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={capabilityFilter} onValueChange={setCapabilityFilter}>
+                    <SelectTrigger aria-label={t("settings.modelExperience.capabilityFilter")}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{t("settings.modelExperience.allCapabilities")}</SelectItem>
+                      {(["image", "audio", "video", "file", "embedding", "rerank"] as const).map((modality) => <SelectItem key={modality} value={modality}>{modelModalityLabel(modality, t)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="settings-model-filter-summary">
                   {t("settings.models.filteredSummary")
@@ -306,6 +349,12 @@ export function ModelListSettingsArea() {
                   0,
                 )
                 const modelKey = `${selectedGroup.provider.id}/${modelId}`
+                // conversationEligible follows declared operations, independently from its access preference.
+                // conversationEligible 遵循声明操作，与访问偏好相互独立。
+                const conversationEligible = routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
+                // inputModalities summarizes declared inputs across these exact executable routes.
+                // inputModalities 汇总这些精确可执行路由声明的输入能力。
+                const inputModalities = Array.from(new Set(routes.flatMap((route) => providerModelModalities(route.model).input)))
                 const internalState = internalStateForModel(
                   snapshot,
                   selectedGroup.provider.id,
@@ -338,30 +387,13 @@ export function ModelListSettingsArea() {
                             .replace("{count}", String(availableAccountCount))}
                         </Badge>
                       </div>
-                      <Tabs
-                        className="settings-model-route-tabs"
-                        defaultValue={modelRouteValue(representative)}
-                      >
-                        <TabsList className="settings-model-route-tabs-list">
-                          {routes.map((route) => (
-                            <TabsTrigger
-                              className="settings-model-route-tab"
-                              key={modelRouteValue(route)}
-                              title={route.serviceEntryName}
-                              value={modelRouteValue(route)}
-                            >
-                              {compactServiceEntryName(route.serviceEntryName)}
-                              {route.accountCount > 1 ? (
-                                <Badge variant="secondary">{route.accountCount}</Badge>
-                              ) : null}
-                            </TabsTrigger>
-                          ))}
-                        </TabsList>
+                      {inputModalities.length > 0 ? <p className="settings-model-purpose-summary">{t("settings.models.inputModalities")}：{inputModalities.map((modality) => modelModalityLabel(modality, t)).join("、")}</p> : null}
+                      <details className="settings-model-route-details">
+                        <summary>{t("settings.modelExperience.routes").replace("{count}", String(routes.length))}</summary>
                         {routes.map((route) => (
-                          <TabsContent
+                          <div
                             className="settings-model-route-content"
                             key={modelRouteValue(route)}
-                            value={modelRouteValue(route)}
                           >
                             <Button
                               aria-label={t("settings.models.additionalConditions")
@@ -374,6 +406,7 @@ export function ModelListSettingsArea() {
                             >
                               <span className="settings-model-route-summary">
                                 <span className="settings-model-route-protocol">
+                                  {route.serviceEntryName} ·
                                   {protocolDisplayName(route.protocolId)}
                                   <SlidersHorizontal aria-hidden="true" size={14} />
                                 </span>
@@ -392,13 +425,22 @@ export function ModelListSettingsArea() {
                               </span>
                               <ProviderModelModalitySummary model={route.model} />
                             </Button>
-                          </TabsContent>
+                            <ul className="settings-model-route-accounts" aria-label={t("settings.modelExperience.routeAccounts")}>
+                              {route.accounts.map((account) => <li key={account.connectionId}>
+                                <span>{account.displayName}</span>
+                                <small>{t(account.enabled ? "settings.modelExperience.available" : "settings.modelExperience.accountNotAdmitted")}</small>
+                              </li>)}
+                            </ul>
+                          </div>
                         ))}
-                      </Tabs>
+                      </details>
+                      {internalState ? <p className="settings-model-purpose-summary">{t("settings.modelExperience.internalPurposes").replace("{purposes}", internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter")))}</p> : null}
+                      {multimodalCandidateEnabled ? <p className="settings-model-purpose-summary">{t("settings.modelExperience.candidateHint")}</p> : null}
                     </div>
                     <div className="settings-model-switches">
                       <Button
                         aria-label={`${t("settings.modelCapabilities.title")} ${representative.model.display_name}`}
+                        disabled={pendingMutationKey !== null}
                         onClick={() => setEditingCapabilityModel(representative.model)}
                         size="sm"
                         type="button"
@@ -407,7 +449,7 @@ export function ModelListSettingsArea() {
                         <SlidersHorizontal aria-hidden="true" size={14} />
                         {t("settings.modelCapabilities.shortLabel")}
                       </Button>
-                      <label className="settings-model-switch-control">
+                      {conversationEligible ? <label className="settings-model-switch-control">
                         <span>{t("settings.models.conversationUse")}</span>
                         <Switch
                           aria-label={`${t("settings.models.conversationUse")} ${representative.model.display_name}`}
@@ -423,8 +465,8 @@ export function ModelListSettingsArea() {
                             ))
                           }}
                         />
-                      </label>
-                      {multimodalCandidateEligible ? (
+                      </label> : <span className="settings-model-purpose-summary">{t("settings.modelExperience.noConversation")}</span>}
+                      {multimodalCandidateEligible || multimodalCandidateEnabled ? (
                         <label className="settings-model-switch-control">
                           <span>{t("settings.models.multimodalUnderstandingCandidate")}</span>
                           <Switch
@@ -523,7 +565,8 @@ export function ModelListSettingsArea() {
         providerId={selectedGroup?.provider.id ?? null}
       />
       </div>
-    </AdaptiveToolPanel>
+      </div>
+    </div>
   )
 }
 

@@ -119,6 +119,33 @@ function menuItem(label: string, role = "menuitem"): HTMLElement {
 }
 
 describe("shared project semantic surfaces", () => {
+  // Feature navigation releases UI polls while preserving the durable host job and child identity.
+  // 功能页导航释放界面轮询，同时保留宿主持久作业与子界面身份。
+  it("stops hidden-chat observations and reloads exact authority when chat returns", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => root.render(<Harness projectId="project-a" />));
+      // Initial reads include the required reconciliation after stream subscription acknowledgement.
+      // 首次读取包含事件订阅确认后的必需核对。
+      const activityReads = rpc.read.mock.calls.length;
+      const jobReads = rpc.jobs.mock.calls.length;
+      expect(activityReads).toBeGreaterThan(0);
+      expect(jobReads).toBeGreaterThan(0);
+      await act(async () => root.render(<Harness projectId={null} />));
+      rpc.read.mockClear(); rpc.jobs.mockClear();
+      await act(async () => vi.advanceTimersByTimeAsync(15000));
+      expect(rpc.read).not.toHaveBeenCalled();
+      expect(rpc.jobs).not.toHaveBeenCalled();
+      expect(rpc.cancel).not.toHaveBeenCalled();
+      expect(surface!.visible).toBe(false);
+      await act(async () => root.render(<Harness projectId="project-a" />));
+      expect(rpc.read).toHaveBeenCalledTimes(activityReads);
+      expect(rpc.jobs).toHaveBeenCalledTimes(jobReads);
+      expect(surface!.projectId).toBe("project-a");
+      expect(surface!.gate).toBe("ready");
+    } finally { vi.useRealTimers(); }
+  });
+
   // Workbench revocation must close both menus and mutation admission while the metadata read is pending.
   // 元数据读取等待期间，工作台撤销必须同时关闭菜单与修改准入。
   it.each(["1:1:4", "1:1:5"])("revokes ready menu actions immediately when the workbench disables the project at revision %s", async (revisionKey) => {

@@ -10,6 +10,7 @@ import type {
   ToolPayload,
 } from "@/service/conversation-event-window-store";
 import { modelExtensionToolTitleKey } from "./model-extension-tool-presentation";
+import { resolveV1ToolDomainPresentation, v1ModelResult, type V1ToolDomainPresentation } from "./v1-tool-domain-presentation";
 
 /** Stable visual state copied from the authoritative tool-call event.
  * 从权威工具调用事件复制的稳定视觉状态。 */
@@ -34,6 +35,9 @@ export interface V1ToolPresentationBase {
   titleKey?: TranslationKey;
   icon: V1ToolPresentationIcon;
   externalRefs: readonly ExternalResourceRef[];
+  // Readable result derived from the exact event envelope, independent of the card shell.
+  // 从精确事件信封派生的可读结果，与卡片外壳独立。
+  domain: V1ToolDomainPresentation;
 }
 
 /** One line rendered by a persisted ChangeSet file body.
@@ -112,7 +116,7 @@ export interface V1ShellToolPresentation extends V1ToolPresentationBase {
  * 从冻结原生工具允许列表中选择的原生语义展示。 */
 export interface V1NativeToolPresentation extends V1ToolPresentationBase {
   kind: "native";
-  family: "todo" | "goal" | "knowledge" | "skill" | "memory" | "runtime_config";
+  family: "todo" | "goal" | "knowledge" | "skill" | "memory" | "runtime_config" | "retrieval" | "plan" | "ask" | "documentation" | "debug";
   inputMarkdown: string;
   outputMarkdown: string;
 }
@@ -176,6 +180,18 @@ const NATIVE_TOOL_CONFIGS = new Map<string, V1NativeToolConfig>([
   ["vmm_memory_write", { family: "memory", title: "写入记忆" }],
   ["vmm_memory_delete", { family: "memory", title: "删除记忆" }],
   ["runtime_config", { family: "runtime_config", title: "运行时配置" }],
+  ["codebase_retrieval", { family: "retrieval", title: "检索代码库" }],
+  ["submit_plan", { family: "plan", title: "提交计划" }],
+  ["ask", { family: "ask", title: "向用户提问" }],
+  ["luaskill", { family: "skill", title: "发现技能" }],
+  ["call_luaskill", { family: "skill", title: "执行技能" }],
+  ["context7_resolve_library_id", { family: "documentation", title: "查找文档库" }],
+  ["context7_query_docs", { family: "documentation", title: "查询文档" }],
+  ["debug_session_open", { family: "debug", title: "打开调试会话" }],
+  ["debug_session_request", { family: "debug", title: "发送调试请求" }],
+  ["debug_session_events", { family: "debug", title: "读取调试事件" }],
+  ["debug_session_status", { family: "debug", title: "查询调试状态" }],
+  ["debug_session_close", { family: "debug", title: "关闭调试会话" }],
 ]);
 
 // SHELL_TOOL_IDS is the complete exact shell-card allowlist for this stage.
@@ -287,6 +303,7 @@ function v1ToolPresentationBase(item: ToolCallDisplayItem): V1ToolPresentationBa
     title: item.tool_call.tool_name,
     icon: "tool",
     externalRefs: item.tool_call.external_refs ?? [],
+    domain: resolveV1ToolDomainPresentation(item.tool_call),
   };
 }
 
@@ -589,6 +606,12 @@ function payloadMarkdown(
 ): string {
   if (!payload) {
     return "";
+  }
+  // Runtime results use the canonical envelope; direct event payloads retain their declared text field.
+  // 运行时结果使用规范信封；直接事件载荷保留其声明的文本字段。
+  if (Object.hasOwn(payload, "model_output")) {
+    const result = v1ModelResult(payload);
+    return typeof result === "string" ? result : result === undefined ? "" : `\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``;
   }
   if (exactTextField) {
     // text is accepted only from the field declared by the selected tool-card contract.

@@ -44,6 +44,7 @@ import {
   SidebarUserMenu,
 } from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import type {
   FeatureAreaSummary,
   MainAreaId,
@@ -284,23 +285,17 @@ function SettingsSidebarGroupRow(props: {
   // isSidebarCollapsed selects hover flyout behavior without replacing the row structure.
   // isSidebarCollapsed 在不替换行结构的情况下选择悬浮菜单行为。
   const isSidebarCollapsed = props.sidebarState === "collapsed"
+  // The category arrow controls disclosure rather than unexpectedly navigating to its first page.
+  // 分类箭头控制展开收起，不再意外跳转到分类中的第一页。
+  const [groupExpanded, setGroupExpanded] = React.useState(true)
   // settingsFolderButton keeps one stable category trigger for expanded and collapsed animation.
   // settingsFolderButton 为展开与折叠动画保留同一个稳定的目录触发入口。
   const settingsFolderButton = (
     <SidebarMenuButton
-      aria-expanded={isSidebarCollapsed ? undefined : "true"}
+      aria-expanded={isSidebarCollapsed ? undefined : groupExpanded}
       aria-label={isSidebarCollapsed ? props.group.label : undefined}
       className={`project-folder-button settings-folder-button ${isSidebarCollapsed ? "collapsed-project-button settings-collapsed-button" : ""}`}
-      onClick={(event) => {
-        if (isSidebarCollapsed) {
-          event.preventDefault()
-          return
-        }
-        const firstItem = props.group.items[0]
-        if (firstItem) {
-          props.onSelectSettingsSubArea(firstItem.id)
-        }
-      }}
+      onClick={() => { if (!isSidebarCollapsed) setGroupExpanded((expanded) => !expanded) }}
       tooltip={isSidebarCollapsed ? undefined : props.group.label}
     >
       {props.group.icon}
@@ -308,7 +303,7 @@ function SettingsSidebarGroupRow(props: {
         <strong>{props.group.label}</strong>
       </span>
       <span className="project-folder-arrow" aria-hidden="true">
-        <ChevronDown size={14} />
+        <ChevronDown className={groupExpanded ? undefined : "-rotate-90"} size={14} />
       </span>
     </SidebarMenuButton>
   )
@@ -326,11 +321,11 @@ function SettingsSidebarGroupRow(props: {
           </CollapsedSettingsGroupMenu>
         ) : settingsFolderButton}
       </div>
-      <SidebarMenu className="project-conversation-list settings-subarea-list">
+      {groupExpanded ? <SidebarMenu className="project-conversation-list settings-subarea-list">
         {props.group.items.map((area) => (
           <SidebarMenuItem key={area.id}>
             <SidebarMenuButton
-              active={props.activeSettingsSubArea === area.id}
+              active={(props.activeSettingsSubArea === "prompt-composer" ? "context-basics" : props.activeSettingsSubArea) === area.id}
               className="conversation-tree-button settings-subarea-button"
               onClick={() => props.onSelectSettingsSubArea(area.id)}
               tooltip={area.label}
@@ -341,13 +336,13 @@ function SettingsSidebarGroupRow(props: {
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}
-      </SidebarMenu>
+      </SidebarMenu> : null}
     </SidebarMenuItem>
   )
 }
 
-// CollapsedSettingsGroupMenu renders one settings category hover menu while the sidebar is collapsed.
-// CollapsedSettingsGroupMenu 在侧栏折叠时渲染单个设置分类的悬停菜单。
+// CollapsedSettingsGroupMenu exposes a keyboard-accessible category menu with bounded viewport placement.
+// CollapsedSettingsGroupMenu 提供支持键盘操作且受视口约束的分类菜单。
 function CollapsedSettingsGroupMenu(props: {
   // Trigger row reused from the expanded settings category.
   // 复用展开设置目录入口的触发行。
@@ -362,71 +357,23 @@ function CollapsedSettingsGroupMenu(props: {
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
-  const anchorRef = React.useRef<HTMLDivElement | null>(null)
-  const closeTimerRef = React.useRef<number | null>(null)
-  const [flyoutOpen, setFlyoutOpen] = React.useState(false)
-  const [flyoutPosition, setFlyoutPosition] = React.useState<{ left: number; top: number } | null>(null)
-  const clearCloseTimer = React.useCallback(() => {
-    if (closeTimerRef.current !== null) {
-      window.clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
-    }
-  }, [])
-  const openFlyout = React.useCallback(() => {
-    clearCloseTimer()
-    const rect = anchorRef.current?.getBoundingClientRect()
-    if (!rect) {
-      return
-    }
-    setFlyoutPosition({ left: rect.right + 8, top: rect.top })
-    setFlyoutOpen(true)
-  }, [clearCloseTimer])
-  const scheduleClose = React.useCallback(() => {
-    clearCloseTimer()
-    closeTimerRef.current = window.setTimeout(() => setFlyoutOpen(false), 140)
-  }, [clearCloseTimer])
-  React.useEffect(() => clearCloseTimer, [clearCloseTimer])
-  const selectArea = React.useCallback((areaId: SettingsSubAreaId) => {
-    setFlyoutOpen(false)
-    props.onSelectSettingsSubArea(areaId)
-  }, [props])
   return (
-    <>
-      <div
-        className="collapsed-project-hover-root settings-collapsed-hover-root"
-        onMouseEnter={openFlyout}
-        onMouseLeave={scheduleClose}
-        ref={anchorRef}
-      >
-        {props.children}
-      </div>
-      {flyoutOpen && flyoutPosition ? (
-        <div
-          aria-label={props.group.label}
-          className="collapsed-project-flyout settings-collapsed-flyout"
-          onMouseEnter={openFlyout}
-          onMouseLeave={scheduleClose}
-          role="menu"
-          style={{ left: flyoutPosition.left, top: flyoutPosition.top }}
-        >
-          <div className="collapsed-project-flyout-title" role="presentation">
-            {props.group.label}
-          </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{props.children}</DropdownMenuTrigger>
+      <DropdownMenuContent aria-label={props.group.label} side="right" align="start" sideOffset={8} className="min-w-48">
+          <DropdownMenuLabel>{props.group.label}</DropdownMenuLabel>
           {props.group.items.map((area) => (
-            <button
-              className={`collapsed-project-flyout-item ${props.activeSettingsSubArea === area.id ? "active" : ""}`}
+            <DropdownMenuItem
               key={area.id}
-              onClick={() => selectArea(area.id)}
-              role="menuitem"
-              type="button"
+              aria-current={(props.activeSettingsSubArea === "prompt-composer" ? "context-basics" : props.activeSettingsSubArea) === area.id ? "page" : undefined}
+              onSelect={() => props.onSelectSettingsSubArea(area.id)}
             >
               {area.icon}
-              <span className="collapsed-project-menu-title">{area.label}</span>
-            </button>
+              <span>{area.label}</span>
+            </DropdownMenuItem>
           ))}
-        </div>
-      ) : null}
-    </>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

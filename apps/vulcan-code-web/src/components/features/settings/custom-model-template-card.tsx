@@ -5,6 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/i18n"
+import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
 import {
   getPublicAiCustomModelTemplateSuggestions,
   savePublicAiCustomModelTemplateDecision,
@@ -26,11 +27,17 @@ interface CustomModelTemplateCardProps {
 
 // CustomModelTemplateCard presents offline hints without silently applying fuzzy matches.
 // CustomModelTemplateCard 展示离线提示且不会静默应用模糊匹配。
+// Parameters: props identifies offline model hints and their apply/reject/reset callbacks; returns explicit suggestion actions within the provider mutation boundary.
+// 参数：props 标识离线模型提示及应用、拒绝和恢复回调；返回供应商变更边界内的显式建议操作。
 export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
   const { t } = useI18n()
   const [suggestions, setSuggestions] = React.useState<PublicAiCommonModelTemplateSuggestion[]>([])
   const [loading, setLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  // The local guard also participates in the containing provider editor's write boundary.
+  // 局部守卫同时参与外层供应商编辑器的写入边界。
+  const savingRef = React.useRef(false)
+  const mutationBoundary = React.useContext(CustomProviderMutationContext)
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -66,6 +73,9 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
   const saveDecision = React.useCallback(async (
     decision: PublicAiCustomModelTemplateDecision | undefined,
   ) => {
+    if (savingRef.current || loading) return
+    if (mutationBoundary && !mutationBoundary.acquire()) return
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -78,9 +88,11 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      savingRef.current = false
+      mutationBoundary?.release()
       setSaving(false)
     }
-  }, [props])
+  }, [loading, mutationBoundary, props])
 
   const firstSuggestion = suggestions[0]
   // appliedSelection preserves the discriminated-union narrowing for the reviewed snapshot.

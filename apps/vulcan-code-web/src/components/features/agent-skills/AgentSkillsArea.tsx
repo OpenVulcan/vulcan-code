@@ -9,6 +9,7 @@ import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/co
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls"
 import {
   Dialog,
@@ -54,9 +55,19 @@ export function AgentSkillsArea(props: {
   // busyAction stores one catalog-wide mutation currently in flight.
   // busyAction 保存当前正在执行的一项目录级变更。
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
+  // actionRunningRef closes the synchronous duplicate-action window.
+  // actionRunningRef 关闭同步重复动作窗口。
+  const actionRunningRef = React.useRef(false)
+  // pendingMutation retains the exact destructive intent until the themed confirmation accepts it.
+  // pendingMutation 保留精确破坏性意图，直到主题化确认框接受它。
+  const [pendingMutation, setPendingMutation] = React.useState<{ kind: "delete" | "restore"; record: AgentSkillRecordSummary } | null>(null)
   // busyRows stores standard names with row-level state mutations in flight.
   // busyRows 保存正在执行行级状态变更的标准名称。
   const [busyRows, setBusyRows] = React.useState<ReadonlySet<string>>(() => new Set())
+  // busyRowsRef enforces row identity before React renders the corresponding disabled controls.
+  // busyRowsRef 在 React 渲染对应禁用控件前约束行身份。
+  const busyRowsRef = React.useRef(new Set<string>())
+  const pageBusy = busyAction !== null || busyRows.size > 0
   // actionError stores the latest page-level service mutation failure.
   // actionError 保存最近一次页面级服务变更失败。
   const [actionError, setActionError] = React.useState("")
@@ -152,9 +163,10 @@ export function AgentSkillsArea(props: {
   // runCatalogAction executes one page-exclusive Agent Skills mutation.
   // runCatalogAction 执行一项页面互斥的 Agent Skills 变更。
   const runCatalogAction = React.useCallback(async (actionId: string, action: () => Promise<void>) => {
-    if (busyAction !== null) {
+    if (actionRunningRef.current || busyRowsRef.current.size > 0) {
       return
     }
+    actionRunningRef.current = true
     setBusyAction(actionId)
     setActionError("")
     try {
@@ -162,6 +174,7 @@ export function AgentSkillsArea(props: {
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught))
     } finally {
+      actionRunningRef.current = false
       setBusyAction(null)
     }
   }, [busyAction])
@@ -169,15 +182,18 @@ export function AgentSkillsArea(props: {
   // runRowAction executes one independent row state mutation.
   // runRowAction 执行一项独立的行级状态变更。
   const runRowAction = React.useCallback(async (record: AgentSkillRecordSummary) => {
-    if (busyRows.has(record.name)) {
+    if (actionRunningRef.current || busyRowsRef.current.has(record.name)) {
       return
     }
+    busyRowsRef.current.add(record.name)
     setBusyRows((current) => new Set(current).add(record.name))
+    setActionError("")
     try {
       await props.actions.onSetAgentSkillEnabled(record.name, !record.enabled)
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught))
     } finally {
+      busyRowsRef.current.delete(record.name)
       setBusyRows((current) => {
         const next = new Set(current)
         next.delete(record.name)
@@ -197,32 +213,14 @@ export function AgentSkillsArea(props: {
   // deleteUserSkill confirms and deletes one exact user source record.
   // deleteUserSkill 确认并删除一个精确用户来源记录。
   const deleteUserSkill = React.useCallback(async (record: AgentSkillRecordSummary) => {
-    // confirmed records the user's explicit destructive-action approval.
-    // confirmed 记录用户对破坏性操作的明确确认。
-    const confirmed = window.confirm(locale.startsWith("zh")
-      ? `确认删除用户技能“${localizedAgentSkillName(record, locale)}”？其资源目录也会一并删除。`
-      : `Delete user skill “${localizedAgentSkillName(record, locale)}” and its resource directory?`)
-    if (!confirmed) {
-      return
-    }
-    await props.actions.onDeleteAgentSkill(record.name)
-    setDetailRecord(null)
-  }, [locale, props.actions])
+    setPendingMutation({ kind: "delete", record })
+  }, [])
 
   // restoreSystemSkill confirms and removes one exact user override.
   // restoreSystemSkill 确认并移除一个精确用户覆盖。
   const restoreSystemSkill = React.useCallback(async (record: AgentSkillRecordSummary) => {
-    // confirmed records the user's explicit restore approval.
-    // confirmed 记录用户对恢复操作的明确确认。
-    const confirmed = window.confirm(locale.startsWith("zh")
-      ? `确认移除“${localizedAgentSkillName(record, locale)}”的用户覆盖并恢复系统版本？`
-      : `Remove the user override for “${localizedAgentSkillName(record, locale)}” and restore the system version?`)
-    if (!confirmed) {
-      return
-    }
-    await props.actions.onRestoreAgentSkillDefault(record.name)
-    setDetailRecord(null)
-  }, [locale, props.actions])
+    setPendingMutation({ kind: "restore", record })
+  }, [])
 
   return (
     <section className="skill-management-surface agent-management-surface agent-skills-management-surface">
@@ -234,12 +232,12 @@ export function AgentSkillsArea(props: {
               <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
             </div>
             <div className="agent-catalog-toolbar-actions">
-              <Button disabled={busyAction !== null} onClick={() => openEditor(null)}>
+              <Button disabled={pageBusy} onClick={() => openEditor(null)}>
                 <Plus size={15} />
                 {locale.startsWith("zh") ? "新建技能" : "Create skill"}
               </Button>
               <Button
-                disabled={busyAction !== null}
+                disabled={pageBusy}
                 onClick={() => {
                   setCategoryDialogOpen(true)
                 }}
@@ -249,7 +247,7 @@ export function AgentSkillsArea(props: {
                 {locale.startsWith("zh") ? "分类管理" : "Manage categories"}
               </Button>
               <Button
-                disabled={busyAction !== null}
+                disabled={pageBusy}
                 onClick={() => void runCatalogAction("open-directory", props.actions.onOpenAgentSkillsUserDirectory)}
                 variant="outline"
               >
@@ -257,7 +255,7 @@ export function AgentSkillsArea(props: {
                 {locale.startsWith("zh") ? "技能目录" : "Skill directory"}
               </Button>
               <Button
-                disabled={busyAction !== null}
+                disabled={pageBusy}
                 onClick={() => void runCatalogAction("refresh", props.actions.onRefreshAgentSkills)}
                 variant="outline"
               >
@@ -345,25 +343,25 @@ export function AgentSkillsArea(props: {
                 {record.canToggle ? <Switch
                   checked={record.enabled}
                   aria-label={record.enabled ? (locale.startsWith("zh") ? "停用" : "Disable") : (locale.startsWith("zh") ? "启用" : "Enable")}
-                  disabled={!record.effective || busyRows.has(record.name) || busyAction !== null}
+                  disabled={!record.effective || busyRows.has(record.name) || pageBusy}
                   onCheckedChange={() => void runRowAction(record)}
                   title={record.enabled ? (locale.startsWith("zh") ? "停用" : "Disable") : (locale.startsWith("zh") ? "启用" : "Enable")}
                 /> : null}
                 {record.effective && record.canEdit ? (
-                  <IconButton aria-label={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} disabled={busyAction !== null} onClick={() => openEditor(record)} title={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} type="button">
+                  <IconButton aria-label={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} disabled={pageBusy} onClick={() => openEditor(record)} title={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} type="button">
                     <Pencil size={14} />
                   </IconButton>
                 ) : null}
-                {record.canCopy ? <IconButton aria-label={locale.startsWith("zh") ? "复制" : "Copy"} disabled={busyAction !== null} onClick={() => openEditor(record, true)} title={locale.startsWith("zh") ? "复制" : "Copy"} type="button">
+                {record.canCopy ? <IconButton aria-label={locale.startsWith("zh") ? "复制" : "Copy"} disabled={pageBusy} onClick={() => openEditor(record, true)} title={locale.startsWith("zh") ? "复制" : "Copy"} type="button">
                   <Copy size={14} />
                 </IconButton> : null}
                 {record.canRestoreDefault ? (
-                  <IconButton aria-label={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} disabled={busyAction !== null} onClick={() => void runCatalogAction(`restore:${record.name}`, () => restoreSystemSkill(record))} title={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} type="button">
+                  <IconButton aria-label={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} disabled={pageBusy} onClick={() => void runCatalogAction(`restore:${record.name}`, () => restoreSystemSkill(record))} title={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} type="button">
                     <RotateCcw size={14} />
                   </IconButton>
                 ) : null}
                 {record.canDelete ? (
-                  <IconButton aria-label={locale.startsWith("zh") ? "删除" : "Delete"} disabled={busyAction !== null} onClick={() => void runCatalogAction(`delete:${record.name}`, () => deleteUserSkill(record))} title={locale.startsWith("zh") ? "删除" : "Delete"} type="button" variant="destructive">
+                  <IconButton aria-label={locale.startsWith("zh") ? "删除" : "Delete"} disabled={pageBusy} onClick={() => void runCatalogAction(`delete:${record.name}`, () => deleteUserSkill(record))} title={locale.startsWith("zh") ? "删除" : "Delete"} type="button" variant="destructive">
                     <Trash2 size={14} />
                   </IconButton>
                 ) : null}
@@ -390,6 +388,30 @@ export function AgentSkillsArea(props: {
         onSave={props.actions.onSaveAgentSkillCategory}
         open={categoryDialogOpen}
       />
+      <AlertDialog open={pendingMutation !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingMutation(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pendingMutation?.kind === "restore" ? (locale.startsWith("zh") ? "恢复系统版本" : "Restore system version") : (locale.startsWith("zh") ? "删除技能" : "Delete skill")}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingMutation ? (pendingMutation.kind === "restore"
+              ? (locale.startsWith("zh") ? `移除“${localizedAgentSkillName(pendingMutation.record, locale)}”的用户覆盖并恢复系统版本？` : `Remove the user override for “${localizedAgentSkillName(pendingMutation.record, locale)}” and restore the system version?`)
+              : (locale.startsWith("zh") ? `删除用户技能“${localizedAgentSkillName(pendingMutation.record, locale)}”及其资源目录？` : `Delete user skill “${localizedAgentSkillName(pendingMutation.record, locale)}” and its resource directory?`)) : ""}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {actionError ? <p role="alert" className="text-sm text-destructive">{actionError}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pageBusy}>{locale.startsWith("zh") ? "取消" : "Cancel"}</AlertDialogCancel>
+            <AlertDialogAction disabled={pageBusy} onClick={(event) => {
+              event.preventDefault()
+              if (!pendingMutation) return
+              void runCatalogAction(pendingMutation.kind, async () => {
+                if (pendingMutation.kind === "restore") await props.actions.onRestoreAgentSkillDefault(pendingMutation.record.name)
+                else await props.actions.onDeleteAgentSkill(pendingMutation.record.name)
+                setDetailRecord(null)
+                setPendingMutation(null)
+              })
+            }}>{pageBusy ? (locale.startsWith("zh") ? "处理中…" : "Working…") : (locale.startsWith("zh") ? "确认" : "Confirm")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }
@@ -467,7 +489,7 @@ function AgentSkillDetailDialog(props: {
   const category = record ? props.categories.find((item) => item.categoryId === record.categoryId) : undefined
   return (
     <Dialog onOpenChange={props.onOpenChange} open={record !== null}>
-      <DialogContent className="agent-skill-detail-dialog">
+      <DialogContent className="agent-skill-detail-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{record ? localizedAgentSkillName(record, props.locale) : "Agent Skill"}</DialogTitle>
           <DialogDescription>{record ? localizedAgentSkillScope(record, props.locale) : ""}</DialogDescription>
@@ -585,3 +607,6 @@ function agentSkillMatchesSearch(record: AgentSkillRecordSummary, query: string)
   ].join("\n").toLocaleLowerCase()
   return tokens.every((token) => searchable.includes(token))
 }
+// Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
+// 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
+import "@/styles/skill-directory.css";

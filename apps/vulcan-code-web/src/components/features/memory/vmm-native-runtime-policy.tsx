@@ -177,7 +177,9 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePo
 
   return <>
     <div className="vmm-section-tabs">
-      {([['recall', 'memory.policy.title'], ['text', 'memory.textPolicy.title'], ['profile', 'memory.profilePolicy.title'], ['retrieval', 'memory.ranking.title'], ['retention', 'memory.cleanup.title']] as const).map(([id, label]) => <button key={id} type="button" aria-pressed={policyTab === id} onClick={() => setPolicyTab(id)}>{t(label)}</button>)}
+      {/* Keep every group discoverable without leaving the only recovery surface before data arrives.
+          保留全部分组入口，在数据到达前避免离开唯一可重试的区域。 */}
+      {([['recall', 'memory.workspace.recallPolicy'], ['text', 'memory.workspace.textPolicy'], ['profile', 'memory.workspace.profilePolicy'], ['retrieval', 'memory.workspace.rankingPolicy'], ['retention', 'memory.workspace.retentionPolicy']] as const).map(([id, label]) => <button key={id} type="button" disabled={!policy && id !== "recall"} aria-pressed={policyTab === id} onClick={() => setPolicyTab(id)}>{t(label)}</button>)}
     </div>
     <div hidden={policyTab !== "recall"}><Card className="w-full min-w-0">
     <CardHeader>
@@ -185,7 +187,7 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePo
       <CardDescription>{t("memory.policy.description")}</CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">
-      <p className="text-sm text-muted-foreground">{policy ? t(policy.userOverride ? "memory.policy.userSource" : "memory.policy.defaultSource") : t("memory.common.loading")}</p>
+      {policy || disabled ? <p className="text-sm text-muted-foreground">{policy ? t(policy.userOverride ? "memory.policy.userSource" : "memory.policy.defaultSource") : t("memory.common.loading")}</p> : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       {saved ? <p role="status" className="text-sm text-muted-foreground">{t("memory.policy.saved")}</p> : null}
       {draft ? <div className="grid gap-4 sm:grid-cols-2">

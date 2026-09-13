@@ -1,4 +1,5 @@
 import { ScanSearch } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/ui/dropdown-menu";
 import { useI18n } from "@/i18n";
@@ -107,9 +108,9 @@ export function VceFloatingNode(props: {
   return <section className="min-w-0 space-y-2 whitespace-normal border-t px-3 py-3 [overflow-wrap:anywhere]" aria-label={chinese ? "项目语义索引" : "Project semantic index"}>
     <div className="flex items-center justify-between gap-2 text-sm">
       <strong className="flex items-center gap-2"><ScanSearch size={15} />{chinese ? "语义索引" : "Semantic index"}</strong>
-      <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={surface.gate === "engine_off" ? surface.openEngineSettings : surface.openProjectSettings}>
+      <Button type="button" variant="ghost" size="sm" onClick={surface.gate === "engine_off" ? surface.openEngineSettings : surface.openProjectSettings}>
         {chinese ? "设置" : "Settings"}
-      </button>
+      </Button>
     </div>
     <p className="text-xs text-muted-foreground">{label}</p>
     {surface.gate === "ready" && label !== freshnessLabel ? <p className="text-xs text-muted-foreground">{freshnessLabel}</p> : null}

@@ -43,6 +43,22 @@ const TURN_STATS_METADATA = {
 };
 
 describe("turn statistics hover card", () => {
+  // A compaction launch profile does not identify wire-protocol input-token semantics.
+  // 压缩启动策略不代表线协议的输入 Token 语义。
+  it("keeps missing normalized input unknown for a real compaction strategy label", () => {
+    // markup uses the persisted strategy from context_compaction_usage_segment_from_execution.
+    // markup 使用 context_compaction_usage_segment_from_execution 持久化的真实策略标签。
+    const markup = renderToStaticMarkup(<TurnStatsTooltipCard locale="zh-CN" subagentStats={false} metadata={{
+      turn_stats: {
+        provider_call_count: 1, tool_call_count: 0, input_tokens: 120, output_tokens: 5,
+        total_tokens: 205, cached_input_tokens: 80,
+        usage_segments: [{ kind: "context_compaction", execution_profile: "pruned_minimal", input_tokens: 120, cached_input_tokens: 80 }],
+      },
+    }} />);
+    expect(markup).toContain("无缓存输入</span><strong>-</strong>");
+    expect(markup).not.toContain("aria-valuenow=");
+  });
+
   // Verifies the card replaces raw debug text with the requested three-row aggregate layout and cache bar.
   // 验证卡片以所需三行总计布局和缓存进度条替代原始调试文本。
   it("renders the requested aggregate fields and cache-hit progress", () => {
@@ -88,9 +104,11 @@ describe("turn statistics hover card", () => {
     expect(markup).not.toContain("常规");
   });
 
-  // Verifies legacy Anthropic segments use cache-write semantics instead of subtracting cache reads from raw input.
-  // 验证旧版 Anthropic 分段使用缓存写入语义，而不是从原始输入中扣减缓存读取。
-  it("reconstructs legacy Anthropic uncached input from protocol-tagged segments", () => {
+  // Verifies normalized parent segments are summed without inferring input semantics from diagnostic labels.
+  // 验证归一化父级分段会被累加，而不会根据诊断标签推断输入语义。
+  it("sums normalized parent segments and excludes detached child usage", () => {
+    // markup contains both parent segment kinds and a child segment with independent accounting.
+    // markup 包含两种父级分段与具有独立核算的子代理分段。
     const markup = renderToStaticMarkup(
       <TurnStatsTooltipCard
         locale="zh-CN"
@@ -106,13 +124,20 @@ describe("turn statistics hover card", () => {
             cache_creation_input_tokens: 8,
             usage_segments: [{
               kind: "assistant_response",
-              execution_profile: "anthropic-messages.v1",
               provider_call_count: 1,
               input_tokens: 12,
+              uncached_input_tokens: 12,
               output_tokens: 5,
               total_tokens: 105,
               cached_input_tokens: 80,
               cache_creation_input_tokens: 8,
+            }, {
+              kind: "context_compaction",
+              execution_profile: "pruned_minimal",
+              uncached_input_tokens: 8,
+            }, {
+              kind: "subagent_task",
+              uncached_input_tokens: 900,
             }],
           },
         }}
@@ -123,6 +148,39 @@ describe("turn statistics hover card", () => {
     expect(markup).toContain("无缓存输入");
     expect(markup).toContain(">20<");
     expect(markup).toContain("80.0%");
+  });
+
+  // Verifies missing or invalid parent segments never produce a misleading partial cache ratio.
+  // 验证缺失或无效的父级分段不会生成具有误导性的局部缓存比例。
+  it.each([
+    [{ kind: "assistant_response", uncached_input_tokens: 12 }, { kind: "context_compaction", input_tokens: 8 }],
+    [{ kind: "assistant_response", execution_profile: "anthropic-messages.v1", input_tokens: 12 }],
+    [{ kind: "assistant_response", uncached_input_tokens: -1 }],
+    [{ kind: "future_kind", uncached_input_tokens: 12 }],
+    [{ kind: "subagent_task", uncached_input_tokens: 12 }],
+    [null],
+    [],
+  ].map((segments) => [segments]))("preserves unknown usage for incomplete segment set %#", (segments) => {
+    // markup exercises the rendered unknown value and absence of a quantitative progress bar.
+    // markup 验证渲染的未知值及定量进度条的缺失。
+    const markup = renderToStaticMarkup(<TurnStatsTooltipCard locale="zh-CN" subagentStats={false} metadata={{
+      turn_stats: { cached_input_tokens: 80, usage_segments: segments },
+    }} />);
+    expect(markup).toContain("无缓存输入</span><strong>-</strong>");
+    expect(markup).not.toContain("aria-valuenow=");
+  });
+
+  // Verifies explicit zero remains a measurement and the persisted aggregate wins over segment reconstruction.
+  // 验证明确的零仍是测量值，且持久化总计优先于分段重建。
+  it.each([
+    { cached_input_tokens: 80, usage_segments: [{ kind: "assistant_response", uncached_input_tokens: 0 }] },
+    { cached_input_tokens: 80, uncached_input_tokens: 0, usage_segments: [{ kind: "assistant_response", uncached_input_tokens: 12 }] },
+  ])("retains measured zero and authoritative aggregate %#", (stats) => {
+    // markup must present a complete cache hit without erasing a measured zero.
+    // markup 必须呈现全部命中缓存，且不能抹除已测量的零值。
+    const markup = renderToStaticMarkup(<TurnStatsTooltipCard locale="zh-CN" subagentStats={false} metadata={{ turn_stats: stats }} />);
+    expect(markup).toContain("无缓存输入</span><strong>0</strong>");
+    expect(markup).toContain('aria-valuenow="100"');
   });
 
   // Verifies an independent subagent-feedback row does not duplicate a nested subagent section.
@@ -137,6 +195,20 @@ describe("turn statistics hover card", () => {
     );
 
     expect(markup).toContain("子代理统计");
+    expect(markup).not.toContain("turn-stats-subagent-section");
+  });
+
+  // Child feedback owns its child segments, unlike the same segments grouped under a parent user turn.
+  // 子代理反馈拥有自身的子代理分段，与父级用户轮次下的同类分组不同。
+  it("includes normalized child segments in a standalone feedback row", () => {
+    // markup follows the subagent_feedback_turn_stats producer's inclusive merge contract.
+    // markup 遵循 subagent_feedback_turn_stats 产出方的包含式合并契约。
+    const markup = renderToStaticMarkup(<TurnStatsTooltipCard locale="zh-CN" subagentStats metadata={{ turn_stats: {
+      turn_kind: "subagent_feedback", cached_input_tokens: 80,
+      usage_segments: [{ kind: "subagent_task", uncached_input_tokens: 20 }],
+    } }} />);
+    expect(markup).toContain("无缓存输入</span><strong>20</strong>");
+    expect(markup).toContain('aria-valuenow="80"');
     expect(markup).not.toContain("turn-stats-subagent-section");
   });
 });

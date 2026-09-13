@@ -102,6 +102,14 @@ interface AskQuestionOptionDescriptor {
 // AskQuestionDialog renders the blocking WebUI ask tool as a compact question bar.
 // AskQuestionDialog 将阻塞式 WebUI ask 工具渲染为紧凑 question bar。
 export function AskQuestionDialog(props: AskQuestionDialogProps) {
+  return props.request ? <AskQuestionRequest key={props.request.id} {...props} /> : null;
+}
+
+// AskQuestionRequest isolates drafts and in-flight acknowledgements to one immutable request identity.
+// AskQuestionRequest 将草稿与进行中的确认隔离到一个不可变请求标识。
+// props supplies the current request and acknowledgement callbacks; returns the scoped question surface.
+// props 提供当前请求及确认回调；返回具有独立状态的问题面板。
+function AskQuestionRequest(props: AskQuestionDialogProps) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
@@ -126,6 +134,16 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // busy prevents double submit or double reject while the backend call is pending.
   // busy 在后端调用未完成时阻止重复提交或重复拒绝。
   const [busy, setBusy] = React.useState(false);
+  // mutationPending blocks repeated events before React commits the disabled state.
+  // mutationPending 在 React 提交禁用状态前阻止重复事件。
+  const mutationPending = React.useRef(false);
+  // mounted prevents a retired request from publishing late errors into its replacement.
+  // mounted 阻止已离开的请求把迟到错误发布到替代请求中。
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   // questionBarRef owns focus when the active question uses structured choices.
   // questionBarRef 在当前问题使用结构化选项时承载键盘焦点。
   const questionBarRef = React.useRef<HTMLElement | null>(null);
@@ -166,6 +184,9 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     () => activeQuestion ? buildAskQuestionOptionDescriptors(activeQuestion, t) : [],
     [activeQuestion, t],
   );
+  // focusStructuredQuestion depends on semantic mode, not freshly projected prompt object identity.
+  // focusStructuredQuestion 依赖语义模式，不依赖重新投影的问题对象引用。
+  const focusStructuredQuestion = Boolean(activeQuestion && activeQuestion.options.length > 0 && !activeDraft?.customSelected);
 
   React.useEffect(() => {
     if (!activeQuestion) {
@@ -177,14 +198,14 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   }, [activeQuestion, safeActiveIndex]);
 
   React.useEffect(() => {
-    if (!request || !activeQuestion || activeQuestion.options.length === 0) {
+    if (!request || !focusStructuredQuestion) {
       return;
     }
     const focusFrame = window.requestAnimationFrame(() => {
       questionBarRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(focusFrame);
-  }, [activeQuestion, request?.id]);
+  }, [focusStructuredQuestion, safeActiveIndex, request?.id]);
 
   React.useLayoutEffect(() => {
     if (!request) {
@@ -230,6 +251,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // updateDraft applies one immutable change to a draft row.
   // updateDraft 对单个草稿行应用一次不可变更新。
   const updateDraft = React.useCallback((questionIndex: number, nextDraft: AskQuestionDraft) => {
+    if (mutationPending.current) return;
     setDrafts((current) => current.map((draft, index) => index === questionIndex ? nextDraft : draft));
     setValidationError(null);
   }, []);
@@ -237,7 +259,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // moveQuestion changes the visible prompt and returns from lightweight confirmation stages.
   // moveQuestion 切换可见问题，并从轻量确认阶段返回答题阶段。
   const moveQuestion = React.useCallback((direction: -1 | 1) => {
-    if (!request || questionCount === 0) {
+    if (mutationPending.current || !request || questionCount === 0) {
       return;
     }
     setStage("answering");
@@ -248,7 +270,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // toggleRenderedOption toggles one structured option row or the custom-answer lane.
   // toggleRenderedOption 切换一条结构化选项行或自定义回答通道。
   const toggleRenderedOption = React.useCallback((optionIndex: number) => {
-    if (!activeQuestion || !activeDraft) {
+    if (mutationPending.current || !activeQuestion || !activeDraft) {
       return;
     }
     const descriptor = renderedOptions[optionIndex];
@@ -286,6 +308,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // moveOption changes the keyboard-highlighted option row without wrapping around.
   // moveOption 以不循环方式移动键盘高亮选项行。
   const moveOption = React.useCallback((direction: -1 | 1) => {
+    if (mutationPending.current) return;
     setStage("answering");
     setValidationError(null);
     setActiveOptionIndex((current) => Math.min(Math.max(current + direction, 0), Math.max(renderedOptions.length - 1, 0)));
@@ -332,7 +355,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // handleSubmit validates answers, then resumes the backend ask runtime.
   // handleSubmit 校验答案并恢复后端 ask 运行时。
   const handleSubmit = React.useCallback(async () => {
-    if (!request) {
+    if (mutationPending.current || !request) {
       return;
     }
     const nextValidation = collectAskQuestionAnswers(request.questions, drafts, t);
@@ -342,32 +365,44 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
       setActiveIndex(nextValidation.errorIndex ?? 0);
       return;
     }
+    mutationPending.current = true;
     setBusy(true);
+    setValidationError(null);
     try {
       await props.onSubmit(request.id, nextValidation.answers);
-    } finally {
+      // Successful acknowledgements stay locked until the authoritative request leaves the surface.
+      // 成功确认后保持锁定，直到权威请求从面板移除。
+    } catch (error) {
+      if (!mounted.current) return;
+      mutationPending.current = false;
       setBusy(false);
+      setValidationError(error instanceof Error ? error.message : String(error));
     }
   }, [drafts, props, request, t]);
 
   // handleReject confirms cancellation and rejects the backend ask runtime.
   // handleReject 确认取消并拒绝后端 ask 运行时。
   const handleReject = React.useCallback(async () => {
-    if (!request) {
+    if (mutationPending.current || !request) {
       return;
     }
+    mutationPending.current = true;
     setBusy(true);
+    setValidationError(null);
     try {
       await props.onReject(request.id);
-    } finally {
+    } catch (error) {
+      if (!mounted.current) return;
+      mutationPending.current = false;
       setBusy(false);
+      setValidationError(error instanceof Error ? error.message : String(error));
     }
   }, [props, request]);
 
   // handleDialogKeyDown maps keyboard shortcuts to the compact question bar state machine.
   // handleDialogKeyDown 将键盘快捷键映射到紧凑 question bar 状态机。
   const handleDialogKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
-    if (busy) {
+    if (mutationPending.current || busy || event.nativeEvent.isComposing) {
       return;
     }
     const targetIsTextarea = event.target instanceof HTMLTextAreaElement;
@@ -459,7 +494,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
         <section
           aria-describedby={descriptionId}
           aria-labelledby={titleId}
-          aria-modal="true"
+          aria-modal="false"
           className="pointer-events-auto max-h-[min(420px,calc(100vh-2rem))] w-full max-w-[760px] overflow-hidden rounded-2xl border border-border/80 bg-popover p-0 text-[13px] text-popover-foreground shadow-2xl outline-none"
           onKeyDown={handleDialogKeyDown}
           ref={questionBarRef}
@@ -502,6 +537,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                         : [],
                     })}
                     onSelect={() => toggleRenderedOption(optionIndex)}
+                    onFocus={() => setActiveOptionIndex(optionIndex)}
                     optionIndex={optionIndex}
                     question={activeQuestion}
                     selected={askQuestionOptionIsSelected(activeQuestion, activeDraft, descriptor)}
@@ -511,7 +547,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
               </div>
             </div>
             {validationError ? (
-              <div className="rounded-lg border border-destructive/25 bg-destructive/10 px-2.5 py-1.5 text-xs leading-5 text-destructive">
+              <div role="alert" className="max-h-24 overflow-y-auto break-words rounded-lg border border-destructive/25 bg-destructive/10 px-2.5 py-1.5 text-xs leading-5 text-destructive">
                 {validationError}
               </div>
             ) : null}
@@ -521,6 +557,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                 className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
                 disabled={busy}
                 onClick={() => {
+                  if (mutationPending.current) return;
                   if (stage === "answering") {
                     setStage("rejectConfirm");
                   } else {
@@ -586,7 +623,7 @@ function AskQuestionProgress(props: {
       >
         <ChevronLeft className="size-3" />
       </Button>
-      <span className="tabular-nums">{props.activeIndex + 1} of {props.total}</span>
+      <span className="tabular-nums">{props.activeIndex + 1} / {props.total}</span>
       <Button
         aria-label={props.t("ask.progress.next")}
         disabled={props.disabled || props.activeIndex >= props.total - 1}
@@ -663,6 +700,9 @@ function AskQuestionOptionRow(props: {
   // Selects or toggles this row.
   // 选择或切换该行。
   onSelect: () => void;
+  // Synchronizes the option highlighted by keyboard navigation with actual focus.
+  // 将键盘导航高亮项与实际焦点保持同步。
+  onFocus: () => void;
   // Zero-based rendered row index.
   // 从零开始的渲染行下标。
   optionIndex: number;
@@ -692,6 +732,7 @@ function AskQuestionOptionRow(props: {
       <div className={rowClassName}>
         <span className="pt-px text-[13px] leading-5 tabular-nums text-muted-foreground/70">{props.optionIndex + 1}.</span>
         <Textarea
+          aria-label={props.question.question}
           autoFocus
           className="min-h-5 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-[13px] leading-5 shadow-none focus-visible:ring-0"
           disabled={props.disabled}
@@ -707,14 +748,17 @@ function AskQuestionOptionRow(props: {
 
   return (
     <button
+      aria-pressed={props.selected}
       className={rowClassName}
       disabled={props.disabled}
       onClick={props.onSelect}
+      onFocus={props.onFocus}
       type="button"
     >
       <span className="text-[13px] leading-5 tabular-nums text-muted-foreground/70">{props.optionIndex + 1}.</span>
       <span className="flex min-w-0 items-center gap-2">
-        <span className="truncate text-[13px] leading-5 font-medium">{props.descriptor.label}</span>
+        <span className="break-words text-[13px] leading-5 font-medium">{props.descriptor.label}</span>
+        {props.descriptor.description ? <span className="sr-only">{props.descriptor.description}</span> : null}
         <AskQuestionInfoTooltip descriptor={props.descriptor} />
         {props.selected ? (
           <span className="rounded-md bg-background px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground">

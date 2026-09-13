@@ -1,0 +1,20 @@
+/* Repository navigation stays inside the existing Git section and never changes the shared panel geometry. */
+/* 仓库导航保持在既有 Git 区域内，不改变共享面板几何布局。 */
+/* Constrain the grid track and reset the floating panel's nowrap rule before long paths reach intrinsic sizing. */
+/* 在长路径参与固有尺寸计算前约束网格列，并清除浮动面板继承的不换行规则。 */
+.session-review-repository-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; max-height: 180px; overflow: auto; padding: 4px 0 8px; }
+.session-review-repository-option { display: flex; justify-content: space-between; gap: 10px; min-width: 0; width: 100%; padding: 7px 9px; text-align: left; white-space: normal; border: 1px solid transparent; border-radius: 7px; color: var(--foreground); background: transparent; cursor: pointer; }
+.session-review-repository-option:hover { background: var(--muted); }
+.session-review-repository-option[aria-pressed="true"] { border-color: var(--border); background: var(--accent); }
+.session-review-repository-option:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.session-review-repository-option:disabled { cursor: default; opacity: .65; }
+.session-review-repository-identity, .session-review-repository-status { display: flex; min-width: 0; flex-direction: column; gap: 3px; overflow-wrap: anywhere; font-size: 11px; }
+.session-review-repository-identity { flex: 1; }
+.session-review-repository-identity small, .session-review-repository-status small { color: var(--muted-foreground); font-size: 10px; }
+.session-review-repository-status { max-width: 48%; align-items: flex-end; text-align: right; }
+/* Text status must not reuse the fourteen-pixel error icon container. */
+/* 文本状态不得复用十四像素的错误图标容器。 */
+.session-review-repository-failure { color: var(--destructive); white-space: nowrap; }
+.session-review-repository-diagnostic, .session-review-repository-notice { margin: 5px 8px; font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+.session-review-repository-diagnostic { color: var(--destructive); }
+.session-review-repository-notice { color: var(--muted-foreground); }

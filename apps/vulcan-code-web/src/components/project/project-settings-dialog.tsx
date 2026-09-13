@@ -161,6 +161,11 @@ export function ProjectSettingsDialog(props: {
   // agentLoading records whether the Agent Skill override map is loading.
   // agentLoading 记录 Agent Skill 覆盖映射是否正在加载。
   const [agentLoading, setAgentLoading] = React.useState(false);
+  // Overview authority binds accepted settings to a project and preserves read failures independently of drafts.
+  // 概览权威将已接受设置绑定项目，并独立于草稿保留读取失败。
+  const [overviewAuthority, setOverviewAuthority] = React.useState<{
+    projectId: string | null; vmmProjectId: string | null; agentProjectId: string | null; vmmError: string | null; agentError: string | null;
+  }>({ projectId: null, vmmProjectId: null, agentProjectId: null, vmmError: null, agentError: null });
   // agentBusySkill stores the Agent Skill currently being saved.
   // agentBusySkill 保存当前正在保存的 Agent Skill。
   const [agentBusySkill, setAgentBusySkill] = React.useState<string | null>(null);
@@ -288,6 +293,7 @@ export function ProjectSettingsDialog(props: {
     setVmmSaveInFlight(false);
     setAgentOverrides({});
     setAgentLoading(false);
+    setOverviewAuthority({ projectId, vmmProjectId: null, agentProjectId: null, vmmError: null, agentError: null });
     setAgentBusySkill(null);
     setCleanupKinds({ image: true, audio: true, video: true, pdf: true });
     setCleanupCutoffDate(new Date().toISOString().slice(0, 10));
@@ -332,6 +338,7 @@ export function ProjectSettingsDialog(props: {
       .then((draft) => {
         if (!cancelled && vmmLoadSequenceRef.current === loadSequence) {
           setVmmDraft(draft);
+          setOverviewAuthority((current) => ({ ...current, vmmProjectId: projectId, vmmError: null }));
           setVmmDirty(false);
           loadedVmmRevisionByProjectRef.current.set(projectId, targetRevision);
           vmmLoadFailureCountByProjectRef.current.delete(projectId);
@@ -343,6 +350,7 @@ export function ProjectSettingsDialog(props: {
           // failureCount 仅属于当前准确领域，并且只在成功读取后重置。
           const failureCount = (vmmLoadFailureCountByProjectRef.current.get(projectId) ?? 0) + 1;
           vmmLoadFailureCountByProjectRef.current.set(projectId, failureCount);
+          setOverviewAuthority((current) => ({ ...current, vmmError: error instanceof Error ? error.message : String(error) }));
           if (failureCount === 1) {
             toast.error(error instanceof Error ? error.message : String(error));
           }
@@ -390,6 +398,7 @@ export function ProjectSettingsDialog(props: {
       .then((overrides) => {
         if (!cancelled && agentLoadSequenceRef.current === loadSequence) {
           setAgentOverrides(overrides);
+          setOverviewAuthority((current) => ({ ...current, agentProjectId: projectId, agentError: null }));
           loadedAgentRevisionByProjectRef.current.set(projectId, targetRevision);
           agentLoadFailureCountByProjectRef.current.delete(projectId);
         }
@@ -400,6 +409,7 @@ export function ProjectSettingsDialog(props: {
           // failureCount 仅属于当前准确领域，并且只在成功读取后重置。
           const failureCount = (agentLoadFailureCountByProjectRef.current.get(projectId) ?? 0) + 1;
           agentLoadFailureCountByProjectRef.current.set(projectId, failureCount);
+          setOverviewAuthority((current) => ({ ...current, agentError: error instanceof Error ? error.message : String(error) }));
           if (failureCount === 1) {
             toast.error(error instanceof Error ? error.message : String(error));
           }
@@ -437,6 +447,7 @@ export function ProjectSettingsDialog(props: {
     effectiveProject,
     props.workbench,
     t,
+    overviewAuthority.vmmProjectId === project.id && vmmDraft !== null ? vmmDraft.hasOverride : null,
   );
   const attachmentRoot = projectAttachmentRoot(project);
   const conversationCount = projectConversationCount(props.workbench, project.id);
@@ -480,6 +491,7 @@ export function ProjectSettingsDialog(props: {
         setVmmDraft(draftToSave);
         setVmmDirty(false);
       }
+      setOverviewAuthority((current) => ({ ...current, vmmError: null }));
       return true;
     } catch (error) {
       if (
@@ -488,6 +500,7 @@ export function ProjectSettingsDialog(props: {
       ) {
         return false;
       }
+      setOverviewAuthority((current) => ({ ...current, vmmError: error instanceof Error ? error.message : String(error) }));
       toast.error(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
@@ -505,7 +518,10 @@ export function ProjectSettingsDialog(props: {
   // setProjectAgentSkill persists one Agent Skill project tri-state override optimistically.
   // setProjectAgentSkill 乐观持久化单个 Agent Skill 项目三态覆盖。
   const setProjectAgentSkill = async (name: string, stateKey: ProjectAgentSkillState) => {
-    if (agentSaveInFlightRef.current) {
+    if (agentSaveInFlightRef.current || agentLoading
+      || overviewAuthority.agentProjectId !== project.id
+      || overviewAuthority.agentError !== null
+      || loadedAgentRevisionByProjectRef.current.get(project.id) !== props.settingsRevision.agentSkills) {
       return;
     }
     agentSaveInFlightRef.current = true;
@@ -525,11 +541,15 @@ export function ProjectSettingsDialog(props: {
     setAgentBusySkill(name);
     try {
       await props.onSetAgentSkillState(project.id, name, stateKey);
+      if (projectActionOwnerRef.current === actionOwner) {
+        setOverviewAuthority((current) => ({ ...current, agentError: null }));
+      }
     } catch (error) {
       if (projectActionOwnerRef.current !== actionOwner) {
         return;
       }
       setAgentOverrides(previousOverrides);
+      setOverviewAuthority((current) => ({ ...current, agentError: error instanceof Error ? error.message : String(error) }));
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       if (projectActionOwnerRef.current === actionOwner) {
@@ -752,11 +772,23 @@ export function ProjectSettingsDialog(props: {
           <section className="project-settings-content">
             {activeSection === "overview" ? (
               <ProjectOverviewSection
+                key={project.id}
                 agentOverrides={agentOverrides}
+                agentLoaded={overviewAuthority.agentProjectId === project.id}
+                agentLoading={agentLoading}
+                agentError={overviewAuthority.projectId === project.id ? overviewAuthority.agentError : null}
                 attachmentRoot={attachmentRoot}
                 conversationCount={conversationCount}
+                memory={props.workbench.vmmMemory}
+                onOpenSection={setActiveSection}
                 project={project}
-                vmmDraft={vmmDraft}
+                vceActivity={vceOverview}
+                vceError={vceActivity.error}
+                vmmDraft={overviewAuthority.vmmProjectId === project.id ? vmmDraft : null}
+                vmmLoading={vmmBusy === "loading"}
+                vmmError={overviewAuthority.projectId === project.id ? overviewAuthority.vmmError : null}
+                vmmDirty={vmmDirty}
+                vmmRevision={props.settingsRevision.vmm}
               />
             ) : null}
 
@@ -767,6 +799,7 @@ export function ProjectSettingsDialog(props: {
                 projectId={project.id}
                 vmmBusy={vmmBusy}
                 vmmDraft={vmmDraft}
+                vmmDirty={vmmDirty}
               />
             ) : null}
 
@@ -774,6 +807,14 @@ export function ProjectSettingsDialog(props: {
               <ProjectAgentSkillsSection
                 agentBusySkill={agentBusySkill}
                 agentLoading={agentLoading}
+                agentLoaded={overviewAuthority.agentProjectId === project.id
+                  && loadedAgentRevisionByProjectRef.current.get(project.id) === props.settingsRevision.agentSkills}
+                agentError={overviewAuthority.projectId === project.id ? overviewAuthority.agentError : null}
+                onRetry={() => {
+                  if (agentLoading || agentSaveInFlightRef.current) return;
+                  loadedAgentRevisionByProjectRef.current.delete(project.id);
+                  setAgentLoadRetryNonce((current) => current + 1);
+                }}
                 agentOverrides={agentOverrides}
                 onSetProjectAgentSkill={(name, stateKey) => void setProjectAgentSkill(name, stateKey)}
                 workbench={props.workbench}

@@ -10,12 +10,11 @@
 
 .project-folder-row {
   position: relative;
-  cursor: grab;
   transition: width 180ms ease, transform 180ms ease;
   user-select: none;
 }
 
-.project-folder-row:active {
+.project-reorder-handle:active {
   cursor: grabbing;
 }
 
@@ -38,7 +37,7 @@
   min-height: 30px;
   font-weight: 400;
   padding-top: 0;
-  padding-right: 58px;
+  padding-right: 84px;
   padding-bottom: 0;
   transition: width 180ms ease, min-width 180ms ease, height 180ms ease, max-height 180ms ease, min-height 180ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease, padding 180ms ease;
 }
@@ -77,6 +76,27 @@
 
 .project-create-conversation {
   right: 28px;
+}
+
+/* Only the independent handle owns drag input; focus remains visible without hover. */
+/* 仅独立手柄持有拖拽输入；无需悬停即可显示键盘焦点。 */
+.project-reorder-handle {
+  position: absolute;
+  right: 52px;
+  top: 3px;
+  z-index: 1;
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.project-folder-row:hover .project-reorder-handle,
+.project-folder-row:focus-within .project-reorder-handle {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .project-reorder-handle { opacity: 1; }
 }
 
 .project-folder-arrow {
@@ -597,6 +617,9 @@
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-action {
+  /* Zero-sized actions are not interactive while the navigation is collapsed. */
+  /* 导航折叠期间，零尺寸操作不参与交互。 */
+  visibility: hidden;
   width: 0;
   height: 0;
   opacity: 0;
@@ -604,6 +627,7 @@
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-conversation-list {
+  visibility: hidden;
   max-height: 0;
   opacity: 0;
   overflow: hidden;

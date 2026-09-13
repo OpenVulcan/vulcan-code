@@ -11,6 +11,9 @@ export interface PublicModelProtocolRoute {
   // Number of credential accounts exposing this exact service-entry protocol route.
   // 暴露此精确服务入口协议路由的凭据账号数量。
   accountCount: number
+  // Exact credential identities and admission states sharing this resolved route.
+  // 共享此解析路由的精确凭据身份与准入状态。
+  accounts: Array<{ connectionId: string; displayName: string; enabled: boolean }>
   // Protocol variants available to every credential aggregated into this exact route.
   // 聚合到此精确路由中的每个凭据都可用的协议变体。
   availableProtocols: string[]
@@ -62,6 +65,8 @@ export function compactServiceEntryName(displayName: string): string {
 
 // buildProviderModelGroups derives every manageable provider model independently from conversation publication.
 // buildProviderModelGroups 独立于会话发布状态派生全部可管理供应商模型。
+// Parameters: snapshot supplies provider descriptors, exact account catalogs and resolved route records; returns provider/model groups retaining service, protocol and account admission identity.
+// 参数：snapshot 提供供应商描述、精确账号目录及已解析路由记录；返回保留服务、协议及账号准入身份的供应商模型分组。
 export function buildProviderModelGroups(
   snapshot: Pick<
     PublicAiSettingsSnapshot,
@@ -122,9 +127,11 @@ export function buildProviderModelGroups(
         ))
         if (existing) {
           existing.accountCount += Number(accountEnabled)
+          existing.accounts.push({ connectionId: connection.id, displayName: connection.display_name, enabled: accountEnabled })
         } else {
           routes.push({
             accountCount: Number(accountEnabled),
+            accounts: [{ connectionId: connection.id, displayName: connection.display_name, enabled: accountEnabled }],
             availableProtocols,
             bindingSource: record.bindingSource,
             bindingRuleId: record.bindingRuleId,

@@ -149,11 +149,11 @@ export function VmmNativeRetentionSettings({ settings, defaults, busy, onRunActi
           const durationKey = field.key === "sessionIdleMs" || field.key === "trashRetentionMs" ? field.key : null
           return <div className="space-y-2" key={field.key}>
             <Label htmlFor={`vmm-cleanup-${field.key}`}>{t(field.label)}</Label>
-            <div className="flex gap-2"><Input id={`vmm-cleanup-${field.key}`} type="number" min={1} step={1}
+            <div className="flex gap-2"><Input className="min-w-0 flex-1" id={`vmm-cleanup-${field.key}`} type="number" min={1} step={1}
               value={draft[field.key]} disabled={disabled} onChange={(event) => edit({ ...draft, [field.key]: event.target.value })} />
               {durationKey ? <Select disabled={disabled}
                 value={String(draft.units[durationKey])} onValueChange={(value) => edit({ ...draft, units: { ...draft.units, [durationKey]: Number(value) } })}>
-                <SelectTrigger aria-label={`${t(field.label)} · ${t("memory.cleanup.unit")}`}><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-24 shrink-0" aria-label={`${t(field.label)} · ${t("memory.cleanup.unit")}`}><SelectValue /></SelectTrigger>
                 <SelectContent>{units.map(([factor, label]) => <SelectItem key={factor} value={String(factor)}>{t(label)}</SelectItem>)}</SelectContent>
               </Select> : null}</div>
           </div>

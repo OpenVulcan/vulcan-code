@@ -146,7 +146,7 @@ export function DiffFileHeader(props: {
   const { t } = useI18n();
   const ToggleIcon = props.collapsed ? ChevronRight : ChevronDown;
   return (
-    <button className={props.className ? `diff-file-header ${props.className}` : "diff-file-header"} onClick={props.onToggle} type="button">
+    <button aria-expanded={!props.collapsed} className={props.className ? `diff-file-header ${props.className}` : "diff-file-header"} onClick={props.onToggle} type="button">
       <ToggleIcon size={15} />
       <div className="diff-file-paths">
         <strong>
@@ -623,11 +623,32 @@ function DiffRowsHtml(props: {
   // hunk 上下文展开控件使用的可选委托处理器。
   onExpandFileContext?: (hunkIndex: number, direction: DiffHunkExpansionDirection) => void;
 }) {
+  const { locale } = useI18n();
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   useTargetDiffDomSetup(hostRef, props.domSetupKey, props.html);
   React.useLayoutEffect(() => {
     applyDiffSearchMarkers(hostRef.current, props.searchLineKeys, props.activeSearchLineKey);
   }, [props.activeSearchLineKey, props.html, props.searchLineKeys]);
+  // Worker HTML stays locale-neutral; label its actual interactive controls at the mounted boundary.
+  // Worker HTML 保持语言无关，在挂载边界为实际交互控件添加本地化名称。
+  React.useLayoutEffect(() => {
+    hostRef.current?.querySelectorAll<HTMLElement>("[data-expand-button]").forEach((control) => {
+      control.setAttribute("aria-label", control.hasAttribute("data-expand-up")
+        ? (locale === "zh-CN" ? "展开上方上下文" : "Expand context above")
+        : control.hasAttribute("data-expand-down")
+          ? (locale === "zh-CN" ? "展开下方上下文" : "Expand context below")
+          : (locale === "zh-CN" ? "展开上下文" : "Expand context"));
+    });
+  }, [locale, props.html]);
+  // Enter and Space reuse the click dispatcher so directional hunk identities cannot diverge.
+  // Enter 与空格复用点击分发，避免方向和 hunk 标识出现两套语义。
+  const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!(event.target instanceof HTMLElement) || !event.target.matches("[data-expand-button],[data-unmodified-lines]")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.target.click();
+  }, []);
   const handleClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const clickedElement = event.target instanceof Element ? event.target : null;
     const expandElement = clickedElement ? targetDiffLineInfoElement(clickedElement, hostRef.current) : null;
@@ -696,7 +717,7 @@ function DiffRowsHtml(props: {
       </div>
     );
   }
-  return <div className="diff-plain-rendered-window" dangerouslySetInnerHTML={{ __html: props.html }} onClick={handleClick} ref={hostRef} />;
+  return <div className="diff-plain-rendered-window" dangerouslySetInnerHTML={{ __html: props.html }} onClick={handleClick} onKeyDown={handleKeyDown} ref={hostRef} />;
 }
 
 // useTargetDiffDomSetup installs target DOM managers and retries when cached HTML swaps its inner structure.

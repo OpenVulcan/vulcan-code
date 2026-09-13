@@ -162,7 +162,12 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(state)
         .manage(shutdown_control)
-        .invoke_handler(tauri::generate_handler![force_close_window])
+        .invoke_handler(tauri::generate_handler![
+            force_close_window,
+            crate::desktop_notifications::notification_permission,
+            crate::desktop_notifications::request_notification_permission,
+            crate::desktop_notifications::show_notification,
+        ])
         .on_window_event(move |window, event| {
             let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                 return;

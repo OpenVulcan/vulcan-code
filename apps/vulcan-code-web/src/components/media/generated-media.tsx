@@ -103,7 +103,7 @@ function GeneratedMediaInlineCard(props: {
     const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
       <div className="generated-media-card audio">
-        <audio controls preload="metadata" src={mediaSource} />
+        <audio aria-label={props.attachment.fileName} controls preload="metadata" src={mediaSource} />
       </div>
     );
   }
@@ -141,9 +141,9 @@ export function GeneratedMediaDetail(props: {
         <span><MediaIcon size={17} />{primary.fileName}</span>
         {primary.kind === "image" ? (
           <span className="generated-media-zoom-controls">
-            <Button onClick={() => setZoom((value) => clampGeneratedMediaZoom(value - GENERATED_MEDIA_ZOOM_STEP))} size="sm" type="button" variant="outline">-</Button>
+            <Button aria-label={t("mediaPlayer.zoomOut")} onClick={() => setZoom((value) => clampGeneratedMediaZoom(value - GENERATED_MEDIA_ZOOM_STEP))} size="sm" type="button" variant="outline">-</Button>
             <strong>{Math.round(zoom * 100)}%</strong>
-            <Button onClick={() => setZoom((value) => clampGeneratedMediaZoom(value + GENERATED_MEDIA_ZOOM_STEP))} size="sm" type="button" variant="outline">+</Button>
+            <Button aria-label={t("mediaPlayer.zoomIn")} onClick={() => setZoom((value) => clampGeneratedMediaZoom(value + GENERATED_MEDIA_ZOOM_STEP))} size="sm" type="button" variant="outline">+</Button>
           </span>
         ) : null}
       </header>
@@ -170,7 +170,7 @@ export function GeneratedMediaDetail(props: {
           </span>
         </button>
       ) : primary.kind === "audio" ? (
-        <audio className="generated-media-audio-preview" controls src={primarySource} />
+        <audio aria-label={primary.fileName} className="generated-media-audio-preview" controls src={primarySource} />
       ) : (
         <a className="generated-media-document-link" href={primarySource} rel="noreferrer" target="_blank">
           <FileText size={18} />

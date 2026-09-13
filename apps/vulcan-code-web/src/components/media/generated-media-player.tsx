@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
@@ -54,8 +55,52 @@ export function GeneratedMediaPlayerWindow(props: {
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  // sourceIdentity remounts one viewer when the selected media changes, isolating late load events.
+  // sourceIdentity 在所选媒体变化时重挂载查看器，隔离迟到的加载事件。
+  const sourceIdentity = `${props.attachment.kind}:${props.attachment.localPath}`;
+  return <GeneratedMediaPlayerContent key={sourceIdentity} {...props} locale={locale} t={t} />;
+}
+
+// GeneratedMediaPlayerContent owns zoom and load state for one immutable media identity.
+// GeneratedMediaPlayerContent 持有单一不可变媒体标识的缩放与加载状态。
+// Parameters provide the selected attachment, close callback and current localized text resolver.
+// 参数提供所选附件、关闭回调以及当前本地化文本解析器。
+// Returns the bounded media dialog and its local recovery controls.
+// 返回受视口约束的媒体弹窗及其局部恢复控件。
+function GeneratedMediaPlayerContent(props: {
+  // attachment is the selected local media descriptor.
+  // attachment 是所选本地媒体描述。
+  attachment: GeneratedMediaAttachment;
+  // onClose dismisses this viewer.
+  // onClose 关闭当前查看器。
+  onClose: () => void;
+  // locale selects visible failure and keyboard help text.
+  // locale 选择可见失败提示及键盘帮助文本。
+  locale: string;
+  // t resolves existing media toolbar labels.
+  // t 解析现有媒体工具栏文案。
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const { t } = props;
+  // loadFailed retains a media decoding or loading failure until the user retries.
+  // loadFailed 保留媒体解码或加载失败，直到用户重试。
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  // loadAttempt remounts the actual browser media element without changing its authoritative URL.
+  // loadAttempt 重挂载浏览器媒体元素，而不更改权威 URL。
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
   const imageStageRef = React.useRef<HTMLDivElement | null>(null);
+  // imageStageNode tracks portal mounting so observation starts after the actual stage exists.
+  // imageStageNode 跟踪门户挂载，确保实际舞台存在后才启动尺寸观测。
+  const [imageStageNode, setImageStageNode] = React.useState<HTMLDivElement | null>(null);
+  // bindImageStage receives the mounted viewport or null and synchronizes pointer and observer owners.
+  // bindImageStage 接收已挂载视口或 null，并同步指针与观测器的所属节点。
+  // Returns nothing; React invokes this stable callback whenever the portal stage changes.
+  // 无返回值；门户舞台变化时由 React 调用此稳定回调。
+  const bindImageStage = React.useCallback((node: HTMLDivElement | null) => {
+    imageStageRef.current = node;
+    setImageStageNode(node);
+  }, []);
   const imageElementRef = React.useRef<HTMLImageElement | null>(null);
   const imageInitializedRef = React.useRef(false);
   const imageDragRef = React.useRef<{
@@ -89,11 +134,12 @@ export function GeneratedMediaPlayerWindow(props: {
     if (!node || !isImage) {
       return null;
     }
-    const rect = node.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
+    // Layout dimensions exclude the dialog entrance transform, which otherwise freezes a smaller initial fit.
+    // 布局尺寸排除弹窗入场变换，避免初次适配永久采用动画期间的偏小比例。
+    const nextSize = { width: node.clientWidth, height: node.clientHeight };
+    if (nextSize.width <= 0 || nextSize.height <= 0) {
       return null;
     }
-    const nextSize = { width: rect.width, height: rect.height };
     setImageViewportSize((current) => (
       current && Math.abs(current.width - nextSize.width) < 0.5 && Math.abs(current.height - nextSize.height) < 0.5
         ? current
@@ -101,33 +147,6 @@ export function GeneratedMediaPlayerWindow(props: {
     ));
     return nextSize;
   }, [isImage]);
-  React.useEffect(() => {
-    imageInitializedRef.current = false;
-    imageDragRef.current = null;
-    imageElementRef.current = null;
-    setImageScale(1);
-    setImageOffset({ x: 0, y: 0 });
-    setIsImageDragging(false);
-    setIsMaximized(false);
-    setImageNaturalSize(null);
-    setImageViewportSize(null);
-  }, [source]);
-  React.useEffect(() => {
-    if (!isImage || !source) {
-      return undefined;
-    }
-    let cancelled = false;
-    const image = new Image();
-    image.onload = () => {
-      if (!cancelled) {
-        setImageNaturalSize({ width: image.naturalWidth, height: image.naturalHeight });
-      }
-    };
-    image.src = source;
-    return () => {
-      cancelled = true;
-    };
-  }, [isImage, source]);
   const syncImageNaturalSize = React.useCallback((image: HTMLImageElement | null) => {
     if (!image || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
       return;
@@ -147,7 +166,7 @@ export function GeneratedMediaPlayerWindow(props: {
       window.cancelAnimationFrame(animationFrame);
       observer.disconnect();
     };
-  }, [isImage, isMaximized, measureImageViewportSize]);
+  }, [imageStageNode, isImage, isMaximized, measureImageViewportSize]);
   React.useEffect(() => {
     syncImageNaturalSize(imageElementRef.current);
   }, [syncImageNaturalSize, source]);
@@ -167,7 +186,12 @@ export function GeneratedMediaPlayerWindow(props: {
     if (!imageNaturalSize || !viewportSize) {
       return;
     }
-    const clampedScale = clampGeneratedMediaZoom(nextScale);
+    // The fit defines the lower bound; preserve the gesture direction when resizing raises that bound.
+    // 适配比例定义缩放下限；窗口扩大抬高下限时，仍需保持用户操作方向。
+    const boundedScale = clampGeneratedMediaZoom(nextScale, generatedMediaFitScale(viewportSize, imageNaturalSize));
+    // clampedScale never enlarges the image in response to a shrinking action.
+    // clampedScale 保证缩小操作绝不会放大图片。
+    const clampedScale = nextScale < imageScale ? Math.min(imageScale, boundedScale) : boundedScale;
     setImageOffset((offset) => generatedMediaZoomOffsetAroundPoint(
       offset,
       imageScale,
@@ -205,7 +229,12 @@ export function GeneratedMediaPlayerWindow(props: {
       x: clientX - rect.left - rect.width / 2,
       y: clientY - rect.top - rect.height / 2,
     };
-    const nextScale = clampGeneratedMediaZoom(imageScale * (deltaY < 0 ? 1.1 : 1 / 1.1));
+    // Wheel shrinking uses the toolbar's fit-aware lower bound, including after viewport enlargement.
+    // 滚轮缩小使用工具栏的适配下限，并处理视口扩大后的下限变化。
+    const boundedScale = clampGeneratedMediaZoom(imageScale * (deltaY < 0 ? 1.1 : 1 / 1.1), generatedMediaFitScale(viewportSize, imageNaturalSize));
+    // nextScale preserves the shrinking direction even when the retained scale is below the new fit.
+    // 即使保留比例低于新的适配比例，nextScale 也保持缩小方向。
+    const nextScale = deltaY < 0 ? boundedScale : Math.min(imageScale, boundedScale);
     setImageOffset((offset) => generatedMediaZoomOffsetAroundPoint(
       offset,
       imageScale,
@@ -227,7 +256,7 @@ export function GeneratedMediaPlayerWindow(props: {
     };
     node.addEventListener("wheel", handleWheel, { passive: false });
     return () => node.removeEventListener("wheel", handleWheel);
-  }, [isImage, zoomImageAtPoint]);
+  }, [imageStageNode, isImage, zoomImageAtPoint]);
   const handleImagePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const viewportSize = measureImageViewportSize() ?? imageViewportSize;
     if (event.button !== 0 || !imageNaturalSize || !viewportSize) {
@@ -279,21 +308,22 @@ export function GeneratedMediaPlayerWindow(props: {
           <span className="generated-media-player-title">
             <MediaIcon size={18} />
             <DialogTitle title={props.attachment.fileName}>{props.attachment.fileName}</DialogTitle>
+            <DialogDescription className="sr-only">{props.locale === "zh-CN" ? "查看生成的媒体文件，或使用工具栏调整显示。" : "View generated media and adjust its display using the toolbar."}</DialogDescription>
           </span>
+          {isImage ? (
+            <GeneratedMediaImageZoomControl
+              canUseZoom={!loadFailed && imageNaturalSize !== null && imageViewportSize !== null}
+              fitScale={imageFitScale}
+              naturalSize={imageNaturalSize}
+              offset={imageOffset}
+              onFit={handleImageFit}
+              onOriginalSize={handleImageOriginalSize}
+              onZoomIn={() => applyImageScaleAroundCenter(imageScale + GENERATED_MEDIA_ZOOM_STEP)}
+              onZoomOut={() => applyImageScaleAroundCenter(imageScale - GENERATED_MEDIA_ZOOM_STEP)}
+              scale={imageScale}
+            />
+          ) : null}
           <span className="generated-media-player-actions">
-            {isImage ? (
-              <GeneratedMediaImageZoomControl
-                canUseZoom={imageNaturalSize !== null && imageViewportSize !== null}
-                fitScale={imageFitScale}
-                naturalSize={imageNaturalSize}
-                offset={imageOffset}
-                onFit={handleImageFit}
-                onOriginalSize={handleImageOriginalSize}
-                onZoomIn={() => applyImageScaleAroundCenter(imageScale + GENERATED_MEDIA_ZOOM_STEP)}
-                onZoomOut={() => applyImageScaleAroundCenter(imageScale - GENERATED_MEDIA_ZOOM_STEP)}
-                scale={imageScale}
-              />
-            ) : null}
             <Button
               aria-label={isMaximized ? t("mediaPlayer.restore") : t("mediaPlayer.maximize")}
               className="icon-button"
@@ -310,14 +340,37 @@ export function GeneratedMediaPlayerWindow(props: {
           </span>
         </header>
         <div className={cn("generated-media-player-body", isImage && "image")}>
-          {isImage ? (
+          {loadFailed || !source ? (
+            <div className="flex min-h-40 flex-col items-center justify-center gap-3 p-4 text-center" role="alert">
+              <p className="text-sm text-muted-foreground">{props.locale === "zh-CN" ? "无法加载此媒体文件。" : "This media file could not be loaded."}</p>
+              {source ? <Button variant="outline" onClick={() => { setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>
+                {props.locale === "zh-CN" ? "重试" : "Retry"}
+              </Button> : null}
+            </div>
+          ) : isImage ? (
             <div
-              className={cn("generated-media-image-viewer", isImageDragging && "dragging")}
+              className={cn("generated-media-image-viewer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", isImageDragging && "dragging")}
+              aria-label={props.locale === "zh-CN" ? "图片查看器：方向键平移，Home 自适应窗口" : "Image viewer: arrow keys pan, Home fits the image"}
+              tabIndex={0}
+              role="region"
+              onKeyDown={(event) => {
+                if (event.altKey || event.ctrlKey || event.metaKey || !imageNaturalSize || !imageViewportSize) return;
+                if (event.key === "Home") { event.preventDefault(); handleImageFit(); return; }
+                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                event.preventDefault();
+                // Arrow movement uses the same clamped offsets as pointer panning.
+                // 方向键移动与指针平移使用相同的边界限制。
+                const step = event.shiftKey ? 100 : 40;
+                setImageOffset((offset) => clampGeneratedMediaImageOffset({
+                  x: offset.x + (event.key === "ArrowLeft" ? step : event.key === "ArrowRight" ? -step : 0),
+                  y: offset.y + (event.key === "ArrowUp" ? step : event.key === "ArrowDown" ? -step : 0),
+                }, imageScale, imageViewportSize, imageNaturalSize));
+              }}
               onPointerCancel={handleImagePointerEnd}
               onPointerDown={handleImagePointerDown}
               onPointerMove={handleImagePointerMove}
               onPointerUp={handleImagePointerEnd}
-              ref={imageStageRef}
+              ref={bindImageStage}
             >
               {imageNaturalSize ? (
                 <div
@@ -327,10 +380,12 @@ export function GeneratedMediaPlayerWindow(props: {
                   }}
                 >
                   <img
+                    key={loadAttempt}
                     alt={props.attachment.fileName}
                     className="generated-media-player-image"
                     draggable={false}
                     onLoad={(event) => syncImageNaturalSize(event.currentTarget)}
+                    onError={() => setLoadFailed(true)}
                     ref={imageElementRef}
                     src={source}
                     style={{
@@ -342,10 +397,12 @@ export function GeneratedMediaPlayerWindow(props: {
                 </div>
               ) : (
                 <img
+                  key={loadAttempt}
                   alt={props.attachment.fileName}
                   className="generated-media-player-image loading"
                   draggable={false}
                   onLoad={(event) => syncImageNaturalSize(event.currentTarget)}
+                  onError={() => setLoadFailed(true)}
                   ref={imageElementRef}
                   src={source}
                 />
@@ -353,6 +410,9 @@ export function GeneratedMediaPlayerWindow(props: {
             </div>
           ) : props.attachment.kind === "video" ? (
             <video
+              key={loadAttempt}
+              aria-label={props.attachment.fileName}
+              onError={() => setLoadFailed(true)}
               className="generated-media-player-video"
               controls
               preload="metadata"
@@ -360,6 +420,9 @@ export function GeneratedMediaPlayerWindow(props: {
             />
           ) : props.attachment.kind === "audio" ? (
             <audio
+              key={loadAttempt}
+              aria-label={props.attachment.fileName}
+              onError={() => setLoadFailed(true)}
               className="generated-media-player-audio"
               controls
               preload="metadata"
@@ -414,7 +477,9 @@ function GeneratedMediaImageZoomControl(props: {
   const hasOffset = generatedMediaHasImageOffset(props.offset);
   const percent = Math.round(props.scale * 100);
   const canUseZoom = props.canUseZoom && props.naturalSize !== null;
-  const canZoomOut = canUseZoom && props.scale > GENERATED_MEDIA_MIN_ZOOM + 0.001;
+  // Disabled state and execution share the same fit-aware minimum.
+  // 禁用状态与执行使用相同的适配下限。
+  const canZoomOut = canUseZoom && props.scale > Math.min(GENERATED_MEDIA_MIN_ZOOM, props.fitScale) + 0.001;
   const canZoomIn = canUseZoom && props.scale < GENERATED_MEDIA_MAX_ZOOM - 0.001;
   const canFitWindow = canUseZoom && (Math.abs(props.scale - props.fitScale) > 0.001 || hasOffset);
   const canUseOriginalSize = canUseZoom && (Math.abs(props.scale - 1) > 0.001 || hasOffset);
@@ -438,7 +503,7 @@ function GeneratedMediaImageZoomControl(props: {
         label={t("mediaPlayer.zoomOut")}
         onClick={props.onZoomOut}
       />
-      <strong>{percent}%</strong>
+      <strong>{canUseZoom ? `${percent}%` : "-"}</strong>
       <GeneratedMediaImageZoomIconButton
         disabled={!canZoomIn}
         icon={<Plus size={16} />}

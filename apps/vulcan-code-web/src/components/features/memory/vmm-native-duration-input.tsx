@@ -43,12 +43,15 @@ interface DurationInputProps {
   id: string
   value: string
   disabled: boolean
+  // Optional field-specific unit name distinguishes multiple duration controls on one page.
+  // 可选的字段专属单位名称用于区分同页的多个时长控件。
+  unitLabel?: string
   onChange: (milliseconds: string) => void
 }
 
 // Edits amount and unit while preserving intermediate text; changing a unit intentionally changes duration.
 // 编辑数量及单位并保留中间文本；修改单位有意改变有效期。
-export function VmmNativeDurationInput({ id, value, disabled, onChange }: DurationInputProps) {
+export function VmmNativeDurationInput({ id, value, disabled, unitLabel, onChange }: DurationInputProps) {
   const { t } = useI18n()
   const [display, setDisplay] = React.useState(() => displayDuration(value))
   // Own emitted values must not reformat the user's partially typed decimal quantity.
@@ -65,9 +68,9 @@ export function VmmNativeDurationInput({ id, value, disabled, onChange }: Durati
     onChange(emitted.current)
   }
   return <div className="flex gap-2">
-    <Input id={id} inputMode="decimal" maxLength={32} disabled={disabled} value={display.quantity} onChange={(event) => update({ ...display, quantity: event.target.value })} />
+    <Input className="min-w-0 flex-1" id={id} inputMode="decimal" maxLength={32} disabled={disabled} value={display.quantity} onChange={(event) => update({ ...display, quantity: event.target.value })} />
     <Select disabled={disabled} value={display.unit} onValueChange={(unit) => update({ ...display, unit: unit as typeof display.unit })}>
-      <SelectTrigger aria-label={t("memory.policy.durationUnit")}><SelectValue /></SelectTrigger>
+      <SelectTrigger className="w-24 shrink-0" aria-label={unitLabel ?? t("memory.policy.durationUnit")}><SelectValue /></SelectTrigger>
       <SelectContent>{units.map((unit) => <SelectItem key={unit.value} value={unit.value}>{t(unit.label)}</SelectItem>)}</SelectContent>
     </Select>
   </div>

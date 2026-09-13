@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { RadioGroup as RadioGroupPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
@@ -10,9 +11,6 @@ interface SegmentedControlContextValue {
   // Whether every option is disabled by the parent control.
   // 父级选择器是否禁用全部选项。
   disabled: boolean
-  // Selects one value without allowing an empty selection.
-  // 选择一个值且不允许产生空选择。
-  onValueChange: (value: string) => void
   // Currently selected option value.
   // 当前选中的选项值。
   value: string
@@ -22,7 +20,6 @@ interface SegmentedControlContextValue {
 // SEGMENTED_CONTROL_EMPTY_CONTEXT 防止独立选项隐式持有选择状态。
 const SEGMENTED_CONTROL_EMPTY_CONTEXT: SegmentedControlContextValue = {
   disabled: false,
-  onValueChange: () => undefined,
   value: "",
 }
 
@@ -32,7 +29,7 @@ const SegmentedControlContext = React.createContext(SEGMENTED_CONTROL_EMPTY_CONT
 
 // SegmentedControlProps describes one mutually exclusive compact choice group.
 // SegmentedControlProps 描述一个互斥的紧凑选项组。
-export interface SegmentedControlProps extends Omit<React.ComponentProps<"div">, "defaultValue" | "onChange"> {
+export interface SegmentedControlProps extends Omit<React.ComponentProps<typeof RadioGroupPrimitive.Root>, "defaultValue" | "onChange"> {
   // Initial value used when the control owns its state.
   // 选择器自行持有状态时使用的初始值。
   defaultValue?: string
@@ -78,37 +75,14 @@ export function SegmentedControl({
   }, [controlledValue, onValueChange])
 
   return (
-    <SegmentedControlContext.Provider value={{ disabled, onValueChange: selectValue, value }}>
-      <div
+    <SegmentedControlContext.Provider value={{ disabled, value }}>
+      <RadioGroupPrimitive.Root
       className={cn("inline-flex w-fit items-center rounded-lg bg-muted p-0.5", className)}
       data-slot="segmented-control"
-      role="radiogroup"
-      onKeyDown={(event) => {
-        onKeyDown?.(event)
-        if (event.defaultPrevented) {
-          return
-        }
-        const direction = event.key === "ArrowRight" || event.key === "ArrowDown"
-          ? 1
-          : event.key === "ArrowLeft" || event.key === "ArrowUp"
-            ? -1
-            : 0
-        const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-slot="segmented-control-item"]:not(:disabled)'))
-        const currentIndex = items.indexOf(event.target as HTMLButtonElement)
-        const nextIndex = event.key === "Home"
-          ? 0
-          : event.key === "End"
-            ? items.length - 1
-            : direction !== 0 && currentIndex >= 0
-              ? (currentIndex + direction + items.length) % items.length
-              : -1
-        const nextItem = items[nextIndex]
-        if (nextItem) {
-          event.preventDefault()
-          nextItem.focus()
-          nextItem.click()
-        }
-      }}
+      disabled={disabled}
+      value={value}
+      onValueChange={selectValue}
+      onKeyDown={onKeyDown}
       {...props}
       />
     </SegmentedControlContext.Provider>
@@ -145,8 +119,7 @@ export function SegmentedControlItem({
   const selected = context.value === value
 
   return (
-    <button
-      aria-checked={selected}
+    <RadioGroupPrimitive.Item
       className={cn(
         "inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm disabled:pointer-events-none disabled:opacity-50",
         className,
@@ -154,14 +127,8 @@ export function SegmentedControlItem({
       data-state={selected ? "on" : "off"}
       data-slot="segmented-control-item"
       disabled={context.disabled || disabled}
-      onClick={(event) => {
-        onClick?.(event)
-        if (!event.defaultPrevented && !selected) {
-          context.onValueChange(value)
-        }
-      }}
-      role="radio"
-      tabIndex={selected || !context.value ? 0 : -1}
+      onClick={onClick}
+      value={value}
       type={type}
       {...props}
     />

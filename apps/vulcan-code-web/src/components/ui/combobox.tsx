@@ -58,21 +58,32 @@ function Combobox({
   contentClassName,
   onValueChange,
 }: ComboboxProps) {
+  // open owns only the popup, while the selected identity remains controlled by the caller.
+  // open 仅持有弹层状态，选中标识仍由调用方控制。
   const [open, setOpen] = React.useState(false)
+  // selectedOption resolves the exact current identity without guessing a replacement.
+  // selectedOption 解析准确的当前标识，不猜测替代选项。
   const selectedOption = options.find((option) => option.value === value)
 
+  React.useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open && !disabled} onOpenChange={(nextOpen) => setOpen(nextOpen && !disabled)}>
       <PopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
           role="combobox"
           aria-label={ariaLabel}
-          aria-expanded={open}
+          aria-expanded={open && !disabled}
+          title={selectedOption?.label}
           disabled={disabled}
           className={cn(
-            "w-full justify-between gap-2 font-normal",
+            // Let grid and flex parents constrain long labels instead of overlapping adjacent fields.
+            // 允许网格和弹性容器约束长名称，避免选择框覆盖相邻字段。
+            "w-full min-w-0 max-w-full justify-between gap-2 font-normal",
             !selectedOption && "text-muted-foreground",
             className,
           )}
@@ -85,21 +96,21 @@ function Combobox({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className={cn("w-[var(--radix-popover-trigger-width)] p-0", contentClassName)}
+        className={cn("w-[max(18rem,var(--radix-popover-trigger-width))] max-w-[calc(100vw-2rem)] p-0", contentClassName)}
       >
         <Command>
-          <CommandInput placeholder={searchPlaceholder} />
+          <CommandInput aria-label={searchPlaceholder} placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
               {options.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={[option.label, option.description, ...(option.keywords ?? [])]
-                    .filter(Boolean)
-                    .join(" ")}
-                  disabled={option.disabled}
+                  value={option.value}
+                  keywords={[option.label, ...(option.description ? [option.description] : []), ...(option.keywords ?? [])]}
+                  disabled={disabled || option.disabled}
                   onSelect={() => {
+                    if (disabled || option.disabled) return
                     onValueChange(option.value)
                     setOpen(false)
                   }}
@@ -112,9 +123,9 @@ function Combobox({
                     aria-hidden="true"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">{option.label}</span>
+                    <span className="block whitespace-normal break-words">{option.label}</span>
                     {option.description ? (
-                      <span className="block truncate text-xs text-muted-foreground">
+                      <span className="block whitespace-normal break-words text-xs text-muted-foreground">
                         {option.description}
                       </span>
                     ) : null}

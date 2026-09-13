@@ -1,4 +1,5 @@
 import * as React from "react";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { Archive, ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,8 @@ export function findKnowledgePackageNameConflict(
 
 // KnowledgePackagePickerDialog lets the user navigate host directories and select one ordinary .vkb file.
 // KnowledgePackagePickerDialog 允许用户浏览宿主目录并选择一个普通 .vkb 文件。
+// Parameters: props supplies open state and package-check callbacks; returns host directory navigation, an exact file selection and guarded actions.
+// 参数：props 提供打开状态及知识库包检查回调；返回宿主目录导航、精确文件选择及受保护操作。
 export function KnowledgePackagePickerDialog(props: {
   // Whether the package picker is visible.
   // 知识库包选择器是否可见。
@@ -126,6 +129,7 @@ export function KnowledgePackagePickerDialog(props: {
 
   React.useEffect(() => {
     if (props.open) void loadDirectory(null);
+    return () => { browseSequenceRef.current += 1; };
   }, [loadDirectory, props.open]);
 
   // handlePathSubmit navigates to the manually entered directory.
@@ -196,6 +200,8 @@ export function KnowledgePackagePickerDialog(props: {
 
 // KnowledgePackageImportDialog confirms a unique-name import or one explicit replacement target.
 // KnowledgePackageImportDialog 确认唯一名称导入或一个显式覆盖目标。
+// Parameters: props supplies package preview, existing libraries and import callbacks; returns local draft fields and exact-target replacement confirmation.
+// 参数：props 提供包预览、现有资料库及导入回调；返回本地草稿字段与精确目标覆盖确认。
 export function KnowledgePackageImportDialog(props: {
   // Validated package inspection currently awaiting confirmation.
   // 当前等待确认的已校验知识库包检查结果。
@@ -222,6 +228,9 @@ export function KnowledgePackageImportDialog(props: {
   // strategy stores the explicit non-overwriting or replacement decision.
   // strategy 保存显式的不覆盖新建或覆盖决策。
   const [strategy, setStrategy] = React.useState<"create" | "replace">("create");
+  // replacementTarget freezes the exact library reviewed by the second destructive decision.
+  // replacementTarget 冻结第二次破坏性决策已审阅的精确知识库。
+  const [replacementTarget, setReplacementTarget] = React.useState<KnowledgeLibrarySummary | null>(null);
   // error stores a failed import request while preserving the user's decision.
   // error 保存失败的导入请求，同时保留用户决策。
   const [error, setError] = React.useState<string | null>(null);
@@ -250,26 +259,22 @@ export function KnowledgePackageImportDialog(props: {
 
   // handleImport enforces the explicit replacement confirmation before any mutation request.
   // handleImport 在发送任何变更请求前强制执行显式覆盖确认。
-  async function handleImport(): Promise<void> {
+  // Parameters: replacementConfirmed proves the selected conflict was explicitly confirmed; returns a promise settling after validation and the guarded import attempt.
+  // 参数：replacementConfirmed 证明选中冲突已经明确确认；返回在校验和受保护导入尝试完成后结束的 Promise。
+  async function handleImport(replacementConfirmed = false): Promise<void> {
     if (!props.inspection || props.busy || submittingRef.current) return;
     if (strategy === "create" && createBlocked) return;
     if (strategy === "replace") {
       if (!conflict) return;
-      // confirmed records the mandatory second confirmation for destructive replacement.
-      // confirmed 记录破坏性覆盖所需的强制二次确认。
-      const confirmed = window.confirm(
-        t("knowledge.package.replaceConfirm")
-          .replace("{name}", conflict.name)
-          .replace("{documents}", String(conflict.documentCount))
-          .replace("{chunks}", String(conflict.chunkCount)),
-      );
-      if (!confirmed) return;
+      if (!replacementConfirmed) { setReplacementTarget(conflict); return; }
+      if (conflict.id !== replacementTarget?.id) { setError(t("knowledge.experience.targetChanged")); return; }
     }
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
       await props.onImport(name.trim(), strategy, strategy === "replace" ? conflict?.id ?? null : null);
+      setReplacementTarget(null);
       props.onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -317,6 +322,22 @@ export function KnowledgePackageImportDialog(props: {
           <Button disabled={effectiveBusy || (strategy === "create" ? createBlocked : !conflict)} onClick={() => void handleImport()} type="button" variant={strategy === "replace" ? "destructive" : "default"}>{effectiveBusy ? <Spinner className="size-4" /> : <Check size={16} />}{strategy === "replace" ? t("knowledge.package.replaceStrategy") : t("knowledge.package.import")}</Button>
         </DialogFooter>
       </DialogContent>
+      <AlertDialog open={replacementTarget !== null} onOpenChange={(open) => { if (!open && !submittingRef.current) setReplacementTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("knowledge.package.replaceStrategy")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("knowledge.package.replaceConfirm")
+              .replace("{name}", replacementTarget?.name ?? "")
+              .replace("{documents}", String(replacementTarget?.documentCount ?? 0))
+              .replace("{chunks}", String(replacementTarget?.chunkCount ?? 0))}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={effectiveBusy}>{t("conversation.action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={effectiveBusy || !conflict} onClick={(event) => { event.preventDefault(); void handleImport(true); }} variant="destructive">{t("knowledge.package.replaceStrategy")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

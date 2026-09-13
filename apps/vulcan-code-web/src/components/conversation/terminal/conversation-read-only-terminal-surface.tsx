@@ -62,6 +62,9 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
   // chunks retains a bounded ordered visible delivery queue for the stable xterm instance.
   // chunks 为稳定 xterm 实例保留有界有序的可见交付队列。
   const [chunks, setChunks] = React.useState<TerminalDisplayChunk[]>([]);
+  // attachmentError distinguishes a failed live subscription from an unchanged historical screen.
+  // attachmentError 区分实时订阅失败与没有变化的历史屏幕。
+  const [attachmentError, setAttachmentError] = React.useState<string | null>(null);
   // screenPresentationSeq forces a fresh atomic baseline after every successful attachment.
   // screenPresentationSeq 在每次成功挂接后强制应用一份新的原子基线。
   const screenPresentationSeq = React.useRef(0);
@@ -166,11 +169,13 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
       } catch (error) {
         releaseDisplayListener();
         releaseDisplayAttachment();
+        if (!cancelled) setAttachmentError(error instanceof Error ? error.message : String(error));
         console.warn("Failed to attach the visible command-session terminal display.", error);
       }
     };
     setLiveSummary(props.summary);
     setChunks([]);
+    setAttachmentError(null);
     void attach();
     return () => {
       cancelled = true;
@@ -203,22 +208,22 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
         <TerminalSquare size={15} />
         <span className="project-terminal-current-title-copy">
           <strong>{props.session.name}</strong>
-          <small>{liveSummary?.backend ?? props.summary?.backend ?? "unknown"} · AI 控制 · 只读显示</small>
+          <small>{liveSummary?.backend ?? props.summary?.backend ?? "unknown"} · {t("workspaceAudit.aiReadOnly")}</small>
         </span>
       </span>
       <div className="project-terminal-header-actions">
         <button
-          aria-label={floatingControls.maximized ? "还原 AI 终端窗口" : "最大化 AI 终端窗口"}
+          aria-label={t(floatingControls.maximized ? "workspaceAudit.restoreAi" : "workspaceAudit.maximizeAi")}
           onClick={floatingControls.toggleMaximized}
-          title={floatingControls.maximized ? "还原" : "最大化"}
+          title={t(floatingControls.maximized ? "workspaceAudit.restoreAi" : "workspaceAudit.maximizeAi")}
           type="button"
         >
           {floatingControls.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
         <button
-          aria-label="收起 AI 终端"
+          aria-label={t("workspaceAudit.minimizeAi")}
           onClick={() => props.onOpenChange(false)}
-          title="收起"
+          title={t("workspaceAudit.minimizeAi")}
           type="button"
         >
           <Minus size={14} />
@@ -235,6 +240,12 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
       projectId={floatingIdentity}
     >
       <div className="conversation-session-terminal-floating-body">
+        {attachmentError !== null ? (
+          <details role="alert">
+            <summary>{t("conversation.control.detailFailed")}</summary>
+            <pre>{attachmentError}</pre>
+          </details>
+        ) : null}
         <div className="conversation-session-terminal-screen-frame">
           <TerminalViewport
             ariaLabel={`${props.session.name} · ${t("terminalSession.openScreen")}`}

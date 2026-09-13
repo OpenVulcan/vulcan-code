@@ -31,6 +31,8 @@ export interface WorkspaceFileTreeNode<RowFile> {
 
 // WorkspaceFileTreeDrawer renders the shared collapsible file-directory navigation drawer.
 // WorkspaceFileTreeDrawer 渲染共享的可收起文件目录导航抽屉。
+// Parameters: props supplies the exact tree, visible state, filters and actions; returns collapsible directory navigation without making hidden descendants interactive.
+// 参数：props 提供精确目录树、可见状态、过滤及操作；返回收起后后代不可交互的目录导航。
 export function WorkspaceFileTreeDrawer<RowFile>(props: {
   // Tree root to render in the drawer.
   // 需要在抽屉中渲染的目录树根节点。
@@ -197,11 +199,11 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
   // expandAllDirectories opens every visible directory in the filtered tree.
   // expandAllDirectories 展开当前筛选目录树里的全部可见目录。
   const expandAllDirectories = React.useCallback(() => {
-    updateOpenDirectoryPaths(() => defaultOpenDirectoryPaths);
-    for (const path of defaultOpenDirectoryPaths) {
+    updateOpenDirectoryPaths(() => fallbackOpenDirectoryPaths);
+    for (const path of fallbackOpenDirectoryPaths) {
       props.onDirectoryOpenStateChange?.(path, true);
     }
-  }, [defaultOpenDirectoryPaths, props, updateOpenDirectoryPaths]);
+  }, [fallbackOpenDirectoryPaths, props, updateOpenDirectoryPaths]);
   // collapseAllDirectories closes every directory in the filtered tree.
   // collapseAllDirectories 折叠当前筛选目录树里的全部目录。
   const collapseAllDirectories = React.useCallback(() => {
@@ -270,14 +272,16 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
       onMouseLeave={handleDrawerMouseLeave}
     >
       <button
+        aria-expanded={drawerOpen}
         aria-label={drawerOpen ? t("workspaceFileTree.collapseDirectory") : t("workspaceFileTree.expandDirectory")}
         className="diff-file-tree-handle"
+        disabled={props.lockedOpen}
         onClick={handleDrawerToggle}
         type="button"
       >
         {drawerOpen ? <ChevronRight size={14} /> : <ChevronLeftIcon />}
       </button>
-      <div className="diff-file-tree-panel">
+      <div className="diff-file-tree-panel" inert={!drawerOpen}>
         <div className="diff-file-tree-filter">
           <Search size={14} />
           <input
@@ -338,6 +342,8 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
 
 // WorkspaceFileTreeNodeView renders one recursive directory-tree row.
 // WorkspaceFileTreeNodeView 渲染目录树中的一个递归节点行。
+// Parameters: props supplies a recursive node, expansion/loading state and callbacks; returns the precise directory/file row and eligible children.
+// 参数：props 提供递归节点、展开和加载状态及回调；返回精确目录或文件行及符合条件的子项。
 function WorkspaceFileTreeNodeView<RowFile>(props: {
   // Tree node to render.
   // 需要渲染的树节点。
@@ -402,6 +408,8 @@ function WorkspaceFileTreeNodeView<RowFile>(props: {
     return (
       <div className="diff-file-tree-node directory">
         <button
+          aria-expanded={isOpen}
+          aria-busy={isLoading}
           className="diff-file-tree-row directory"
           onClick={() => props.onToggleDirectory(props.node.path)}
           style={rowStyle}
@@ -449,6 +457,7 @@ function WorkspaceFileTreeNodeView<RowFile>(props: {
       title={fileTitle}
     >
       <button
+        aria-current={isActive ? "true" : undefined}
         className="diff-file-tree-file-main"
         onClick={() => props.node.file ? props.onSelectFile(props.node.file) : undefined}
         type="button"

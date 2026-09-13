@@ -14,6 +14,9 @@ required_files:
   - config/schema.json
   - config/defaults.json
   - schemas/dashboard-output.json
+  - schemas/dashboard-input.json
+  - schemas/pricing-input.json
+  - schemas/pricing-output.json
   - schemas/settings-output.json
   - schemas/statistics-clear-preview-output.json
   - schemas/statistics-clear-apply-input.json
@@ -36,6 +39,13 @@ lua_runtime:
   max_active_sessions: 8
   session_idle_timeout_sec: 300
   actions:
+    - id: pricing-get
+      function: pricing_get
+      input_schema_file: schemas/pricing-input.json
+      output_schema_file: schemas/pricing-output.json
+      timeout_ms: 8000
+      callers:
+        - plugin_ui
     - id: settings-get
       function: settings_get
       output_schema_file: schemas/settings-output.json
@@ -51,6 +61,7 @@ lua_runtime:
         - plugin_ui
     - id: dashboard-get
       function: dashboard_get
+      input_schema_file: schemas/dashboard-input.json
       output_schema_file: schemas/dashboard-output.json
       timeout_ms: 12000
       callers:

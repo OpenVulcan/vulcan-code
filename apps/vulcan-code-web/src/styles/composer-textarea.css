@@ -28,6 +28,7 @@
   left: 24px;
   z-index: 4;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   pointer-events: none;
   opacity: 1;
@@ -44,12 +45,24 @@
 
 .empty-conversation-prompt h2 {
   margin: 0;
+  min-width: 0;
   max-width: min(900px, calc(100% - 48px));
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--foreground);
   font-size: 28px;
   font-weight: 500;
   line-height: 1.3;
   text-align: center;
+}
+
+/* The full prompt is available on hover while the leaving overlay cannot intercept the composer. */
+/* 完整提示可在悬停时查看，离场后的覆盖层不能拦截输入区。 */
+.empty-conversation-prompt:not(.leaving) h2 {
+  pointer-events: auto;
 }
 
 .project-context-menu {
@@ -501,10 +514,13 @@
 }
 
 .status-icon.ready {
-  color: var(--primary);
+  color: var(--vcn-content-success);
 }
 
-.status-icon.warning,
+.status-icon.warning {
+  color: var(--vcn-content-warning);
+}
+
 .status-icon.error {
   color: var(--destructive);
 }

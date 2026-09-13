@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/i18n";
@@ -18,6 +20,7 @@ import { projectConversationBranchPresentationV1 } from "./conversation-branch-p
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
+import { resolveToolPresentation } from "./conversation-tool-presentations";
 
 // eventSummary builds one typed V1 envelope for restored-workspace tests.
 // eventSummary 为恢复后 workspace 测试构建一条强类型 V1 envelope。
@@ -153,16 +156,19 @@ function snapshot(events: readonly ConversationEventSummary[]): ConversationEven
   };
 }
 
-// renderWorkspace renders the real restored branch shell with V1 authority.
-// renderWorkspace 使用 V1 权威渲染真实恢复后的分支外壳。
+// workspaceTree constructs the real restored branch shell with V1 authority.
+// workspaceTree 使用 V1 权威构造真实恢复后的分支外壳。
 // Parameters: events is the canonical history; reasoningDisplayMode selects its current presentation.
 // 参数：events 是规范历史；reasoningDisplayMode 选择当前展示方式。
-// Returns: static markup with every process expanded so display filtering can be checked independently.
-// 返回值：展开所有过程的静态标记，以便独立检查展示过滤。
-function renderWorkspace(
+// Returns: the tree with every process expanded so static and deferred results share one fixture.
+// 返回值：展开所有过程的组件树，使同步与延迟结果共用一个夹具。
+function workspaceTree(
   events: readonly ConversationEventSummary[],
   reasoningDisplayMode: ThinkingDisplayMode = "inline_output",
-): string {
+  // Explicit card IDs allow testing the production expanded result rather than a detached presentation fixture.
+  // 显式卡片标识用于测试生产展开结果，而不是脱离实际路径的展示夹具。
+  expandedToolPresentationIds: string[] = [],
+): React.ReactElement {
   const conversation: ConversationSummary = {
     id: "session-branch-v1",
     title: "恢复界面",
@@ -179,7 +185,7 @@ function renderWorkspace(
     conversation,
     false,
   );
-  return renderToStaticMarkup(
+  return (
     <I18nProvider initialLocale="zh-CN">
       <TooltipProvider>
         <ConversationLiveStreamProvider store={new ConversationLiveStreamStore()}>
@@ -192,7 +198,7 @@ function renderWorkspace(
                 ? [[`${conversation.id}:${item.process.id}`, false]]
                 : [])),
               expandedUserPromptIds: [],
-              expandedToolPresentationIds: [],
+              expandedToolPresentationIds,
               measuredCollapseById: {},
             }}
             onCopyText={() => undefined}
@@ -209,11 +215,59 @@ function renderWorkspace(
           />
         </ConversationLiveStreamProvider>
       </TooltipProvider>
-    </I18nProvider>,
+    </I18nProvider>
   );
 }
 
+// Render synchronous scenarios as static markup; deferred results use the same tree in a mounted DOM.
+// 同步场景使用静态标记，延迟结果通过同一棵树挂载到 DOM。
+// Parameters match workspaceTree; returns the synchronous markup.
+// 参数与 workspaceTree 相同；返回同步标记。
+function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
+  return renderToStaticMarkup(workspaceTree(...args));
+}
+
 describe("ConversationBranchWorkspaceV1", () => {
+  // The real runtime-config call revealed that branch rendering bypassed the direct V1 domain card.
+  // 实际 runtime-config 调用暴露了分支渲染绕过直接 V1 领域卡的问题。
+  it("renders the runtime descriptor through the full branch projection without eager raw JSON", async () => {
+    // Payload follows the real describe result shape; the marker belongs only to raw diagnostics.
+    // 载荷遵循实际 describe 返回结构；标记仅属于原始诊断。
+    const events = completeTurnEvents().map((summary): ConversationEventSummary => summary.event.kind === "tool_call" ? {
+      ...summary,
+      event: { ...summary.event, tool_name: "runtime_config", input: { action: "describe" }, output: { model_output: JSON.stringify({ action: "describe", ok: true, error: null, result: [{ skill_id: "vulcan-codekit", skill_version: "0.1.11", complete: true, missing_count: 0, invalid_count: 0, business_issue_count: 0, orphaned_count: 0, items: [], revision: "raw-only-revision" }] }) } },
+    } : summary);
+    // Card ownership is resolved by the same production adapter used by the live tool row.
+    // 卡片归属通过实际工具行使用的同一生产适配器解析。
+    const branch = projectConversationBranchPresentationV1("session-branch-v1", events, emptyResourceCatalog(), (key) => key);
+    // Only actual call/result blocks enter the same tool-card adapter as the production merger.
+    // 只有真实调用/结果块进入与生产合并器相同的工具卡适配器。
+    const blocks = branch.renderItems.flatMap((item) => item.blocks).flatMap((block) => block.toolName === "runtime_config" && (block.kind === "tool-call" || block.kind === "tool-result") ? [{ ...block, kind: block.kind as "tool-call" | "tool-result" }] : []);
+    const presentation = resolveToolPresentation(blocks, "completed");
+    // The mounted production tree must resolve its real deferred module, without mocking the result renderer.
+    // 挂载的生产组件树必须解析真实延迟模块，不模拟结果渲染器。
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      await React.act(async () => { root.render(workspaceTree(events, "inline_output", [presentation.id])); });
+      await React.act(async () => { await vi.dynamicImportSettled(); });
+      const markup = host.innerHTML;
+      expect(markup).toContain("data-tool-domain-result");
+      expect(markup).toContain("运行配置");
+      expect(markup).toContain("配置完整");
+      expect(markup).toContain("vulcan-codekit");
+      expect(markup).toContain("原始详情");
+      expect(markup).not.toContain("raw-only-revision");
+      expect(markup).not.toContain("更新运行配置");
+    } finally {
+      await React.act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Mode changes must reproject the same completed ledger without waiting for a new provider event.
   // 模式变化必须重新投影同一份已结束账本，不能等待新的供应商事件。
   it("applies all display modes to completed history without mutating its events", () => {

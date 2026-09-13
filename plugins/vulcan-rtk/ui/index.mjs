@@ -53,6 +53,9 @@ export function createPluginPanel(sdk) {
   // Badge is the shared Vulcan design-system badge component.
   // Badge 是 Vulcan 共享设计系统徽标组件。
   const Badge = sdk.components.Badge;
+  // Button uses the host action hierarchy and keyboard focus contract.
+  // Button 使用宿主操作层级与键盘焦点契约。
+  const Button = sdk.components.Button;
   // StatusPill is the shared Vulcan lifecycle status component.
   // StatusPill 是 Vulcan 共享生命周期状态组件。
   const StatusPill = sdk.components.StatusPill;
@@ -264,6 +267,12 @@ export function createPluginPanel(sdk) {
   // Returns the complete RTK configuration and statistics page.
   // 返回完整的 RTK 配置与统计页面。
   function RtkPluginPanel() {
+    // routeSearch filters visible commands without discarding selections in other groups.
+    // routeSearch 筛选可见命令，不丢弃其它分组的已选项。
+    const [routeSearch, setRouteSearch] = React.useState("");
+    // section keeps configuration, routes and statistics directly reachable.
+    // section 保持配置、路由和统计可直接访问。
+    const [section, setSection] = React.useState("settings");
     // settings stores the complete schema-validated plugin configuration.
     // settings 保存完整且通过 Schema 校验的插件配置。
     const [settings, setSettings] = React.useState(null);
@@ -297,6 +306,23 @@ export function createPluginPanel(sdk) {
     // error stores the latest bounded action diagnostic.
     // error 保存最近一次有边界的 Action 诊断。
     const [error, setError] = React.useState("");
+    // Read errors remain independent so retrying configuration never hides a statistics failure.
+    // 读取错误保持独立，重试配置不会隐藏统计失败。
+    const [settingsError, setSettingsError] = React.useState("");
+    const [statisticsError, setStatisticsError] = React.useState("");
+    // mountedRef and read identities reject completions from an obsolete mount or read.
+    // mountedRef 与读取身份拒绝过期挂载或读取的完成结果。
+    const mountedRef = React.useRef(false);
+    const settingsSequence = React.useRef(0);
+    const statisticsSequence = React.useRef(0);
+    const settingsRequest = React.useRef(null);
+    const statisticsRequest = React.useRef(null);
+    // savingRef closes the same-event gap before React publishes disabled controls.
+    // savingRef 关闭 React 发布禁用控件前的同事件重入窗口。
+    const savingRef = React.useRef(false);
+    // savedTimer is cancelled when its plugin mount ends.
+    // savedTimer 在所属插件挂载结束时取消。
+    const savedTimer = React.useRef(null);
     // licenseOpen controls the host-rendered Apache-2.0 document dialog.
     // licenseOpen 控制由宿主渲染的 Apache-2.0 文档浮动框。
     const [licenseOpen, setLicenseOpen] = React.useState(false);
@@ -353,16 +379,28 @@ export function createPluginPanel(sdk) {
     // Returns a promise settled after the exact plugin action completes.
     // 返回在精确插件 Action 完成后结束的 Promise。
     const loadSettings = React.useCallback(async () => {
+      if (savingRef.current) return;
+      // sequence binds this subscriber to the latest configuration read.
+      // sequence 将当前订阅绑定到最近一次配置读取。
+      const sequence = ++settingsSequence.current;
       setSettingsLoading(true);
+      setSettingsError("");
       try {
-        const nextSettings = await sdk.invoke("settings-get", {});
+        if (settingsRequest.current === null) settingsRequest.current = sdk.invoke("settings-get", {});
+        // pending is shared across effect replay and cleared on either settlement.
+        // pending 在 Effect 重放间共享，并在成功或失败后清理。
+        const pending = settingsRequest.current;
+        const nextSettings = await pending.finally(() => {
+          if (settingsRequest.current === pending) settingsRequest.current = null;
+        });
+        if (!mountedRef.current || sequence !== settingsSequence.current) return;
         setSettings(nextSettings);
         setRouteMode(nextSettings.routeMode);
         setCheckedRoutes(checkedRoutesFromSettings(nextSettings));
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (mountedRef.current && sequence === settingsSequence.current) setSettingsError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        setSettingsLoading(false);
+        if (mountedRef.current && sequence === settingsSequence.current) setSettingsLoading(false);
       }
     }, []);
 
@@ -374,14 +412,25 @@ export function createPluginPanel(sdk) {
     // Returns a promise settled after cache selection or the statistics action.
     // 返回在缓存选择或统计 Action 完成后结束的 Promise。
     const loadStatistics = React.useCallback(async (force) => {
+      // sequence prevents a stale subscriber from updating the module cache.
+      // sequence 防止过期订阅更新模块缓存。
+      const sequence = ++statisticsSequence.current;
       if (!force && rtkGainStatsCache && Date.now() - rtkGainStatsCache.loadedAtMs <= RTK_GAIN_STATS_CACHE_MS) {
         setStatistics(rtkGainStatsCache.statistics);
         setStatisticsLoadedAtMs(rtkGainStatsCache.loadedAtMs);
         return;
       }
       setStatisticsLoading(true);
+      setStatisticsError("");
       try {
-        const nextStatistics = await sdk.invoke("statistics-get", {});
+        if (statisticsRequest.current === null) statisticsRequest.current = sdk.invoke("statistics-get", {});
+        // pending coalesces simultaneous refreshes without caching rejected promises.
+        // pending 合并同时刷新，且不缓存拒绝的 Promise。
+        const pending = statisticsRequest.current;
+        const nextStatistics = await pending.finally(() => {
+          if (statisticsRequest.current === pending) statisticsRequest.current = null;
+        });
+        if (!mountedRef.current || sequence !== statisticsSequence.current) return;
         // loadedAtMs is shared by the cache entry and visible page metadata.
         // loadedAtMs 由缓存条目与可见页面元数据共享。
         const loadedAtMs = Date.now();
@@ -389,9 +438,9 @@ export function createPluginPanel(sdk) {
         setStatistics(nextStatistics);
         setStatisticsLoadedAtMs(loadedAtMs);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (mountedRef.current && sequence === statisticsSequence.current) setStatisticsError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        setStatisticsLoading(false);
+        if (mountedRef.current && sequence === statisticsSequence.current) setStatisticsLoading(false);
       }
     }, []);
 
@@ -401,9 +450,10 @@ export function createPluginPanel(sdk) {
     // Returns a promise settled after atomic host persistence.
     // 返回在宿主原子持久化完成后结束的 Promise。
     const saveSettings = React.useCallback(async () => {
-      if (!settings) {
+      if (!settings || savingRef.current) {
         return;
       }
+      savingRef.current = true;
       setSaving(true);
       setSaved(false);
       setError("");
@@ -418,19 +468,29 @@ export function createPluginPanel(sdk) {
           enabledRoutes,
           disabledRoutes,
         });
+        if (!mountedRef.current) return;
         setSettings(persisted);
         setSaved(true);
-        window.setTimeout(() => setSaved(false), 1200);
+        if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+        savedTimer.current = window.setTimeout(() => { if (mountedRef.current) setSaved(false); }, 1200);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        setSaving(false);
+        savingRef.current = false;
+        if (mountedRef.current) setSaving(false);
       }
     }, [checkedRoutes, routeMode, settings]);
 
     React.useEffect(() => {
+      mountedRef.current = true;
       void loadSettings();
       void loadStatistics(false);
+      return () => {
+        mountedRef.current = false;
+        settingsSequence.current += 1;
+        statisticsSequence.current += 1;
+        if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+      };
     }, [loadSettings, loadStatistics]);
 
     // toggleRoute applies one checkbox change without mutating the current Set instance.
@@ -485,17 +545,17 @@ export function createPluginPanel(sdk) {
         React.createElement("header", { className: "settings-route-group-header" },
           React.createElement("strong", null, text(titleKey, titleFallback)),
           React.createElement("div", { className: "settings-route-bulk-actions" },
-            React.createElement("button", { className: "settings-route-bulk-button", onClick: () => setRouteGroup(routes, true), type: "button" }, text("routes.selectAll", "Select all")),
-            React.createElement("button", { className: "settings-route-bulk-button", onClick: () => setRouteGroup(routes, false), type: "button" }, text("routes.clear", "Clear")),
+            React.createElement(Button, { size: "sm", variant: "outline", disabled: saving || !settings, onClick: () => setRouteGroup(routes, true), type: "button" }, text("routes.selectAll", "Select all")),
+            React.createElement(Button, { size: "sm", variant: "outline", disabled: saving || !settings, onClick: () => setRouteGroup(routes, false), type: "button" }, text("routes.clear", "Clear")),
           ),
         ),
         React.createElement("div", { className: "settings-route-grid" },
-          ...routes.map((route) => {
+          ...routes.filter((route) => route.includes(routeSearch.trim().toLowerCase())).map((route) => {
             // enabled is the exact draft membership rendered by this checkbox.
             // enabled 是当前复选框渲染的精确草稿成员状态。
             const enabled = checkedRoutes.has(route);
             return React.createElement("label", { className: "settings-route-option", key: route, title: route },
-              React.createElement("input", { "aria-label": `${text("routes.enable", "Enable route")} ${route}`, checked: enabled, onChange: (event) => toggleRoute(route, event.currentTarget.checked), type: "checkbox" }),
+              React.createElement("input", { "aria-label": `${text("routes.enable", "Enable route")} ${route}`, disabled: saving || !settings, checked: enabled, onChange: (event) => toggleRoute(route, event.currentTarget.checked), type: "checkbox" }),
               React.createElement("span", null, route),
             );
           }),
@@ -521,7 +581,7 @@ export function createPluginPanel(sdk) {
     // byCommand 包含解析后的 RTK 命令明细。
     const byCommand = Array.isArray(statistics?.byCommand) ? statistics.byCommand : [];
 
-    return React.createElement("section", { className: "full-height settings-detail-panel plugin-statistics-layout plugin-panel-rtk" },
+    return React.createElement("section", { className: "settings-detail-panel plugin-statistics-layout plugin-panel-rtk" },
       React.createElement("div", { className: "plugin-statistics-header" },
         React.createElement("div", { className: "rtk-page-heading" },
           React.createElement("div", { className: "rtk-page-title-row" },
@@ -549,39 +609,45 @@ export function createPluginPanel(sdk) {
           React.createElement("p", null, text("densityDescription", "RTK compresses noisy test, build, search, and Git output so the AI can retain more useful analysis. Unmatched or failed rewrites fall back to the original command.")),
         ),
       ),
+      React.createElement("nav", { className: "plugin-control-navigation", "aria-label": text("sections.label", "RTK sections") },
+        ...["settings", "routes", "statistics"].map((value) => React.createElement(Button, {
+          key: value, type: "button", size: "sm", variant: section === value ? "secondary" : "ghost",
+          "aria-pressed": section === value, onClick: () => setSection(value),
+        }, text(`sections.${value}`, value))),
+      ),
       React.createElement("div", { className: "settings-form-grid" },
-        React.createElement("article", { className: "settings-card rtk-routing-config" },
+        React.createElement("article", { className: "settings-card rtk-routing-config", hidden: section !== "settings" },
           settings ? React.createElement("div", { className: "rtk-routing-option-row" },
             React.createElement("div", { className: "rtk-routing-option" },
               React.createElement("label", null,
-                React.createElement("input", { checked: settings.enabled, onChange: (event) => setSettings({ ...settings, enabled: event.currentTarget.checked }), type: "checkbox" }),
+                React.createElement("input", { disabled: saving, checked: settings.enabled, onChange: (event) => setSettings({ ...settings, enabled: event.currentTarget.checked }), type: "checkbox" }),
                 React.createElement("span", null, text("enableRouting", "Enable RTK routing")),
               ),
               React.createElement(HelpTooltip, { ariaLabel: text("enableRoutingHelp", "RTK routing description"), content: text("enableRoutingHelp", "Rewrite supported shell_command calls through the bundled RTK binary."), delayMs: 500 }),
             ),
             React.createElement("div", { className: "rtk-routing-option" },
               React.createElement("label", null,
-                React.createElement("input", { checked: settings.gitCommitContextEnabled, onChange: (event) => setSettings({ ...settings, gitCommitContextEnabled: event.currentTarget.checked }), type: "checkbox" }),
+                React.createElement("input", { disabled: saving, checked: settings.gitCommitContextEnabled, onChange: (event) => setSettings({ ...settings, gitCommitContextEnabled: event.currentTarget.checked }), type: "checkbox" }),
                 React.createElement("span", null, text("gitContext", "Use RTK for commit generation")),
               ),
               React.createElement(HelpTooltip, { ariaLabel: text("gitContextHelp", "RTK Git context description"), content: text("gitContextHelp", "Compress git status and git diff context used to generate commit messages."), delayMs: 500 }),
             ),
             React.createElement("div", { className: "rtk-routing-option" },
               React.createElement("label", null,
-                React.createElement("input", { checked: settings.telemetryDisabled, onChange: (event) => setSettings({ ...settings, telemetryDisabled: event.currentTarget.checked }), type: "checkbox" }),
+                React.createElement("input", { disabled: saving, checked: settings.telemetryDisabled, onChange: (event) => setSettings({ ...settings, telemetryDisabled: event.currentTarget.checked }), type: "checkbox" }),
                 React.createElement("span", null, text("disableTelemetry", "Disable RTK telemetry environment variable")),
               ),
               React.createElement(HelpTooltip, { ariaLabel: text("disableTelemetryHelp", "RTK telemetry description"), content: text("disableTelemetryHelp", "Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes."), delayMs: 500 }),
             ),
           ) : null,
         ),
-        React.createElement("article", { className: "settings-card rtk-gain-panel" },
+        React.createElement("article", { className: "settings-card rtk-gain-panel", hidden: section !== "statistics" },
           React.createElement("div", { className: "rtk-gain-header" },
             React.createElement("div", null,
               React.createElement("strong", null, text("stats.title", "RTK context-density statistics")),
               React.createElement("p", null, text("stats.description", "Token savings are cached for thirty minutes. Switching daily, weekly, and monthly views never sends another request.")),
             ),
-            React.createElement("button", { className: "skill-action-button secondary", disabled: statisticsLoading, onClick: () => void loadStatistics(true), type: "button" }, statisticsLoading ? text("stats.refreshing", "Refreshing") : text("stats.refresh", "Refresh")),
+            React.createElement(Button, { size: "sm", variant: "outline", disabled: statisticsLoading, onClick: () => void loadStatistics(true), type: "button" }, statisticsLoading ? text("stats.refreshing", "Refreshing") : text("stats.refresh", "Refresh")),
           ),
           React.createElement("div", { className: "rtk-gain-meta" },
             React.createElement("span", null, `${text("stats.lastLoaded", "Last loaded")}: ${formatStatisticsTimestamp(statisticsLoadedAtMs)}`),
@@ -589,24 +655,33 @@ export function createPluginPanel(sdk) {
           ),
           statistics?.available ? React.createElement(React.Fragment, null,
             React.createElement("div", { className: "rtk-gain-summary-grid" }, ...summaryCards.map(([label, value]) => React.createElement("div", { className: "rtk-gain-summary-card", key: label }, React.createElement("span", null, label), React.createElement("strong", null, typeof value === "number" ? formatCompactNumber(value) : value)))),
-            React.createElement("div", { className: "rtk-gain-tabs" }, ...["daily", "weekly", "monthly"].map((view) => React.createElement("button", { className: `rtk-gain-tab ${statisticsView === view ? "active" : ""}`, key: view, onClick: () => setStatisticsView(view), type: "button" }, text(`stats.${view}`, view)))),
+            React.createElement("div", { className: "plugin-control-navigation" }, ...["daily", "weekly", "monthly"].map((view) => React.createElement(Button, { size: "sm", variant: statisticsView === view ? "secondary" : "ghost", "aria-pressed": statisticsView === view, key: view, onClick: () => setStatisticsView(view), type: "button" }, text(`stats.${view}`, view)))),
             React.createElement(RtkGainChart, { points: chartPoints }),
             React.createElement(RtkCommandTable, { rows: byCommand }),
           ) : React.createElement("div", { className: "rtk-gain-empty" }, statistics?.error ?? text("stats.unavailableHelp", "Statistics are currently unavailable.")),
         ),
-        React.createElement("article", { className: "settings-card" },
+        React.createElement("article", { className: "settings-card", hidden: section !== "routes" },
           React.createElement("div", { className: "settings-route-header" },
             React.createElement("div", null, React.createElement("strong", null, text("routes.title", "RTK routes")), React.createElement("p", null, text("routes.description", "Choose exactly which supported commands may be rewritten."))),
             React.createElement(Badge, { variant: "outline" }, `${checkedRoutes.size}/${RTK_AVAILABLE_ROUTES.length}`),
           ),
+          React.createElement("input", { className: "plugin-statistics-price-input", type: "search", "aria-label": text("routes.search", "Search routes"), placeholder: text("routes.search", "Search routes"), value: routeSearch, onChange: (event) => setRouteSearch(event.currentTarget.value) }),
           React.createElement("div", { className: "settings-route-groups" },
             renderRouteGroup("routes.curated", "Curated", DEFAULT_RTK_ROUTES),
             renderRouteGroup("routes.extended", "Extended", EXTENDED_RTK_ROUTES),
           ),
+          !RTK_AVAILABLE_ROUTES.some((route) => route.includes(routeSearch.trim().toLowerCase()))
+            ? React.createElement("p", { role: "status", className: "settings-muted-line" }, text("routes.noMatches", "No matching routes")) : null,
           React.createElement("small", { className: "settings-muted-line" }, `${checkedRoutes.size} ${text("routes.selected", "RTK routes selected")}`),
         ),
-        error ? React.createElement("p", { className: "plugin-panel-error" }, error) : null,
-        React.createElement("div", { className: "settings-card-actions" }, React.createElement("button", { className: "skill-action-button", disabled: saving || !settings, onClick: () => void saveSettings(), type: "button" }, saving ? text("saving", "Saving") : saved ? text("saved", "Saved") : text("save", "Save"))),
+        settingsError ? React.createElement("div", { role: "alert" }, text("settingsLoadFailed", "Unable to load RTK settings"),
+          React.createElement(Button, { type: "button", size: "sm", variant: "outline", disabled: settingsLoading || saving, onClick: () => void loadSettings() }, text("retry", "Retry")),
+          React.createElement("details", null, React.createElement("summary", null, text("errorDetails", "Error details")), React.createElement("pre", { className: "plugin-control-error-details" }, settingsError))) : null,
+        statisticsError ? React.createElement("div", { role: "alert" }, text("stats.loadFailed", "Unable to load RTK statistics"),
+          React.createElement("details", null, React.createElement("summary", null, text("errorDetails", "Error details")), React.createElement("pre", { className: "plugin-control-error-details" }, statisticsError))) : null,
+        error ? React.createElement("div", { role: "alert" }, text("actionFailed", "Action failed"),
+          React.createElement("details", null, React.createElement("summary", null, text("errorDetails", "Error details")), React.createElement("pre", { className: "plugin-control-error-details" }, error))) : null,
+        React.createElement("div", { className: "settings-card-actions", hidden: section === "statistics" }, React.createElement(Button, { size: "sm", disabled: saving || !settings, onClick: () => void saveSettings(), type: "button" }, saving ? text("saving", "Saving") : saved ? text("saved", "Saved") : text("save", "Save"))),
       ),
       React.createElement(TextDocumentDialog, {
         content: licenseContent,

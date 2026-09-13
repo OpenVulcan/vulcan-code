@@ -226,7 +226,7 @@ pub(super) async fn handle_finished_stream_event(
             terminal_goal_id.is_some()
         ),
     );
-    match account_session_goal_from_report(
+    if let Err(error) = account_session_goal_from_report(
         task_state,
         controller_runtime,
         &report,
@@ -235,17 +235,14 @@ pub(super) async fn handle_finished_stream_event(
     )
     .await
     {
-        Ok(true) => {
-            if let Err(error) =
-                emit_session_addons_changed_delta(app, task_state, finished_session_id)
-            {
-                eprintln!("[webui-service] terminal session goal delta emit failed: {error}");
-            }
-        }
-        Ok(false) => {}
-        Err(error) => {
-            eprintln!("[webui-service] session goal accounting failed: {error}");
-        }
+        eprintln!("[webui-service] session goal accounting failed: {error}");
+    }
+    // Every settled stream changes Provider usage, including ordinary sessions with no active goal.
+    // 每条结束的流都会改变 Provider 用量，包括没有活动目标的普通会话。
+    // Reuse the authoritative V1 projection after durable API completion; never synthesize totals from the report.
+    // 在可靠 API 完成后复用权威 V1 投影，绝不从执行报告拼装累计量。
+    if let Err(error) = emit_session_addons_changed_delta(app, task_state, finished_session_id) {
+        eprintln!("[webui-service] terminal session addons delta emit failed: {error}");
     }
     webui_trace(
         "stream_goal_accounting_finished",

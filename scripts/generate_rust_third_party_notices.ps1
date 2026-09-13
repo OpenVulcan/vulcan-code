@@ -75,137 +75,9 @@ $CargoAboutTemplateFile = Join-Path $ProjectDir "about.hbs"
 # TauriManifestPath 指向作为依赖图根节点的 Tauri/WebUI 桌面壳清单文件。
 $TauriManifestPath = Join-Path $ProjectDir "apps/vulcan-code-tauri/Cargo.toml"
 
-# Convert-ToStableLicenseIdentifier maps one free-form title to a lowercase stable identifier fragment.
-# Convert-ToStableLicenseIdentifier 用于把自由格式标题映射为小写稳定标识片段。
-function Convert-ToStableLicenseIdentifier {
-    param([string]$Title)
-
-    $Slug = ($Title.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
-    if ([string]::IsNullOrWhiteSpace($Slug)) {
-        return "license"
-    }
-    return $Slug
-}
-
-# Get-RustThirdPartyNoticeSectionIndex parses the generated Markdown and emits a lightweight JSON index for lazy section loading.
-# Get-RustThirdPartyNoticeSectionIndex 用于解析生成后的 Markdown，并输出轻量 JSON 索引供懒加载分段使用。
-function Get-RustThirdPartyNoticeSectionIndex {
-    param([string]$MarkdownPath)
-
-    $Lines = [System.IO.File]::ReadAllLines($MarkdownPath)
-    $Entries = New-Object System.Collections.Generic.List[object]
-    $MergedEntryIndexBySignature = @{}
-    $LineIndex = 0
-
-    while ($LineIndex -lt $Lines.Length) {
-        $CurrentLine = $Lines[$LineIndex].Trim()
-        if (-not $CurrentLine.StartsWith("### ")) {
-            $LineIndex += 1
-            continue
-        }
-
-        $Title = $CurrentLine.Substring(4).Trim()
-        $UsedByCount = 0
-        $UsedByEntries = New-Object System.Collections.Generic.List[string]
-        $ScanIndex = $LineIndex + 1
-        $StartLine = $null
-        $EndLine = $null
-
-        while ($ScanIndex -lt $Lines.Length) {
-            $ScannedLine = $Lines[$ScanIndex].Trim()
-            if ($ScannedLine.StartsWith("### ")) {
-                break
-            }
-
-            if ($ScannedLine -eq "Used by:") {
-                $ScanIndex += 1
-                while ($ScanIndex -lt $Lines.Length) {
-                    $UsedByLine = $Lines[$ScanIndex].Trim()
-                    if ($UsedByLine -eq '```text') {
-                        break
-                    }
-                    if ($UsedByLine.StartsWith("- ")) {
-                        $UsedByCount += 1
-                        $UsedByEntries.Add($UsedByLine.Substring(2).Trim())
-                    }
-                    $ScanIndex += 1
-                }
-                continue
-            }
-
-            if ($ScannedLine -eq '```text') {
-                $FirstLine = $ScanIndex + 2
-                $LastLine = $ScanIndex + 1
-                $ScanIndex += 1
-                while ($ScanIndex -lt $Lines.Length) {
-                    if ($Lines[$ScanIndex].Trim() -eq '```') {
-                        $LastLine = $ScanIndex
-                        break
-                    }
-                    $ScanIndex += 1
-                }
-
-                if ($LastLine -ge $FirstLine) {
-                    while ($FirstLine -le $LastLine -and [string]::IsNullOrWhiteSpace($Lines[$FirstLine - 1])) {
-                        $FirstLine += 1
-                    }
-                    while ($LastLine -ge $FirstLine -and [string]::IsNullOrWhiteSpace($Lines[$LastLine - 1])) {
-                        $LastLine -= 1
-                    }
-                    if ($FirstLine -le $LastLine) {
-                        $StartLine = $FirstLine
-                        $EndLine = $LastLine
-                    }
-                }
-                break
-            }
-
-            $ScanIndex += 1
-        }
-
-        if ($null -ne $StartLine -and $null -ne $EndLine) {
-            $MergeKey = $Title
-            if ($MergedEntryIndexBySignature.ContainsKey($MergeKey)) {
-                $ExistingEntry = $Entries[$MergedEntryIndexBySignature[$MergeKey]]
-                $ExistingEntry.used_by_entries = @($ExistingEntry.used_by_entries) + @($UsedByEntries)
-                $ExistingEntry.used_by_count = @($ExistingEntry.used_by_entries).Count
-            }
-            else {
-                $MergedEntryIndexBySignature[$MergeKey] = $Entries.Count
-                $Entries.Add([pscustomobject]@{
-                        id = ""
-                        title = $Title
-                        used_by_count = $UsedByCount
-                        used_by_entries = @($UsedByEntries)
-                        start_line = $StartLine
-                        end_line = $EndLine
-                        line_count = ($EndLine - $StartLine + 1)
-                    })
-            }
-        }
-
-        $LineIndex = $ScanIndex + 1
-    }
-
-    $SeenIds = @{}
-    foreach ($Entry in $Entries) {
-        $StableId = Convert-ToStableLicenseIdentifier -Title $Entry.title
-        $BaseId = "rust-dependency-license-$StableId"
-        if ($SeenIds.ContainsKey($BaseId)) {
-            $SeenIds[$BaseId] += 1
-            $Entry.id = "$BaseId-$($SeenIds[$BaseId])"
-        }
-        else {
-            $SeenIds[$BaseId] = 1
-            $Entry.id = $BaseId
-        }
-    }
-
-    return [pscustomobject]@{
-        source_file = [System.IO.Path]::GetFileName($MarkdownPath)
-        licenses = $Entries
-    }
-}
+# Load the shared deterministic indexer used by generation and fixture validation.
+# 加载生成流程与样例验证共用的确定性索引器。
+. (Join-Path $PSScriptRoot "rust_third_party_notices_index.ps1")
 
 # Invoke-GenerateRustThirdPartyNotices generates the Markdown notice file and its lightweight section index.
 # Invoke-GenerateRustThirdPartyNotices 用于生成 Markdown 声明文件及其轻量分段索引。
@@ -258,7 +130,7 @@ function Invoke-GenerateRustThirdPartyNotices {
     $SectionIndex = Get-RustThirdPartyNoticeSectionIndex -MarkdownPath $GeneratedThirdPartyNoticesFile
     # SectionIndexJson stores normalized UTF-8 JSON with one terminal LF for cross-platform hashing.
     # SectionIndexJson 保存使用单个结尾 LF 规范化的 UTF-8 JSON，供跨平台哈希使用。
-    $SectionIndexJson = (($SectionIndex | ConvertTo-Json -Depth 6) -replace "`r`n", "`n") + "`n"
+    $SectionIndexJson = (($SectionIndex | ConvertTo-Json -Depth 10) -replace "`r`n", "`n") + "`n"
     [System.IO.File]::WriteAllText(
         $GeneratedThirdPartyNoticesIndexFile,
         $SectionIndexJson,

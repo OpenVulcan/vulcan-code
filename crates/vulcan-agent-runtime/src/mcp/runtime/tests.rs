@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 构建测试中用于结构体更新语法的最小服务器快照。
 fn empty_server_snapshot() -> McpRuntimeServerSnapshot {
     McpRuntimeServerSnapshot {
+        inspection_generation: 0,
         name: String::new(),
         enabled: false,
         transport_label: String::new(),

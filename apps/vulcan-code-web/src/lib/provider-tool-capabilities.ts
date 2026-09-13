@@ -4,6 +4,20 @@ import type {
   PublicAiResourceKind,
 } from "@/types";
 
+// Blocks invalid enablement while preserving the ability to turn off a stale selection.
+// 阻止无效启用，同时保留关闭失效选择的能力。
+// Parameters: pending is an active mutation, backendAvailable is a concrete route, enabled is persisted state.
+// 参数：pending 表示写入进行中，backendAvailable 表示存在具体路由，enabled 是持久化状态。
+// Returns true only when the switch must reject every transition; this pure rule imports no settings UI.
+// 仅当开关必须拒绝全部状态转换时返回 true；此纯规则不引入设置界面。
+export function mediaUnderstandingCapabilityToggleDisabled(
+  pending: boolean,
+  backendAvailable: boolean,
+  enabled: boolean,
+): boolean {
+  return pending || (!backendAvailable && !enabled);
+}
+
 // DIRECT_PROVIDER_TOOL_CAPABILITIES is the closed set configured through one selected target.
 // DIRECT_PROVIDER_TOOL_CAPABILITIES 是通过一个选定目标配置的封闭能力集合。
 const DIRECT_PROVIDER_TOOL_CAPABILITIES = new Set<PublicAiProviderToolCapabilityKind>([

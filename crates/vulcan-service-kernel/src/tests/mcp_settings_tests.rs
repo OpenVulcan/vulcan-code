@@ -3,6 +3,26 @@
 
 use super::*;
 
+/// Verifies the settings parser preserves exact process arguments without touching real configuration.
+/// 验证设置解析器保留精确进程参数，不接触真实配置。
+#[test]
+fn mcp_settings_preserves_exact_argument_boundaries() {
+    // request is entirely synthetic, including whitespace and an intentional empty argument.
+    // request 完全由合成数据组成，包含空白与有意传入的空参数。
+    let request: McpServerSaveRequest = serde_json::from_value(serde_json::json!({
+        "serverId": null, "name": "argv-fixture", "enabled": true, "transport": "stdio",
+        "command": "node", "args": [" a b ", "", "--key=a=b", "quoted 'value'"], "url": "",
+        "bearerToken": "", "headers": [], "headersFromEnv": [], "oauthClientId": "", "oauthClientSecret": "",
+        "oauthScopes": [], "oauthRedirectUri": "", "cwd": "", "env": [{"key":"EXACT_VALUE","value":" a=b "}], "envPassthrough": ["API_TOKEN"]
+    })).expect("decode synthetic request");
+    // entry is an in-memory parse result only; no process is spawned.
+    // entry 仅为内存解析结果，不启动进程。
+    let (_, entry) = mcp_server_entry_from_request(request).expect("parse exact argv");
+    assert_eq!(entry.args, [" a b ", "", "--key=a=b", "quoted 'value'"]);
+    assert_eq!(entry.env_passthrough, ["API_TOKEN"]);
+    assert_eq!(entry.env["EXACT_VALUE"], " a=b ");
+}
+
 /// Builds one minimal stdio MCP server entry for configuration mutation tests.
 /// 为配置变更测试构建一个最小 stdio MCP 服务器条目。
 ///

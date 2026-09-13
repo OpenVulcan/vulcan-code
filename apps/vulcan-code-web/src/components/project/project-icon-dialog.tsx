@@ -58,12 +58,12 @@ export function ProjectIconDialog(props: {
   onCancel: () => void;
   // Persists the selected icon.
   // 持久化选中的图标。
-  onConfirm: (project: ProjectSummary, icon: ProjectIconSelection) => void;
+  onConfirm: (project: ProjectSummary, icon: ProjectIconSelection) => Promise<void>;
   // Resets the selected project to default folder icons.
   // 将选中项目还原为默认文件夹图标。
-  onReset: (project: ProjectSummary) => void;
+  onReset: (project: ProjectSummary) => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const project = props.target?.project ?? null;
   // selectedIcon stores the currently selected built-in icon.
   // selectedIcon 保存当前选中的内置图标。
@@ -83,8 +83,19 @@ export function ProjectIconDialog(props: {
   // activeIconOptions stores only the catalog owned by the visible picker tab.
   // activeIconOptions 只保存当前可见选择器标签所属的图标目录。
   const [activeIconOptions, setActiveIconOptions] = React.useState<ProjectIconOption[]>([]);
+  // Operation state belongs to the picker and does not imply successful persistence before the RPC settles.
+  // 操作状态属于选择器，在 RPC 完成前不表示持久化成功。
+  const [busy, setBusy] = React.useState(false);
+  const savingRef = React.useRef(false);
+  const [error, setError] = React.useState<string | null>(null);
+  // Catalog state distinguishes unavailable imports from an empty search result.
+  // 目录状态区分导入不可用与搜索结果为空。
+  const [catalogError, setCatalogError] = React.useState<string | null>(null);
+  const [catalogLoading, setCatalogLoading] = React.useState(false);
+  const [catalogRevision, setCatalogRevision] = React.useState(0);
 
   React.useEffect(() => {
+    setError(null);
     if (!project) {
       return;
     }
@@ -123,22 +134,29 @@ export function ProjectIconDialog(props: {
   }, [activeTab, iconSearch]);
 
   React.useEffect(() => {
+    setActiveIconOptions([]);
+    setCatalogError(null);
     if (activeTab === "badge") {
-      setActiveIconOptions([]);
+      setCatalogLoading(false);
       return;
     }
     // cancelled prevents a slower previous tab import from replacing the current catalog.
     // cancelled 防止较慢的前一标签导入覆盖当前图标目录。
     let cancelled = false;
+    setCatalogLoading(true);
     void loadProjectIconCatalog(activeTab).then((catalog) => {
       if (!cancelled) {
         setActiveIconOptions(catalog.PROJECT_ICON_OPTIONS);
       }
+    }).catch((failure) => {
+      if (!cancelled) setCatalogError(failure instanceof Error ? failure.message : String(failure));
+    }).finally(() => {
+      if (!cancelled) setCatalogLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [activeTab]);
+  }, [activeTab, catalogRevision]);
 
   // updateBadgeText applies the Chinese-one-or-English-two text rule.
   // updateBadgeText 应用中文一个字或英文两个字母的文字规则。
@@ -152,6 +170,7 @@ export function ProjectIconDialog(props: {
   // handleDialogInteractOutside keeps nested Radix select popovers from closing this dialog.
   // handleDialogInteractOutside 避免嵌套的 Radix 选择器浮层被弹窗误判为外部点击而关闭。
   const handleDialogInteractOutside = React.useCallback((event: Event) => {
+    if (savingRef.current) { event.preventDefault(); return; }
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target) {
       return;
@@ -170,6 +189,15 @@ export function ProjectIconDialog(props: {
     key: encodeProjectBadgeKey(badgeConfig),
   };
   const finalSelection = activeTab === "badge" ? selectedBadgeIcon : selectedIcon;
+  // persist keeps the selected icon intact on failure and serializes save and reset together.
+  // persist 在失败时保持所选图标，并将保存与还原共同串行化。
+  const persist = async (reset: boolean) => {
+    if (savingRef.current) return;
+    savingRef.current = true; setBusy(true); setError(null);
+    try { if (reset) await props.onReset(project); else await props.onConfirm(project, finalSelection); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { savingRef.current = false; setBusy(false); }
+  };
   const normalizedSearch = iconSearch.trim().toLowerCase();
   const visibleIconOptions = normalizedSearch.length === 0
     ? activeIconOptions
@@ -192,18 +220,22 @@ export function ProjectIconDialog(props: {
   };
 
   return (
-    <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
+    <Dialog open={Boolean(project)} onOpenChange={(open) => !open && !savingRef.current && props.onCancel()}>
       <DialogContent
-        className="project-icon-dialog sm:max-w-[720px]"
+        className="project-icon-dialog flex min-h-0 flex-col"
+        size="xl"
+        scrollMode="fixed-footer"
+        showCloseButton={!busy}
+        onEscapeKeyDown={event => { if (savingRef.current) event.preventDefault(); }}
         onInteractOutside={handleDialogInteractOutside}
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>{t("projectIcon.title")}</DialogTitle>
           <DialogDescription>
             {t("projectIcon.description").replace("{project}", project.name)}
           </DialogDescription>
         </DialogHeader>
-        <div className="project-icon-layout">
+        <fieldset disabled={busy} className="project-icon-layout min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="project-icon-preview" aria-label={t("projectIcon.previewAria")}>
             <ProjectIcon project={{ ...project, iconPack: finalSelection.pack, iconKey: finalSelection.key }} size={42} />
             <strong>{project.name}</strong>
@@ -221,12 +253,16 @@ export function ProjectIconDialog(props: {
                   <>
                     <div className="project-icon-filter">
                       <Input
+                        aria-label={t("projectIcon.filterPlaceholder").replace("{pack}", projectIconPackLabel(pack))}
                         onChange={(event) => setIconSearch(event.target.value)}
                         placeholder={t("projectIcon.filterPlaceholder").replace("{pack}", projectIconPackLabel(pack))}
                         value={iconSearch}
                       />
                       <span>{streamedIconOptions.length} / {visibleIconOptions.length} / {activeIconOptions.length}</span>
                     </div>
+                    {catalogLoading && <p role="status">{locale === "zh-CN" ? "正在加载图标目录…" : "Loading icon catalog…"}</p>}
+                    {catalogError && <div role="alert"><p className="text-sm text-destructive">{catalogError}</p><Button type="button" size="sm" variant="outline" onClick={() => setCatalogRevision(value => value + 1)}>{locale === "zh-CN" ? "重试" : "Retry"}</Button></div>}
+                    {!catalogLoading && !catalogError && visibleIconOptions.length === 0 && <p>{locale === "zh-CN" ? "没有匹配的图标" : "No matching icons"}</p>}
                     <div className="project-icon-grid picker-icon-grid" onScroll={handleIconGridScroll}>
                       {streamedIconOptions.map((option) => (
                         <button
@@ -277,6 +313,7 @@ export function ProjectIconDialog(props: {
                 <div className="badge-editor-field">
                   <span>{t("projectIcon.shape")}</span>
                   <Select
+                    disabled={busy}
                     value={badgeConfig.shape}
                     onValueChange={(shape) => setBadgeConfig((current) => ({ ...current, shape: shape as ProjectIconBadgeShape }))}
                   >
@@ -307,11 +344,12 @@ export function ProjectIconDialog(props: {
               </div>
             </TabsContent>
           </Tabs>
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
-          <Button type="button" variant="outline" onClick={() => props.onReset(project)}>{t("projectIcon.resetDefault")}</Button>
-          <Button type="button" onClick={() => props.onConfirm(project, finalSelection)}>{t("projectIcon.set")}</Button>
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        </fieldset>
+        <DialogFooter className="shrink-0">
+          <Button disabled={busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
+          <Button disabled={busy} type="button" variant="outline" onClick={() => void persist(true)}>{t("projectIcon.resetDefault")}</Button>
+          <Button disabled={busy} type="button" onClick={() => void persist(false)}>{busy ? (locale === "zh-CN" ? "正在保存…" : "Saving…") : t("projectIcon.set")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
-import { CheckIcon, ChevronRightIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, MinusIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -94,21 +94,28 @@ function ContextMenuSubTrigger({
 
 // ContextMenuSubContent renders the floating body of a nested submenu.
 // ContextMenuSubContent 渲染嵌套子菜单的浮动主体。
+// Parameters: props preserve native submenu options and collision padding. Returns: a portaled, scrollable submenu.
+// 参数：props 保留原生子菜单选项及碰撞留白。返回值：门户中的可滚动子菜单。
 function ContextMenuSubContent({
   className,
+  collisionPadding = 8,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   return (
+    <ContextMenuPrimitive.Portal>
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
+      collisionPadding={collisionPadding}
       className={cn(
-        "z-50 min-w-32 origin-(--radix-context-menu-content-transform-origin) overflow-hidden p-1 data-[state=closed]:overflow-hidden",
+        "z-50 max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain p-1 data-[state=closed]:overflow-hidden",
         FLOATING_SURFACE_CLASS_NAME,
         FLOATING_MOTION_CLASS_NAME,
+        "min-w-[min(8rem,var(--radix-context-menu-content-available-width))] max-w-(--radix-context-menu-content-available-width)",
         className,
       )}
       {...props}
     />
+    </ContextMenuPrimitive.Portal>
   )
 }
 
@@ -168,6 +175,8 @@ function ContextMenuItem({
 
 // ContextMenuCheckboxItem renders one checkable right-click menu command.
 // ContextMenuCheckboxItem 渲染单个可勾选的右键菜单命令。
+// Parameters: props supply native check state and actions. Returns: a row with distinct full and mixed indicators.
+// 参数：props 提供原生选择状态及操作。返回值：具有不同全选和部分选择指示的菜单行。
 function ContextMenuCheckboxItem({
   className,
   children,
@@ -189,8 +198,9 @@ function ContextMenuCheckboxItem({
       {...props}
     >
       <span className="pointer-events-none absolute right-2 flex items-center justify-center">
-        <ContextMenuPrimitive.ItemIndicator>
-          <CheckIcon />
+        <ContextMenuPrimitive.ItemIndicator className="group/menu-check-indicator">
+          <CheckIcon className="group-data-[state=indeterminate]/menu-check-indicator:hidden" />
+          <MinusIcon className="hidden group-data-[state=indeterminate]/menu-check-indicator:block" />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
       {children}

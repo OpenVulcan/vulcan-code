@@ -1,5 +1,6 @@
 import React from "react";
 import { FileText, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 
 import { WorkspaceDefaultFileIcon, WorkspaceFileTreeDrawer, WorkspaceFileTreeStats } from "@/components/workspace/WorkspaceFileTreeDrawer";
 import { useI18n } from "@/i18n";
@@ -36,7 +37,6 @@ import {
   diffSummarySearchDerived,
   diffSummarySearchRequestKey,
   diffSummarySearchTargetKey,
-  isPromiseLike,
   nextSearchIndex,
   previousSearchIndex,
   scheduleDiffDetailHydrationRequests,
@@ -77,7 +77,7 @@ export function DiffReviewPanel(props: {
   onSelectionChange?: (selection: DiffReviewSelection) => void;
   // Optional copy action receiving raw diff text.
   // 接收原始 diff 文本的可选复制动作。
-  onCopyRaw?: (rawDiff: string) => void;
+  onCopyRaw?: (rawDiff: string) => void | Promise<void>;
   // Optional lazy detail loader for partial summaries and hunk context expansion.
   // 用于局部摘要与 hunk 上下文展开的可选懒加载详情函数。
   onLoadFileDetail?: DiffFileDetailLoader;
@@ -130,6 +130,9 @@ export function DiffReviewPanel(props: {
   // refreshPending stores the immediate local refresh lock before parent loading propagates.
   // refreshPending 保存父级 loading 传入前的本地即时刷新锁。
   const [refreshPending, setRefreshPending] = React.useState(false);
+  // refreshPendingRef closes the repeat-click gap before React renders the pending state.
+  // refreshPendingRef 关闭 React 渲染等待状态前的重复点击窗口。
+  const refreshPendingRef = React.useRef(false);
   const [summarySearchState, setSummarySearchState] = React.useState<DiffSummarySearchState>(EMPTY_DIFF_SUMMARY_SEARCH_STATE);
   const diffSourceScrollResetKey = React.useMemo(
     () => diffReviewScrollResetKey(snapshot, selection),
@@ -267,29 +270,27 @@ export function DiffReviewPanel(props: {
     if (!absolutePath) {
       return;
     }
-    void openProjectDirectoryPath(absolutePath);
+    void openProjectDirectoryPath(absolutePath).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
   }, [renderedSnapshot?.repositoryRoot]);
   // handleRefreshClick starts one refresh request and blocks duplicate clicks until it settles.
   // handleRefreshClick 启动一次刷新请求，并在完成前阻止重复点击。
-  const handleRefreshClick = React.useCallback(() => {
-    if (!onRefresh || refreshBusy) {
+  const handleRefreshClick = React.useCallback(async () => {
+    if (!onRefresh || props.loading || refreshPendingRef.current) {
       return;
     }
+    refreshPendingRef.current = true;
     setRefreshPending(true);
     try {
-      const refreshResult = onRefresh();
-      if (isPromiseLike(refreshResult)) {
-        void refreshResult.finally(() => setRefreshPending(false));
-      } else if (typeof window !== "undefined") {
-        window.setTimeout(() => setRefreshPending(false), 0);
-      } else {
-        setRefreshPending(false);
-      }
+      await onRefresh();
     } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      refreshPendingRef.current = false;
       setRefreshPending(false);
-      throw error;
     }
-  }, [onRefresh, refreshBusy]);
+  }, [onRefresh, props.loading]);
   // requestSearchScroll records one user-requested search navigation scroll.
   // requestSearchScroll 记录一次用户请求的搜索导航滚动。
   const requestSearchScroll = React.useCallback(() => {
@@ -307,12 +308,6 @@ export function DiffReviewPanel(props: {
     setActiveSearchIndex((index) => previousSearchIndex(index, searchIndex.matches.length));
     requestSearchScroll();
   }, [requestSearchScroll, searchIndex.matches.length]);
-  React.useEffect(() => {
-    if (!props.loading) {
-      setRefreshPending(false);
-    }
-  }, [props.loading]);
-
   React.useEffect(() => {
     persistDiffDisplayPreferences(viewMode, renderPreferences);
   }, [renderPreferences, viewMode]);

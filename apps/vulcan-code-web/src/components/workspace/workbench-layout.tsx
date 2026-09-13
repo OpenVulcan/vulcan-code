@@ -24,10 +24,12 @@ import {
 import {
   projectAgentSkillSaveMessage,
   projectConversationCount,
+} from "@/components/project/project-settings-utils";
+import {
   type ProjectAgentSkillState,
   type ProjectSettingsDialogTarget,
   type ProjectSettingsRevision,
-} from "@/components/project/project-settings-dialog";
+} from "@/components/project/project-settings-types";
 import {
   type ConversationMenuAction,
   type ProjectMenuAction,
@@ -183,9 +185,7 @@ import {
   type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
 import {
-  applyPreviewConversationAction,
   applyPreviewConversationRename,
-  applyPreviewProjectAction,
   applyPreviewProjectIcon,
   applyPreviewProjectOrder,
   applyPreviewProjectRename,
@@ -904,12 +904,18 @@ export function WorkbenchLayout(props: {
   // archiveProjectSubmitting tracks a bulk archive request in the confirmation dialog.
   // archiveProjectSubmitting 跟踪批量归档确认弹窗中的请求状态。
   const [archiveProjectSubmitting, setArchiveProjectSubmitting] = React.useState(false);
+  // archiveProjectInFlightRef excludes synchronous duplicate bulk lifecycle requests.
+  // archiveProjectInFlightRef 排除同步重复的批量生命周期请求。
+  const archiveProjectInFlightRef = React.useRef(false);
   // removeProjectTarget stores the project waiting for removal confirmation.
   // removeProjectTarget 保存正在等待移除确认的项目。
   const [removeProjectTarget, setRemoveProjectTarget] = React.useState<ProjectSummary | null>(null);
   // removeProjectSubmitting tracks an archive-then-remove project request.
   // removeProjectSubmitting 跟踪先归档再移除项目的请求状态。
   const [removeProjectSubmitting, setRemoveProjectSubmitting] = React.useState(false);
+  // removeProjectInFlightRef locks destructive removal before React publishes the busy state.
+  // removeProjectInFlightRef 在 React 发布忙碌状态前锁定破坏性移除。
+  const removeProjectInFlightRef = React.useRef(false);
   // pinnedConversationIds stores the locally pinned conversations until persistence is added.
   // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
   const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
@@ -919,6 +925,9 @@ export function WorkbenchLayout(props: {
   // activeFeature stores the selected feature summary from the complete top navigation list.
   // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
   const activeFeature = localizedTopFeatureAreas.find((area) => area.id === activeArea) ?? localizedTopFeatureAreas[0];
+  // Resolve the bundled statistics mount against the live catalog before offering navigation.
+  // 提供导航前，根据实时目录解析内置统计插件的精确挂载点。
+  const usageStatisticsMount = findEnabledPluginDetailMount(workbenchState.plugins, "plugin:vulcan-usage-statistics:usage-statistics");
   // handleSelectTopFeatureArea routes top navigation away from the embedded skills view.
   // handleSelectTopFeatureArea 将顶部导航路由出内嵌技能视图。
   const handleSelectTopFeatureArea = React.useCallback((area: MainAreaId) => {
@@ -1210,10 +1219,7 @@ export function WorkbenchLayout(props: {
               throw new Error("归档已提交，但本地生命周期状态未能收敛，请重试刷新。");
             }
           } else {
-            applyProjectActionSnapshot(
-              applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot,
-              "local",
-            );
+            throw new Error("归档未返回权威工作台快照，请刷新后检查会话状态。");
           }
           archiveCommitted = true;
           toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
@@ -1353,8 +1359,7 @@ export function WorkbenchLayout(props: {
   const handleRenameConfirm = React.useCallback(async (target: RenameTarget, name: string) => {
     const normalizedName = name.trim();
     if (!normalizedName && target.kind !== "project") {
-      toast.error(i18n.t("workbenchConversation.nameEmpty"));
-      return;
+      throw new Error(i18n.t("workbenchConversation.nameEmpty"));
     }
     const project = target.kind === "project"
       ? workbenchState.projects.find((candidate) => candidate.id === target.id) ?? null
@@ -1364,13 +1369,10 @@ export function WorkbenchLayout(props: {
       const snapshot = target.kind === "project"
         ? await renameProject(target.id, effectiveProjectName)
         : await renameConversation(target.id, normalizedName);
-      if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
-      } else if (target.kind === "project") {
-        applyProjectActionSnapshot(applyPreviewProjectRename(workbenchState, target.id, effectiveProjectName).snapshot, "local");
-      } else {
-        applyProjectActionSnapshot(applyPreviewConversationRename(workbenchState, target.id, normalizedName).snapshot, "local");
-      }
+      // A rename must return its committed snapshot; missing service data is never a successful preview write.
+      // 重命名必须返回已提交快照；缺失服务数据绝不视为成功的预览写入。
+      if (!snapshot) throw new Error("Rename did not return a committed service snapshot.");
+      applyProjectActionSnapshot(snapshot);
       setRenameTarget(null);
       toast.success(target.kind === "project"
         ? normalizedName
@@ -1378,16 +1380,19 @@ export function WorkbenchLayout(props: {
           : formatWorkbenchTranslation(i18n.t, "workbenchConversation.projectNameRestored", { project: effectiveProjectName })
         : formatWorkbenchTranslation(i18n.t, "workbenchConversation.conversationRenamed", { conversation: normalizedName }));
     } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      // Let the dialog keep the edited name and display the failure beside its action.
+      // 由弹窗保留编辑名称，并在操作旁展示失败。
+      throw nextError;
     }
   }, [applyProjectActionSnapshot, i18n.t, workbenchState]);
 
   // handleArchiveProjectConfirm archives all conversations under the selected project.
   // handleArchiveProjectConfirm 归档选定项目下的全部对话。
   const handleArchiveProjectConfirm = React.useCallback(async () => {
-    if (!archiveProjectTarget || archiveProjectSubmitting) {
+    if (!archiveProjectTarget || archiveProjectInFlightRef.current) {
       return;
     }
+    archiveProjectInFlightRef.current = true;
     setArchiveProjectSubmitting(true);
     try {
       // archivedConversationIds captures the exact visible child lifecycle set before the RPC commits.
@@ -1402,7 +1407,7 @@ export function WorkbenchLayout(props: {
           throw new Error("批量归档已提交，但本地生命周期状态未能收敛，请重试刷新。");
         }
       } else {
-        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, archiveProjectTarget.id, "archive-conversations").snapshot, "local");
+        throw new Error("批量归档未返回权威工作台快照，请刷新后检查会话状态。");
       }
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedCount", {
         count: String(projectConversationCount(workbenchState, archiveProjectTarget.id)),
@@ -1411,6 +1416,7 @@ export function WorkbenchLayout(props: {
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
+      archiveProjectInFlightRef.current = false;
       setArchiveProjectSubmitting(false);
     }
   }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, i18n.t, workbenchState]);
@@ -1418,9 +1424,10 @@ export function WorkbenchLayout(props: {
   // handleRemoveProjectConfirm archives conversations and removes the selected project.
   // handleRemoveProjectConfirm 归档对话并移除选中的项目。
   const handleRemoveProjectConfirm = React.useCallback(async () => {
-    if (!removeProjectTarget || removeProjectSubmitting) {
+    if (!removeProjectTarget || removeProjectInFlightRef.current) {
       return;
     }
+    removeProjectInFlightRef.current = true;
     setRemoveProjectSubmitting(true);
     try {
       // archivedConversationIds captures the exact visible child lifecycle set before project removal commits.
@@ -1439,7 +1446,7 @@ export function WorkbenchLayout(props: {
           throw new Error("项目移除已提交，但本地生命周期状态未能收敛，请重试刷新。");
         }
       } else {
-        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot, "local");
+        throw new Error("项目移除未返回权威工作台快照，请刷新后检查项目状态。");
       }
       clearProjectTerminalInputBuffers(removeProjectTarget.id);
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedAndRemovedProject", { project: removeProjectTarget.name }));
@@ -1447,6 +1454,7 @@ export function WorkbenchLayout(props: {
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
+      removeProjectInFlightRef.current = false;
       setRemoveProjectSubmitting(false);
     }
   }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, i18n.t, removeProjectSubmitting, removeProjectTarget, workbenchState]);
@@ -1459,6 +1467,7 @@ export function WorkbenchLayout(props: {
       toast.success(i18n.t("workbenchAsk.submitted"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      throw nextError;
     }
   }, [i18n.t]);
 
@@ -1470,6 +1479,7 @@ export function WorkbenchLayout(props: {
       toast.info(i18n.t("workbenchAsk.cancelled"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      throw nextError;
     }
   }, [i18n.t]);
 
@@ -1898,7 +1908,9 @@ export function WorkbenchLayout(props: {
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
       <VceJobObserverProvider serviceEpoch={props.serviceInstanceEpoch}>
       <VceProjectSurfaceProvider
-      projectId={selectedVceProject?.id ?? null}
+      // Only the visible chat owns these observations; project settings subscribe independently.
+      // 仅可见会话持有这些观察；项目设置自行独立订阅。
+      projectId={showConsoleSidebar && workspaceMainView === "chat" ? selectedVceProject?.id ?? null : null}
       projectEnabled={selectedVceProject?.vceEnabled === true}
       revisionKey={`${props.serviceInstanceEpoch}:${globalProjectSettingsRevision.vce}:${selectedVceProject ? projectSettingsRevisionById[selectedVceProject.id]?.vce ?? 0 : 0}`}
       onOpenEngineSettings={() => { handleOpenWorkspaceSkills(); setActiveWorkbenchSkillSubArea("context-engine"); }}
@@ -2020,6 +2032,10 @@ export function WorkbenchLayout(props: {
           />
         ) : (
           <ExtractedFeatureShell
+            onOpenUsageStatistics={usageStatisticsMount ? () => {
+              setActiveWorkbenchSkillSubArea(usageStatisticsMount.subAreaId);
+              handleSelectTopFeatureArea("skills");
+            } : undefined}
             activeArea={activeArea}
             activeFeature={activeFeature}
             sidebarOpen={navigationSidebarOpen}
@@ -2102,7 +2118,7 @@ export function WorkbenchLayout(props: {
         workbench={workbenchState}
         onBrowseProjectDirectories={browseProjectDirectories}
         onCancelArchiveProject={() => {
-          if (!archiveProjectSubmitting) {
+          if (!archiveProjectSubmitting && !archiveProjectInFlightRef.current) {
             setArchiveProjectTarget(null);
           }
         }}
@@ -2114,7 +2130,7 @@ export function WorkbenchLayout(props: {
           setActiveWorkbenchSkillSubArea("context-engine");
         }}
         onCancelRemoveProject={() => {
-          if (!removeProjectSubmitting) {
+          if (!removeProjectSubmitting && !removeProjectInFlightRef.current) {
             setRemoveProjectTarget(null);
           }
         }}

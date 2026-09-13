@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react"
 
 import type { ProviderRetrySettingsSaveRequest, SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { PanelTitle, StatusPill } from "@/components/shared/status"
+import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -125,6 +126,8 @@ function ProviderRetryNumberField(props: ProviderRetryNumberFieldProps) {
 
 // ProviderRetrySettingsArea renders and saves the complete Provider retry configuration.
 // ProviderRetrySettingsArea 渲染并保存完整 Provider 重试配置。
+// Parameters: props supplies retry policy and save callbacks; returns raw validated drafts, explicit reload and guarded save controls.
+// 参数：props 提供重试策略与保存回调；返回原始校验草稿、显式重载及受保护保存控件。
 export function ProviderRetrySettingsArea(props: {
   // Service-backed settings actions.
   // 服务端设置操作。
@@ -143,50 +146,69 @@ export function ProviderRetrySettingsArea(props: {
   const [draft, setDraft] = React.useState<ProviderRetrySettingsDraft>(sourceDraft)
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved">("idle")
   const [saveError, setSaveError] = React.useState<string | null>(null)
+  // baselineDraft tracks the values the user actually began editing.
+  // baselineDraft 跟踪用户实际开始编辑的值。
+  const [baselineDraft, setBaselineDraft] = React.useState(sourceDraft)
+  // observedSource ignores reference-only snapshot refreshes without erasing local input.
+  // observedSource 忽略仅引用变化的快照刷新，不擦除本地输入。
+  const observedSource = React.useRef(JSON.stringify(sourceDraft))
+  // savingRef serializes saves synchronously and protects the pending draft.
+  // savingRef 同步串行化保存，并保护待保存草稿。
+  const savingRef = React.useRef(false)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baselineDraft)
+  const sourceChanged = JSON.stringify(sourceDraft) !== JSON.stringify(baselineDraft)
 
   React.useEffect(() => {
+    const sourceKey = JSON.stringify(sourceDraft)
+    if (observedSource.current === sourceKey) return
+    observedSource.current = sourceKey
+    if (dirty || savingRef.current) return
     setDraft(sourceDraft)
+    setBaselineDraft(sourceDraft)
     setSaveState("idle")
     setSaveError(null)
-  }, [sourceDraft])
+  }, [dirty, sourceDraft])
 
   const validationError = validateRetrySettingsDraft(draft, text)
-  const dirty = JSON.stringify(draft) !== JSON.stringify(sourceDraft)
   const saveDraft = React.useCallback(async () => {
+    if (savingRef.current || !dirty || sourceChanged) return
     const error = validateRetrySettingsDraft(draft, text)
     if (error) {
       setSaveError(error)
       return
     }
+    savingRef.current = true
     setSaveState("saving")
     setSaveError(null)
     try {
       await props.actions.onSaveProviderRetrySettings(retrySettingsRequest(draft))
+      setBaselineDraft(draft)
       setSaveState("saved")
-      window.setTimeout(() => setSaveState("idle"), 1_200)
     } catch (errorValue) {
       setSaveState("idle")
       setSaveError(errorValue instanceof Error ? errorValue.message : text("保存重试设置失败。", "Failed to save retry settings."))
+    } finally {
+      savingRef.current = false
     }
-  }, [draft, props.actions, text])
+  }, [dirty, draft, props.actions, sourceChanged, text])
 
   return (
-    <section className={props.embedded ? "panel settings-detail-panel" : "panel full-height settings-detail-panel"}>
+    <section className={props.embedded ? "settings-retry-section min-w-0 space-y-4" : "panel full-height settings-detail-panel"}>
       <PanelTitle icon={<RefreshCw size={17} />} title={text("请求重试", "Request retry")} />
-      <div className="settings-form-grid">
-        <article className="settings-card">
+      <fieldset disabled={saveState === "saving"} className="settings-form-grid min-w-0">
+        <article className="space-y-3">
           <StatusPill status={draft.enabled ? "ready" : "warning"} label={draft.enabled ? text("自动重试已启用", "Automatic retry enabled") : text("自动重试已停用", "Automatic retry disabled")} />
-          <label className="settings-check-row inline">
+          <label className="settings-check-row settings-retry-toggle">
+            <span>{text("启用可重试 Provider 错误的自动重试", "Automatically retry eligible Provider failures")}</span>
             <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
-            {text("启用可重试 Provider 错误的自动重试", "Automatically retry eligible Provider failures")}
           </label>
-          <label className="settings-check-row inline">
+          <label className="settings-check-row settings-retry-toggle">
+            <span>{text("遵守 Provider 返回的 Retry-After 等待提示", "Honor Provider Retry-After wait hints")}</span>
             <Switch checked={draft.respectRetryAfter} onCheckedChange={(checked) => setDraft((current) => ({ ...current, respectRetryAfter: checked }))} />
-            {text("遵守 Provider 返回的 Retry-After 等待提示", "Honor Provider Retry-After wait hints")}
           </label>
         </article>
 
-        <article className="settings-card">
+        <article className="space-y-3 border-t pt-4">
           <strong>{text("普通瞬态错误", "Ordinary transient failures")}</strong>
           <p>{text("用于网络中断、超时和可重试 5xx。最大次数为首次请求之后允许追加的重试次数。", "Used for network interruptions, timeouts, and retryable 5xx responses. Maximum retries are additional attempts after the initial request.")}</p>
           <div className="settings-form-grid two">
@@ -198,11 +220,11 @@ export function ProviderRetrySettingsArea(props: {
           </div>
         </article>
 
-        <article className="settings-card">
+        <article className="space-y-3 border-t pt-4">
           <strong>{text("429 与限流错误", "429 and rate-limit failures")}</strong>
-          <label className="settings-check-row inline">
+          <label className="settings-check-row settings-retry-toggle">
+            <span>{text("自动重试 HTTP 429 与 Anthropic rate_limit_error", "Retry HTTP 429 and Anthropic rate_limit_error")}</span>
             <Switch checked={draft.retry429} onCheckedChange={(checked) => setDraft((current) => ({ ...current, retry429: checked }))} />
-            {text("自动重试 HTTP 429 与 Anthropic rate_limit_error", "Retry HTTP 429 and Anthropic rate_limit_error")}
           </label>
           <p>{text("每次限流都会先显示等待记录，且所有自动重试都受宿主硬上限约束。", "Every rate limit first creates a visible wait record, and all automatic retries remain under the host hard ceiling.")}</p>
           <div className="settings-form-grid two">
@@ -214,13 +236,15 @@ export function ProviderRetrySettingsArea(props: {
         </article>
 
         {validationError || saveError ? <p className="settings-validation-error" role="alert">{validationError ?? saveError}</p> : null}
+        {sourceChanged && <div className="space-y-2" role="status"><p>{text("服务器设置已更新，请重新载入后再保存。当前草稿仍保留。", "Server settings changed. Reload before saving; your current draft is retained.")}</p>
+          <Button type="button" variant="outline" onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }}>{text("重新载入当前设置", "Reload current settings")}</Button></div>}
         <div className="settings-card-actions">
-          <button className="skill-action-button" disabled={!dirty || Boolean(validationError) || saveState === "saving"} onClick={() => void saveDraft()} type="button">
-            {saveState === "saving" ? text("保存中", "Saving") : saveState === "saved" ? text("已保存", "Saved") : text("保存重试设置", "Save retry settings")}
-          </button>
+          <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saveState === "saving"} onClick={() => void saveDraft()} type="button">
+            {saveState === "saving" ? text("保存中", "Saving") : saveState === "saved" && !dirty ? text("已保存", "Saved") : text("保存重试设置", "Save retry settings")}
+          </Button>
           {!dirty && saveState === "idle" ? <span className="settings-muted-line">{text("当前设置已同步", "Current settings are synchronized")}</span> : null}
         </div>
-      </div>
+      </fieldset>
     </section>
   )
 }

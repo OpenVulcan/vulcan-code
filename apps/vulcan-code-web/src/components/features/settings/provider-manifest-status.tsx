@@ -222,8 +222,15 @@ export function ProviderManifestStatusPanel() {
   const [busyProviderId, setBusyProviderId] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [preview, setPreview] = React.useState<ProviderManifestCandidatePreview | null>(null)
+  // Reads and mutations share one lock so late catalog reads cannot regress a completed mutation.
+  // 读取和变更共享锁，避免迟到的目录读取覆盖已完成的变更。
+  const actionRunningRef = React.useRef(false)
+  const [refreshing, setRefreshing] = React.useState(false)
 
   const refresh = React.useCallback(async () => {
+    if (actionRunningRef.current) return
+    actionRunningRef.current = true
+    setRefreshing(true)
     // A refreshed backend snapshot invalidates every previously rendered candidate delta.
     // 刷新后端快照会使之前渲染的所有候选差异失效。
     setPreview(null)
@@ -232,6 +239,9 @@ export function ProviderManifestStatusPanel() {
       setStatuses(await getProviderManifestStatus())
     } catch (reason) {
       setError(errorMessage(reason))
+    } finally {
+      actionRunningRef.current = false
+      setRefreshing(false)
     }
   }, [])
 
@@ -242,8 +252,11 @@ export function ProviderManifestStatusPanel() {
   // syncOne synchronizes exactly one provider and refreshes the snapshot.
   // syncOne 同步精确一个供应商并刷新快照。
   const syncOne = React.useCallback(async (providerId: string) => {
+    if (actionRunningRef.current) return
+    actionRunningRef.current = true
     setBusyProviderId(providerId)
     setError(null)
+    setPreview(null)
     try {
       const report = await syncProviderManifest(providerId)
       if (report.outcome === "rejected") {
@@ -252,32 +265,39 @@ export function ProviderManifestStatusPanel() {
           : (report.failure_kind ?? "未知原因")
         setError(`供应商 ${providerId} 同步被拒绝：${reason}`)
       }
-      await refresh()
+      setStatuses(await getProviderManifestStatus())
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      actionRunningRef.current = false
       setBusyProviderId(null)
     }
-  }, [refresh])
+  }, [])
 
   // rollbackOne explicitly rolls one provider back to its previous layer.
   // rollbackOne 显式把一个供应商回滚到 previous 层。
   const rollbackOne = React.useCallback(async (providerId: string) => {
+    if (actionRunningRef.current) return
+    actionRunningRef.current = true
     setBusyProviderId(providerId)
     setError(null)
+    setPreview(null)
     try {
       await rollbackProviderManifest(providerId)
-      await refresh()
+      setStatuses(await getProviderManifestStatus())
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      actionRunningRef.current = false
       setBusyProviderId(null)
     }
-  }, [refresh])
+  }, [])
 
   // previewOne verifies one candidate and renders backend-owned semantic deltas without writes.
   // previewOne 验证一个候选并渲染后端持有的语义差异，且不执行写入。
   const previewOne = React.useCallback(async (providerId: string) => {
+    if (actionRunningRef.current) return
+    actionRunningRef.current = true
     setBusyProviderId(providerId)
     setError(null)
     // A failed new preview must never leave another provider's stale delta visible.
@@ -288,6 +308,7 @@ export function ProviderManifestStatusPanel() {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      actionRunningRef.current = false
       setBusyProviderId(null)
     }
   }, [])
@@ -306,7 +327,7 @@ export function ProviderManifestStatusPanel() {
         </div>
         <Button
           aria-label="刷新 Manifest 状态"
-          disabled={!!busyProviderId}
+          disabled={refreshing || busyProviderId !== null}
           onClick={() => void refresh()}
           size="sm"
           variant="outline"
@@ -317,7 +338,7 @@ export function ProviderManifestStatusPanel() {
       </div>
 
       {error ? (
-        <div className="mt-3 rounded-lg border border-destructive/40 p-3 text-sm text-destructive">
+        <div className="mt-3 rounded-lg border border-destructive/40 p-3 text-sm text-destructive" role="alert">
           {error}
         </div>
       ) : null}
@@ -360,7 +381,7 @@ export function ProviderManifestStatusPanel() {
                       </div>
                     ) : status.bundled_failure ? (
                       <div
-                        className="mt-1 max-w-72 text-xs font-normal text-amber-600"
+                        className="mt-1 max-w-72 text-xs font-normal text-[var(--vcn-content-warning)]"
                         title={status.bundled_failure.message}
                       >
                         内置回退不可用：{status.bundled_failure.failure_kind}
@@ -403,7 +424,7 @@ export function ProviderManifestStatusPanel() {
                       return <span className="text-xs text-muted-foreground">{summary.text}</span>
                     })()}
                     {status.quarantine.length > 0 ? (
-                      <span className="ml-1 text-xs text-amber-600">
+                      <span className="ml-1 text-xs text-[var(--vcn-content-warning)]">
                         {status.quarantine.length} 隔离
                       </span>
                     ) : null}
@@ -411,7 +432,7 @@ export function ProviderManifestStatusPanel() {
                   <TableCell className="text-right">
                     <div className="inline-flex gap-1">
                       <Button
-                        disabled={busyProviderId !== null || !status.sync_configured}
+                        disabled={refreshing || busyProviderId !== null || !status.sync_configured}
                         onClick={() => void previewOne(status.provider_id)}
                         size="sm"
                         variant="ghost"
@@ -421,7 +442,7 @@ export function ProviderManifestStatusPanel() {
                         预览
                       </Button>
                       <Button
-                        disabled={busyProviderId !== null}
+                        disabled={refreshing || busyProviderId !== null}
                         onClick={() => void syncOne(status.provider_id)}
                         size="sm"
                         variant="ghost"
@@ -430,7 +451,7 @@ export function ProviderManifestStatusPanel() {
                         同步
                       </Button>
                       <Button
-                        disabled={busyProviderId !== null || !status.previous}
+                        disabled={refreshing || busyProviderId !== null || !status.previous}
                         onClick={() => void rollbackOne(status.provider_id)}
                         size="sm"
                         variant="ghost"

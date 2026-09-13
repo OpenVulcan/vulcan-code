@@ -1,5 +1,8 @@
 import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
+import { FeatureLoadBoundary } from "@/components/features/feature-shell-content";
 import React from "react";
+import { toast } from "sonner";
+import { createWorkspaceGitRefreshOwnership } from "@/components/workspace/workspace-shell/git-refresh-ownership";
 import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
@@ -140,6 +143,8 @@ function resolveWorkspaceSubagentTask(
 
 // WorkspaceShellContent renders the workspace shell after sidebar context is available.
 // WorkspaceShellContent 在侧栏上下文可用后渲染工作台外壳。
+// Parameters: props supplies workspace authorities and page actions. Returns the sidebar, selected page and owned floating panels.
+// 参数：props 提供工作区权威数据和页面动作。返回侧栏、选中页面及其持有的浮动面板。
 function WorkspaceShellContent(props: WorkspaceShellProps) {
   // Shared semantic state can make the floating panel visible without Git, terminals, or agents.
   // 共享语义状态可独立于 Git、终端或智能体使浮动面板可见。
@@ -219,9 +224,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // gitCommitBusyStateByWorkspace stores running Git actions by workspace path.
   // gitCommitBusyStateByWorkspace 按工作区路径保存正在执行的 Git 动作状态。
   const [gitCommitBusyStateByWorkspace, setGitCommitBusyStateByWorkspace] = React.useState<Record<string, NonNullable<ConversationSessionCommitBusyState>>>({});
-  // workspaceGitRefreshRequestSeqRef provides monotonic ids for project-level Git refreshes.
-  // workspaceGitRefreshRequestSeqRef 为项目级 Git 刷新提供单调请求标识。
-  const workspaceGitRefreshRequestSeqRef = React.useRef(0);
+  // workspaceGitRefreshOwner restricts success, failure and selection writes to their current project request.
+  // workspaceGitRefreshOwner 将成功、失败与选择写入限制到所属项目的当前请求。
+  const workspaceGitRefreshOwner = React.useRef(createWorkspaceGitRefreshOwnership());
   // monitoringRefreshQueueRef serializes file-event refreshes for one selected project.
   // monitoringRefreshQueueRef 串行处理同一选中项目的文件事件刷新。
   const monitoringRefreshQueueRef = React.useRef<Promise<void>>(Promise.resolve());
@@ -250,6 +255,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // selectedGitCommitWorkspaceKey identifies the Git workspace whose commit state is currently shown.
   // selectedGitCommitWorkspaceKey 标识当前展示提交状态的 Git 工作区。
   const selectedGitCommitWorkspaceKey = selectedChatProject?.path ?? null;
+  // selectedGitWorkspaceRef prevents delayed refreshes from changing another project's visible selection.
+  // selectedGitWorkspaceRef 防止迟到刷新改变另一项目的可见仓库选择。
+  const selectedGitWorkspaceRef = React.useRef(selectedGitCommitWorkspaceKey);
+  selectedGitWorkspaceRef.current = selectedGitCommitWorkspaceKey;
   // selectedWorkspaceGitState stores the selected project's shared Git state entry.
   // selectedWorkspaceGitState 保存当前选中项目的共享 Git 状态条目。
   const selectedWorkspaceGitState = selectedGitCommitWorkspaceKey
@@ -364,7 +373,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     let cancelled = false;
     void refreshCommandSessions().catch((error) => {
       if (!cancelled) {
-        console.warn("[workspace-shell] command-session runtime refresh failed", error);
+        toast.error(error instanceof Error ? error.message : String(error));
       }
     });
     return () => {
@@ -617,6 +626,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     const startedAt = window.performance.now();
     try {
       await action();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       const remainingMs = 450 - (window.performance.now() - startedAt);
       if (remainingMs > 0) {
@@ -672,14 +683,20 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   // refreshProjectGitSummary reloads the shared Git summary for one project path.
   // refreshProjectGitSummary 重新加载单个项目路径的共享 Git 摘要。
+  // Parameters: workspacePath is the cache owner; projectId/conversationId scope IO; optional repositoryKey limits diff refreshes.
+  // 参数：workspacePath 是缓存归属；projectId/conversationId 限定输入输出；可选 repositoryKey 限制差异刷新范围。
+  // Returns after the current request publishes a summary/error or loses ownership; it never writes another project's selection.
+  // 当前请求发布摘要/错误或失去归属后返回；绝不写入另一项目的选择。
   const refreshProjectGitSummary = React.useCallback(async (
     workspacePath: string,
     projectId: string | null,
     conversationId: string | null,
     repositoryKey?: string | null,
   ) => {
-    const requestId = workspaceGitRefreshRequestSeqRef.current + 1;
-    workspaceGitRefreshRequestSeqRef.current = requestId;
+    // ticket gates every terminal result, including failed catalog reads and visible selection updates.
+    // ticket 对所有终态结果设门，包括目录读取失败及可见选择更新。
+    const ticket = workspaceGitRefreshOwner.current.begin(workspacePath);
+    const requestId = ticket.requestId;
     setWorkspaceGitStateByProject((current) => {
       const previous = current[workspacePath];
       return {
@@ -709,7 +726,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       catalog = await loadWorkspaceGitCatalog(workspacePath, projectId, conversationId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setWorkspaceGitStateByProject((current) => ({
+      setWorkspaceGitStateByProject((current) => workspaceGitRefreshOwner.current.owns(ticket) ? ({
         ...current,
         [workspacePath]: {
           ...(current[workspacePath] ?? {
@@ -727,9 +744,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           projectId,
           refreshRequestId: requestId,
         },
-      }));
+      }) : current);
       return;
     }
+    if (!workspaceGitRefreshOwner.current.owns(ticket)) return;
     const previousEntry = workspaceGitStateByProjectRef.current[workspacePath];
     const repositoryStates = await Promise.all(catalog.repositories.map(async (repository) => {
       const previousRepository = previousEntry?.repositories.find((entry) => entry.repositoryKey === repository.repositoryKey);
@@ -809,7 +827,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     )) ?? repositoryStates[0] ?? null;
     setWorkspaceGitStateByProject((current) => {
       const previous = current[workspacePath];
-      if (previous && previous.refreshRequestId !== requestId) {
+      if (!workspaceGitRefreshOwner.current.owns(ticket)) {
         return current;
       }
       return {
@@ -830,7 +848,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       };
     });
     setSelectedGitRepositoryKey((current) => (
-      current && repositoryStates.some((repository) => repository.repositoryKey === current && repository.monitoringEnabled)
+      !workspaceGitRefreshOwner.current.ownsSelection(ticket, selectedGitWorkspaceRef.current) ? current
+        : current && repositoryStates.some((repository) => repository.repositoryKey === current && repository.monitoringEnabled)
         ? current
         : repositoryStates.find((repository) => repository.monitoringEnabled && repository.repositoryKey === primaryRepository?.repositoryKey)?.repositoryKey
           ?? repositoryStates.find((repository) => repository.monitoringEnabled)?.repositoryKey
@@ -912,7 +931,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
           }
         })
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          if (!cancelled) toast.error(error instanceof Error ? error.message : String(error));
+        });
     });
     void subscription.then((nextUnsubscribe) => {
       if (cancelled) {
@@ -920,7 +941,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       } else {
         unsubscribe = nextUnsubscribe;
       }
-    }).catch(() => undefined);
+    }).catch((error: unknown) => {
+      // A failed subscription must remain visible; stale surfaces never report a new connection's failure.
+      // 订阅失败必须可见；失效表面不会报告新连接的错误。
+      if (!cancelled) toast.error(error instanceof Error ? error.message : String(error));
+    });
     return () => {
       cancelled = true;
       unsubscribe?.();
@@ -937,6 +962,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   // handleToggleReviewMonitoring persists one repository listener switch and refreshes its own node.
   // handleToggleReviewMonitoring 持久化单个仓库监听开关并刷新该仓库节点。
+  // Parameters: repositoryKey identifies the exact node and enabled is the requested persisted state. Returns a rejecting promise on failure.
+  // 参数：repositoryKey 标识精确节点，enabled 是请求持久化的状态。失败时返回拒绝的 Promise。
   const handleToggleReviewMonitoring = React.useCallback(async (repositoryKey: string, enabled: boolean) => {
     if (!selectedChatProject?.path || !selectedChatProject.id || !props.selectedConversationId) {
       return;
@@ -953,10 +980,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       selectedChatProject.id,
       props.selectedConversationId,
     );
-    setReviewFocusRequest((current) => ({
-      repositoryKey: current.repositoryKey,
-      sequence: current.sequence + 1,
-    }));
+    // Only the project still displayed may request a panel catalog refresh after persistence.
+    // 持久化结束后，仅仍在显示的项目可以请求面板目录刷新。
+    if (selectedGitWorkspaceRef.current === selectedChatProject.path) {
+      setReviewFocusRequest((current) => ({
+        repositoryKey: current.repositoryKey,
+        sequence: current.sequence + 1,
+      }));
+    }
   }, [props.selectedConversationId, refreshProjectGitSummary, selectedChatProject?.id, selectedChatProject?.path]);
 
   // recordWorkspaceDiffSnapshotForProject merges a panel-loaded snapshot into the shared project Git state.
@@ -1180,6 +1211,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       const width = entry.contentRect.width;
       const previousWidth = previousShellWidthRef.current;
       const isGrowing = previousWidth !== null && width > previousWidth + 1;
+      // Only initial layout or a real shrink may override desktop visibility; rerenders must respect a manual reopen.
+      // 只有初次布局或实际缩窄可以自动折叠；普通重绘不能覆盖用户手动重新展开的选择。
+      const canAutoCollapse = previousWidth === null || width < previousWidth - 1;
       previousShellWidthRef.current = width;
       const expandedLeftWidth = 288;
       const collapsedLeftWidth = 46;
@@ -1202,7 +1236,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       if (sidebar.isMobile) {
         return;
       }
-      if (mainWidth < 800 && sidebar.open) {
+      if (canAutoCollapse && mainWidth < 800 && sidebar.open) {
         notifyConversationLayoutWillChange();
         sidebar.setOpen(false);
         setLeftAutoCollapsed(true);
@@ -1334,6 +1368,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSelectWorkbenchThinkingDisplayMode={props.onSelectWorkbenchThinkingDisplayMode}
         onSlashCommand={props.onSlashCommand}
         onOpenKnowledge={props.onOpenKnowledge}
+        onOpenMemorySettings={props.onOpenMemory}
         onSubmitPrompt={props.onSubmitPrompt}
         onSaveSessionGoal={props.onSaveSessionGoal}
         onResumeSessionGoal={props.onResumeSessionGoal}
@@ -1417,16 +1452,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onToggleReviewMonitoring={(repositoryKey, enabled) => {
             return handleToggleReviewMonitoring(repositoryKey, enabled).catch((error) => {
               const message = error instanceof Error ? error.message : String(error);
-              setWorkspaceGitStateByProject((current) => {
-                const entry = selectedGitCommitWorkspaceKey ? current[selectedGitCommitWorkspaceKey] : null;
-                if (!entry) {
-                  return current;
-                }
-                return {
-                  ...current,
-                  [selectedGitCommitWorkspaceKey as string]: { ...entry, error: message },
-                };
-              });
+              // Persistence failure must be visible without overwriting a newer catalog snapshot.
+              // 持久化失败必须可见，同时不能覆盖较新的目录快照。
+              toast.error(message);
             });
           }}
           onOpenSubagentPanel={handleOpenSubagentPanel}
@@ -1502,8 +1530,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onStopSubagentTask={props.onStopSubagentTask}
           onCloseSubagentTask={props.onCloseSubagentTask}
           onStopCommandSession={props.onStopCommandSession}
-          onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}
-          onCopyText={(text) => void props.onCopyText(text)}
+          onCopyRawDiff={props.onCopyText}
+          onCopyText={props.onCopyText}
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
           loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
@@ -1521,7 +1549,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           gitCommitActionLabel={gitCommitBusyState?.label ?? t("gitCommitDialog.open")}
           onOpenGitCommitAction={sessionGitCommitActionVisible ? handleOpenGitCommitDialog : undefined}
         >
-          {pageDescriptor.content}
+          {/* Embedded feature imports share recovery with settings, leaving the project navigation mounted. */}
+          {/* 内嵌功能导入与设置共用恢复界面，保持项目导航挂载。 */}
+          {props.mainView === "chat" ? pageDescriptor.content : (
+            <FeatureLoadBoundary regionKey={`${props.mainView}:${props.mainView === "memory" ? props.activeMemorySubArea : props.mainView === "skills" ? props.activeSkillSubArea : ""}`}>
+              {pageDescriptor.content}
+            </FeatureLoadBoundary>
+          )}
         </WorkspaceResizableBody>
         {props.footer ? (
           <div className="workspace-statusbar-host">

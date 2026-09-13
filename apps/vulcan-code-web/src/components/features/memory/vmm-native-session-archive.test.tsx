@@ -44,8 +44,11 @@ async function mount(status: VmmNativeMemorySessionSummary["status"], failed = f
   const container = document.createElement("div")
   const root = createRoot(container)
   document.body.append(container)
-  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><VmmNativeSessionArchive projectId={7} sessions={[{ ...session, status }]} busy={busy} onBusyChange={onBusyChange} onRunAction={onRunAction} onRefresh={onRefresh} /></I18nProvider>))
-  return { container, onRunAction, onRefresh, onBusyChange, dispose: async () => { await act(async () => root.unmount()); container.remove() } }
+  // render changes only the stable owner while preserving the mounted confirmation controls.
+  // render 仅改变稳定归属，保留已挂载确认控件。
+  const render = async (projectId = 7) => { await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><VmmNativeSessionArchive projectId={projectId} sessions={[{ ...session, status }]} busy={busy} onBusyChange={onBusyChange} onRunAction={onRunAction} onRefresh={onRefresh} /></I18nProvider>)) }
+  await render()
+  return { container, onRunAction, onRefresh, onBusyChange, render, dispose: async () => { await act(async () => root.unmount()); container.remove() } }
 }
 
 it.each(["active", "archived"] as const)("previews and confirms the exact %s session without submitting a replacement selection", async (status) => {
@@ -99,8 +102,8 @@ it("does not preview while the parent transport is occupied", async () => {
   } finally { await view.dispose() }
 })
 
-it("cancels a preview without executing or refreshing records", async () => {
-  const view = await mount("active")
+it.each(["active", "archived", "forgotten"] as const)("cancels a %s preview and returns focus without executing or refreshing records", async (status) => {
+  const view = await mount(status)
   try {
     await act(async () => view.container.querySelector<HTMLButtonElement>("button")!.click())
     const cancel = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')).find((button) => button.textContent === "取消")!
@@ -108,6 +111,23 @@ it("cancels a preview without executing or refreshing records", async () => {
     expect(view.onRunAction).toHaveBeenCalledTimes(1)
     expect(view.onRefresh).not.toHaveBeenCalled()
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+    await vi.waitFor(() => expect(document.activeElement).toBe(view.container.querySelector("button")))
+  } finally { await view.dispose() }
+})
+
+// Errors from an executed preview cannot be attributed to a newly selected owner.
+// 已执行预览的错误不得归属于新选中的项目。
+it.each(["active", "forgotten"] as const)("clears rejected %s feedback when its owner changes", async (status) => {
+  // view retains one mounted instance across the explicit identity change.
+  // view 在明确身份切换前后保留同一挂载实例。
+  const view = await mount(status, true)
+  try {
+    await act(async () => view.container.querySelector<HTMLButtonElement>("button")!.click())
+    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')).find((button) => button.textContent !== "取消")!.click())
+    expect(view.container.querySelector('[role="alert"]')).not.toBeNull()
+    await view.render(8)
+    expect(view.container.querySelector('[role="alert"]')).toBeNull()
+    expect(view.onRunAction).toHaveBeenCalledTimes(2)
   } finally { await view.dispose() }
 })
 

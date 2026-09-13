@@ -19,6 +19,7 @@ import {
   orderProvidersByPriority,
 } from "@/components/features/settings/provider-ordering"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
+import { parseCustomProviderHeaderDraft } from "./custom-provider-header-draft"
 import { persistAndApplyCustomProviderSnapshot } from "@/components/features/settings/custom-provider-save-state"
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status"
 import {
@@ -49,7 +50,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog,
   DialogContent,
@@ -130,6 +130,12 @@ export function ProviderManagementArea() {
   // credentialProviderId 持有锁定到新增凭据弹窗的精确供应商。
   const [credentialProviderId, setCredentialProviderId] = React.useState("")
   const [error, setError] = React.useState<string | null>(null)
+  // category selects one local provider directory without changing persisted provider state.
+  // category 选择一个局部供应商目录，不改变持久化供应商状态。
+  const [category, setCategory] = React.useState("system")
+  // Full settings snapshots must be applied in the same order as provider mutations.
+  // 完整设置快照必须按供应商变更顺序采用。
+  const providerActionRunningRef = React.useRef(false)
 
   // refresh loads the effective system and custom provider registry.
   // refresh 加载有效的系统与自定义供应商注册表。
@@ -188,36 +194,44 @@ export function ProviderManagementArea() {
   // removeProvider accepts one exact descriptor, cascades confirmed cleanup, and refreshes the local snapshot.
   // removeProvider 接收一个精确描述，级联执行已确认清理，并刷新本地快照。
   const removeProvider = React.useCallback(async (provider: PublicAiProviderDescriptor) => {
+    if (providerActionRunningRef.current) return
+    providerActionRunningRef.current = true
     setBusyProviderId(provider.id)
     setError(null)
     try {
       setSnapshot(await removePublicAiCustomProvider(provider.id))
+      setProviderToRemove(null)
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      providerActionRunningRef.current = false
       setBusyProviderId(null)
-      setProviderToRemove(null)
     }
   }, [])
 
   // removeIsolatedProvider deletes one exact failed standalone reference without fabricating a descriptor.
   // removeIsolatedProvider 不伪造描述符，直接删除一项精确失败的独立引用。
   const removeIsolatedProvider = React.useCallback(async (providerId: string) => {
+    if (providerActionRunningRef.current) return
+    providerActionRunningRef.current = true
     setBusyProviderId(providerId)
     setError(null)
     try {
       setSnapshot(await removePublicAiCustomProvider(providerId))
+      setIsolatedProviderToRemove(null)
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      providerActionRunningRef.current = false
       setBusyProviderId(null)
-      setIsolatedProviderToRemove(null)
     }
   }, [])
 
   // saveProviderPriority persists one provider ordering value and refreshes the authoritative snapshot.
   // saveProviderPriority 持久化一个供应商排序值并刷新权威快照。
   const saveProviderPriority = React.useCallback(async (providerId: string, priority: number) => {
+    if (providerActionRunningRef.current) return
+    providerActionRunningRef.current = true
     setBusyProviderId(providerId)
     setError(null)
     try {
@@ -225,6 +239,7 @@ export function ProviderManagementArea() {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      providerActionRunningRef.current = false
       setBusyProviderId(null)
     }
   }, [])
@@ -328,17 +343,45 @@ export function ProviderManagementArea() {
       {error ? (
         <div className="rounded-xl border border-destructive/40 p-4 text-sm text-destructive">
           {error}
+          {!snapshot ? <Button className="mt-2" onClick={() => void refresh()} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : null}
         </div>
       ) : null}
 
-      <Tabs className="space-y-4" defaultValue="system">
-        <TabsList variant="line">
-          <TabsTrigger value="system">{t("settings.providers.system")}</TabsTrigger>
-          <TabsTrigger value="functional">{t("settings.providers.functional")}</TabsTrigger>
-          <TabsTrigger value="custom">{t("settings.providers.custom")}</TabsTrigger>
-          <TabsTrigger value="catalog">{t("settings.providers.catalog")}</TabsTrigger>
-        </TabsList>
-        <TabsContent className="m-0" value="system">
+      <div className="settings-local-directory-grid">
+          <nav
+            className="settings-local-directory-nav"
+            aria-label={t("settings.providers.managementTitle")}
+          >
+            {([
+              ["system", t("settings.providers.system"), systemProviders.length],
+              ["functional", t("settings.providers.functional"), functionalProviders.length],
+              ["custom", t("settings.providers.custom"), customProviders.length],
+              ["catalog", t("settings.providers.catalog"), null],
+            ] as const).map(([value, label, count]) => (
+              <button
+                aria-current={category === value ? "page" : undefined}
+                className={`workspace-tool-panel-menu-row ${category === value ? "active" : ""}`}
+                key={value}
+                onClick={() => setCategory(value)}
+                type="button"
+              >
+                <span>{label}</span>{count !== null ? <small>{count}</small> : null}
+              </button>
+            ))}
+          </nav>
+      <div className="provider-management-categories">
+        <div className="settings-local-directory-mobile">
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger aria-label={t("settings.providers.managementTitle")}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="system">{t("settings.providers.system")}</SelectItem>
+              <SelectItem value="functional">{t("settings.providers.functional")}</SelectItem>
+              <SelectItem value="custom">{t("settings.providers.custom")}</SelectItem>
+              <SelectItem value="catalog">{t("settings.providers.catalog")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <section hidden={category !== "system"}>
           <SystemProviderTable
             busyProviderId={busyProviderId}
             connections={snapshot?.connections ?? []}
@@ -350,8 +393,8 @@ export function ProviderManagementArea() {
             providers={systemProviders}
             variant="system"
           />
-        </TabsContent>
-        <TabsContent className="m-0" value="functional">
+        </section>
+        <section hidden={category !== "functional"}>
           <SystemProviderTable
             busyProviderId={busyProviderId}
             connections={snapshot?.connections ?? []}
@@ -363,8 +406,8 @@ export function ProviderManagementArea() {
             providers={functionalProviders}
             variant="functional"
           />
-        </TabsContent>
-        <TabsContent className="m-0 space-y-4" value="custom">
+        </section>
+        <section className="space-y-4" hidden={category !== "custom"}>
           {customProviderManifestFailureTotalCount > 0 ? (
             <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
               <p className="font-semibold text-destructive">
@@ -415,11 +458,10 @@ export function ProviderManagementArea() {
             priorities={snapshot?.providerPriorities ?? {}}
             providers={customProviders}
           />
-        </TabsContent>
-        <TabsContent className="m-0" value="catalog">
-          <ProviderManifestStatusPanel />
-        </TabsContent>
-      </Tabs>
+        </section>
+        {category === "catalog" ? <ProviderManifestStatusPanel /> : null}
+      </div>
+      </div>
 
       <CustomProviderDialog
         connections={snapshot?.connections ?? []}
@@ -454,7 +496,7 @@ export function ProviderManagementArea() {
         open={credentialProviderId !== ""}
         providers={snapshot?.providers ?? []}
       />
-      <AlertDialog onOpenChange={(open) => !open && setProviderToRemove(null)} open={providerToRemove !== null}>
+      <AlertDialog onOpenChange={(open) => !open && !providerActionRunningRef.current && setProviderToRemove(null)} open={providerToRemove !== null}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.customProviders.removeTitle")}</AlertDialogTitle>
@@ -465,7 +507,7 @@ export function ProviderManagementArea() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busyProviderId !== null}>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={providerToRemove
                 ? busyProviderId === providerToRemove.id
@@ -484,7 +526,7 @@ export function ProviderManagementArea() {
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog
-        onOpenChange={(open) => !open && setIsolatedProviderToRemove(null)}
+        onOpenChange={(open) => !open && !providerActionRunningRef.current && setIsolatedProviderToRemove(null)}
         open={isolatedProviderToRemove !== null}
       >
         <AlertDialogContent>
@@ -502,7 +544,7 @@ export function ProviderManagementArea() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busyProviderId !== null}>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={isolatedProviderToRemove
                 ? busyProviderId === isolatedProviderToRemove
@@ -547,6 +589,14 @@ function CustomProviderTable(props: {
     () => orderProvidersByPriority(props.providers, props.priorities),
     [props.priorities, props.providers],
   )
+  // search retains this category's local filter across directory switches.
+  // search 在目录切换时保留本分类的局部筛选。
+  const [search, setSearch] = React.useState("")
+  // visibleProviders filters registered identities without changing priority or credentials.
+  // visibleProviders 筛选已注册身份，不改变优先级或凭据。
+  const visibleProviders = orderedProviders.filter((provider) => (
+    `${provider.id} ${provider.display_name}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())
+  ))
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -559,6 +609,7 @@ function CustomProviderTable(props: {
           type="button"
           size="sm"
           className="inline-flex items-center gap-1.5 leading-none"
+          disabled={props.busyProviderId !== null}
           onClick={props.onCreate}
         >
           <Plus className="size-4" />
@@ -566,6 +617,8 @@ function CustomProviderTable(props: {
         </Button>
       </div>
 
+      <Input aria-label={t("settings.modelExperience.searchCustom")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
+      {!props.loading && props.providers.length > 0 && visibleProviders.length === 0 ? <p className="text-sm text-muted-foreground">{t("settings.modelExperience.noProviders")}</p> : null}
       {props.loading ? (
         <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
@@ -575,7 +628,7 @@ function CustomProviderTable(props: {
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {t("settings.providers.emptyCustom")}
         </div>
-      ) : (
+      ) : visibleProviders.length === 0 ? null : (
         <div className="overflow-hidden rounded-xl border">
           <Table className="provider-responsive-table">
             <TableHeader className="bg-muted/40">
@@ -589,7 +642,7 @@ function CustomProviderTable(props: {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {orderedProviders.map((provider) => {
+              {visibleProviders.map((provider) => {
                 // credentialCount counts credentials explicitly bound to this provider.
                 // credentialCount 统计明确绑定到此供应商的凭据。
                 const credentialCount = props.connections.filter(
@@ -637,7 +690,7 @@ function CustomProviderTable(props: {
                     </TableCell>
                     <TableCell data-label={t("settings.providers.table.priority")} className="py-3 align-top">
                       <ProviderPriorityEditor
-                        busy={props.busyProviderId === provider.id}
+                        busy={props.busyProviderId !== null}
                         onSave={(priority) => props.onSavePriority(provider.id, priority)}
                         value={props.priorities[provider.id] ?? 0}
                       />
@@ -646,6 +699,7 @@ function CustomProviderTable(props: {
                       <div className="flex justify-end gap-1">
                         <Button
                           aria-label={t("settings.providers.addCredentialFor").replace("{provider}", provider.display_name)}
+                          disabled={props.busyProviderId !== null}
                           onClick={() => props.onAddCredential(provider.id)}
                           size="sm"
                           type="button"
@@ -656,6 +710,7 @@ function CustomProviderTable(props: {
                         </Button>
                         <Button
                           aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", provider.display_name)}
+                          disabled={props.busyProviderId !== null}
                           onClick={() => props.onManageModels(provider)}
                           size="icon-sm"
                           title={t("settings.customProviders.manageModels")}
@@ -666,6 +721,7 @@ function CustomProviderTable(props: {
                         </Button>
                         <Button
                           aria-label={t("settings.providers.editFor").replace("{provider}", provider.display_name)}
+                          disabled={props.busyProviderId !== null}
                           onClick={() => props.onEdit(provider)}
                           size="icon-sm"
                           type="button"
@@ -721,6 +777,15 @@ function SystemProviderTable(props: {
     () => orderProvidersByPriority(props.providers, props.priorities),
     [props.priorities, props.providers],
   )
+  // search retains the system or functional category filter while navigating.
+  // search 在导航切换时保留系统或功能分类筛选。
+  const [search, setSearch] = React.useState("")
+  // visibleProviders searches both registered and localized names without mutating catalog state.
+  // visibleProviders 同时搜索注册名称和本地化名称，不修改目录状态。
+  const visibleProviders = orderedProviders.filter((provider) => (
+    `${provider.id} ${provider.display_name} ${localizedProviderName(provider.id, provider.display_name, t)}`
+      .toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())
+  ))
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
@@ -731,12 +796,14 @@ function SystemProviderTable(props: {
         <Badge variant="secondary">{props.providers.length}</Badge>
       </div>
 
+      <Input aria-label={t("settings.modelExperience.searchProvider")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
+      {!props.loading && visibleProviders.length === 0 ? <p className="text-sm text-muted-foreground">{t("settings.modelExperience.noProviders")}</p> : null}
       {props.loading ? (
         <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
           {t("settings.providers.loading")}
         </div>
-      ) : (
+      ) : visibleProviders.length === 0 ? null : (
         <div className="overflow-hidden rounded-xl border">
           <Table className="provider-responsive-table">
             <TableHeader className="bg-muted/40">
@@ -749,7 +816,7 @@ function SystemProviderTable(props: {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {orderedProviders.map((provider) => {
+              {visibleProviders.map((provider) => {
                 // credentialCount counts credentials explicitly bound to this provider.
                 // credentialCount 统计明确绑定到此供应商的凭据。
                 const credentialCount = props.connections.filter(
@@ -778,9 +845,9 @@ function SystemProviderTable(props: {
                       </div>
                     </TableCell>
                     <TableCell data-label={t("settings.providers.table.details")} className="whitespace-normal py-3 align-top">
-                      <div className="text-sm text-muted-foreground">
-                        {providerDescription}
-                      </div>
+                      <details className="provider-management-details">
+                      <summary>{t("settings.modelExperience.providerDetails")}</summary>
+                      <p className="text-sm text-muted-foreground">{providerDescription}</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         <ProviderSummaryTooltip
                           items={provider.service_entries.map((entry) => entry.display_name)}
@@ -803,6 +870,7 @@ function SystemProviderTable(props: {
                           />
                         ) : null}
                       </div>
+                      </details>
                     </TableCell>
                     <TableCell data-label={t("settings.providers.table.configurationStatus")} className="py-3 text-right align-top">
                       <Badge variant={credentialCount > 0 ? "default" : "secondary"}>
@@ -811,7 +879,7 @@ function SystemProviderTable(props: {
                     </TableCell>
                     <TableCell data-label={t("settings.providers.table.priority")} className="py-3 align-top">
                       <ProviderPriorityEditor
-                        busy={props.busyProviderId === provider.id}
+                        busy={props.busyProviderId !== null}
                         onSave={(priority) => props.onSavePriority(provider.id, priority)}
                         value={props.priorities[provider.id] ?? 0}
                       />
@@ -920,10 +988,16 @@ function ProviderPriorityEditor(props: ProviderPriorityEditorProps) {
 function CustomProtocolRouteDraftCard(props: {
   draft: CustomProtocolRouteDraft
   onChange: (draft: CustomProtocolRouteDraft) => void
+  // Report incomplete raw input so a parent save cannot silently keep an older valid map.
+  // 上报未完成原始输入，防止父级保存静默保留旧的有效映射。
+  onHeaderValidityChange: (valid: boolean) => void
   protocol: PublicAiCustomProviderProtocol
   t: (key: TranslationKey) => string
 }) {
   const { draft, onChange, protocol, t } = props
+  const { locale } = useI18n()
+  const [headersText, setHeadersText] = React.useState(() => Object.entries(draft.requestHeaders).map(([name, value]) => `${name}: ${value}`).join("\n"))
+  const headersValid = parseCustomProviderHeaderDraft(headersText) !== null
   return (
     <details className="rounded-lg border bg-muted/30 p-3 text-sm">
       <summary className="cursor-pointer font-medium text-foreground">
@@ -1006,22 +1080,17 @@ function CustomProtocolRouteDraftCard(props: {
           <textarea
             className="min-h-[72px] w-full rounded-md border bg-background px-3 py-2 text-xs"
             onChange={(event) => {
-              const headers: Record<string, string> = {}
-              for (const line of event.target.value.split("\n")) {
-                const separator = line.indexOf(":")
-                if (separator > 0) {
-                  const key = line.slice(0, separator).trim()
-                  const value = line.slice(separator + 1).trim()
-                  if (key) headers[key] = value
-                }
-              }
-              onChange({ ...draft, requestHeaders: headers })
+              const rawText = event.target.value
+              setHeadersText(rawText)
+              const headers = parseCustomProviderHeaderDraft(rawText)
+              props.onHeaderValidityChange(headers !== null)
+              if (headers !== null) onChange({ ...draft, requestHeaders: headers })
             }}
             placeholder="accept: application/json"
-            value={Object.entries(draft.requestHeaders)
-              .map(([key, value]) => `${key}: ${value}`)
-              .join("\n")}
+            aria-invalid={!headersValid}
+            value={headersText}
           />
+          {!headersValid ? <span role="alert" className="text-destructive">{locale === "zh-CN" ? "每行填写完整的名称: 值，请勿重复请求头名称。" : "Complete each row as name: value, without duplicate header names."}</span> : null}
         </label>
       </div>
     </details>
@@ -1065,6 +1134,11 @@ function CustomProviderDialog(props: {
   // protocolOverrideConfirmation 在确认不兼容路由设置期间保留原始保存意图。
   const [protocolOverrideConfirmation, setProtocolOverrideConfirmation] = React.useState<"ready" | "manual" | "pending" | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // One operation owns the wizard draft until probing or saving has settled.
+  // 探测或保存结束前，由单次操作持有向导草稿。
+  const operationRunningRef = React.useRef(false)
+  const [invalidHeaderProtocols, setInvalidHeaderProtocols] = React.useState<Set<PublicAiCustomProviderProtocol>>(new Set())
+  const headersValid = !protocols.some((protocol) => invalidHeaderProtocols.has(protocol))
   // providerConnections is the complete account set owned by the edited provider.
   // providerConnections 是被编辑供应商持有的完整账号集合。
   const providerConnections = React.useMemo(() => props.connections.filter(
@@ -1113,6 +1187,7 @@ function CustomProviderDialog(props: {
     setProbeResult(null)
     setPendingConfirmation(null)
     setProtocolOverrideConfirmation(null)
+    setInvalidHeaderProtocols(new Set())
     setError(null)
   }, [props.open, props.provider, providerConnections])
 
@@ -1147,12 +1222,12 @@ function CustomProviderDialog(props: {
   // continueToCredential validates the endpoint contract before asking for a secret.
   // continueToCredential 在请求秘密前校验入口契约。
   const continueToCredential = React.useCallback(() => {
-    if (!validateConnectionDraft()) {
+    if (!headersValid || !validateConnectionDraft()) {
       return
     }
     setProbeResult(null)
     setStep("credential")
-  }, [validateConnectionDraft])
+  }, [headersValid, validateConnectionDraft])
 
   // requestBody builds the exact typed service request from the current form.
   // requestBody 从当前表单构造精确的类型化服务请求。
@@ -1187,11 +1262,12 @@ function CustomProviderDialog(props: {
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
     confirmInactiveProtocolOverrideDeletion,
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
   const probe = React.useCallback(async () => {
+    if (operationRunningRef.current || !headersValid) return
     if (props.provider && !validationConnectionId) {
       setError(t("settings.customProviders.validationCredentialRequired"))
       return
@@ -1200,6 +1276,7 @@ function CustomProviderDialog(props: {
       setError(t("settings.customProviders.credentialRequired"))
       return
     }
+    operationRunningRef.current = true
     setProbing(true)
     setError(null)
     try {
@@ -1208,9 +1285,10 @@ function CustomProviderDialog(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      operationRunningRef.current = false
       setProbing(false)
     }
-  }, [credentialDisplayName, props.provider, requestBody, secret, t, validationConnectionId])
+  }, [credentialDisplayName, headersValid, props.provider, requestBody, secret, t, validationConnectionId])
 
   // originalEntry is the persisted technical contract used to distinguish cosmetic edits.
   // originalEntry 是用于区分纯展示编辑的持久化技术契约。
@@ -1241,11 +1319,13 @@ function CustomProviderDialog(props: {
     acceptance?: "manual" | "pending",
     confirmInactiveProtocolOverrideDeletion = false,
   ) => {
+    if (operationRunningRef.current || !headersValid) return
     if (inactiveProtocolOverrideCount > 0 && !confirmInactiveProtocolOverrideDeletion) {
       setPendingConfirmation(null)
       setProtocolOverrideConfirmation(acceptance ?? "ready")
       return
     }
+    operationRunningRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -1258,9 +1338,10 @@ function CustomProviderDialog(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      operationRunningRef.current = false
       setSaving(false)
     }
-  }, [inactiveProtocolOverrideCount, props, requestBody])
+  }, [headersValid, inactiveProtocolOverrideCount, props, requestBody])
 
   // saveCredentialFreeEdit persists a valid provider contract when no account exists to probe.
   // saveCredentialFreeEdit 在不存在可探测账号时持久化有效的供应商契约。
@@ -1322,20 +1403,21 @@ function CustomProviderDialog(props: {
   return (
     <Dialog
       onOpenChange={(open) => {
-        if (!open && (probing || saving)) {
+        if (!open && operationRunningRef.current) {
           return
         }
         props.onOpenChange(open)
       }}
       open={props.open}
     >
-      <DialogContent className="max-h-[min(760px,calc(100vh-2rem))] overflow-y-auto sm:max-w-[620px]">
+      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>{t(props.provider ? "settings.customProviders.editTitle" : "settings.customProviders.addTitle")}</DialogTitle>
           <DialogDescription>
             {t("settings.customProviders.dialogDescription")}
           </DialogDescription>
         </DialogHeader>
+        <fieldset className="min-h-0 flex-1 space-y-4 overflow-y-auto" disabled={probing || saving}>
         <div className="grid grid-cols-3 gap-2" aria-label={t("settings.customProviders.progressLabel")}>
           {(["connection", "credential", "result"] as const).map((candidate, index) => (
             <div className={`rounded-lg border px-3 py-2 text-xs ${candidate === step ? "border-foreground bg-muted font-medium" : "text-muted-foreground"}`} key={candidate}>
@@ -1380,6 +1462,11 @@ function CustomProviderDialog(props: {
                               if (next.length === 0) {
                                 return current
                               }
+                              if (enabled) setInvalidHeaderProtocols((invalid) => {
+                                const nextInvalid = new Set(invalid)
+                                nextInvalid.delete(option.id)
+                                return nextInvalid
+                              })
                               if (!enabled) {
                                 setRouteDrafts((drafts: CustomProviderProtocolCollection["drafts"]) => ({
                                   ...drafts,
@@ -1408,7 +1495,7 @@ function CustomProviderDialog(props: {
                 </Select>
               </label>
             </div>
-            {protocols.length > 1 ? (
+            {protocols.length > 1 || !headersValid ? (
               <fieldset className="settings-form-field">
                 <legend className="text-sm font-medium">{t("settings.customProviders.routeDrafts")}</legend>
                 <p className="text-xs text-muted-foreground">{t("settings.customProviders.routeDraftsHint")}</p>
@@ -1417,6 +1504,12 @@ function CustomProviderDialog(props: {
                     <CustomProtocolRouteDraftCard
                       draft={routeDrafts[protocolId] ?? emptyProtocolRouteDraft()}
                       key={protocolId}
+                      onHeaderValidityChange={(valid) => setInvalidHeaderProtocols((current) => {
+                        const next = new Set(current)
+                        if (valid) next.delete(protocolId)
+                        else next.add(protocolId)
+                        return next
+                      })}
                       onChange={(draft) => setRouteDrafts((drafts: CustomProviderProtocolCollection["drafts"]) => ({ ...drafts, [protocolId]: draft }))}
                       protocol={protocolId}
                       t={t}
@@ -1558,12 +1651,13 @@ function CustomProviderDialog(props: {
           </div>
         ) : null}
 
-        {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+        {error ? <p className="settings-muted-line settings-error-text" role="alert">{error}</p> : null}
+        </fieldset>
         <DialogFooter>
           {step === "connection" ? <Button disabled={probing || saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button> : <Button disabled={probing || saving} onClick={() => setStep(step === "result" ? "credential" : "connection")} type="button" variant="outline">{t("settings.customProviders.back")}</Button>}
           {step === "connection" && props.provider && !providerChanged ? <Button disabled type="button">{t("memory.common.save")}</Button> : null}
-          {step === "connection" && providerChanged && (directSaveOnly || credentialFreeEdit) ? <Button disabled={saving} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("memory.common.save")}</Button> : null}
-          {step === "connection" && (!props.provider || (providerChanged && !directSaveOnly && !credentialFreeEdit)) ? <Button onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
+          {step === "connection" && providerChanged && (directSaveOnly || credentialFreeEdit) ? <Button disabled={saving || !headersValid} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("memory.common.save")}</Button> : null}
+          {step === "connection" && (!props.provider || (providerChanged && !directSaveOnly && !credentialFreeEdit)) ? <Button disabled={!headersValid} onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
           {step === "credential" ? <Button disabled={probing} onClick={() => void probe()} type="button">{probing ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t(probing ? "settings.customProviders.probing" : "settings.customProviders.probe")}</Button> : null}
           {step === "result" && acceptedWithoutOverride ? <Button disabled={saving} onClick={() => void save()} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveVerified")}</Button> : null}
           {step === "result" && probeResult?.manualFallbackAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("manual")} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveManual")}</Button> : null}

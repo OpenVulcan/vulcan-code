@@ -1,53 +1,9 @@
+/* Shared rules preserve their original workbench cascade position. */
+/* 共用规则保留工作台中的原有层叠位置。 */
 .settings-direct-content {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-}
-
-.provider-management-surface {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: none;
-  margin-inline: auto;
-}
-
-.provider-protocol-fieldset {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 10px;
-}
-
-.provider-protocol-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.credential-management-layout {
-  --workspace-tool-panel-menu-width: 176px;
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
-.credential-management-menu .workspace-tool-panel-menu-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.credential-management-menu .workspace-tool-panel-menu-row small {
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-
-.credential-management-content {
-  display: grid;
-  align-content: start;
-  gap: 10px;
 }
 
 .settings-inline-control {
@@ -68,47 +24,6 @@
   line-height: 1.4;
 }
 
-.settings-inline-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--foreground);
-  font-weight: 500;
-}
-
-.credential-management-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
-  align-items: stretch;
-  justify-content: start;
-  gap: 8px;
-}
-
-.provider-credential-select {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-}
-
-.settings-capability-page {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  padding-right: 4px;
-}
-
-.settings-summary-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 0;
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-
 .settings-panel-title-row,
 .settings-card-actions {
   min-width: 0;
@@ -121,13 +36,6 @@
 
 .settings-card-actions {
   justify-content: flex-start;
-}
-
-.settings-provider-list,
-.settings-target-list {
-  min-height: 0;
-  display: grid;
-  gap: 10px;
 }
 
 .settings-provider-row,
@@ -170,18 +78,6 @@
   overflow-wrap: anywhere;
 }
 
-.settings-validation-error {
-  margin: 0;
-  color: var(--destructive);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.settings-model-grid {
-  display: grid;
-  gap: 8px;
-}
-
 .settings-model-row,
 .settings-target-row {
   padding: 10px;
@@ -189,26 +85,6 @@
 
 /* Archived-row layout keeps selection controls, metadata, and lifecycle actions aligned. */
 /* 归档行布局确保选择控件、元数据与生命周期操作保持对齐。 */
-.settings-target-row-main,
-.settings-pagination {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-}
-
-.settings-target-row-main {
-  flex: 1;
-}
-
-.settings-target-row-main > div {
-  min-width: 0;
-}
-
-.settings-pagination {
-  justify-content: space-between;
-  padding-top: 2px;
-}
 
 .settings-grid.compact {
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
@@ -238,35 +114,6 @@
   font-weight: 650;
 }
 
-.settings-checkbox-line {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.settings-checkbox-line input {
-  flex: 0 0 auto;
-  margin-top: 2px;
-}
-
-.settings-checkbox-line span {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.settings-checkbox-line small {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
 .settings-split-layout {
   min-width: 0;
   min-height: 0;
@@ -282,358 +129,12 @@
   grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
 }
 
-.settings-provider-nav,
-.settings-model-list-pane {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-provider-nav {
-  gap: 4px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.settings-split-column-title {
-  color: var(--muted-foreground);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.settings-provider-nav-row {
-  width: 100%;
-  min-width: 0;
-  height: 32px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  padding: 0 10px;
-  text-align: left;
-}
-
-.settings-provider-nav-row:hover,
-.settings-provider-nav-row.active {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.settings-provider-nav-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-provider-nav-row small {
-  color: inherit;
-  opacity: 0.72;
-}
-
-.settings-model-list-pane {
-  gap: 10px;
-  overflow: visible;
-}
-
-.model-list-surface {
-  box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: visible;
-}
-
-.model-list-content {
-  min-height: 0;
-}
-
-.model-list-layout .adaptive-tool-panel-content-shell {
-  overflow-x: hidden;
-}
-
-.settings-model-pane-header {
-  min-width: 0;
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.settings-model-pane-header small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.settings-model-toolbar {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(132px, 160px) auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.settings-model-search {
-  position: relative;
-  min-width: 0;
-}
-
-.settings-model-search > svg {
-  position: absolute;
-  z-index: 1;
-  left: 10px;
-  top: 50%;
-  color: var(--muted-foreground);
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.settings-model-search input {
-  padding-left: 32px;
-}
-
-.settings-model-bulk-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.settings-model-filter-summary {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.settings-model-sticky-controls {
-  position: sticky;
-  z-index: 3;
-  top: -14px;
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  padding: 14px 0 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--background);
-}
-
 .settings-model-row {
   align-items: flex-start;
 }
 
-.settings-model-row-main {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: grid;
-  gap: 8px;
-}
-
-.settings-model-title-line {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-}
-
 .settings-model-row .settings-model-title-line strong {
   display: inline;
-}
-
-.settings-model-id {
-  min-width: 0;
-  max-width: min(420px, 46vw);
-  overflow: hidden;
-  color: var(--muted-foreground);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-model-credential-count {
-  flex: 0 0 auto;
-  color: var(--foreground);
-  font-weight: 500;
-}
-
-.settings-model-route-tabs {
-  min-width: 0;
-  width: min(620px, 100%);
-  gap: 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
-
-.settings-model-route-tabs-list {
-  width: 100%;
-  height: 27px;
-  max-width: 100%;
-  justify-content: flex-start;
-  overflow-x: auto;
-  overflow-y: hidden;
-  border-radius: 0;
-  scrollbar-width: thin;
-}
-
-.settings-model-route-tab {
-  height: 22px;
-  min-width: 0;
-  max-width: 190px;
-  flex: 0 0 auto;
-  overflow: hidden;
-  padding-inline: 6px;
-  font-size: 11px;
-  line-height: 1;
-  text-overflow: ellipsis;
-}
-
-.settings-model-route-content {
-  min-width: 0;
-  margin: 0;
-  border-top: 1px solid var(--border);
-}
-
-.settings-model-route-panel {
-  width: 100%;
-  min-height: 58px;
-  height: auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-radius: 0;
-  padding: 5px 8px;
-  text-align: left;
-}
-
-.settings-model-route-summary {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  overflow: hidden;
-}
-
-.settings-model-route-protocol {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-model-route-protocol svg {
-  flex: 0 0 auto;
-}
-
-.settings-model-route-binding {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-model-switches {
-  width: 152px;
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 6px;
-}
-
-.settings-model-switch-control {
-  width: 100%;
-  min-height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  white-space: normal;
-}
-
-.settings-model-switch-control > span {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow-wrap: anywhere;
-  line-height: 1.2;
-}
-
-.settings-model-switch-control > button {
-  flex: 0 0 auto;
-}
-
-.settings-model-modality-summary,
-.settings-model-modality-group {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.settings-model-modality-summary {
-  flex: 0 0 auto;
-  margin-left: auto;
-  gap: 7px;
-}
-
-.settings-model-modality-icon {
-  width: 21px;
-  height: 21px;
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--background);
-  color: var(--foreground);
-}
-
-.settings-model-modality-icon.muted {
-  border-color: transparent;
-  background: transparent;
-  color: var(--muted-foreground);
-}
-
-.settings-model-modality-icon svg {
-  width: 13px;
-  height: 13px;
-}
-
-.settings-model-row-list {
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  overflow: visible;
-  padding-right: 4px;
-}
-
-.settings-model-row-list.modal {
-  flex: 1 1 auto;
 }
 
 .settings-model-row.selectable {
@@ -646,163 +147,14 @@
   min-width: 0;
 }
 
-.settings-capability-route-list {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  align-content: start;
-  overflow: visible;
-}
+/* Keep empty understanding forms aligned without replacing their selectors. */
+/* 保持空理解表单对齐，不以空态替换选择控件。 */
 
-.settings-capability-route-row {
-  min-width: 0;
-  min-height: 46px;
-  display: grid;
-  grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 7px 8px;
-  background: var(--background);
-  cursor: grab;
-  touch-action: none;
-}
+/* Keep independent settings editors mounted so navigation retains their drafts. */
+/* 保持独立设置编辑器挂载，使分区导航保留草稿。 */
 
-.settings-capability-route-row:hover {
-  background: var(--accent);
-}
-
-.settings-capability-route-row.provider-tool-settings-row {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  cursor: default;
-  touch-action: auto;
-}
-
-.settings-provider-tool-defaults {
-  min-width: 0;
-  display: grid;
-  gap: 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
-  background: var(--background);
-}
-
-.settings-provider-tool-defaults-header {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.settings-provider-tool-defaults-header > span {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.settings-provider-tool-defaults-header small,
-.settings-provider-tool-defaults-grid > label > span {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.settings-provider-tool-defaults-grid {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.72fr) auto;
-  align-items: end;
-  gap: 10px;
-}
-
-.settings-provider-tool-defaults-grid > label {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-
-.settings-provider-tool-extension-list {
-  display: grid;
-  gap: 8px;
-}
-
-.settings-capability-route-row.dragging {
-  opacity: 0.68;
-  cursor: grabbing;
-}
-
-.settings-drag-handle {
-  color: var(--muted-foreground);
-  flex: 0 0 auto;
-}
-
-.settings-route-index,
-.settings-route-separator {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.settings-route-main {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.settings-route-main strong,
-.settings-route-main small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-route-main small {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.capability-target-choice {
-  gap: 12px;
-}
-
-.settings-capability-empty {
-  min-height: 240px;
-}
-
-.model-capability-form {
-  min-width: 0;
-  display: grid;
-  gap: 14px;
-}
-
-.settings-modality-box {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 12px;
-}
-
-.settings-modality-box legend {
-  padding: 0 4px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.settings-modal-list {
-  min-height: 0;
-  max-height: 460px;
-  display: grid;
-  gap: 8px;
-  overflow: auto;
-  padding-right: 4px;
-}
+/* Local directories remain fixed columns; narrow content uses a readable selector. */
+/* 局部目录保持固定分栏；窄正文使用可读选择器。 */
 
 .settings-check-row {
   min-width: 0;
@@ -838,34 +190,6 @@
   font-size: 12px;
 }
 
-.settings-picker-row {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--card);
-  color: var(--foreground);
-  padding: 10px 12px;
-  text-align: left;
-}
-
-.settings-picker-row:hover {
-  background: var(--accent);
-}
-
-.settings-picker-row strong,
-.settings-picker-row span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.settings-picker-row span {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
 @media (max-width: 760px) {
   .settings-split-layout,
   .settings-split-layout.modal {
@@ -882,21 +206,8 @@
     grid-template-columns: 1fr;
   }
 
-  .settings-model-toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-model-bulk-actions {
-    justify-content: flex-start;
-  }
-
   .settings-model-row {
     flex-direction: column;
-  }
-
-  .settings-model-switches {
-    width: 100%;
-    justify-content: flex-start;
   }
 
 }
@@ -1203,118 +514,10 @@
   white-space: nowrap;
 }
 
-.settings-route-header,
-.settings-panel-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.settings-route-header > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.settings-route-header p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
 .rtk-command-table-wrap {
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: 7px;
-}
-
-.settings-route-groups {
-  display: grid;
-  gap: 14px;
-  min-width: 0;
-}
-
-.settings-route-group {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.settings-route-group + .settings-route-group {
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
-.settings-route-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.settings-route-bulk-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.settings-route-bulk-button {
-  min-height: 26px;
-  padding: 3px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.settings-route-bulk-button:hover,
-.settings-route-bulk-button:focus-visible {
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--foreground);
-  outline: none;
-}
-
-.settings-route-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px 10px;
-  min-width: 0;
-}
-
-.settings-route-option {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 30px;
-  padding: 5px 7px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.settings-route-option:hover {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-.settings-route-option input {
-  flex: 0 0 auto;
-  margin: 0;
-}
-
-.settings-route-option span {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .rtk-command-table-wrap {

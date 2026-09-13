@@ -44,12 +44,15 @@
 .vmm-section-tabs { display: flex; flex-wrap: wrap; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .vmm-section-tabs button { padding: 8px 0 10px; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: 13px; }
 .vmm-section-tabs button[aria-pressed="true"] { border-color: var(--foreground); color: var(--foreground); font-weight: 600; }
+/* Pending groups retain their place while exposing their unavailable state.
+   待加载分组保留位置，同时明确显示当前不可用状态。 */
+.vmm-section-tabs button:disabled { cursor: not-allowed; opacity: 0.5; }
 .vmm-section-tabs button:focus-visible, .vmm-nav-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
-/* Keep source lists and selected detail independent, with a single-column narrow fallback. */
-/* 保持来源列表与选中详情独立，并在窄面板切换为单列。 */
+/* Let the selected session own the workspace while its hidden list retains browsing state. */
+/* 让选中会话独占工作区，同时隐藏的列表保留浏览状态。 */
 .vmm-session-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
-.vmm-session-workspace.has-selection { grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); }
+.vmm-session-workspace > .vmm-session-browser[hidden] { display: none; }
 .vmm-session-browser, .vmm-session-detail { min-width: 0; container: memory-session / inline-size; }
 .vmm-session-row.selected { background: var(--accent); box-shadow: inset 3px 0 var(--foreground); }
 .vmm-session-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
@@ -58,8 +61,8 @@
 /* 优先保证项目名称可读，再为次要操作分配同行空间。 */
 .vmm-session-scope > label { flex-basis: 220px; }
 .vmm-session-filter-details { flex-basis: 100%; order: 2; font-size: 13px; }
-.vmm-session-filter-details summary { cursor: pointer; color: var(--muted-foreground); }
-.vmm-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; padding-top: 12px; }
+.vmm-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; padding-top: 4px; align-items: end; }
+.vmm-filter-fields > label { display: flex; min-width: 0; flex-direction: column; justify-content: flex-end; gap: 4px; }
 .vmm-session-detail [data-slot="card-content"] .grid { grid-template-columns: minmax(0, 1fr); }
 
 /* Preserve shared modal controls and model-picker styling while giving names readable space. */
@@ -82,21 +85,37 @@
 .vmm-model-dialog .model-picker-row { grid-template-columns: 20px minmax(0, 1.5fr) minmax(0, 1fr); height: auto; min-height: 46px; padding-top: 8px; padding-bottom: 8px; cursor: pointer; }
 .vmm-model-dialog .model-picker-row-id { max-width: none; overflow-wrap: anywhere; white-space: normal; }
 .vmm-profile-counts [data-slot="card-header"] { padding-bottom: 0; }
+/* Base compact numeric rows on the editor width, including narrow split panes. */
+/* 按编辑器实际宽度排列紧凑数值行，兼顾窄分栏正文。 */
+.vmm-profile-policy-editor { container: profile-policy / inline-size; }
+.vmm-profile-lifetime-fields { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); align-items: end; gap: 10px; border: 0; border-top: 1px solid var(--border); padding: 12px 0 0; }
+@container profile-policy (min-width: 280px) {
+  .vmm-profile-lifetime-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 .vmm-profile-counts [data-slot="card-content"] { display: flex; flex-wrap: wrap; gap: 16px; }
 .vmm-profile-counts [data-slot="card-content"] > div { border: 0; background: transparent; padding: 0; display: flex; gap: 8px; align-items: baseline; }
 .vmm-profile-counts [data-slot="card-content"] > div > p { margin: 0; font-size: 13px; }
 .vmm-profile-list { display: flex; flex-direction: column; gap: 0; }
 .vmm-profile-list > [data-slot="card"] { border-radius: 0; border-width: 0 0 1px; }
 .vmm-profile-list [data-slot="card-content"] { padding: 18px 4px; }
-.vmm-profile-target { border: 0 !important; gap: 0; }
-.vmm-profile-target [data-slot="card-header"] { display: none; }
-.vmm-profile-target [data-slot="card-content"] { padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
-.vmm-profile-target [data-slot="card-content"] > * { margin: 0; }
+/* Target selection is a compact form section, with readable picker width independent of identity text. */
+/* 目标选择是紧凑表单分区，选择器的可读宽度独立于身份文本。 */
+.vmm-profile-target { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 12px; border-bottom: 1px solid var(--border); }
+.vmm-profile-picker { flex: 1 1 280px; min-width: min(100%, 240px); max-width: 480px; }
+.vmm-profile-identity { flex: 1 1 240px; }
+.vmm-profile-target-description { flex-basis: 100%; }
 .vmm-search-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 18px; }
 .vmm-search-workspace > * { min-width: 0; }
 .vmm-search-detail { position: sticky; top: 0; }
 .vmm-project-workspace { display: grid; grid-template-columns: minmax(160px, .65fr) minmax(0, 2fr); gap: 18px; align-items: start; }
 .vmm-project-list { display: flex; flex-direction: column; gap: 5px; }
+.vmm-project-directory { min-width: 0; }
+.vmm-project-directory-expanded { display: flex; flex-direction: column; gap: 10px; }
+.vmm-project-picker { display: none; }
+.vmm-project-directory .vmm-project-list { max-height: 520px; overflow-y: auto; }
+.vmm-project-directory .vmm-project-list button { display: flex; justify-content: space-between; gap: 8px; height: auto; white-space: normal; }
+.vmm-directory-filters { display: flex; flex-wrap: wrap; gap: 2px; }
+.vmm-linked-project-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
 .vmm-project-list button { text-align: left; padding: 10px 12px; border-radius: 6px; overflow-wrap: anywhere; }
 .vmm-project-list button[aria-pressed="true"] { background: var(--accent); font-weight: 600; }
 .vmm-resource-workspace { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); gap: 18px; align-items: start; }
@@ -109,7 +128,9 @@
 @container memory-body (max-width: 840px) {
   .vmm-session-workspace.has-selection { grid-template-columns: minmax(0, 1fr); }
   .vmm-project-workspace, .vmm-resource-workspace, .vmm-search-workspace { grid-template-columns: minmax(0, 1fr); }
-  .vmm-project-list, .vmm-resource-files { flex-direction: row; flex-wrap: wrap; }
+  .vmm-project-directory-expanded { display: none; }
+  .vmm-project-picker { display: block; }
+  .vmm-resource-files { flex-direction: row; flex-wrap: wrap; }
   .vmm-resource-file-groups { max-height: 240px; }
 }
 @container memory-inference (max-width: 680px) {

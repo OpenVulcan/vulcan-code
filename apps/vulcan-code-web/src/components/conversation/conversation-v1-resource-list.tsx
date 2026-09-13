@@ -182,16 +182,22 @@ function ConversationV1AvailableResource(props: ConversationV1AvailableResourceP
       >
         <strong>{props.summary.original_name}</strong>
         <span>内容服务不可用</span>
+        <details>
+          <summary>错误详情</summary>
+          <pre>{error instanceof Error ? error.message : String(error)}</pre>
+        </details>
       </li>
     );
   }
   let previewUrl: string | null = null;
-  let previewUnavailable = false;
+  // previewError retains the original resolver failure for keyboard-accessible inspection.
+  // previewError 保留解析器原始失败，以便通过键盘查看。
+  let previewError: string | null = null;
   if (props.previewSummary !== undefined) {
     try {
       previewUrl = props.catalog.contentUrl(props.previewSummary.resource_id);
-    } catch {
-      previewUnavailable = true;
+    } catch (error) {
+      previewError = error instanceof Error ? error.message : String(error);
     }
   }
   const rasterPreview = props.summary.mime?.startsWith("image/") === true
@@ -207,7 +213,7 @@ function ConversationV1AvailableResource(props: ConversationV1AvailableResourceP
     <li
       className="conversation-v1-resource conversation-v1-resource-available"
       data-generated-resource-kind={props.generatedKind}
-      data-preview-resource-missing={props.previewMissing || previewUnavailable || undefined}
+      data-preview-resource-missing={props.previewMissing || previewError !== null || undefined}
     >
       {generatedMedia}
       <a href={contentUrl} rel="noreferrer" target="_blank">
@@ -217,9 +223,15 @@ function ConversationV1AvailableResource(props: ConversationV1AvailableResourceP
         <span>
           <strong>{props.summary.original_name}</strong>
           <small>{resourceDescription(props.summary)}</small>
-          {props.previewMissing || previewUnavailable ? <small>预览资源不可用</small> : null}
+          {props.previewMissing || previewError !== null ? <small>预览资源不可用</small> : null}
         </span>
       </a>
+      {previewError !== null ? (
+        <details>
+          <summary>错误详情</summary>
+          <pre>{previewError}</pre>
+        </details>
+      ) : null}
     </li>
   );
 }
@@ -253,10 +265,10 @@ function generatedResourceMedia(
     return <img alt={altText} loading="lazy" src={contentUrl} />;
   }
   if (kind === "video") {
-    return <video controls preload="metadata" src={contentUrl} />;
+    return <video aria-label={altText} controls preload="metadata" src={contentUrl} />;
   }
   if (kind === "audio") {
-    return <audio controls preload="metadata" src={contentUrl} />;
+    return <audio aria-label={altText} controls preload="metadata" src={contentUrl} />;
   }
   return null;
 }

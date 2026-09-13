@@ -654,6 +654,9 @@ pub struct VmmConfigDraftSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmProjectScopeSummary {
+    /// Resolved memory enablement for new conversations in this exact host project.
+    /// 当前准确宿主项目中新会话的已解析记忆启用状态。
+    pub memory_enabled: bool,
     /// Stable task project id.
     /// 稳定任务项目标识。
     pub project_id: String,

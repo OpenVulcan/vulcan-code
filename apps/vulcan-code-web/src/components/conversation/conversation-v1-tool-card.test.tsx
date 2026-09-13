@@ -435,9 +435,9 @@ describe("ConversationV1ToolCard", () => {
     );
 
     expect(missingMarkup).toContain("terminal: terminal-1");
-    expect(missingMarkup).toContain("disabled");
+    expect(missingMarkup).toContain('class="v1-tool-card-navigation-button" disabled=""');
     expect(availableMarkup).toContain("terminal: terminal-1");
-    expect(availableMarkup).not.toContain("disabled");
+    expect(availableMarkup).not.toContain('class="v1-tool-card-navigation-button" disabled=""');
   });
 
   it("renders ask, dynamic subagent, and terminal events through the same persisted card shell", () => {
@@ -448,7 +448,7 @@ describe("ConversationV1ToolCard", () => {
             seq: 301,
             toolName: "ask",
             input: { questions: [{ header: "范围", question: "继续执行吗？", options: [] }] },
-            output: { host_result: { kind: "ask_question", payload: { answers: [["继续"]] } } },
+            output: { model_output: "## User Answers", host_result: { kind: "ask", payload: { tool_name: "ask", headers: ["范围"], answers: [["继续"]], display: { kind: "ask_question", questions: [{ header: "范围", question: "继续执行吗？", options: [], multiple: false, answers: ["继续"], answered: true }] } } } },
           })}
         />
       </I18nProvider>,
@@ -484,7 +484,7 @@ describe("ConversationV1ToolCard", () => {
     for (const markup of [askMarkup, terminalMarkup]) {
       expect(markup).toContain("tool-presentation-card v1-tool-card");
     }
-    expect(askMarkup).toContain("ask");
+    expect(askMarkup).toContain("向用户提问");
     expect(subagentMarkup).toContain("tool-presentation-card subagent-orchestration");
     expect(subagentMarkup).toContain("review-agent");
     expect(terminalMarkup).toContain('data-tool-detail="true"');

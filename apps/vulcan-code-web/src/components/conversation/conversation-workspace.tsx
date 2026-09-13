@@ -1,4 +1,5 @@
 import React from "react";
+import { runConversationControlAction } from "./conversation-control-feedback";
 import {
   GeneratedMediaPlayerWindow,
   type GeneratedMediaAttachment,
@@ -435,7 +436,10 @@ export function ConversationWorkspace(props: {
     if (!conversationId || !element || props.historyLoading) {
       return;
     }
-    await props.onPreserveHistoryPrepend(() => props.onLoadMoreHistory(conversationId));
+    await runConversationControlAction(
+      () => props.onPreserveHistoryPrepend(() => props.onLoadMoreHistory(conversationId)),
+      t("conversation.control.actionFailed"),
+    );
   }, [
     props.conversation?.id,
     props.historyLoading,
@@ -443,6 +447,7 @@ export function ConversationWorkspace(props: {
     props.onPreserveHistoryPrepend,
     props.parentConversationId,
     props.scrollRef,
+    t,
   ]);
 
   // commandSessionsRef supplies current runtime truth without invalidating unrelated historical Seats.

@@ -1,4 +1,5 @@
 import React from "react";
+import { toast } from "sonner";
 import { Check, ChevronDown, ChevronUp, Columns2, Copy, Diff, GitBranch, GitCommitHorizontal, GitCompareArrows, ListCollapse, LoaderCircle, MoreHorizontal, RefreshCw, Rows3, Search, SquarePlus, WrapText } from "lucide-react";
 
 import {
@@ -68,7 +69,7 @@ export function DiffPanelToolbar(props: {
   onRefresh?: () => void | Promise<void>;
   // Optional copy action receiving raw diff text.
   // 接收原始 diff 文本的可选复制动作。
-  onCopyRaw?: (rawDiff: string) => void;
+  onCopyRaw?: (rawDiff: string) => void | Promise<void>;
   // Current diff search query.
   // 当前 diff 搜索查询。
   searchQuery?: string;
@@ -259,14 +260,28 @@ function DiffMoreMenu(props: {
   rawDiff: string;
   // Optional copy action receiving raw diff text.
   // 接收原始 diff 文本的可选复制动作。
-  onCopyRaw?: (rawDiff: string) => void;
+  onCopyRaw?: (rawDiff: string) => void | Promise<void>;
   // Preference change handler.
   // 偏好变更处理器。
   onPreferencesChange: (preferences: DiffRenderPreferences) => void;
 }) {
   const { t } = useI18n();
-  const copyRawDiff = React.useCallback(() => {
-    props.onCopyRaw?.(props.rawDiff);
+  // Keep clipboard failures inside the initiating menu and prevent overlapping copies.
+  // 将剪贴板错误留在发起操作的菜单边界，并防止复制重叠。
+  const copyingRef = React.useRef(false);
+  const [copying, setCopying] = React.useState(false);
+  const copyRawDiff = React.useCallback(async () => {
+    if (!props.onCopyRaw || copyingRef.current) return;
+    copyingRef.current = true;
+    setCopying(true);
+    try {
+      await props.onCopyRaw(props.rawDiff);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      copyingRef.current = false;
+      setCopying(false);
+    }
   }, [props]);
   const toggleInlineDiff = React.useCallback(() => {
     props.onPreferencesChange({ ...props.preferences, inlineDiff: !props.preferences.inlineDiff });
@@ -299,7 +314,7 @@ function DiffMoreMenu(props: {
       <DropdownMenuContent align="end" className="diff-style-menu" sideOffset={4}>
         {props.onCopyRaw ? (
           <>
-            <DropdownMenuItem className="diff-style-toggle-item" onSelect={copyRawDiff}>
+            <DropdownMenuItem className="diff-style-toggle-item" disabled={copying} onSelect={() => void copyRawDiff()}>
               <Copy size={13} />
               <span>{t("diff.copyRaw")}</span>
             </DropdownMenuItem>
@@ -361,6 +376,9 @@ function DiffSearchControl(props: {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+  // Restore keyboard focus when Escape removes the transient search input.
+  // Escape 移除临时搜索输入时还原键盘焦点。
+  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
   React.useEffect(() => {
     if (!open || typeof window === "undefined") {
       return undefined;
@@ -375,10 +393,13 @@ function DiffSearchControl(props: {
   }, []);
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
       setOpen(false);
+      triggerRef.current?.focus();
       return;
     }
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && event.target === inputRef.current) {
       event.preventDefault();
       if (event.shiftKey) {
         props.onPrevious?.();
@@ -394,6 +415,7 @@ function DiffSearchControl(props: {
         aria-label={t("diff.search.open")}
         className={`diff-icon-button diff-search-toggle${props.query ? " active" : ""}`}
         onClick={() => setOpen((current) => !current)}
+        ref={triggerRef}
         title={t("diff.search.label")}
         type="button"
       >

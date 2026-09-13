@@ -37,6 +37,8 @@ function Command({
 
 // CommandDialog presents a command collection inside the shared dialog shell.
 // CommandDialog 在共享对话框容器中展示命令集合。
+// Parameters: props provide controlled dialog state and accessible text. Returns: a centered command surface with owned labels.
+// 参数：props 提供受控弹窗状态及无障碍文本。返回值：持有自身标签的居中命令表面。
 function CommandDialog({
   title = "Command Palette",
   description = "Search for a command to run...",
@@ -52,17 +54,19 @@ function CommandDialog({
 }) {
   return (
     <Dialog {...props}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
       <DialogContent
         className={cn(
-          "top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
+          "grid-rows-[minmax(0,1fr)] gap-0 overflow-hidden rounded-xl! p-0",
+          showCloseButton && "[&_[data-slot=command-input-wrapper]]:pr-10",
           className
         )}
+        scrollMode="content-scroll"
         showCloseButton={showCloseButton}
       >
+        <DialogHeader className="sr-only">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
         {children}
       </DialogContent>
     </Dialog>

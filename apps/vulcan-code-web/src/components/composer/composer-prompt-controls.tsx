@@ -3,6 +3,7 @@ import {
   closestCenter,
   DndContext,
   PointerSensor,
+  KeyboardSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -10,6 +11,7 @@ import {
 import {
   arrayMove,
   SortableContext,
+  sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
@@ -35,6 +37,8 @@ import { useVerticalSortableItem } from "./composer-sortable";
 
 // PendingPromptQueueStrip renders the service-backed visible send queue above the composer.
 // PendingPromptQueueStrip 渲染输入区上方由服务端持久化的可见发送队列。
+// Parameters: props supplies durable queued prompts and queue callbacks; returns sortable rows with pointer and keyboard reordering.
+// 参数：props 提供持久化排队提示词与队列回调；返回支持指针和键盘排序的行。
 export function PendingPromptQueueStrip(props: {
   // Queue entries returned by the selected conversation snapshot.
   // 当前选中会话快照返回的队列条目。
@@ -63,7 +67,10 @@ export function PendingPromptQueueStrip(props: {
   const { t } = useI18n();
   // sensors keeps accidental clicks from turning into drag operations.
   // sensors 防止普通点击误触发拖拽。
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   // entryIds is the stable dnd item list derived from the backend queue.
   // entryIds 是从后端队列派生出的稳定拖拽条目列表。
   const entryIds = React.useMemo(() => props.entries.map((entry) => entry.id), [props.entries]);

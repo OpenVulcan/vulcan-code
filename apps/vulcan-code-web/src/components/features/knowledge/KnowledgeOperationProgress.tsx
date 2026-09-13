@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useI18n } from "@/i18n";
 import { Activity, Braces, Database, Gauge, LoaderCircle, Server, Sparkles } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
@@ -25,6 +26,8 @@ const EMPTY_OBSERVABILITY: KnowledgeOperationObservability = {
 
 // KnowledgeOperationProgress renders a compact, refresh-safe streaming operation panel.
 // KnowledgeOperationProgress 渲染紧凑且可刷新恢复的流式操作面板。
+// Parameters: props supplies the authoritative operation snapshot; returns measured progress, known/unknown usage and live request/output details.
+// 参数：props 提供权威操作快照；返回实测进度、已知或未知用量及实时请求和输出详情。
 export function KnowledgeOperationProgress(props: {
   // Durable operation snapshot returned by the service.
   // 服务返回的持久化操作快照。
@@ -39,6 +42,7 @@ export function KnowledgeOperationProgress(props: {
   // 命令路径记录的终态结果。
   outcome: "completed" | "cancelled" | "failed" | null;
 }) {
+  const { t } = useI18n();
   const job = props.job;
   const observability = job?.observability ?? EMPTY_OBSERVABILITY;
   const currentRequest = observability.currentRequest;
@@ -47,16 +51,16 @@ export function KnowledgeOperationProgress(props: {
   const processed = isImport ? job?.processedFiles ?? 0 : job?.processedIndexItems ?? 0;
   const percent = total > 0 ? Math.min(100, Math.max(0, Math.round((processed / total) * 100))) : null;
   const status = props.cancelRequested
-    ? "正在请求取消"
+    ? t("knowledge.experience.cancelling")
     : props.outcome === "failed"
-      ? "操作失败"
+      ? t("knowledge.experience.failed")
       : props.outcome === "cancelled"
-        ? "操作已取消"
+        ? t("knowledge.experience.cancelled")
         : props.outcome === "completed"
-          ? "操作完成"
+          ? t("knowledge.experience.completed")
           : props.running
-            ? "正在执行"
-            : "等待操作";
+            ? t("knowledge.experience.running")
+            : t("knowledge.experience.waiting");
 
   return (
     <div className="knowledge-operation-progress">
@@ -66,7 +70,7 @@ export function KnowledgeOperationProgress(props: {
           <span>{job?.phase ?? "queued"}</span>
         </div>
         <span className="knowledge-operation-progress-percent">
-          {percent === null ? "处理中" : `${percent}%`}
+          {percent === null ? t("knowledge.experience.processing") : `${percent}%`}
         </span>
       </div>
 
@@ -78,50 +82,50 @@ export function KnowledgeOperationProgress(props: {
         className={`knowledge-operation-progress-bar${percent === null && props.running ? " indeterminate" : ""}`}
         role="progressbar"
       >
-        <span style={{ width: `${percent ?? 38}%` }} />
+        <span style={{ width: `${percent ?? (props.running ? 38 : 0)}%` }} />
       </div>
 
       <div className="knowledge-operation-progress-meta">
-        <span>{processed} / {total || "?"} 项</span>
+        <span>{t("knowledge.experience.items").replace("{done}", String(processed)).replace("{total}", total ? String(total) : "?")}</span>
         <span>{job?.processedBytes ?? 0} bytes</span>
       </div>
 
       <div className="knowledge-operation-stat-grid">
-        <OperationStat icon={<Sparkles size={14} />} label="LLM 请求" value={observability.llmRequestCount} detail={`重试 ${observability.llmRetryCount}`} />
-        <OperationStat icon={<Database size={14} />} label="向量请求" value={observability.embeddingRequestCount} detail={`生成 ${observability.generatedVectorCount}`} />
-        <OperationStat icon={<Gauge size={14} />} label="输入 Token" value={formatCount(observability.inputTokens)} detail="累计" />
-        <OperationStat icon={<Activity size={14} />} label="输出 Token" value={formatCount(observability.outputTokens)} detail="累计" />
-        <OperationStat icon={<Server size={14} />} label="缓存读 / 写" value={`${formatCount(observability.cacheReadTokens)} / ${formatCount(observability.cacheWriteTokens)}`} detail="累计" />
+        <OperationStat icon={<Sparkles size={14} />} label={t("knowledge.experience.llmRequests")} value={observability.llmRequestCount} detail={t("knowledge.experience.retries").replace("{count}", String(observability.llmRetryCount))} />
+        <OperationStat icon={<Database size={14} />} label={t("knowledge.experience.embeddingRequests")} value={observability.embeddingRequestCount} detail={t("knowledge.experience.generated").replace("{count}", String(observability.generatedVectorCount))} />
+        <OperationStat icon={<Gauge size={14} />} label={t("knowledge.experience.inputTokens")} value={formatCount(observability.inputTokens, t("knowledge.experience.unknown"))} detail={t("knowledge.experience.cumulative")} />
+        <OperationStat icon={<Activity size={14} />} label={t("knowledge.experience.outputTokens")} value={formatCount(observability.outputTokens, t("knowledge.experience.unknown"))} detail={t("knowledge.experience.cumulative")} />
+        <OperationStat icon={<Server size={14} />} label={t("knowledge.experience.cacheTokens")} value={`${formatCount(observability.cacheReadTokens, t("knowledge.experience.unknown"))} / ${formatCount(observability.cacheWriteTokens, t("knowledge.experience.unknown"))}`} detail={t("knowledge.experience.cumulative")} />
       </div>
 
       <section className="knowledge-operation-live">
         <div className="knowledge-operation-section-title">
-          <span><Braces size={14} /> 当前请求</span>
-          {currentRequest ? <span>{currentRequest.provider} / {currentRequest.model}</span> : <span>尚未发起请求</span>}
+          <span><Braces size={14} /> {t("knowledge.experience.currentRequest")}</span>
+          {currentRequest ? <span>{currentRequest.provider} / {currentRequest.model}</span> : <span>{t("knowledge.experience.noRequest")}</span>}
         </div>
         {currentRequest ? (
           <div className="knowledge-operation-request-meta">
             <span>{currentRequest.phase} · {currentRequest.protocol || "provider"}</span>
-            <span>{currentRequest.status} · 输入 {formatCount(currentRequest.inputTokens)} / 输出 {formatCount(currentRequest.outputTokens)}</span>
+            <span>{currentRequest.status} · {t("knowledge.experience.requestTokens").replace("{input}", formatCount(currentRequest.inputTokens, t("knowledge.experience.unknown"))).replace("{output}", formatCount(currentRequest.outputTokens, t("knowledge.experience.unknown")))}</span>
           </div>
         ) : (
-          <div className="knowledge-operation-empty">文件扫描或索引准备阶段，暂时没有 LLM 流输出。</div>
+          <div className="knowledge-operation-empty">{t("knowledge.experience.preparing")}</div>
         )}
       </section>
 
       {currentRequest ? (
         <div className="knowledge-operation-stream">
-          <MarkdownMessage key={currentRequest.requestId} content={currentRequest.outputMarkdown || "```json\n等待 JSON 流输出…\n```"} defaultCodeWrap eager streaming={props.running} />
+          <MarkdownMessage key={currentRequest.requestId} content={currentRequest.outputMarkdown || t("knowledge.experience.waitingStream")} defaultCodeWrap eager streaming={props.running} />
         </div>
       ) : null}
 
       <section className="knowledge-operation-history">
         <div className="knowledge-operation-section-title">
-          <span><LoaderCircle size={14} /> 最近请求（最多 3 条）</span>
+          <span><LoaderCircle size={14} /> {t("knowledge.experience.recentRequests")}</span>
           <span>{currentRequest?.label ?? ""}</span>
         </div>
         {observability.recentRequests.length === 0 ? (
-          <div className="knowledge-operation-empty">暂无已完成请求记录。</div>
+          <div className="knowledge-operation-empty">{t("knowledge.experience.noHistory")}</div>
         ) : (
           <div className="knowledge-operation-history-list">
             {observability.recentRequests.map((request) => <RecentRequestRow key={`${request.requestId}-${request.durationMs ?? 0}`} request={request} />)}
@@ -129,7 +133,7 @@ export function KnowledgeOperationProgress(props: {
         )}
       </section>
 
-      {job?.currentFile ? <div className="knowledge-operation-current-file">当前文件：<code>{job.currentFile}</code></div> : null}
+      {job?.currentFile ? <div className="knowledge-operation-current-file">{t("knowledge.experience.currentFile")}<code>{job.currentFile}</code></div> : null}
     </div>
   );
 }
@@ -162,6 +166,8 @@ function RecentRequestRow(props: { request: KnowledgeOperationRequestSummary }) 
 
 // formatCount keeps unknown provider usage explicit instead of pretending it is zero.
 // formatCount 明确展示供应商未提供的用量，而不是伪装成零。
-function formatCount(value: number | null | undefined): string {
-  return value == null ? "未提供" : value.toLocaleString();
+// Parameters: value is optional measured usage and unknownLabel is explicit missing-data copy; returns formatted known usage or that unknown label.
+// 参数：value 是可选实测用量，unknownLabel 是明确的缺失文案；返回已知用量格式化结果或该未知标签。
+function formatCount(value: number | null | undefined, unknownLabel: string): string {
+  return value == null ? unknownLabel : value.toLocaleString();
 }

@@ -1,5 +1,5 @@
 import { Palette, Sparkles } from "lucide-react"
-import { useState, type CSSProperties, type ReactNode } from "react"
+import { useRef, useState, type CSSProperties, type ReactNode, type MouseEvent, type KeyboardEvent } from "react"
 
 import { UsagePanel, type UsagePanelViewModel } from "@/components/product/usage"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -192,6 +192,8 @@ function VisualTokenSwatch(props: VisualTokenSwatchProps) {
 
 // VisualLabSettingsArea renders the first visible acceptance surface for the unified UI system.
 // VisualLabSettingsArea 渲染统一 UI 体系首个可见的验收页面。
+// Parameters: none; reads locale from context. Returns interactive local-only component samples and explicitly synthetic status data.
+// 参数：无，从上下文读取语言。返回仅作用于本页的交互组件样本与明确合成的状态数据。
 export function VisualLabSettingsArea() {
   // locale selects bilingual preview copy without introducing product state.
   // locale 仅用于选择双语预览文案，不引入产品状态。
@@ -205,6 +207,43 @@ export function VisualLabSettingsArea() {
   // labFilter stores the interactive filter-chip example without affecting product data.
   // labFilter 保存交互式筛选标签示例，不影响产品数据。
   const [labFilter, setLabFilter] = useState<"all" | "active" | "issues">("all")
+  // previewAction records local demo feedback without invoking product services.
+  // previewAction 记录本地演示反馈，不调用产品服务。
+  const [lastAction, setLastAction] = useState<string | null>(null)
+  // Parameters: event identifies the activated demo control; records its accessible label and returns no value, without invoking product services.
+  // 参数：event 标识被触发的演示控件；记录其可访问标签，不返回值，也不调用产品服务。
+  const previewAction = (event: MouseEvent<HTMLElement>) => setLastAction(event.currentTarget.getAttribute("aria-label") ?? event.currentTarget.textContent ?? "")
+  // Menu selections are controlled because Radix menu items do not own checked state.
+  // 菜单选择采用受控状态，因为 Radix 菜单项不持有勾选状态。
+  const [showActivity, setShowActivity] = useState(true)
+  const [pinned, setPinned] = useState(true)
+  const [menuDensity, setMenuDensity] = useState("balanced")
+  // Local navigation demonstrates selection without pretending to change application routes.
+  // 本地导航演示选中状态，不冒充应用路由切换。
+  const [navigationSample, setNavigationSample] = useState("current")
+  const [treeSample, setTreeSample] = useState(1)
+  // modalTrigger preserves the actual launcher for controlled modal focus restoration.
+  // modalTrigger 保留实际启动按钮，用于受控模态关闭后的焦点恢复。
+  const modalTrigger = useRef<HTMLButtonElement | null>(null)
+  // Parameters: kind selects the demo modal and event identifies its real launcher; records focus ownership, opens the modal and returns no value.
+  // 参数：kind 选择演示模态，event 标识实际启动者；记录焦点归属并打开模态，不返回值。
+  const openPreview = (kind: "dialog" | "alert" | "sheet", event: MouseEvent<HTMLButtonElement>) => {
+    modalTrigger.current = event.currentTarget
+    setDialogPreview(kind)
+  }
+  // Parameters: event is the primitive close-autofocus event; prevents default restoration, focuses the saved launcher and returns no value.
+  // 参数：event 是原语关闭自动聚焦事件；阻止默认恢复并聚焦已保存启动者，不返回值。
+  const restoreModalFocus = (event: Event) => { event.preventDefault(); modalTrigger.current?.focus() }
+  // openContextMenuKeyboard exposes the same native context-menu event to focused keyboard users.
+  // openContextMenuKeyboard 向已聚焦的键盘用户提供同一个原生上下文菜单事件。
+  // Parameters: event is the focused trigger key event; recognized menu keys dispatch the native context-menu event and return no value.
+  // 参数：event 是已聚焦触发器的键盘事件；识别菜单按键后派发原生上下文菜单事件，不返回值。
+  const openContextMenuKeyboard = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    event.currentTarget.dispatchEvent(new window.MouseEvent("contextmenu", { bubbles: true, clientX: rect.left + 8, clientY: rect.top + 8 }))
+  }
   // usagePanelSamples defines fixed state fixtures without connecting the lab to product services.
   // usagePanelSamples 定义固定状态样本，且不把视觉实验室连接到产品服务。
   const usagePanelSamples: UsagePanelViewModel[] = [
@@ -252,10 +291,11 @@ export function VisualLabSettingsArea() {
         <h2>{text("视觉实验室", "Visual Lab")}</h2>
         <p>
           {text(
-            "这里只展示真实组件和统一语义变量。后续每次可见调整都在这里提供固定对照，不再要求验收没有发生的变化。",
-            "This surface renders real components and semantic tokens. Every visible adjustment will provide a stable comparison here.",
+            "这里使用真实组件展示合成样本。所有数字、错误、加载与进度都是演示数据；操作和选择仅影响本页，不会保存配置、复制链接或删除项目。",
+            "Real components display synthetic samples here. All numbers, errors, loading and progress are demo data. Actions and selections affect this page only; they do not save settings, copy links or delete projects.",
           )}
         </p>
+        <p role="status" className="break-words">{lastAction ? `${text("已演示", "Demo action")}: ${lastAction}` : text("请选择任意示例检查交互状态。", "Choose an example to review its interaction state.")}</p>
       </header>
 
       <div className="visual-lab-grid">
@@ -274,21 +314,21 @@ export function VisualLabSettingsArea() {
         >
           <div className="visual-lab-stack">
             <div className="visual-lab-row">
-              <Button>{text("主要操作", "Primary")}</Button>
-              <Button variant="secondary">{text("次要操作", "Secondary")}</Button>
-              <Button variant="outline">{text("描边操作", "Outline")}</Button>
-              <Button variant="ghost">{text("弱操作", "Ghost")}</Button>
-              <Button variant="destructive">{text("危险操作", "Danger")}</Button>
+              <Button onClick={previewAction}>{text("主要操作", "Primary")}</Button>
+              <Button onClick={previewAction} variant="secondary">{text("次要操作", "Secondary")}</Button>
+              <Button onClick={previewAction} variant="outline">{text("描边操作", "Outline")}</Button>
+              <Button onClick={previewAction} variant="ghost">{text("弱操作", "Ghost")}</Button>
+              <Button onClick={previewAction} variant="destructive">{text("危险操作", "Danger")}</Button>
             </div>
             <div className="visual-lab-row">
-              <Button size="xs">XS</Button>
-              <Button size="sm">SM</Button>
-              <Button size="default">MD</Button>
-              <Button size="lg">LG</Button>
+              <Button onClick={previewAction} size="xs">XS</Button>
+              <Button onClick={previewAction} size="sm">SM</Button>
+              <Button onClick={previewAction} size="default">MD</Button>
+              <Button onClick={previewAction} size="lg">LG</Button>
               <Button disabled>{text("禁用", "Disabled")}</Button>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <IconButton aria-label={text("提示示例", "Tooltip example")}>
+                  <IconButton onClick={previewAction} aria-label={text("提示示例", "Tooltip example")}>
                     <Sparkles />
                   </IconButton>
                 </TooltipTrigger>
@@ -296,11 +336,11 @@ export function VisualLabSettingsArea() {
               </Tooltip>
             </div>
             <div className="visual-lab-row">
-              <IconButton aria-label={text("超小图标按钮", "Extra-small icon button")} size="xs"><Sparkles /></IconButton>
-              <IconButton aria-label={text("小图标按钮", "Small icon button")} size="sm"><Sparkles /></IconButton>
-              <IconButton aria-label={text("中图标按钮", "Medium icon button")} size="md"><Sparkles /></IconButton>
-              <IconButton aria-label={text("大图标按钮", "Large icon button")} size="lg"><Sparkles /></IconButton>
-              <IconButton aria-label={text("危险图标按钮", "Destructive icon button")} variant="destructive"><Sparkles /></IconButton>
+              <IconButton onClick={previewAction} aria-label={text("超小图标按钮", "Extra-small icon button")} size="xs"><Sparkles /></IconButton>
+              <IconButton onClick={previewAction} aria-label={text("小图标按钮", "Small icon button")} size="sm"><Sparkles /></IconButton>
+              <IconButton onClick={previewAction} aria-label={text("中图标按钮", "Medium icon button")} size="md"><Sparkles /></IconButton>
+              <IconButton onClick={previewAction} aria-label={text("大图标按钮", "Large icon button")} size="lg"><Sparkles /></IconButton>
+              <IconButton onClick={previewAction} aria-label={text("危险图标按钮", "Destructive icon button")} variant="destructive"><Sparkles /></IconButton>
               <IconButton aria-label={text("禁用图标按钮", "Disabled icon button")} disabled><Sparkles /></IconButton>
             </div>
             <div className="visual-lab-row">
@@ -308,7 +348,7 @@ export function VisualLabSettingsArea() {
               <Badge variant="secondary">{text("次要", "Secondary")}</Badge>
               <Badge variant="outline">{text("描边", "Outline")}</Badge>
               <Badge variant="destructive">{text("危险", "Danger")}</Badge>
-              <Spinner />
+              <Spinner aria-label={text("加载演示", "Loading demo")} />
             </div>
           </div>
         </VisualLabSection>
@@ -330,15 +370,15 @@ export function VisualLabSettingsArea() {
             </div>
             <Field data-invalid="true">
               <FieldLabel htmlFor="visual-lab-invalid-input">{text("错误状态", "Invalid state")}</FieldLabel>
-              <Input aria-invalid="true" defaultValue={text("无效内容", "Invalid value")} id="visual-lab-invalid-input" />
-              <FieldError>{text("这里显示统一的字段错误信息。", "A unified field error appears here.")}</FieldError>
+              <Input aria-invalid="true" aria-describedby="visual-lab-input-error" defaultValue={text("无效内容", "Invalid value")} id="visual-lab-invalid-input" />
+              <FieldError id="visual-lab-input-error">{text("这里显示统一的字段错误信息。", "A unified field error appears here.")}</FieldError>
             </Field>
             <Field>
               <FieldLabel htmlFor="visual-lab-textarea">{text("多行输入", "Multiline input")}</FieldLabel>
               <Textarea defaultValue={text("用于检查字体、边框、内边距和换行。", "Checks typography, borders, padding, and wrapping.")} id="visual-lab-textarea" />
             </Field>
             <Select defaultValue="balanced">
-              <SelectTrigger>
+              <SelectTrigger aria-label={text("选择密度", "Select density")}>
                 <SelectValue placeholder={text("选择密度", "Select density")} />
               </SelectTrigger>
               <SelectContent>
@@ -357,7 +397,7 @@ export function VisualLabSettingsArea() {
                 {text("开关", "Switch")}
               </label>
             </div>
-            <RadioGroup defaultValue="standard">
+            <RadioGroup aria-label={text("演示模式", "Demo mode")} defaultValue="standard">
               <label className="visual-lab-choice-line">
                 <RadioGroupItem value="standard" />
                 {text("标准模式", "Standard mode")}
@@ -390,7 +430,9 @@ export function VisualLabSettingsArea() {
                 <CardDescription>{text("用于密集设置区域", "For dense settings surfaces")}</CardDescription>
               </CardHeader>
             </Card>
-            <Card variant="interactive">
+            <Card variant="interactive" tabIndex={0} role="button" onClick={previewAction} onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.currentTarget.click() }
+            }}>
               <CardHeader>
                 <CardTitle>{text("可交互卡片", "Interactive card")}</CardTitle>
                 <CardDescription>{text("悬停与键盘聚焦来自统一表面状态。", "Hover and keyboard focus come from the shared surface state.")}</CardDescription>
@@ -441,12 +483,12 @@ export function VisualLabSettingsArea() {
           title={text("模态表面", "Modal surfaces")}
         >
           <div className="visual-lab-row">
-            <Button onClick={() => setDialogPreview("dialog")} variant="outline">{text("普通弹窗", "Dialog")}</Button>
-            <Button onClick={() => setDialogPreview("alert")} variant="outline">{text("确认弹窗", "Confirmation")}</Button>
-            <Button onClick={() => setDialogPreview("sheet")} variant="outline">{text("侧边抽屉", "Sheet")}</Button>
+            <Button onClick={(event) => openPreview("dialog", event)} variant="outline">{text("普通弹窗", "Dialog")}</Button>
+            <Button onClick={(event) => openPreview("alert", event)} variant="outline">{text("确认弹窗", "Confirmation")}</Button>
+            <Button onClick={(event) => openPreview("sheet", event)} variant="outline">{text("侧边抽屉", "Sheet")}</Button>
           </div>
           <Dialog open={dialogPreview === "dialog"} onOpenChange={(open) => setDialogPreview(open ? "dialog" : null)}>
-            <DialogContent size="md">
+            <DialogContent size="md" onCloseAutoFocus={restoreModalFocus}>
               <DialogHeader>
                 <DialogTitle>{text("标准表单弹窗", "Standard form dialog")}</DialogTitle>
                 <DialogDescription>{text("检查标题、说明、内容间距、关闭按钮和底部操作区。", "Review title, description, spacing, close action, and footer.")}</DialogDescription>
@@ -457,31 +499,31 @@ export function VisualLabSettingsArea() {
               </Field>
               <DialogFooter>
                 <Button onClick={() => setDialogPreview(null)} variant="outline">{text("取消", "Cancel")}</Button>
-                <Button onClick={() => setDialogPreview(null)}>{text("保存", "Save")}</Button>
+                <Button onClick={(event) => { previewAction(event); setDialogPreview(null) }}>{text("完成演示", "Finish demo")}</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
           <AlertDialog open={dialogPreview === "alert"} onOpenChange={(open) => setDialogPreview(open ? "alert" : null)}>
-            <AlertDialogContent>
+            <AlertDialogContent onCloseAutoFocus={restoreModalFocus}>
               <AlertDialogHeader>
                 <AlertDialogTitle>{text("确认当前操作？", "Confirm this action?")}</AlertDialogTitle>
                 <AlertDialogDescription>{text("确认弹窗只承载需要明确决定的操作。", "Confirmations are reserved for explicit decisions.")}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>{text("取消", "Cancel")}</AlertDialogCancel>
-                <AlertDialogAction>{text("确认", "Confirm")}</AlertDialogAction>
+                <AlertDialogAction onClick={previewAction}>{text("确认演示", "Confirm demo")}</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
           <Sheet open={dialogPreview === "sheet"} onOpenChange={(open) => setDialogPreview(open ? "sheet" : null)}>
-            <SheetContent size="md">
+            <SheetContent size="md" onCloseAutoFocus={restoreModalFocus}>
               <SheetHeader>
                 <SheetTitle>{text("标准侧边抽屉", "Standard side sheet")}</SheetTitle>
                 <SheetDescription>{text("用于需要保留主界面上下文的辅助编辑。", "Used for auxiliary editing that preserves page context.")}</SheetDescription>
               </SheetHeader>
               <div className="px-4 text-sm text-muted-foreground">{text("抽屉内容区域", "Sheet content area")}</div>
               <SheetFooter>
-                <Button onClick={() => setDialogPreview(null)}>{text("完成", "Done")}</Button>
+                <Button onClick={(event) => { previewAction(event); setDialogPreview(null) }}>{text("完成演示", "Finish demo")}</Button>
               </SheetFooter>
             </SheetContent>
           </Sheet>
@@ -505,7 +547,7 @@ export function VisualLabSettingsArea() {
           title={text("导航与反馈", "Navigation and feedback")}
         >
           <div className="visual-lab-stack">
-            <SegmentedControl defaultValue="balanced">
+            <SegmentedControl aria-label={text("密度演示", "Density demo")} defaultValue="balanced">
               <SegmentedControlItem value="compact">{text("紧凑", "Compact")}</SegmentedControlItem>
               <SegmentedControlItem value="balanced">{text("均衡", "Balanced")}</SegmentedControlItem>
               <SegmentedControlItem value="comfortable">{text("宽松", "Comfortable")}</SegmentedControlItem>
@@ -517,14 +559,14 @@ export function VisualLabSettingsArea() {
             </FilterChipGroup>
             <div className="visual-lab-navigation-samples">
               <nav aria-label={text("导航项示例", "Navigation item example")}>
-                <NavItem selected>{text("当前页面", "Current page")}</NavItem>
-                <NavItem>{text("其他页面", "Other page")}</NavItem>
+                <NavItem selected={navigationSample === "current"} onClick={() => setNavigationSample("current")}>{text("当前页面", "Current page")}</NavItem>
+                <NavItem selected={navigationSample === "other"} onClick={() => setNavigationSample("other")}>{text("其他页面", "Other page")}</NavItem>
                 <NavItem disabled>{text("禁用页面", "Disabled page")}</NavItem>
               </nav>
-              <div role="tree" aria-label={text("树节点示例", "Tree row example")}>
-                <TreeRow depth={0}>{text("工作区", "Workspace")}</TreeRow>
-                <TreeRow depth={1} selected>{text("当前项目", "Current project")}</TreeRow>
-                <TreeRow depth={2}>{text("子目录", "Nested folder")}</TreeRow>
+              <div role="group" aria-label={text("层级行外观示例", "Hierarchical row style examples")}>
+                <TreeRow depth={0} role="button" selected={treeSample === 0} aria-pressed={treeSample === 0} onClick={() => setTreeSample(0)}>{text("工作区", "Workspace")}</TreeRow>
+                <TreeRow depth={1} role="button" selected={treeSample === 1} aria-pressed={treeSample === 1} onClick={() => setTreeSample(1)}>{text("当前项目", "Current project")}</TreeRow>
+                <TreeRow depth={2} role="button" selected={treeSample === 2} aria-pressed={treeSample === 2} onClick={() => setTreeSample(2)}>{text("子目录", "Nested folder")}</TreeRow>
               </div>
             </div>
           </div>
@@ -536,7 +578,7 @@ export function VisualLabSettingsArea() {
             <TabsContent value="overview">
               <div className="visual-lab-progress">
                 <span className="visual-lab-caption">{text("处理中 64%", "Processing 64%")}</span>
-                <Progress value={64} />
+                <Progress aria-label={text("演示进度", "Demo progress")} value={64} />
               </div>
             </TabsContent>
             <TabsContent value="details">
@@ -564,8 +606,8 @@ export function VisualLabSettingsArea() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent width="md">
                   <DropdownMenuLabel>{text("显示设置", "Display settings")}</DropdownMenuLabel>
-                  <DropdownMenuCheckboxItem defaultChecked>{text("显示活动状态", "Show activity")}</DropdownMenuCheckboxItem>
-                  <DropdownMenuRadioGroup defaultValue="balanced">
+                  <DropdownMenuCheckboxItem checked={showActivity} onCheckedChange={(checked) => setShowActivity(checked === true)}>{text("显示活动状态", "Show activity")}</DropdownMenuCheckboxItem>
+                  <DropdownMenuRadioGroup value={menuDensity} onValueChange={setMenuDensity}>
                     <DropdownMenuRadioItem value="compact">{text("紧凑密度", "Compact density")}</DropdownMenuRadioItem>
                     <DropdownMenuRadioItem value="balanced">{text("均衡密度", "Balanced density")}</DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
@@ -573,8 +615,8 @@ export function VisualLabSettingsArea() {
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>{text("更多操作", "More actions")}</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent>
-                      <DropdownMenuItem>{text("复制链接", "Copy link")}<DropdownMenuShortcut>Ctrl+C</DropdownMenuShortcut></DropdownMenuItem>
-                      <DropdownMenuItem variant="destructive">{text("删除项目", "Delete project")}</DropdownMenuItem>
+                      <DropdownMenuItem onSelect={(event) => setLastAction((event.currentTarget as HTMLElement).textContent ?? "")}>{text("复制链接", "Copy link")}<DropdownMenuShortcut>Ctrl+C</DropdownMenuShortcut></DropdownMenuItem>
+                      <DropdownMenuItem variant="destructive" onSelect={(event) => setLastAction((event.currentTarget as HTMLElement).textContent ?? "")}>{text("删除项目", "Delete project")}</DropdownMenuItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                 </DropdownMenuContent>
@@ -604,21 +646,21 @@ export function VisualLabSettingsArea() {
             </div>
 
             <ContextMenu>
-              <ContextMenuTrigger className="visual-lab-context-target">
+              <ContextMenuTrigger className="visual-lab-context-target focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} onKeyDown={openContextMenuKeyboard}>
                 {text("在此区域点击右键，检查上下文菜单", "Right-click this area to review the context menu")}
               </ContextMenuTrigger>
               <ContextMenuContent width="md">
-                <ContextMenuItem>{text("打开", "Open")}<ContextMenuShortcut>Enter</ContextMenuShortcut></ContextMenuItem>
-                <ContextMenuCheckboxItem defaultChecked>{text("固定到侧栏", "Pin to sidebar")}</ContextMenuCheckboxItem>
+                <ContextMenuItem onSelect={(event) => setLastAction((event.currentTarget as HTMLElement).textContent ?? "")}>{text("打开", "Open")}<ContextMenuShortcut>Enter</ContextMenuShortcut></ContextMenuItem>
+                <ContextMenuCheckboxItem checked={pinned} onCheckedChange={(checked) => setPinned(checked === true)}>{text("固定到侧栏", "Pin to sidebar")}</ContextMenuCheckboxItem>
                 <ContextMenuSub>
                   <ContextMenuSubTrigger>{text("移动到", "Move to")}</ContextMenuSubTrigger>
                   <ContextMenuSubContent>
-                    <ContextMenuItem>{text("工作区一", "Workspace one")}</ContextMenuItem>
-                    <ContextMenuItem>{text("工作区二", "Workspace two")}</ContextMenuItem>
+                    <ContextMenuItem onSelect={(event) => setLastAction((event.currentTarget as HTMLElement).textContent ?? "")}>{text("工作区一", "Workspace one")}</ContextMenuItem>
+                    <ContextMenuItem onSelect={(event) => setLastAction((event.currentTarget as HTMLElement).textContent ?? "")}>{text("工作区二", "Workspace two")}</ContextMenuItem>
                   </ContextMenuSubContent>
                 </ContextMenuSub>
                 <ContextMenuSeparator />
-                <ContextMenuItem variant="destructive">{text("删除", "Delete")}</ContextMenuItem>
+                <ContextMenuItem variant="destructive" onSelect={(event) => setLastAction((event.currentTarget as HTMLElement).textContent ?? "")}>{text("删除", "Delete")}</ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
           </div>

@@ -48,6 +48,35 @@ function button(container: HTMLElement, text: string): HTMLButtonElement {
   return found!
 }
 
+// A failed initial read must retain both its error and a usable refresh action.
+// 首次读取失败必须保留错误和可用的刷新操作。
+it("keeps unavailable groups visible but disabled until a failed initial load recovers", async () => {
+  // onRunAction fails only the first read so the same mounted page can recover.
+  // onRunAction 仅令第一次读取失败，使同一挂载页面能够恢复。
+  const onRunAction = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(result({ recall: defaults, defaults, userOverride: false }))
+  // container and root host the actual global policy owner and all five group entries.
+  // container 和 root 挂载真实全局策略容器及全部五个分组入口。
+  const container = document.createElement("div")
+  const root = createRoot(container)
+  document.body.append(container)
+  try {
+    await act(async () => { root.render(<I18nProvider initialLocale="zh-CN"><VmmNativeRuntimePolicy busy={false} onRunAction={onRunAction} /></I18nProvider>) })
+    expect(container.querySelectorAll(".vmm-section-tabs button")).toHaveLength(5)
+    for (const label of ["文本清洗", "画像期限", "检索排序", "定期清洗"]) expect(button(container, label).disabled).toBe(true)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("未返回有效结果")
+    expect(container.textContent).not.toContain("处理中")
+    await act(async () => { button(container, "刷新").click() })
+    expect(onRunAction).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(button(container, "文本清洗").disabled).toBe(false)
+    await act(async () => { button(container, "文本清洗").click() })
+    expect(button(container, "文本清洗").getAttribute("aria-pressed")).toBe("true")
+  } finally {
+    await act(async () => { root.unmount() })
+    container.remove()
+  }
+})
+
 it("loads without saving, rejects invalid edits, and saves the exact independently edited policy", async () => {
   const onRunAction = vi.fn(async (action: string, payload?: Record<string, unknown>) => {
     if (action === "native_runtime_policy") return result({ recall: defaults, defaults, userOverride: false })

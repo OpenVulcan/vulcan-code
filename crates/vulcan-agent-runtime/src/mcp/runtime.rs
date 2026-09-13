@@ -28,8 +28,8 @@ use tools::*;
 
 pub use diagnostics::{
     McpRuntimeDiscoveryReport, McpRuntimeEventProjection, McpRuntimeOverview,
-    McpRuntimeServerDiagnostic, McpRuntimeServerState, McpRuntimeServerStatus,
-    McpRuntimeToolAllowlist,
+    McpRuntimeServerDiagnostic, McpRuntimeServerInspection, McpRuntimeServerState,
+    McpRuntimeServerStatus, McpRuntimeToolAllowlist, McpRuntimeToolInspection,
 };
 pub use handle::{
     bootstrap_mcp_runtime_access, remove_plugin_mcp_runtime_partition,

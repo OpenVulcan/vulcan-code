@@ -71,6 +71,9 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   const [settings, setSettings] = React.useState<VmmNativeResourceSettingsSummary | null>(null)
   const [selectedPath, setSelectedPath] = React.useState("")
   const [file, setFile] = React.useState<VmmNativeResourceFileContent | null>(null)
+  // fileReadRevision lets an explicit refresh retry a failed read of the same selected resource.
+  // fileReadRevision 允许显式刷新重试同一选中资源的失败读取。
+  const [fileReadRevision, setFileReadRevision] = React.useState(0)
   const [editorText, setEditorText] = React.useState("")
   const [editUnlocked, setEditUnlocked] = React.useState(false)
   const [confirmation, setConfirmation] = React.useState<ResourceConfirmation>(null)
@@ -150,7 +153,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
     return () => {
       active = false
     }
-  }, [onRunAction, selectedPath, t])
+  }, [fileReadRevision, onRunAction, selectedPath, t])
 
   // saveSettings validates and hot-activates one complete common-plus-locale composition.
   // saveSettings 校验并热更新一份完整的 common 加区域组合。
@@ -168,7 +171,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   // saveFile writes the selected effective text only after the separate save confirmation.
   // saveFile 仅在单独保存确认后写入所选当前生效文本。
   const saveFile = React.useCallback(async () => {
-    if (!file || !editUnlocked || editorText === file.effectiveText) return
+    if (!file || !editUnlocked || editorText === file.effectiveText) return false
     const result = await onRunAction("native_resource_write", {
       path: file.path,
       content: editorText,
@@ -177,29 +180,31 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
     })
     if (result?.data.kind !== "native_resource_file") {
       setError(t("memory.resources.invalidResponse"))
-      return
+      return false
     }
     setFile(result.data.value)
     setEditorText(result.data.value.effectiveText)
     setEditUnlocked(false)
     setError(null)
     await loadCatalog()
+    return true
   }, [editUnlocked, editorText, file, loadCatalog, onRunAction, t])
 
   // resetFile removes only the selected user override after explicit confirmation.
   // resetFile 在明确确认后仅移除所选用户覆盖。
   const resetFile = React.useCallback(async () => {
-    if (!file) return
+    if (!file) return false
     const result = await onRunAction("native_resource_reset", { path: file.path })
     if (result?.data.kind !== "native_resource_file") {
       setError(t("memory.resources.invalidResponse"))
-      return
+      return false
     }
     setFile(result.data.value)
     setEditorText(result.data.value.effectiveText)
     setEditUnlocked(false)
     setError(null)
     await loadCatalog()
+    return true
   }, [file, loadCatalog, onRunAction, t])
 
   // testPii executes the active common-plus-locale scrubber without invoking an LLM.
@@ -253,11 +258,12 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
     <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 className="text-lg font-semibold">{t("memory.resources.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.resources.description")}</p></div>
-        <Button disabled={busy} onClick={() => void loadCatalog()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
+        <Button disabled={busy} onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
       </div>
       <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? t("memory.resources.loading")}</span></div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
 
+      <fieldset className="min-w-0" disabled={busy}>
       <Tabs onValueChange={(value) => setActiveGroup(value as ResourceGroup)} value={activeGroup}>
         <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="prompt">{t("memory.resources.promptTab")}</TabsTrigger><TabsTrigger value="pii">{t("memory.resources.piiTab")}</TabsTrigger><TabsTrigger value="noise">{t("memory.resources.noiseTab")}</TabsTrigger></TabsList>
         {(["prompt", "pii", "noise"] as const).map((group) => (
@@ -269,7 +275,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
               <CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 className="size-4" aria-hidden="true" />{t("memory.resources.fileEditor")}</CardTitle><CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription></CardHeader>
               <CardContent className="space-y-4">
                 {selectedSummary ? <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedSummary.selector}</Badge><Badge variant={selectedSummary.hasUserOverride ? "default" : "secondary"}>{selectedSummary.hasUserOverride ? t("memory.resources.userOverride") : t("memory.resources.builtIn")}</Badge><Badge variant="outline"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />{editUnlocked ? t("memory.resources.unlocked") : t("memory.resources.locked")}</Badge></div> : null}
-                {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p><p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p></div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={!editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
+                {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p>{group === "prompt" ? <p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p> : null}</div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={busy || !editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
               </CardContent>
             </Card>
             </div>
@@ -278,8 +284,14 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
           </TabsContent>
         ))}
       </Tabs>
+      </fieldset>
 
-      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{confirmationTitle(confirmation, t)}</AlertDialogTitle><AlertDialogDescription>{confirmationDescription(confirmation, resourcePurpose, t)}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => { const action = confirmation; setConfirmation(null); if (action === "unlock") setEditUnlocked(true); if (action === "save") void saveFile(); if (action === "reset") void resetFile() }}>{confirmationAction(confirmation, t)}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && !busy && setConfirmation(null)}><AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{confirmationTitle(confirmation, t)}</AlertDialogTitle><AlertDialogDescription>{confirmationDescription(confirmation, resourcePurpose, t)}</AlertDialogDescription></AlertDialogHeader>{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}<AlertDialogFooter><AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => {
+        event.preventDefault()
+        if (confirmation === "unlock") { setEditUnlocked(true); setConfirmation(null) }
+        if (confirmation === "save") void saveFile().then((completed) => { if (completed) setConfirmation(null) })
+        if (confirmation === "reset") void resetFile().then((completed) => { if (completed) setConfirmation(null) })
+      }}>{confirmationAction(confirmation, t)}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </div>
   )
 }

@@ -290,6 +290,8 @@ const projectFloatingWindowStateCache = new Map<string, ProjectFloatingWindowSta
 
 // ProjectFloatingLayer renders one project-scoped movable surface above workspace content.
 // ProjectFloatingLayer 在工作区内容之上渲染一个项目级可移动表面。
+// Parameters: props supplies project identity, visibility and surface slots. Returns the movable project surface and its layout host.
+// 参数：props 提供项目身份、可见状态与表面插槽。返回可移动的项目表面及其布局宿主。
 export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   // layerRef identifies the workspace-sized positioning boundary.
   // layerRef 标识工作区大小的定位边界。
@@ -352,6 +354,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   // Load project geometry before paint so a project switch never shows the previous project's size for one frame.
   // 在绘制前加载项目几何，避免项目切换时出现一帧上一个项目的尺寸。
   React.useLayoutEffect(() => {
+    dragCleanupRef.current?.();
     setWindowState(loadProjectFloatingWindowState(props.projectId));
     setBoundarySize(null);
     previousExpandedRef.current = props.expanded;
@@ -403,7 +406,12 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
     genieDirectionRef.current = null;
   }, []);
   React.useEffect(() => {
-    if (!props.expanded) return;
+    if (!props.expanded) {
+      // Collapsing ends drag ownership even while the surface remains mounted for its closing animation.
+      // 收起立即结束拖动归属，即使表面仍为关闭动画保持挂载。
+      dragCleanupRef.current?.();
+      return;
+    }
     const layer = layerRef.current;
     const surface = surfaceRef.current;
     if (!layer || !surface || typeof ResizeObserver === "undefined") return;
@@ -619,6 +627,8 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
 
   // handleHeaderPointerDown begins pointer-owned surface dragging outside interactive controls.
   // handleHeaderPointerDown 在交互控制项之外开始由指针持有的表面拖动。
+  // Parameters: event is the header pointer press. Returns nothing; accepted gestures install project-owned drag listeners.
+  // 参数：event 是标题指针按下事件。无返回值；接纳的手势安装项目自有拖动监听。
   const handleHeaderPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (windowState.maximized || event.button !== 0
       || (event.target as HTMLElement).closest("button, select, input, [role='button']")) return;
@@ -648,9 +658,12 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
     };
     // releaseDrag removes listeners and optionally persists the final project position.
     // releaseDrag 移除监听器，并按需持久化最终项目位置。
+    // Parameters: persist is true only for completed gestures. Returns nothing and releases every listener of this drag.
+    // 参数：persist 仅对完成的手势为真。无返回值，并释放本次拖动的全部监听。
     const releaseDrag = (persist: boolean) => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
       dragCleanupRef.current = null;
       if (persist) {
         setWindowState((current) => {
@@ -662,9 +675,15 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
     // handlePointerUp commits the dragged position at the end of pointer ownership.
     // handlePointerUp 在指针所有权结束时提交拖动位置。
     const handlePointerUp = () => releaseDrag(true);
+    // handlePointerCancel releases a cancelled gesture without persisting an incomplete drag.
+    // handlePointerCancel 释放取消的手势，不保存未完成的拖动。
+    // Parameters: none. Returns nothing; the captured release function clears this gesture without persisting position.
+    // 参数：无。无返回值；捕获的释放函数清理本次手势且不保存位置。
+    const handlePointerCancel = () => releaseDrag(false);
     dragCleanupRef.current = () => releaseDrag(false);
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerCancel, { once: true });
   }, [props.projectId, windowState.maximized]);
 
   // handleHeaderDoubleClick toggles maximize only from the non-interactive draggable title region.
@@ -697,6 +716,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
         <section
           ref={surfaceRef}
           aria-hidden={!props.expanded}
+          inert={!props.expanded}
           className="project-floating-surface"
           data-animation-state={animationState}
           data-maximized={windowState.maximized ? "true" : "false"}

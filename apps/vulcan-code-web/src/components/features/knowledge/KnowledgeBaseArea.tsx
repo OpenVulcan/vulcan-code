@@ -4,13 +4,15 @@ import { toast } from "sonner";
 
 import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-dialog";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { KnowledgeLibraryViewerDialog } from "@/components/features/knowledge/KnowledgeLibraryViewerDialog";
 import { KnowledgeLibraryCreateDialog, type KnowledgeLibraryCreateDialogModel } from "@/components/features/knowledge/KnowledgeLibraryCreateDialog";
 import { KnowledgeOperationProgress } from "@/components/features/knowledge/KnowledgeOperationProgress";
 import { KnowledgePackageImportDialog, KnowledgePackagePickerDialog } from "@/components/features/knowledge/KnowledgePackageDialogs";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
+import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import {
   browseKnowledgeSourceDirectories,
@@ -34,6 +36,33 @@ import {
 } from "@/service/knowledge-base-service";
 import type { KnowledgeDisplayIndexState, KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeRetrievalMode, KnowledgeSourceSummary } from "@/types";
 import type { PublicAiInternalInferenceCandidate } from "@/types/public-ai";
+
+// KnowledgeReadFailure keeps a failed read distinct from empty content and exposes only read recovery.
+// KnowledgeReadFailure 区分读取失败与空内容，仅提供读取恢复操作。
+// Parameters: error is the exact diagnostic, busy disables recovery, onRetry repeats the owning read.
+// 参数：error 是精确诊断，busy 禁用恢复按钮，onRetry 仅重复所属读取。
+// Returns a compact localized summary with expandable details and a retry button.
+// 返回包含可展开详情与重试按钮的紧凑本地化摘要。
+function KnowledgeReadFailure({ error, busy, onRetry }: {
+  // Exact transport or service diagnostic, disclosed only on demand.
+  // 仅按需展开的精确传输或服务诊断。
+  error: string;
+  // Whether another operation currently prevents this read retry.
+  // 当前是否有其他操作阻止重试读取。
+  busy: boolean;
+  // Repeats this read without replaying any prior mutation.
+  // 仅重复本次读取，不重放此前变更。
+  onRetry: () => void;
+}) {
+  // t provides the same locale as the owning knowledge page.
+  // t 与所属知识库页面使用相同语言。
+  const { t } = useI18n();
+  return <div className="space-y-2 rounded-md border border-destructive/30 p-3 text-sm" role="alert">
+    <p>{t("knowledge.readFailed")}</p>
+    <details><summary className="cursor-pointer text-muted-foreground">{t("toolPresentation.output.errorDetails")}</summary><pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs">{error}</pre></details>
+    <Button disabled={busy} onClick={onRetry} size="sm" type="button" variant="outline"><RefreshCw size={14} />{t("knowledge.refresh")}</Button>
+  </div>;
+}
 
 // KnowledgeBusyOperation is the locale-independent identity of one serialized page mutation.
 // KnowledgeBusyOperation 是一次串行页面变更的语言无关身份。
@@ -96,7 +125,7 @@ export type KnowledgeDisplayBuildAction = {
   mode: "start" | "resume" | "progress" | "complete";
   // User-visible button label matching the persisted lifecycle.
   // 与持久化生命周期匹配的用户可见按钮标签。
-  label: string;
+  label: TranslationKey;
   // Whether starting another generation is forbidden.
   // 是否禁止再次启动生成。
   disabled: boolean;
@@ -108,22 +137,24 @@ export type KnowledgeDisplayBuildAction = {
 // 参数：displayIndex 是权威持久化显示库生命周期。返回值：一个按钮动作。
 export function knowledgeDisplayBuildAction(displayIndex: KnowledgeDisplayIndexState): KnowledgeDisplayBuildAction {
   if (displayIndex.status === "building") {
-    return { mode: "progress", label: "查看生成进度", disabled: false };
+    return { mode: "progress", label: "knowledge.experience.viewProgress", disabled: false };
   }
   if (displayIndex.pendingGeneration) {
-    return { mode: "resume", label: "继续生成", disabled: false };
+    return { mode: "resume", label: "knowledge.experience.resume", disabled: false };
   }
   if (displayIndex.status === "ready" && displayIndex.activeGeneration) {
-    return { mode: "complete", label: "显示库已完成", disabled: true };
+    return { mode: "complete", label: "knowledge.experience.displayReady", disabled: true };
   }
   if (displayIndex.status === "stale" || (displayIndex.status === "failed" && displayIndex.activeGeneration)) {
-    return { mode: "start", label: "重新生成", disabled: false };
+    return { mode: "start", label: "knowledge.experience.regenerate", disabled: false };
   }
-  return { mode: "start", label: "生成显示库", disabled: false };
+  return { mode: "start", label: "knowledge.experience.buildDisplay", disabled: false };
 }
 
 // KnowledgeBaseArea renders host-owned library content management and portable operations.
 // KnowledgeBaseArea 渲染宿主持有的知识库内容管理与可移植操作。
+// Parameters: none; consumes the knowledge service and language context. Returns library management, exact-owner dialogs and durable operation progress.
+// 参数：无，消费知识库服务与语言上下文。返回资料库管理、精确归属弹窗及持久操作进度。
 export function KnowledgeBaseArea() {
   // t resolves all user-visible knowledge-area copy in the active WebUI language.
   // t 使用当前 WebUI 语言解析知识库区域的全部用户可见文案。
@@ -131,18 +162,33 @@ export function KnowledgeBaseArea() {
   // libraries stores the authoritative registry rows loaded from the service.
   // libraries 保存从服务加载的权威注册记录。
   const [libraries, setLibraries] = React.useState<KnowledgeLibrarySummary[]>([]);
+  // Library read state distinguishes an initial request, a valid empty registry and a failed refresh.
+  // 知识库读取状态区分首次请求、有效空目录与刷新失败。
+  const [librariesLoading, setLibrariesLoading] = React.useState(true);
+  // librariesError retains the latest read failure until an explicit retry succeeds.
+  // librariesError 保留最近读取错误，直到显式重试成功。
+  const [librariesError, setLibrariesError] = React.useState<string | null>(null);
+  // libraryRequestSequence prevents an older registry response from replacing newer data.
+  // libraryRequestSequence 防止较旧的目录响应替换新数据。
+  const libraryRequestSequence = React.useRef(0);
   // sources stores the durable Markdown roots attached to the selected library.
   // sources 保存关联到选中知识库的持久化 Markdown 根目录。
   const [sources, setSources] = React.useState<KnowledgeSourceSummary[]>([]);
   // sourcesLoading distinguishes an empty source list from an in-flight management query.
   // sourcesLoading 区分空来源列表与正在进行的管理查询。
   const [sourcesLoading, setSourcesLoading] = React.useState(false);
+  // sourcesError is local to the selected library's source query, not an empty directory result.
+  // sourcesError 属于选中知识库的来源查询，不代表空目录结果。
+  const [sourcesError, setSourcesError] = React.useState<string | null>(null);
   // indexIntegrity stores exact revision and physical-row diagnostics for the selected library.
   // indexIntegrity 保存选中知识库的精确版本与物理记录诊断。
   const [indexIntegrity, setIndexIntegrity] = React.useState<KnowledgeIndexIntegritySummary | null>(null);
   // indexIntegrityLoading distinguishes an unavailable snapshot from an in-flight inspection.
   // indexIntegrityLoading 区分不可用快照与正在进行的检查。
   const [indexIntegrityLoading, setIndexIntegrityLoading] = React.useState(false);
+  // indexIntegrityError preserves a failed inspection independently of source-list availability.
+  // indexIntegrityError 独立保留检查失败状态，不依赖来源列表是否可用。
+  const [indexIntegrityError, setIndexIntegrityError] = React.useState<string | null>(null);
   // sourceRequestSequence rejects stale source-list responses after rapid library selection changes.
   // sourceRequestSequence 在快速切换知识库后拒绝过期来源列表响应。
   const sourceRequestSequence = React.useRef(0);
@@ -185,6 +231,15 @@ export function KnowledgeBaseArea() {
   // settingsDialogOpen controls editing of the selected library policy.
   // settingsDialogOpen 控制当前资料库策略编辑对话框。
   const [settingsDialogOpen, setSettingsDialogOpen] = React.useState(false);
+  // editingLibraryId freezes the exact library whose policy the user opened, across background registry updates.
+  // editingLibraryId 在后台注册表更新期间冻结用户打开策略的精确知识库。
+  const [editingLibraryId, setEditingLibraryId] = React.useState<string | null>(null);
+  // deleteTarget freezes the exact library named by the shared destructive confirmation.
+  // deleteTarget 冻结共享删除确认明确指定的精确知识库。
+  const [deleteTarget, setDeleteTarget] = React.useState<KnowledgeLibrarySummary | null>(null);
+  // deleteError remains visible in the confirmation when deletion fails.
+  // deleteError 在删除失败时继续显示于确认框内。
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
   // searchText filters the local library summaries.
   // searchText 筛选本地知识库摘要。
   const [searchText, setSearchText] = React.useState("");
@@ -306,9 +361,25 @@ export function KnowledgeBaseArea() {
   // refreshLibraries reloads the registry and preserves a valid selection.
   // refreshLibraries 重新加载注册表并保留有效选择。
   const refreshLibraries = React.useCallback(async () => {
-    const nextLibraries = await listKnowledgeLibraries();
-    setLibraries(nextLibraries);
-    setSelectedLibraryId((current) => nextLibraries.some((library) => library.id === current) ? current : (nextLibraries[0]?.id ?? null));
+    // requestSequence owns this registry read even when background reconciliation overlaps refresh.
+    // requestSequence 在后台协调与刷新重叠时仍唯一拥有本次目录读取。
+    const requestSequence = ++libraryRequestSequence.current;
+    setLibrariesLoading(true);
+    setLibrariesError(null);
+    try {
+      // nextLibraries is the authoritative registry, never synthesized from a failed response.
+      // nextLibraries 是权威目录，绝不从失败响应构造。
+      const nextLibraries = await listKnowledgeLibraries();
+      if (requestSequence !== libraryRequestSequence.current) return;
+      setLibraries(nextLibraries);
+      setSelectedLibraryId((current) => nextLibraries.some((library) => library.id === current) ? current : (nextLibraries[0]?.id ?? null));
+    } catch (error) {
+      if (requestSequence !== libraryRequestSequence.current) return;
+      setLibrariesError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      if (requestSequence === libraryRequestSequence.current) setLibrariesLoading(false);
+    }
   }, []);
 
   // refreshSources reloads one library's source roots and ignores any superseded response.
@@ -323,11 +394,16 @@ export function KnowledgeBaseArea() {
     // 清空上一份投影，避免请求失败后暴露另一个知识库的根目录。
     setSources([]);
     setSourcesLoading(true);
+    setSourcesError(null);
     try {
       // nextSources is the authoritative source snapshot returned by the host.
       // nextSources 是宿主返回的权威来源快照。
       const nextSources = await listKnowledgeSources(libraryId);
       if (requestSequence === sourceRequestSequence.current) setSources(nextSources);
+    } catch (error) {
+      if (requestSequence !== sourceRequestSequence.current) return;
+      setSourcesError(error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       if (requestSequence === sourceRequestSequence.current) setSourcesLoading(false);
     }
@@ -343,18 +419,26 @@ export function KnowledgeBaseArea() {
     const requestSequence = ++integrityRequestSequence.current;
     setIndexIntegrity(null);
     setIndexIntegrityLoading(true);
+    setIndexIntegrityError(null);
     try {
       // integrity is computed by the host from authoritative rows and the physical FTS table.
       // integrity 由宿主根据权威记录与物理 FTS 表计算。
       const integrity = await getKnowledgeIndexIntegrity(libraryId);
       if (requestSequence === integrityRequestSequence.current) setIndexIntegrity(integrity);
+    } catch (error) {
+      if (requestSequence !== integrityRequestSequence.current) return;
+      setIndexIntegrityError(error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       if (requestSequence === integrityRequestSequence.current) setIndexIntegrityLoading(false);
     }
   }, []);
 
   React.useEffect(() => {
-    void refreshLibraries().catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+    // Read failures already own an inline recovery surface; no duplicate transient toast is needed.
+    // 读取失败已有内联恢复区域，无需再重复弹出临时提示。
+    void refreshLibraries().catch(() => undefined);
+    return () => { libraryRequestSequence.current += 1; };
   }, [refreshLibraries]);
 
   React.useEffect(() => {
@@ -363,12 +447,20 @@ export function KnowledgeBaseArea() {
       integrityRequestSequence.current += 1;
       setSources([]);
       setSourcesLoading(false);
+      setSourcesError(null);
       setIndexIntegrity(null);
       setIndexIntegrityLoading(false);
+      setIndexIntegrityError(null);
       return;
     }
-    void refreshSources(selectedLibraryId).catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
-    void refreshIndexIntegrity(selectedLibraryId).catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+    // Each read renders its own persistent failure and retries only that read.
+    // 每项读取独立展示持久错误，重试时仅重读该项。
+    void refreshSources(selectedLibraryId).catch(() => undefined);
+    void refreshIndexIntegrity(selectedLibraryId).catch(() => undefined);
+    return () => {
+      sourceRequestSequence.current += 1;
+      integrityRequestSequence.current += 1;
+    };
   }, [refreshIndexIntegrity, refreshSources, selectedLibraryId]);
 
   React.useEffect(() => {
@@ -639,6 +731,7 @@ export function KnowledgeBaseArea() {
   // openCreateDialog loads the current official model capability snapshot before showing choices.
   // openCreateDialog 在显示选项前加载当前官方模型能力快照。
   const openCreateDialog = React.useCallback(async () => {
+    if (!acquireBusy("create")) return;
     try {
       const snapshot = await loadPublicAiSettings();
       setCreateInferenceCandidates(snapshot.internalInferenceCandidates);
@@ -652,13 +745,15 @@ export function KnowledgeBaseArea() {
       setCreateDialogOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      releaseBusy("create");
     }
-  }, []);
+  }, [acquireBusy, releaseBusy]);
 
   // openSettingsDialog loads fresh official candidates and mirrors the persisted library choices.
   // openSettingsDialog 加载最新官方候选并镜像持久化的资料库选择。
   const openSettingsDialog = React.useCallback(async () => {
-    if (!selectedLibrary) return;
+    if (!selectedLibrary || !acquireBusy("settings")) return;
     try {
       const snapshot = await loadPublicAiSettings();
       const settings = selectedLibrary.settings;
@@ -674,11 +769,14 @@ export function KnowledgeBaseArea() {
       setCreateConfiguredDimension(settings.embedding.configuredDimension ? String(settings.embedding.configuredDimension) : "");
       setCreateRequestedBatchSize(settings.embedding.embeddingBatchSize ? String(settings.embedding.embeddingBatchSize) : "");
       setCreateCompatibilityOverride(settings.vectorIndex.compatibilityOverride ?? "");
+      setEditingLibraryId(selectedLibrary.id);
       setSettingsDialogOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      releaseBusy("settings");
     }
-  }, [selectedLibrary]);
+  }, [acquireBusy, releaseBusy, selectedLibrary]);
 
   // createLibrary validates and submits one named library with the selected model policy.
   // createLibrary 校验并提交一个带模型策略的命名知识库。
@@ -727,7 +825,7 @@ export function KnowledgeBaseArea() {
   // updateLibrarySettings persists an edited policy without re-importing source files.
   // updateLibrarySettings 持久化编辑后的策略且不重新导入原始文件。
   const updateLibrarySettings = React.useCallback(async (model: KnowledgeLibraryCreateDialogModel) => {
-    if (!selectedLibrary) return;
+    if (!editingLibraryId) return;
     const routeFromCandidate = (candidate: PublicAiInternalInferenceCandidate | null) => candidate ? ({
       consumerProfileId: "knowledge_base",
       providerId: candidate.route.provider_id,
@@ -739,8 +837,8 @@ export function KnowledgeBaseArea() {
       connectionId: candidate.route.connection_id,
     }) : null;
     const embeddingCapability = model.embeddingCandidate?.capabilities.embedding;
-    await runMutation("settings", "保存资料库配置", async () => {
-      await updateKnowledgeLibrarySettings(selectedLibrary.id, {
+    await runMutation("settings", t("knowledge.experience.saveSettings"), async () => {
+      await updateKnowledgeLibrarySettings(editingLibraryId, {
         retrievalMode: model.retrievalMode,
         fallbackPolicy: "explicit_only",
         curation: { enabled: model.retrievalMode !== "raw_bm25", route: routeFromCandidate(model.curationCandidate), promptVersion: "knowledge-display-v1", reasoningEffort: model.reasoningEffort || null },
@@ -749,7 +847,7 @@ export function KnowledgeBaseArea() {
       setSettingsDialogOpen(false);
       await refreshLibraries();
     });
-  }, [refreshLibraries, runMutation, selectedLibrary]);
+  }, [editingLibraryId, refreshLibraries, runMutation]);
 
   // exportPackage writes one consistent package to the selected host directory.
   // exportPackage 将一个一致性知识库包写入选中的宿主目录。
@@ -799,7 +897,7 @@ export function KnowledgeBaseArea() {
     ? (operationRunning
       && importLibraryId === selectedLibrary.id
       && importJob?.operationKind === "display_build"
-      ? { mode: "progress", label: "查看生成进度", disabled: false } satisfies KnowledgeDisplayBuildAction
+      ? { mode: "progress", label: "knowledge.experience.viewProgress", disabled: false } satisfies KnowledgeDisplayBuildAction
       : knowledgeDisplayBuildAction(selectedLibrary.settings.displayIndex))
     : null;
   // handleViewerOpenChange clears the exact reader owner when the dialog closes.
@@ -820,11 +918,13 @@ export function KnowledgeBaseArea() {
       </div>
       <div className="knowledge-layout">
         <aside className="knowledge-library-list">
+          {librariesLoading ? <div className="knowledge-sources-state" role="status">{t("knowledge.librariesLoading")}</div> : null}
+          {librariesError ? <KnowledgeReadFailure busy={pageBusy || librariesLoading} error={librariesError} onRetry={() => void refreshLibraryList()} /> : null}
           {filteredLibraries.map((library) => (
             <div className={library.id === selectedLibraryId ? "knowledge-library-row active" : "knowledge-library-row"} key={library.id}>
               <button className="knowledge-library-select" disabled={pageBusy} onClick={() => setSelectedLibraryId(library.id)} type="button">
                 <Database size={18} />
-                <span><strong>{library.name}</strong><small>{t("knowledge.libraryCounts").replace("{documents}", String(library.documentCount)).replace("{chunks}", String(library.chunkCount)).replace("{status}", library.indexStatus)}</small></span>
+                <span><strong>{library.name}</strong><small title={library.indexStatus}>{t("knowledge.libraryCounts").replace("{documents}", String(library.documentCount)).replace("{chunks}", String(library.chunkCount)).replace("{status}", formatKnowledgeIndexStatus(library.indexStatus, t))}</small></span>
               </button>
               <Button aria-label={`${t("knowledge.view")} ${library.name}`} className="knowledge-library-view-button" disabled={pageBusy} onClick={() => {
                 setSelectedLibraryId(library.id);
@@ -837,7 +937,7 @@ export function KnowledgeBaseArea() {
               }} size="icon-sm" title={`${t("knowledge.package.export")} ${library.name}`} type="button" variant="ghost"><Download size={16} /></Button>
             </div>
           ))}
-          {filteredLibraries.length === 0 ? <div className="knowledge-empty">{t("knowledge.emptyLibraries")}</div> : null}
+          {!librariesLoading && !librariesError && filteredLibraries.length === 0 ? <div className="knowledge-empty">{t(libraries.length > 0 ? "knowledge.noMatchingLibraries" : "knowledge.emptyLibraries")}</div> : null}
         </aside>
         <main className="knowledge-detail">
           {selectedLibrary ? (
@@ -845,16 +945,12 @@ export function KnowledgeBaseArea() {
               <header className="knowledge-detail-header">
                 <div className="knowledge-title-editor"><Input aria-label={t("knowledge.name")} disabled={pageBusy} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} /><p>{selectedLibrary.description || t("knowledge.defaultDescription")}</p></div>
                 <div className="knowledge-actions">
-                  <Button disabled={pageBusy} onClick={() => void openSettingsDialog()} variant="outline"><Settings2 size={15} />配置</Button>
+                  <Button disabled={pageBusy} onClick={() => void openSettingsDialog()} variant="outline"><Settings2 size={15} />{t("knowledge.experience.configure")}</Button>
                   <Button disabled={pageBusy || !renameDraft.trim() || renameDraft.trim() === selectedLibrary.name} onClick={() => void runMutation("rename", t("knowledge.saveName"), async () => {
                     await renameKnowledgeLibrary(selectedLibrary.id, renameDraft.trim(), selectedLibrary.description);
                   })} variant="outline">{t("knowledge.saveName")}</Button>
                   <Button disabled={pageBusy} onClick={() => setSourcePickerTarget({ sourceId: null })}><FolderInput size={15} />{t("knowledge.sources.add")}</Button>
-                  <Button disabled={pageBusy} onClick={() => {
-                    if (window.confirm(t("knowledge.deleteConfirm").replace("{name}", selectedLibrary.name))) {
-                      void runMutation("delete", t("knowledge.delete"), () => deleteKnowledgeLibrary(selectedLibrary.id));
-                    }
-                  }} variant="outline"><Trash2 size={15} />{t("knowledge.delete")}</Button>
+                  <Button disabled={pageBusy} onClick={() => { setDeleteTarget(selectedLibrary); setDeleteError(null); }} variant="destructive"><Trash2 size={15} />{t("knowledge.delete")}</Button>
                 </div>
               </header>
               <section className="knowledge-index-health">
@@ -864,12 +960,13 @@ export function KnowledgeBaseArea() {
                     <p>{t("knowledge.indexHealth.description")}</p>
                   </div>
                   {indexIntegrity ? (
-                    <span className={`knowledge-index-health-state ${indexIntegrity.searchable ? "ready" : "attention"}`}>
-                      {indexIntegrity.searchable ? t("knowledge.indexHealth.searchable") : t("knowledge.indexHealth.needsRepair")}
+                    <span className={`knowledge-index-health-state ${indexIntegrity.searchable ? "ready" : indexIntegrity.indexStatus === "empty" ? "" : "attention"}`}>
+                      {indexIntegrity.searchable ? t("knowledge.indexHealth.searchable") : indexIntegrity.indexStatus === "empty" ? t("knowledge.indexStatus.empty") : t("knowledge.indexHealth.needsRepair")}
                     </span>
                   ) : null}
                 </header>
                 {indexIntegrityLoading ? <div className="knowledge-sources-state">{t("knowledge.indexHealth.loading")}</div> : null}
+                {indexIntegrityError ? <KnowledgeReadFailure busy={pageBusy || indexIntegrityLoading} error={indexIntegrityError} onRetry={() => void refreshIndexIntegrity(selectedLibrary.id).catch(() => undefined)} /> : null}
                 {!indexIntegrityLoading && indexIntegrity ? (
                   <>
                     <div className="knowledge-index-health-metrics">
@@ -883,7 +980,7 @@ export function KnowledgeBaseArea() {
                       <code>{t("knowledge.indexHealth.dictionaryRevision").replace("{indexed}", String(indexIntegrity.indexedDictionaryRevision)).replace("{current}", String(indexIntegrity.dictionaryRevision))}</code>
                       <code>{t("knowledge.indexHealth.tokenizer").replace("{tokenizer}", indexIntegrity.tokenizer || "-")}</code>
                     </div>
-                    {selectedLibrary.settings.vectorIndex.compatibilityOverride ? <p className="text-sm text-amber-700">已人工确认同维度模型兼容，当前复用旧向量索引：{selectedLibrary.settings.vectorIndex.compatibilityOverride}</p> : null}
+                    {selectedLibrary.settings.vectorIndex.compatibilityOverride ? <p className="text-sm text-[var(--vcn-content-warning)]">{t("knowledge.experience.compatibilityActive").replace("{reason}", selectedLibrary.settings.vectorIndex.compatibilityOverride)}</p> : null}
                     <div className="knowledge-index-health-actions">
                       <Button disabled={pageBusy || indexIntegrity.searchable} onClick={() => void startIndexOperation("repair", selectedLibrary.id)} variant="outline"><Wrench size={15} />{t("knowledge.repairIndex")}</Button>
                       <Button disabled={pageBusy} onClick={() => void startIndexOperation("rebuild", selectedLibrary.id)} variant="outline"><RefreshCw size={15} />{t("knowledge.rebuildIndex")}</Button>
@@ -898,10 +995,10 @@ export function KnowledgeBaseArea() {
                             }
                           }}
                           variant="outline"
-                        ><Wrench size={15} />{displayBuildAction?.label ?? "生成显示库"}</Button>
+                        ><Wrench size={15} />{t(displayBuildAction?.label ?? "knowledge.experience.buildDisplay")}</Button>
                       ) : null}
                       {selectedLibrary.settings.embedding.enabled ? (
-                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status !== "ready" || selectedLibrary.settings.vectorIndex.status === "building"} onClick={() => void startDerivedOperation("vector-build", selectedLibrary.id)} variant="outline"><Database size={15} />生成向量</Button>
+                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status !== "ready" || selectedLibrary.settings.vectorIndex.status === "building"} onClick={() => void startDerivedOperation("vector-build", selectedLibrary.id)} variant="outline"><Database size={15} />{t("knowledge.experience.buildVectors")}</Button>
                       ) : null}
                     </div>
                   </>
@@ -915,7 +1012,8 @@ export function KnowledgeBaseArea() {
                   </div>
                 </header>
                 {sourcesLoading ? <div className="knowledge-sources-state">{t("knowledge.sources.loading")}</div> : null}
-                {!sourcesLoading && sources.length === 0 ? <div className="knowledge-sources-state">{t("knowledge.sources.empty")}</div> : null}
+                {sourcesError ? <KnowledgeReadFailure busy={pageBusy || sourcesLoading} error={sourcesError} onRetry={() => void refreshSources(selectedLibrary.id).catch(() => undefined)} /> : null}
+                {!sourcesLoading && !sourcesError && sources.length === 0 ? <div className="knowledge-sources-state">{t("knowledge.sources.empty")}</div> : null}
                 {!sourcesLoading ? (
                   <div className="knowledge-source-list">
                     {sources.map((source) => (
@@ -961,7 +1059,30 @@ export function KnowledgeBaseArea() {
           ) : <div className="knowledge-empty">{t("knowledge.emptySelection")}</div>}
         </main>
       </div>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && busyRef.current === null) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("knowledge.delete")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("knowledge.deleteConfirm").replace("{name}", deleteTarget?.name ?? "")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteError ? <p role="alert" className="text-sm text-destructive">{deleteError}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy !== null}>{t("conversation.action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={busy !== null} variant="destructive" onClick={(event) => {
+              event.preventDefault();
+              if (!deleteTarget || !acquireBusy("delete")) return;
+              setDeleteError(null);
+              void deleteKnowledgeLibrary(deleteTarget.id).then(async () => {
+                setDeleteTarget(null);
+                await refreshLibraries();
+              }).catch((reason) => setDeleteError(reason instanceof Error ? reason.message : String(reason)))
+                .finally(() => releaseBusy("delete"));
+            }}>{t("knowledge.delete")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <KnowledgeLibraryCreateDialog
+        busy={busy === "create"}
         candidates={createInferenceCandidates}
         configuredDimension={createConfiguredDimension}
         compatibilityOverride={createCompatibilityOverride}
@@ -975,7 +1096,7 @@ export function KnowledgeBaseArea() {
         onReasoningEffortChange={setCreateCurationReasoningEffort}
         onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
         onNameChange={setCreateName}
-        onOpenChange={setCreateDialogOpen}
+        onOpenChange={(open) => { if (busyRef.current === null) setCreateDialogOpen(open) }}
         onRequestedBatchSizeChange={setCreateRequestedBatchSize}
         onRetrievalModeChange={setCreateRetrievalMode}
         onSubmit={(model) => void createLibrary(model)}
@@ -984,6 +1105,7 @@ export function KnowledgeBaseArea() {
         retrievalMode={createRetrievalMode}
       />
       <KnowledgeLibraryCreateDialog
+        busy={busy === "settings"}
         candidates={createInferenceCandidates}
         configuredDimension={createConfiguredDimension}
         compatibilityOverride={createCompatibilityOverride}
@@ -997,15 +1119,15 @@ export function KnowledgeBaseArea() {
         onReasoningEffortChange={setCreateCurationReasoningEffort}
         onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
         onNameChange={setCreateName}
-        onOpenChange={setSettingsDialogOpen}
+        onOpenChange={(open) => { if (busyRef.current === null) setSettingsDialogOpen(open) }}
         onRequestedBatchSizeChange={setCreateRequestedBatchSize}
         onRetrievalModeChange={setCreateRetrievalMode}
         onSubmit={(model) => void updateLibrarySettings(model)}
         open={settingsDialogOpen}
         requestedBatchSize={createRequestedBatchSize}
         retrievalMode={createRetrievalMode}
-        submitLabel="保存"
-        title="资料库模型与检索配置"
+        submitLabel={t("memory.common.save")}
+        title={t("knowledge.experience.settingsTitle")}
       />
       <KnowledgeLibraryViewerDialog library={viewerLibrary} onOpenChange={handleViewerOpenChange} open={viewerLibrary !== null} />
       <KnowledgePackagePickerDialog onOpenChange={setPackagePickerOpen} onSelect={inspectPackage} open={packagePickerOpen} />
@@ -1064,7 +1186,7 @@ export function KnowledgeBaseArea() {
               ? t("knowledge.operationDialog.title.repair")
               : (displayedOperationKind === "rebuild"
                 ? t("knowledge.operationDialog.title.rebuild")
-                : (displayedOperationKind === "display_build" ? "生成资料库显示层" : (displayedOperationKind === "vector_build" ? "生成资料库向量索引" : t("knowledge.operationDialog.title.import"))))}</DialogTitle>
+                : (displayedOperationKind === "display_build" ? t("knowledge.experience.displayOperation") : (displayedOperationKind === "vector_build" ? t("knowledge.experience.vectorOperation") : t("knowledge.operationDialog.title.import"))))}</DialogTitle>
           </DialogHeader>
           <KnowledgeOperationProgress cancelRequested={importCancelRequested} job={importJob} outcome={importOutcome} running={operationDialogRunning} />
           {importError ? <pre className="knowledge-import-dialog-error">{importError}</pre> : null}
@@ -1072,7 +1194,7 @@ export function KnowledgeBaseArea() {
           <DialogFooter>
             {operationDialogRunning && importLibraryId ? (
               <>
-                <Button disabled={!importJob?.id} onClick={hideOperationProgress} type="button" variant="ghost">后台运行</Button>
+                <Button disabled={!importJob?.id} onClick={hideOperationProgress} type="button" variant="ghost">{t("knowledge.experience.background")}</Button>
                 <Button disabled={!importJob?.id || importCancelRequested} onClick={() => void requestImportCancellation()} type="button" variant="outline">{importCancelRequested ? t("knowledge.importDialog.cancelling") : t(displayedOperationKind === "import" ? "knowledge.cancelImport" : "knowledge.cancelOperation")}</Button>
               </>
             ) : (
@@ -1087,6 +1209,8 @@ export function KnowledgeBaseArea() {
 
 // KnowledgeImportProgress renders durable import, repair, and rebuild progress states.
 // KnowledgeImportProgress 渲染持久化导入、补全与重建进度状态。
+// Parameters: props supplies durable import progress and allowed lifecycle callbacks; returns status, statistics and the appropriate operation controls.
+// 参数：props 提供持久导入进度及允许的生命周期回调；返回状态、统计与对应操作控件。
 function KnowledgeImportProgress(props: {
   // Whether the backend has accepted a cooperative cancellation request.
   // 后端是否已接受协作取消请求。
@@ -1130,9 +1254,9 @@ function KnowledgeImportProgress(props: {
       ? props.t("knowledge.importDialog.scanning").replace("{discovered}", String(props.job?.scannedFiles ?? 0))
       : (isIndexing
         ? (props.job?.phase === "curating"
-          ? `正在整理显示库 ${props.job?.processedIndexItems ?? 0} / ${props.job?.totalIndexItems ?? 0}（${percentage ?? 0}%）`
+          ? props.t("knowledge.experience.curatingProgress").replace("{done}", String(props.job?.processedIndexItems ?? 0)).replace("{total}", String(props.job?.totalIndexItems ?? 0)).replace("{percent}", String(percentage ?? 0))
           : (props.job?.phase === "embedding"
-            ? `正在生成向量 ${props.job?.processedIndexItems ?? 0} / ${props.job?.totalIndexItems ?? 0}（${percentage ?? 0}%）`
+            ? props.t("knowledge.experience.embeddingProgress").replace("{done}", String(props.job?.processedIndexItems ?? 0)).replace("{total}", String(props.job?.totalIndexItems ?? 0)).replace("{percent}", String(percentage ?? 0))
             : props.t(props.job?.phase === "repairing" ? "knowledge.importDialog.repairing" : (props.job?.phase === "rebuilding" ? "knowledge.importDialog.rebuilding" : "knowledge.importDialog.indexing")).replace("{processed}", String(props.job?.processedIndexItems ?? 0)).replace("{total}", String(props.job?.totalIndexItems ?? 0)).replace("{percent}", String(percentage ?? 0))))
         : importPhaseStatus(props.job, percentage ?? 0, props.t)))))
     : ((props.outcome ?? props.job?.state) === "completed"
@@ -1174,6 +1298,8 @@ function importPhaseStatus(job: KnowledgeImportJobSummary | null, percentage: nu
 
 // importPhaseLabel localizes the compact backend phase indicator.
 // importPhaseLabel 本地化紧凑的后端阶段指示器。
+// Parameters: phase is the backend phase identifier and t resolves locale text; returns its compact user-visible label.
+// 参数：phase 是后端阶段标识，t 解析本地化文案；返回紧凑的用户可见标签。
 function importPhaseLabel(phase: string | undefined, t: KnowledgeTranslator): string {
   switch (phase) {
     case "scanning": return t("knowledge.importPhase.scanning");
@@ -1182,8 +1308,8 @@ function importPhaseLabel(phase: string | undefined, t: KnowledgeTranslator): st
     case "indexing": return t("knowledge.importPhase.indexing");
     case "repairing": return t("knowledge.importPhase.repairing");
     case "rebuilding": return t("knowledge.importPhase.rebuilding");
-    case "curating": return "整理显示库";
-    case "embedding": return "生成向量";
+    case "curating": return t("knowledge.experience.curating");
+    case "embedding": return t("knowledge.experience.buildVectors");
     case "verifying": return t("knowledge.importPhase.verifying");
     case "finalizing": return t("knowledge.importPhase.finalizing");
     case "completed": return t("knowledge.importPhase.completed");
@@ -1194,14 +1320,16 @@ function importPhaseLabel(phase: string | undefined, t: KnowledgeTranslator): st
 
 // importPhaseFallback replaces the misleading scan wait message after file processing finishes.
 // importPhaseFallback 在文件处理结束后替换具有误导性的扫描等待提示。
+// Parameters: phase is the current backend phase and t resolves locale text; returns phase-appropriate fallback copy without claiming unfinished scanning.
+// 参数：phase 是当前后端阶段，t 解析本地化文案；返回对应阶段的替代文案，避免误称仍在扫描。
 function importPhaseFallback(phase: string | undefined, t: KnowledgeTranslator): string {
   switch (phase) {
     case "committing": return t("knowledge.importDialog.committingFallback");
     case "indexing": return t("knowledge.importDialog.indexingFallback");
     case "repairing": return t("knowledge.importDialog.repairingFallback");
     case "rebuilding": return t("knowledge.importDialog.rebuildingFallback");
-    case "curating": return "正在整理显示库";
-    case "embedding": return "正在生成向量索引";
+    case "curating": return t("knowledge.experience.curatingNow");
+    case "embedding": return t("knowledge.experience.embeddingNow");
     case "verifying": return t("knowledge.importDialog.verifyingFallback");
     case "finalizing": return t("knowledge.importDialog.finalizingFallback");
     default: return t("knowledge.importDialog.waiting");

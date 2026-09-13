@@ -39,8 +39,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel"
-import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu"
+import { Combobox } from "@/components/ui/combobox"
 import { useI18n } from "@/i18n"
 import {
   addPublicAiConnection,
@@ -83,12 +82,21 @@ export function CredentialManagementArea() {
   // pickerOpen keeps provider-scoped credential creation local to this settings page.
   // pickerOpen 将供应商作用域的凭据创建状态保留在当前设置页面内。
   const [pickerOpen, setPickerOpen] = React.useState(false)
-  const [menuExpanded, setMenuExpanded] = React.useState(true)
-  const { t } = useI18n()
+  // Serialize account writes and usage reads so stale snapshots cannot overwrite newer choices.
+  // 串行执行账号写入与用量读取，避免旧快照覆盖更新的选择。
+  const accountActionRunningRef = React.useRef(false)
+  // Directory retries are read-only, but must not race one another or account mutations.
+  // 目录重试虽然只读，也不能彼此竞争或与账号修改竞争。
+  const directoryLoadingRef = React.useRef(false)
+  const [directoryLoading, setDirectoryLoading] = React.useState(false)
+  const { t, locale } = useI18n()
 
   // refresh loads the authoritative persisted graph and current process-local catalogs.
   // refresh 加载权威持久化连接图与当前进程内目录。
   const refresh = React.useCallback(async () => {
+    if (directoryLoadingRef.current || accountActionRunningRef.current) return
+    directoryLoadingRef.current = true
+    setDirectoryLoading(true)
     try {
       setError(null)
       const next = await loadPublicAiSettings()
@@ -96,6 +104,9 @@ export function CredentialManagementArea() {
       setUsageByConnection(next.usageCache)
     } catch (reason) {
       setError(errorMessage(reason))
+    } finally {
+      directoryLoadingRef.current = false
+      setDirectoryLoading(false)
     }
   }, [])
 
@@ -109,6 +120,8 @@ export function CredentialManagementArea() {
     connectionId: string,
     action: () => Promise<PublicAiSettingsSnapshot>,
   ) => {
+    if (accountActionRunningRef.current) return
+    accountActionRunningRef.current = true
     setBusyConnectionId(connectionId)
     setError(null)
     try {
@@ -116,6 +129,7 @@ export function CredentialManagementArea() {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      accountActionRunningRef.current = false
       setBusyConnectionId(null)
     }
   }, [])
@@ -123,6 +137,8 @@ export function CredentialManagementArea() {
   // refreshUsage queries and displays one account-scoped usage observation.
   // refreshUsage 查询并展示一个账号作用域用量观测。
   const refreshUsage = React.useCallback(async (connectionId: string) => {
+    if (accountActionRunningRef.current) return
+    accountActionRunningRef.current = true
     setBusyConnectionId(connectionId)
     setError(null)
     try {
@@ -131,6 +147,7 @@ export function CredentialManagementArea() {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      accountActionRunningRef.current = false
       setBusyConnectionId(null)
     }
   }, [])
@@ -151,19 +168,6 @@ export function CredentialManagementArea() {
   // activeProvider is the exact provider selected by the fixed directory.
   // activeProvider 是固定目录选中的精确供应商。
   const activeProvider = directoryProviders.find((provider) => provider.id === activeProviderId)
-  // activeProviderLabel supplies the shared collapsed-menu pill label.
-  // activeProviderLabel 为共享收起菜单胶囊提供标签。
-  const activeProviderLabel = activeProviderId
-    ? (() => {
-      // provider resolves the exact registered descriptor selected by the left menu.
-      // provider 解析左侧菜单选中的精确注册描述。
-      const provider = directoryProviders.find((candidate) => candidate.id === activeProviderId)
-      return provider
-        ? localizedProviderName(provider.id, provider.display_name, t)
-        : activeProviderId
-    })()
-    : t("settings.credentials.selectProvider")
-
   // Select the first ordered provider when the current provider is absent or stale.
   // 当前供应商缺失或过期时选择排序后的第一个供应商。
   React.useEffect(() => {
@@ -180,41 +184,27 @@ export function CredentialManagementArea() {
     : undefined
 
   return (
-    <AdaptiveToolPanel
-      className="workspace-tool-panel-page workspace-skills-settings credential-management-layout"
-      contentClassName="workspace-skills-content credential-management-content"
-      contentShellClassName="credential-management-content-shell"
-      expanded={menuExpanded}
-      minContentWidth={336}
-      panel={(
-        <WorkspaceToolPanelMenu
-          activeLabel={activeProviderLabel}
-           ariaLabel={t("settings.credentials.categoryAria")}
-           className="credential-management-menu"
-           collapseLabel={t("settings.credentials.collapse")}
-           expanded={menuExpanded}
-           expandLabel={t("settings.credentials.expand")}
-           heading={t("settings.credentials.categoryAria")}
-          onExpandedChange={setMenuExpanded}
-        >
-          {directoryProviders.map((provider) => (
-            <button
-              className={`workspace-tool-panel-menu-row ${activeProviderId === provider.id ? "active" : ""}`}
-              key={provider.id}
-              onClick={() => setActiveProviderId(provider.id)}
-              type="button"
-            >
-              <ProviderIcon category={provider.category} className="size-5" providerId={provider.id} />
-              <span>{localizedProviderName(provider.id, provider.display_name, t)}</span>
-              <small>{snapshot?.connections.filter((connection) => connection.provider_id === provider.id).length ?? 0}</small>
-            </button>
-          ))}
-        </WorkspaceToolPanelMenu>
-      )}
-      panelWidth={176}
-      side="left"
-    >
+    <div className="credential-management-layout settings-local-directory-grid">
+      <nav className="settings-local-directory-nav" aria-label={t("settings.credentials.categoryAria")}>
+        {directoryProviders.map((provider) => (
+          <Button
+            aria-current={activeProviderId === provider.id ? "page" : undefined}
+            className={`workspace-tool-panel-menu-row ${activeProviderId === provider.id ? "active" : ""}`}
+            key={provider.id}
+            onClick={() => setActiveProviderId(provider.id)}
+            type="button"
+            variant="ghost"
+          >
+            <ProviderIcon category={provider.category} className="size-5" providerId={provider.id} />
+            <span className="settings-directory-label" title={localizedProviderName(provider.id, provider.display_name, t)}>{localizedProviderName(provider.id, provider.display_name, t)}</span>
+            <small>{snapshot?.connections.filter((connection) => connection.provider_id === provider.id).length ?? 0}</small>
+          </Button>
+        ))}
+      </nav>
       <div className="settings-direct-content credential-management-surface">
+        <div className="settings-local-directory-mobile">
+          <Combobox ariaLabel={t("settings.credentials.categoryAria")} placeholder={t("settings.credentials.selectProvider")} searchPlaceholder={t("settings.modelExperience.searchPlaceholder")} emptyText={t("settings.modelExperience.noProviders")} options={directoryProviders.map((provider) => ({ value: provider.id, label: localizedProviderName(provider.id, provider.display_name, t) }))} value={activeProviderId} onValueChange={setActiveProviderId} />
+        </div>
         {activeProvider ? (
           <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
             <div className="flex min-w-0 items-center gap-3">
@@ -233,6 +223,7 @@ export function CredentialManagementArea() {
               </div>
             </div>
             <Button
+              disabled={busyConnectionId !== null || directoryLoading}
               onClick={() => {
                 setCreatingProviderId(activeProvider.id)
                 setPickerOpen(true)
@@ -245,11 +236,11 @@ export function CredentialManagementArea() {
             </Button>
           </div>
         ) : null}
-        {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+        {error ? <div className="settings-error-text" role="alert"><p>{locale === "zh-CN" ? "操作未完成，请重试。" : "The operation did not complete. Please retry."}</p><details><summary>{locale === "zh-CN" ? "查看详情" : "View details"}</summary><pre>{error}</pre></details></div> : null}
         {!snapshot ? (
           <article className="settings-card">
-            <strong>{t("settings.credentials.connecting")}</strong>
-            <p>{t("settings.credentials.connectingDescription")}</p>
+            <strong>{error ? (locale === "zh-CN" ? "凭据目录加载失败" : "Credential directory could not be loaded") : t("settings.credentials.connecting")}</strong>
+            {!error ? <p>{t("settings.credentials.connectingDescription")}</p> : <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{locale === "zh-CN" ? "重新加载" : "Reload"}</Button>}
           </article>
         ) : visibleConnections.length > 0 ? (
           <div className="credential-management-list">
@@ -271,7 +262,7 @@ export function CredentialManagementArea() {
               const isDefault = snapshot.providerDefaults[connection.provider_id] === connection.id
               return (
                 <CredentialAccountCard
-                  busy={busyConnectionId === connection.id}
+                  busy={busyConnectionId !== null}
                   catalogError={catalogError}
                   connection={connection}
                   credentialProfile={credentialProfile}
@@ -311,8 +302,9 @@ export function CredentialManagementArea() {
           </div>
         ) : (
           <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <strong>{t("settings.credentials.emptyAll")}</strong>
-            <p>{t("settings.credentials.emptyAllDescription")}</p>
+            <strong>{locale === "zh-CN" ? "供应商目录为空" : "The provider directory is empty"}</strong>
+            <p>{locale === "zh-CN" ? "加载供应商目录后，即可添加账号凭据。" : "Load the provider directory to add account credentials."}</p>
+            <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{locale === "zh-CN" ? "重新加载目录" : "Reload directory"}</Button>
           </div>
         )}
         <PublicAiConnectionDialog
@@ -381,7 +373,7 @@ export function CredentialManagementArea() {
         open={deletingConnection !== null}
         />
       </div>
-    </AdaptiveToolPanel>
+    </div>
   )
 }
 
@@ -458,11 +450,11 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
     : { title: providerName, tags: [] }
   return (
     <Card
-      className="h-60 w-full max-w-[21rem] gap-0 border border-border pt-2 ring-0"
+      className="min-h-48 min-w-0 w-full gap-0 border border-border pt-2 ring-0"
       size="sm"
     >
       <CardHeader className="shrink-0">
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
           <ProviderIcon
             category={props.provider?.category}
             className="size-8 shrink-0"
@@ -470,10 +462,10 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
             serviceEntryId={props.connection.service_entry_id}
           />
           <div className="min-w-0 flex-1">
-            <div className="mb-1 truncate text-xs text-muted-foreground">
+            <div className="mb-1 truncate text-xs text-muted-foreground" title={serviceEntryPresentation.title}>
               {serviceEntryPresentation.title}
             </div>
-            <CardTitle className="truncate">{props.connection.display_name}</CardTitle>
+            <CardTitle className="truncate" title={props.connection.display_name}>{props.connection.display_name}</CardTitle>
             <CardDescription className="mt-0.5 flex min-h-4 flex-wrap items-center gap-1.5">
               {serviceEntryPresentation.tags.map((tag) => (
                 <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
@@ -555,11 +547,11 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
         >
           <Star
             className={props.isDefault
-              ? "size-4 fill-yellow-400 text-yellow-500"
+              ? "size-4 fill-current text-[var(--vcn-content-warning)]"
               : "size-4"}
           />
         </CredentialIconAction>
-        <CredentialIconAction label={t("settings.credentials.edit")} onClick={props.onEdit}>
+        <CredentialIconAction disabled={props.busy} label={t("settings.credentials.edit")} onClick={props.onEdit}>
           <KeyRound className="size-4" />
         </CredentialIconAction>
         <CredentialIconAction
@@ -655,6 +647,9 @@ function PublicAiDeleteConnectionDialog(props: {
   const [replacementId, setReplacementId] = React.useState("")
   const [error, setError] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
+  // Deletion owns the selected identity until the backend acknowledges success or failure.
+  // 后端确认成功或失败前，删除操作持有选定身份。
+  const savingRef = React.useRef(false)
 
   React.useEffect(() => {
     if (!props.open) {
@@ -667,13 +662,14 @@ function PublicAiDeleteConnectionDialog(props: {
   // remove submits the connection and replacement choice as one atomic backend transaction.
   // remove 把连接与替代选择作为一个原子后端事务提交。
   const remove = React.useCallback(async () => {
-    if (!props.connection) {
+    if (savingRef.current || !props.connection) {
       return
     }
     if (props.isProviderDefault && replacements.length > 0 && !replacementId) {
       setError(t("settings.credentials.deleteDefaultMissingReplacement"))
       return
     }
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -686,13 +682,14 @@ function PublicAiDeleteConnectionDialog(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [props, replacementId, replacements.length])
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent>
+    <Dialog open={props.open} onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }}>
+      <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>{t("settings.credentials.deleteTitle")}</DialogTitle>
           <DialogDescription>
@@ -702,8 +699,8 @@ function PublicAiDeleteConnectionDialog(props: {
         {props.isProviderDefault && replacements.length > 0 ? (
           <div className="settings-field">
             <span>{t("settings.credentials.replacementDefault")}</span>
-            <Select onValueChange={setReplacementId} value={replacementId}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <Select disabled={saving} onValueChange={setReplacementId} value={replacementId}>
+              <SelectTrigger aria-label={t("settings.credentials.replacementDefault")} className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
               {replacements.map((connection) => (
                 <SelectItem key={connection.id} value={connection.id}>{connection.display_name}</SelectItem>
@@ -712,14 +709,14 @@ function PublicAiDeleteConnectionDialog(props: {
             </Select>
           </div>
         ) : null}
-        {error ? <p className="settings-error-text">{error}</p> : null}
+        {error ? <p className="settings-error-text" role="alert">{error}</p> : null}
         <DialogFooter>
-          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">
+          <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">
             {t("settings.credentials.cancel")}
-          </button>
-          <button className="skill-action-button secondary danger" disabled={saving} onClick={() => void remove()} type="button">
+          </Button>
+          <Button disabled={saving} onClick={() => void remove()} type="button" variant="destructive">
             {saving ? t("settings.credentials.deleting") : t("settings.credentials.confirmDelete")}
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -819,6 +816,14 @@ export function PublicAiConnectionDialog(props: {
   const [oauthProjectId, setOauthProjectId] = React.useState("")
   const [oauthTransaction, setOauthTransaction] = React.useState<PublicAiOAuthTransaction | null>(null)
   const [oauthUserCode, setOauthUserCode] = React.useState<string | null>(null)
+  // Stable identity preserves drafts across unrelated settings snapshot refreshes.
+  // 稳定身份在无关设置快照刷新时保留草稿。
+  const initializedConnectionKey = React.useRef<string | null>(null)
+  const savingRef = React.useRef(false)
+  const cancellingRef = React.useRef(false)
+  const [cancelling, setCancelling] = React.useState(false)
+  const onSavedRef = React.useRef(props.onSaved)
+  onSavedRef.current = props.onSaved
   const [pendingAuthorization, setPendingAuthorization] = React.useState<{
     transactionId: string
     providerId: string
@@ -843,8 +848,12 @@ export function PublicAiConnectionDialog(props: {
 
   React.useEffect(() => {
     if (!props.open) {
+      initializedConnectionKey.current = null
       return
     }
+    const connectionKey = JSON.stringify([props.connection?.id ?? null, props.lockedProviderId, props.initialProviderId])
+    if (initializedConnectionKey.current === connectionKey) return
+    initializedConnectionKey.current = connectionKey
     const existingProvider = props.connection
       ? props.providers.find((item) => item.id === props.connection?.provider_id)
       : props.providers.find((item) => item.id === props.lockedProviderId)
@@ -916,12 +925,23 @@ export function PublicAiConnectionDialog(props: {
         if (disposed) {
           return
         }
+        if (cancellingRef.current) {
+          timer = setTimeout(() => void poll(), 750)
+          return
+        }
         setOauthTransaction(transaction)
         if (transaction.phase === "succeeded") {
-          const next = await commitPublicAiOAuthConnection(pendingAuthorization)
-          if (!disposed) {
-            setPendingAuthorization(null)
-            props.onSaved(next)
+          savingRef.current = true
+          setSaving(true)
+          try {
+            const next = await commitPublicAiOAuthConnection(pendingAuthorization)
+            if (!disposed) {
+              setPendingAuthorization(null)
+              onSavedRef.current(next)
+            }
+          } finally {
+            savingRef.current = false
+            if (!disposed) setSaving(false)
           }
           return
         }
@@ -944,11 +964,12 @@ export function PublicAiConnectionDialog(props: {
         clearTimeout(timer)
       }
     }
-  }, [pendingAuthorization, props.onSaved])
+  }, [pendingAuthorization])
 
   // save validates the visible form and delegates secrets to the host-owned credential store.
   // save 校验可见表单并把秘密委托给宿主持有的凭据仓库。
   const save = React.useCallback(async () => {
+    if (savingRef.current || cancellingRef.current || pendingAuthorization) return
     const requiresToken = credentialMode === "token"
       && (
         !props.connection
@@ -965,6 +986,7 @@ export function PublicAiConnectionDialog(props: {
       setError(t("settings.credentials.connectionIncomplete"))
       return
     }
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -1033,10 +1055,12 @@ export function PublicAiConnectionDialog(props: {
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [
     credentialMode,
+    pendingAuthorization,
     credentialProfile,
     displayName,
     entry,
@@ -1056,29 +1080,37 @@ export function PublicAiConnectionDialog(props: {
 
   // cancelAuthorization cancels the exact active browser transaction.
   // cancelAuthorization 取消精确的活动浏览器事务。
-  const cancelAuthorization = React.useCallback(async () => {
-    if (!pendingAuthorization) {
+  const cancelAuthorization = React.useCallback(async (closeAfterCancel = false) => {
+    if (!pendingAuthorization || savingRef.current || cancellingRef.current) {
       return
     }
+    cancellingRef.current = true
+    setCancelling(true)
     try {
       setOauthTransaction(await cancelPublicAiOAuth(pendingAuthorization.transactionId))
       setPendingAuthorization(null)
+      if (closeAfterCancel) props.onOpenChange(false)
     } catch (reason) {
       setError(errorMessage(reason))
+    } finally {
+      cancellingRef.current = false
+      setCancelling(false)
     }
-  }, [pendingAuthorization])
+  }, [pendingAuthorization, props.onOpenChange])
 
   return (
     <Dialog
       open={props.open}
       onOpenChange={(open) => {
+        if (savingRef.current || cancellingRef.current) return
         if (!open && pendingAuthorization) {
-          void cancelAuthorization()
+          void cancelAuthorization(true)
+          return
         }
         props.onOpenChange(open)
       }}
     >
-      <DialogContent scrollMode="body-scroll" size="lg">
+      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
             {props.connection
@@ -1091,7 +1123,7 @@ export function PublicAiConnectionDialog(props: {
               : t("settings.credentials.modelDescription")}
           </DialogDescription>
         </DialogHeader>
-        <div className="settings-form-grid">
+        <fieldset className="settings-form-grid min-h-0 flex-1 overflow-y-auto" disabled={saving || cancelling || pendingAuthorization !== null}>
           <label className="settings-form-field">
             <span>{t("settings.credentials.provider")}</span>
             <span className="provider-credential-select">
@@ -1232,7 +1264,7 @@ export function PublicAiConnectionDialog(props: {
               ) : null}
             </>
           ) : null}
-        </div>
+        </fieldset>
         {oauthTransaction ? (
           <div className="settings-muted-line">
             <span>
@@ -1242,16 +1274,17 @@ export function PublicAiConnectionDialog(props: {
             {oauthUserCode ? <strong>{t("settings.credentials.authorizationCode")}{t("global.labelSeparator")}{oauthUserCode}</strong> : null}
           </div>
         ) : null}
-        {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+        {error ? <p className="settings-muted-line settings-error-text" role="alert">{error}</p> : null}
         <DialogFooter>
-          <button
-            className="skill-action-button secondary"
+          <Button
+            disabled={saving || cancelling}
+            variant="outline"
             onClick={() => pendingAuthorization ? void cancelAuthorization() : props.onOpenChange(false)}
             type="button"
           >
             {pendingAuthorization ? t("settings.credentials.cancelAuthorization") : t("settings.credentials.cancel")}
-          </button>
-          <button className="skill-action-button" disabled={saving || pendingAuthorization !== null} onClick={() => void save()} type="button">
+          </Button>
+          <Button disabled={saving || cancelling || pendingAuthorization !== null} onClick={() => void save()} type="button">
             {pendingAuthorization
               ? t("settings.credentials.waitBrowser")
               : saving
@@ -1261,7 +1294,7 @@ export function PublicAiConnectionDialog(props: {
                     ? t("settings.credentials.reauthorizeAndSave")
                     : t("settings.credentials.openBrowserAuthorize")
                   : t("settings.credentials.saveSync")}
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -16,7 +16,6 @@ const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var
 
 // CHART_RANGE_DAYS keeps the restored daily trend aligned with the runtime projection window.
 // CHART_RANGE_DAYS 让恢复的每日趋势与运行时投影窗口保持一致。
-const CHART_RANGE_DAYS = 30;
 
 // TOOLTIP_DELAY_MS keeps chart details intentional instead of appearing during pointer transit.
 // TOOLTIP_DELAY_MS 让图表详情只在明确悬停后出现，避免指针经过时立即弹出。
@@ -43,6 +42,46 @@ const PRICE_FIELDS = Object.freeze([
   { key: "cacheReadPerMillion", messageKey: "pricing.cacheRead", fallback: "Cache read" },
   { key: "cacheWritePerMillion", messageKey: "pricing.cacheWrite", fallback: "Cache write" },
 ]);
+
+// Format exact non-negative decimals without converting the stored value to floating point.
+// 格式化精确非负十进制数，不把存储值转换为浮点数。
+// value is an exact decimal string and locale selects separators; returns compact display text.
+// value 是精确十进制字符串，locale 选择分隔符；返回紧凑展示文本。
+export function formatMoney(value, locale = "en") {
+  if (typeof value !== "string" || !DECIMAL_PRICE_PATTERN.test(value)) return "-";
+  // parts preserve every source digit, including values above Number.MAX_SAFE_INTEGER.
+  // parts 保留全部来源数字，包括超过 Number.MAX_SAFE_INTEGER 的数值。
+  const parts = value.split(".");
+  // fraction is explicitly optional in the accepted decimal grammar.
+  // fraction 在接受的十进制语法中明确可选。
+  const fraction = parts[1] ?? "";
+  if (BigInt(parts[0]) === 0n && !/[1-9]/.test(fraction)) return "0.00";
+  if (BigInt(parts[0]) === 0n && fraction.slice(0, 4).padEnd(4, "0") === "0000") return "<0.0001";
+  // places keeps small amounts useful while limiting ordinary amounts to cents.
+  // places 保留小金额的有效信息，并将普通金额限制为分。
+  let places = BigInt(parts[0]) === 0n ? 4 : 2;
+  // scaled rounds integer digits only; the exact source is never changed.
+  // scaled 仅对整数数字进行展示舍入；精确来源不会改变。
+  let scaled = BigInt(parts[0] + fraction.slice(0, places).padEnd(places, "0"));
+  if (Number(fraction[places] ?? "0") >= 5) scaled += 1n;
+  if (places === 4 && scaled >= 10000n) { scaled = 100n; places = 2; }
+  // digits provides the rounded integer and fractional portions.
+  // digits 提供舍入后的整数与小数部分。
+  const digits = scaled.toString().padStart(places + 1, "0");
+  // integer is formatted as BigInt to preserve arbitrarily large exact values.
+  // integer 使用 BigInt 格式化，以保留任意大精确值。
+  const integer = new Intl.NumberFormat(locale).format(BigInt(digits.slice(0, -places)));
+  // decimalSeparator follows the host locale.
+  // decimalSeparator 遵循宿主语言环境。
+  const decimalSeparator = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
+  // tail removes insignificant zeros only for sub-unit amounts.
+  // tail 仅在小于一的金额中移除无意义尾零。
+  const tail = places === 4 ? digits.slice(-places).replace(/0+$/, "") : digits.slice(-places);
+  // rounded reports only actual precision loss.
+  // rounded 仅表示确实存在精度舍弃。
+  const rounded = /[1-9]/.test(fraction.slice(places));
+  return `${rounded ? "≈" : ""}${integer}${tail ? decimalSeparator + tail : ""}`;
+}
 
 // Create the Provider usage statistics panel through the stable host UI SDK.
 // 通过稳定宿主 UI SDK 创建 Provider 用量统计面板。
@@ -142,20 +181,9 @@ export function createPluginPanel(sdk) {
   // Returns an explicitly estimated value or the exact reason it is unavailable.
   // 返回带明确估算标记的值，或返回其不可用的精确原因。
   function formatReferenceEstimate(record) {
-    // currency is the plugin-catalog currency and is never persisted by the core.
-    // currency 是插件价目表币种，内核绝不会持久化它。
-    const currency = record.estimatedCurrency ? ` ${record.estimatedCurrency}` : "";
-    if (record.estimatedCost !== null && record.estimatedCost !== undefined) {
-      return `~${record.estimatedCost}${currency}`;
+      if (record.estimatedCost === null || record.estimatedCost === undefined) return "-";
+      return `${formatMoney(record.estimatedCost, sdk.locale)}${record.estimatedCurrency ? ` ${record.estimatedCurrency}` : ""}`;
     }
-    if (record.pricingMatchStatus === "unmatched") {
-      return text("pricing.unmatched", "Model not in reference catalog");
-    }
-    if (record.pricingMatchStatus === "incomplete_usage") {
-      return text("pricing.incomplete", "Incomplete Token facts");
-    }
-    return "—";
-  }
 
   // interpolate replaces exact named locale placeholders without evaluating arbitrary templates.
   // interpolate 替换精确命名的语言占位符，不执行任意模板。
@@ -220,7 +248,7 @@ export function createPluginPanel(sdk) {
 
   // buildHeatmapCells fills the shared calendar grid and derives five non-zero intensity bands.
   // buildHeatmapCells 填充共享日历点阵并派生五级非零强度区间。
-  function buildHeatmapCells(rows) {
+  function buildHeatmapCells(rows, days) {
     // rowsByDate maps exact ISO keys to complete daily activity facts.
     // rowsByDate 将精确 ISO 键映射到完整每日活动事实。
     const rowsByDate = new Map(rows.map((row) => [row.date, row]));
@@ -235,7 +263,7 @@ export function createPluginPanel(sdk) {
     const thresholds = nonZeroValues.length === 0
       ? []
       : [1, 2, 3, 4, 5].map((level) => nonZeroValues[Math.ceil((nonZeroValues.length * level) / 5) - 1]);
-    return localCalendarDates(365).map((date) => {
+    return localCalendarDates(days).map((date) => {
       // row is the complete aggregate for this date when activity exists.
       // row 是存在活动时当前日期的完整聚合。
       const row = rowsByDate.get(date);
@@ -252,9 +280,9 @@ export function createPluginPanel(sdk) {
       // successes is the exact successful request count used by the tooltip.
       // successes 是提示中使用的精确成功请求数。
       const successes = numeric(row?.successes);
-      // successRate preserves the empty-day zero semantics without division by zero.
-      // successRate 保留空日期为零的语义，并避免除零。
-      const successRate = requests === 0 ? 0 : successes * 100 / requests;
+      // A day without requests has no observed success rate, rather than a failed zero-percent rate.
+      // 无请求的日期没有观测成功率，不能显示为全部失败的零百分比。
+      const successRate = requests === 0 ? null : successes * 100 / requests;
       // topModel is the provider/model pair returned by the authoritative daily projection.
       // topModel 是权威每日投影返回的供应商/模型组合。
       const topModel = row?.topModelName
@@ -269,7 +297,7 @@ export function createPluginPanel(sdk) {
             date: new Intl.DateTimeFormat(sdk.locale, { month: "long", day: "numeric" }).format(new Date(`${date}T00:00:00`)),
             model: topModel,
             requests: formatInteger(requests),
-            successRate: `${successRate.toFixed(1)}%`,
+            successRate: successRate === null ? "—" : `${successRate.toFixed(1)}%`,
             value: formatInteger(value),
           },
         ),
@@ -283,12 +311,12 @@ export function createPluginPanel(sdk) {
     return new Intl.DateTimeFormat(sdk.locale, { month: "short" }).format(new Date(`${date}T00:00:00`));
   }
 
-  // buildLineSeries aligns sparse model rows onto one shared 30-day local-date axis.
-  // buildLineSeries 将稀疏模型行对齐到共享的 30 天本地自然日横轴。
-  function buildLineSeries(rows) {
+  // buildLineSeries aligns sparse model rows onto one selected-range local-date axis.
+  // buildLineSeries 将稀疏模型行对齐到所选范围的本地自然日横轴。
+  function buildLineSeries(rows, days) {
     // dates is the complete fixed chart x-axis.
     // dates 是完整的固定图表横轴。
-    const dates = localCalendarDates(CHART_RANGE_DAYS);
+    const dates = localCalendarDates(days);
     // groups accumulates exact values by stable series key and date.
     // groups 按稳定序列键与日期累积精确数值。
     const groups = new Map();
@@ -365,12 +393,141 @@ export function createPluginPanel(sdk) {
     );
   }
 
+  // Render exact usage dimensions and the cache-read share of reported input.
+  // 渲染精确用量维度，以及缓存读取占已报告输入的比例。
+  // record is a daily or attempt projection; returns an accessible disclosure.
+  // record 是每日或请求投影；返回可访问的详情展开控件。
+  function tokenDetails(record, open = false) {
+    return h("details", { open },
+      h("summary", null, record.totalTokens === null ? "-" : formatInteger(record.totalTokens)),
+      h("dl", { className: "plugin-control-facts" },
+        ...["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"].flatMap((key) => [
+          h("dt", { key: key + "-label" }, text(`tokens.${key}`, key)),
+          h("dd", { key }, record[key] === null ? "-" : formatInteger(record[key])),
+        ]),
+        h("dt", null, text("tokens.cacheShare", "Cache read / reported input")),
+        h("dd", null, record.inputTokens !== null && record.inputTokens > 0 && record.cacheReadTokens !== null
+          ? `${(record.cacheReadTokens / record.inputTokens * 100).toFixed(1)}%` : "-"),
+      ),
+    );
+  }
+
+  // tokenOverview visualizes reported input/output only; cache dimensions never add to that denominator.
+  // tokenOverview 仅可视化已报告输入与输出；缓存维度绝不加入该分母。
+  // record is the full-range host summary; returns compact values and a labelled composition bar when both operands are known.
+  // record 是全范围宿主汇总；返回紧凑数值，并仅在两个操作数已知时返回带名称的占比条。
+  function tokenOverview(record) {
+    // total combines disjoint input/output dimensions; null and zero cannot manufacture percentages.
+    // total 合并互不重叠的输入与输出维度；空值与零值不能被编造成比例。
+    const total = record.inputTokens !== null && record.outputTokens !== null ? record.inputTokens + record.outputTokens : null;
+    const inputShare = total !== null && total > 0 ? record.inputTokens / total * 100 : null;
+    const outputShare = inputShare === null ? null : 100 - inputShare;
+    const cacheShare = record.inputTokens !== null && record.inputTokens > 0 && record.cacheReadTokens !== null
+      ? `${(record.cacheReadTokens / record.inputTokens * 100).toFixed(1)}%` : "-";
+    return h(React.Fragment, null,
+      h("div", { className: "plugin-statistics-token-values" },
+        ...[["inputTokens", inputShare], ["outputTokens", outputShare]].map(([key, share]) => h("div", { key, "data-token-dimension": key },
+          h("span", null, text(`tokens.${key}`, key)),
+          h("strong", null, record[key] === null ? "-" : formatInteger(record[key])),
+          h("span", { className: "plugin-statistics-token-share" }, share === null ? "-" : `${share.toFixed(1)}%`),
+        )),
+      ),
+      inputShare === null ? h("p", { className: "plugin-statistics-privacy" }, text("tokens.noComposition", "Input/output share is unavailable"))
+        : h("div", { className: "plugin-statistics-token-bar", role: "img", "aria-label": interpolate(text("tokens.composition", "Input {{input}}% · Output {{output}}%"), {
+          input: inputShare.toFixed(1), output: outputShare.toFixed(1),
+        }) }, h("span", { style: { width: `${inputShare}%` } }), h("span", { style: { width: `${outputShare}%` } })),
+      h("dl", { className: "plugin-control-facts plugin-statistics-cache-facts" },
+        h("dt", null, text("tokens.cacheReadTokens", "Cache read")),
+        h("dd", null, record.cacheReadTokens === null ? "-" : formatInteger(record.cacheReadTokens), ` · ${cacheShare}`),
+        h("dt", null, text("tokens.cacheWriteTokens", "Cache write")),
+        h("dd", null, record.cacheWriteTokens === null ? "-" : formatInteger(record.cacheWriteTokens)),
+      ),
+      h("p", { className: "plugin-statistics-privacy" }, text("tokens.cacheSeparate", "Cache read share uses reported input; cache counts are not added to input/output.")),
+    );
+  }
+
+  // Keep short cost cells while exposing the exact estimate and missing-price reason.
+  // 保持费用单元格简短，同时提供精确估算与价格缺失原因。
+  // record is a priced runtime projection; returns an accessible disclosure.
+  // record 是运行时定价投影；返回可访问的详情展开控件。
+  function estimateDetails(record) {
+    return h("details", null,
+      h("summary", null, formatReferenceEstimate(record)),
+      h("div", { className: "plugin-control-error-details" },
+        record.estimatedCost === null
+          ? text(record.pricingMatchStatus === "unmatched" ? "pricing.unpriced" : "pricing.incompleteUsage", "Estimate unavailable")
+          : `${record.estimatedCost} ${record.estimatedCurrency}`,
+      ),
+    );
+  }
+
+  // Render server page navigation without claiming the loaded rows are the complete dataset.
+  // 渲染服务端分页导航，不将已加载行冒充完整数据集。
+  // offset, size and total describe the server page; setOffset changes it and busy prevents overlap.
+  // offset、size 与 total 描述服务端分页；setOffset 切换分页，busy 防止重叠。
+  // Returns one themed navigation row.
+  // 返回一行遵循主题的导航。
+  function pageControls(offset, size, total, setOffset, busy) {
+    return h("div", { className: "plugin-statistics-toolbar" },
+      h(Button, { type: "button", size: "sm", variant: "outline", disabled: busy || offset === 0, onClick: () => setOffset(Math.max(0, offset - size)) }, text("page.previous", "Previous")),
+      h("span", null, `${Math.min(offset + 1, total)}–${Math.min(offset + size, total)} / ${formatInteger(total)}`),
+      h(Button, { type: "button", size: "sm", variant: "outline", disabled: busy || offset + size >= total, onClick: () => setOffset(offset + size) }, text("page.next", "Next")),
+    );
+  }
+
   // UsageStatisticsPanel combines host-owned Token facts with an in-memory plugin price catalog.
   // UsageStatisticsPanel 将宿主持有的 Token 事实与插件内存价目表组合展示。
   function UsageStatisticsPanel() {
+    // section selects one reachable task area without losing unsaved pricing drafts.
+    // section 选择可达任务区域，同时保留尚未保存的定价草稿。
+    const [section, setSection] = React.useState("overview");
+    // dashboardView requests only projections used by the active task area.
+    // dashboardView 仅请求当前任务区域使用的投影。
+    const dashboardView = section === "details" ? "details" : section === "maintenance" ? "maintenance" : "overview";
+    // rangeDays applies the same bounded calendar range to every usage query.
+    // rangeDays 为每个用量查询应用相同的有界自然日范围。
+    const [rangeDays, setRangeDays] = React.useState(30);
+    // modelQuery and sortOrder bind explicit search and chronological ordering to the server.
+    // modelQuery 与 sortOrder 将明确搜索和时间排序绑定到服务端。
+    const [modelQuery, setModelQuery] = React.useState("");
+    const [modelDraft, setModelDraft] = React.useState("");
+    const [sortOrder, setSortOrder] = React.useState("newest");
+    // dailyOffset and recentOffset select independent server pages.
+    // dailyOffset 与 recentOffset 选择独立的服务端分页。
+    const [dailyOffset, setDailyOffset] = React.useState(0);
+    const [recentOffset, setRecentOffset] = React.useState(0);
+    // pricingSearch and pricingFilter narrow the complete declared price catalog.
+    // pricingSearch 与 pricingFilter 筛选完整声明的定价目录。
+    const [pricingSearch, setPricingSearch] = React.useState("");
+    const [pricingFilter, setPricingFilter] = React.useState("all");
+    const [pricingPage, setPricingPage] = React.useState(0);
+    // pricingDirectory is a server page across all retained usage, catalog and override models.
+    // pricingDirectory 是横跨全部保留用量、目录与覆盖模型的服务端分页。
+    const [pricingDirectory, setPricingDirectory] = React.useState(null);
+    const [pricingDirectoryLoading, setPricingDirectoryLoading] = React.useState(false);
+    const [pricingDirectoryError, setPricingDirectoryError] = React.useState("");
+    // settingsError is independent of database loading so price configuration stays available.
+    // settingsError 独立于数据库加载，让价格配置保持可用。
+    const [settingsError, setSettingsError] = React.useState("");
+    // Retry revisions rerun only the failed independent read boundary.
+    // 重试修订号仅重新执行失败的独立读取边界。
+    const [settingsRetry, setSettingsRetry] = React.useState(0);
+    const [pricingRetry, setPricingRetry] = React.useState(0);
+    // requestSequence rejects earlier responses after range changes or unmount.
+    // requestSequence 拒绝范围变更或卸载后返回的旧响应。
+    const requestSequence = React.useRef(0);
+    // dashboardInFlight coalesces identical concurrent reads, including StrictMode setup replay.
+    // dashboardInFlight 合并相同并发读取，包括 StrictMode 的初始化重放。
+    const dashboardInFlight = React.useRef(null);
+    // settingsRequest shares the initial independent settings action across effect replay.
+    // settingsRequest 在 Effect 重放间共享首次独立设置 Action。
+    const settingsRequest = React.useRef(null);
     // dashboard stores the latest schema-validated host statistics snapshot.
     // dashboard 保存最近一份通过 Schema 校验的宿主统计快照。
     const [dashboard, setDashboard] = React.useState(null);
+    // dashboardKey identifies the exact filters of the retained successful snapshot.
+    // dashboardKey 标识保留的成功快照所属的精确筛选条件。
+    const dashboardKey = React.useRef(null);
     // pricingSettings stores plugin-owned model overrides and the bundled catalog projection.
     // pricingSettings 保存插件自有模型覆盖与内置目录投影。
     const [pricingSettings, setPricingSettings] = React.useState(null);
@@ -383,6 +540,9 @@ export function createPluginPanel(sdk) {
     // settingsBusy prevents overlapping model-price persistence operations.
     // settingsBusy 防止模型价格持久化操作重叠。
     const [settingsBusy, setSettingsBusy] = React.useState(false);
+    // settingsBusyRef prevents repeated writes before React commits disabled state.
+    // settingsBusyRef 防止 React 提交禁用状态前重复写入。
+    const settingsBusyRef = React.useRef(false);
     // consumerFilter selects one exact server-bound consumer identity.
     // consumerFilter 选择一个精确的服务端消费者身份。
     const [consumerFilter, setConsumerFilter] = React.useState(ALL_CONSUMERS);
@@ -398,6 +558,9 @@ export function createPluginPanel(sdk) {
     // clearBusy prevents concurrent preview and apply operations.
     // clearBusy 防止预览与应用操作并发执行。
     const [clearBusy, setClearBusy] = React.useState(false);
+    // clearBusyRef serializes preview and apply through the complete host operation.
+    // clearBusyRef 在完整宿主操作期间串行化预览与应用。
+    const clearBusyRef = React.useRef(false);
     // notice stores the latest successful maintenance result.
     // notice 保存最近一次维护成功结果。
     const [notice, setNotice] = React.useState("");
@@ -410,28 +573,51 @@ export function createPluginPanel(sdk) {
 
     // refresh loads one coherent native dashboard revision through the plugin action boundary.
     // refresh 通过插件 Action 边界加载一个一致的原生仪表盘修订版。
-    const refresh = React.useCallback(async () => {
-      if (loading) return;
+    const refresh = React.useCallback(async (force = false) => {
+      if (!mountedRef.current) return;
+      // sequence captures the exact filter request represented by this response.
+      // sequence 捕获当前响应代表的精确筛选请求。
+      const sequence = ++requestSequence.current;
       setLoading(true);
       setError("");
       try {
-        const [nextDashboard, nextSettings] = await Promise.all([
-          sdk.invoke("dashboard-get", {}),
-          sdk.invoke("settings-get", {}),
-        ]);
-        if (mountedRef.current) {
+        // argumentsValue captures the declared query contract for exact request deduplication.
+        // argumentsValue 捕获声明的查询契约，以精确合并相同请求。
+        const argumentsValue = {
+          view: dashboardView,
+          rangeDays, consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
+          dailyOffset, recentOffset, modelQuery, sortOrder,
+        };
+        // key compares only immutable action arguments, never SQL or runtime guesses.
+        // key 仅比较不可变 Action 参数，不使用 SQL 或运行时猜测。
+        const key = JSON.stringify(argumentsValue);
+        // Same-filter retries retain readable results; another scope must never inherit those values.
+        // 同筛选重试保留可读结果；其他作用域绝不能继承这些值。
+        if (dashboardKey.current !== key) setDashboard(null);
+        if (force || dashboardInFlight.current?.key !== key) {
+          dashboardInFlight.current = { key, promise: sdk.invoke("dashboard-get", argumentsValue) };
+        }
+        // pending is the exact shared request claimed by this refresh.
+        // pending 是当前刷新认领的精确共享请求。
+        const pending = dashboardInFlight.current;
+        const nextDashboard = await pending.promise.finally(() => {
+          if (dashboardInFlight.current === pending) dashboardInFlight.current = null;
+        });
+        if (mountedRef.current && sequence === requestSequence.current) {
+          dashboardKey.current = key;
           setDashboard(nextDashboard);
-          setPricingSettings(nextSettings);
-          const nextModel = selectedPricingModel || nextSettings.catalogModels[0]?.modelId || "";
-          setSelectedPricingModel(nextModel);
-          setPricingDraft(editablePrices(nextSettings, nextModel));
         }
       } catch (reason) {
-        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
+        if (mountedRef.current && sequence === requestSequence.current) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current && sequence === requestSequence.current) setLoading(false);
       }
-    }, [loading, selectedPricingModel]);
+    }, [rangeDays, consumerFilter, dailyOffset, recentOffset, modelQuery, sortOrder, dashboardView]);
+
+    // Post-write refresh follows the currently rendered scope even if the user navigated during the write.
+    // 即使用户在写入期间切换页面，写入后的刷新也遵循当前渲染作用域。
+    const currentRefresh = React.useRef(refresh);
+    currentRefresh.current = refresh;
 
     // selectPricingModel loads one exact override or catalog default into the string-only editor.
     // selectPricingModel 将一个精确覆盖或目录默认值加载到纯字符串编辑器。
@@ -444,25 +630,26 @@ export function createPluginPanel(sdk) {
     // persistPricingOverrides saves one complete plugin-owned configuration and refreshes estimates.
     // persistPricingOverrides 保存完整插件自有配置并刷新估算结果。
     const persistPricingOverrides = React.useCallback(async (modelOverrides, successMessage) => {
-      if (settingsBusy) return;
+      if (settingsBusyRef.current) return;
+      settingsBusyRef.current = true;
       setSettingsBusy(true);
-      setError("");
+      setSettingsError("");
       setNotice("");
       try {
         const nextSettings = await sdk.invoke("settings-update", { modelOverrides });
-        const nextDashboard = await sdk.invoke("dashboard-get", {});
         if (mountedRef.current) {
           setPricingSettings(nextSettings);
-          setDashboard(nextDashboard);
           setPricingDraft(editablePrices(nextSettings, selectedPricingModel));
           setNotice(successMessage);
         }
+        await currentRefresh.current(true);
       } catch (reason) {
-        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
+        if (mountedRef.current) setSettingsError(reason instanceof Error ? reason.message : String(reason));
       } finally {
+        settingsBusyRef.current = false;
         if (mountedRef.current) setSettingsBusy(false);
       }
-    }, [selectedPricingModel, settingsBusy]);
+    }, [selectedPricingModel]);
 
     // savePricingOverride validates and persists all four exact prices for the selected model.
     // savePricingOverride 校验并持久化所选模型的四项精确价格。
@@ -486,7 +673,8 @@ export function createPluginPanel(sdk) {
     // previewClear reads the exact destructive scope without modifying system statistics.
     // previewClear 读取精确破坏范围，且不修改系统统计。
     const previewClear = React.useCallback(async () => {
-      if (clearBusy) return;
+      if (clearBusyRef.current) return;
+      clearBusyRef.current = true;
       setClearBusy(true);
       setError("");
       setNotice("");
@@ -496,6 +684,7 @@ export function createPluginPanel(sdk) {
       } catch (reason) {
         if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
+        clearBusyRef.current = false;
         if (mountedRef.current) setClearBusy(false);
       }
     }, [clearBusy]);
@@ -503,25 +692,26 @@ export function createPluginPanel(sdk) {
     // applyClear deletes history only when the preview revision is still current.
     // applyClear 仅在预览修订仍然有效时删除历史。
     const applyClear = React.useCallback(async () => {
-      if (clearBusy || !clearPreview) return;
+      if (clearBusyRef.current || !clearPreview) return;
+      clearBusyRef.current = true;
       setClearBusy(true);
       setError("");
       try {
         const result = await sdk.invoke("statistics-clear-apply", {
           expectedAggregateRevision: clearPreview.aggregateRevision,
         });
-        const nextDashboard = await sdk.invoke("dashboard-get", {});
         if (mountedRef.current) {
-          setDashboard(nextDashboard);
           setClearPreview(null);
           setNotice(`${text("clear.success", "Cleared historical statistics")}: ${formatInteger(result.clearedAttemptCount)} ${text("clear.attempts", "attempts")}`);
         }
+        await currentRefresh.current(true);
       } catch (reason) {
         if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
+        clearBusyRef.current = false;
         if (mountedRef.current) setClearBusy(false);
       }
-    }, [clearBusy, clearPreview]);
+    }, [clearPreview]);
 
     // toggleSeries changes only local chart visibility and never reloads statistics.
     // toggleSeries 仅改变本地图表可见性，绝不重新加载统计。
@@ -537,57 +727,65 @@ export function createPluginPanel(sdk) {
 
     React.useEffect(() => {
       mountedRef.current = true;
-      // The initial read bypasses the overlap guard because loading starts true.
-      // 初始读取绕过重叠保护，因为 loading 初始值为 true。
-      void Promise.all([
-        sdk.invoke("dashboard-get", {}),
-        sdk.invoke("settings-get", {}),
-      ]).then(([nextDashboard, nextSettings]) => {
+      setSettingsError("");
+      // Price configuration resolves independently of statistics reads.
+      // 价格配置独立于统计读取完成加载。
+      if (settingsRequest.current === null) settingsRequest.current = sdk.invoke("settings-get", {});
+      void settingsRequest.current.then((nextSettings) => {
         if (mountedRef.current) {
-          setDashboard(nextDashboard);
           setPricingSettings(nextSettings);
-          const initialModel = nextSettings.catalogModels[0]?.modelId || "";
-          setSelectedPricingModel(initialModel);
-          setPricingDraft(editablePrices(nextSettings, initialModel));
         }
       }).catch((reason) => {
-        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
-      }).finally(() => {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current) setSettingsError(reason instanceof Error ? reason.message : String(reason));
       });
       return () => {
         mountedRef.current = false;
       };
-    }, []);
+    }, [settingsRetry]);
+
+    React.useEffect(() => {
+      void refresh();
+      return () => { requestSequence.current += 1; };
+    }, [refresh]);
+
+    React.useEffect(() => {
+      if (section !== "pricing" || !pricingSettings) return;
+      // active and timer prevent stale search responses and coalesce rapid search edits.
+      // active 与 timer 防止旧搜索响应，并合并快速搜索编辑。
+      let active = true;
+      setPricingDirectoryLoading(true);
+      setPricingDirectory(null);
+      setPricingDirectoryError("");
+      const timer = window.setTimeout(() => {
+        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * 25 })
+          .then((result) => { if (active) setPricingDirectory(result); })
+          .catch((reason) => { if (active) setPricingDirectoryError(reason instanceof Error ? reason.message : String(reason)); })
+          .finally(() => { if (active) setPricingDirectoryLoading(false); });
+      }, 200);
+      return () => { active = false; window.clearTimeout(timer); };
+    }, [section, pricingSearch, pricingFilter, pricingPage, pricingSettings, pricingRetry]);
 
     // consumerIds contains exact server-bound identities observed in either dashboard projection.
     // consumerIds 包含任一仪表盘投影中观察到的精确服务端身份。
-    const consumerIds = React.useMemo(() => Array.from(new Set([
-      ...(dashboard?.daily.map((row) => row.consumerId) ?? []),
-      ...(dashboard?.recentAttempts.map((row) => row.consumerId) ?? []),
-    ])).sort(), [dashboard]);
-    // pricingModelIds merges bundled, observed, and explicitly configured exact model identities.
-    // pricingModelIds 合并内置、已观测与显式配置的精确模型标识。
-    const pricingModelIds = React.useMemo(() => Array.from(new Set([
-      ...(pricingSettings?.catalogModels.map((entry) => entry.modelId) ?? []),
-      ...(dashboard?.daily.map((row) => row.modelId) ?? []),
-      ...(dashboard?.recentAttempts.map((row) => row.modelId) ?? []),
-      ...Object.keys(pricingSettings?.modelOverrides ?? {}),
-    ])).sort(), [dashboard, pricingSettings]);
+    const consumerIds = dashboard?.consumerIds ?? [];
     // selectedModelHasOverride controls the exact restore-default operation.
     // selectedModelHasOverride 控制精确的恢复默认操作。
     const selectedModelHasOverride = Boolean(
       selectedPricingModel && pricingSettings?.modelOverrides?.[selectedPricingModel],
     );
+    // selectedPricingSource is derived from the complete settings authority, independent of the filtered directory page.
+    // selectedPricingSource 派生自完整设置权威，与已筛选目录分页无关。
+    const selectedPricingSource = !selectedPricingModel || !pricingSettings ? null : selectedModelHasOverride ? "override"
+      : pricingSettings.catalogModels.some((entry) => entry.modelId === selectedPricingModel) ? "catalog" : "unpriced";
     // pricingDraftValid controls persistence without coercing decimal strings.
     // pricingDraftValid 控制持久化，且不强制转换十进制字符串。
     const pricingDraftValid = pricingDraftIsValid(pricingDraft);
 
     React.useEffect(() => {
-      if (consumerFilter !== ALL_CONSUMERS && !consumerIds.includes(consumerFilter)) {
+      if (dashboard && consumerFilter !== ALL_CONSUMERS && !consumerIds.includes(consumerFilter)) {
         setConsumerFilter(ALL_CONSUMERS);
       }
-    }, [consumerFilter, consumerIds]);
+    }, [consumerFilter, consumerIds, dashboard]);
 
     // filteredDaily applies the selected consumer without changing persisted aggregates.
     // filteredDaily 应用选定消费者，且不改变持久化聚合。
@@ -601,36 +799,52 @@ export function createPluginPanel(sdk) {
     ) ?? [];
     // summary is a display-only projection over already persisted host facts.
     // summary 是对已持久化宿主事实的纯展示投影。
-    const summary = summarizeDaily(filteredDaily);
-    // heatmapCells contains the complete aligned 365-day activity grid.
-    // heatmapCells 包含完整对齐的 365 天活动点阵。
-    const heatmapCells = buildHeatmapCells(dashboard?.heatmap ?? []);
+    const summary = dashboard ? {
+      ...dashboard.summary,
+      successRate: dashboard.summary.attempts > 0 ? dashboard.summary.successes / dashboard.summary.attempts * 100 : null,
+      usageCoverage: dashboard.summary.attempts > 0 ? dashboard.summary.reported / dashboard.summary.attempts * 100 : null,
+    } : summarizeDaily([]);
+    // heatmapCells contains the complete activity grid for the selected range.
+    // heatmapCells 包含所选范围内完整对齐的活动点阵。
+    const heatmapCells = buildHeatmapCells(dashboard?.heatmap ?? [], rangeDays);
     // allSeries contains every runtime-projected model line.
     // allSeries 包含运行时投影的全部模型折线。
-    const allSeries = buildLineSeries(dashboard?.series ?? []);
+    const allSeries = buildLineSeries(dashboard?.series ?? [], rangeDays);
     // visibleSeries excludes locally hidden lines without changing the action result.
     // visibleSeries 排除本地隐藏折线，但不改变 Action 结果。
     const visibleSeries = allSeries.filter((series) => !hiddenSeries.has(series.id));
     // legendItems projects every line into the shared visibility control model.
     // legendItems 将全部折线投影为共享可见性控件模型。
     const legendItems = allSeries.map((series) => ({ ...series, visible: !hiddenSeries.has(series.id) }));
+    // visiblePricingModels contains only the declared server page, while totalCount covers the full filter.
+    // visiblePricingModels 仅包含声明的服务端分页，totalCount 则覆盖完整筛选。
+    const visiblePricingModels = pricingDirectory?.models ?? [];
+    // pricingDirty compares exact strings so opening a default never creates an unsolicited override.
+    // pricingDirty 比较精确字符串，确保打开默认值不会产生非预期覆盖。
+    const pricingDirty = pricingSettings && PRICE_FIELDS.some((field) => pricingDraft[field.key] !== editablePrices(pricingSettings, selectedPricingModel)[field.key]);
 
-    return h("section", { className: "full-height settings-detail-panel plugin-statistics-layout" },
+    return h("section", { className: "settings-detail-panel plugin-statistics-layout" },
       h("div", { className: "plugin-statistics-header" },
         h("div", null,
           h("strong", null, text("title", "System Usage Statistics")),
           h("p", null, text("subtitle", "The core stores Token facts only. This plugin computes non-persisted reference estimates from its own catalog.")),
         ),
         h(StatusPill, {
-          status: error ? "warning" : "ready",
+          status: loading ? "loading" : error || dashboard?.healthStatus !== "ready" ? "warning" : "ready",
           label: loading
             ? text("status.loading", "Loading system statistics")
             : error
               ? text("status.error", "System statistics failed to load")
-              : text("status.ready", "System statistics available"),
+              : dashboard?.healthStatus === "ready" ? text("status.ready", "System statistics available") : text("status.unknown", "Statistics health is unknown"),
         }),
       ),
-      h("div", { className: "plugin-statistics-range-header" },
+      h("nav", { className: "plugin-control-navigation", "aria-label": text("sections.label", "Statistics sections") },
+        ...["overview", "details", "pricing", "maintenance"].map((value) => h(Button, {
+          key: value, type: "button", size: "sm", variant: section === value ? "secondary" : "ghost",
+          "aria-pressed": section === value, onClick: () => setSection(value),
+        }, text(`sections.${value}`, value))),
+      ),
+      h("div", { className: "plugin-statistics-range-header", hidden: section === "pricing" },
         h("div", { className: "plugin-statistics-toolbar" },
           h(Button, {
             "aria-busy": loading,
@@ -654,7 +868,12 @@ export function createPluginPanel(sdk) {
             strokeLinejoin: "round",
             strokeWidth: "1.75",
           }))),
-          consumerIds.length > 1 ? h(SelectControl, {
+          h(SelectControl, {
+            ariaLabel: text("range.label", "Time range"), value: String(rangeDays),
+            options: [7, 30, 90, 365].map((days) => ({ value: String(days), label: interpolate(text("range.days", "Last {{days}} days"), { days }) })),
+            onValueChange: (value) => { setRangeDays(Number(value)); setDailyOffset(0); setRecentOffset(0); },
+          }),
+          consumerIds.length > 0 ? h(SelectControl, {
             ariaLabel: text("consumer.label", "Consumer"),
             className: "plugin-statistics-toolbar-select",
             value: consumerFilter,
@@ -662,9 +881,10 @@ export function createPluginPanel(sdk) {
               { value: ALL_CONSUMERS, label: text("consumer.all", "All consumers") },
               ...consumerIds.map((consumerId) => ({ value: consumerId, label: consumerId })),
             ],
-            onValueChange: setConsumerFilter,
+            onValueChange: (value) => { setConsumerFilter(value); setDailyOffset(0); setRecentOffset(0); },
           }) : null,
           h(Button, {
+            hidden: section !== "maintenance",
             "aria-busy": clearBusy,
             disabled: clearBusy || loading,
             onClick: () => void previewClear(),
@@ -674,6 +894,12 @@ export function createPluginPanel(sdk) {
             variant: "outline",
           }, clearBusy ? text("clear.previewing", "Preparing preview") : text("clear.preview", "Preview clearing history")),
         ),
+        modelQuery ? h("div", { className: "plugin-statistics-toolbar" },
+          h(Badge, { variant: "outline" }, `${text("pricing.model", "Model")}: ${modelQuery}`),
+          h(Button, { type: "button", size: "sm", variant: "ghost", onClick: () => {
+            setModelQuery(""); setModelDraft(""); setDailyOffset(0); setRecentOffset(0);
+          } }, text("usage.clearSearch", "Clear model search")),
+        ) : null,
         dashboard ? h("div", { className: "plugin-statistics-toolbar" },
           h(Badge, { variant: "outline" }, text("source.host", "Host data")),
           h(Badge, { variant: "outline" },
@@ -683,13 +909,35 @@ export function createPluginPanel(sdk) {
             `${text("revision", "Revision")} ${formatInteger(dashboard.aggregateRevision)} · ${formatTimestamp(dashboard.generatedAtMs)}`,
           ),
         ) : null,
+        dashboard && (loading || error) ? h("p", { role: "status", className: "plugin-statistics-privacy" },
+          text("snapshot.retained", "Showing the previous result until a refresh succeeds.")) : null,
       ),
-      error ? h(ErrorState, {
-        title: text("error.title", "Unable to read system statistics"),
-        description: error,
-      }) : null,
+      error ? h("div", { role: "alert" },
+        h(ErrorState, { title: text("error.title", "Unable to read system statistics") }),
+        h("details", null, h("summary", null, text("error.details", "Error details")),
+          h("pre", { className: "plugin-control-error-details" }, error)),
+      ) : null,
+      settingsError ? h("div", { role: "alert" },
+        h(ErrorState, { title: text("pricing.loadError", "Unable to load price settings") }),
+        h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => {
+          settingsRequest.current = null;
+          setSettingsRetry((revision) => revision + 1);
+        } }, text("error.retry", "Retry")),
+        h("details", null, h("summary", null, text("error.details", "Error details")),
+          h("pre", { className: "plugin-control-error-details" }, settingsError)),
+      ) : null,
+      h("form", { className: "plugin-statistics-toolbar", hidden: section !== "details",
+        onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); } },
+        h("input", { className: "plugin-statistics-price-input", type: "search", maxLength: 256,
+          "aria-label": text("usage.search", "Search usage by model"), placeholder: text("usage.search", "Search usage by model"),
+          value: modelDraft, onChange: (event) => setModelDraft(event.currentTarget.value) }),
+        h(Button, { type: "submit", size: "sm", variant: "outline", disabled: loading }, text("usage.applySearch", "Search")),
+        h(SelectControl, { ariaLabel: text("usage.order", "Time order"), value: sortOrder,
+          options: ["newest", "oldest"].map((value) => ({ value, label: text(`usage.${value}`, value) })),
+          onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
+      ),
       notice ? h("p", { className: "plugin-statistics-privacy" }, notice) : null,
-      clearPreview ? h("article", { className: "plugin-statistics-card" },
+      clearPreview ? h("article", { className: "plugin-statistics-card", hidden: section !== "maintenance" },
         h("div", { className: "plugin-statistics-section-header" },
           h("div", null,
             h("strong", null, text("clear.title", "Clear historical statistics")),
@@ -711,16 +959,17 @@ export function createPluginPanel(sdk) {
               onClick: () => void applyClear(),
               size: "sm",
               type: "button",
+              variant: "destructive",
             }, clearBusy ? text("clear.applying", "Clearing") : text("clear.apply", "Confirm clear")),
           ),
         ),
       ) : null,
-      !dashboard && !error ? h(EmptyState, {
+      !dashboard && !error && section !== "pricing" ? h(EmptyState, {
         title: text("status.loading", "Loading system statistics"),
         description: text("loading.description", "Reading the authoritative host statistics database."),
       }) : null,
-      dashboard ? h(React.Fragment, null,
-        h("div", { className: "plugin-statistics-summary-grid" },
+      dashboard || pricingSettings ? h(React.Fragment, null,
+        h("div", { className: "plugin-statistics-summary-grid", hidden: section !== "overview" || !dashboard },
           h(MetricCard, {
             icon: "requests",
             label: text("summary.requests", "Physical attempts"),
@@ -746,7 +995,25 @@ export function createPluginPanel(sdk) {
             detail: text("summary.usageCoverageDetail", "Directly Provider-reported"),
           }),
         ),
-        h("article", { className: "plugin-statistics-card" },
+        h("div", { className: "plugin-statistics-balance", hidden: section !== "overview" || !dashboard },
+          h("article", { className: "plugin-statistics-card" },
+            h("div", { className: "plugin-statistics-section-header" }, h("strong", null, text("cost.title", "Reference cost for the selected range")),
+              h(Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setSection("pricing") }, text("sections.pricing", "Model pricing"))),
+            ...(dashboard?.summary.costs ?? []).map((cost) => h("div", { className: "plugin-statistics-cost", key: cost.currency },
+              h("strong", { className: "plugin-statistics-cost-value", title: cost.amount === null ? "" : cost.amount }, cost.amount === null ? "-" : `${formatMoney(cost.amount, sdk.locale)} ${cost.currency}`),
+              h("p", { className: "plugin-statistics-privacy" }, interpolate(text("cost.coverage", "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"), {
+                priced: formatInteger(cost.pricedRows), unpriced: formatInteger(cost.unpricedRows), incomplete: formatInteger(cost.incompleteRows),
+              })),
+              cost.unpricedRows + cost.incompleteRows > 0 ? h(Badge, { variant: "outline" }, text("cost.partial", "Partial coverage")) : null,
+            )),
+            !dashboard?.summary.costs.length ? h("p", { className: "plugin-statistics-privacy" }, text("cost.empty", "No cost records in this range")) : null,
+          ),
+          h("article", { className: "plugin-statistics-card" },
+            h("strong", null, text("tokens.breakdown", "Input, output and cache")),
+            dashboard ? tokenOverview(summary) : null,
+          ),
+        ),
+        h("article", { className: "plugin-statistics-card", hidden: section !== "overview" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("heatmap.title", "Activity heatmap")),
             h(ActivityHeatmapLegend, {
@@ -756,7 +1023,7 @@ export function createPluginPanel(sdk) {
           ),
           h("div", { className: "plugin-statistics-chart-wrap" },
             h(ActivityHeatmap, {
-              ariaLabel: text("heatmap.aria", "Token activity heatmap for the last 365 days"),
+              ariaLabel: text("heatmap.aria", "Token activity heatmap for the selected range"),
               cells: heatmapCells,
               emptyLabel: text("heatmap.empty", "No token activity yet"),
               formatMonth: formatMonthLabel,
@@ -764,10 +1031,10 @@ export function createPluginPanel(sdk) {
             }),
           ),
         ),
-        h("article", { className: "plugin-statistics-card" },
+        h("article", { className: "plugin-statistics-card", hidden: section !== "overview" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("trend.title", "Daily token usage")),
-            h(Badge, { variant: "outline" }, text("trend.range", "Last 30 days")),
+            h(Badge, { variant: "outline" }, interpolate(text("range.days", "Last {{days}} days"), { days: rangeDays })),
           ),
           h("div", { className: "plugin-statistics-chart-wrap" },
             h(TimeSeriesLineChart, {
@@ -780,7 +1047,7 @@ export function createPluginPanel(sdk) {
           ),
           h(ChartLegend, { items: legendItems, onToggle: toggleSeries }),
         ),
-        h("article", { className: "plugin-statistics-card" },
+        h("article", { className: "plugin-statistics-card", hidden: section !== "pricing" },
           h("div", { className: "plugin-statistics-section-header" },
             h("div", null,
               h("strong", null, text("pricing.title", "Model reference prices")),
@@ -788,67 +1055,73 @@ export function createPluginPanel(sdk) {
                 text("pricing.description", "Overrides belong to this plugin configuration. Estimates are recomputed and never written to the statistics database."),
               ),
             ),
-            h(Badge, { variant: "outline" }, selectedModelHasOverride
-              ? text("pricing.override", "Custom override")
-              : text("pricing.default", "Catalog default")),
           ),
-          pricingModelIds.length === 0 ? h(EmptyState, {
-            title: text("pricing.empty", "No model identities available"),
-          }) : h(React.Fragment, null,
-            h(SelectControl, {
-              ariaLabel: text("pricing.model", "Model"),
-              className: "plugin-statistics-pricing-model",
-              value: selectedPricingModel,
-              options: pricingModelIds.map((modelId) => ({ value: modelId, label: modelId })),
-              onValueChange: selectPricingModel,
-            }),
-            h("div", { className: "plugin-statistics-price-grid" },
-              ...PRICE_FIELDS.map((field) => h("label", {
-                className: "plugin-statistics-price-field",
-                key: field.key,
-              },
-                h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
-                h("input", {
-                  "aria-label": text(field.messageKey, field.fallback),
-                  className: "plugin-statistics-price-input",
-                  disabled: settingsBusy,
-                  inputMode: "decimal",
-                  maxLength: 64,
-                  onChange: (event) => setPricingDraft((current) => ({
-                    ...current,
-                    [field.key]: event.currentTarget.value.trim(),
-                  })),
-                  spellCheck: false,
-                  type: "text",
-                  value: pricingDraft[field.key],
-                }),
-              )),
-            ),
-            h("div", { className: "plugin-statistics-toolbar" },
-              h(Button, {
-                "aria-busy": settingsBusy,
-                disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid,
-                onClick: savePricingOverride,
-                size: "sm",
-                type: "button",
-              }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
-              h(Button, {
-                disabled: settingsBusy || !selectedModelHasOverride,
-                onClick: resetPricingOverride,
-                size: "sm",
-                type: "button",
-                variant: "outline",
-              }, text("pricing.reset", "Restore catalog default")),
-              !pricingDraftValid ? h("span", { className: "plugin-statistics-privacy" },
-                text("pricing.validation", "Enter four non-negative decimal prices."),
-              ) : null,
-            ),
+          h("div", { className: "plugin-statistics-toolbar" },
+            h("input", { className: "plugin-statistics-price-input", type: "search",
+              "aria-label": text("pricing.search", "Search models"), placeholder: text("pricing.search", "Search models"),
+              value: pricingSearch, onChange: (event) => { setPricingSearch(event.currentTarget.value); setPricingPage(0); } }),
+            h(SelectControl, { ariaLabel: text("pricing.filter", "Price filter"), value: pricingFilter,
+              options: ["all", "unpriced", "override", "used"].map((value) => ({ value, label: text(`pricing.filter.${value}`, value) })),
+              onValueChange: (value) => { setPricingFilter(value); setPricingPage(0); } }),
+          ),
+          h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
+            pricingSettings === null ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices"))
+              : !selectedPricingModel ? h("p", { className: "plugin-statistics-privacy", role: "status" }, text("pricing.chooseModel", "Select a model in the table below to edit its prices."))
+                : h(React.Fragment, null,
+                  h("div", { className: "plugin-statistics-section-header" },
+                    h("h3", { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
+                    h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
+                      : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
+                  ),
+                  h("div", { className: "plugin-statistics-price-grid" },
+                    ...PRICE_FIELDS.map((field) => h("label", { className: "plugin-statistics-price-field", key: field.key },
+                      h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
+                      h("input", { "aria-label": text(field.messageKey, field.fallback), className: "plugin-statistics-price-input",
+                        disabled: settingsBusy, inputMode: "decimal", maxLength: 64, spellCheck: false, type: "text", value: pricingDraft[field.key],
+                        onChange: (event) => {
+                          // Capture the exact string before React releases the event's currentTarget.
+                          // 在 React 释放事件 currentTarget 前捕获精确字符串。
+                          const value = event.currentTarget.value.trim();
+                          setPricingDraft((current) => ({ ...current, [field.key]: value }));
+                        },
+                      }),
+                    )),
+                  ),
+                  h("div", { className: "plugin-statistics-toolbar" },
+                    h(Button, { "aria-busy": settingsBusy, disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid || !pricingDirty,
+                      onClick: savePricingOverride, size: "sm", type: "button" }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
+                    h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" }, text("pricing.reset", "Restore catalog default")),
+                    !pricingDraftValid ? h("span", { className: "plugin-statistics-privacy" }, text("pricing.validation", "Enter four non-negative decimal prices.")) : null,
+                  ),
+                ),
+          ),
+          h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${pricingDirectory.currency}` : ""),
+          pricingDirectoryLoading ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices")) : null,
+          pricingDirectoryError ? h("div", { role: "alert" }, text("pricing.loadError", "Unable to load model prices"),
+            h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => setPricingRetry((revision) => revision + 1) }, text("error.retry", "Retry")),
+            h("details", null, h("summary", null, text("error.details", "Error details")), h("pre", { className: "plugin-control-error-details" }, pricingDirectoryError))) : null,
+          h("div", { className: "plugin-statistics-table-wrap" }, h("table", { className: "plugin-statistics-table" },
+            h("thead", null, h("tr", null,
+              h("th", null, text("pricing.model", "Model")),
+              ...PRICE_FIELDS.map((field) => h("th", { key: field.key }, text(field.messageKey, field.fallback))),
+              h("th", null, text("pricing.source", "Source")),
+            )),
+            h("tbody", null, ...visiblePricingModels.map((entry) => h("tr", { key: entry.modelId, "aria-selected": selectedPricingModel === entry.modelId },
+              h("td", null, h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy, onClick: () => selectPricingModel(entry.modelId) }, entry.modelId)),
+              ...PRICE_FIELDS.map((field) => h("td", { key: field.key, title: entry.prices === null ? "" : entry.prices[field.key] }, formatMoney(entry.prices === null ? null : entry.prices[field.key], sdk.locale))),
+              h("td", null, text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source")),
+            ))),
+          )),
+          h("div", { className: "plugin-statistics-toolbar" },
+            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || pricingPage === 0, onClick: () => setPricingPage((value) => value - 1) }, text("page.previous", "Previous")),
+            h("span", null, `${Math.min(pricingPage * 25 + 1, pricingDirectory?.totalCount ?? 0)}–${Math.min(pricingPage * 25 + 25, pricingDirectory?.totalCount ?? 0)} / ${pricingDirectory?.totalCount ?? 0}`),
+            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || (pricingPage + 1) * 25 >= (pricingDirectory?.totalCount ?? 0), onClick: () => setPricingPage((value) => value + 1) }, text("page.next", "Next")),
           ),
         ),
-        h("article", { className: "plugin-statistics-card" },
+        h("article", { className: "plugin-statistics-card", hidden: section !== "details" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("daily.title", "Daily model usage")),
-            h(Badge, { variant: "outline" }, `${Math.min(filteredDaily.length, MAX_DAILY_ROWS)} / ${filteredDaily.length}`),
+            h(Badge, { variant: "outline" }, `${dailyOffset + filteredDaily.length} / ${dashboard?.dailyCount ?? 0}`),
           ),
           filteredDaily.length === 0 ? h(EmptyState, {
             title: text("daily.empty", "No daily usage facts"),
@@ -871,16 +1144,17 @@ export function createPluginPanel(sdk) {
                 h("td", null, row.consumerId),
                 h("td", null, row.operation),
                 h("td", null, `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`),
-                h("td", null, row.totalTokens === null ? "—" : formatInteger(row.totalTokens)),
-                h("td", null, formatReferenceEstimate(row)),
+                h("td", null, tokenDetails(row)),
+                h("td", null, estimateDetails(row)),
               ))),
             ),
           ),
+          pageControls(dailyOffset, MAX_DAILY_ROWS, dashboard?.dailyCount ?? 0, setDailyOffset, loading),
         ),
-        h("article", { className: "plugin-statistics-card" },
+        h("article", { className: "plugin-statistics-card", hidden: section !== "details" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("recent.title", "Recent physical attempts")),
-            h(Badge, { variant: "outline" }, `${Math.min(filteredAttempts.length, MAX_RECENT_ATTEMPTS)} / ${filteredAttempts.length}`),
+            h(Badge, { variant: "outline" }, `${recentOffset + filteredAttempts.length} / ${dashboard?.recentCount ?? 0}`),
           ),
           filteredAttempts.length === 0 ? h(EmptyState, {
             title: text("recent.empty", "No physical attempt records"),
@@ -903,21 +1177,22 @@ export function createPluginPanel(sdk) {
                   className: "plugin-statistics-status",
                   "data-status": attempt.status,
                 }, text(`status.${attempt.status}`, attempt.status)),
-                h("td", null, attempt.totalTokens === null ? "—" : formatInteger(attempt.totalTokens)),
-                h("td", null, formatReferenceEstimate(attempt)),
+                h("td", null, tokenDetails(attempt)),
+                h("td", null, estimateDetails(attempt)),
                 h("td", null, attempt.errorCategory
                   ? `${attempt.errorCategory}${attempt.errorCode ? ` / ${attempt.errorCode}` : ""}`
                   : "—"),
               ))),
             ),
           ),
+          pageControls(recentOffset, MAX_RECENT_ATTEMPTS, dashboard?.recentCount ?? 0, setRecentOffset, loading),
         ),
-        h("article", { className: "plugin-statistics-card" },
+        h("article", { className: "plugin-statistics-card", hidden: section !== "maintenance" || !dashboard },
           h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("accounts.title", "Account usage snapshots")),
-            h(Badge, { variant: "outline" }, formatInteger(dashboard.accounts.length)),
+            h(Badge, { variant: "outline" }, formatInteger(dashboard?.accounts.length ?? 0)),
           ),
-          dashboard.accounts.length === 0 ? h(EmptyState, {
+          !dashboard || dashboard.accounts.length === 0 ? h(EmptyState, {
             title: text("accounts.empty", "No account usage snapshots"),
           }) : h("div", { className: "plugin-statistics-table-wrap" },
             h("table", { className: "plugin-statistics-table" },
@@ -938,7 +1213,7 @@ export function createPluginPanel(sdk) {
             ),
           ),
         ),
-        h("p", { className: "plugin-statistics-privacy" },
+        h("p", { className: "plugin-statistics-privacy", hidden: section !== "maintenance" },
           text("privacy", "Vulcan persists Token facts only. Reference prices and estimates remain plugin-owned and are recomputed for each dashboard query."),
         ),
       ) : null,

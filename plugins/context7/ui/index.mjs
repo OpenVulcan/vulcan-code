@@ -26,7 +26,7 @@ const RETENTION_OPTIONS = [30, 90, 180, 365];
 // PANEL_STYLE 让未编译插件界面保持主题感知，同时不增加插件自有样式表。
 const PANEL_STYLE = {
   display: "grid",
-  gap: "16px",
+  gap: "12px",
   padding: "4px 0 20px",
 };
 
@@ -34,12 +34,12 @@ const PANEL_STYLE = {
 // CARD_STYLE 仅使用继承的设计 Token，确保浅色与深色主题均可读。
 const CARD_STYLE = {
   border: "1px solid var(--border)",
-  borderRadius: "12px",
+  borderRadius: "var(--radius)",
   background: "var(--card)",
   color: "var(--card-foreground)",
   display: "grid",
-  gap: "12px",
-  padding: "16px",
+  gap: "10px",
+  padding: "14px",
 };
 
 // ROW_STYLE aligns bounded settings controls while allowing narrow layouts to wrap.
@@ -108,9 +108,6 @@ export function createPluginPanel(sdk) {
   // SelectControl is the shared host-themed select component.
   // SelectControl 是共享宿主主题下拉组件。
   const SelectControl = sdk.components.SelectControl;
-  // ErrorState is the shared host error presentation.
-  // ErrorState 是共享宿主错误展示组件。
-  const ErrorState = sdk.components.ErrorState;
   // EmptyState is the shared host empty presentation.
   // EmptyState 是共享宿主空状态展示组件。
   const EmptyState = sdk.components.EmptyState;
@@ -164,6 +161,10 @@ export function createPluginPanel(sdk) {
     // config is the complete schema-validated non-secret plugin configuration.
     // config 是经过 Schema 校验的完整非密钥插件配置。
     const [config, setConfig] = React.useState(null);
+    // savedConfig and configDirty retain unsaved user settings across background usage refreshes.
+    // savedConfig 和 configDirty 在后台用量刷新期间保留用户未保存的设置。
+    const savedConfig = React.useRef(null);
+    const configDirty = React.useRef(false);
     // credential is the non-secret status projection returned by the plugin action.
     // credential 是插件 Action 返回的非密钥状态投影。
     const [credential, setCredential] = React.useState(null);
@@ -182,6 +183,9 @@ export function createPluginPanel(sdk) {
     // saving serializes user-initiated mutations and connection tests.
     // saving 串行化用户发起的变更与连接测试。
     const [saving, setSaving] = React.useState(false);
+    // mutationPending closes the same-tick gap before React renders disabled buttons.
+    // mutationPending 关闭 React 渲染禁用按钮前同一轮事件中的重复提交窗口。
+    const mutationPending = React.useRef(false);
     // deleteArmed requires a deliberate second click before credential deletion.
     // deleteArmed 要求再次明确点击后才删除凭据。
     const [deleteArmed, setDeleteArmed] = React.useState(false);
@@ -217,9 +221,11 @@ export function createPluginPanel(sdk) {
         // result 是通过单次串行插件 Action 返回的完整且经 Schema 校验的页面投影。
         const result = await sdk.invoke("bootstrap-get", { rangeDays });
         if (requestSequence !== loadSequence.current) return;
-        setConfig(result.settings);
+        savedConfig.current = result.settings;
+        if (!configDirty.current) setConfig(result.settings);
         setCredential(result.credential);
         setUsage(result.usage);
+        setError(result.usageError);
       } catch (loadError) {
         if (requestSequence !== loadSequence.current) return;
         // message preserves only the host-rendered bounded diagnostic.
@@ -274,23 +280,29 @@ export function createPluginPanel(sdk) {
     //
     // operation performs the declared plugin action and successMessage is the localized toast text.
     // operation 执行已声明插件 Action，successMessage 是本地化 Toast 文案。
-    // Returns a promise that resolves after the mutation and refresh finish.
-    // 返回一个在变更与刷新完成后解决的 Promise。
-    async function runMutation(operation, successMessage) {
+    // settingsMutation clears the dirty flag only after an acknowledged settings save; returns success or failure.
+    // settingsMutation 仅在设置保存确认后清除草稿标记；返回成功或失败。
+    async function runMutation(operation, successMessage, settingsMutation = false) {
+      if (mutationPending.current) return false;
+      mutationPending.current = true;
       setSaving(true);
       setError(null);
       try {
         await operation();
+        if (settingsMutation) configDirty.current = false;
         sdk.notifications.success(successMessage);
         await loadAll(false);
+        return true;
       } catch (mutationError) {
         // message is the exact bounded host action failure.
         // message 是宿主 Action 返回的精确有界失败信息。
         const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
         setError(message);
-        sdk.notifications.error(message);
+        sdk.notifications.error(text("operationFailed", "The operation failed. Please retry."));
+        return false;
       } finally {
         setSaving(false);
+        mutationPending.current = false;
       }
     }
 
@@ -300,6 +312,7 @@ export function createPluginPanel(sdk) {
     // Returns a promise that resolves after the credential action completes.
     // 返回一个在凭据 Action 完成后解决的 Promise。
     async function saveCredential() {
+      if (mutationPending.current || !credential || apiKey.length === 0) return;
       // submittedKey snapshots the secret so React state can be cleared before the network refresh.
       // submittedKey 快照密钥，使 React 状态可在网络刷新前清空。
       const submittedKey = apiKey;
@@ -316,6 +329,7 @@ export function createPluginPanel(sdk) {
     // Returns a promise that resolves after deletion or immediately after arming confirmation.
     // 返回一个在删除完成后或确认状态启用后立即解决的 Promise。
     async function deleteCredential() {
+      if (mutationPending.current || !credential?.configured) return;
       if (!deleteArmed) {
         setDeleteArmed(true);
         return;
@@ -345,10 +359,25 @@ export function createPluginPanel(sdk) {
     // Returns a promise that resolves after the configuration update completes.
     // 返回一个在配置更新完成后解决的 Promise。
     async function saveSettings() {
+      if (!config || !configDirty.current) return;
       await runMutation(
         () => sdk.invoke("settings-update", config),
         text("settingsSaved", "Context7 settings saved."),
+        true,
       );
+    }
+
+    // updateSettings changes only the three declared settings and tracks whether explicit saving is needed.
+    // updateSettings 仅变更三个已声明设置，并跟踪是否需要明确保存。
+    // nextConfig is the complete configuration schema; returns no value and never writes to storage.
+    // nextConfig 是完整配置 Schema；无返回值且绝不写入存储。
+    function updateSettings(nextConfig) {
+      if (mutationPending.current) return;
+      configDirty.current = savedConfig.current === null
+        || nextConfig.defaultFastMode !== savedConfig.current.defaultFastMode
+        || nextConfig.requestTimeoutMs !== savedConfig.current.requestTimeoutMs
+        || nextConfig.retentionDays !== savedConfig.current.retentionDays;
+      setConfig(nextConfig);
     }
 
     // openOfficial opens one source-defined Context7 URL through the host shell boundary.
@@ -404,14 +433,9 @@ export function createPluginPanel(sdk) {
     // quota is the latest snapshot for the current authentication generation only.
     // quota 是仅属于当前鉴权代次的最新快照。
     const quota = usage?.quotaSnapshot ?? null;
-    // stats is the exact local aggregate or a zero projection before first refresh.
-    // stats 是精确本地聚合；首次刷新前使用零值投影。
-    const stats = usage?.localStats ?? {
-      requests: 0,
-      successes: 0,
-      failures: 0,
-      averageDurationMs: 0,
-    };
+    // stats remains absent until a successful local aggregate has been received.
+    // stats 在成功接收本地聚合前保持缺失。
+    const stats = usage?.localStats ?? null;
 
     return h("section", { style: PANEL_STYLE },
       h("header", null,
@@ -420,9 +444,18 @@ export function createPluginPanel(sdk) {
           h("p", { style: { ...MUTED_STYLE, margin: "4px 0 0" } }, text("subtitle", "Configure authentication and inspect request quota and local usage.")),
         ),
       ),
-      error ? h(ErrorState, { title: text("loadError", "Context7 data could not be loaded."), description: error }) : null,
-      h("article", { style: CARD_STYLE },
-        h("strong", null, text("aboutTitle", "What is Context7?")),
+      error ? h("div", { role: "alert", style: CARD_STYLE },
+        h("div", { style: { ...ROW_STYLE, justifyContent: "space-between" } },
+          h("strong", { style: { color: "var(--destructive)", fontSize: "13px" } }, text("loadError", "Context7 data could not be loaded.")),
+          h(Button, { disabled: loading || saving, onClick: () => void loadAll(true), size: "sm", type: "button", variant: "outline" }, text("retry", "Retry")),
+        ),
+        h("details", { style: MUTED_STYLE },
+          h("summary", { style: { cursor: "pointer" } }, text("errorDetails", "Error details")),
+          h("pre", { style: { margin: "8px 0 0", maxHeight: "160px", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, error)),
+      ) : null,
+      h("details", { style: { color: "var(--muted-foreground)", fontSize: "12px" } },
+        h("summary", { style: { cursor: "pointer", padding: "4px 0" } }, text("aboutTitle", "What is Context7?")),
+        h("div", { style: { display: "grid", gap: "8px", padding: "8px 0" } },
         h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("aboutDescription", "Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant excerpts directly to the active task.")),
         h("p", { style: { ...MUTED_STYLE, margin: 0, fontSize: "13px" } }, text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard.")),
         h("div", { style: ROW_STYLE },
@@ -431,18 +464,19 @@ export function createPluginPanel(sdk) {
           officialLink(CONTEXT7_API_KEY_DOCS_URL, text("apiKeyDocsLink", "Get a free API key")),
           officialLink(CONTEXT7_USAGE_DOCS_URL, text("usageDocsLink", "API and usage documentation")),
         ),
+        ),
       ),
       h("article", { style: CARD_STYLE },
         h("div", { style: ROW_STYLE },
           h("strong", null, text("credentialTitle", "Authentication")),
-          h(Badge, { variant: credential?.configured ? "default" : "outline" }, credential?.configured ? text("apiKeyMode", "API key mode") : text("anonymousMode", "Anonymous mode")),
+          h(Badge, { variant: credential?.configured ? "default" : "outline" }, !credential ? text("loading", "Loading…") : credential.configured ? text("apiKeyMode", "API key mode") : text("anonymousMode", "Anonymous mode")),
         ),
-        h("p", { style: { ...MUTED_STYLE, margin: 0 } }, credential?.configured ? `${text("configured", "API key configured")} · ${validationMessage}` : text("notConfigured", "No API key configured; requests use the anonymous allowance.")),
+        credential ? h("p", { style: { ...MUTED_STYLE, margin: 0 } }, credential.configured ? `${text("configured", "API key configured")} · ${validationMessage}` : text("notConfigured", "No API key configured; requests use the anonymous allowance.")) : null,
         h("div", { style: ROW_STYLE },
           h("input", {
             "aria-label": text("apiKeyMode", "API key mode"),
             autoComplete: "off",
-            disabled: saving,
+            disabled: saving || !credential,
             onChange: (event) => setApiKey(event.target.value),
             placeholder: text("apiKeyPlaceholder", "ctx7sk-…"),
             spellCheck: false,
@@ -450,18 +484,19 @@ export function createPluginPanel(sdk) {
             type: "password",
             value: apiKey,
           }),
-          h(Button, { disabled: saving || apiKey.length === 0, onClick: () => void saveCredential(), size: "sm", type: "button" }, credential?.configured ? text("replaceApiKey", "Replace API key") : text("saveApiKey", "Save API key")),
+          h(Button, { disabled: saving || !credential || apiKey.length === 0, onClick: () => void saveCredential(), size: "sm", type: "button" }, credential?.configured ? text("replaceApiKey", "Replace API key") : text("saveApiKey", "Save API key")),
           credential?.configured ? h(Button, { disabled: saving, onClick: () => void deleteCredential(), size: "sm", type: "button", variant: deleteArmed ? "destructive" : "outline" }, deleteArmed ? text("confirmDeleteApiKey", "Confirm deletion") : text("deleteApiKey", "Delete API key")) : null,
         ),
         h("div", { style: ROW_STYLE },
-          h(Button, { disabled: saving, onClick: () => void testConnection(), size: "sm", type: "button", variant: "outline" }, saving ? text("testing", "Testing…") : text("connectionTest", "Test connection")),
+          h(Button, { disabled: saving || !credential, onClick: () => void testConnection(), size: "sm", type: "button", variant: "outline" }, text("connectionTest", "Test connection")),
           h("span", { style: MUTED_STYLE }, text("connectionTestHint", "Testing consumes one Context7 request from the current allowance.")),
         ),
       ),
-      config ? h("article", { style: CARD_STYLE },
-        h("strong", null, text("behaviorTitle", "Request behavior")),
+      config ? h("details", { style: { border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px 14px", background: "var(--card)" } },
+        h("summary", { style: { cursor: "pointer", fontWeight: 600 } }, text("behaviorTitle", "Request behavior")),
+        h("div", { style: { display: "grid", gap: "10px", paddingTop: "12px" } },
         h("label", { style: ROW_STYLE },
-          h("input", { checked: config.defaultFastMode, disabled: saving, onChange: (event) => setConfig({ ...config, defaultFastMode: event.target.checked }), type: "checkbox" }),
+          h("input", { checked: config.defaultFastMode, disabled: saving, onChange: (event) => updateSettings({ ...config, defaultFastMode: event.target.checked }), type: "checkbox" }),
           h("span", null, text("defaultFastMode", "Fast mode by default")),
         ),
         h("p", { style: { ...MUTED_STYLE, margin: 0 } }, text("defaultFastModeHint", "Skip Context7 LLM reranking for lower latency and potentially lower relevance.")),
@@ -470,7 +505,7 @@ export function createPluginPanel(sdk) {
           h(SelectControl, {
             ariaLabel: text("timeout", "Request timeout"),
             disabled: saving,
-            onValueChange: (value) => setConfig({ ...config, requestTimeoutMs: Number(value) }),
+            onValueChange: (value) => updateSettings({ ...config, requestTimeoutMs: Number(value) }),
             options: TIMEOUT_OPTIONS.map((value) => ({ value: String(value), label: `${value / 1000} s` })),
             value: String(config.requestTimeoutMs),
           }),
@@ -478,11 +513,12 @@ export function createPluginPanel(sdk) {
           h(SelectControl, {
             ariaLabel: text("retention", "Local statistics retention"),
             disabled: saving,
-            onValueChange: (value) => setConfig({ ...config, retentionDays: Number(value) }),
+            onValueChange: (value) => updateSettings({ ...config, retentionDays: Number(value) }),
             options: RETENTION_OPTIONS.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: value }) })),
             value: String(config.retentionDays),
           }),
-          h(Button, { disabled: saving, onClick: () => void saveSettings(), size: "sm", type: "button" }, saving ? text("saving", "Saving…") : text("saveSettings", "Save settings")),
+          h(Button, { disabled: saving || !configDirty.current, onClick: () => void saveSettings(), size: "sm", type: "button" }, saving ? text("saving", "Saving…") : text("saveSettings", "Save settings")),
+        ),
         ),
       ) : null,
       h("article", { style: CARD_STYLE },
@@ -500,10 +536,10 @@ export function createPluginPanel(sdk) {
         ),
         h("strong", { style: { fontSize: "13px" } }, text("localStatsTitle", "Local request statistics")),
         h("div", { style: GRID_STYLE },
-          h(MetricCard, { label: text("requests", "Requests"), value: sdk.formatNumber(stats.requests) }),
-          h(MetricCard, { label: text("successes", "Successful"), value: sdk.formatNumber(stats.successes) }),
-          h(MetricCard, { label: text("failures", "Failed"), value: sdk.formatNumber(stats.failures) }),
-          h(MetricCard, { label: text("averageDuration", "Average duration"), value: `${Math.round(stats.averageDurationMs)} ms` }),
+          h(MetricCard, { label: text("requests", "Requests"), value: stats ? sdk.formatNumber(stats.requests) : "-" }),
+          h(MetricCard, { label: text("successes", "Successful"), value: stats ? sdk.formatNumber(stats.successes) : "-" }),
+          h(MetricCard, { label: text("failures", "Failed"), value: stats ? sdk.formatNumber(stats.failures) : "-" }),
+          h(MetricCard, { label: text("averageDuration", "Average duration"), value: stats && stats.requests > 0 ? `${Math.round(stats.averageDurationMs)} ms` : "-" }),
         ),
         h("p", { style: { ...MUTED_STYLE, margin: 0 } }, text("localUsageNotice", "Local statistics include only requests made by this Vulcan Code plugin.")),
         h("strong", { style: { fontSize: "13px", marginTop: "4px" } }, text("quotaTitle", "Latest Context7 quota snapshot")),
@@ -512,7 +548,7 @@ export function createPluginPanel(sdk) {
           h(MetricCard, { label: text("quotaRemaining", "Remaining"), value: typeof quota.quotaRemaining !== "number" ? "—" : sdk.formatNumber(quota.quotaRemaining) }),
           h(MetricCard, { label: text("quotaLimit", "Limit"), value: typeof quota.quotaLimit !== "number" ? "—" : sdk.formatNumber(quota.quotaLimit) }),
           h(MetricCard, { label: text("quotaReset", "Reset"), value: typeof quota.quotaResetUnixSec !== "number" ? "—" : formatQuotaResetDate(quota.quotaResetUnixSec) }),
-        ) : h(EmptyState, { title: text("noQuota", "No quota response has been observed for the current authentication generation.") }),
+        ) : h("span", { title: text("noQuota", "No quota response has been observed for the current authentication generation."), "aria-label": text("noQuota", "No quota response has been observed for the current authentication generation.") }, "—"),
         h("p", { style: { ...MUTED_STYLE, margin: 0 } }, text("officialUsageNotice", "Complete account usage, billing periods, seats, and cost remain available in the official Context7 dashboard.")),
       ),
     );

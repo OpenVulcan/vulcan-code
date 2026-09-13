@@ -45,6 +45,7 @@ import { useI18n } from "@/i18n";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { terminalSummaryById } from "./conversation-terminal-model";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
+import { fixedV1ToolEvent } from "./tool-presentations/presentation-value-readers";
 
 export type {
   ToolExecutionConversationBlock,
@@ -168,11 +169,10 @@ export function ToolExecutionBlock(props: {
   const detailRefFields = toolExecutionDetailRef(props.blocks);
   // v1BackedPresentation identifies cards whose complete persisted payload already came from the V1 ledger.
   // v1BackedPresentation 标识完整持久化载荷已来自 V1 账本的卡片。
-  const v1BackedPresentation = props.blocks.some((block) => {
-    const metadata = block.rawMetadata;
-    return Boolean(metadata && typeof metadata === "object" && !Array.isArray(metadata)
-      && (metadata as Record<string, unknown>).v1_tool_event);
-  });
+  const v1ToolEvent = fixedV1ToolEvent(props.blocks);
+  // Presence follows the same producer-owned event used by domain cards.
+  // 是否存在取决于领域卡使用的同一生产者权威事件。
+  const v1BackedPresentation = v1ToolEvent !== undefined;
   // supportsDetailLookup prevents a merely stopped request row from enabling a nonexistent terminal detail.
   // supportsDetailLookup 防止仅被停止的请求行启用不存在的终态详情。
   const supportsDetailLookup = toolExecutionSupportsDetailLookup(props.blocks);
@@ -298,6 +298,7 @@ export function ToolExecutionBlock(props: {
   return (
     <div className="tool-execution-stack">
       <ToolPresentationCard
+        v1ToolEvent={v1ToolEvent}
         expanded={effectiveExpandedToolPresentationIds.has(presentation.id)}
         expandedFooter={rawInvocationAllowed && detailRef ? (
           <ToolRawInvocationButton onOpen={openRawInvocation} />

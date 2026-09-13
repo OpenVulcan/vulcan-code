@@ -698,6 +698,9 @@ export function useComposerAttachmentPreparation(options: {
     if (
       !preparation
       || !attachment
+      || retryPlanningTransfers.current.has(attachmentId)
+      || preparation.phase === "uploading"
+      || preparation.phase === "awaiting_provider_confirmation"
       || (preparation.deliveryPlan !== "upload_reference" && preparation.reason !== "original_upload_requires_explicit_retry")
       || !composerAttachmentRouteReadyForPlanning(
         modelSelectionSnapshot,

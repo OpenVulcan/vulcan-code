@@ -191,7 +191,7 @@ describe("project terminal data contracts", () => {
     expect(componentSource).toContain('setWorkspaceInputOwner({ kind: "project_terminal", terminalId });');
     expect(componentSource).toContain("terminalFocusRequestNonce: current.terminalFocusRequestNonce + 1");
     expect(componentSource).toContain("readOnly={!props.visible");
-    expect(componentSource).toContain("正在连接当前终端…");
+    expect(componentSource).toContain('t("workspaceAudit.connecting")');
     expect(viewportSource).toContain("[props.autoFocus, props.focusRequestNonce, props.readOnly]");
   });
 
@@ -275,9 +275,9 @@ describe("project terminal data contracts", () => {
     expect(componentSource).toContain('aria-orientation="vertical"');
     expect(componentSource).toContain('className="project-terminal-sidebar-add"');
     expect(componentSource).toContain('className="project-terminal-session-actions"');
-    expect(componentSource).toContain('title="停止终端"');
-    expect(componentSource).toContain('title="关闭终端"');
-    expect(componentSource).toContain('floatingControls.maximized ? "还原" : "最大化"');
+    expect(componentSource).toContain('title={t("workspaceAudit.stopTitle")}');
+    expect(componentSource).toContain('title={t("workspaceAudit.closeTitle")}');
+    expect(componentSource).toContain('floatingControls.maximized ? "workspaceAudit.restore" : "workspaceAudit.maximize"');
     expect(componentSource).toContain("projectTerminalUiStateCache");
     expect(componentSource).toContain("projectTerminalSeenRequests");
     expect(componentSource).toContain("sidebarCollapsed: false");
@@ -298,7 +298,7 @@ describe("project terminal data contracts", () => {
       "utf8",
     );
     expect(terminalStyles).toMatch(
-      /\.project-terminal-select-trigger\s*\{[^}]*color:\s*rgb\(241 244 249\);[^}]*background:\s*rgb\(62 68 80\);/,
+      /\.project-terminal-select-trigger\s*\{[^}]*color:\s*var\(--foreground\);[^}]*background:\s*var\(--background\);/,
     );
     expect(terminalStyles).toMatch(
       /\.project-terminal-session-name\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*normal;/,

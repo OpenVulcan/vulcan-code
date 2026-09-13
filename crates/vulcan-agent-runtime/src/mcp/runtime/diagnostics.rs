@@ -40,7 +40,8 @@ impl McpRuntimeToolAllowlist {
 
 /// Runtime connectivity state of one configured MCP server.
 /// 某个已配置 MCP 服务器的运行时连通状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum McpRuntimeServerStatus {
     /// Server is disabled in configuration and therefore does not participate in runtime registration.
     /// 服务器在配置中被禁用，因此不参与运行时注册。
@@ -79,7 +80,8 @@ impl McpRuntimeServerStatus {
 
 /// Structured source-aware runtime state for one MCP server exposed to service diagnostics.
 /// 暴露给服务诊断的单个 MCP 服务器结构化来源感知运行时状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpRuntimeServerState {
     /// Exact globally unique runtime server identifier.
     /// 精确且全局唯一的运行时服务器标识。
@@ -134,10 +136,48 @@ pub struct McpRuntimeServerState {
     pub recent_logs: Vec<String>,
 }
 
+/// Read-only catalog and state captured from the same runtime snapshot.
+/// 从同一运行时快照采集的只读目录与状态。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRuntimeServerInspection {
+    /// Process-local catalog revision changed on reconnect or tool catalog replacement.
+    /// 重连或工具目录替换时更新的进程内目录版本。
+    pub inspection_generation: u64,
+    /// Live server state, including bounded server-specific diagnostics.
+    /// 实时服务器状态，包含有界的服务器专属诊断。
+    pub state: McpRuntimeServerState,
+    /// Original schemas; discovery does not imply current AI authorization.
+    /// 原始 Schema；发现工具不代表当前 AI 获得调用授权。
+    pub tools: Vec<McpRuntimeToolInspection>,
+}
+
+/// Original tool metadata retained without schema reduction.
+/// 完整保留 Schema 的原始工具元数据。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRuntimeToolInspection {
+    /// Original server-owned tool name.
+    /// 服务器拥有的原始工具名称。
+    pub name: String,
+    /// Original tool description.
+    /// 原始工具描述。
+    pub description: String,
+    /// Complete argument JSON Schema.
+    /// 完整参数 JSON Schema。
+    pub input_schema: serde_json::Value,
+    /// Complete result JSON Schema, or null when absent.
+    /// 完整结果 JSON Schema，未声明时为空。
+    pub output_schema: serde_json::Value,
+}
+
 /// Runtime snapshot of one configured MCP server.
 /// 某个已配置 MCP 服务器的运行时快照。
 #[derive(Debug, Clone)]
 pub(super) struct McpRuntimeServerSnapshot {
+    /// Process-local identity of the current catalog capture.
+    /// 当前目录采集的进程内身份。
+    pub(super) inspection_generation: u64,
     /// Human-readable server name.
     /// 人类可读服务器名称。
     pub(super) name: String,

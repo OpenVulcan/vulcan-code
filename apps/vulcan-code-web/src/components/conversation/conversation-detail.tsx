@@ -1,4 +1,5 @@
 import React from "react";
+import { runConversationControlAction } from "./conversation-control-feedback";
 import {
   BrainCircuit,
   Copy,
@@ -240,7 +241,7 @@ export function ConversationDetailModal(props: {
             </div>
           </div>
           <div className="detail-modal-actions">
-            <Button aria-label={t("conversation.detail.copy")} className="icon-button" onClick={() => void props.onCopyText(fullBody)} size="icon" type="button" variant="outline">
+            <Button aria-label={t("conversation.detail.copy")} className="icon-button" onClick={() => void runConversationControlAction(() => props.onCopyText(fullBody), t("conversation.control.copyFailed"))} size="icon" type="button" variant="outline">
               <Copy size={17} />
             </Button>
             <Button aria-label={t("conversation.detail.close")} className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
@@ -262,7 +263,7 @@ export function ConversationDetailModal(props: {
                 emptyTitle="Git Diff"
                 loading={diffParseLoading}
                 snapshot={diffDetailSnapshot}
-                onCopyRaw={(rawDiff) => void props.onCopyText(rawDiff)}
+                onCopyRaw={(rawDiff) => void runConversationControlAction(() => props.onCopyText(rawDiff), t("conversation.control.copyFailed"))}
               />
             </React.Suspense>
           ) : (

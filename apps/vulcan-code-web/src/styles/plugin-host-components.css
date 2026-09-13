@@ -62,8 +62,6 @@
 
 .plugin-text-document-dialog {
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(760px, calc(100vw - 32px));
-  max-width: 760px;
   height: min(680px, calc(100vh - 48px));
 }
 
@@ -142,14 +140,22 @@
 .plugin-activity-heatmap-scroll {
   display: grid;
   width: 100%;
-  overflow-x: clip;
+  overflow-x: auto;
   padding: 2px;
 }
 
 .plugin-activity-heatmap-content {
   width: max-content;
-  justify-self: end;
+  justify-self: start;
 }
+
+/* Short selected ranges fill one labelled day strip; longer calendars keep compact weekly columns. */
+/* 短筛选范围填充带日期标签的单行日条；较长日历保留紧凑周列。 */
+.plugin-activity-heatmap-content[data-layout="days"] { width: 100%; }
+.plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-month-labels { min-width: 0; }
+.plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-heatmap { grid-auto-flow: row; grid-template-rows: 22px; min-width: 0; }
+.plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-cell { width: 100%; height: 22px; }
+.plugin-activity-day-labels { display: grid; gap: 3px; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; text-align: center; }
 
 .plugin-activity-month-labels {
   display: grid;
@@ -299,6 +305,43 @@
   background: transparent;
 }
 
+/* Keep plugin task navigation compact and themed, with visible keyboard selection. */
+/* 保持插件任务导航紧凑且遵循主题，并提供可见键盘选择状态。 */
+.plugin-control-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-block: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Hidden task sections override layout display rules and remove keyboard targets. */
+/* 隐藏任务区域覆盖布局显示规则，并移除键盘聚焦目标。 */
+.plugin-statistics-layout [hidden] { display: none !important; }
+
+/* Exact diagnostics and amounts wrap within the settings pane. */
+/* 精确诊断与金额在设置面板内换行。 */
+.plugin-control-error-details {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 60ch;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+/* Token labels and values share a compact two-column detail layout. */
+/* 令牌标签与数值共用紧凑双列详情布局。 */
+.plugin-control-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  margin: 8px 0;
+}
+.plugin-control-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.plugin-statistics-table tr[aria-selected="true"] { background: var(--accent); }
+.plugin-statistics-table summary { cursor: pointer; }
+.plugin-statistics-table summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
 .plugin-statistics-header,
 .plugin-statistics-toolbar,
 .plugin-statistics-range-header,
@@ -381,11 +424,33 @@
   background: var(--card);
 }
 
+/* Cost and usage share the available panel width and wrap only when their content needs it. */
+/* 费用与用量共享面板可用宽度，仅在内容需要时换行。 */
+.plugin-statistics-balance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+}
+.plugin-statistics-cost { margin-top: 10px; }
+.plugin-statistics-cost-value { font-size: 26px; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plugin-statistics-token-values { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-block: 10px; }
+.plugin-statistics-token-values > div { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; min-width: 0; }
+.plugin-statistics-token-values > div > span:first-child { grid-column: 1 / -1; color: var(--muted-foreground); font-size: 12px; }
+.plugin-statistics-token-values strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.plugin-statistics-token-share { align-self: center; font-size: 12px; color: var(--muted-foreground); }
+.plugin-statistics-token-bar { display: flex; height: 8px; overflow: hidden; border-radius: 4px; background: var(--muted); }
+.plugin-statistics-token-bar > span:first-child { background: var(--chart-1); }
+.plugin-statistics-token-bar > span:last-child { background: var(--chart-2); }
+.plugin-statistics-cache-facts { font-size: 12px; }
+.plugin-statistics-price-editor { margin-block: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); }
+
 /* Price editor layout stays host-themed while the mounted plugin owns its state. */
 /* 价格编辑器布局保持宿主主题，同时由挂载插件持有状态。 */
 .plugin-statistics-pricing-model {
-  width: min(100%, 420px);
-  margin-top: 12px;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 /* Price dimensions remain independently editable at desktop and compact widths. */
@@ -494,10 +559,6 @@
 }
 
 @media (max-width: 480px) {
-  .plugin-statistics-summary-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .plugin-statistics-price-grid {
     grid-template-columns: minmax(0, 1fr);
   }

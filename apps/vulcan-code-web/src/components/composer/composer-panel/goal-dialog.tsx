@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useI18n } from "@/i18n";
 
 // ComposerGoalDialogProps carries the controlled goal editing dialog state.
@@ -43,29 +44,33 @@ export interface ComposerGoalDialogProps {
 
 // ComposerGoalDialog renders goal creation, editing, and resume confirmation.
 // ComposerGoalDialog 渲染目标创建、编辑与继续确认弹窗。
+// Parameters: props supplies goal drafts, validation and controller actions; returns the goal form without rewriting invalid raw budget input.
+// 参数：props 提供目标草稿、校验与控制器操作；返回不改写非法预算原始输入的目标表单。
 export function ComposerGoalDialog(props: ComposerGoalDialogProps) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent size="sm">
+    <Dialog open={props.open} onOpenChange={(open) => { if (!props.saving) props.onOpenChange(open); }}>
+      <DialogContent size="sm" scrollMode="fixed-footer" className="grid-rows-[auto_minmax(0,1fr)_auto]">
         <DialogHeader>
           <DialogTitle>{props.mode === "resume" ? t("composer.goalDialog.resumeTitle") : t("composer.goalDialog.editTitle")}</DialogTitle>
         </DialogHeader>
-        <div className="composer-goal-dialog-body">
+        <div className="composer-goal-dialog-body min-h-0 overflow-y-auto">
           <Textarea
             aria-label={t("composer.goalDialog.objectiveAria")}
             className="composer-goal-objective-input"
+            disabled={props.saving}
             onChange={(event) => props.onObjectiveChange(event.currentTarget.value)}
             placeholder={t("composer.goalDialog.objectivePlaceholder")}
             value={props.objective}
           />
-          <input
+          <Input
             aria-label={t("composer.goalDialog.tokenBudgetAria")}
             className="composer-goal-budget-input"
+            disabled={props.saving}
             inputMode="numeric"
-            onChange={(event) => props.onTokenBudgetChange(event.currentTarget.value.replace(/[^\d]/g, ""))}
+            onChange={(event) => props.onTokenBudgetChange(event.currentTarget.value)}
             placeholder={t("composer.goalDialog.tokenBudgetPlaceholder")}
             value={props.tokenBudget}
           />
@@ -74,7 +79,7 @@ export function ComposerGoalDialog(props: ComposerGoalDialogProps) {
           <Button disabled={props.saving} onClick={() => props.onOpenChange(false)} type="button" variant="secondary">
             {t("conversation.action.cancel")}
           </Button>
-          <Button disabled={props.saving} onClick={props.onSave} type="button">
+          <Button disabled={props.saving || !props.objective.trim()} onClick={props.onSave} type="button">
             {props.mode === "resume" ? t("composer.goalDialog.resumeTitle") : t("composer.goalDialog.save")}
           </Button>
         </DialogFooter>

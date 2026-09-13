@@ -1,5 +1,5 @@
 import React from "react";
-import { BookMarked, Settings2 } from "lucide-react";
+import { BookMarked, RefreshCw, Settings2 } from "lucide-react";
 
 import {
   DropdownMenuCheckboxItem,
@@ -82,9 +82,12 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // loading prevents edits while loading or persisting a selection.
   // loading 在加载或持久化选择期间阻止编辑。
   const [loading, setLoading] = React.useState(false);
-  // error retains a bounded user-visible service failure.
-  // error 保留有界的用户可见服务错误。
-  const [error, setError] = React.useState<string | null>(null);
+  // error separates failed reads, failed writes and committed writes whose reload failed.
+  // error 区分读取失败、写入失败及已写入但重新读取失败。
+  const [error, setError] = React.useState<{ message: string; phase: "read" | "save" | "reload" } | null>(null);
+  // errorExpanded keeps diagnostics secondary to the recoverable action.
+  // errorExpanded 让诊断信息从属于可恢复的操作。
+  const [errorExpanded, setErrorExpanded] = React.useState(false);
   // requestSequence rejects stale responses after the active conversation changes.
   // requestSequence 在活动会话变化后拒绝过期响应。
   const requestSequence = React.useRef(0);
@@ -97,6 +100,32 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // latestRefresh always points deferred work at the callback for the currently rendered project and conversation.
   // latestRefresh 始终让延迟任务指向当前渲染项目与会话对应的刷新回调。
   const latestRefresh = React.useRef<() => Promise<void>>(async () => {});
+  // retryFocusPending restores explicit retry focus after the error row is replaced by valid choices.
+  // retryFocusPending 在错误行被有效选项替换后恢复显式重试动作的焦点。
+  const retryFocusPending = React.useRef(false);
+  // inheritItem and retryItem name the two exact focus destinations across recovery.
+  // inheritItem 与 retryItem 标识恢复过程中的两个精确焦点目标。
+  const inheritItem = React.useRef<HTMLDivElement>(null);
+  const retryItem = React.useRef<HTMLDivElement>(null);
+
+  React.useLayoutEffect(() => {
+    if (!retryFocusPending.current || loading) return;
+    retryFocusPending.current = false;
+    (error ? retryItem.current : inheritItem.current)?.focus();
+  }, [loading, error]);
+
+  // Clear the previous owner's projection before paint without releasing its in-flight write lock.
+  // 在绘制前清除上一归属的投影，同时保留其进行中的写入锁。
+  React.useLayoutEffect(() => {
+    requestSequence.current += 1;
+    retryFocusPending.current = false;
+    setLibraries([]);
+    setSelection(null);
+    setDraftDefaultLibraryIds([]);
+    setError(null);
+    setErrorExpanded(false);
+    setLoading(Boolean(props.projectId));
+  }, [props.projectId, props.conversationId]);
 
   // refresh reloads the authoritative authorized libraries and persisted session projection.
   // refresh 重新加载权威授权知识库与持久会话投影。
@@ -120,7 +149,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
       return;
     }
     setLoading(true);
-    setError(null);
+    setErrorExpanded(false);
     try {
       if (!props.conversationId) {
         const [nextLibraries, nextBindings] = await Promise.all([
@@ -128,6 +157,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
           listProjectKnowledgeBindings(props.projectId),
         ]);
         if (requestSequence.current !== sequence) return;
+        setError(null);
         const defaultLibraryIds = nextBindings
           .filter((binding) => binding.defaultEnabled)
           .map((binding) => binding.libraryId);
@@ -149,11 +179,12 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
         getSessionKnowledgeLibraries(props.conversationId),
       ]);
       if (requestSequence.current !== sequence) return;
+      setError(null);
       setLibraries(nextLibraries);
       setSelection(nextSelection);
     } catch (reason) {
       if (requestSequence.current !== sequence) return;
-      setError(String(reason).slice(0, 240));
+      setError({ message: String(reason), phase: "read" });
     } finally {
       if (requestSequence.current === sequence) setLoading(false);
     }
@@ -169,6 +200,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     });
     return () => {
       requestSequence.current += 1;
+      refreshPending.current = false;
       unsubscribe();
     };
   }, [props.projectId, refresh]);
@@ -176,8 +208,9 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // persist stores one exact selection and then reloads the service-authoritative projection.
   // persist 保存一份精确选择，然后重新加载服务端权威投影。
   const persist = React.useCallback(async (mode: "inherit" | "explicit", libraryIds: string[]) => {
-    if (!props.projectId || mutationInFlight.current) return;
+    if (!props.projectId || loading || error || mutationInFlight.current) return;
     if (!props.conversationId) {
+      if (!props.onDraftSelectionChange) return;
       const normalizedIds = mode === "inherit" ? [] : [...new Set(libraryIds)];
       props.onDraftSelectionChange?.({ mode, libraryIds: normalizedIds });
       setSelection({
@@ -192,12 +225,21 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     requestSequence.current = sequence;
     setLoading(true);
     setError(null);
+    setErrorExpanded(false);
+    // committed prevents a failed confirmation read from being reported as a failed write.
+    // committed 防止把确认读取失败误报为写入失败。
+    let committed = false;
     try {
       await setSessionKnowledgeLibraries(props.projectId, props.conversationId, mode, libraryIds);
+      committed = true;
+      // The completed write remains valid, but an obsolete owner no longer needs a confirmation read.
+      // 已完成的写入仍有效，但过期归属无需再执行确认读取。
+      if (requestSequence.current !== sequence) return;
+      setError(null);
       const nextSelection = await getSessionKnowledgeLibraries(props.conversationId);
       if (requestSequence.current === sequence) setSelection(nextSelection);
     } catch (reason) {
-      if (requestSequence.current === sequence) setError(String(reason).slice(0, 240));
+      if (requestSequence.current === sequence) setError({ message: String(reason), phase: committed ? "reload" : "save" });
     } finally {
       if (requestSequence.current === sequence) setLoading(false);
       mutationInFlight.current = false;
@@ -211,14 +253,17 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     draftDefaultLibraryIds,
     props.onDraftSelectionChange,
     props.projectId,
+    loading,
+    error,
   ]);
 
   // effectiveCount is the enabled-library count shown on the knowledge submenu trigger.
   // effectiveCount 是知识库子菜单入口显示的已启用知识库数量。
   const effectiveCount = selection?.effectiveLibraryIds.length ?? 0;
-  // selectionDisabled prevents persistence before a project conversation exists.
-  // selectionDisabled 在项目会话存在前阻止持久化选择。
-  const selectionDisabled = !props.projectId;
+  // selectionDisabled requires a current authoritative projection and an exact writable owner.
+  // selectionDisabled 要求当前权威投影及精确可写归属。
+  const selectionDisabled = loading || Boolean(error) || !selection || !props.projectId
+    || (!props.conversationId && !props.onDraftSelectionChange);
   return (
     <DropdownMenuSub onOpenChange={(open) => {
       if (open) void refresh();
@@ -231,15 +276,37 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
             : t("knowledge.composer.label")}
         </span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-knowledge-menu">
+      <DropdownMenuSubContent className="composer-knowledge-menu w-80">
         <DropdownMenuItem onSelect={props.onOpenKnowledge}>
           <Settings2 size={15} />
           <span>{t("knowledge.composer.manage")}</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          ref={inheritItem}
+          checked={selection?.mode === "inherit"}
+          disabled={selectionDisabled}
+          onCheckedChange={(checked) => void persist(checked ? "inherit" : "explicit", checked ? [] : selection?.effectiveLibraryIds ?? [])}
+          onSelect={(event) => event.preventDefault()}
+        >
+          {t("knowledge.composer.inherit")}
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {loading ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">{t("knowledge.composer.loading")}</p> : null}
         {error ? (
-          <DropdownMenuItem disabled>{error}</DropdownMenuItem>
-        ) : libraries.length === 0 ? (
+          <>
+            <p role="alert" className="px-2 py-1.5 text-xs text-destructive">{t(`knowledge.composer.${error.phase}Failed`)}</p>
+            <DropdownMenuItem ref={retryItem} disabled={loading} onSelect={(event) => {
+              event.preventDefault(); retryFocusPending.current = true; void refresh();
+            }}>
+              <RefreshCw size={15} /><span>{t("knowledge.composer.retry")}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem aria-expanded={errorExpanded} onSelect={(event) => { event.preventDefault(); setErrorExpanded(!errorExpanded); }}>
+              {t("knowledge.composer.details")}
+            </DropdownMenuItem>
+            {errorExpanded ? <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 text-xs text-muted-foreground">{error.message}</pre> : null}
+          </>
+        ) : loading && !selection ? null : libraries.length === 0 ? (
           <DropdownMenuItem disabled>{t("knowledge.composer.noneAuthorized")}</DropdownMenuItem>
         ) : (
           libraries.map((library) => {
@@ -249,7 +316,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
             return (
               <DropdownMenuCheckboxItem
                 checked={checked}
-                disabled={loading || selectionDisabled}
+                disabled={selectionDisabled}
                 key={library.id}
                 onCheckedChange={(nextChecked) => {
                   const nextIds = nextExplicitKnowledgeLibraryIds(
@@ -261,7 +328,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
                 }}
                 onSelect={(event) => event.preventDefault()}
               >
-                <span>{library.name}</span>
+                <span className="min-w-0 flex-1 truncate" title={library.name}>{library.name}</span>
               </DropdownMenuCheckboxItem>
             );
           })

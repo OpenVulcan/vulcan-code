@@ -1,9 +1,9 @@
 import React from "react";
+import { composerAttachmentMedia } from "./composer-attachment-media";
 import { VceComposerMenu } from "@/components/features/code-context/vce-project-controls";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
   BrainCircuit,
-  CheckCircle2,
   CircleAlert,
   FileText,
   Image as ImageIcon,
@@ -12,17 +12,21 @@ import {
   Paperclip,
   Palette,
   Plus,
+  RotateCcw,
   Target,
   Video,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -55,6 +59,8 @@ import { ComposerKnowledgeControl } from "./composer-knowledge-control";
 
 // ComposerAttachmentMenu renders the plus button and attachment submenu.
 // ComposerAttachmentMenu 渲染加号按钮与附件子菜单。
+// Parameters: props supplies attachment capabilities, output styles and selection callbacks; returns the accessible add menu.
+// 参数：props 提供附件能力、输出风格与选择回调；返回可访问的添加菜单。
 export function ComposerAttachmentMenu(props: {
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
@@ -74,6 +80,12 @@ export function ComposerAttachmentMenu(props: {
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
+  // Readiness is displayed independently of policy editability; absent status preserves embedded callers.
+  // 就绪状态与策略可编辑性分开展示；未传状态时保留嵌入调用方行为。
+  vmmStatus?: "disabled" | "not_ready" | "ready";
+  // Opens memory configuration without changing any global or session policy.
+  // 打开记忆配置，不改变任何全局或会话策略。
+  onOpenMemorySettings?: () => void;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
@@ -189,14 +201,15 @@ export function ComposerAttachmentMenu(props: {
             <span>{t("composer.thinkingProcess")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
+            <DropdownMenuRadioGroup value={props.thinkingDisplayMode}>
             {THINKING_DISPLAY_MODE_OPTIONS.map((option) => (
-              <DropdownMenuItem key={option.value} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
+              <DropdownMenuRadioItem key={option.value} value={option.value} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
                 <span className="composer-thinking-mode-label">
                   <span>{t(option.labelKey)}</span>
                 </span>
-                {props.thinkingDisplayMode === option.value ? <CheckCircle2 size={14} /> : null}
-              </DropdownMenuItem>
+              </DropdownMenuRadioItem>
             ))}
+            </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuCheckboxItem
@@ -207,13 +220,15 @@ export function ComposerAttachmentMenu(props: {
           <ListChecks size={15} />
           <span>{t("composer.planMode")}</span>
         </DropdownMenuCheckboxItem>
-        {props.vmmAvailable ? (
+        {props.vmmAvailable || props.onOpenMemorySettings ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <BrainCircuit size={15} />
               <span>{t("composer.vmmMemory")}</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="composer-thinking-menu">
+              {props.vmmStatus ? <p className="px-2 py-1.5 text-xs text-muted-foreground">{t(`memory.workspace.${props.vmmStatus}`)}</p> : null}
+              {props.vmmAvailable ? <>
               <VmmPolicySubMenu
                 label={t("composer.vmm.precheckInjection")}
                 policy="precheck"
@@ -226,6 +241,8 @@ export function ComposerAttachmentMenu(props: {
                 selectedMode={props.sessionVmmPolicy?.memoryWritebackMode ?? "inherit"}
                 onChange={props.onVmmPolicyChange}
               />
+              </> : null}
+              {props.onOpenMemorySettings ? <DropdownMenuItem onSelect={props.onOpenMemorySettings}>{t("memory.workspace.settings")}</DropdownMenuItem> : null}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         ) : null}
@@ -262,7 +279,8 @@ function OutputStyleSubMenu(props: {
         <span>{locale === "en-US" ? "Output style" : "输出风格"}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="composer-thinking-menu">
-        <DropdownMenuItem onSelect={() => props.onChange(null)}>
+        <DropdownMenuRadioGroup value={selectedId === null ? "inherit" : `style:${selectedId}`}>
+        <DropdownMenuRadioItem value="inherit" onSelect={() => props.onChange(null)}>
           <span className="composer-thinking-mode-label">
             <span>{locale === "en-US" ? "Inherit global" : "继承全局"}</span>
             <small>
@@ -271,17 +289,19 @@ function OutputStyleSubMenu(props: {
                 : `使用系统设置：${globalLabel}`}
             </small>
           </span>
-          {selectedId === null ? <CheckCircle2 size={14} /> : null}
-        </DropdownMenuItem>
+        </DropdownMenuRadioItem>
         {props.catalog.entries.map((entry) => (
-          <DropdownMenuItem key={entry.id} onSelect={() => props.onChange(entry.id)}>
+          <DropdownMenuRadioItem key={entry.id} value={`style:${entry.id}`} onSelect={() => props.onChange(entry.id)}>
             <span className="composer-thinking-mode-label">
               <span>{locale === "en-US" ? entry.labelEn : entry.labelZh}</span>
-              <small>{`${entry.constraintLevel} · ${entry.promptCharCount} chars`}</small>
+              <small>{locale === "en-US" ? `${entry.promptCharCount.toLocaleString("en-US")} prompt characters` : `${entry.promptCharCount.toLocaleString("zh-CN")} 字符提示词`}</small>
             </span>
-            {selectedId === entry.id ? <CheckCircle2 size={14} /> : null}
-          </DropdownMenuItem>
+          </DropdownMenuRadioItem>
         ))}
+        </DropdownMenuRadioGroup>
+        {props.conversationId && props.sessionOutputStyle?.pendingActivation ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
+          {locale === "en-US" ? "Saved. Applies in a new session or after context compaction." : "已保存，在新会话或上下文压缩后生效。"}
+        </p> : null}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -312,15 +332,17 @@ function VmmPolicySubMenu(props: {
         <span>{props.label}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
+        <DropdownMenuRadioGroup value={props.selectedMode}>
         {VMM_POLICY_MODE_OPTIONS.map((option) => (
-          <DropdownMenuItem
+          <DropdownMenuRadioItem
             key={option.mode}
+            value={option.mode}
             onSelect={() => props.onChange(props.policy, option.mode)}
           >
             <span>{t(option.labelKey)}</span>
-            {props.selectedMode === option.mode ? <CheckCircle2 size={14} /> : null}
-          </DropdownMenuItem>
+          </DropdownMenuRadioItem>
         ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -360,6 +382,8 @@ function ComposerAttachmentKindIcon(props: {
 
 // ComposerAttachmentStrip renders staged attachments before the prompt text.
 // ComposerAttachmentStrip 在提示词文本之前渲染已暂存附件。
+// Parameters: props supplies staged files, preparation snapshots and preview/removal callbacks; returns file tiles with truthful progress and actions.
+// 参数：props 提供暂存文件、准备快照及预览和移除回调；返回包含真实进度与操作的文件块。
 export function ComposerAttachmentStrip(props: {
   // Staged attachments shown in the strip.
   // 附件条中展示的已暂存附件。
@@ -379,6 +403,9 @@ export function ComposerAttachmentStrip(props: {
   // Removes one attachment by index.
   // 按索引移除单个附件。
   onRemove?: (index: number) => void;
+  // Returns keyboard focus to the owning composer after the final attachment was actually removed.
+  // 最后一个附件实际移除后，将键盘焦点交回所属输入区。
+  onEmptyAfterRemoval?: () => void;
   // Retries one failed provider upload by stable attachment identity.
   // 按稳定附件身份重试单个失败供应商上传。
   onRetry?: (attachmentId: string) => void;
@@ -386,8 +413,26 @@ export function ComposerAttachmentStrip(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // strip and removalFocus retain the exact DOM origin, so delayed removals never steal focus from another control.
+  // strip 与 removalFocus 保留精确 DOM 来源，避免延迟移除抢走其他控件的焦点。
+  const strip = React.useRef<HTMLDivElement>(null);
+  const removalFocus = React.useRef<{ attachment: ComposerAttachmentSummary; index: number; trigger: HTMLButtonElement } | null>(null);
+  React.useLayoutEffect(() => {
+    // request remains pending while cancellation is unresolved or failed and the original attachment remains present.
+    // 取消尚未完成或失败且原附件仍存在时，request 保持等待。
+    const request = removalFocus.current;
+    if (request === null || props.attachments.includes(request.attachment)) return;
+    removalFocus.current = null;
+    if (request.trigger.isConnected || document.activeElement !== document.body) return;
+    // buttons belong only to this exact strip; removal shifts the next item into the removed item's former position.
+    // buttons 仅属于此精确附件条；移除会让下一项进入被移除项原先的位置。
+    const buttons = strip.current?.querySelectorAll<HTMLButtonElement>(".composer-attachment-remove");
+    if (buttons && buttons.length > 0) buttons[Math.min(request.index, buttons.length - 1)].focus({ preventScroll: true });
+    else if (props.attachments.length === 0) props.onEmptyAfterRemoval?.();
+  }, [props.attachments, props.onEmptyAfterRemoval]);
+  if (props.attachments.length === 0) return null;
   return (
-    <div className="composer-attachment-strip">
+    <div className="composer-attachment-strip" ref={strip}>
       {props.attachments.map((attachment, index) => {
         const attachmentId = composerAttachmentIdentity(attachment, index);
         const preparation = attachmentId ? props.preparations?.[attachmentId] : undefined;
@@ -395,12 +440,18 @@ export function ComposerAttachmentStrip(props: {
         const totalBytes = progress?.totalBytes ?? null;
         const progressPercent = preparation?.phase === "failed"
           || preparation?.phase === "cancelled"
+          || preparation?.phase === "awaiting_provider_confirmation"
           ? null
-          : preparation?.phase === "awaiting_provider_confirmation"
-          ? 99
           : totalBytes && totalBytes > 0
-            ? Math.min(99, Math.max(0, Math.floor((progress?.bytesSent ?? 0) * 100 / totalBytes)))
-            : preparation?.blocksSubmission ? 0 : null;
+            ? Math.min(100, Math.max(0, Math.floor((progress?.bytesSent ?? 0) * 100 / totalBytes)))
+            : null;
+        // previewAvailable follows the same closed media projection used by the actual viewer.
+        // previewAvailable 遵循实际查看器使用的同一封闭媒体投影。
+        const previewAvailable = composerAttachmentMedia(attachment) !== null;
+        // pendingProgress excludes terminal failures even when their submission barrier remains set.
+        // pendingProgress 排除仍保留发送屏障的终止失败状态，避免将失败展示为继续处理中。
+        const pendingProgress = preparation?.blocksSubmission
+          && preparation.phase !== "failed" && preparation.phase !== "cancelled";
         const degraded = preparation?.deliveryPlan === "metadata_only"
           || preparation?.phase === "failed";
         return (
@@ -413,8 +464,10 @@ export function ComposerAttachmentStrip(props: {
           key={`${attachment.localPath}-${index}`}
         >
           <button
-            aria-label={attachment.fileName}
+            aria-label={previewAvailable ? attachment.fileName : `${attachment.fileName} · ${t("composer.attachment.previewUnavailable")}`}
             className="composer-attachment-open"
+            disabled={!previewAvailable}
+            title={previewAvailable ? attachment.fileName : t("composer.attachment.previewUnavailable")}
             onClick={() => props.onOpenMedia(attachment)}
             type="button"
           />
@@ -424,10 +477,11 @@ export function ComposerAttachmentStrip(props: {
           )}
           {props.onRemove ? (
             <button
-              aria-label={t("composer.attachment.remove")}
+              aria-label={`${t("composer.attachment.remove")} · ${attachment.fileName}`}
               className="composer-attachment-remove"
               onClick={(event) => {
                 event.stopPropagation();
+                if (document.activeElement === event.currentTarget) removalFocus.current = { attachment, index, trigger: event.currentTarget };
                 props.onRemove?.(index);
               }}
               type="button"
@@ -435,15 +489,13 @@ export function ComposerAttachmentStrip(props: {
               <X size={12} />
             </button>
           ) : null}
-          {typeof progressPercent === "number" ? (
+          {typeof progressPercent === "number" || pendingProgress ? (
             <span
-              aria-label={preparation?.phase === "awaiting_provider_confirmation"
-                ? t("composer.attachment.processing")
-                : `${progressPercent}%`}
+              aria-label={typeof progressPercent === "number" ? `${progressPercent}%` : t("composer.attachment.processing")}
               className="composer-attachment-progress"
               role="status"
             >
-              <svg aria-hidden="true" viewBox="0 0 36 36">
+              <svg aria-hidden="true" className={progressPercent === null ? "motion-safe:animate-spin" : undefined} viewBox="0 0 36 36">
                 <circle className="composer-attachment-progress-track" cx="18" cy="18" r="15" />
                 <circle
                   className="composer-attachment-progress-value"
@@ -451,43 +503,35 @@ export function ComposerAttachmentStrip(props: {
                   cy="18"
                   pathLength="100"
                   r="15"
-                  style={{ strokeDasharray: `${progressPercent} 100` }}
+                  style={{ strokeDasharray: `${progressPercent ?? 25} 100` }}
                 />
               </svg>
-              <span>{progressPercent}%</span>
+              <span className={progressPercent === null ? "sr-only" : undefined}>{typeof progressPercent === "number" ? `${progressPercent}%` : t("composer.attachment.processing")}</span>
             </span>
           ) : null}
           {degraded ? (
             <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    aria-label={preparation?.error ?? t("composer.attachment.metadataOnly")}
-                    className="composer-attachment-warning"
-                    role="status"
-                    tabIndex={0}
-                  >
-                    <CircleAlert size={16} />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent className="composer-control-tooltip" side="top">
-                  {preparation?.error ?? t("composer.attachment.metadataOnly")}
-                </TooltipContent>
-              </Tooltip>
+              <ComposerAttachmentNotice fileName={attachment.fileName} failed={preparation?.phase === "failed"} error={preparation?.error ?? null} />
               {preparation?.phase === "failed"
                 && preparation.deliveryPlan === "upload_reference"
                 && props.onRetry
                 && attachmentId ? (
-                <button
-                  className="composer-attachment-retry"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onRetry?.(attachmentId);
-                  }}
-                  type="button"
-                >
-                  {t("composer.attachment.retry")}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      aria-label={`${t("composer.attachment.retry")} · ${attachment.fileName}`}
+                      className="composer-attachment-retry"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        props.onRetry?.(attachmentId);
+                      }}
+                      type="button"
+                    >
+                      <RotateCcw aria-hidden="true" size={14} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{t("composer.attachment.retry")}</TooltipContent>
+                </Tooltip>
               ) : null}
             </>
           ) : null}
@@ -496,6 +540,36 @@ export function ComposerAttachmentStrip(props: {
       })}
     </div>
   );
+}
+
+/** Shows compact attachment advice while keeping raw failures in a keyboard-accessible detail popover.
+ * 显示紧凑附件说明，将原始失败信息放在可用键盘访问的详情浮层中。
+ * Parameters: fileName identifies the file, failed distinguishes blocked preparation, and error is the declared optional diagnostic; returns the notice control.
+ * 参数：fileName 标识文件，failed 区分准备失败，error 是明确可选的诊断内容；返回说明控件。
+ */
+function ComposerAttachmentNotice(props: { fileName: string; failed: boolean; error: string | null }) {
+  // t resolves the short notice and action labels independently of raw service text.
+  // t 独立于原始服务文本解析简短说明及操作标签。
+  const { t } = useI18n();
+  if (!props.failed && props.error === null) {
+    return <Tooltip>
+      <TooltipTrigger asChild><span aria-label={t("composer.attachment.metadataOnly")} className="composer-attachment-warning" role="status" tabIndex={0}><CircleAlert size={16} /></span></TooltipTrigger>
+      <TooltipContent className="composer-control-tooltip composer-attachment-notice-tooltip" side="top">{t("composer.attachment.metadataOnly")}</TooltipContent>
+    </Tooltip>;
+  }
+  return <Popover>
+    <Tooltip>
+      <TooltipTrigger asChild><PopoverTrigger asChild>
+        <button aria-label={`${t("composer.attachment.details")} · ${props.fileName}`} className="composer-attachment-warning" type="button"><CircleAlert size={16} /></button>
+      </PopoverTrigger></TooltipTrigger>
+      <TooltipContent side="top">{t("composer.attachment.details")}</TooltipContent>
+    </Tooltip>
+    <PopoverContent aria-label={`${t("composer.attachment.details")} · ${props.fileName}`} className="composer-attachment-detail" collisionPadding={12} side="top">
+      <strong className="text-sm [overflow-wrap:anywhere]">{props.fileName}</strong>
+      <p className="text-xs text-muted-foreground">{t(props.failed ? "composer.attachment.failed" : "composer.attachment.metadataOnly")}</p>
+      {props.error !== null ? <pre className="composer-attachment-detail-text" tabIndex={0}>{props.error}</pre> : null}
+    </PopoverContent>
+  </Popover>;
 }
 
 // ComposerAttachmentPreview renders one staged attachment thumbnail or media icon.
@@ -510,7 +584,7 @@ function ComposerAttachmentPreview(props: {
 }) {
   const media = props.resolvePreview(props.attachment);
   if (media?.kind === "image" && media.sourceUrl) {
-    return <img alt={props.attachment.fileName} src={media.sourceUrl} />;
+    return <img alt={props.attachment.fileName} decoding="async" src={media.sourceUrl} />;
   }
   if (media?.kind === "video") {
     return <Video size={20} />;

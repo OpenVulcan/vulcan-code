@@ -1,6 +1,7 @@
 name: Context7
 capability: 为编码智能体提供最新且支持版本定位的库文档
 messages:
+  errorDetails: 查看错误详情
   navigationLabel: Context7
   title: Context7 文档服务
   subtitle: 配置鉴权方式，并查看请求配额与本地用量。
@@ -11,6 +12,8 @@ messages:
   refresh: 刷新
   loading: 正在加载 Context7 设置…
   loadError: 无法加载 Context7 数据。
+  retry: 重试
+  operationFailed: 操作未成功，请重试。
   credentialTitle: 身份验证
   anonymousMode: 匿名模式
   apiKeyMode: API Key 模式

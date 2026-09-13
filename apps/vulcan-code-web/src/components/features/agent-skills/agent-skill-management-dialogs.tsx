@@ -2,6 +2,7 @@ import * as React from "react"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -76,12 +77,20 @@ export function AgentSkillEditorDialog(props: {
   // saving prevents concurrent package submissions.
   // saving 防止并发提交技能包。
   const [saving, setSaving] = React.useState(false)
+  // savingRef excludes duplicate submissions and dismissals before React commits busy state.
+  // savingRef 在 React 提交忙碌状态前排除重复提交和关闭。
+  const savingRef = React.useRef(false)
+  // editorSession preserves an unsaved draft when a background catalog refresh replaces props.
+  // editorSession 在后台目录刷新替换属性时保留未保存草稿。
+  const editorSession = React.useRef<string | null>(null)
 
   React.useEffect(() => {
-    if (props.open) {
+    const session = props.open ? `${props.copy}:${props.record?.baseDir ?? "new"}` : null
+    if (session !== null && editorSession.current !== session) {
       setDraft(createEditorDraft(props.record, props.categories, props.copy))
       setError("")
     }
+    editorSession.current = session
   }, [props.categories, props.copy, props.open, props.record])
 
   // updateStructuredField changes one host-managed package node.
@@ -110,8 +119,10 @@ export function AgentSkillEditorDialog(props: {
   // submit builds the strict service payload; the host generates SKILL.md frontmatter and vulcan.yaml.
   // submit 构建严格服务载荷；SKILL.md frontmatter 与 vulcan.yaml 由宿主生成。
   const submit = React.useCallback(async () => {
+    if (savingRef.current) return
     try {
       const request = createSkillSaveRequest(draft, props.record, props.copy, props.locale.startsWith("zh"))
+      savingRef.current = true
       setSaving(true)
       setError("")
       await props.onSave(request)
@@ -119,6 +130,7 @@ export function AgentSkillEditorDialog(props: {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [draft, props])
@@ -130,8 +142,8 @@ export function AgentSkillEditorDialog(props: {
   // recordDisplayName 是本地化弹窗标题基线。
   const recordDisplayName = props.record ? localizedRecordDisplayName(props.record, props.locale) : ""
   return (
-    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
-      <DialogContent className="agent-skill-editor-dialog" showCloseButton={false}>
+    <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
+      <DialogContent className="agent-skill-editor-dialog" size="xl" scrollMode="fixed-footer" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>
             {props.copy && props.record
@@ -147,7 +159,7 @@ export function AgentSkillEditorDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <div className="agent-skill-editor-body">
-          <fieldset>
+          <fieldset disabled={saving}>
             <legend>{chinese ? "技能包字段" : "Package fields"}</legend>
             <div className="agent-skill-form-grid">
               <AgentSkillTextField label="name" onChange={(value) => updateStructuredField("name", value)} required value={draft.name} />
@@ -157,7 +169,7 @@ export function AgentSkillEditorDialog(props: {
               <AgentSkillTextField label={chinese ? "标签（逗号分隔）" : "Tags (comma separated)"} onChange={(value) => updateStructuredField("tags", uniqueCommaSeparatedValues(value))} value={draft.tags.join(", ")} />
             </div>
           </fieldset>
-          <fieldset>
+          <fieldset disabled={saving}>
             <legend>{chinese ? "显示与分类" : "Presentation and category"}</legend>
             <div className="agent-skill-form-grid">
               <AgentSkillTextField label={chinese ? "默认显示名称" : "Default display name"} onChange={(value) => updateStructuredField("displayName", value)} value={draft.displayName} />
@@ -169,7 +181,7 @@ export function AgentSkillEditorDialog(props: {
               </label>
               <label className="agent-skill-form-field">
                 <span>{chinese ? "技能分类" : "Skill category"}</span>
-                <Select onValueChange={(value) => updateStructuredField("categoryId", value)} value={draft.categoryId}>
+                <Select disabled={saving} onValueChange={(value) => updateStructuredField("categoryId", value)} value={draft.categoryId}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -179,7 +191,7 @@ export function AgentSkillEditorDialog(props: {
                 </Select>
               </label>
               <label className="agent-skill-form-check">
-                <Switch checked={draft.enabled} onCheckedChange={(checked) => updateStructuredField("enabled", checked)} />
+                <Switch disabled={saving} checked={draft.enabled} onCheckedChange={(checked) => updateStructuredField("enabled", checked)} />
                 <span>{chinese ? "启用此技能" : "Enable this skill"}</span>
               </label>
               <AgentSkillTextField label="English name" onChange={(value) => updateLocaleField("en-US", "displayName", value)} value={draft.locales["en-US"]?.displayName ?? ""} />
@@ -188,7 +200,7 @@ export function AgentSkillEditorDialog(props: {
               <AgentSkillTextField label="中文说明" onChange={(value) => updateLocaleField("zh-CN", "shortDescription", value)} value={draft.locales["zh-CN"]?.shortDescription ?? ""} />
             </div>
           </fieldset>
-          <fieldset className="agent-skill-source-fieldset">
+          <fieldset disabled={saving} className="agent-skill-source-fieldset">
             <legend>{chinese ? "提示词内容" : "Prompt content"}</legend>
             <AgentSkillTextArea className="agent-skill-source-editor" label={chinese ? "SKILL.md 提示词正文" : "SKILL.md prompt body"} onChange={(value) => updateStructuredField("body", value)} required rows={22} value={draft.body} />
           </fieldset>
@@ -196,7 +208,7 @@ export function AgentSkillEditorDialog(props: {
         </div>
         <DialogFooter>
           <Button disabled={saving} onClick={() => props.onOpenChange(false)} variant="outline">{chinese ? "取消" : "Cancel"}</Button>
-          <Button disabled={saving || Boolean(error)} onClick={() => void submit()}>{saving ? (chinese ? "保存中…" : "Saving…") : (chinese ? "保存技能" : "Save skill")}</Button>
+          <Button disabled={saving} onClick={() => void submit()}>{saving ? (chinese ? "保存中…" : "Saving…") : (chinese ? "保存技能" : "Save skill")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -225,13 +237,21 @@ export function AgentSkillCategoryManagementDialog(props: {
   // saving serializes category writes and deletes.
   // saving 串行化分类写入与删除。
   const [saving, setSaving] = React.useState(false)
+  // savingRef synchronously serializes category writes and protects the active dialog session.
+  // savingRef 同步串行化分类写入，并保护活动弹窗会话。
+  const savingRef = React.useRef(false)
 
   React.useEffect(() => {
     if (props.open) {
+      setPendingDelete(null)
       setEditing(undefined)
       setError("")
     }
   }, [props.open])
+
+  // pendingDelete holds the exact category whose removal is awaiting the shared confirmation dialog.
+  // pendingDelete 保存等待共享确认弹窗确认删除的精确分类。
+  const [pendingDelete, setPendingDelete] = React.useState<AgentSkillCategorySummary | null>(null)
 
   // openForm initializes the exact selected category or a new user category.
   // openForm 初始化精确选中的分类或新用户分类。
@@ -250,6 +270,8 @@ export function AgentSkillCategoryManagementDialog(props: {
   // saveCategory validates and persists one user-owned category row.
   // saveCategory 校验并持久化一条用户所有的分类记录。
   const saveCategory = React.useCallback(async () => {
+    if (savingRef.current) return
+    savingRef.current = true
     try {
       setSaving(true)
       setError("")
@@ -258,6 +280,7 @@ export function AgentSkillCategoryManagementDialog(props: {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [draft, props])
@@ -265,17 +288,17 @@ export function AgentSkillCategoryManagementDialog(props: {
   // deleteCategory confirms and deletes one user-owned category row.
   // deleteCategory 确认并删除一条用户所有的分类记录。
   const deleteCategory = React.useCallback(async (category: AgentSkillCategorySummary) => {
-    const chinese = props.locale.startsWith("zh")
-    if (!window.confirm(chinese ? `确认删除分类“${localizedCategoryName(category, props.locale)}”？` : `Delete category “${localizedCategoryName(category, props.locale)}”?`)) {
-      return
-    }
+    if (savingRef.current) return
     try {
+      savingRef.current = true
       setSaving(true)
       setError("")
       await props.onDelete(category.categoryId)
+      setPendingDelete(null)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [props])
@@ -284,18 +307,19 @@ export function AgentSkillCategoryManagementDialog(props: {
   // chinese 控制优先展示的用户文案。
   const chinese = props.locale.startsWith("zh")
   return (
-    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
-      <DialogContent className="agent-skill-category-management-dialog" showCloseButton={false}>
+    <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
+      <DialogContent className="agent-skill-category-management-dialog" size="lg" scrollMode="fixed-footer" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>{chinese ? "分类管理" : "Category management"}</DialogTitle>
           <DialogDescription>{chinese ? "系统分类不可修改或删除；附加分类与技能归属写入技能目录配置。" : "System categories are immutable; added categories and assignments are stored in the skill-root configuration."}</DialogDescription>
         </DialogHeader>
+        <div className="min-h-0 overflow-y-auto">
         {editing === undefined ? (
-          <div className="agent-skill-category-management-body">
+          <div className="grid gap-2">
             <div className="agent-skill-category-management-actions">
               <Button disabled={saving} onClick={() => openForm(null)}><Plus size={15} />{chinese ? "添加分类" : "Add category"}</Button>
             </div>
-            <div className="agent-skill-category-management-list">
+            <div className="grid gap-2">
               {props.categories.map((category) => (
                 <div className="agent-skill-category-management-row" key={category.categoryId}>
                   <span className="agent-skill-category-management-marker" style={{ backgroundColor: category.color }}>{category.emoji}</span>
@@ -303,8 +327,8 @@ export function AgentSkillCategoryManagementDialog(props: {
                   <span>{category.builtin ? (chinese ? "系统分类" : "System") : (chinese ? "附加分类" : "Added")}</span>
                   {!category.builtin ? (
                     <div>
-                      <button aria-label={chinese ? "编辑分类" : "Edit category"} onClick={() => openForm(category)} type="button"><Pencil size={15} /></button>
-                      <button aria-label={chinese ? "删除分类" : "Delete category"} onClick={() => void deleteCategory(category)} type="button"><Trash2 size={15} /></button>
+                      <Button variant="ghost" size="icon-sm" disabled={saving} aria-label={chinese ? "编辑分类" : "Edit category"} onClick={() => openForm(category)} type="button"><Pencil size={15} /></Button>
+                      <Button variant="ghost" size="icon-sm" disabled={saving} aria-label={chinese ? "删除分类" : "Delete category"} onClick={() => { setError(""); setPendingDelete(category) }} type="button"><Trash2 size={15} /></Button>
                     </div>
                   ) : null}
                 </div>
@@ -312,7 +336,7 @@ export function AgentSkillCategoryManagementDialog(props: {
             </div>
           </div>
         ) : (
-          <div className="agent-skill-form-grid">
+          <fieldset disabled={saving} className="agent-skill-form-grid min-w-0 border-0 p-0">
             <AgentSkillTextField disabled={editing !== null} label="category-id" onChange={(value) => updateCategoryField("categoryId", value)} required value={draft.categoryId} />
             <AgentSkillTextField label={chinese ? "默认名称" : "Default name"} onChange={(value) => updateCategoryField("name", value)} required value={draft.name} />
             <AgentSkillTextField label={chinese ? "图标" : "Emoji"} onChange={(value) => updateCategoryField("emoji", value)} required value={draft.emoji} />
@@ -326,14 +350,28 @@ export function AgentSkillCategoryManagementDialog(props: {
             <AgentSkillTextField label="English description" onChange={(value) => updateCategoryField("englishDescription", value)} value={draft.englishDescription} />
             <AgentSkillTextField label="中文名称" onChange={(value) => updateCategoryField("chineseName", value)} required value={draft.chineseName} />
             <AgentSkillTextField label="中文说明" onChange={(value) => updateCategoryField("chineseDescription", value)} value={draft.chineseDescription} />
-          </div>
+          </fieldset>
         )}
         {error ? <p className="agent-skill-form-error" role="alert">{error}</p> : null}
+        </div>
         <DialogFooter>
           {editing !== undefined ? <Button disabled={saving} onClick={() => setEditing(undefined)} variant="outline">{chinese ? "返回" : "Back"}</Button> : null}
           <Button disabled={saving} onClick={() => props.onOpenChange(false)} variant="outline">{chinese ? "关闭" : "Close"}</Button>
           {editing !== undefined ? <Button disabled={saving} onClick={() => void saveCategory()}>{chinese ? "保存分类" : "Save category"}</Button> : null}
         </DialogFooter>
+        <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open && !savingRef.current) setPendingDelete(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{chinese ? "删除分类" : "Delete category"}</AlertDialogTitle>
+              <AlertDialogDescription>{pendingDelete ? (chinese ? `确认删除分类“${localizedCategoryName(pendingDelete, props.locale)}”？` : `Delete category “${localizedCategoryName(pendingDelete, props.locale)}”?`) : ""}</AlertDialogDescription>
+            </AlertDialogHeader>
+            {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={saving}>{chinese ? "取消" : "Cancel"}</AlertDialogCancel>
+              <AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); if (pendingDelete) void deleteCategory(pendingDelete) }}>{saving ? (chinese ? "删除中…" : "Deleting…") : (chinese ? "删除" : "Delete")}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   )

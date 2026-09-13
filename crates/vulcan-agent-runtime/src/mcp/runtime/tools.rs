@@ -14,6 +14,9 @@ pub(super) struct McpRuntimeToolSchema {
     /// JSON Schema describing the tool arguments.
     /// 描述工具参数的 JSON Schema。
     args_schema: serde_json::Value,
+    /// Original optional result schema retained for read-only inspection.
+    /// 为只读检查保留的原始可选结果 Schema。
+    result_schema: serde_json::Value,
 }
 
 /// Stable MCP tool descriptor exposed to the host runtime and execution planner.
@@ -43,7 +46,26 @@ impl McpRuntimeToolDescriptor {
                 name: tool_name.into(),
                 description: tool_description.into(),
                 args_schema,
+                result_schema: serde_json::Value::Null,
             },
+        }
+    }
+
+    /// Retains the transport result schema without altering execution bindings.
+    /// 保留传输层结果 Schema，不改变执行绑定。
+    pub(super) fn with_result_schema(mut self, schema: serde_json::Value) -> Self {
+        self.schema.result_schema = schema;
+        self
+    }
+
+    /// Returns a complete metadata-only view without invoking the tool.
+    /// 返回完整的纯元数据视图，不调用工具。
+    pub(super) fn inspection(&self) -> McpRuntimeToolInspection {
+        McpRuntimeToolInspection {
+            name: self.schema.name.clone(),
+            description: self.schema.description.clone(),
+            input_schema: self.schema.args_schema.clone(),
+            output_schema: self.schema.result_schema.clone(),
         }
     }
 
@@ -360,6 +382,38 @@ impl McpRuntimeAccess {
             .values()
             .flat_map(|lease| lease.runtime.server_states())
             .collect()
+    }
+
+    /// Captures complete per-server catalogs from current live partitions only.
+    /// 仅从当前实时分区采集各服务器的完整目录。
+    pub fn server_inspections(&self) -> Vec<McpRuntimeServerInspection> {
+        self.live_partitions
+            .values()
+            .flat_map(|lease| lease.runtime.server_inspections())
+            .collect()
+    }
+
+    /// Lists optional metadata on one existing connection without connecting or executing tools.
+    /// 在单个现有连接列出可选元数据，不创建连接或执行工具。
+    pub async fn server_capabilities(&self, server_id: &str) -> Result<serde_json::Value, String> {
+        let runtime = self
+            .partition_for_server(server_id)
+            .ok_or_else(|| String::from("MCP 运行时未就绪。"))?;
+        runtime.server_capabilities(server_id).await
+    }
+
+    /// Checks whether two access generations still own the same exact server lease.
+    /// 检查两个访问代次是否仍持有同一精确服务器租约。
+    pub fn shares_server_partition(&self, other: &Self, server_id: &str) -> bool {
+        let lease = self
+            .live_partitions
+            .values()
+            .find(|lease| lease.runtime.contains_server(server_id));
+        let current = other
+            .live_partitions
+            .values()
+            .find(|lease| lease.runtime.contains_server(server_id));
+        matches!((lease, current), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
     }
 
     /// Returns currently available MCP tool bindings filtered by one allowlist when live runtime state is available.

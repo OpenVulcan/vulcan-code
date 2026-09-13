@@ -92,6 +92,12 @@ it("saves only the ranking group and never rounds the submitted RRF constant", a
       replaceMinSimilarity: 0.86, hardDedupeCosineThreshold: 0, hardDedupePoolTopK: 3, replacementTopK: 2 })
     expect(onSaved).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain("排序策略已保存")
+    // A later server refresh invalidates the old acknowledgement without issuing another write.
+    // 后续服务端刷新使旧确认失效，不触发再次写入。
+    await act(async () => { root.render(<I18nProvider initialLocale="zh-CN"><VmmNativeRetrievalPolicy settings={{ ...rankingDefaults, rrfK: "31" }} defaults={rankingDefaults} busy={false} onRunAction={onRunAction} onSaved={onSaved} /></I18nProvider>) })
+    expect(container.textContent).not.toContain("排序策略已保存")
+    expect(container.querySelector<HTMLInputElement>("#vmm-ranking-rrfK")!.value).toBe("31")
+    expect(onRunAction).toHaveBeenCalledTimes(1)
   } finally {
     await act(async () => { root.unmount() })
     container.remove()

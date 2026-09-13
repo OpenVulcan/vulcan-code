@@ -106,9 +106,9 @@ export interface ComposerDraftSessionSettingsController {
   // Captures the latest settings synchronously at submission time.
   // 在提交时同步捕获最新设置。
   captureSubmissionSettings: () => ComposerSessionSettingsSnapshot | null;
-  // Clears the exact draft slot only after its first submission is accepted.
-  // 仅在首次提交被接受后清理精确草稿槽。
-  clearSubmissionSettings: () => void;
+  // Clears an accepted snapshot only when its immutable source entry is still current.
+  // 仅在不可变来源条目仍为当前版本时清理已接受的快照。
+  clearSubmissionSettings: (snapshot: ComposerSessionSettingsSnapshot | null) => void;
 }
 
 // useComposerDraftSessionSettings isolates every new-conversation slot from persisted sessions and sibling drafts.
@@ -124,6 +124,11 @@ export function useComposerDraftSessionSettings(
   // entriesRef 在目标保存后、React 提交渲染前提供同步捕获。
   const entriesRef = React.useRef(entries);
   entriesRef.current = entries;
+  // capturedEntriesRef binds detached delivery snapshots to the immutable entries produced by updateCurrent.
+  // capturedEntriesRef 将分离的传输快照绑定到 updateCurrent 生成的不可变条目。
+  // Identity preserves later edits, including reselecting the same value, without retaining completed request snapshots.
+  // 身份比较保护后续编辑，包括重新选择同值；弱引用不会保留已结束请求的快照。
+  const capturedEntriesRef = React.useRef(new WeakMap<ComposerSessionSettingsSnapshot, DraftSessionSettingsEntry>());
 
   // updateCurrent commits one immutable entry and synchronously updates the capture ref.
   // updateCurrent 提交一个不可变条目并同步更新捕获引用。
@@ -203,15 +208,27 @@ export function useComposerDraftSessionSettings(
     });
   }, [updateCurrent]);
   const captureSubmissionSettings = React.useCallback(() => {
-    return captureDraftSessionSettingsSnapshot(
+    // snapshot is the exact object forwarded by the send controller and acknowledged on success.
+    // snapshot 是发送控制器转发并在成功时确认的精确对象。
+    const snapshot = captureDraftSessionSettingsSnapshot(
       entriesRef.current,
       scopeKey,
       conversationId,
     );
+    if (snapshot !== null) capturedEntriesRef.current.set(snapshot, entriesRef.current[scopeKey]);
+    return snapshot;
   }, [conversationId, scopeKey]);
-  // clearSubmissionSettings consumes settings only after the backend accepts their submission.
-  // clearSubmissionSettings 仅在后端接受对应提交后消费设置。
-  const clearSubmissionSettings = React.useCallback(() => {
+  // clearSubmissionSettings consumes only the acknowledged immutable version, preserving edits made during the request.
+  // clearSubmissionSettings 仅消费已确认的不可变版本，保留请求期间发生的编辑。
+  // Parameter: snapshot is the accepted delivery object; returns without changing newer or uncaptured entries.
+  // 参数：snapshot 是已接受的传输对象；存在更新或未捕获的条目时不作修改并返回。
+  const clearSubmissionSettings = React.useCallback((snapshot: ComposerSessionSettingsSnapshot | null) => {
+    if (snapshot === null) return;
+    // capturedEntry is absent for an already-consumed or foreign snapshot, neither of which may authorize deletion.
+    // capturedEntry 对已消费或其他实例的快照为空，这两类快照均不能授权删除。
+    const capturedEntry = capturedEntriesRef.current.get(snapshot);
+    capturedEntriesRef.current.delete(snapshot);
+    if (!capturedEntry || entriesRef.current[scopeKey] !== capturedEntry) return;
     const nextEntries = clearDraftSessionSettingsEntry(
       entriesRef.current,
       scopeKey,

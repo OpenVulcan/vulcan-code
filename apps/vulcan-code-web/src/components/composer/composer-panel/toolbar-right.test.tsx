@@ -30,6 +30,7 @@ function renderToolbar(options: {
     <TooltipProvider>
       <I18nProvider initialLocale="en-US">
         <ComposerPanelToolbarRight
+          draftSlotKey="conversation:toolbar-test"
           attachmentCount={options.attachmentCount}
           contextCompactionWindowNodes={[]}
           contextUsage={options.contextUsage ?? null}
@@ -46,6 +47,7 @@ function renderToolbar(options: {
           selectFallbackLabel="Select"
           sendAriaLabel="Send"
           sendBlocked={false}
+          stopPending={false}
           sessionProviderUsage={options.sessionProviderUsage ?? null}
           sessionContextCompactionWindowNodeId={null}
           stopAriaLabel="Stop"

@@ -1,9 +1,11 @@
 import * as React from "react";
-import { Bot, BrainCircuit, Calendar, Database, FolderCog, FolderPlus, LoaderCircle, Save, Trash2 } from "lucide-react";
+import { Bot, BrainCircuit, Calendar, Database, FolderPlus, LoaderCircle, Save, Trash2 } from "lucide-react";
 import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import "@/styles/project-vmm.css";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { canonicalProjectPath } from "@/components/features/memory/vmm-identity-project-page";
 import { VmmNativeHostProjectPolicy } from "@/components/features/memory/vmm-native-host-project-policy";
@@ -12,7 +14,6 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
 import type {
-  ProjectSummary,
   VmmConfigDraftSummary,
   VmmNativeProjectCatalogSummary,
   VmmMemoryActionResult,
@@ -33,59 +34,9 @@ import {
   projectAttachmentKindLabel,
 } from "./project-settings-utils";
 
-// ProjectOverviewSection renders static project metadata and inherited setting summaries.
-// ProjectOverviewSection 渲染静态项目元信息与继承设置摘要。
-export function ProjectOverviewSection(props: {
-  // Project whose settings are shown.
-  // 当前展示设置的项目。
-  project: ProjectSummary;
-  // Managed attachment root shown for the project.
-  // 当前项目展示的托管附件根目录。
-  attachmentRoot: string;
-  // Visible conversation count under the project.
-  // 当前项目下的可见会话数量。
-  conversationCount: number;
-  // Loaded VMM draft used to describe override state.
-  // 用于描述覆盖状态的已加载 VMM 草稿。
-  vmmDraft: VmmConfigDraftSummary | null;
-  // Project-local Agent Skill override map.
-  // 项目本地 Agent Skill 覆盖映射。
-  agentOverrides: Record<string, string>;
-}) {
-  const { t } = useI18n();
-  const overrideCount = Object.keys(props.agentOverrides).length;
-  return (
-    <div className="project-settings-section">
-      <div className="project-settings-summary">
-        <FolderCog size={22} />
-        <div>
-          <strong>{props.project.name}</strong>
-          <span>{props.project.path}</span>
-        </div>
-      </div>
-      <div className="project-settings-grid">
-        <div className="project-settings-panel">
-          <strong>{t("projectSettings.projectSpace")}</strong>
-          <p>{t("projectSettings.projectId").replace("{id}", props.project.id)}</p>
-          <p>{t("projectSettings.conversationCount").replace("{count}", String(props.conversationCount))}</p>
-          <p>{t("projectSettings.pinStatus").replace("{status}", props.project.pinned ? t("projectSettings.pinned") : t("projectSettings.notPinned"))}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{t("projectSettings.attachmentCache")}</strong>
-          <p>{props.attachmentRoot}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{t("projectSettings.vmmMemory")}</strong>
-          <p>{props.vmmDraft?.hasOverride ? t("projectSettings.vmmHasOverride") : t("projectSettings.vmmInheritsGlobal")}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{t("projectSettings.agentTitle")}</strong>
-          <p>{overrideCount > 0 ? t("projectSettings.agentOverrideCount").replace("{count}", String(overrideCount)) : t("projectSettings.agentInheritsGlobal")}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
+// Preserve the public section import while the overview owns its independent layout.
+// 保留公开分区导入，同时由概览持有独立布局。
+export { ProjectOverviewSection } from "./project-overview-section";
 
 // ProjectVmmSection renders project-level VMM memory override controls.
 // ProjectVmmSection 渲染项目级 VMM 记忆覆盖控件。
@@ -99,6 +50,9 @@ export function ProjectVmmSection(props: {
   // Current VMM load or save phase.
   // 当前 VMM 加载或保存阶段。
   vmmBusy: "idle" | "loading" | "saving";
+  // Unsaved project edits determine whether the general configuration needs persistence.
+  // 尚未保存的项目编辑决定一般配置是否需要持久化。
+  vmmDirty: boolean;
   // Applies a partial draft edit.
   // 应用局部草稿编辑。
   onUpdateDraft: (patch: Partial<VmmConfigDraftSummary>) => void;
@@ -112,7 +66,15 @@ export function ProjectVmmSection(props: {
   const [nativeOwnerId, setNativeOwnerId] = React.useState("");
   const [nativeLinkedIds, setNativeLinkedIds] = React.useState<number[]>([]);
   const [nativeBindingBusy, setNativeBindingBusy] = React.useState(false);
+  // Bind/create share one synchronous guard, including repeated clicks within one React batch.
+  // 绑定与创建共用同步锁，包括同一 React 批次内的重复点击。
+  const nativeBindingBusyRef = React.useRef(false);
   const [nativeBindingNotice, setNativeBindingNotice] = React.useState("");
+  // Catalog read failures remain distinct from an empty project list and can be retried explicitly.
+  // 目录读取失败与空项目列表保持区分，并允许明确重试。
+  const [catalogError, setCatalogError] = React.useState("");
+  const [catalogLoading, setCatalogLoading] = React.useState(false);
+  const [catalogAttempt, setCatalogAttempt] = React.useState(0);
   // This transport accepts only caller-policy actions; the child supplies the exact host tag in its typed payload.
   // 此传输仅接受调用方策略动作；子组件在强类型载荷中提供准确宿主标签。
   const runNativePolicyAction = React.useCallback((action: string, payload?: Record<string, unknown>): Promise<VmmMemoryActionResult> =>
@@ -155,6 +117,11 @@ export function ProjectVmmSection(props: {
       return;
     }
     let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogError("");
+    setNativeCatalog(null);
+    setExternalUsers([]);
+    setExternalProjects([]);
     void runVmmMemoryAction({
       action: props.vmmDraft.backendMode === "native" ? "native_project_catalog" : "load_users_projects",
       commandId: crypto.randomUUID(),
@@ -167,19 +134,24 @@ export function ProjectVmmSection(props: {
       } else if (result.data.kind === "users_projects") {
         setExternalUsers(result.data.value.users);
         setExternalProjects(result.data.value.projects);
+      } else {
+        throw new Error("Memory catalog returned an unexpected result kind.");
       }
     }).catch((error) => {
-      if (!cancelled) setNativeBindingNotice(error instanceof Error ? error.message : String(error));
+      if (!cancelled) setCatalogError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      if (!cancelled) setCatalogLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [acceptNativeCatalog, props.projectId, props.vmmDraft?.backendMode]);
+  }, [acceptNativeCatalog, props.projectId, props.vmmDraft?.backendMode, catalogAttempt]);
 
   // saveNativeBinding persists one owner and the separately selected recall-only projects.
   // saveNativeBinding 持久化一个归属项目与单独选择的仅召回项目。
   const saveNativeBinding = async () => {
-    if (nativeBindingBusy) return;
+    if (nativeBindingBusyRef.current || !nativeCatalog) return;
+    nativeBindingBusyRef.current = true;
     setNativeBindingBusy(true);
     setNativeBindingNotice("");
     try {
@@ -212,6 +184,7 @@ export function ProjectVmmSection(props: {
     } catch (error) {
       setNativeBindingNotice(error instanceof Error ? error.message : String(error));
     } finally {
+      nativeBindingBusyRef.current = false;
       setNativeBindingBusy(false);
     }
   };
@@ -219,7 +192,8 @@ export function ProjectVmmSection(props: {
   // createAndBindProject creates one backend-specific project and durably binds this project to its stable id.
   // createAndBindProject 创建一个后端专属项目，并将当前项目耐久绑定到其稳定标识。
   const createAndBindProject = async () => {
-    if (nativeBindingBusy || !props.vmmDraft || !createProjectName.trim()) return;
+    if (nativeBindingBusyRef.current || catalogLoading || catalogError || !props.vmmDraft || !createProjectName.trim()) return;
+    nativeBindingBusyRef.current = true;
     setNativeBindingBusy(true);
     setNativeBindingNotice("");
     try {
@@ -270,6 +244,7 @@ export function ProjectVmmSection(props: {
     } catch (error) {
       setNativeBindingNotice(error instanceof Error ? error.message : String(error));
     } finally {
+      nativeBindingBusyRef.current = false;
       setNativeBindingBusy(false);
     }
   };
@@ -287,7 +262,7 @@ export function ProjectVmmSection(props: {
     });
   };
   return (
-    <div className="project-settings-section">
+    <div className="project-settings-section project-vmm-section">
       <header className="project-settings-heading">
         <BrainCircuit size={18} />
         <div>
@@ -302,27 +277,27 @@ export function ProjectVmmSection(props: {
       ) : (
         <>
           <label className="project-settings-toggle-row">
-            <input
+            <Switch
               checked={props.vmmDraft.hasOverride}
-              onChange={(event) => props.onUpdateDraft({ hasOverride: event.target.checked })}
-              type="checkbox"
+              disabled={props.vmmBusy === "saving"}
+              onCheckedChange={(hasOverride) => props.onUpdateDraft({ hasOverride })}
             />
             <span>
               <strong>{t(props.vmmDraft.backendMode === "native" ? "memory.hostPolicy.connection" : "projectSettings.enableProjectOverride")}</strong>
               <small>{props.vmmDraft.hasOverride ? t("projectSettings.overrideEnabledHint") : t("projectSettings.overrideDisabledHint")}</small>
             </span>
           </label>
-          <div className={cn("project-settings-form-grid", !props.vmmDraft.hasOverride && "disabled")}>
+          <fieldset className="project-settings-form-grid project-vmm-form" disabled={!props.vmmDraft.hasOverride || props.vmmBusy === "saving"}>
             <label className="project-settings-check-row">
-              <input checked={props.vmmDraft.enabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ enabled: event.target.checked })} type="checkbox" />
-              {t("vmm.settings.enableMemoryConnection")}
+              <span>{t(props.vmmDraft.backendMode === "native" ? "projectSettings.vmmNativeEnabled" : "vmm.settings.enableMemoryConnection")}</span>
+              <Switch checked={props.vmmDraft.enabled} disabled={!props.vmmDraft.hasOverride || props.vmmBusy === "saving"} onCheckedChange={(enabled) => props.onUpdateDraft({ enabled })} />
             </label>
             <label className="project-settings-check-row">
-              <input checked={props.vmmDraft.aiToolsEnabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ aiToolsEnabled: event.target.checked })} type="checkbox" />
-              {t("vmm.settings.exposeAiTools")}
+              <span>{t("vmm.settings.exposeAiTools")}</span>
+              <Switch checked={props.vmmDraft.aiToolsEnabled} disabled={!props.vmmDraft.hasOverride || props.vmmBusy === "saving"} onCheckedChange={(aiToolsEnabled) => props.onUpdateDraft({ aiToolsEnabled })} />
             </label>
-            <VmmSelectField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.precheckPolicy")} options={policyOptions} value={props.vmmDraft.precheckMode} onChange={(mode) => updatePolicyMode("precheck", mode)} />
-            <VmmSelectField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.writebackPolicy")} options={policyOptions} value={props.vmmDraft.memoryWritebackMode} onChange={(mode) => updatePolicyMode("writeback", mode)} />
+            <VmmSelectField disabled={!props.vmmDraft.hasOverride || props.vmmBusy === "saving"} label={t("vmm.settings.precheckPolicy")} options={policyOptions} value={props.vmmDraft.precheckMode} onChange={(mode) => updatePolicyMode("precheck", mode)} />
+            <VmmSelectField disabled={!props.vmmDraft.hasOverride || props.vmmBusy === "saving"} label={t("vmm.settings.writebackPolicy")} options={policyOptions} value={props.vmmDraft.memoryWritebackMode} onChange={(mode) => updatePolicyMode("writeback", mode)} />
             {props.vmmDraft.backendMode === "external_grpc" ? (
               <>
                 <VmmSelectField
@@ -341,6 +316,9 @@ export function ProjectVmmSection(props: {
                 />
               </>
             ) : null}
+            <details className="project-vmm-advanced">
+              <summary>{t("projectSettings.vmmAdvanced")}</summary>
+              <div className="project-settings-form-grid project-vmm-form">
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.implicitMemoryTtl")} value={props.vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onUpdateDraft({ implicitMemoryTurns })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileRefreshInterval")} value={props.vmmDraft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onUpdateDraft({ profileRefreshTurns })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileNodeLimit")} value={props.vmmDraft.profileNodeLimit} onChange={(profileNodeLimit) => props.onUpdateDraft({ profileNodeLimit })} />
@@ -349,15 +327,25 @@ export function ProjectVmmSection(props: {
               <span>{t("vmm.settings.injectionDescription")}</span>
               <Textarea disabled={!props.vmmDraft.hasOverride} value={props.vmmDraft.injectionDescription} onChange={(event) => props.onUpdateDraft({ injectionDescription: event.target.value })} />
             </label>
+              </div>
+            </details>
+          </fieldset>
+          <div className="project-settings-actions">
+            <Button disabled={!props.vmmDirty || props.vmmBusy === "saving"} onClick={() => void props.onSaveDraft()} type="button">
+              <Save size={15} />
+              {props.vmmBusy === "saving" ? t("composer.capability.save.saving") : t("projectSettings.saveVmm")}
+            </Button>
           </div>
           {props.vmmDraft.backendMode === "native" ? (
             <div className="project-settings-panel">
               <strong>{t("projectSettings.vmmNativeBinding")}</strong>
               <VmmSelectField
+                disabled={nativeBindingBusy || !nativeCatalog}
                 label={t("projectSettings.vmmNativeOwner")}
                 onChange={(value) => {
                   setNativeOwnerId(value === "unbound" ? "" : value);
                   if (value === "unbound") setNativeLinkedIds([]);
+                  else setNativeLinkedIds((current) => current.filter((projectId) => String(projectId) !== value));
                 }}
                 options={[
                   { value: "unbound", label: t("vmm.nativeProjects.unbound") },
@@ -367,9 +355,11 @@ export function ProjectVmmSection(props: {
               />
               {nativeOwnerId ? (
                 <div className="project-settings-form-grid">
+                  <span className="project-vmm-linked-label">{t("projectSettings.vmmNativeLinked")}</span>
                   {(nativeCatalog?.projects ?? []).filter((project) => String(project.projectId) !== nativeOwnerId).map((project) => (
                     <label className="project-settings-check-row" key={project.projectId}>
                       <input
+                        disabled={nativeBindingBusy}
                         checked={nativeLinkedIds.includes(project.projectId)}
                         onChange={() => setNativeLinkedIds((current) => current.includes(project.projectId)
                           ? current.filter((value) => value !== project.projectId)
@@ -387,8 +377,15 @@ export function ProjectVmmSection(props: {
               </Button>
             </div>
           ) : null}
-          <div className="project-settings-panel">
-            <strong>{t("projectSettings.vmmCreateBinding")}</strong>
+          {catalogLoading ? <p role="status" className="project-settings-muted">{t("memory.common.loading")}</p> : null}
+          {catalogError ? <div role="alert" className="project-vmm-catalog-error">
+            <p>{catalogError}</p>
+            <Button size="sm" variant="outline" onClick={() => setCatalogAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button>
+          </div> : null}
+          {nativeBindingNotice ? <p role="status" className="project-settings-muted">{nativeBindingNotice}</p> : null}
+          <details className="project-vmm-create">
+            <summary>{t("projectSettings.vmmCreateBinding")}</summary>
+            <div className="project-vmm-create-body">
             {props.vmmDraft.backendMode === "external_grpc" ? (
               <div className="project-settings-form-grid">
                 <label className="project-settings-field">
@@ -410,9 +407,9 @@ export function ProjectVmmSection(props: {
                 {t("memory.identity.projectPathPreview")} {canonicalProjectPath(createExternalTeamName, createExternalSpaceName, createProjectName)}
               </p>
             ) : null}
-            {nativeBindingNotice ? <p className="project-settings-muted">{nativeBindingNotice}</p> : null}
             <Button
               disabled={nativeBindingBusy
+                || catalogLoading || Boolean(catalogError)
                 || !createProjectName.trim()
                 || (props.vmmDraft.backendMode === "external_grpc"
                   && (!createExternalTeamName.trim() || !createExternalSpaceName.trim()))}
@@ -423,18 +420,13 @@ export function ProjectVmmSection(props: {
               {nativeBindingBusy ? <LoaderCircle className="size-4 animate-spin" /> : <FolderPlus size={15} />}
               {t("projectSettings.vmmCreateAndBind")}
             </Button>
-          </div>
+            </div>
+          </details>
           <p className="project-settings-muted">
             {t(props.vmmDraft.backendMode === "native"
               ? "projectSettings.vmmNativeHostHint"
               : "projectSettings.vmmTransportHint")}
           </p>
-          <div className="project-settings-actions">
-            <Button disabled={props.vmmBusy === "saving"} onClick={() => void props.onSaveDraft()} type="button">
-              <Save size={15} />
-              {props.vmmBusy === "saving" ? t("composer.capability.save.saving") : t("projectSettings.saveVmm")}
-            </Button>
-          </div>
           {props.vmmDraft.backendMode === "native" && nativeCatalog?.bindings.some((binding) => binding.vulcanProjectId === props.projectId) ? (
             <VmmNativeHostProjectPolicy key={props.projectId} hostProjectId={props.projectId}
               busy={nativeBindingBusy || props.vmmBusy === "saving"} onRunAction={runNativePolicyAction} />
@@ -475,6 +467,15 @@ export function ProjectAgentSkillsSection(props: {
   // Whether project overrides are currently loading.
   // 项目覆盖是否正在加载。
   agentLoading: boolean;
+  // A successful read at the current settings revision owns the displayed override states.
+  // 当前设置版本的成功读取持有所显示覆盖状态的权威。
+  agentLoaded: boolean;
+  // Read or write failures remain visible until a successful authoritative read or save.
+  // 读取或写入失败保持可见，直到权威读取或保存成功。
+  agentError: string | null;
+  // Retries the existing project override read without changing any configuration.
+  // 重试既有项目覆盖读取，不改变任何配置。
+  onRetry: () => void;
   // Current project override map.
   // 当前项目覆盖映射。
   agentOverrides: Record<string, string>;
@@ -485,7 +486,7 @@ export function ProjectAgentSkillsSection(props: {
   // 持久化单个技能覆盖。
   onSetProjectAgentSkill: (name: string, stateKey: ProjectAgentSkillState) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
@@ -499,8 +500,14 @@ export function ProjectAgentSkillsSection(props: {
         <StatusPill status="ready" label={`${props.workbench.agentSkills.records.filter((record) => record.effective && record.enabled).length} ${t("projectSettings.agentTitle")}`} />
         <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
       </div>
+      {props.agentError ? <div role="alert" className="space-y-2 text-sm text-destructive">
+        <p>{props.agentError}</p>
+        <Button type="button" variant="outline" disabled={props.agentLoading || props.agentBusySkill !== null} onClick={props.onRetry}>{locale === "zh-CN" ? "重新读取项目设置" : "Reload project settings"}</Button>
+      </div> : null}
       {props.agentLoading ? (
         <p className="project-settings-muted">{t("projectSettings.agentLoading")}</p>
+        ) : !props.agentLoaded || props.agentError ? (
+        <p className="project-settings-muted">{locale === "zh-CN" ? "项目技能设置尚未读取成功。" : "Project skill settings have not been loaded successfully."}</p>
         ) : props.workbench.agentSkills.records.filter((skill) => skill.effective).length === 0 ? (
         <p className="project-settings-muted">{t("projectSettings.agentEmpty")}</p>
       ) : (

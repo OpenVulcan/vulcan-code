@@ -189,6 +189,9 @@ export function LuaSkillConfigDialog(props: {
   // busy reports an active load, write, validation, or delete operation.
   // busy 表示正在执行加载、写入、校验或删除操作。
   const [busy, setBusy] = React.useState(false);
+  // mutationRef prevents duplicate manual operations and dismissal while a CAS write is unresolved.
+  // mutationRef 防止重复手动操作及 CAS 写入未完成期间的关闭。
+  const mutationRef = React.useRef(false);
   // errorMessage contains the current value-free service or editor error.
   // errorMessage 保存当前不含配置值的服务或编辑器错误。
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
@@ -402,6 +405,8 @@ export function LuaSkillConfigDialog(props: {
   // Returns: a promise that settles after the manual refresh completes.
   // 返回值：手动刷新完成后结束的 Promise。
   const reloadDescriptor = React.useCallback(async (): Promise<void> => {
+    if (mutationRef.current) return;
+    mutationRef.current = true;
     setBusy(true);
     setErrorMessage(null);
     try {
@@ -409,6 +414,7 @@ export function LuaSkillConfigDialog(props: {
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      mutationRef.current = false;
       setBusy(false);
     }
   }, [loadDescriptor]);
@@ -416,9 +422,10 @@ export function LuaSkillConfigDialog(props: {
   // submitChangedValues sends one non-empty typed CAS batch and clears sensitive inputs afterward.
   // submitChangedValues 发送一组非空类型化 CAS 批次，并在完成后清空敏感输入。
   const submitChangedValues = React.useCallback(async () => {
-    if (!descriptor || changedKeys.length === 0) {
+    if (mutationRef.current || !descriptor || changedKeys.length === 0) {
       return;
     }
+    mutationRef.current = true;
     setBusy(true);
     setErrorMessage(null);
     try {
@@ -445,16 +452,20 @@ export function LuaSkillConfigDialog(props: {
       // updated 是提交后的宿主安全快照。
       const updated = mutation.descriptor;
       setDescriptor(updated);
-      setValidation(await props.actions.onValidateLuaSkillConfig(updated.skillId));
+      // Clear committed sensitive drafts before the independent validation read can fail.
+      // 在独立校验读取可能失败之前清除已提交的敏感草稿。
       setDraft(draftFromDescriptor(updated));
       changedKeysRef.current = [];
       setChangedKeys([]);
       setConflictMessage(null);
+      setValidation(null);
+      setValidation(await props.actions.onValidateLuaSkillConfig(updated.skillId));
     } catch (error: unknown) {
       if (!(await handleRevisionConflict(error))) {
         setErrorMessage(error instanceof Error ? error.message : String(error));
       }
     } finally {
+      mutationRef.current = false;
       setBusy(false);
     }
   }, [changedKeys, descriptor, draft, handleRevisionConflict, props.actions]);
@@ -462,9 +473,10 @@ export function LuaSkillConfigDialog(props: {
   // deleteValue removes one explicit or orphaned key with the currently observed revision.
   // deleteValue 使用当前观察到的修订号删除单个显式或遗留键。
   const deleteValue = React.useCallback(async (key: string) => {
-    if (!descriptor) {
+    if (mutationRef.current || !descriptor) {
       return;
     }
+    mutationRef.current = true;
     setBusy(true);
     setErrorMessage(null);
     try {
@@ -479,16 +491,24 @@ export function LuaSkillConfigDialog(props: {
       // updated 是删除后的宿主安全快照。
       const updated = mutation.descriptor;
       setDescriptor(updated);
-      setValidation(await props.actions.onValidateLuaSkillConfig(updated.skillId));
-      setDraft(draftFromDescriptor(updated));
-      changedKeysRef.current = [];
-      setChangedKeys([]);
+      // Deleting one key must preserve edits to every other unsaved field.
+      // 删除一个键必须保留所有其他尚未保存字段的编辑。
+      changedKeysRef.current = changedKeysRef.current.filter((changedKey) => changedKey !== key);
+      setChangedKeys(changedKeysRef.current);
+      setDraft((current) => {
+        const nextDraft = draftFromDescriptor(updated);
+        for (const changedKey of changedKeysRef.current) nextDraft[changedKey] = current[changedKey];
+        return nextDraft;
+      });
       setConflictMessage(null);
+      setValidation(null);
+      setValidation(await props.actions.onValidateLuaSkillConfig(updated.skillId));
     } catch (error: unknown) {
       if (!(await handleRevisionConflict(error))) {
         setErrorMessage(error instanceof Error ? error.message : String(error));
       }
     } finally {
+      mutationRef.current = false;
       setBusy(false);
     }
   }, [descriptor, handleRevisionConflict, props.actions]);
@@ -633,18 +653,19 @@ export function LuaSkillConfigDialog(props: {
   };
 
   return (
-    <Dialog open={props.open && props.skill !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="lua-skill-config-dialog">
+    <Dialog open={props.open && props.skill !== null} onOpenChange={(open) => { if (!mutationRef.current) props.onOpenChange(open); }}>
+      <DialogContent className="lua-skill-config-dialog grid-rows-[auto_minmax(0,1fr)_auto]" size="lg" scrollMode="fixed-footer">
         <DialogHeader>
           <DialogTitle>{t("skills.luaConfig.title")}</DialogTitle>
           <DialogDescription>
             {props.skill ? `${props.skill.displayName} · ${props.skill.skillId}` : t("skills.luaConfig.description")}
           </DialogDescription>
         </DialogHeader>
-        {busy && !descriptor ? <div className="skill-empty-state">{t("skills.luaConfig.loading")}</div> : null}
-        {!busy && !descriptor ? <div className="skill-empty-state">{t("skills.luaConfig.empty")}</div> : null}
+        <div className="lua-skill-config-body min-h-0">
+        {busy && !descriptor ? <div className="skill-empty-state" role="status">{t("skills.luaConfig.loading")}</div> : null}
+        {!busy && !descriptor && !errorMessage ? <div className="skill-empty-state">{t("skills.luaConfig.empty")}</div> : null}
         {descriptor ? (
-          <div className="lua-skill-config-body">
+          <div className="grid gap-3">
             <div className="lua-skill-config-summary">
               <Badge variant={descriptor.complete ? "secondary" : "outline"}>
                 {descriptor.complete ? t("skills.luaConfig.complete") : t("skills.luaConfig.incomplete")}
@@ -706,10 +727,13 @@ export function LuaSkillConfigDialog(props: {
               </div>
             ) : null}
           </div>
-        ) : errorMessage ? <p className="lua-skill-config-error">{errorMessage}</p> : null}
+        ) : errorMessage ? <div role="alert"><p className="lua-skill-config-error">{errorMessage}</p>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void reloadDescriptor()}>{t("skills.luaConfig.reload")}</Button>
+        </div> : null}
+        </div>
         <DialogFooter>
           <Button
-            disabled={busy}
+            disabled={mutationRef.current}
             onClick={() => props.onOpenChange(false)}
             type="button"
             variant="secondary"

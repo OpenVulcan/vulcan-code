@@ -1,4 +1,7 @@
 .composer-capability-dialog {
+  /* Keep surface padding and footer bleed under the same owner at every breakpoint. */
+  /* 所有断点均由同一来源管理表面内边距与底栏外扩。 */
+  --composer-dialog-padding: 18px;
   width: min(860px, calc(100vw - 48px));
   max-width: min(860px, calc(100vw - 48px));
   height: min(520px, calc(100vh - 88px));
@@ -6,15 +9,16 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0;
-  padding: 18px;
+  padding: var(--composer-dialog-padding);
+  overflow: hidden;
 }
 
 .composer-capability-dialog-note {
   margin-top: 6px;
-  border-left: 3px solid #ef4444;
+  border-left: 3px solid var(--vcn-content-danger);
   padding: 5px 8px;
-  background: color-mix(in srgb, #ef4444 10%, transparent);
-  color: #dc2626;
+  background: color-mix(in srgb, var(--vcn-content-danger) 10%, transparent);
+  color: var(--vcn-content-danger);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -148,8 +152,7 @@
 
 .composer-capability-dialog-right {
   min-height: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  display: block;
 }
 
 .composer-capability-target-table {
@@ -251,13 +254,13 @@
 }
 
 .composer-capability-dialog-footer {
-  margin: 0 -18px -18px;
+  margin: 0 calc(-1 * var(--composer-dialog-padding)) calc(-1 * var(--composer-dialog-padding));
   align-items: center;
   flex-direction: row;
   gap: 12px;
   border-top: 1px solid var(--border);
   border-radius: 0;
-  padding: 12px 18px;
+  padding: 12px var(--composer-dialog-padding);
 }
 
 .composer-capability-dialog-save-hint {

@@ -55,7 +55,7 @@ export function EmptyConversationPrompt(props: {
 
   return (
     <section className={cn("empty-conversation-prompt", props.leaving && "leaving")} aria-hidden={props.leaving}>
-      <h2>{promptText}</h2>
+      <h2 title={promptText}>{promptText}</h2>
     </section>
   );
 }

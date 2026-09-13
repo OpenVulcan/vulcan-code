@@ -11,14 +11,15 @@ import type {
 
 // projectSettingsSections builds the left-side project settings navigation.
 // projectSettingsSections 构建项目设置左侧导航。
-// Parameters: project/workbench provide current data, and t localizes labels.
-// 参数：project/workbench 提供当前数据，t 负责本地化标签。
+// Parameters: project/workbench provide current data, t localizes labels, and hasVmmOverride comes from the exact dialog project's loaded draft.
+// 参数：project/workbench 提供当前数据，t 本地化标签，hasVmmOverride 来自弹窗准确所属项目的已加载草稿。
 // Returns: ordered settings sections; configuration access is independent from runtime tool admission.
 // 返回值：有序设置分区；配置访问独立于运行时工具准入。
 export function projectSettingsSections(
   project: ProjectSummary,
   workbench: WorkbenchSnapshot,
   t: (key: TranslationKey) => string,
+  hasVmmOverride: boolean | null,
 ): ProjectSettingsSectionSummary[] {
   const sections: ProjectSettingsSectionSummary[] = [
     {
@@ -31,7 +32,7 @@ export function projectSettingsSections(
       id: "vmm",
       icon: <BrainCircuit size={16} />,
       label: t("projectSettings.vmmMemory"),
-      detail: workbench.vmmMemory.projectDraft.hasOverride ? t("projectSettings.projectOverride") : t("projectSettings.inheritGlobal"),
+      detail: hasVmmOverride === null ? "-" : t(hasVmmOverride ? "projectSettings.projectOverride" : "projectSettings.inheritGlobal"),
     },
     {
       id: "knowledge-bases",

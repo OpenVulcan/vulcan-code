@@ -1,0 +1,187 @@
+/* Preference pages share section rhythm without nesting decorative cards. */
+/* 偏好设置页面使用一致分区节奏，不再嵌套装饰卡片。 */
+.settings-preferences-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  padding: 24px;
+}
+.settings-preferences-fields {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.settings-preferences-section {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+.settings-preferences-section + .settings-preferences-section {
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.settings-preferences-section h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.settings-preference-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 40px;
+}
+.settings-preference-row > div { min-width: 0; }
+.settings-preference-row [data-slot="switch"] { flex-shrink: 0; }
+.settings-preferences-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.settings-save-error {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));
+  border-radius: 8px;
+  color: var(--foreground);
+}
+.settings-save-error > p { color: var(--destructive); }
+.settings-save-error pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@container workspace-page (max-width: 640px) {
+  .settings-preferences-page { padding: 16px 12px; }
+}
+.settings-feature-content {
+  padding: 0;
+}
+
+/* Page padding belongs inside the scroll owner, never between the title bar and the page. */
+/* 页面留白归属于滚动容器内部，不在标题栏与页面之间留下空带。 */
+.settings-feature-content > .settings-direct-content {
+  padding: 20px 24px;
+}
+
+.settings-feature-content > .area-grid {
+  padding: 20px 24px;
+}
+
+.settings-feature-content > .model-list-layout,
+.settings-feature-content > .credential-management-layout {
+  height: 100%;
+  padding: 0;
+}
+
+/* Fill the page only for split panes; provider categories flow after their heading. */
+/* 仅分栏页填满高度；供应商分类在标题之后按内容自然排列。 */
+.settings-feature-content > .model-list-layout .settings-local-directory-grid,
+.settings-feature-content > .credential-management-layout {
+  min-height: 0;
+  height: 100%;
+}
+
+.settings-feature-content > .model-list-layout .settings-local-directory-grid,
+.settings-feature-content > .credential-management-layout {
+  align-items: stretch;
+  gap: 0;
+}
+
+.settings-feature-content > .model-list-layout .settings-local-directory-nav,
+.settings-feature-content > .credential-management-layout > .settings-local-directory-nav {
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding: 16px 10px;
+}
+
+.settings-feature-content .model-list-surface,
+.settings-feature-content .credential-management-surface {
+  min-height: 0;
+  padding: 16px 24px;
+}
+
+.credential-management-layout {
+  container-type: inline-size;
+}
+
+.credential-management-layout .workspace-tool-panel-menu-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.settings-diagnostics-page {
+  height: 100%;
+  min-height: 0;
+  padding: 16px 24px 0;
+  overflow: hidden;
+}
+
+.settings-diagnostics-page > [data-slot="tabs-list"] {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow-x: auto;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.settings-diagnostics-page > [data-slot="tabs-content"] {
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
+.settings-diagnostics-page [data-slot="input"] {
+  margin: 16px 0;
+}
+
+.settings-diagnostics-startup,
+.settings-diagnostics-explanation {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-diagnostics-explanation > summary {
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.diagnostic-log-row {
+  display: grid;
+  grid-template-columns: 64px minmax(100px, 140px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-log-row > p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.diagnostic-log-level {
+  color: var(--muted-foreground);
+}
+
+.diagnostic-log-level[data-level="error"] {
+  color: var(--destructive);
+}
+
+@container workspace-page (max-width: 640px) {
+  .settings-diagnostics-page { padding: 12px 12px 0; }
+  .diagnostic-log-row { grid-template-columns: 64px minmax(0, 1fr); }
+  .diagnostic-log-row > p { grid-column: 1 / -1; }
+}

@@ -59,6 +59,9 @@ export function LuaSkillCard(props: {
   // Opens the package configuration dialog for this Lua Skill.
   // 打开当前 Lua Skill 的技能包配置弹窗。
   onOpenConfig: (skill: LuaSkillSummary) => void;
+  // Requests shared confirmation before removing this user-owned package.
+  // 删除此用户包之前请求共享确认。
+  onRequestUninstall: (skill: LuaSkillSummary) => void;
   // Runs a labeled async action with page-level busy state.
   // 使用页面级忙碌状态运行带标签的异步动作。
   onRunAction: (label: string, action: () => Promise<void>) => Promise<void>;
@@ -168,7 +171,7 @@ export function LuaSkillCard(props: {
               </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="lua-skill-action-menu">
-              <DropdownMenuItem variant="destructive" onSelect={() => void props.onRunAction("uninstall", () => props.actions.onUninstallLuaSkill(props.skill.skillId))}>
+              <DropdownMenuItem variant="destructive" onSelect={() => props.onRequestUninstall(props.skill)}>
                 <Trash2 size={15} />
                 <span>{t("skills.action.delete")}</span>
               </DropdownMenuItem>
@@ -198,7 +201,7 @@ export function LuaSkillDetailDialog(props: {
   const source = skill?.sourceLocator ? `${skill.sourceType ?? "source"} · ${skill.sourceLocator}` : t("skills.source.unknown");
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="lua-skill-detail-dialog">
+      <DialogContent className="lua-skill-detail-dialog" size="md" scrollMode="body-scroll">
         <DialogHeader>
           <DialogTitle>{skill?.displayName ?? t("skills.lua.detailsTitle")}</DialogTitle>
           <DialogDescription>{skill ? `${skill.skillId} · v${skill.version}` : t("skills.lua.detailsDescription")}</DialogDescription>
@@ -253,9 +256,21 @@ export function LuaSkillToolsDialog(props: {
 }) {
   const { t } = useI18n();
   const skill = props.skill;
+  // writingRef protects this dialog until its accepted registration write settles.
+  // writingRef 在已接受的注册写入结束前保护此弹窗。
+  const writingRef = React.useRef(false);
+  const [writing, setWriting] = React.useState(false);
+  // onWritingChange synchronously guards dismissal and disables all sibling tool controls.
+  // onWritingChange 同步保护关闭，并禁用所有同级工具控件。
+  const onWritingChange = React.useCallback((value: boolean) => {
+    if (value && writingRef.current) return false;
+    writingRef.current = value;
+    setWriting(value);
+    return true;
+  }, []);
   return (
-    <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="lua-skill-tools-dialog">
+    <Dialog open={props.open && skill !== null} onOpenChange={(open) => { if (!writingRef.current) props.onOpenChange(open); }}>
+      <DialogContent className="lua-skill-tools-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{skill ? `${skill.displayName} ${t("skills.action.tools")}` : t("skills.lua.toolsTitle")}</DialogTitle>
           <DialogDescription>{skill ? `${skill.skillId} · ${skill.tools.length} ${t("skills.label.runtimeTools")}` : t("skills.lua.toolsDescription")}</DialogDescription>
@@ -266,7 +281,8 @@ export function LuaSkillToolsDialog(props: {
           ) : skill?.tools.map((tool) => (
             <LuaSkillToolRow
               actions={props.actions}
-              busy={props.busy}
+              busy={props.busy || writing}
+              onWritingChange={onWritingChange}
               key={`${skill.skillId}-${tool.localName}`}
               skillId={skill.skillId}
               tool={tool}
@@ -293,14 +309,25 @@ function LuaSkillToolRow(props: {
   // Runtime tool row.
   // 运行时工具行。
   tool: LuaSkillToolSummary;
+  // Reports the accepted write lifetime to the containing dialog.
+  // 将已接受写入的生命周期报告给所属弹窗。
+  onWritingChange: (writing: boolean) => boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // selectedState mirrors the select value immediately before backend synchronization completes.
   // selectedState 在后端同步完成前立即镜像选择框取值。
   const [selectedState, setSelectedState] = React.useState(props.tool.registrationState);
   // syncing tracks the background persistence request for this single tool row.
   // syncing 跟踪当前工具行的后台持久化请求。
   const [syncing, setSyncing] = React.useState(false);
+  // syncingRef rejects repeat writes before the busy render; persistedState tracks current host authority.
+  // syncingRef 在忙碌渲染前拒绝重复写入；persistedState 跟踪当前宿主权威。
+  const syncingRef = React.useRef(false);
+  const persistedState = React.useRef(props.tool.registrationState);
+  persistedState.current = props.tool.registrationState;
+  // syncError presents failed registration without hiding the retained current state.
+  // syncError 展示注册失败，不隐藏保留的当前状态。
+  const [syncError, setSyncError] = React.useState("");
 
   React.useEffect(() => {
     setSelectedState(props.tool.registrationState);
@@ -310,20 +337,25 @@ function LuaSkillToolRow(props: {
   // handleRegistrationChange 先执行乐观本地切换，并在持久化失败时回滚。
   const handleRegistrationChange = React.useCallback(async (nextState: LuaSkillToolSummary["registrationState"]) => {
     const previousState = selectedState;
-    if (nextState === previousState || syncing || props.busy) {
+    if (nextState === previousState || syncingRef.current || props.busy) {
       return;
     }
+    if (!props.onWritingChange(true)) return;
     setSelectedState(nextState);
+    syncingRef.current = true;
     setSyncing(true);
+    setSyncError("");
     try {
       await props.actions.onSetLuaSkillToolRegistrationState(props.skillId, props.tool.localName, nextState);
     } catch (error) {
-      setSelectedState(previousState);
-      console.warn("sync LuaSkill tool registration state failed", error);
+      setSelectedState(persistedState.current);
+      setSyncError(error instanceof Error ? error.message : String(error));
     } finally {
+      syncingRef.current = false;
+      props.onWritingChange(false);
       setSyncing(false);
     }
-  }, [props.actions, props.busy, props.skillId, props.tool.localName, selectedState, syncing]);
+  }, [props.actions, props.busy, props.skillId, props.tool.localName, props.onWritingChange, selectedState]);
 
   return (
     <article className="skill-tool-row">
@@ -359,6 +391,10 @@ function LuaSkillToolRow(props: {
       <div className="skill-tool-description">
         <p>{props.tool.description || props.tool.registrationHelp}</p>
       </div>
+      {syncError ? <details role="alert" className="text-xs text-destructive">
+        <summary>{locale.startsWith("zh") ? "工具状态保存失败，请重试" : "Tool state could not be saved. Retry."}</summary>
+        <pre className="plugin-control-error-details">{syncError}</pre>
+      </details> : null}
     </article>
   );
 }

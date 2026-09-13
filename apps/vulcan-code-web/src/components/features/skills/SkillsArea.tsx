@@ -8,6 +8,7 @@ import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
 import {
   findEnabledPluginDetailMount,
+  isPluginDetailSubArea,
   type SkillActionProps,
   type SkillSubAreaId,
 } from "./skill-area-types"
@@ -29,6 +30,9 @@ export function SkillsArea(props: {
   // 包含 LuaSkills 目录与运行时设置的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
+  // locale provides a visible unavailable state when the selected plugin loses its enabled mount.
+  // locale 在所选插件失去已启用挂载点时提供可见的不可用状态。
+  const { locale } = useI18n()
   // pluginSelection is the exact enabled dynamic page selected by the host navigation.
   // pluginSelection 是宿主导航选中的精确已启用动态页面。
   const pluginSelection = findEnabledPluginDetailMount(props.workbench.plugins, props.activeTab)
@@ -57,6 +61,12 @@ export function SkillsArea(props: {
           <DynamicPluginMountPanel mount={pluginSelection.mount} plugin={pluginSelection.plugin} />
         </div>
       ) : null}
+      {!pluginSelection && isPluginDetailSubArea(props.activeTab) ? <div className="skill-empty-state" role="status">
+        {locale.startsWith("zh") ? "此插件页面当前不可用，请在插件管理中检查启用状态。" : "This plugin page is unavailable. Check its enabled state in plugin management."}
+      </div> : null}
     </section>
   )
 }
+// Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
+// 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
+import "@/styles/skill-directory.css";

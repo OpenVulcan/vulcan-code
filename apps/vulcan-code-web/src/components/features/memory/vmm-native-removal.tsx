@@ -1,8 +1,9 @@
 import * as React from "react"
 import { Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { useI18n } from "@/i18n"
+import { formatNativeDuration } from "./native-duration-display"
 import type { VmmMemoryActionResult, VmmNativeRemovalPreview, VmmNativeRemovalTarget } from "@/types"
 
 // Binds a selected source family to the existing native preview/confirmation transport.
@@ -52,9 +53,12 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
   const previewGeneration = React.useRef(-1)
   const mounted = React.useRef(true)
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  // Feedback belongs to the selected owner and source generation, just like the preview.
+  // 反馈与预览一样归属于选定项目和来源代次，切换选择后清除旧错误。
+  React.useEffect(() => { setError(false) }, [identity])
   // Translation and eligibility are presentation-only; the server validates the full selection again.
   // 翻译及可选状态仅用于展示；服务端会再次校验完整选择。
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const eligible = selection.ids.length > 0 && selection.ids.length <= 100
   const visiblePreview = previewGeneration.current === generationRef.current ? preview : null
 
@@ -110,13 +114,12 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
     }
   }
 
-  return <div className="space-y-2">
-    <Button type="button" variant="outline" disabled={busy || pending || !eligible} onClick={() => void prepare()}>
+  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !inFlight.current) setPreview(null) }}><div className="space-y-2">
+    <AlertDialogTrigger asChild><Button type="button" variant="outline" disabled={busy || pending || !eligible} onClick={() => void prepare()}>
       <Trash2 className="size-4" aria-hidden="true" />
       {t(selection.kind === "sessions" ? "memory.removal.sessions" : "memory.removal.turns")} ({selection.ids.length})
-    </Button>
+    </Button></AlertDialogTrigger>
     {error ? <p role="alert" className="text-sm text-destructive">{t("memory.removal.failed")}</p> : null}
-    <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !inFlight.current) setPreview(null) }}>
       <AlertDialogContent className="max-h-[85vh] overflow-y-auto">
         <AlertDialogHeader>
           <AlertDialogTitle>{t("memory.removal.title")}</AlertDialogTitle>
@@ -136,7 +139,7 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
             <RemovalCount label={t("memory.removal.projectProfiles")} count={visiblePreview.impact.projectProfileNodeIds.length} />
             <RemovalCount label={t("memory.removal.userProfiles")} count={visiblePreview.impact.userProfileNodeIds.length} />
           </dl>
-          <p className="text-sm">{t("memory.removal.retention")} {visiblePreview.trashRetentionMs / 86_400_000} {t("memory.removal.days")}</p>
+          <p className="text-sm">{t("memory.removal.retention")} {formatNativeDuration(visiblePreview.trashRetentionMs, locale, t)}{t("memory.removal.expirySuffix")}</p>
           <details className="rounded-md border p-3 text-sm">
             <summary className="cursor-pointer">{t("memory.removal.sources")}</summary>
             <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
@@ -150,8 +153,7 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
           <AlertDialogAction disabled={busy || pending || !visiblePreview} onClick={(event) => { event.preventDefault(); void confirm() }}>{t("memory.removal.confirm")}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
-    </AlertDialog>
-  </div>
+  </div></AlertDialog>
 }
 
 // Renders one authoritative impact count from its translated label and numeric value.

@@ -4,7 +4,7 @@ import * as React from "react"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
-import { CheckIcon, ChevronRightIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, MinusIcon } from "lucide-react"
 import {
   FLOATING_MOTION_CLASS_NAME,
   FLOATING_SURFACE_CLASS_NAME,
@@ -141,6 +141,10 @@ function DropdownMenuItem({
   )
 }
 
+// DropdownMenuCheckboxItem preserves native checkable menu state, including a distinct mixed indicator.
+// DropdownMenuCheckboxItem 保留原生可选菜单状态，包括独立的部分选择指示。
+// Parameters: props supply native check state and actions. Returns: the accessible checkable menu row.
+// 参数：props 提供原生选择状态及操作。返回值：无障碍可选菜单行。
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -166,9 +170,9 @@ function DropdownMenuCheckboxItem({
         className="pointer-events-none absolute right-2 flex items-center justify-center"
         data-slot="dropdown-menu-checkbox-item-indicator"
       >
-        <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon
-          />
+        <DropdownMenuPrimitive.ItemIndicator className="group/menu-check-indicator">
+          <CheckIcon className="group-data-[state=indeterminate]/menu-check-indicator:hidden" />
+          <MinusIcon className="hidden group-data-[state=indeterminate]/menu-check-indicator:block" />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
@@ -301,21 +305,30 @@ function DropdownMenuSubTrigger({
   )
 }
 
+// DropdownMenuSubContent portals dynamic submenus outside transformed parent menus before viewport positioning.
+// DropdownMenuSubContent 将动态二级菜单挂载到变换后的父菜单之外，再按视口定位。
+// Parameters: props retain the Radix submenu contract. Returns: one themed, keyboard-managed submenu surface.
+// 参数：props 保留 Radix 二级菜单契约。返回值：一个主题化且由键盘管理的二级菜单表面。
 function DropdownMenuSubContent({
   className,
+  collisionPadding = 8,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   return (
+    <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
+      collisionPadding={collisionPadding}
       className={cn(
-        "z-50 min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden p-1",
+        "z-50 max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain p-1 data-[state=closed]:overflow-hidden",
         FLOATING_SURFACE_CLASS_NAME,
         FLOATING_MOTION_CLASS_NAME,
+        "min-w-[min(8rem,var(--radix-dropdown-menu-content-available-width))] max-w-(--radix-dropdown-menu-content-available-width)",
         className,
       )}
       {...props}
     />
+    </DropdownMenuPrimitive.Portal>
   )
 }
 

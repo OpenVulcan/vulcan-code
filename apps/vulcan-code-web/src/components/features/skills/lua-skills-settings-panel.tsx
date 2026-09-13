@@ -272,9 +272,9 @@ export function LuaSkillsSettingsPanel(props: {
   // 服务端支持的 LuaSkills 页面动作。
   actions: SkillActionProps
 }) {
-  // t resolves localized settings labels for the current interface locale.
-  // t 为当前界面语言解析本地化设置标签。
-  const { t } = useI18n()
+  // t and locale resolve labels and external-change feedback for the current interface locale.
+  // t 与 locale 为当前界面语言解析标签及外部变更反馈。
+  const { t, locale } = useI18n()
   // draft stores the editable complete package settings document.
   // draft 保存可编辑的完整包设置文档。
   const [draft, setDraft] = React.useState<LuaSkillsRuntimeSettings>(() => (
@@ -283,6 +283,14 @@ export function LuaSkillsSettingsPanel(props: {
   // saving prevents concurrent package settings writes.
   // saving 防止并发写入包设置。
   const [saving, setSaving] = React.useState(false)
+  // operationRef serializes settings writes and runtime repair before busy state renders.
+  // operationRef 在忙碌状态渲染前串行化设置写入与运行时修复。
+  const operationRef = React.useRef(false)
+  // draftRef and externalUpdate preserve and explain local edits across external settings changes.
+  // draftRef 与 externalUpdate 跨外部设置变更保留并说明本地编辑。
+  const draftRef = React.useRef(draft)
+  draftRef.current = draft
+  const [externalUpdate, setExternalUpdate] = React.useState(false)
   // retryingTarget prevents concurrent installs and identifies the row that owns transient progress.
   // retryingTarget 防止并发安装并标识承载临时进度的运行时行。
   const [retryingTarget, setRetryingTarget] = React.useState<LuaSkillsManagedRuntimeTarget | null>(null)
@@ -302,9 +310,20 @@ export function LuaSkillsSettingsPanel(props: {
     () => JSON.parse(committedSettingsKey) as LuaSkillsRuntimeSettings,
     [committedSettingsKey],
   )
+  // previousCommitted is the baseline against which an unchanged local form may safely refresh.
+  // previousCommitted 是未修改本地表单可以安全刷新的比较基线。
+  const previousCommitted = React.useRef(committedSettings)
 
   React.useEffect(() => {
-    setDraft(cloneLuaSkillsRuntimeSettings(committedSettings))
+    if (runtimeSettingsAreEqual(draftRef.current, previousCommitted.current)) {
+      setDraft(cloneLuaSkillsRuntimeSettings(committedSettings))
+      setExternalUpdate(false)
+    } else if (!runtimeSettingsAreEqual(draftRef.current, committedSettings)) {
+      setExternalUpdate(true)
+    } else {
+      setExternalUpdate(false)
+    }
+    previousCommitted.current = committedSettings
   }, [committedSettings])
 
   // dirty records whether the local editor differs from the latest committed package settings.
@@ -442,20 +461,24 @@ export function LuaSkillsSettingsPanel(props: {
   // saveSettings validates and commits the complete Vulcan-owned settings document.
   // saveSettings 校验并提交完整的 Vulcan 自有设置文档。
   const saveSettings = React.useCallback(async () => {
+    if (operationRef.current) return
     const validationError = runtimeSettingsValidationError(draft, t)
     if (validationError) {
       setError(validationError)
       return
     }
+    operationRef.current = true
     setSaving(true)
     setError(null)
     setFeedback(null)
     try {
       await props.actions.onSaveLuaSkillsRuntimeSettings(draft)
+      setExternalUpdate(false)
       setFeedback(t("skills.luaSettings.saved"))
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : String(caughtError))
     } finally {
+      operationRef.current = false
       setSaving(false)
     }
   }, [draft, props.actions, t])
@@ -463,6 +486,8 @@ export function LuaSkillsSettingsPanel(props: {
   // retryManagedRuntimes executes the service-owned bootstrap and lets the returned catalog carry failures.
   // retryManagedRuntimes 执行服务持有的初始化，并由返回目录承载失败结果。
   const retryManagedRuntimes = React.useCallback(async (target: LuaSkillsManagedRuntimeTarget) => {
+    if (operationRef.current || props.catalog.managedRuntimeProgress != null) return
+    operationRef.current = true
     setRetryingTarget(target)
     setError(null)
     setFeedback(null)
@@ -472,9 +497,10 @@ export function LuaSkillsSettingsPanel(props: {
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : String(caughtError))
     } finally {
+      operationRef.current = false
       setRetryingTarget(null)
     }
-  }, [props.actions, t])
+  }, [props.actions, props.catalog.managedRuntimeProgress, t])
 
   return (
     <section className="skill-page-body lua-settings-page-body">
@@ -490,7 +516,13 @@ export function LuaSkillsSettingsPanel(props: {
         </div>
       </header>
 
-      <div className="lua-settings-content">
+      <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content min-w-0 border-0 p-0">
+        {externalUpdate ? <div className="text-sm text-[var(--vcn-content-warning)]" role="status">
+          <p>{locale.startsWith("zh") ? "设置已在其他位置更新，当前编辑已保留。保存会使用当前草稿。" : "Settings changed elsewhere. Your edits are retained; saving will use this draft."}</p>
+          <Button variant="outline" size="sm" onClick={() => { setDraft(cloneLuaSkillsRuntimeSettings(committedSettings)); setExternalUpdate(false) }}>
+            {locale.startsWith("zh") ? "舍弃草稿并载入最新设置" : "Discard draft and load latest settings"}
+          </Button>
+        </div> : null}
         <div className="lua-managed-runtime-list">
           {props.catalog.managedPythonRuntime && props.catalog.managedNodeRuntime ? (
             <>
@@ -645,6 +677,7 @@ export function LuaSkillsSettingsPanel(props: {
           <label className="lua-settings-field">
             <span>{t("skills.luaSettings.defaultEncoding")}</span>
             <Select
+              disabled={saving || retryingTarget !== null}
               onValueChange={(value) => updateDefaultEncoding(value === "auto" ? "" : value)}
               value={draft.capabilities.defaultTextEncoding ?? "auto"}
             >
@@ -676,18 +709,18 @@ export function LuaSkillsSettingsPanel(props: {
         </section>
 
         <aside className="lua-settings-restart-note">{t("skills.luaSettings.restartHint")}</aside>
-        {error ? <div className="lua-settings-feedback error">{error}</div> : null}
-        {feedback ? <div className="lua-settings-feedback success">{feedback}</div> : null}
+        {error ? <div role="alert" className="lua-settings-feedback error">{error}</div> : null}
+        {feedback ? <div role="status" className="lua-settings-feedback success">{feedback}</div> : null}
         <div className="lua-settings-actions">
           <Button
             type="button"
-            disabled={saving || !dirty}
+            disabled={saving || retryingTarget !== null || !dirty}
             onClick={() => void saveSettings()}
           >
             {saving ? t("skills.luaSettings.saving") : t("skills.luaSettings.save")}
           </Button>
         </div>
-      </div>
+      </fieldset>
     </section>
   )
 }

@@ -41,6 +41,9 @@ interface KnowledgeDirectoryPage {
   // Whether another bounded page can be requested.
   // 是否还可以请求下一有界分页。
   hasMore: boolean;
+  // Failed page reads remain distinct from an empty successfully loaded directory.
+  // 分页读取失败与成功加载的空目录保持区分。
+  error?: string;
 }
 
 // KnowledgeDocumentTreeNode represents one folder or Markdown leaf in the viewer tree.
@@ -62,6 +65,8 @@ export interface KnowledgeDocumentTreeNode {
 
 // KnowledgeLibraryViewerDialog renders complete library navigation and Markdown reading in one modal.
 // KnowledgeLibraryViewerDialog 在一个弹窗内渲染完整知识库导航与 Markdown 阅读。
+// Parameters: props supplies the exact library and open-state callbacks; returns searchable document navigation and original Markdown reading.
+// 参数：props 提供精确资料库与打开状态回调；返回可搜索的文档导航和原始 Markdown 阅读界面。
 export function KnowledgeLibraryViewerDialog(props: {
   // Selected library whose documents are available to the trusted management surface.
   // 受信任管理界面可浏览其文档的选中知识库。
@@ -127,6 +132,20 @@ export function KnowledgeLibraryViewerDialog(props: {
   // searchRequestSequence discards stale search responses after close or a newer query.
   // searchRequestSequence 在关闭或更新查询后丢弃过期搜索响应。
   const searchRequestSequence = React.useRef(0);
+  // Read errors remain visible in their owning region rather than appearing as empty data.
+  // 读取错误保留在所属区域，不被呈现为空数据。
+  const [catalogError, setCatalogError] = React.useState("");
+  const [documentError, setDocumentError] = React.useState("");
+  const [searchError, setSearchError] = React.useState("");
+  // reloadCatalog is an explicit retry independent from background summary object refreshes.
+  // reloadCatalog 是独立于后台摘要对象刷新的显式重试。
+  const [reloadCatalog, setReloadCatalog] = React.useState(0);
+  const searchBusy = React.useRef(false);
+  // libraryRef supplies the latest snapshot when the stable library identity actually changes.
+  // libraryRef 在稳定知识库身份确实变化时提供最新快照。
+  const libraryRef = React.useRef(props.library);
+  libraryRef.current = props.library;
+  const libraryId = props.library?.id;
 
   // openDocument loads one complete Markdown document and preserves only the newest response.
   // openDocument 加载一份完整 Markdown 文档，并且只保留最新响应。
@@ -137,6 +156,8 @@ export function KnowledgeLibraryViewerDialog(props: {
     const sequence = documentRequestSequence.current + 1;
     documentRequestSequence.current = sequence;
     setDocumentLoading(true);
+    setDocumentError("");
+    setSelectedDocument(null);
     try {
       // content is the authoritative Markdown body returned by the management RPC.
       // content 是管理 RPC 返回的权威 Markdown 正文。
@@ -145,7 +166,7 @@ export function KnowledgeLibraryViewerDialog(props: {
       setSelectedDocument(content);
       setPreviewMode("rendered");
     } catch (error) {
-      if (documentRequestSequence.current === sequence) toast.error(error instanceof Error ? error.message : String(error));
+      if (documentRequestSequence.current === sequence) setDocumentError(error instanceof Error ? error.message : String(error));
     } finally {
       if (documentRequestSequence.current === sequence) setDocumentLoading(false);
     }
@@ -192,6 +213,7 @@ export function KnowledgeLibraryViewerDialog(props: {
           documents: current[folderPath]?.documents ?? [],
           loading: false,
           hasMore: current[folderPath]?.hasMore ?? true,
+          error: error instanceof Error ? error.message : String(error),
         },
       }));
       toast.error(error instanceof Error ? error.message : String(error));
@@ -201,10 +223,10 @@ export function KnowledgeLibraryViewerDialog(props: {
   }, [props.library]);
 
   React.useEffect(() => {
-    if (!props.open || !props.library) return;
+    if (!props.open || !libraryRef.current) return;
     // library is the non-null immutable catalog owner captured by this effect.
     // library 是本次副作用捕获的非空不可变目录所有者。
-    const library = props.library;
+    const library = libraryRef.current;
     // sequence owns the lightweight initial navigation load.
     // sequence 持有轻量的初始导航加载过程。
     const sequence = catalogRequestSequence.current + 1;
@@ -217,6 +239,10 @@ export function KnowledgeLibraryViewerDialog(props: {
     setSelectedDocument(null);
     setBrowseCorpus(defaultKnowledgeBrowseCorpus(library.settings.displayIndex));
     setCatalogLoading(true);
+    setCatalogError("");
+    setDocumentError("");
+    setSearchError("");
+    searchBusy.current = false;
     setDocumentLoading(false);
     setSearchText("");
     setSearchRetrievalMode(library.settings.retrievalMode);
@@ -243,7 +269,7 @@ export function KnowledgeLibraryViewerDialog(props: {
           },
         });
       } catch (error) {
-        if (catalogRequestSequence.current === sequence) toast.error(error instanceof Error ? error.message : String(error));
+        if (catalogRequestSequence.current === sequence) setCatalogError(error instanceof Error ? error.message : String(error));
       } finally {
         if (catalogRequestSequence.current === sequence) setCatalogLoading(false);
       }
@@ -254,7 +280,7 @@ export function KnowledgeLibraryViewerDialog(props: {
       documentRequestSequence.current += 1;
       searchRequestSequence.current += 1;
     };
-  }, [props.library, props.open]);
+  }, [libraryId, props.open, reloadCatalog]);
 
   // loadedDocuments flattens only the folder pages explicitly requested so far.
   // loadedDocuments 仅展开目前已显式请求的目录分页。
@@ -279,12 +305,14 @@ export function KnowledgeLibraryViewerDialog(props: {
     // query is the normalized non-empty user search text.
     // query 是规范化后的非空用户搜索文本。
     const query = searchText.trim();
-    if (!props.library || !query || searching) return;
+    if (!props.library || !query || searchBusy.current) return;
+    searchBusy.current = true;
     // sequence owns this exact search request.
     // sequence 持有本次精确搜索请求。
     const sequence = searchRequestSequence.current + 1;
     searchRequestSequence.current = sequence;
     setSearching(true);
+    setSearchError("");
     try {
       // result is the authoritative library-scoped Jieba BM25 response.
       // result 是权威的知识库范围 Jieba BM25 响应。
@@ -294,9 +322,9 @@ export function KnowledgeLibraryViewerDialog(props: {
       if (result.failures.length > 0) toast.error(result.failures.map((failure) => failure.error).join("\n"));
       if (result.hits[0]) void openDocument(result.hits[0].documentId);
     } catch (error) {
-      if (searchRequestSequence.current === sequence) toast.error(error instanceof Error ? error.message : String(error));
+      if (searchRequestSequence.current === sequence) setSearchError(error instanceof Error ? error.message : String(error));
     } finally {
-      if (searchRequestSequence.current === sequence) setSearching(false);
+      if (searchRequestSequence.current === sequence) { searchBusy.current = false; setSearching(false); }
     }
   }, [openDocument, props.library, searchRetrievalMode, searchText, searching]);
 
@@ -313,6 +341,8 @@ export function KnowledgeLibraryViewerDialog(props: {
   const clearSearch = React.useCallback(() => {
     searchRequestSequence.current += 1;
     setSearching(false);
+    searchBusy.current = false;
+    setSearchError("");
     setSearchText("");
     setSearchResult(null);
   }, []);
@@ -323,6 +353,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     documentRequestSequence.current += 1;
     setDocumentLoading(false);
     setSelectedDocument(null);
+    setDocumentError("");
     setBrowseCorpus(corpus);
   }, []);
 
@@ -345,12 +376,12 @@ export function KnowledgeLibraryViewerDialog(props: {
         <header className="knowledge-viewer-header">
           <span className="knowledge-viewer-title"><BookOpen size={18} /><DialogTitle>{props.library.name}</DialogTitle></span>
           <Select onValueChange={(value) => changeBrowseCorpus(value as KnowledgeBrowseCorpus)} value={browseCorpus}>
-            <SelectTrigger aria-label="浏览内容层" className="knowledge-viewer-corpus-mode">
+            <SelectTrigger aria-label={t("knowledge.experience.browseCorpus")} className="knowledge-viewer-corpus-mode">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="raw">原始库</SelectItem>
-              <SelectItem disabled={!props.library.settings.displayIndex.activeGeneration?.trim()} value="display">显示库</SelectItem>
+              <SelectItem value="raw">{t("knowledge.experience.rawLibrary")}</SelectItem>
+              <SelectItem disabled={!props.library.settings.displayIndex.activeGeneration?.trim()} value="display">{t("knowledge.experience.displayLibrary")}</SelectItem>
             </SelectContent>
           </Select>
           <span className="knowledge-viewer-window-actions">
@@ -363,13 +394,13 @@ export function KnowledgeLibraryViewerDialog(props: {
         <div className="knowledge-viewer-search">
           <Search size={16} />
           <Select disabled={searching} onValueChange={(value) => setSearchRetrievalMode(value as "raw_bm25" | "display_bm25" | "display_hybrid")} value={searchRetrievalMode}>
-            <SelectTrigger aria-label="检索层" className="knowledge-viewer-search-mode">
+            <SelectTrigger aria-label={t("knowledge.experience.searchLayer")} className="knowledge-viewer-search-mode">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="raw_bm25">原始库 BM25</SelectItem>
-              <SelectItem value="display_bm25">显示库 BM25</SelectItem>
-              <SelectItem value="display_hybrid">显示库混合检索</SelectItem>
+              <SelectItem value="raw_bm25">{t("knowledge.experience.rawSearch")}</SelectItem>
+              <SelectItem value="display_bm25">{t("knowledge.experience.displaySearch")}</SelectItem>
+              <SelectItem value="display_hybrid">{t("knowledge.experience.hybridSearch")}</SelectItem>
             </SelectContent>
           </Select>
           <Input aria-label={t("knowledge.search.placeholder")} disabled={searching} onChange={(event) => {
@@ -385,12 +416,14 @@ export function KnowledgeLibraryViewerDialog(props: {
             {t(searching ? "knowledge.searching" : "knowledge.search")}
           </Button>
         </div>
-        {searchResult?.warnings?.map((warning) => <p className="text-sm text-amber-700" key={warning}>{warning}</p>)}
+        {searchError ? <p role="alert" className="px-4 text-sm text-destructive">{searchError}</p> : null}
+        {searchResult?.warnings?.map((warning) => <p className="px-4 text-sm text-[var(--vcn-content-warning)]" key={warning}>{warning}</p>)}
         <div className="knowledge-viewer-body">
           <aside className="knowledge-viewer-tree">
+            {catalogError ? <div role="alert" className="space-y-2 p-3 text-sm text-destructive"><p>{catalogError}</p><Button variant="outline" onClick={() => setReloadCatalog((value) => value + 1)}>{t("skills.action.refresh")}</Button></div> : null}
             {catalogLoading ? <div className="knowledge-viewer-state"><LoaderCircle className="animate-spin" size={18} />{t("knowledge.viewer.loadingDocuments")}</div> : null}
             {!catalogLoading && searchResult && searchHits.length === 0 ? <div className="knowledge-viewer-state">{t("knowledge.search.empty")}</div> : null}
-            {!catalogLoading && !searchResult && documentTree.children.length === 0 ? <div className="knowledge-viewer-state">{t("knowledge.emptyDocuments")}</div> : null}
+            {!catalogLoading && !catalogError && !searchResult && documentTree.children.length === 0 ? <div className="knowledge-viewer-state">{t("knowledge.emptyDocuments")}</div> : null}
             {searchResult ? searchHits.map((hit) => (
               <button className={`knowledge-viewer-tree-row file${hit.documentId === selectedDocument?.document.id ? " active" : ""}`} key={hit.documentId} onClick={() => void openDocument(hit.documentId)} title={hit.relativePath} type="button">
                 <FileText size={14} /><span>{hit.relativePath}</span>
@@ -400,6 +433,7 @@ export function KnowledgeLibraryViewerDialog(props: {
             {!searchResult && directoryPages[""]?.hasMore && !directoryPages[""]?.loading ? <Button className="knowledge-viewer-load-more" onClick={() => void loadDirectoryPage("", directoryPages[""].documents.length)} size="sm" type="button" variant="ghost">{t("knowledge.viewer.loadMore")}</Button> : null}
           </aside>
           <main className="knowledge-viewer-reader">
+            {documentError ? <p role="alert" className="p-4 text-sm text-destructive">{documentError}</p> : null}
             {selectedDocument ? (
               <>
                 <header className="knowledge-viewer-document-header">
@@ -423,6 +457,8 @@ export function KnowledgeLibraryViewerDialog(props: {
 
 // KnowledgeDocumentTreeRow recursively renders one folder or Markdown document row.
 // KnowledgeDocumentTreeRow 递归渲染一个文件夹或 Markdown 文档行。
+// Parameters: props identifies one folder/document, its expansion state and load/select callbacks; returns the recursive navigation row.
+// 参数：props 标识一个文件夹或文档、展开状态及加载和选择回调；返回递归导航行。
 function KnowledgeDocumentTreeRow(props: {
   // Tree node rendered by this row.
   // 本行渲染的目录树节点。
@@ -468,6 +504,7 @@ function KnowledgeDocumentTreeRow(props: {
           <div className="knowledge-viewer-tree-children">
             {props.node.children.map((child) => <KnowledgeDocumentTreeRow {...props} key={child.path} node={child} />)}
             {directoryPage?.loading ? <div className="knowledge-viewer-tree-loading"><LoaderCircle className="animate-spin" size={14} />{props.t("knowledge.viewer.loadingFolder")}</div> : null}
+            {directoryPage?.error ? <p role="alert" className="p-2 text-xs text-destructive">{directoryPage.error}</p> : null}
             {directoryPage?.hasMore && !directoryPage.loading ? <Button className="knowledge-viewer-load-more" onClick={() => void props.onLoadDirectoryPage(props.node.path, directoryPage.documents.length)} size="sm" type="button" variant="ghost">{props.t("knowledge.viewer.loadMore")}</Button> : null}
           </div>
         ) : null}

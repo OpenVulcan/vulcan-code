@@ -92,6 +92,7 @@ it("cancels without moving records", async () => {
     await act(async () => dialogButton("取消").click())
     expect(view.onRunAction).toHaveBeenCalledTimes(1)
     expect(view.onRefresh).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(document.activeElement).toBe(view.container.querySelector("button")))
   } finally { await view.dispose() }
 })
 
@@ -103,6 +104,10 @@ it("closes failed confirmation and requires a fresh preview without claiming suc
     expect(view.onRefresh).not.toHaveBeenCalled()
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain("重新预览")
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+    await view.render(8)
+    expect(view.container.querySelector('[role="alert"]')).toBeNull()
+    await view.render(7)
+    expect(view.container.querySelector('[role="alert"]')).toBeNull()
     await act(async () => view.container.querySelector<HTMLButtonElement>("button")!.click())
     expect(view.onRunAction).toHaveBeenLastCalledWith("native_removal_preview", { vmmProjectId: 7, selection: { kind: "turns", ids: ["vmm-turn-2"] } })
   } finally { await view.dispose() }

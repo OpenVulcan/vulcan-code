@@ -1,6 +1,17 @@
 name: Vulcan RTK
 capability: Command routing, compressed Git context, and token-saving statistics
 messages:
+  sections.label: RTK sections
+  sections.settings: Settings
+  sections.routes: Routes
+  sections.statistics: Statistics
+  routes.search: Search routes
+  routes.noMatches: No matching routes
+  retry: Retry
+  settingsLoadFailed: Unable to load RTK settings
+  stats.loadFailed: Unable to load RTK statistics
+  actionFailed: Action failed
+  errorDetails: Error details
   navigationLabel: RTK Settings
   title: RTK command routing
   hookBadge: Declarative hooks

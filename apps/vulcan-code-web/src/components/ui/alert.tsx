@@ -7,7 +7,7 @@ import { surfaceVariants } from "@/components/ui/surface"
 // alertVariants defines the shared visual treatments for alert severity variants.
 // alertVariants 定义不同警告级别的共享视觉样式。
 const alertVariants = cva(
-  "group/alert relative grid w-full gap-0.5 rounded-lg px-3 py-2.5 text-left text-sm has-data-[slot=alert-action]:relative has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
+  "group/alert relative grid min-w-0 w-full gap-0.5 rounded-lg px-3 py-2.5 text-left text-sm [overflow-wrap:anywhere] has-data-[slot=alert-action]:relative has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_minmax(0,1fr)] has-[>svg]:gap-x-2 *:min-w-0 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -27,7 +27,7 @@ const alertVariants = cva(
 // Alert 渲染主题化状态容器并转发原生 div 属性。
 function Alert({
   className,
-  variant,
+  variant = "default",
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
   return (

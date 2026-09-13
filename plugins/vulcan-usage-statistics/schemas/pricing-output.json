@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "totalCount": { "type": "integer", "minimum": 0 },
+    "currency": { "type": "string", "minLength": 1 },
+    "models": {
+      "type": "array", "maxItems": 25,
+      "items": {
+        "type": "object",
+        "properties": {
+          "modelId": { "type": "string" },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "source": { "enum": ["catalog", "override", "unpriced"] },
+          "prices": {
+            "type": ["object", "null"],
+            "properties": {
+              "inputPerMillion": { "type": "string" },
+              "outputPerMillion": { "type": "string" },
+              "cacheReadPerMillion": { "type": "string" },
+              "cacheWritePerMillion": { "type": "string" }
+            },
+            "required": ["inputPerMillion", "outputPerMillion", "cacheReadPerMillion", "cacheWritePerMillion"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["modelId", "attempts", "source", "prices"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["totalCount", "currency", "models"],
+  "additionalProperties": false
+}

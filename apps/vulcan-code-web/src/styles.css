@@ -24,14 +24,12 @@
 @import "./styles/composer-selectors.css";
 @import "./styles/composer-textarea.css";
 @import "./styles/settings.css";
-@import "./styles/visual-lab.css";
 @import "./styles/markdown.css";
 @import "./styles/plan-artifact.css";
 @import "./styles/special-blocks.css";
 @import "./styles/tool-presentations.css";
 @import "./styles/media.css";
 @import "./styles/project-folder-picker.css";
-@import "./styles/plugin-host-components.css";
 @import "./styles/terminal.css";
 @import "./styles/responsive.css";
 @import "./styles/workspace-directory.css";
@@ -59,9 +57,13 @@ body,
   height: 100%;
 }
 
-button,
-textarea {
-  font: inherit;
+/* Keep browser font normalization below component typography utilities. */
+/* 浏览器字体重置优先级低于组件的字号与字重工具类。 */
+@layer base {
+  button,
+  textarea {
+    font: inherit;
+  }
 }
 
 button {

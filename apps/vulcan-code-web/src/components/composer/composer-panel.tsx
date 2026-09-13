@@ -76,6 +76,8 @@ import { useComposerAttachmentRemoval } from "@/components/composer/composer-pan
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
+// Parameters: props supplies the current input owner, services and controlled conversation state; returns the composer and its attachment, goal and toolbar surfaces.
+// 参数：props 提供当前输入归属、服务及受控会话状态；返回输入区及附件、目标和工具栏界面。
 export function ComposerPanel(props: {
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
@@ -128,6 +130,10 @@ export function ComposerPanel(props: {
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
+  // Memory readiness and configuration navigation remain independent from executable tool admission.
+  // 记忆就绪状态及配置导航独立于可执行工具准入。
+  vmmStatus?: "disabled" | "not_ready" | "ready";
+  onOpenMemorySettings?: () => void;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -259,6 +265,8 @@ export function ComposerPanel(props: {
     draftInput,
     setDraftInput,
     attachments,
+    pendingAttachmentCount,
+    hasPendingAttachmentStaging,
     isAttachmentDragOver,
     setIsAttachmentDragOver,
     attachmentFileInputRef,
@@ -476,12 +484,15 @@ export function ComposerPanel(props: {
     const pending = handleModelChoiceChange(choice);
     pendingModelSelectionRef.current = pending;
     setModelSelectionPersistencePending(true);
-    void pending.finally(() => {
+    // releasePendingModel clears this exact write without creating an unhandled rejected finally promise.
+    // releasePendingModel 清理此次精确写入，避免 finally 派生未处理的拒绝 Promise。
+    const releasePendingModel = () => {
       if (pendingModelSelectionRef.current === pending) {
         pendingModelSelectionRef.current = null;
         setModelSelectionPersistencePending(false);
       }
-    });
+    };
+    void pending.then(releasePendingModel, releasePendingModel);
     return pending;
   }, [handleModelChoiceChange]);
   // secondaryRouteProviderId is the exact provider adapter id, not the credential-scoped row id.
@@ -506,12 +517,15 @@ export function ComposerPanel(props: {
     const pending = queuedWrite.result;
     pendingSecondaryRouteSelectionRef.current = pending;
     setSecondaryRoutePersistencePending(true);
-    void pending.finally(() => {
+    // releasePendingRoute observes both outcomes while the original promise retains its error contract.
+    // releasePendingRoute 观察两种结果，同时由原始 Promise 保留其错误契约。
+    const releasePendingRoute = () => {
       if (pendingSecondaryRouteSelectionRef.current === pending) {
         pendingSecondaryRouteSelectionRef.current = null;
         setSecondaryRoutePersistencePending(false);
       }
-    });
+    };
+    void pending.then(releasePendingRoute, releasePendingRoute);
     return pending;
   }, [props.onSelectWorkbenchModelSecondaryRoute]);
   // flushSecondaryRouteSelection waits only for the currently visible route write.
@@ -556,6 +570,7 @@ export function ComposerPanel(props: {
   const {
     canAutoSubmitCreatedGoal,
     isSubmissionActive,
+    isStopping,
     sendDraft,
     submitCreatedGoal,
   } = useComposerSendController({
@@ -578,11 +593,23 @@ export function ComposerPanel(props: {
     onStopConversationRun: props.onStopConversationRun,
     onTrace: props.onTrace,
   });
-  // handleComposerSend blocks user submissions until invalid capability routes are confirmed.
-  // handleComposerSend 在无效能力路由重新确认前阻止用户提交。
+  // handleComposerSend routes the visible stop action before applying barriers shared by button and keyboard submission.
+  // handleComposerSend 先路由界面显示的停止操作，再应用按钮和键盘提交共同遵守的屏障。
+  // Parameters: none; returns after stopping the current run or validating and submitting the current draft.
+  // 参数：无；停止当前运行或校验并提交当前草稿后返回。
   const handleComposerSend = React.useCallback(async () => {
+    // Match the toolbar's stop action: unsent staging and draft replacement must not block stopping a running turn.
+    // 与工具栏的停止操作保持一致：未完成的暂存和草稿替换不得阻止停止运行中的轮次。
+    if (props.isConversationRunning && !draftInput.trim() && attachments.length === 0) {
+      await sendDraft();
+      return;
+    }
     if (pendingPromptEditRef.current) return;
-    if (providerToolSettingsBlocked && !props.isConversationRunning) return;
+    if (hasPendingAttachmentStaging()) {
+      toast.info(t("composer.attachment.stagingPending"));
+      return;
+    }
+    if (providerToolSettingsBlocked) return;
     if (attachmentPreparation.blocksSubmission) {
       toast.info(t("composer.attachment.preparationBlocked").replace(
         "{count}",
@@ -592,11 +619,14 @@ export function ComposerPanel(props: {
     }
     await sendDraft();
   }, [
+    attachments.length,
     attachmentPreparation.blockingCount,
     attachmentPreparation.blocksSubmission,
+    draftInput,
     props.isConversationRunning,
     providerToolSettingsBlocked,
     sendDraft,
+    hasPendingAttachmentStaging,
     t,
   ]);
 
@@ -841,19 +871,19 @@ export function ComposerPanel(props: {
           ref={attachmentFileInputRef}
           type="file"
         />
-        {attachments.length ? (
-          <>
-            <ComposerPanelAttachmentPreviewStrip
-              attachments={attachments}
-              preparations={attachmentPreparation.preparations}
-              progresses={attachmentPreparation.progresses}
-              onOpenMedia={setComposerMediaPlayer}
-              onRemove={handleRemoveComposerAttachment}
-              onRetry={handleAttachmentRetry}
-              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-            />
-          </>
-        ) : null}
+        {/* Keep the owner-mounted empty strip long enough to restore focus; it renders no empty surface.
+            保留所属附件条的空状态挂载以恢复焦点；空状态不渲染空白区域。 */}
+        <ComposerPanelAttachmentPreviewStrip
+          key={draftSlotKey}
+          attachments={attachments}
+          preparations={attachmentPreparation.preparations}
+          progresses={attachmentPreparation.progresses}
+          onOpenMedia={setComposerMediaPlayer}
+          onRemove={handleRemoveComposerAttachment}
+          onEmptyAfterRemoval={() => composerTextareaRef.current?.focus({ preventScroll: true })}
+          onRetry={handleAttachmentRetry}
+          resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+        />
         {slashPanelVisible && !isPendingPromptEditing ? (
           <ComposerSlashCommandPanel
             commands={visibleSlashCommands}
@@ -873,6 +903,9 @@ export function ComposerPanel(props: {
           ref={composerTextareaRef}
           value={draftInput}
         />
+        {pendingAttachmentCount > 0 ? <p role="status" aria-busy="true" className="px-3 text-xs text-muted-foreground">
+          {t("composer.attachment.stagingPending")} ({pendingAttachmentCount})
+        </p> : null}
         <div className="composer-toolbar">
           <div className="composer-toolbar-left">
             <ComposerAttachmentMenu
@@ -891,6 +924,8 @@ export function ComposerPanel(props: {
               }
               sessionOutputStyle={props.sessionOutputStyle}
               vmmAvailable={props.vmmAvailable}
+              vmmStatus={props.vmmStatus}
+              onOpenMemorySettings={props.onOpenMemorySettings}
               draftKnowledgeSelection={draftSessionSettings.knowledgeSelection}
               onDraftKnowledgeSelectionChange={draftSessionSettings.setKnowledgeSelection}
               onOpenKnowledge={props.onOpenKnowledge}
@@ -948,13 +983,15 @@ export function ComposerPanel(props: {
           <ComposerPanelToolbarRight
             attachmentCount={attachments.length}
             contextUsage={props.contextUsage}
+            draftSlotKey={draftSlotKey}
             sessionProviderUsage={props.sessionProviderUsage}
             contextCompactionWindowNodes={props.contextCompactionWindowNodes}
             sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
-            sendBlocked={isPendingPromptEditing || providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
+            sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
+            stopPending={isStopping}
             onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
             onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}

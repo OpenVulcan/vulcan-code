@@ -107,13 +107,14 @@ describe("model picker account grouping", () => {
       .toBe("connection-api");
   });
 
-  it("filters only by model name or model id", () => {
+  it("filters by model, provider and exact account labels", () => {
     // choices carries provider, account, and model labels used to prove the filter boundary.
     // choices 携带供应商、账号与模型标签，用于证明过滤边界。
     const choices = modelPickerChoicesFromProviders(miniMaxProviders());
 
     expect(filterModelPickerChoices(choices, "m2.1")).toHaveLength(2);
-    expect(filterModelPickerChoices(choices, "minimaxcn")).toHaveLength(0);
+    expect(filterModelPickerChoices(choices, "minimaxcn")).toHaveLength(2);
+    expect(filterModelPickerChoices(choices, "connection-api")).toHaveLength(1);
     expect(filterModelPickerChoices(choices, "provider")).toHaveLength(0);
   });
 

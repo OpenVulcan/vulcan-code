@@ -64,6 +64,9 @@ interface ProfileNodeView {
 // VmmProfilePageProps 定义当前画像快照与服务操作。
 interface VmmProfilePageProps {
   busy: boolean
+  // notice preserves the controller failure detail for this visible profile page.
+  // notice 保留当前画像页面控制器的具体失败信息。
+  notice?: string
   snapshot: VmmMemorySnapshot
   result: VmmMemoryActionResult | null
   onRunAction: (
@@ -154,10 +157,22 @@ export function vmmProfileBundlePreview(
 function VmmProfilePage({
   busy,
   snapshot,
-  result,
+  notice = "",
   onRunAction,
 }: VmmProfilePageProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  // readState distinguishes pending, failed and confirmed-empty profile content.
+  // readState 区分加载中、失败与已确认空画像内容。
+  const [readState, setReadState] = React.useState<"idle" | "loading" | "failed" | "ready">("idle")
+  // readError retains local contract failures when shared page feedback is cleared.
+  // readError 在共享页面反馈清除后仍保留局部契约错误。
+  const [readError, setReadError] = React.useState("")
+  // readGeneration rejects responses belonging to a previous backend or unmounted page.
+  // readGeneration 拒绝先前后端或已经卸载页面的响应。
+  const readGeneration = React.useRef(0)
+  // copy selects complete user-facing status text in the existing locale.
+  // copy 按现有语言选择完整用户状态文案。
+  const copy = React.useCallback((zh: string, en: string) => locale === "zh-CN" ? zh : en, [locale])
   // correctionOpen keeps correction separate from read-only profile browsing.
   // correctionOpen 将修正操作与只读画像浏览分开。
   const [correctionOpen, setCorrectionOpen] = React.useState(false)
@@ -187,6 +202,16 @@ function VmmProfilePage({
   // nativeCatalogLoadIssued prevents duplicate native project catalog requests during one mount.
   // nativeCatalogLoadIssued 防止一次挂载期间重复请求原生项目目录。
   const nativeCatalogLoadIssued = React.useRef(false)
+  // Share the exact in-flight directory read across effect replay; only the latest reader publishes it.
+  // 副作用重放共用同一在途目录读取，仅由最新读取方发布结果。
+  const catalogRequest = React.useRef<{
+    // Deployment fixes the authority of this directory request.
+    // 部署模式固定本次目录请求的权威来源。
+    deployment: VmmMemorySnapshot["experienceState"]["deployment"]
+    // Promise carries the original response through the exclusive management channel.
+    // Promise 携带独占管理通道返回的原始响应。
+    promise: Promise<VmmMemoryActionResult | null>
+  } | null>(null)
 
   // userOptions exposes human-readable VMM users without leaking their numeric transport ids.
   // userOptions 暴露人类可读的 VMM 用户，同时不显示数字传输标识。
@@ -200,7 +225,7 @@ function VmmProfilePage({
     ? (nativeCatalog?.projects ?? []).map((project) => ({
       value: String(project.projectId),
       label: project.name,
-      description: project.tag,
+      description: project.tag === project.name ? undefined : project.tag,
       keywords: [project.tag],
     }))
     : snapshot.managementCatalog.projects.map((project) => ({
@@ -227,19 +252,56 @@ function VmmProfilePage({
     setBundleModeError(false)
     automaticLoadKey.current = ""
     nativeCatalogLoadIssued.current = false
+    setReadState("idle")
+    setReadError("")
+    readGeneration.current += 1
+    return () => { readGeneration.current += 1 }
   }, [isNative])
+
+  // loadCatalog consumes responses directly so page feedback resets cannot discard a valid directory.
+  // loadCatalog 直接消费响应，防止页面反馈重置丢弃有效目录。
+  const loadCatalog = React.useCallback(async () => {
+    // generation binds this asynchronous read to the active backend lifetime.
+    // generation 将此次异步读取绑定到当前后端生命周期。
+    const generation = readGeneration.current
+    setReadState("loading")
+    setReadError("")
+    // pending reuses one request only for the identical backend, never a cached response from another mode.
+    // pending 仅复用完全相同后端的一次请求，不复用其他模式的缓存响应。
+    let pending = catalogRequest.current
+    if (!pending || pending.deployment !== snapshot.experienceState.deployment) {
+      pending = {
+        deployment: snapshot.experienceState.deployment,
+        promise: onRunAction(vmmProfileCatalogAction(snapshot.experienceState.deployment)),
+      }
+      catalogRequest.current = pending
+    }
+    try {
+      const response = await pending.promise
+      if (generation !== readGeneration.current) return
+      if (isNative) {
+        if (response?.data.kind !== "native_project_catalog") throw new Error(copy("记忆项目目录加载失败，请刷新重试。", "Memory project directory could not be loaded. Refresh to retry."))
+        setNativeCatalog(response.data.value)
+      } else if (response?.data.kind !== "users_projects") {
+        throw new Error(copy("用户与项目目录加载失败，请刷新重试。", "User and project directory could not be loaded. Refresh to retry."))
+      }
+      setReadState("idle")
+    } catch (error) {
+      if (generation !== readGeneration.current) return
+      setReadError(error instanceof Error ? error.message : String(error))
+      setReadState("failed")
+    } finally {
+      if (catalogRequest.current === pending) catalogRequest.current = null
+    }
+  }, [copy, isNative, onRunAction, snapshot.experienceState.deployment])
 
   React.useEffect(() => {
     if (!isNative || busy || nativeCatalog || nativeCatalogLoadIssued.current) {
       return
     }
     nativeCatalogLoadIssued.current = true
-    void onRunAction("native_project_catalog").then((catalogResult) => {
-      if (!catalogResult) {
-        nativeCatalogLoadIssued.current = false
-      }
-    })
-  }, [busy, isNative, nativeCatalog, onRunAction])
+    void loadCatalog()
+  }, [busy, isNative, nativeCatalog, loadCatalog])
 
   React.useEffect(() => {
     if (isNative) {
@@ -291,63 +353,49 @@ function VmmProfilePage({
     ? t("memory.profile.nativeUserName")
     : effectiveTarget === "user"
       ? snapshot.managementCatalog.users.find((user) => user.stableKey === selectedUserRef)?.displayName
-    : projectOptions.find((project) => project.value === selectedProjectRef)?.description
+    : isNative
+      ? nativeCatalog?.projects.find((project) => String(project.projectId) === selectedProjectRef)?.name
+      : projectOptions.find((project) => project.value === selectedProjectRef)?.description
 
-  React.useEffect(() => {
-    if (result?.data.kind === "profile_nodes") {
-      setNodes(projectProfileNodes(result.data.value.nodes))
-      setNativeStateCounts(null)
-    }
-    if (result?.data.kind === "native_profile_records") {
-      setNodes(nativeProfileNodes(result.data.value.nodes))
-      setNativeStateCounts(result.data.value.counts)
-    }
-    if (result?.data.kind === "profile_bundle") {
-      const preview = vmmProfileBundlePreview(result.data.value, effectiveTarget)
+  // refreshProfile publishes direct target responses and confirms empty content only after successful reads.
+  // refreshProfile 发布目标直接响应，且仅在读取成功后确认空内容。
+  const refreshProfile = React.useCallback(async () => {
+    if (!profileCatalogReady) { await loadCatalog(); return }
+    if (!selectedTargetRef) return
+    // generation owns both sequential reads and blocks stale publication after navigation.
+    // generation 持有两次顺序读取，并阻止导航后的旧响应发布。
+    const generation = ++readGeneration.current
+    const identityPayload = isNative ? { projectRef: selectedProjectRef } : { userRef: selectedUserRef, projectRef: selectedProjectRef }
+    setReadState("loading")
+    setReadError("")
+    setBundlePreview("")
+    try {
+      const nodesResult = await onRunAction(vmmProfileNodeAction(snapshot.experienceState.deployment), isNative
+        ? { vmmProjectId: Number(selectedProjectRef), target: effectiveTarget }
+        : { ...identityPayload, target: effectiveTarget })
+      if (generation !== readGeneration.current) return
+      if (isNative && nodesResult?.data.kind === "native_profile_records") {
+        setNodes(nativeProfileNodes(nodesResult.data.value.nodes))
+        setNativeStateCounts(nodesResult.data.value.counts)
+      } else if (!isNative && nodesResult?.data.kind === "profile_nodes") {
+        setNodes(projectProfileNodes(nodesResult.data.value.nodes))
+        setNativeStateCounts(null)
+      } else {
+        throw new Error(copy("画像读取失败，请刷新重试。", "Profile could not be loaded. Refresh to retry."))
+      }
+      const bundle = await onRunAction("load_profile_bundle", identityPayload)
+      if (generation !== readGeneration.current) return
+      if (bundle?.data.kind !== "profile_bundle") throw new Error(copy("画像预览读取失败，请刷新重试。", "Profile preview could not be loaded. Refresh to retry."))
+      const preview = vmmProfileBundlePreview(bundle.data.value, effectiveTarget)
       setBundleModeError(preview === null)
       setBundlePreview(preview ?? "")
+      setReadState("ready")
+    } catch (error) {
+      if (generation !== readGeneration.current) return
+      setReadError(error instanceof Error ? error.message : String(error))
+      setReadState("failed")
     }
-    if (result?.data.kind === "profile_instruction") {
-      setNodes(projectProfileNodes(result.data.value.accepted_nodes))
-    }
-    if (result?.data.kind === "native_project_catalog") {
-      setNativeCatalog(result.data.value)
-    }
-  }, [effectiveTarget, result])
-
-  // refreshProfile loads both atomic entries and the final profile preview.
-  // refreshProfile 同时加载原子条目与最终画像预览。
-  const refreshProfile = React.useCallback(async () => {
-    if (!profileCatalogReady) {
-      await onRunAction(vmmProfileCatalogAction(snapshot.experienceState.deployment))
-      return
-    }
-    if (!selectedTargetRef) {
-      return
-    }
-    const identityPayload = isNative
-      ? { projectRef: selectedProjectRef }
-      : { userRef: selectedUserRef, projectRef: selectedProjectRef }
-    const nodesResult = await onRunAction(
-      vmmProfileNodeAction(snapshot.experienceState.deployment),
-      isNative
-        ? { vmmProjectId: Number(selectedProjectRef), target: effectiveTarget }
-        : { ...identityPayload, target: effectiveTarget },
-    )
-    if (!nodesResult) {
-      return
-    }
-    await onRunAction("load_profile_bundle", identityPayload)
-  }, [
-    effectiveTarget,
-    isNative,
-    onRunAction,
-    profileCatalogReady,
-    selectedProjectRef,
-    selectedTargetRef,
-    selectedUserRef,
-    snapshot.experienceState.deployment,
-  ])
+  }, [copy, effectiveTarget, isNative, loadCatalog, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment])
 
   React.useEffect(() => {
     if (busy || !profileCatalogReady || !selectedTargetRef) {
@@ -420,9 +468,9 @@ function VmmProfilePage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)}>{t("memory.profile.instruction")}</Button>
+        <Button disabled={busy || readState === "loading" || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)}>{t("memory.profile.instruction")}</Button>
         <Button
-          disabled={busy}
+          disabled={busy || readState === "loading"}
           onClick={() => void refreshProfile()}
           type="button"
           variant="outline"
@@ -432,20 +480,14 @@ function VmmProfilePage({
         </Button></div>
       </div>
 
-      <Card className="vmm-profile-target">
-        <CardHeader>
-          <CardTitle>{t("memory.profile.target")}</CardTitle>
-          <CardDescription>
-            {selectedTargetDescription
-              ?? (effectiveTarget === "user"
-                ? t("memory.profile.noUser")
-                : t("memory.profile.noProject"))}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
+      {readError ? <p role="alert" className="text-sm text-destructive">{readError}</p> : null}
+      {!profileCatalogReady && readState === "idle" ? <p role="status" className="text-sm text-muted-foreground">{copy("请先在记忆项目中建立可用项目，再查看画像。", "Create an available memory project before browsing profiles.")}</p> : null}
+
+      <section className="vmm-profile-target" aria-label={t("memory.profile.target")}>
           <RadioGroup
             className="flex flex-wrap gap-3"
-            disabled={busy || !profileCatalogReady}
+            disabled={busy || readState === "loading" || !profileCatalogReady}
             onValueChange={(value) => {
               setTarget(value as "user" | "project")
               setNodes([])
@@ -455,24 +497,24 @@ function VmmProfilePage({
             }}
             value={target}
           >
-            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2">
               <RadioGroupItem value="user" />
               <span className="text-sm font-medium">{t("memory.profile.user")}</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2">
               <RadioGroupItem value="project" />
               <span className="text-sm font-medium">{t("memory.profile.project")}</span>
             </label>
           </RadioGroup>
           {usesFixedNativeUser ? (
-            <div className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2.5">
+            <div className="vmm-profile-identity space-y-1">
               <p className="text-sm font-medium">{t("memory.profile.nativeUserName")}</p>
               <p className="text-xs text-muted-foreground">
                 {t("memory.profile.nativeUserDescription")}
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="vmm-profile-picker space-y-2">
               <Label>
                 {effectiveTarget === "user"
                   ? t("memory.profile.selectUser")
@@ -482,7 +524,7 @@ function VmmProfilePage({
                 ariaLabel={effectiveTarget === "user"
                   ? t("memory.profile.selectUser")
                   : t("memory.profile.selectProject")}
-                disabled={busy || !profileCatalogReady}
+                disabled={busy || readState === "loading" || !profileCatalogReady}
                 emptyText={effectiveTarget === "user"
                   ? t("memory.profile.noUser")
                   : t("memory.profile.noProject")}
@@ -508,8 +550,8 @@ function VmmProfilePage({
               />
             </div>
           )}
-        </CardContent>
-      </Card>
+        {selectedTargetDescription && !isNative ? <p className="vmm-profile-target-description text-xs text-muted-foreground">{selectedTargetDescription}</p> : null}
+      </section>
 
       {isNative && nativeStateCounts ? (
         <Card className="vmm-profile-counts">
@@ -527,7 +569,7 @@ function VmmProfilePage({
         </Card>
       ) : null}
 
-      {nodes.length === 0 ? (
+      {readState === "loading" ? <p role="status" className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p> : nodes.length === 0 && readState !== "ready" ? null : nodes.length === 0 ? (
         <Empty className="min-h-48" variant="outlined">
           <EmptyHeader>
             <EmptyMedia variant="icon"><BrainCircuit className="size-5" /></EmptyMedia>
@@ -607,6 +649,7 @@ function VmmProfilePage({
           <DialogTitle>{t("memory.profile.instruction")}</DialogTitle>
           <DialogDescription>{t(effectiveTarget === "user" ? "memory.profile.user" : "memory.profile.project")} · {selectedTargetDescription}</DialogDescription>
         </DialogHeader>
+        {notice ? <p className="text-sm text-muted-foreground" role="status">{notice}</p> : null}
         <div className="space-y-3">
           <Label htmlFor="vmm-profile-instruction">{t("memory.profile.instruction")}</Label>
           <Textarea

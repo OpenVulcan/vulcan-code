@@ -31,14 +31,26 @@ describe("project VCE settings visibility", () => {
       { ...project, vceEnabled: false },
       workbenchFixture(),
       translationFixture,
+      null,
     );
     const ready = projectSettingsSections(
       project,
       workbenchFixture(),
       translationFixture,
+      null,
     );
 
     expect(closed.find((section) => section.id === "code-context")?.detail).toBe("projectSettings.codeContext.disabled");
     expect(ready.some((section) => section.id === "code-context")).toBe(true);
+  });
+
+  // A settings dialog may target a different project from the selected conversation's memory snapshot.
+  // 设置弹窗可能属于另一个项目，不能读取当前会话的记忆快照来决定其覆盖状态。
+  it("uses only the dialog project's loaded memory authority", () => {
+    const project = { id: "other-project", pinned: false, vceEnabled: false } as ProjectSummary;
+    const workbench = workbenchFixture();
+    expect(projectSettingsSections(project, workbench, translationFixture, true).find((section) => section.id === "vmm")?.detail).toBe("projectSettings.projectOverride");
+    expect(projectSettingsSections(project, workbench, translationFixture, false).find((section) => section.id === "vmm")?.detail).toBe("projectSettings.inheritGlobal");
+    expect(projectSettingsSections(project, workbench, translationFixture, null).find((section) => section.id === "vmm")?.detail).toBe("-");
   });
 });

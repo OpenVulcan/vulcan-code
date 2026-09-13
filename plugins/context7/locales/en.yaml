@@ -1,6 +1,7 @@
 name: Context7
 capability: Current, version-aware library documentation for coding agents
 messages:
+  errorDetails: Error details
   navigationLabel: Context7
   title: Context7 documentation
   subtitle: Configure authentication and inspect request quota and local usage.
@@ -11,6 +12,8 @@ messages:
   refresh: Refresh
   loading: Loading Context7 settings…
   loadError: Context7 data could not be loaded.
+  retry: Retry
+  operationFailed: The operation failed. Please retry.
   credentialTitle: Authentication
   anonymousMode: Anonymous mode
   apiKeyMode: API key mode

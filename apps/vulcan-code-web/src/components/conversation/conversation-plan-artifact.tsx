@@ -16,6 +16,7 @@ import {
 } from "@/components/conversation/conversation-measured-collapse";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import { useI18n } from "@/i18n";
+import { runConversationControlAction } from "./conversation-control-feedback";
 
 // PlanArtifactActionPayload describes one user decision for a pending Plan artifact.
 // PlanArtifactActionPayload 描述用户对待确认计划产物的一次决策。
@@ -58,6 +59,15 @@ export function PlanArtifactBlock(props: {
   const [expanded, setExpanded] = useConversationMeasuredExpansion(`plan-artifact:${artifactKey}`, props.pending);
   const collapsedPreviewHeight = usePlanArtifactCollapsedPreviewHeight();
   const [copied, setCopied] = React.useState(false);
+  // actionInFlight closes the synchronous gap before the parent publishes its busy state.
+  // actionInFlight 关闭父组件发布忙碌状态前的同步空隙。
+  const actionInFlight = React.useRef(false);
+  // actionPending keeps every input and keyboard path consistent during one submitted decision.
+  // actionPending 在一次决策提交期间保持输入与键盘路径一致。
+  const [actionPending, setActionPending] = React.useState(false);
+  // actionsDisabled combines authoritative runtime state with the local in-flight decision.
+  // actionsDisabled 合并权威运行时状态与本地进行中的决策。
+  const actionsDisabled = props.disabled || actionPending;
   const [note, setNote] = React.useState("");
   const [selectedAction, setSelectedAction] = React.useState<"execute" | "defer">("execute");
   const confirmationRef = React.useRef<HTMLDivElement | null>(null);
@@ -81,18 +91,43 @@ export function PlanArtifactBlock(props: {
   }, [note]);
 
   const handleCopy = React.useCallback(async () => {
-    await props.onCopyText(props.artifact.content);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1100);
-  }, [props]);
+    setCopied(false);
+    if (await runConversationControlAction(
+      () => props.onCopyText(props.artifact.content), t("conversation.control.copyFailed"),
+    )) setCopied(true);
+  }, [props, t]);
+
+  React.useEffect(() => {
+    if (!copied) return;
+    // timer expires the clipboard confirmation and is released on unmount.
+    // timer 使复制确认到期，并在卸载时释放。
+    const timer = window.setTimeout(() => setCopied(false), 1100);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  /** Submits one exact plan decision, rejecting disabled and duplicate gestures.
+   * 提交一次精确计划决策，拒绝禁用状态与重复手势。
+   * action is the existing plan callback; completion releases the local UI lock.
+   * action 是既有计划回调；结束后释放本地界面锁。 */
+  const runDecision = React.useCallback(async (action: () => Promise<void> | void) => {
+    if (!props.pending || props.disabled || actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionPending(true);
+    try {
+      await runConversationControlAction(action, t("conversation.control.actionFailed"));
+    } finally {
+      actionInFlight.current = false;
+      setActionPending(false);
+    }
+  }, [props.pending, props.disabled, t]);
 
   const execute = React.useCallback(() => {
-    void props.onExecute({ artifact: props.artifact, note: note.trim() || undefined });
-  }, [note, props]);
+    void runDecision(() => props.onExecute({ artifact: props.artifact, note: note.trim() || undefined }));
+  }, [note, props, runDecision]);
 
   const defer = React.useCallback(() => {
-    void props.onCancel({ artifact: props.artifact });
-  }, [props]);
+    void runDecision(() => props.onCancel({ artifact: props.artifact }));
+  }, [props, runDecision]);
 
   const suggest = React.useCallback(() => {
     const trimmedNote = note.trim();
@@ -100,8 +135,8 @@ export function PlanArtifactBlock(props: {
       defer();
       return;
     }
-    void props.onSuggest({ artifact: props.artifact, note: trimmedNote });
-  }, [defer, note, props]);
+    void runDecision(() => props.onSuggest({ artifact: props.artifact, note: trimmedNote }));
+  }, [defer, note, props, runDecision]);
 
   const submitSelectedAction = React.useCallback(() => {
     if (selectedAction === "defer") {
@@ -112,7 +147,7 @@ export function PlanArtifactBlock(props: {
   }, [execute, selectedAction, suggest]);
 
   const handleConfirmationKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.nativeEvent.isComposing) {
+    if (event.nativeEvent.isComposing || actionsDisabled) {
       return;
     }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -124,7 +159,7 @@ export function PlanArtifactBlock(props: {
       event.preventDefault();
       submitSelectedAction();
     }
-  }, [submitSelectedAction]);
+  }, [actionsDisabled, submitSelectedAction]);
 
   return (
     <section
@@ -191,6 +226,7 @@ export function PlanArtifactBlock(props: {
           ref={confirmationRef}
           aria-activedescendant={`plan-artifact-action-${selectedAction}`}
           aria-label={t("planArtifact.confirmAria")}
+          aria-busy={actionPending}
           className="plan-artifact-confirmation"
           onKeyDown={handleConfirmationKeyDown}
           tabIndex={0}
@@ -199,7 +235,7 @@ export function PlanArtifactBlock(props: {
             ref={noteInputRef}
             aria-label={t("planArtifact.noteAria")}
             className="plan-artifact-note-input"
-            disabled={props.disabled}
+            disabled={actionsDisabled}
             onChange={(event) => setNote(event.currentTarget.value)}
             onInput={(event) => resizePlanNoteInput(event.currentTarget)}
             placeholder={t("planArtifact.notePlaceholder")}
@@ -211,7 +247,7 @@ export function PlanArtifactBlock(props: {
               id="plan-artifact-action-execute"
               aria-pressed={selectedAction === "execute"}
               className="plan-artifact-action-choice plan-artifact-action-choice-primary"
-              disabled={props.disabled}
+              disabled={actionsDisabled}
               onClick={() => {
                 setSelectedAction("execute");
                 execute();
@@ -225,7 +261,7 @@ export function PlanArtifactBlock(props: {
               id="plan-artifact-action-defer"
               aria-pressed={selectedAction === "defer"}
               className="plan-artifact-action-choice"
-              disabled={props.disabled}
+              disabled={actionsDisabled}
               onClick={() => {
                 setSelectedAction("defer");
                 suggest();

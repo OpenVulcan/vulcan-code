@@ -354,6 +354,9 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
     };
     let global_vmm = VmmConfigLayer {
         enabled: Some(true),
+        // Freeze native ownership explicitly; unused external connection fields must not select transport.
+        // 明确冻结原生归属；未使用的外链连接字段不得选择传输后端。
+        backend_mode: Some(vulcan_vmm::VmmBackendMode::Native),
         grpc_target: Some(String::from("127.0.0.1:19090")),
         user_id: Some(1),
         project_id: Some(2),
@@ -411,6 +414,26 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
     assert!(enabled_ids.iter().any(|id| id == "vmm_turn_details"));
     assert!(enabled_ids.iter().any(|id| id == "vmm_memory_write"));
     assert!(enabled_ids.iter().any(|id| id == "vmm_memory_delete"));
+
+    // Inspect the actual manager definitions passed to provider projection, not descriptor labels alone.
+    // 检查实际传给供应商投影的管理器定义，而不仅是描述标签。
+    let build_definitions = enabled_manager.resolve_for_execution_mode("Build").definitions
+        .into_iter().filter(|definition| base_ids.contains(&definition.descriptor.id)).collect::<Vec<_>>();
+    assert_eq!(build_definitions.len(), 4);
+    for definition in &build_definitions {
+        assert_eq!(definition.parameters_schema["type"], "object");
+        assert!(definition.parameters_schema["properties"].is_object());
+        assert!(!definition.descriptor.description.trim().is_empty());
+    }
+    // The manager deliberately preserves the Plan schema surface and enforces write restrictions at invocation.
+    // 管理器刻意保留 Plan 的 Schema 工具面，并在调用时执行写入限制。
+    let plan_definitions = enabled_manager.resolve_for_execution_mode("Plan").definitions
+        .into_iter().filter(|definition| base_ids.contains(&definition.descriptor.id)).collect::<Vec<_>>();
+    assert_eq!(plan_definitions.len(), 4);
+    for definition in plan_definitions {
+        let is_write = matches!(definition.descriptor.id.as_str(), "vmm_memory_write" | "vmm_memory_delete");
+        assert_eq!(matches!(definition.plan_policy, vulcan_tools_manager::VulcanPlanToolPolicy::Hidden), is_write);
+    }
 
     let disabled_manager = build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),

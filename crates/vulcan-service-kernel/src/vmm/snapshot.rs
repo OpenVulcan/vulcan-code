@@ -97,6 +97,13 @@ pub(crate) fn vmm_memory_snapshot(
             .map(|project| {
                 let project_vmm = cached_project_vmm_layer(&project.path);
                 VmmProjectScopeSummary {
+                    memory_enabled: global_effective.enabled
+                        && vulcan_vmm::VmmEffectiveConfig::resolve(
+                            &provider_configuration.vmm,
+                            Some(&project_vmm),
+                            None,
+                        )
+                        .enabled,
                     project_id: project.id.clone(),
                     name: project.title.clone(),
                     path: project.path.clone(),
@@ -557,11 +564,9 @@ pub(crate) fn vmm_config_draft_summary(
 ) -> VmmConfigDraftSummary {
     VmmConfigDraftSummary {
         has_override,
-        backend_mode: layer
-            .backend_mode
-            .unwrap_or(effective.backend_mode)
-            .as_str()
-            .to_string(),
+        // Backend ownership is global-only in VmmEffectiveConfig::resolve; stale project values are not executable.
+        // VmmEffectiveConfig::resolve 规定后端仅由全局持有；旧项目层的值不是可执行后端。
+        backend_mode: effective.backend_mode.as_str().to_string(),
         native_project_binding_mode: layer
             .native_project_binding_mode
             .unwrap_or(effective.native_project_binding_mode)

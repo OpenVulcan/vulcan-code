@@ -38,6 +38,8 @@ const INHERIT_VALUE = "__inherit__"
 
 // PublicAiInternalOverridesDialog edits operation defaults from capabilities common to every matching route.
 // PublicAiInternalOverridesDialog 根据全部匹配路由共有的能力编辑操作默认值。
+// Parameters: props identifies the internal operation and matching route capabilities; returns validated overrides with owner-stable drafts and guarded saves.
+// 参数：props 标识内部操作及匹配路由能力；返回带稳定归属草稿与受保护保存的校验覆盖表单。
 export function PublicAiInternalOverridesDialog(props: {
   // Exact route candidate whose model-level defaults are being edited.
   // 正在编辑模型级默认值的精确路由候选。
@@ -60,6 +62,19 @@ export function PublicAiInternalOverridesDialog(props: {
   const [parameterValues, setParameterValues] = React.useState<Record<string, string>>({})
   const [error, setError] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
+  // savingRef protects the synchronous interval before disabled controls render.
+  // savingRef 保护禁用控件渲染之前的同步时间窗口。
+  const savingRef = React.useRef(false)
+  // formRef allows invalid local numeric text to block submission without rewriting inherited values.
+  // formRef 允许无效的本地数字文本阻止提交，而不改写继承值。
+  const formRef = React.useRef<HTMLFormElement>(null)
+  // initializedIdentity freezes the draft per provider/model/operation while the dialog remains open.
+  // initializedIdentity 在弹窗打开期间按供应商、模型与操作冻结草稿归属。
+  const initializedIdentity = React.useRef<string | null>(null)
+  // baselineValue tracks the exact visible initial values for explicit dirty-state feedback.
+  // baselineValue 跟踪精确可见初值，用于明确的未保存状态反馈。
+  const [baselineValue, setBaselineValue] = React.useState("")
+  const dirty = JSON.stringify([draft, parameterValues]) !== baselineValue
   const candidate = props.candidate
   const commonCandidate = React.useMemo(
     () => commonInternalInferenceCandidate(candidate, props.matchingCandidates),
@@ -71,42 +86,62 @@ export function PublicAiInternalOverridesDialog(props: {
   )
 
   React.useEffect(() => {
+    if (!props.open) { initializedIdentity.current = null; return }
     if (!props.open || !candidate || !commonCandidate) {
       return
     }
+    // identity matches the exact model-level backend override key, excluding credential routes.
+    // identity 匹配精确的模型级后端覆盖键，不混入凭据路由。
+    const identity = JSON.stringify([candidate.route.provider_id, candidate.route.model_id, candidate.route.operation])
+    if (initializedIdentity.current === identity) return
+    initializedIdentity.current = identity
     // VMM owns reasoning and embedding wire semantics at request time, so only deployment-level
     // defaults may survive through this settings surface.
     // VMM 在请求期拥有思考与向量 Wire 语义，因此只有部署级默认值可通过此设置界面保留。
-    setDraft({
+    const initialDraft = {
       ...commonCandidate.overrides,
       reasoning_effort: undefined,
       embedding_task: undefined,
       embedding_output_kind: undefined,
       embedding_encoding: undefined,
-    })
-    setParameterValues(Object.fromEntries(definitions.map((definition) => {
+    }
+    const initialParameters = Object.fromEntries(definitions.map((definition) => {
       const current = commonCandidate.overrides.model_parameters?.[definition.id] as {
         value?: unknown
       } | undefined
       return [definition.id, current?.value === undefined ? "" : String(current.value)]
-    })))
+    }))
+    setDraft(initialDraft)
+    setParameterValues(initialParameters)
+    setBaselineValue(JSON.stringify([initialDraft, initialParameters]))
     setError(null)
   }, [candidate, commonCandidate, definitions, props.open])
 
   // save converts scalar controls into the closed backend contract and persists one replacement.
   // save 把标量控件转换为封闭后端契约并持久化一次完整替换。
   const save = React.useCallback(async () => {
-    if (!candidate) {
+    if (!candidate || !commonCandidate || !dirty || savingRef.current || !formRef.current?.reportValidity()) {
       return
     }
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
+      // Saved discrete dimensions must remain inside the current common route contract.
+      // 已保存离散维度必须仍属于当前公共路由契约。
+      const dimensions = commonCandidate.capabilities.embedding?.dimensions ?? []
+      if (draft.embedding_dimensions !== undefined && dimensions.length > 0 && !dimensions.includes(draft.embedding_dimensions)) {
+        throw new Error(t("settings.modelExperience.invalidValue"))
+      }
       const modelParameters: Record<string, unknown> = {}
       for (const definition of definitions) {
         const raw = parameterValues[definition.id]?.trim() ?? ""
         if (!raw || raw === INHERIT_VALUE) {
           continue
+        }
+        if ((definition.schema.type === "boolean" && raw !== "true" && raw !== "false")
+          || (definition.schema.type === "enum" && !(definition.schema.values as string[]).includes(raw))) {
+          throw new Error(`${definition.display_name}: ${t("settings.modelExperience.invalidValue")}`)
         }
         modelParameters[definition.id] = modelParameterValue(definition, raw)
       }
@@ -124,22 +159,23 @@ export function PublicAiInternalOverridesDialog(props: {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
-  }, [candidate, definitions, draft, parameterValues, props])
+  }, [candidate, commonCandidate, definitions, dirty, draft, parameterValues, props, t])
 
   return (
     <Dialog
       open={props.open}
       onOpenChange={(open) => {
-        if (!open && saving) {
+        if (!open && savingRef.current) {
           return
         }
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="max-h-[calc(100vh-2rem)] gap-0 overflow-hidden p-0 sm:max-w-xl">
-        <DialogHeader className="border-b bg-muted/30 px-5 py-4 pr-12">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
           <div className="flex items-start gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
               <SlidersHorizontal className="size-4 text-muted-foreground" />
@@ -157,8 +193,9 @@ export function PublicAiInternalOverridesDialog(props: {
             </div>
           </div>
         </DialogHeader>
-        <ScrollArea className="max-h-[calc(100vh-12rem)]">
-          <div className="space-y-4 p-5">
+        <form ref={formRef} className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); void save() }}>
+        <ScrollArea className="min-h-0 flex-1">
+          <fieldset disabled={saving} className="min-w-0 space-y-4 p-5">
             {commonCandidate?.route.operation === "conversation_respond" ? (
               <LlmDefaults candidate={commonCandidate} draft={draft} onChange={setDraft} />
             ) : null}
@@ -174,7 +211,7 @@ export function PublicAiInternalOverridesDialog(props: {
               <RerankDefaults candidate={commonCandidate} draft={draft} onChange={setDraft} />
             ) : null}
             {definitions.length > 0 ? (
-              <section className="space-y-4 rounded-xl border bg-card/40 p-4">
+              <section className="space-y-4 border-t pt-4">
                 <div className="flex items-start gap-2.5">
                   <Database className="mt-0.5 size-4 text-muted-foreground" />
                   <div>
@@ -202,16 +239,17 @@ export function PublicAiInternalOverridesDialog(props: {
                 {error}
               </div>
             ) : null}
-          </div>
+          </fieldset>
         </ScrollArea>
-        <DialogFooter className="m-0 rounded-none px-5 py-3">
-          <Button variant="outline" onClick={() => props.onOpenChange(false)} type="button">
+        <DialogFooter className="m-0 shrink-0 rounded-none px-5 py-3">
+          <Button disabled={saving} variant="outline" onClick={() => props.onOpenChange(false)} type="button">
             {t("settings.modelOverrides.cancel")}
           </Button>
-          <Button disabled={saving} onClick={() => void save()} type="button">
+          <Button disabled={saving || !commonCandidate || !dirty} type="submit">
             {saving ? t("settings.modelOverrides.saving") : t("settings.modelOverrides.save")}
           </Button>
         </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )
@@ -321,6 +359,8 @@ interface InternalDefaultsProps {
 
 // InternalLimitField renders one direct positive integer narrowing field.
 // InternalLimitField 渲染一个直接输入的正整数收窄字段。
+// Parameters: props supplies an optional numeric limit and capability bounds; returns an integer narrowing input preserving inherited and invalid states.
+// 参数：props 提供可选数值限制与能力边界；返回保留继承和非法状态的整数收窄输入。
 function InternalLimitField(props: {
   capabilityLimit?: number
   capabilityMinimum?: number
@@ -331,6 +371,20 @@ function InternalLimitField(props: {
   value?: number
 }) {
   const { t } = useI18n()
+  // rawValue preserves invalid user text instead of silently replacing it with inheritance.
+  // rawValue 保留无效用户文本，不静默替换为继承。
+  const [rawValue, setRawValue] = React.useState(props.value?.toString() ?? "")
+  React.useEffect(() => { setRawValue(props.value?.toString() ?? "") }, [props.value])
+  // invalid covers safe integers and the exact declared narrowing interval.
+  // invalid 覆盖安全整数及精确声明的收窄范围。
+  const numericValue = Number(rawValue)
+  const invalid = rawValue.trim() !== "" && (!Number.isSafeInteger(numericValue) || numericValue <= 0
+    || (props.capabilityMinimum !== undefined && numericValue < props.capabilityMinimum)
+    || (props.capabilityLimit !== undefined && numericValue > props.capabilityLimit))
+  // inputRef synchronizes native validity after an external reset as well as direct typing.
+  // inputRef 在外部重置和直接输入后同步原生有效性。
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  React.useEffect(() => { inputRef.current?.setCustomValidity(invalid ? t("settings.modelExperience.invalidValue") : "") }, [invalid, t])
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -342,29 +396,40 @@ function InternalLimitField(props: {
         ) : null}
       </div>
       <Input
+        ref={inputRef}
         disabled={props.disabled ?? props.capabilityLimit === undefined}
         id={props.id}
         inputMode="numeric"
         onChange={(event) => {
           const raw = event.currentTarget.value.trim()
+          setRawValue(event.currentTarget.value)
           if (!raw) {
+            event.currentTarget.setCustomValidity("")
             props.onChange(undefined)
             return
           }
           const value = Number(raw)
-          props.onChange(Number.isSafeInteger(value) && value > 0 ? value : undefined)
+          const valid = Number.isSafeInteger(value) && value > 0
+            && (props.capabilityMinimum === undefined || value >= props.capabilityMinimum)
+            && (props.capabilityLimit === undefined || value <= props.capabilityLimit)
+          event.currentTarget.setCustomValidity(valid ? "" : t("settings.modelExperience.invalidValue"))
+          if (valid) props.onChange(value)
         }}
         pattern="[0-9]*"
         placeholder={t("settings.inference.inheritModelDefault")}
         type="text"
-        value={props.value?.toString() ?? ""}
+        value={rawValue}
+        aria-invalid={invalid}
       />
+      {invalid && <p role="alert" className="text-xs text-destructive">{t("settings.modelExperience.invalidValue")}</p>}
     </div>
   )
 }
 
 // InternalEnumField renders one closed capability-backed optional value.
 // InternalEnumField 渲染一个由封闭能力支持的可选值。
+// Parameters: props supplies a closed option set and retained value; returns a selector that visibly preserves unsupported saved values.
+// 参数：props 提供封闭选项集与保留值；返回显式保留不支持已存值的选择器。
 function InternalEnumField(props: {
   label: string
   onChange: (value: string | undefined) => void
@@ -382,6 +447,7 @@ function InternalEnumField(props: {
         <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value={INHERIT_VALUE}>{t("settings.inference.inheritModelDefault")}</SelectItem>
+          {props.value !== undefined && !props.options.includes(props.value) ? <SelectItem disabled value={props.value}>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem> : null}
           {props.options.map((option) => (
             <SelectItem key={option} value={option}>{option}</SelectItem>
           ))}
@@ -393,6 +459,8 @@ function InternalEnumField(props: {
 
 // InternalDimensionField renders discrete dimensions or one bounded direct input.
 // InternalDimensionField 渲染离散维度或一个有边界的直接输入。
+// Parameters: props supplies declared dimension options/range and draft; returns the matching discrete selector or bounded numeric input.
+// 参数：props 提供声明维度选项或范围与草稿；返回对应离散选择器或有界数值输入。
 function InternalDimensionField(props: {
   candidate: PublicAiInternalInferenceCandidate
   hasDiscreteConstraint: boolean
@@ -417,6 +485,7 @@ function InternalDimensionField(props: {
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={INHERIT_VALUE}>{t("settings.inference.inheritModelDefault")}</SelectItem>
+            {props.value !== undefined && !capability.dimensions.includes(props.value) ? <SelectItem disabled value={String(props.value)}>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem> : null}
             {capability.dimensions.map((dimension) => (
               <SelectItem key={dimension} value={dimension.toString()}>{dimension}</SelectItem>
             ))}
@@ -450,6 +519,8 @@ function InternalDimensionField(props: {
 
 // InternalParameterField renders one scalar adapter-registered parameter.
 // InternalParameterField 渲染一个由适配器注册的标量参数。
+// Parameters: props supplies an adapter-declared scalar parameter and draft value; returns its typed field without coercing invalid saved data.
+// 参数：props 提供适配器声明的标量参数及草稿值；返回不强制转换非法已存数据的类型化控件。
 function InternalParameterField(props: {
   definition: PublicAiModelParameterDefinition
   onChange: (value: string) => void
@@ -468,6 +539,7 @@ function InternalParameterField(props: {
             </SelectItem>
             <SelectItem value="true">{t("settings.modelOverrides.enabled")}</SelectItem>
             <SelectItem value="false">{t("settings.modelOverrides.disabled")}</SelectItem>
+            {props.value && props.value !== INHERIT_VALUE && props.value !== "true" && props.value !== "false" ? <SelectItem disabled value={props.value}>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem> : null}
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">{props.definition.description}</p>
@@ -490,6 +562,7 @@ function InternalParameterField(props: {
             {enumValues.map((value) => (
               <SelectItem key={value} value={value}>{value}</SelectItem>
             ))}
+            {props.value && props.value !== INHERIT_VALUE && !enumValues.includes(props.value) ? <SelectItem disabled value={props.value}>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem> : null}
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">{props.definition.description}</p>

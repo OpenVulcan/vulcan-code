@@ -171,6 +171,7 @@ mod git_watcher;
 mod host_tools_settings;
 mod internal_ai;
 mod knowledge_base_services;
+mod licenses;
 mod mcp_settings;
 mod media_upload;
 mod native_vmm;

@@ -47,6 +47,8 @@ const inputGroupAddonVariants = cva(
 
 // InputGroupAddon renders leading or trailing supplemental input content.
 // InputGroupAddon 渲染输入框前置或后置的补充内容。
+// Parameters: props choose alignment and native div attributes. Returns: an addon focusing its declared input or textarea.
+// 参数：props 选择对齐及原生 div 属性。返回值：可聚焦所属输入框或多行文本框的附加项。
 function InputGroupAddon({
   className,
   align = "inline-start",
@@ -62,7 +64,9 @@ function InputGroupAddon({
         if ((e.target as HTMLElement).closest("button")) {
           return
         }
-        e.currentTarget.parentElement?.querySelector("input")?.focus()
+        // Both editable control types are explicitly exported by this input-group module.
+        // 此输入组合模块明确导出这两种可编辑控件类型。
+        e.currentTarget.parentElement?.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.focus()
       }}
       {...props}
     />

@@ -52,7 +52,7 @@ export async function addProjectFromPath(path: string): Promise<WorkbenchSnapsho
 // toggleProjectPinned 请求桌面壳切换单个项目的置顶状态。
 export async function toggleProjectPinned(projectId: string): Promise<void> {
   if (!hasServiceRuntime()) {
-    return;
+    throw new Error("Service runtime is unavailable; project pinning was not changed.");
   }
   await serviceClient.request<void>("service_toggle_project_pinned", { projectId });
 }
@@ -61,7 +61,7 @@ export async function toggleProjectPinned(projectId: string): Promise<void> {
 // reorderProjects 请求桌面壳持久化同一分区内的项目顺序。
 export async function reorderProjects(projectIds: string[]): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; project order was not saved.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_reorder_projects", { projectIds });
 }
@@ -70,7 +70,7 @@ export async function reorderProjects(projectIds: string[]): Promise<WorkbenchSn
 // renameProject 请求桌面壳应用新的项目显示名称。
 export async function renameProject(projectId: string, name: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; the project was not renamed.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_rename_project", { projectId, name });
 }
@@ -79,7 +79,7 @@ export async function renameProject(projectId: string, name: string): Promise<Wo
 // setProjectIcon 请求桌面壳持久化单个项目图标覆盖。
 export async function setProjectIcon(projectId: string, icon: ProjectIconChoice): Promise<void> {
   if (!hasServiceRuntime()) {
-    return;
+    throw new Error("Service runtime is unavailable; the project icon was not saved.");
   }
   await serviceClient.request<void>("service_set_project_icon", {
     projectId,
@@ -92,7 +92,7 @@ export async function setProjectIcon(projectId: string, icon: ProjectIconChoice)
 // resetProjectIcon 请求桌面壳清除单个项目图标覆盖。
 export async function resetProjectIcon(projectId: string): Promise<void> {
   if (!hasServiceRuntime()) {
-    return;
+    throw new Error("Service runtime is unavailable; the project icon was not reset.");
   }
   await serviceClient.request<void>("service_reset_project_icon", { projectId });
 }
@@ -101,7 +101,7 @@ export async function resetProjectIcon(projectId: string): Promise<void> {
 // setExpandedTaskProjects 请求桌面壳持久化已展开的项目行。
 export async function setExpandedTaskProjects(projectIds: string[]): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; project expansion was not saved.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_set_expanded_task_projects", { projectIds });
 }
@@ -110,7 +110,7 @@ export async function setExpandedTaskProjects(projectIds: string[]): Promise<Wor
 // archiveProjectConversations 请求桌面壳归档单个项目下的全部会话。
 export async function archiveProjectConversations(projectId: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; project conversations were not archived.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_archive_project_conversations", { projectId });
 }
@@ -119,7 +119,7 @@ export async function archiveProjectConversations(projectId: string): Promise<Wo
 // removeProject 归档会话并从活动侧栏移除单个项目记录。
 export async function removeProject(projectId: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; the project was not removed.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_remove_project", { projectId });
 }
@@ -128,7 +128,7 @@ export async function removeProject(projectId: string): Promise<WorkbenchSnapsho
 // renameConversation 请求桌面壳应用新的会话显示名称。
 export async function renameConversation(conversationId: string, name: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; the conversation was not renamed.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_rename_conversation", { conversationId, name });
 }
@@ -137,7 +137,7 @@ export async function renameConversation(conversationId: string, name: string): 
 // archiveConversation 请求桌面壳归档单个会话。
 export async function archiveConversation(conversationId: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("Service runtime is unavailable; the conversation was not archived.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
 }

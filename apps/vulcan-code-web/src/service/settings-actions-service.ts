@@ -895,7 +895,7 @@ export async function clearSelectedProviderApiTraceDirectory(): Promise<boolean>
 // saveMcpServerConfiguration 通过桌面服务持久化单个 MCP 服务器。
 export async function saveMcpServerConfiguration(request: Record<string, unknown>): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("MCP runtime is unavailable; the server configuration was not saved.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_save_mcp_server_configuration", { request });
 }
@@ -904,7 +904,7 @@ export async function saveMcpServerConfiguration(request: Record<string, unknown
 // removeMcpServerConfiguration 通过桌面服务移除单个 MCP 服务器。
 export async function removeMcpServerConfiguration(serverId: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    return null;
+    throw new Error("MCP runtime is unavailable; the server configuration was not removed.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_remove_mcp_server_configuration", { serverId });
 }

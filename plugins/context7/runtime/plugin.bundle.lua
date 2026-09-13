@@ -177,7 +177,11 @@ local function sqlite_query(sql, params, query_name)
         params = params or EMPTY_ARRAY,
     })
     if not call_ok then
-        error("Context7 storage query failed: " .. query_name)
+        -- stage exposes a safe failure category without leaking SQL, bindings, or credentials.
+        -- stage 暴露安全的失败类别，不泄露 SQL、绑定参数或凭据。
+        local stage = tostring(response):find("Plugin SQLite statement", 1, true)
+            and "statement_policy" or "storage_query"
+        error("Context7 storage query failed: " .. query_name .. " [" .. stage .. "]", 0)
     end
     if type(response) ~= "table" or type(response.rows) ~= "table" then
         error("Context7 storage query returned an invalid result: " .. query_name)
@@ -316,7 +320,7 @@ INSERT OR IGNORE INTO context7_meta(meta_key, meta_value) VALUES
     -- existing_credential 证明是否必须创建首次运行的密钥材料。
     local existing_credential = sqlite_query([[
 SELECT singleton_id FROM context7_credential WHERE singleton_id = 1
-]], {})
+]], {}, "credential initialization")
     if #existing_credential == 0 then
         -- wrapping_key_hex is generated only for a genuinely missing singleton.
         -- wrapping_key_hex 仅在单例确实缺失时生成。
@@ -1758,10 +1762,14 @@ function M.bootstrap_get(args)
     -- credential is loaded once and reused by the combined usage query.
     -- credential 只加载一次，并由组合用量查询复用。
     local credential = credential_status_value()
+    -- usage_ok isolates a local statistics failure from usable credentials and configuration.
+    -- usage_ok 将本地统计失败与可用的凭据、配置隔离。
+    local usage_ok, usage = pcall(usage_value, input, credential)
     return success({
         settings = read_config(),
         credential = credential,
-        usage = usage_value(input, credential),
+        usage = usage_ok and usage or vulcan.json.null,
+        usageError = usage_ok and vulcan.json.null or tostring(usage),
     })
 end
 

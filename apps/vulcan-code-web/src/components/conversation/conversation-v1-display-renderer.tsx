@@ -1,4 +1,5 @@
 import React from "react";
+import { runConversationControlAction } from "./conversation-control-feedback";
 import { ModelSwitchNotice, modelSwitchRouteLabel } from "./conversation-model-switch";
 import type { ProviderSummary } from "@/types";
 import {
@@ -347,9 +348,11 @@ function ConversationV1UserInputView(
    * 复制精确持久化提示词，并显示既有确认图标。 */
   const handleCopy = React.useCallback(async () => {
     if (!props.onCopyText) return;
-    await props.onCopyText(event.text);
-    setCopied(true);
-  }, [event.text, props.onCopyText]);
+    setCopied(false);
+    setCopied(await runConversationControlAction(
+      () => props.onCopyText!(event.text), t("conversation.control.copyFailed"),
+    ));
+  }, [event.text, props.onCopyText, t]);
   return (
     <article
       className="message-row user conversation-v1-event"
@@ -591,9 +594,11 @@ function ConversationV1AssistantView(
    * 复制精确持久化的最终 assistant Markdown。 */
   const handleCopy = React.useCallback(async () => {
     if (!props.onCopyText) return;
-    await props.onCopyText(props.node.item.markdown);
-    setCopied(true);
-  }, [props.node.item.markdown, props.onCopyText]);
+    setCopied(false);
+    setCopied(await runConversationControlAction(
+      () => props.onCopyText!(props.node.item.markdown), t("conversation.control.copyFailed"),
+    ));
+  }, [props.node.item.markdown, props.onCopyText, t]);
   return (
     <article
       className="message-row assistant assistant-final-output conversation-v1-event"

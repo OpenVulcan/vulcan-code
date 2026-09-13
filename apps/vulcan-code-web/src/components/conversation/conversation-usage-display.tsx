@@ -1,11 +1,22 @@
 import type { UsageCoverage, UsageDimension } from "@/service/conversation-usage-coverage";
 
+/** Derives whole-turn output throughput from exact persisted measurements.
+ * 根据精确持久化测量计算完整回合输出吞吐率。
+ * Parameters outputTokens and durationMs cover the same completed turn, including waits and tools; returns tokens per second or null.
+ * 参数 outputTokens 与 durationMs 覆盖同一已完成回合（包括等待与工具）；返回每秒 Token 数或 null。
+ * Partial token coverage cannot describe whole-turn throughput and must not be passed here.
+ * 部分 Token 覆盖无法代表完整回合吞吐率，不得传入此处。 */
+export function averageTurnOutputSpeed(outputTokens: number | null | undefined, durationMs: number | null | undefined): number | null {
+  if (outputTokens == null || durationMs == null || !Number.isFinite(outputTokens) || !Number.isFinite(durationMs) || outputTokens < 0 || durationMs <= 0) return null;
+  return outputTokens / durationMs * 1000;
+}
+
 /** Formats `exact` when reported, otherwise the known contribution for `field`, without extra coverage annotations.
  * 已报告时格式化 `exact`，否则显示 `field` 的已知贡献，不附加覆盖说明。
  * `coverage` supplies view-only evidence and `locale` selects number formatting; returns plain numeric text.
  * `coverage` 提供仅供视图使用的证据，`locale` 选择数字格式；返回纯数值文本。
- * Missing values display as zero by UI policy without changing persisted usage or the ratio calculation.
- * 按界面规则将空值显示为零，不改变持久化用量或命中率计算。 */
+ * Missing values use a dash, while a reported zero remains zero; persisted accounting never changes.
+ * 缺失值使用短横线，已上报零值仍为零；不改变持久化核算。 */
 export function usageMetricDisplay(
   exact: number | null | undefined,
   field: UsageDimension,
@@ -18,7 +29,7 @@ export function usageMetricDisplay(
   // Exact totals take precedence without overwriting or persisting partial evidence.
   // 精确总量优先，不覆盖或持久化部分证据。
   const value = exact ?? (known && known.reportedApiCallCount > 0 ? known.knownTokens : null);
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value ?? 0);
+  return value === null ? "-" : new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
 }
 
 /** Computes a cache ratio only from exact totals or paired values of the same known requests.

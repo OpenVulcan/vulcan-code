@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeRecycleBatchSummary, VmmNativeRecycleRecord, VmmNativeRecycleRecordKind, VmmNativeRecycleRecordPage } from "@/types"
@@ -60,14 +60,16 @@ export function VmmNativeRecycleRecords({ batch, busy, onRunAction }: RecycleRec
     finally { if (requestGeneration === generation.current) setPending(false) }
   }
 
-  return <>
-    <Button type="button" size="sm" variant="outline" disabled={busy || pending} onClick={() => { setOpen(true); void load("turn", 0, null) }}>{t("memory.recycleRecords.inspect")}</Button>
-    <Dialog open={open} onOpenChange={(visible) => { setOpen(visible); if (!visible) { generation.current += 1; setPage(null); setPending(false) } }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader><DialogTitle>{t("memory.recycleRecords.inspect")}</DialogTitle><DialogDescription>{t("memory.recycleRecords.description")}</DialogDescription></DialogHeader>
+  return <Dialog open={open} onOpenChange={(visible) => { setOpen(visible); if (!visible) { generation.current += 1; setPage(null); setPending(false) } }}>
+    <DialogTrigger asChild><Button type="button" size="sm" variant="outline" disabled={busy || pending} onClick={() => void load("turn", 0, null)}>{t("memory.recycleRecords.inspect")}</Button></DialogTrigger>
+      <DialogContent className="flex min-h-0 flex-col" size="xl" scrollMode="fixed-footer">
+        <DialogHeader className="shrink-0"><DialogTitle>{t("memory.recycleRecords.inspect")}</DialogTitle><DialogDescription>{t("memory.recycleRecords.description")}</DialogDescription></DialogHeader>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         <p className="break-all font-mono text-xs text-muted-foreground">{batch.batchId}</p>
         <Tabs value={kind} onValueChange={(value) => { if (!busy && !pending) void load(value as VmmNativeRecycleRecordKind, 0, null) }}>
-          <TabsList>{(Object.keys(kinds) as VmmNativeRecycleRecordKind[]).map((value) => <TabsTrigger key={value} value={value} disabled={busy || pending}>{t(kinds[value])}</TabsTrigger>)}</TabsList>
+          {/* Keep the current tab focusable while its request runs; inactive tabs cannot start competing reads.
+              当前分页请求期间保留焦点，其余分页不可发起竞争读取。 */}
+          <TabsList>{(Object.keys(kinds) as VmmNativeRecycleRecordKind[]).map((value) => <TabsTrigger key={value} value={value} disabled={(busy || pending) && value !== kind} aria-disabled={busy || pending}>{t(kinds[value])}</TabsTrigger>)}</TabsList>
         </Tabs>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" disabled={busy || pending} onClick={() => void load(kind, 0, null)}>{t("memory.recycleRecords.reload")}</Button>
@@ -77,13 +79,13 @@ export function VmmNativeRecycleRecords({ batch, busy, onRunAction }: RecycleRec
         {error ? <p role="alert" className="text-sm text-destructive">{t("memory.recycleRecords.failed")}</p> : null}
         {page?.records.length === 0 ? <p className="rounded border border-dashed p-5 text-muted-foreground">{t("memory.recycleRecords.empty")}</p> : null}
         {page?.records.map((record) => <RecycleRecord key={recordKey(record)} record={record} />)}
-        {page ? <div className="flex gap-2">
+        </div>
+        {page ? <div className="flex shrink-0 flex-wrap gap-2">
           <Button type="button" variant="outline" disabled={busy || pending || page.query.offset === 0} onClick={() => void load(kind, Math.max(0, page.query.offset - page.query.limit), page.storageVersion)}>{t("memory.recycleRecords.previous")}</Button>
           <Button type="button" variant="outline" disabled={busy || pending || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) void load(kind, page.nextOffset, page.storageVersion) }}>{t("memory.recycleRecords.next")}</Button>
         </div> : null}
       </DialogContent>
-    </Dialog>
-  </>
+  </Dialog>
 }
 
 // Returns the exact retained identity, using the full evidence tuple where no separate ID exists.

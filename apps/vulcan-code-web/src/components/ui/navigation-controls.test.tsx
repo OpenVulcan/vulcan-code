@@ -6,6 +6,15 @@ import { NavItem, TreeRow } from "@/components/ui/navigation-item"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 describe("shared navigation and choice controls", () => {
+  // Vertical appearance must also select the primitive's matching accessibility and keyboard orientation.
+  // 垂直外观必须同步选择底层组件对应的无障碍与键盘操作方向。
+  it("forwards vertical orientation into the tab-list interaction contract", () => {
+    // markup exposes the primitive-owned orientation, rather than only our root's decorative data attribute.
+    // markup 暴露底层组件持有的方向，而非仅验证外层装饰性数据属性。
+    const markup = renderToStaticMarkup(<Tabs orientation="vertical" defaultValue="one"><TabsList><TabsTrigger value="one">One</TabsTrigger></TabsList></Tabs>);
+    expect(markup).toContain('aria-orientation="vertical"');
+    expect(markup).not.toContain('aria-orientation="horizontal"');
+  });
   it("renders exclusive segmented choices with a selected value", () => {
     const markup = renderToStaticMarkup(
       <SegmentedControl defaultValue="balanced">

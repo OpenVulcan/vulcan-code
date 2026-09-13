@@ -342,7 +342,7 @@ function VmmIdentityProjectPage({
       <Dialog
         open={createKind !== null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !busy) {
             setCreateKind(null)
             setCreateTeamName("default")
             setCreateSpaceName("default")
@@ -350,7 +350,9 @@ function VmmIdentityProjectPage({
           }
         }}
       >
-        <DialogContent className={createKind === "project" ? "sm:max-w-xl" : undefined}>
+        <DialogContent className={createKind === "project" ? "sm:max-w-xl" : undefined} showCloseButton={!busy}
+          onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}
+          onInteractOutside={(event) => { if (busy) event.preventDefault() }}>
           <DialogHeader>
             <DialogTitle>
               {createKind === "user" ? t("memory.identity.addUser") : t("memory.identity.addProject")}
@@ -416,8 +418,9 @@ function VmmIdentityProjectPage({
               />
             </div>
           )}
+          {operationMessage ? <p role="status" className="text-sm text-muted-foreground">{operationMessage}</p> : null}
           <DialogFooter>
-            <Button onClick={() => setCreateKind(null)} type="button" variant="outline">
+            <Button disabled={busy} onClick={() => setCreateKind(null)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
             <Button
@@ -436,14 +439,14 @@ function VmmIdentityProjectPage({
       <AlertDialog
         open={pendingDeletion !== null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !busy) {
             setPendingDeletion(null)
             setDeletionText("")
             setUserConfirmationCode("")
           }
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("memory.identity.confirmDeleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
@@ -468,8 +471,9 @@ function VmmIdentityProjectPage({
               <p className="text-xs text-muted-foreground">{t("memory.identity.checking")}</p>
             ) : null}
           </div>
+          {operationMessage ? <p role="status" className="text-sm text-muted-foreground">{operationMessage}</p> : null}
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={
                 busy
@@ -492,13 +496,15 @@ function VmmIdentityProjectPage({
       <Dialog
         open={migrationProject !== null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !busy) {
             setMigrationProject(null)
             setMigrationTarget("")
           }
         }}
       >
-        <DialogContent>
+        <DialogContent showCloseButton={!busy}
+          onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}
+          onInteractOutside={(event) => { if (busy) event.preventDefault() }}>
           <DialogHeader>
             <DialogTitle>{t("memory.identity.migrateTitle")}</DialogTitle>
             <DialogDescription>{t("memory.identity.migrateDescription")}</DialogDescription>
@@ -516,8 +522,9 @@ function VmmIdentityProjectPage({
               value={migrationTarget}
             />
           </div>
+          {operationMessage ? <p role="status" className="text-sm text-muted-foreground">{operationMessage}</p> : null}
           <DialogFooter>
-            <Button onClick={() => setMigrationProject(null)} type="button" variant="outline">
+            <Button disabled={busy} onClick={() => setMigrationProject(null)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
             <Button disabled={busy || !migrationTarget} onClick={() => void submitMigration()} type="button">

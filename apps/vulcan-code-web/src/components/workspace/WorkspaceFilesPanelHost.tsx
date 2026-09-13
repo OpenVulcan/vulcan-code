@@ -82,6 +82,10 @@ interface WorkspaceFilesPanelCacheEntry {
 
 // WorkspaceFilesPanelHost owns workspace file tree and preview state for the right context panel.
 // WorkspaceFilesPanelHost 持有右侧上下文面板的工作区文件树与预览状态。
+// Parameters: props supplies route identity, typed file IO and clipboard callbacks. Returns the tree and preview surface.
+// 参数：props 提供路由身份、强类型文件输入输出及剪贴板回调。返回文件树与预览界面。
+// Parameters: props supplies workspace identity, file services and context-panel callbacks; returns authoritative tree and preview state with explicit read recovery.
+// 参数：props 提供工作区身份、文件服务及上下文面板回调；返回带明确读取恢复的权威目录树与预览状态。
 export function WorkspaceFilesPanelHost(props: {
   // Unique dynamic context tab instance id.
   // 唯一动态上下文页签实例标识。
@@ -118,7 +122,7 @@ export function WorkspaceFilesPanelHost(props: {
   resolveMediaSourceUrl: (path: string) => string;
   // Copies text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制文本。
-  onCopyText: (text: string) => void;
+  onCopyText: (text: string) => void | Promise<void>;
   // Updates the parent dynamic tab title.
   // 更新父级动态页签标题。
   onTitleChange: (title: string) => void;
@@ -212,7 +216,14 @@ export function WorkspaceFilesPanelHost(props: {
   const [mediaPermissionEntry, setMediaPermissionEntry] = React.useState<WorkspaceFileEntrySummary | null>(null);
   // panelError stores the latest directory loading error.
   // panelError 保存最近一次目录加载错误。
-  const [panelError, setPanelError] = React.useState<string | null>(null);
+  const [panelError, setPanelError] = React.useState<{
+    // Exact failed request argument; null explicitly represents the root listing.
+    // 失败请求的精确参数；null 明确表示根目录列表。
+    directoryPath: string | null;
+    // Service error displayed without losing the retry target.
+    // 保留重试目标时展示的服务错误。
+    message: string;
+  } | null>(null);
   // loadedInitialDirectoryRef separates first directory hydration from user filter changes.
   // loadedInitialDirectoryRef 区分首次目录水合与用户过滤规则变化。
   const loadedInitialDirectoryRef = React.useRef(false);
@@ -282,7 +293,7 @@ export function WorkspaceFilesPanelHost(props: {
       }
     } catch (error) {
       if (requestOwnership.ownsDirectoryRequest(loadingKey, ownedRequest)) {
-        setPanelError(error instanceof Error ? error.message : String(error));
+        setPanelError({ directoryPath, message: error instanceof Error ? error.message : String(error) });
       }
     } finally {
       if (requestOwnership.finishDirectoryRequest(loadingKey, ownedRequest)) {
@@ -494,6 +505,8 @@ export function WorkspaceFilesPanelHost(props: {
 
   // copyFileContent loads and copies one code file's textual preview content.
   // copyFileContent 加载并复制单个代码文件的文本预览内容。
+  // Parameters: entry is the exact requested file. Returns after preview loading and clipboard completion or visible failure.
+  // 参数：entry 是准确请求的文件。预览读取与剪贴板完成或可见失败处理后返回。
   const copyFileContent = React.useCallback(async (entry: WorkspaceFileEntrySummary) => {
     if (!workspacePath || entry.kind !== "code") {
       return;
@@ -506,8 +519,9 @@ export function WorkspaceFilesPanelHost(props: {
         entry.path,
         filters,
       );
-      props.onCopyText(response.content ?? "");
-      toast.success(t("workspaceFiles.copyContentSuccess"));
+      await props.onCopyText(response.content ?? "");
+      if (response.truncated) toast.info(t("workspaceAudit.copyTruncated"));
+      else toast.success(t("workspaceFiles.copyContentSuccess"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -556,7 +570,7 @@ export function WorkspaceFilesPanelHost(props: {
         <WorkspaceFileTreeDrawer
           activeFileKey={selectedPath}
           collapseOnSelect
-          emptyLabel={panelError ?? (rootListing ? t("workspaceFiles.noMatchedFiles") : t("workspaceFiles.noDisplayableFiles"))}
+          emptyLabel={rootListing ? t("workspaceFiles.noMatchedFiles") : t("workspaceFiles.noDisplayableFiles")}
           extraFilterActions={<WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} />}
           fileIconClassName={(node) => workspaceFileTreeIconClassName(node.file)}
           fileKey={(entry) => entry.path}
@@ -586,7 +600,12 @@ export function WorkspaceFilesPanelHost(props: {
         {!rootListing && loadingDirectories.has(workspacePath) ? (
           <div className="workspace-files-panel-notice">{t("workspaceFiles.loadingTree")}</div>
         ) : null}
-        {panelError ? <div className="workspace-files-panel-notice error">{panelError}</div> : null}
+        {panelError ? <div className="workspace-files-panel-notice error" role="alert">
+          <span>{panelError.message}</span>
+          <Button size="sm" variant="outline" onClick={() => void loadDirectory(panelError.directoryPath)}>
+            {t("workspaceAudit.retry")}
+          </Button>
+        </div> : null}
         <WorkspaceFilePreview
           entry={selectedEntry}
           error={previewError}
@@ -597,6 +616,7 @@ export function WorkspaceFilesPanelHost(props: {
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           onAllowMediaPreview={allowMediaPreview}
           onClosePreview={closePreviewAndShowTree}
+          onRetryPreview={() => { if (selectedEntry) void loadFilePreview(selectedEntry, filters); }}
         />
       </div>
     </section>
@@ -660,18 +680,35 @@ function WorkspaceFilesFilterMenu(props: {
 
 // WorkspaceFileRowMenu renders lightweight copy actions for one file tree row.
 // WorkspaceFileRowMenu 为单个文件树行渲染轻量复制动作。
+// Parameters: props supplies one file entry and awaiting clipboard actions. Returns its file-scoped dropdown.
+// 参数：props 提供一个文件条目及可等待的剪贴板动作。返回该文件的下拉菜单。
+// Parameters: props supplies one file entry and copy callbacks; returns contextual copy actions constrained by actual preview availability.
+// 参数：props 提供一个文件条目及复制回调；返回受实际预览可用性约束的上下文复制操作。
 function WorkspaceFileRowMenu(props: {
   // File tree entry that owns the row menu.
   // 拥有行菜单的文件树条目。
   entry: WorkspaceFileEntrySummary;
   // Copies text using the host clipboard.
   // 使用宿主剪贴板复制文本。
-  onCopyText: (text: string) => void;
+  onCopyText: (text: string) => void | Promise<void>;
   // Copies one code file's content through the backend preview path.
   // 通过后端预览路径复制单个代码文件内容。
   onCopyFileContent: (entry: WorkspaceFileEntrySummary) => void;
 }) {
   const { t } = useI18n();
+  // copyPath observes the host result before completing a menu clipboard action.
+  // copyPath 在菜单剪贴板动作完成前检查宿主执行结果。
+  // Parameters: path is the chosen absolute or relative path string. Returns a promise after copy or error feedback.
+  // 参数：path 是所选绝对或相对路径字符串。返回在复制或错误反馈后结束的 Promise。
+  // Parameters: path is the exact requested clipboard text; returns after the host result is observed, exposing a failed copy instead of claiming success.
+  // 参数：path 是精确请求的剪贴板文本；在观察宿主结果后返回，复制失败时暴露错误而非声称成功。
+  const copyPath = async (path: string): Promise<void> => {
+    try {
+      await props.onCopyText(path);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -680,11 +717,11 @@ function WorkspaceFileRowMenu(props: {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="workspace-file-row-menu">
-        <DropdownMenuItem onClick={() => props.onCopyText(props.entry.path)}>
+        <DropdownMenuItem onClick={() => void copyPath(props.entry.path)}>
           <Copy size={14} />
           {t("workspaceFiles.copyPath")}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => props.onCopyText(props.entry.relativePath)}>
+        <DropdownMenuItem onClick={() => void copyPath(props.entry.relativePath)}>
           <Copy size={14} />
           {t("workspaceFiles.copyRelativePath")}
         </DropdownMenuItem>

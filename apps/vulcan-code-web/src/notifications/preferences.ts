@@ -20,11 +20,14 @@ export function defaultNotificationPreferences(): NotificationPreferencesV1 {
 
 // loadNotificationPreferences validates one local document and falls back to safe defaults when invalid.
 // loadNotificationPreferences 校验本地文档，并在无效时回退到安全默认值。
-export function loadNotificationPreferences(storage: Pick<Storage, "getItem"> = window.localStorage): NotificationPreferencesV1 {
+export function loadNotificationPreferences(storage?: Pick<Storage, "getItem">): NotificationPreferencesV1 {
   try {
+    // Access the browser getter inside the boundary because restricted clients can reject storage itself.
+    // 在异常边界内访问浏览器 getter，因为受限客户端可能直接拒绝取得存储对象。
+    const readableStorage = storage ?? window.localStorage;
     // serialized stores the exact device-local preference document.
     // serialized 保存精确的设备本地偏好文档。
-    const serialized = storage.getItem(NOTIFICATION_PREFERENCES_STORAGE_KEY);
+    const serialized = readableStorage.getItem(NOTIFICATION_PREFERENCES_STORAGE_KEY);
     if (serialized === null) {
       return defaultNotificationPreferences();
     }

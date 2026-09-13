@@ -1,5 +1,6 @@
 import React from "react";
 import { BootErrorScreen, BootLoadingScreen } from "@/app/BootStartupScreen";
+import { RenderErrorBoundary } from "./render-error-boundary";
 import type { StartupSnapshot } from "@/types";
 import {
   hasServiceRuntime,
@@ -29,11 +30,13 @@ export function WebuiApp() {
     return <BootGate onReady={setBootResult} />;
   }
   return (
+    <RenderErrorBoundary fallback={(error) => <BootErrorScreen error={error.message} uiLocale={bootResult.startup.uiLocale} onReload={() => window.location.reload()} />}>
     <React.Suspense fallback={(
       <BootLoadingScreen startup={bootResult.startup} />
     )}>
       <LazyWorkbenchApp initialStartup={bootResult.startup} />
     </React.Suspense>
+    </RenderErrorBoundary>
   );
 }
 
@@ -116,7 +119,7 @@ function BootGate(props: {
   }, []);
 
   if (error) {
-    return <BootErrorScreen error={error} uiLocale={startup?.uiLocale} />;
+    return <BootErrorScreen error={error} uiLocale={startup?.uiLocale} onReload={() => window.location.reload()} />;
   }
 
   if (startup?.phase === "failed") {
@@ -124,6 +127,7 @@ function BootGate(props: {
       <BootErrorScreen
         error={startupFailureMessage(startup)}
         uiLocale={startup.uiLocale}
+        onReload={() => window.location.reload()}
       />
     );
   }

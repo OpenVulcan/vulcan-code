@@ -207,6 +207,10 @@ export function ComposerDock(props: {
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
+  // Memory readiness and configuration navigation are passed through without changing policy state.
+  // 记忆就绪状态与配置导航直接透传，不改变策略状态。
+  vmmStatus?: "disabled" | "not_ready" | "ready";
+  onOpenMemorySettings?: () => void;
   // runtimeCue shows the current session in-progress activity near the composer.
   // runtimeCue 在工作区底部状态栏显示当前会话的进行中活动。
   runtimeCue: ComposerRuntimeCue | null;
@@ -313,6 +317,8 @@ export function ComposerDock(props: {
         outputStyleCatalog={props.outputStyleCatalog}
         sessionOutputStyle={props.sessionOutputStyle}
         vmmAvailable={props.vmmAvailable}
+        vmmStatus={props.vmmStatus}
+        onOpenMemorySettings={props.onOpenMemorySettings}
       />
       {props.todolistStatusHost && visibleSessionTodolist
         ? createPortal(

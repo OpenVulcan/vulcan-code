@@ -113,6 +113,9 @@ export function VmmNativeRetrievalPolicy({ settings, defaults, busy, onRunAction
     if ((Object.keys(settings) as (keyof VmmNativeRetrievalPolicySummary)[]).some((key) => settings[key] !== accepted.current[key])) {
       setDraft(draftFromSettings(settings))
       accepted.current = settings
+      // A refreshed policy supersedes the last save acknowledgement.
+      // 刷新后的策略取代上一次保存确认，避免显示过时的成功状态。
+      setSaved(false)
     }
   }, [settings])
 

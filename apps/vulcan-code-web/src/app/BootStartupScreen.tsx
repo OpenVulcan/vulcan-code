@@ -1,6 +1,7 @@
 import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { StartupDownloadProgress } from "@/components/shell/startup-download-progress";
-import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
+import type { StartupSnapshot } from "@/types";
+import { activeStartupStep, startupProgressPercent } from "@/components/shell/startup-progress";
 
 // BootLocale is the minimal language set needed before the full i18n bundle is loaded.
 // BootLocale 是完整 i18n 包加载前所需的最小语言集合。
@@ -24,9 +25,15 @@ interface BootText {
   // Startup failure prefix.
   // 启动失败前缀。
   failedPrefix: string;
+  // Label for optional raw failure details, keeping the recovery action visible.
+  // 可选原始错误详情的标签，让恢复操作保持可见。
+  errorDetails: string;
   // Managed-runtime download progress label.
   // 受管运行时下载进度标签。
   downloadProgress: string;
+  // Real completed step count label, independent from measured percentage.
+  // 真实完成步骤计数标签，独立于实测百分比。
+  completedSteps: string;
 }
 
 // BOOT_TEXT maps startup labels without importing the full application translation catalog.
@@ -38,7 +45,9 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     loadingProjectIndex: "正在加载项目与会话索引",
     loadingStepPrefix: "正在加载",
     failedPrefix: "启动失败：",
+    errorDetails: "查看详情",
     downloadProgress: "下载进度",
+    completedSteps: "已完成 {completed}/{total} 个步骤",
   },
   "en-US": {
     loadingWorkspace: "Loading Workspace",
@@ -46,7 +55,9 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     loadingProjectIndex: "Loading project and conversation indexes",
     loadingStepPrefix: "Loading",
     failedPrefix: "Startup failed: ",
+    errorDetails: "View details",
     downloadProgress: "Download progress",
+    completedSteps: "Completed {completed}/{total} steps",
   },
 };
 
@@ -77,17 +88,20 @@ export function BootLoadingScreen(props: {
   const heading = activeStep ? `${text.loadingStepPrefix} ${activeStep.label}` : text.loadingWorkspace;
   return (
     <main className="loading-screen">
-      <section className="startup-progress-panel" aria-live="polite" aria-busy={!props.startup?.ready}>
+      <section className="startup-progress-panel" aria-live="polite" aria-busy={!props.startup?.ready && activeStep?.status !== "error"}>
         <StartupLogoMark />
         <div className="startup-progress-content">
           <div className="conversation-loading-heading startup-progress-heading">
             <strong>{heading}</strong>
-            <span>{Math.round(percent)}%</span>
+            {percent !== null ? <span>{Math.round(percent)}%</span> : null}
           </div>
-          <div className="conversation-loading-bar startup-progress-bar" aria-label={text.loadingWorkspace} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
-            <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
+          <div className="conversation-loading-bar startup-progress-bar" aria-label={activeStep?.label ?? text.loadingWorkspace} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent !== null ? Math.round(percent) : undefined}>
+            <div className={`conversation-loading-bar-value${percent === null ? " startup-download-progress-indeterminate" : ""}`} style={percent !== null ? { width: `${percent}%` } : undefined} />
           </div>
-          <p className="startup-progress-message">{message}</p>
+          {props.startup && props.startup.steps.length > 0 ? <small>{text.completedSteps
+            .replace("{completed}", String(props.startup.steps.filter((step) => step.status === "ready" || step.status === "warning").length))
+            .replace("{total}", String(props.startup.steps.length))}</small> : null}
+          <p className="startup-progress-message" title={message} role={activeStep?.status === "error" ? "alert" : undefined}>{message}</p>
           <StartupDownloadProgress step={activeStep} label={text.downloadProgress} />
         </div>
       </section>
@@ -104,6 +118,9 @@ export function BootErrorScreen(props: {
   // Service-provided UI locale.
   // 服务提供的界面语言。
   uiLocale?: string | null;
+  // onReload explicitly restarts the application only after the user chooses recovery.
+  // onReload 仅在用户选择恢复后显式重新加载应用。
+  onReload?: () => void;
 }) {
   // text stores localized labels for the boot error.
   // text 保存启动错误的本地化文案。
@@ -114,7 +131,13 @@ export function BootErrorScreen(props: {
         <StartupLogoMark />
         <div className="startup-error-content">
           <strong>{text.failedPrefix}</strong>
-          <p className="startup-error-message">{props.error}</p>
+          <details className="startup-error-details">
+            <summary>{text.errorDetails}</summary>
+            <p className="startup-error-message">{props.error}</p>
+          </details>
+          {props.onReload ? <button className="startup-reload-button" type="button" onClick={props.onReload}>
+            {bootLocale(props.uiLocale) === "zh-CN" ? "重新加载应用" : "Reload application"}
+          </button> : null}
         </div>
       </section>
     </main>
@@ -128,37 +151,4 @@ function bootLocale(value: string | null | undefined): BootLocale {
     return value;
   }
   return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
-}
-
-// activeStartupStep returns the first in-progress or pending startup step for the headline.
-// activeStartupStep 返回首个进行中或待处理启动步骤，用于标题显示。
-function activeStartupStep(steps: StartupStepSnapshot[]): StartupStepSnapshot | null {
-  return steps.find((step) => step.status === "running")
-    ?? steps.find((step) => step.status === "pending")
-    ?? null;
-}
-
-// startupProgressPercent maps startup step states to a stable bounded progress percentage.
-// startupProgressPercent 将启动步骤状态映射为稳定的有界进度百分比。
-function startupProgressPercent(startup: StartupSnapshot | null): number {
-  if (!startup) {
-    return 8;
-  }
-  if (startup.ready) {
-    return 100;
-  }
-  const total = startup.steps.length;
-  if (total === 0) {
-    return 8;
-  }
-  const completed = startup.steps.reduce((sum, step) => {
-    if (step.status === "ready" || step.status === "warning") {
-      return sum + 1;
-    }
-    if (step.status === "running") {
-      return sum + Math.max(0, Math.min(100, step.progressPercent ?? 50)) / 100;
-    }
-    return sum;
-  }, 0);
-  return Math.max(8, Math.min(96, (completed / total) * 100));
 }

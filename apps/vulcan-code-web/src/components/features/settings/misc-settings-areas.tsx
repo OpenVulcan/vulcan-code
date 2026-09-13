@@ -3,21 +3,17 @@ import {
   Archive,
   ChevronLeft,
   ChevronRight,
-  Cpu,
-  FileText,
   GitCommitHorizontal,
-  PackagePlus,
   RefreshCw,
   Route,
   RotateCcw,
   Save,
-  ScrollText,
-  SlidersHorizontal,
   Trash2,
 } from "lucide-react"
 
-import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
-import { PanelTitle, StatusPill } from "@/components/shared/status"
+import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
+import { Button } from "@/components/ui/button"
+import { PanelTitle } from "@/components/shared/status"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -36,8 +32,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type {
-  ComposerAttachmentCapabilitySummary,
-  ComposerSlashCommandSummary,
   ConversationSummary,
   ProjectSummary,
   WorkbenchSnapshot,
@@ -56,128 +50,152 @@ const DEFAULT_COMMIT_SUMMARY_MODEL: GitCommitSummaryModelSelectionSaveRequest = 
 // ARCHIVED_CONVERSATION_PAGE_SIZE 在跨分页保留选择的同时保持归档恢复页面可读。
 const ARCHIVED_CONVERSATION_PAGE_SIZE = 20
 
-// GitCommitSettingsArea renders local Git commit dialog preferences.
-// GitCommitSettingsArea 渲染 Git 提交弹窗偏好。
+// GitCommitSettingsArea edits model-scoped generation preferences without selecting a credential.
+// GitCommitSettingsArea 编辑模型作用域的生成偏好，不将凭据账号写入配置。
+// Parameters: actions saves the draft; workbench supplies authoritative persisted settings.
+// 参数：actions 保存草稿；workbench 提供权威持久化设置。
+// Returns the generation form, branch naming preview and explicit save feedback.
+// 返回生成表单、分支命名预览和明确保存反馈。
 export function GitCommitSettingsArea(props: {
   // Service-backed settings actions.
   // 服务端设置操作。
   actions: SettingsActionProps
-  // Workbench snapshot that carries the shared Git commit configuration.
-  // 携带共享 Git 提交配置的工作台快照。
+  // Authoritative persisted Git settings and executable model catalog.
+  // 权威持久化 Git 设置与可执行模型目录。
   workbench: WorkbenchSnapshot
 }) {
+  // Localized copy follows the active interface language.
+  // 本地化文案跟随当前界面语言。
   const { locale, t } = useI18n()
-  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
-  const branchPrefix = props.workbench.gitCommit?.newBranchPrefix ?? DEFAULT_COMMIT_BRANCH_PREFIX
-  const summaryModel = props.workbench.gitCommit?.summaryModel ?? DEFAULT_COMMIT_SUMMARY_MODEL
-  const summaryExtraPrompt = props.workbench.gitCommit?.summaryExtraPrompt ?? ""
-  const summaryModelMode = summaryModel.mode
-  const summaryModelProviderId = summaryModel.mode === "fixed" ? summaryModel.providerId : ""
-  const summaryModelModelId = summaryModel.mode === "fixed" ? summaryModel.modelId : ""
-  const [draftPrefix, setDraftPrefix] = React.useState(branchPrefix)
-  const [draftSummaryModel, setDraftSummaryModel] = React.useState<GitCommitSummaryModelSelectionSaveRequest>(summaryModel)
-  const [draftSummaryExtraPrompt, setDraftSummaryExtraPrompt] = React.useState(summaryExtraPrompt)
+  // text selects the matching interface copy.
+  // text 选择对应界面文案。
+  const text = (zh: string, en: string) => localizedLiteral(locale, zh, en)
+  // persistedDraft records only fields accepted by the save contract.
+  // persistedDraft 仅记录保存契约接受的字段。
+  const persistedDraft = {
+    newBranchPrefix: props.workbench.gitCommit?.newBranchPrefix ?? DEFAULT_COMMIT_BRANCH_PREFIX,
+    summaryModel: props.workbench.gitCommit?.summaryModel ?? DEFAULT_COMMIT_SUMMARY_MODEL,
+    summaryExtraPrompt: props.workbench.gitCommit?.summaryExtraPrompt ?? "",
+  }
+  // persistedKey detects changes without depending on snapshot object identity.
+  // persistedKey 检测变化，不依赖快照对象身份。
+  const persistedKey = JSON.stringify(persistedDraft)
+  // baselineRef preserves unsaved input when a background snapshot changes.
+  // baselineRef 在后台快照变化时保护未保存输入。
+  const baselineRef = React.useRef(persistedKey)
+  // draft is the editable settings payload.
+  // draft 是可编辑设置载荷。
+  const [draft, setDraft] = React.useState(persistedDraft)
+  // saveState and saveError expose saving, completion and failure independently.
+  // saveState 与 saveError 分别展示保存过程、完成和失败。
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved">("idle")
-
+  const [saveError, setSaveError] = React.useState("")
+  // savingRef prevents duplicate synchronous submissions before React disables the button.
+  // savingRef 在 React 禁用按钮前防止同步重复提交。
+  const savingRef = React.useRef(false)
   React.useEffect(() => {
-    setDraftPrefix(branchPrefix)
-    setDraftSummaryModel(summaryModelMode === "fixed"
-      ? { mode: "fixed", providerId: summaryModelProviderId, modelId: summaryModelModelId }
-      : { mode: "session" })
-    setDraftSummaryExtraPrompt(summaryExtraPrompt)
-  }, [branchPrefix, summaryExtraPrompt, summaryModelMode, summaryModelProviderId, summaryModelModelId])
-
-  const normalizedDraftPrefix = normalizeGitCommitBranchPrefix(draftPrefix)
-  const fixedSummaryModelValue = draftSummaryModel.mode === "fixed"
-    ? `${draftSummaryModel.providerId}/${draftSummaryModel.modelId}`
+    // nextDraft is decoded from the locally serialized, typed settings object.
+    // nextDraft 从本地序列化的类型化设置对象还原。
+    const nextDraft = JSON.parse(persistedKey) as typeof draft
+    // previousBaseline identifies whether the user has edited the previous snapshot.
+    // previousBaseline 用于判断用户是否已编辑此前快照。
+    const previousBaseline = baselineRef.current
+    setDraft((current) => JSON.stringify(current) === previousBaseline ? nextDraft : current)
+    baselineRef.current = persistedKey
+  }, [persistedKey])
+  // fixedModelValue intentionally contains no connection identifier.
+  // fixedModelValue 明确不包含连接标识。
+  const fixedModelValue = draft.summaryModel.mode === "fixed"
+    ? modelPickerGroupKey(draft.summaryModel)
     : ""
-  const saveDraft = React.useCallback(async () => {
+  // fixedModelLabel preserves the exact unavailable selection in the trigger.
+  // fixedModelLabel 在触发器中保留精确的失效选择。
+  const fixedModelLabel = draft.summaryModel.mode === "fixed"
+    ? `${draft.summaryModel.providerId}/${draft.summaryModel.modelId}`
+    : undefined
+  // dirty describes the current payload against the latest persisted snapshot.
+  // dirty 描述当前载荷相对最新持久化快照的变化。
+  const dirty = JSON.stringify(draft) !== persistedKey
+  // saveDraft submits one immutable form snapshot and retains input on failure.
+  // saveDraft 提交一个不可变表单快照，失败时保留输入。
+  // Parameters: none. Returns after the explicit save attempt settles.
+  // 参数：无。返回值：在明确保存尝试结束后完成。
+  const saveDraft = async () => {
+    if (savingRef.current) return
+    savingRef.current = true
     setSaveState("saving")
-    await props.actions.onSaveGitCommitSettings({
-      newBranchPrefix: draftPrefix,
-      summaryModel: draftSummaryModel,
-      summaryExtraPrompt: draftSummaryExtraPrompt,
-    })
-    setSaveState("saved")
-    window.setTimeout(() => setSaveState("idle"), 1200)
-  }, [draftPrefix, draftSummaryExtraPrompt, draftSummaryModel, props.actions])
-
+    setSaveError("")
+    try {
+      await props.actions.onSaveGitCommitSettings(draft)
+      setSaveState("saved")
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error))
+      setSaveState("idle")
+    } finally {
+      savingRef.current = false
+    }
+  }
   return (
-    <section className="panel full-height settings-detail-panel">
+    <section className="settings-detail-panel settings-preferences-page">
       <PanelTitle icon={<GitCommitHorizontal size={17} />} title={text("Git 提交", "Git commit")} />
-      <div className="settings-form-grid">
-        <label className="settings-form-field">
-          <span>{text("新分支默认前缀", "Default new-branch prefix")}</span>
-          <Input
-            onChange={(event) => setDraftPrefix(event.currentTarget.value)}
-            placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
-            value={draftPrefix}
-          />
-        </label>
-        <article className="settings-card">
-          <StatusPill status="ready" label={t("settings.gitCommit.active")} />
-          <strong>{normalizedDraftPrefix}</strong>
-          <p>{text("仅当前分支没有命名空间时使用；已有命名空间的分支会沿用当前命名空间。", "Used only when the current branch has no namespace; namespaced branches keep their current namespace.")}</p>
-        </article>
-        <article className="settings-card">
-          <StatusPill status="ready" label={t("settings.gitCommit.autoSummary")} />
-          <strong>{t("settings.gitCommit.summaryModel")}</strong>
-          <div className="settings-card-actions">
-            {draftSummaryModel.mode === "session" ? (
-              <button className="skill-action-button" type="button">
-                <Cpu size={14} />
-                <span>{t("settings.gitCommit.followSessionModel")}</span>
-              </button>
-            ) : (
-              <button className="skill-action-button" type="button">
-                <Cpu size={14} />
-                <span>{draftSummaryModel.providerId}/{draftSummaryModel.modelId}</span>
-              </button>
-            )}
-            <ModelPickerControl
-              ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
-              fallbackLabel={t("composer.selectFallback")}
-              filterPlaceholder={t("composer.modelPicker.filter")}
-              noMatchesLabel={t("composer.modelPicker.noMatches")}
-              providers={props.workbench.providers}
-              value={fixedSummaryModelValue}
-              onValueChange={(choice) => setDraftSummaryModel({
-                mode: "fixed",
-                providerId: choice.providerId,
-                modelId: choice.modelId,
-              })}
-            />
-            <button
-              className="skill-action-button"
-              disabled={draftSummaryModel.mode === "session"}
-              onClick={() => setDraftSummaryModel({ mode: "session" })}
-              type="button"
-            >
-              <RotateCcw size={14} />
-              <span>{t("settings.gitCommit.resetSummaryModel")}</span>
-            </button>
+      <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
+        <section className="settings-preferences-section">
+          <h2>{text("提交信息生成", "Commit message generation")}</h2>
+          <div className="settings-form-field">
+            <span>{t("settings.gitCommit.summaryModel")}</span>
+            <div className="settings-card-actions">
+              <ModelPickerControl
+                selectionScope="model"
+                ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
+                fallbackLabel={t("settings.gitCommit.followSessionModel")}
+                unavailableValueLabel={fixedModelLabel}
+                filterPlaceholder={t("composer.modelPicker.filter")}
+                noMatchesLabel={t("composer.modelPicker.noMatches")}
+                providers={props.workbench.providers}
+                value={fixedModelValue}
+                disabled={saveState === "saving"}
+                onValueChange={(choice) => setDraft({ ...draft, summaryModel: { mode: "fixed", providerId: choice.providerId, modelId: choice.modelId } })}
+              />
+              {draft.summaryModel.mode === "fixed" ? <Button
+                variant="ghost"
+                onClick={() => setDraft({ ...draft, summaryModel: { mode: "session" } })}
+                type="button"
+              ><RotateCcw size={14} />{t("settings.gitCommit.followSessionModel")}</Button> : null}
+            </div>
+            <small className="settings-muted-line">{draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}</small>
+            {fixedModelValue && !modelPickerChoiceExists(props.workbench.providers, fixedModelValue) ? (
+              <p role="status" className="settings-muted-line">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
+            ) : null}
           </div>
-          <p>{draftSummaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}</p>
-          {draftSummaryModel.mode === "fixed" && !modelPickerChoiceExists(props.workbench.providers, fixedSummaryModelValue) ? (
-            <p className="settings-muted-line">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
-          ) : null}
-        </article>
-        <label className="settings-form-field">
-          <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
-          <Textarea
-            onChange={(event) => setDraftSummaryExtraPrompt(event.currentTarget.value)}
-            placeholder={t("settings.gitCommit.summaryExtraPromptPlaceholder")}
-            rows={4}
-            value={draftSummaryExtraPrompt}
-          />
-          <small className="settings-muted-line">{t("settings.gitCommit.summaryExtraPromptHelp")}</small>
-        </label>
-        <div className="settings-card-actions">
-          <button className="skill-action-button" disabled={saveState === "saving"} onClick={() => void saveDraft()} type="button">
-            {saveState === "saving" ? text("保存中", "Saving") : saveState === "saved" ? text("已保存", "Saved") : text("保存", "Save")}
-          </button>
-        </div>
+          <label className="settings-form-field">
+            <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
+            <Textarea rows={4} value={draft.summaryExtraPrompt}
+              placeholder={t("settings.gitCommit.summaryExtraPromptPlaceholder")}
+              onChange={(event) => setDraft({ ...draft, summaryExtraPrompt: event.currentTarget.value })} />
+            <small className="settings-muted-line">{t("settings.gitCommit.summaryExtraPromptHelp")}</small>
+          </label>
+        </section>
+        <section className="settings-preferences-section">
+          <h2>{text("分支命名", "Branch naming")}</h2>
+          <label className="settings-form-field">
+            <span>{text("新分支默认前缀", "Default new-branch prefix")}</span>
+            <Input value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
+              onChange={(event) => setDraft({ ...draft, newBranchPrefix: event.currentTarget.value })} />
+            <small className="settings-muted-line">{text("预览", "Preview")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
+            <small className="settings-muted-line">{text("已有命名空间的分支继续使用原命名空间。", "Namespaced branches keep their existing namespace.")}</small>
+          </label>
+        </section>
+      </fieldset>
+      <div className="settings-preferences-footer">
+        <span role="status" className="settings-muted-line">{dirty ? text("有未保存的修改", "Unsaved changes") : saveState === "saved" ? text("已保存", "Saved") : ""}</span>
+        <Button disabled={saveState === "saving" || !dirty} onClick={() => void saveDraft()} type="button">
+          <Save size={14} />{saveState === "saving" ? text("保存中…", "Saving…") : text("保存", "Save")}
+        </Button>
       </div>
+      {saveError ? <div role="alert" className="settings-save-error">
+        <p>{text("保存失败，修改已保留。", "Saving failed. Your changes are preserved.")}</p>
+        <details><summary>{text("查看详情", "View details")}</summary><pre>{saveError}</pre></details>
+      </div> : null}
     </section>
   )
 }
@@ -198,147 +216,89 @@ function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], valu
   if (!value) {
     return false
   }
-  return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerChoiceKey({
+  return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerGroupKey({
     providerId: provider.sourceProviderId ?? provider.id,
-    connectionId: provider.connectionId ?? "",
-    providerName: provider.name,
     modelId: model.id,
-    modelName: model.name,
-    active: Boolean(model.active),
   }) === value))
 }
 
-// PromptComposerSettingsArea renders composer command and capability settings status.
-// PromptComposerSettingsArea 渲染输入区指令与能力设置状态。
-export function PromptComposerSettingsArea(props: {
-  // Service-backed settings actions.
-  // 服务端设置动作。
+// OutputStyleSettingsSection keeps the useful session default inside model basics.
+// OutputStyleSettingsSection 将有用的会话默认选项保留在模型基础设置内。
+// Parameters: actions persists the selected style; outputStyleCatalog supplies valid styles.
+// 参数：actions 持久化所选风格；outputStyleCatalog 提供有效风格。
+// Returns a compact form with explicit saving and failure feedback.
+// 返回包含明确保存与失败反馈的紧凑表单。
+export function OutputStyleSettingsSection(props: {
+  // Service-backed output-style action.
+  // 服务端输出风格动作。
   actions: SettingsActionProps
-  // Composer attachment capability gates.
-  // 输入区附件能力门控。
-  attachmentCapabilities: ComposerAttachmentCapabilitySummary[]
-  // Global output-style catalog and persisted selection.
-  // 全局输出风格目录与已持久化选择。
+  // Catalog and persisted selection.
+  // 目录与持久化选择。
   outputStyleCatalog: WorkbenchSnapshot["outputStyleCatalog"]
-  // Backend-resolved reasoning selector view.
-  // 后端解析出的推理选择器视图。
-  reasoningSelection: WorkbenchSnapshot["reasoningSelection"] | null
-  // Composer slash commands.
-  // 输入区 slash 指令。
-  slashCommands: ComposerSlashCommandSummary[]
 }) {
+  // locale selects visible copy.
+  // locale 选择显示文案。
   const { locale } = useI18n()
-  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  // text resolves bilingual interface strings.
+  // text 解析双语界面文案。
+  const text = (zh: string, en: string) => localizedLiteral(locale, zh, en)
+  // outputStyleId is the local editable selection.
+  // outputStyleId 是本地可编辑选择。
   const [outputStyleId, setOutputStyleId] = React.useState(props.outputStyleCatalog.selectedId)
-  const [outputStyleSaving, setOutputStyleSaving] = React.useState(false)
+  // previousStyleRef prevents background refresh from overwriting an edited selection.
+  // previousStyleRef 防止后台刷新覆盖已编辑选择。
+  const previousStyleRef = React.useRef(props.outputStyleCatalog.selectedId)
+  // saving and error distinguish a pending request from a failed save.
+  // saving 与 error 区分进行中的请求和保存失败。
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState("")
+  // savingRef closes the synchronous duplicate-click window.
+  // savingRef 关闭同步重复点击窗口。
+  const savingRef = React.useRef(false)
   React.useEffect(() => {
-    setOutputStyleId(props.outputStyleCatalog.selectedId)
+    // previousStyle identifies the last authoritative selection.
+    // previousStyle 标识上一次权威选择。
+    const previousStyle = previousStyleRef.current
+    setOutputStyleId((current) => current === previousStyle ? props.outputStyleCatalog.selectedId : current)
+    previousStyleRef.current = props.outputStyleCatalog.selectedId
   }, [props.outputStyleCatalog.selectedId])
-  const saveOutputStyle = React.useCallback(async () => {
-    setOutputStyleSaving(true)
+  // saveOutputStyle preserves the existing application boundary and retains input on errors.
+  // saveOutputStyle 保留既有应用边界，错误时保留输入。
+  // Parameters: none. Returns when the save settles.
+  // 参数：无。返回值：保存结束后完成。
+  const saveOutputStyle = async () => {
+    if (savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setError("")
     try {
       await props.actions.onSavePromptOutputStyle(outputStyleId)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setOutputStyleSaving(false)
+      savingRef.current = false
+      setSaving(false)
     }
-  }, [outputStyleId, props.actions])
-  return (
-    <div className="area-grid two-columns">
-      <section className="panel settings-detail-panel">
-        <PanelTitle icon={<FileText size={17} />} title={text("Slash 指令", "Slash commands")} />
-        <div className="settings-target-list">
-          {props.slashCommands.map((command) => (
-            <article className="settings-target-row" key={command.id}>
-              <div>
-                <strong>{command.command}</strong>
-                <span>{command.descriptionZh || command.descriptionEn}</span>
-              </div>
-              <Badge variant="outline">{command.id}</Badge>
-            </article>
-          ))}
-        </div>
-      </section>
-      <section className="panel settings-detail-panel">
-        <PanelTitle icon={<SlidersHorizontal size={17} />} title={text("输出风格", "Output style")} />
-        <div className="settings-form-grid">
-          <div className="settings-field">
-            <span>{text("新会话默认风格", "Default for new sessions")}</span>
-            <Select onValueChange={setOutputStyleId} value={outputStyleId}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-              {props.outputStyleCatalog.entries.map((entry) => (
-                <SelectItem key={entry.id} value={entry.id}>
-                  {`${locale === "zh-CN" ? entry.labelZh : entry.labelEn} · ${entry.promptCharCount} chars`}
-                </SelectItem>
-              ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <p className="settings-muted-line">
-            {text("全局设置仅在新会话或上下文压缩后的会话应用，避免替换当前系统提示词。", "The global setting applies only at a new session or compaction boundary, so the active system prompt is never replaced mid-context.")}
-          </p>
-          <button className="button button-primary" disabled={outputStyleSaving} onClick={() => void saveOutputStyle()} type="button">
-            {outputStyleSaving ? text("保存中…", "Saving…") : text("保存输出风格", "Save output style")}
-          </button>
-        </div>
-      </section>
-      <section className="panel settings-detail-panel">
-        <PanelTitle icon={<PackagePlus size={17} />} title={text("附件能力", "Attachment capability")} />
-        <div className="settings-grid compact">
-          {props.attachmentCapabilities.map((capability) => (
-            <article className="settings-card" key={capability.kind}>
-              <StatusPill status={capability.enabled ? "ready" : "warning"} label={capability.enabled ? "enabled" : "disabled"} />
-              <strong>{capability.label}</strong>
-              <p>{capability.native ? text("模型原生支持", "Native model support") : capability.bridged ? text("通过宿主工具桥接", "Bridged by host tools") : text("当前不可用", "Currently unavailable")}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-      <section className="panel settings-detail-panel">
-        <PanelTitle icon={<SlidersHorizontal size={17} />} title={text("推理选择", "Reasoning selection")} />
-        <div className="settings-target-list">
-          {(props.reasoningSelection?.options ?? []).map((option) => (
-            <article className="settings-target-row" key={option.value}>
-              <div>
-                <strong>{option.label}</strong>
-                <span>{option.value}</span>
-              </div>
-              {option.value === props.reasoningSelection?.selectedEffort ? <Badge className="skill-card-enabled-badge">Selected</Badge> : <Badge variant="outline">Available</Badge>}
-            </article>
-          ))}
-        </div>
-      </section>
+  }
+  return <div className="settings-form-grid">
+    <label className="settings-form-field">
+      <span>{text("新会话默认输出风格", "Default output style for new sessions")}</span>
+      <Select disabled={saving} onValueChange={setOutputStyleId} value={outputStyleId}>
+        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
+          <SelectItem key={entry.id} value={entry.id}>{locale === "zh-CN" ? entry.labelZh : entry.labelEn}</SelectItem>
+        ))}</SelectContent>
+      </Select>
+    </label>
+    <p className="settings-muted-line">{text("用于新会话或下一次上下文压缩，不会中途替换当前系统提示词。", "Applies to new sessions or the next compaction, without replacing the active system prompt mid-context.")}</p>
+    <div className="settings-card-actions">
+      <Button disabled={saving || outputStyleId === props.outputStyleCatalog.selectedId || !props.outputStyleCatalog.entries.some((entry) => entry.id === outputStyleId)}
+        onClick={() => void saveOutputStyle()} type="button"><Save size={14} />{saving ? text("保存中…", "Saving…") : text("保存默认风格", "Save default style")}</Button>
     </div>
-  )
+    {error ? <div role="alert"><p>{text("保存失败，选择已保留。", "Saving failed. Your selection is preserved.")}</p><details><summary>{text("查看详情", "View details")}</summary><pre>{error}</pre></details></div> : null}
+  </div>
 }
 
-// AboutLicensesSettingsArea renders application version and license entry information.
-// AboutLicensesSettingsArea 渲染应用版本与许可证入口信息。
-export function AboutLicensesSettingsArea(props: {
-  // Current application version.
-  // 当前应用版本。
-  appVersion: string
-}) {
-  const { locale } = useI18n()
-  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
-  return (
-    <section className="panel full-height settings-detail-panel">
-      <PanelTitle icon={<ScrollText size={17} />} title={text("关于与许可证", "About and licenses")} />
-      <div className="settings-grid">
-        <article className="settings-card">
-          <StatusPill status="ready" label="version" />
-          <strong>Vulcan Code</strong>
-          <p>{text(`当前版本：${props.appVersion}`, `Current version: ${props.appVersion}`)}</p>
-        </article>
-        <article className="settings-card">
-          <StatusPill status="pending" label="licenses" />
-          <strong>{text("许可证目录", "License directory")}</strong>
-          <p>{text("WebUI 当前展示许可证入口状态，后续接入目录命令后可直接打开。", "The WebUI shows the license entry state until the directory command is connected.")}</p>
-        </article>
-      </div>
-    </section>
-  )
-}
 
 // ArchivedRestoreSettingsArea renders restorable archived conversations from service snapshots.
 // ArchivedRestoreSettingsArea 根据服务快照渲染可恢复的归档会话。
@@ -359,6 +319,9 @@ export function ArchivedRestoreSettingsArea(props: {
   const [selectedConversationIds, setSelectedConversationIds] = React.useState<Set<string>>(new Set())
   const [currentPage, setCurrentPage] = React.useState(1)
   const [operation, setOperation] = React.useState<"idle" | "restoring" | "deleting">("idle")
+  // Lock synchronously before React commits busy state to prevent duplicate destructive requests.
+  // 在 React 提交忙碌状态前同步加锁，防止重复提交破坏性请求。
+  const operationRunningRef = React.useRef(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
   // deleteConfirmationOpen controls the component-based permanent-delete confirmation.
   // deleteConfirmationOpen 控制基于组件的彻底删除确认框。
@@ -409,9 +372,10 @@ export function ArchivedRestoreSettingsArea(props: {
   // runArchivedConversationAction 在界面确认后执行一次批量生命周期操作。
   const runArchivedConversationAction = React.useCallback(async (kind: "restore" | "delete") => {
     const conversationIds = Array.from(selectedConversationIds)
-    if (conversationIds.length === 0 || operation !== "idle") {
+    if (conversationIds.length === 0 || operationRunningRef.current) {
       return
     }
+    operationRunningRef.current = true
     setActionError(null)
     setOperation(kind === "restore" ? "restoring" : "deleting")
     try {
@@ -424,48 +388,52 @@ export function ArchivedRestoreSettingsArea(props: {
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error))
     } finally {
+      operationRunningRef.current = false
       setOperation("idle")
     }
-  }, [operation, props.actions, selectedConversationIds])
+  }, [props.actions, selectedConversationIds])
 
   return (
     <section className="panel full-height settings-detail-panel">
       <PanelTitle icon={<Archive size={17} />} title={text("归档恢复", "Archived restore")} />
       <div className="settings-summary-strip">
-        <StatusPill status={archivedConversations.length > 0 ? "warning" : "ready"} label={`${archivedConversations.length}`} />
-        <span>{text(`当前 WebUI snapshot 暴露 ${props.projects.length} 个活动项目与 ${archivedConversations.length} 个可恢复归档会话。`, `The current WebUI snapshot exposes ${props.projects.length} active projects and ${archivedConversations.length} restorable archived conversations.`)}</span>
+        <Badge variant="secondary">{archivedConversations.length}</Badge>
+        <span>{text("恢复归档会话后，可在原项目中继续对话。", "Restore archived conversations to continue them in their original projects.")}</span>
       </div>
       <div className="settings-card-actions">
-        <label className="settings-target-row-main">
-          <Checkbox
-            aria-label={text("全选归档会话", "Select all archived conversations")}
-            checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
-            disabled={archivedConversations.length === 0 || operation !== "idle"}
-            onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
-          />
-          <span>{text("全选", "Select all")}</span>
-        </label>
-        <span className="settings-muted-line">{text(`已选择 ${selectedCount} 项`, `${selectedCount} selected`)}</span>
-        <button
-          className="skill-action-button"
-          disabled={selectedCount === 0 || operation !== "idle"}
-          onClick={() => void runArchivedConversationAction("restore")}
-          type="button"
-        >
-          <RotateCcw size={14} />
-          <span>{operation === "restoring" ? text("恢复中", "Restoring") : text("批量恢复", "Restore selected")}</span>
-        </button>
-        <button
-          className="skill-action-button secondary danger"
-          disabled={selectedCount === 0 || operation !== "idle"}
-          onClick={() => setDeleteConfirmationOpen(true)}
-          type="button"
-        >
-          <Trash2 size={14} />
-          <span>{operation === "deleting" ? text("删除中", "Deleting") : text("彻底删除", "Delete permanently")}</span>
-        </button>
+        <div className="inline-flex items-center gap-2 whitespace-nowrap">
+          <label className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
+            <Checkbox
+              aria-label={text("全选归档会话", "Select all archived conversations")}
+              checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
+              disabled={archivedConversations.length === 0 || operation !== "idle"}
+              onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
+            />
+            <span>{text("全选", "Select all")}</span>
+          </label>
+          <span className="settings-muted-line">{text(`已选择 ${selectedCount} 项`, `${selectedCount} selected`)}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            disabled={selectedCount === 0 || operation !== "idle"}
+            onClick={() => void runArchivedConversationAction("restore")}
+            type="button"
+          >
+            <RotateCcw size={14} />
+            <span>{operation === "restoring" ? text("恢复中", "Restoring") : text("批量恢复", "Restore selected")}</span>
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={selectedCount === 0 || operation !== "idle"}
+            onClick={() => setDeleteConfirmationOpen(true)}
+            type="button"
+          >
+            <Trash2 size={14} />
+            <span>{operation === "deleting" ? text("删除中", "Deleting") : text("彻底删除", "Delete permanently")}</span>
+          </Button>
+        </div>
       </div>
-      {actionError ? <p className="settings-validation-error" role="alert">{actionError}</p> : null}
+      {actionError ? <div className="settings-validation-error" role="alert"><p>{text("操作失败，选择已保留，请重试。", "The operation failed. Your selection is preserved; please retry.")}</p><details><summary>{text("查看详情", "View details")}</summary><pre>{actionError}</pre></details></div> : null}
       <AlertDialog onOpenChange={setDeleteConfirmationOpen} open={deleteConfirmationOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -487,7 +455,7 @@ export function ArchivedRestoreSettingsArea(props: {
       </AlertDialog>
       <div className="settings-target-list">
         {archivedConversations.length === 0 ? (
-          <p className="settings-muted-line">{text("当前快照中没有可恢复的归档会话。", "No restorable archived conversations are exposed in the current snapshot.")}</p>
+          <p className="settings-muted-line">{text("暂无归档会话。", "No archived conversations.")}</p>
         ) : visibleConversations.map((conversation) => (
           <article className="settings-target-row" key={conversation.id}>
             <div className="settings-target-row-main">
@@ -499,10 +467,10 @@ export function ArchivedRestoreSettingsArea(props: {
               />
               <div>
               <strong>{conversation.title}</strong>
-              <span>{conversation.projectId ?? "standalone"} · {conversation.lastUpdatedLabel ?? ""}</span>
+              <span title={conversation.projectId ?? undefined}>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? text("原项目不可用", "Original project unavailable") : text("独立会话", "Standalone conversation")}{conversation.lastUpdatedLabel ? ` · ${conversation.lastUpdatedLabel}` : ""}</span>
               </div>
             </div>
-            <StatusPill status="warning" label={conversation.status} />
+            <Badge variant="secondary">{text("已归档", "Archived")}</Badge>
           </article>
         ))}
       </div>
@@ -511,24 +479,26 @@ export function ArchivedRestoreSettingsArea(props: {
           <span className="settings-muted-line">{text(`第 ${currentPage} / ${pageCount} 页`, `Page ${currentPage} of ${pageCount}`)}</span>
           <div className="settings-card-actions">
             <span className="settings-muted-line">{currentPageSelected ? text("本页已全选", "Current page selected") : text("可跨页保留选择", "Selection is kept across pages")}</span>
-            <button
+            <Button
               aria-label={text("上一页", "Previous page")}
-              className="skill-action-button secondary"
+              variant="outline"
+              size="icon-sm"
               disabled={currentPage <= 1 || operation !== "idle"}
               onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
               type="button"
             >
               <ChevronLeft size={14} />
-            </button>
-            <button
+            </Button>
+            <Button
               aria-label={text("下一页", "Next page")}
-              className="skill-action-button secondary"
+              variant="outline"
+              size="icon-sm"
               disabled={currentPage >= pageCount || operation !== "idle"}
               onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
               type="button"
             >
               <ChevronRight size={14} />
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}

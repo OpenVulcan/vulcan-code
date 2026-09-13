@@ -623,6 +623,8 @@ export function CodeContextArea(props: {
 
   // Save next against its frozen revision; refresh lightweight authority on failure without erasing edits.
   // 按冻结修订保存 next；失败时刷新轻量权威，不擦除编辑。
+  // Parameters: next contains the complete typed settings draft for this project revision.
+  // 参数：next 包含当前项目修订的完整强类型设置草稿。
   // Returns after acknowledgement or visible error handling; management scans are never required.
   // 确认或可见错误处理后返回；绝不要求管理扫描。
   const saveDraft = async (next: VceProjectSettingsInput) => {
@@ -654,7 +656,7 @@ export function CodeContextArea(props: {
         );
         // Shared read errors are rendered independently through activityError, never swallowed here.
         // 共享读取错误通过 activityError 独立渲染，绝不在此吞掉。
-        await props.onReloadActivity();
+        await refreshStatus();
       }
     }
   };
@@ -683,6 +685,8 @@ export function CodeContextArea(props: {
   // 仅刷新可见元数据；此图标无权扫描或初始化索引。
   // Takes no arguments and replaces only the current project's authoritative overview.
   // 无参数，仅替换当前项目权威概览。
+  // Returns after refreshing metadata or retaining an explicit error; failures never require a management scan.
+  // 刷新元数据或保留明确错误后返回；失败绝不要求管理扫描。
   const refreshStatus = async () => {
     try {
       await props.onReloadActivity();
@@ -878,10 +882,13 @@ export function CodeContextArea(props: {
             <p role="alert" className="text-sm text-destructive">
               {props.activityError}
             </p>
-            <Button type="button" onClick={() => void props.onReloadActivity()}>
+            <Button type="button" disabled={props.busy} onClick={() => void refreshStatus()}>
               {copy("重新读取状态", "Reload status")}
             </Button>
           </>
+        ) : null}
+        {managementError || indexing.error ? (
+          <p role="alert" className="text-sm text-destructive">{managementError ?? indexing.error}</p>
         ) : null}
         {indexing.job ? (
           <VceJobProgress
@@ -1133,7 +1140,7 @@ export function CodeContextArea(props: {
               disabled={
                 props.busy ||
                 synchronization.disabled ||
-                indexingStatusVisible ||
+                (indexingStatusVisible && activeJobStatusLabel === null) ||
                 !props.overview.configuration.ready ||
                 !props.overview.settings.enabled ||
                 rebuildRecoveryRequired
@@ -1563,7 +1570,9 @@ export function CodeContextArea(props: {
             {issuePage.items.length === 0 ? (
               <p className="project-settings-muted">
                 <SearchCheck className="mr-2 inline" size={14} />
-                {copy("未发现完整性问题。", "No integrity issues found.")}
+                {managementOverview === null
+                  ? copy("尚未取得完整性检查结果。", "Integrity results have not been loaded.")
+                  : copy("未发现完整性问题。", "No integrity issues found.")}
               </p>
             ) : (
               issuePage.items.map((issue) => (

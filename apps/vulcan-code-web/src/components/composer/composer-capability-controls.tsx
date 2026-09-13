@@ -1,4 +1,7 @@
 import React from "react";
+import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertTriangle,
   LoaderCircle,
@@ -42,6 +45,7 @@ import { cn } from "@/lib/utils";
 import {
   isDirectProviderToolCapability,
   isModelExtensionCapability,
+  mediaUnderstandingCapabilityToggleDisabled,
   modelCapabilitiesSupportMediaUnderstanding,
 } from "@/lib/provider-tool-capabilities";
 import {
@@ -74,6 +78,8 @@ import type {
 
 // ContextUsageOrb renders a compact context budget indicator beside the composer.
 // ContextUsageOrb 在输入区旁渲染紧凑的上下文预算指示器。
+// Parameters: props supplies measured usage, context nodes and the node mutation callback; returns a compact indicator and keyboard-accessible policy popover.
+// 参数：props 提供实测用量、上下文节点及节点变更回调；返回紧凑指示器与可键盘访问的策略浮层。
 export function ContextUsageOrb(props: {
   // Context usage snapshot projected by the service.
   // 服务投影出的上下文占用快照。
@@ -97,6 +103,14 @@ export function ContextUsageOrb(props: {
   // t resolves stable copy for the active WebUI language.
   // t 为当前 WebUI 语言解析稳定文案。
   const { locale, t } = useI18n();
+  // nodeMutation prevents concurrent node writes while retaining the last authoritative selection.
+  // nodeMutation 防止并发节点写入，同时保留最后的权威选择。
+  const nodeMutation = React.useRef(false);
+  const [nodeSaving, setNodeSaving] = React.useState(false);
+  const [nodeError, setNodeError] = React.useState<string | null>(null);
+  // contentRef receives initial focus so opening the metrics does not immediately show a missing-value tooltip.
+  // contentRef 接收初始焦点，避免打开指标时立即弹出缺失值提示并遮挡数值。
+  const contentRef = React.useRef<HTMLDivElement>(null);
   if (!props.snapshot) {
     return null;
   }
@@ -111,7 +125,7 @@ export function ContextUsageOrb(props: {
   const providerUsage = props.sessionProviderUsage;
   // providerUsageTotal uses only the cumulative total derived from canonical V1 API facts.
   // providerUsageTotal 仅使用从规范 V1 API 事实派生的累计总量。
-  const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
+  const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens;
   // providerUsageUnknown keeps missing Provider usage explicit in the diagnostic row.
   // providerUsageUnknown 在 Provider 用量缺失时保持诊断行显式可见。
   const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
@@ -119,14 +133,14 @@ export function ContextUsageOrb(props: {
   // providerUsageTitle 展示唯一规范会话口径，不构造分支或计费统计口径。
   const providerUsageTitle = providerUsage
     ? t("conversation.process.providerUsageSession")
-        .replace("{calls}", formatCompactProviderCount(providerUsage.providerCallCount, providerUsageUnknown))
-        .replace("{tokens}", formatCompactProviderCount(providerUsageTotal, providerUsageUnknown))
+        .replace("{calls}", formatCompactProviderCount(providerUsage.providerCallCount, "-"))
+        .replace("{tokens}", formatCompactProviderCount(providerUsageTotal, "-"))
         .replace("{unknown}", String(providerUsage.unknownUsageCallCount))
     : undefined;
   // providerUsageAriaLabel exposes the two compact metrics through the capacity control.
   // providerUsageAriaLabel 通过上下文容量控件公开两项紧凑统计。
   const providerUsageAriaLabel = providerUsage
-    ? `${t("composer.contextUsage.totalRequests")}: ${formatCompactProviderCount(providerUsage.providerCallCount, providerUsageUnknown)} · ${t("composer.contextUsage.totalTokens")}: ${formatCompactProviderCount(providerUsageTotal, providerUsageUnknown)}`
+    ? `${t("composer.contextUsage.totalRequests")}: ${formatCompactProviderCount(providerUsage.providerCallCount, "-")} · ${t("composer.contextUsage.totalTokens")}: ${formatCompactProviderCount(providerUsageTotal, "-")}`
     : null;
   // selectedNode resolves the persisted id against the current backend projection.
   // selectedNode 根据当前后端投影解析持久化标识。
@@ -167,8 +181,8 @@ export function ContextUsageOrb(props: {
   } as React.CSSProperties;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <Popover>
+      <PopoverTrigger asChild>
         <button
           aria-label={contextUsageAriaLabel}
           className={cn("context-usage-control", selectedNode && "is-locked")}
@@ -187,11 +201,14 @@ export function ContextUsageOrb(props: {
             </span>
           ) : null}
         </button>
-      </TooltipTrigger>
-      <TooltipContent
+      </PopoverTrigger>
+      <PopoverContent
         align="end"
+        aria-label={title}
         className="context-usage-tooltip"
-        showArrow={false}
+        collisionPadding={12}
+        ref={contentRef}
+        onOpenAutoFocus={(event) => { event.preventDefault(); contentRef.current?.focus(); }}
         side="top"
         sideOffset={8}
       >
@@ -216,9 +233,8 @@ export function ContextUsageOrb(props: {
         <div className="context-usage-cache-row">
           <span>{t("composer.contextUsage.cacheHitRate")}</span>
           <strong>
-            {snapshot.cacheHitBasisPoints == null
-              ? t("composer.contextUsage.noData")
-            : formatBasisPoints(snapshot.cacheHitBasisPoints)}
+            <ContextUsageValue value={snapshot.cacheHitBasisPoints == null ? "-" : formatBasisPoints(snapshot.cacheHitBasisPoints)}
+              hint={snapshot.cacheHitBasisPoints == null ? t("composer.contextUsage.noData") : undefined} />
           </strong>
         </div>
         {providerUsage ? (
@@ -226,11 +242,12 @@ export function ContextUsageOrb(props: {
             <div className="context-usage-provider-row">
               <div className="context-usage-provider-metric">
                 <span>{t("composer.contextUsage.totalRequests")}</span>
-                <strong>{formatCompactProviderCount(providerUsage.providerCallCount, providerUsageUnknown)}</strong>
+                <strong>{formatCompactProviderCount(providerUsage.providerCallCount, "-")}</strong>
               </div>
               <div className="context-usage-provider-metric">
                 <span>{t("composer.contextUsage.totalTokens")}</span>
-                <strong>{formatCompactProviderCount(providerUsageTotal, providerUsageUnknown)}</strong>
+                <strong><ContextUsageValue value={formatCompactProviderCount(providerUsageTotal, "-")}
+                  hint={providerUsageTotal == null ? providerUsageUnknown : undefined} /></strong>
               </div>
             </div>
           </div>
@@ -240,10 +257,21 @@ export function ContextUsageOrb(props: {
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
             className="context-usage-window-switch"
+            disabled={nodeSaving}
             onValueChange={(value) => {
               const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
-              if (nextNodeId !== undefined) {
-                void props.onNodeChange(nextNodeId);
+              if (nextNodeId !== undefined && !nodeMutation.current) {
+                nodeMutation.current = true;
+                setNodeSaving(true);
+                setNodeError(null);
+                void props.onNodeChange(nextNodeId).then((saved) => {
+                  if (!saved) setNodeError("");
+                }).catch((reason: unknown) => {
+                  setNodeError(errorMessage(reason));
+                }).finally(() => {
+                  nodeMutation.current = false;
+                  setNodeSaving(false);
+                });
               }
             }}
             value={props.selectedNodeId ?? "default"}
@@ -254,9 +282,10 @@ export function ContextUsageOrb(props: {
               </SegmentedControlItem>
             ))}
             {selectedNodeIsInvalid ? (
-              <SegmentedControlItem disabled value={selectedNode.id}>
+              <SegmentedControlItem disabled value={selectedNode.id}
+                aria-label={`${formatContextWindowNodeTokens(selectedNode.tokens)} · ${t("composer.contextWindow.invalid")}`}>
                 <AlertTriangle aria-hidden="true" size={13} />
-                {formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}
+                {formatContextWindowNodeTokens(selectedNode.tokens)}
               </SegmentedControlItem>
             ) : null}
             <SegmentedControlItem
@@ -266,9 +295,17 @@ export function ContextUsageOrb(props: {
               {defaultContextWindowLabel}
             </SegmentedControlItem>
           </SegmentedControl>
+          {selectedNodeIsInvalid ? <p className="text-xs text-muted-foreground">{formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}</p> : null}
+          {nodeError !== null ? <div className="text-xs">
+            <p role="alert" className="text-destructive">{t("composer.contextWindow.saveFailed")}</p>
+            {nodeError ? <details className="mt-1">
+              <summary className="cursor-pointer text-muted-foreground">{t("composer.capability.errorDetails")}</summary>
+              <pre tabIndex={0} className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-xs">{nodeError}</pre>
+            </details> : null}
+          </div> : null}
         </div>
-      </TooltipContent>
-    </Tooltip>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -448,6 +485,8 @@ function formatBasisPoints(value: number): string {
 
 // ComposerAiCapabilityControl owns one materialized session snapshot with separate switches, models, and accounts.
 // ComposerAiCapabilityControl 持有一份将开关、模型与账号分离的已物化会话快照。
+// Parameters: props identifies the conversation and capability configuration; returns the session editor with exact targets, local mode state and guarded saves.
+// 参数：props 标识会话与能力配置；返回包含精确目标、本地模式状态和受保护保存的会话编辑器。
 export function ComposerAiCapabilityControl(props: {
   // Current persisted conversation, or null for a new conversation draft.
   // 当前持久化会话；新会话草稿时为空。
@@ -491,16 +530,44 @@ export function ComposerAiCapabilityControl(props: {
   // saveGeneration rejects late save responses after the settings owner or load generation changes.
   // saveGeneration 拒绝设置归属或加载代次变化后迟到的保存响应。
   const saveGeneration = React.useRef(0);
+  // mutationPending closes the same-frame duplicate window before React renders saving state.
+  // mutationPending 在 React 渲染保存状态前关闭同帧重复操作窗口。
+  const mutationPending = React.useRef(false);
+  // Recovery actions remove their own button; retain keyboard focus on the next recovery or current category.
+  // 恢复操作会移除自身按钮；将键盘焦点保留在下一个恢复操作或当前分类。
+  const recoveryFocusPending = React.useRef(false);
+  const extensionRecoveryList = React.useRef<HTMLDivElement>(null);
+  const selectedCategoryButton = React.useRef<HTMLButtonElement>(null);
+  // Retry focus remains within the recovered controls after the loading branch removes the clicked button.
+  // 加载分支移除重试按钮后，将焦点保留在恢复后的控件中。
+  const retryFocusPending = React.useRef(false);
+  const retryButton = React.useRef<HTMLButtonElement>(null);
+  React.useLayoutEffect(() => {
+    if (!recoveryFocusPending.current) return;
+    recoveryFocusPending.current = false;
+    const nextRecovery = extensionRecoveryList.current?.querySelector<HTMLButtonElement>('[data-extension-recovery]');
+    (nextRecovery ?? selectedCategoryButton.current)?.focus();
+  }, [draft]);
+  // mediaEditModes owns empty UI modes without fabricating a complete persisted route.
+  // mediaEditModes 持有空的界面模式，不伪造完整持久化路由。
+  const [mediaEditModes, setMediaEditModes] = React.useState<Partial<Record<PublicAiMediaUnderstandingCapabilityKind, PublicAiMediaUnderstandingBackendMode>>>({});
   // loadStatus invalidates the previous owner synchronously, before the next effect can start.
   // loadStatus 在下一次 effect 启动前同步使上一个会话的状态失效。
   const loadStatus = loadState.conversationId === props.conversationId ? loadState.status : "loading";
   // settingsReady is required both by the UI and the save callback to prevent destructive empty writes after read errors.
   // settingsReady 同时约束界面与保存回调，防止读取失败后用空配置覆盖原设置。
   const settingsReady = loadStatus === "ready";
+  React.useLayoutEffect(() => {
+    if (!retryFocusPending.current || !open || loadStatus === "loading") return;
+    retryFocusPending.current = false;
+    (loadStatus === "failed" ? retryButton.current : selectedCategoryButton.current)?.focus();
+  }, [open, loadStatus]);
 
   React.useEffect(() => {
     let active = true;
     saveGeneration.current += 1;
+    mutationPending.current = false;
+    setMediaEditModes({});
     setSaving(false);
     setLoadState({ conversationId: props.conversationId, status: "loading" });
     setError(null);
@@ -529,7 +596,10 @@ export function ComposerAiCapabilityControl(props: {
               extensionTargetSets: nextSnapshot.providerExtensionTargetSets,
               mediaUnderstandingSelections: nextSnapshot.mediaUnderstandingSelections ?? {},
             };
-        const capabilities = orderedProviderToolCapabilities(nextSnapshot);
+        const capabilities = composerProviderToolCapabilities(nextSnapshot, nextDraft);
+        // Prefer a configured family initially; fixed empty media categories remain selectable when none is configured.
+        // 初次优先展示已有配置的能力族；无配置时仍可选中固定空媒体分类。
+        const initialCapability = orderedProviderToolCapabilities(nextSnapshot)[0] ?? capabilities[0];
         setSnapshot(nextSnapshot);
         setDraft(nextDraft);
         setBaselineSignature(providerToolSettingsSignature(nextDraft));
@@ -537,7 +607,7 @@ export function ComposerAiCapabilityControl(props: {
           props.onDraftSettingsChange?.(nextDraft);
         }
         setSelectedCapability((current) => (
-          capabilities.includes(current) ? current : capabilities[0] ?? "web_search"
+          capabilities.includes(current) ? current : initialCapability
         ));
         setError(null);
         setLoadState({ conversationId: props.conversationId, status: "ready" });
@@ -555,12 +625,7 @@ export function ComposerAiCapabilityControl(props: {
   }, [open, props.conversationId, props.draftSettings, props.onDraftSettingsChange, reloadVersion]);
 
   const capabilities = settingsReady && snapshot
-    ? orderProviderToolCapabilities([
-        ...orderedProviderToolCapabilities(snapshot),
-        ...draft.enabledCapabilities,
-        ...Object.keys(draft.mediaUnderstandingSelections)
-          .filter(isMediaUnderstandingCapability),
-      ] as PublicAiProviderToolCapabilityKind[])
+    ? composerProviderToolCapabilities(snapshot, draft)
     : [];
   const capabilityTargets = snapshot?.providerToolTargets.filter(
     (target) => target.target.contract.capability === selectedCapability
@@ -571,6 +636,35 @@ export function ComposerAiCapabilityControl(props: {
   // selectedExtensionTargets is the complete native model set for the selected capability.
   // selectedExtensionTargets 是当前选中能力的完整原生模型集合。
   const selectedExtensionTargets = draft.extensionTargetSets[selectedCapability] ?? [];
+  // unavailableExtensionTargets preserves exact saved identities that cannot appear in a current model card.
+  // unavailableExtensionTargets 保留无法出现在当前模型卡片中的准确已存身份。
+  const unavailableExtensionTargets = selectedExtensionTargets.filter((selection) => !capabilityTargets.some((target) => (
+    target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
+  )));
+  // updateMediaSelection changes one explicit route while requiring manual activation after an unavailable route.
+  // updateMediaSelection 修改一条显式路由；原路由不可用时，要求用户重新手动开启。
+  // Parameters: capability identifies the media facade; selection is the complete chosen route. Returns nothing.
+  // 参数：capability 标识媒体能力；selection 是完整选定路由。无返回值。
+  const updateMediaSelection = (
+    capability: PublicAiProviderToolCapabilityKind,
+    selection: PublicAiMediaUnderstandingBackendSelection,
+  ): void => {
+    if (!snapshot || !isMediaUnderstandingCapability(capability) || mutationPending.current) return;
+    setDraft((current) => {
+      // wasAvailable uses the same route and mode checks as the displayed switch, never its stale stored flag alone.
+      // wasAvailable 使用与显示开关一致的路由和模式校验，绝不单独采用过期的已存标记。
+      const wasAvailable = (mediaEditModes[capability] ?? current.mediaUnderstandingSelections[capability]?.mode)
+        === current.mediaUnderstandingSelections[capability]?.mode
+        && !providerToolSettingsConflicts(snapshot, { ...current, enabledCapabilities: [capability] })
+          .some((conflict) => conflict.capability === capability);
+      return {
+        ...current,
+        enabledCapabilities: wasAvailable ? current.enabledCapabilities
+          : current.enabledCapabilities.filter((enabled) => enabled !== capability),
+        mediaUnderstandingSelections: { ...current.mediaUnderstandingSelections, [capability]: selection },
+      };
+    });
+  };
   const selectedSelection = draft.selections[selectedCapability];
   const selectedModel = selectedModels.find(
     (target) => target.target.target_id === selectedSelection?.target_id,
@@ -600,6 +694,11 @@ export function ComposerAiCapabilityControl(props: {
   const selectedMediaSelection = isMediaUnderstandingCapability(selectedCapability)
     ? draft.mediaUnderstandingSelections[selectedCapability]
     : undefined;
+  // selectedMediaMode remains readable even when the authoritative selection is absent.
+  // selectedMediaMode 在权威选择缺失时仍保留可读的编辑模式。
+  const selectedMediaMode = isMediaUnderstandingCapability(selectedCapability)
+    ? mediaEditModes[selectedCapability] ?? selectedMediaSelection?.mode ?? "provider_tool"
+    : "provider_tool";
   const selectedMediaProviderTarget = selectedMediaSelection?.mode === "provider_tool"
     ? selectedMediaTargets.find((target) => (
       target.connectionId === selectedMediaSelection.selection.connection_id
@@ -640,7 +739,7 @@ export function ComposerAiCapabilityControl(props: {
     props.onConflictChange?.(!settingsReady || conflicts.length > 0);
   }, [settingsReady, conflicts.length, props.onConflictChange]);
   const save = React.useCallback(async () => {
-    if (!settingsReady || saving) {
+    if (!settingsReady || mutationPending.current || conflicts.length > 0) {
       return;
     }
     if (!props.conversationId) {
@@ -649,6 +748,7 @@ export function ComposerAiCapabilityControl(props: {
       setOpen(false);
       return;
     }
+    mutationPending.current = true;
     setSaving(true);
     // generation pins this response to the exact settings view that initiated the save.
     // generation 将响应固定到发起保存的精确设置视图。
@@ -680,12 +780,14 @@ export function ComposerAiCapabilityControl(props: {
       }
     } finally {
       if (generation === saveGeneration.current) {
+        mutationPending.current = false;
         setSaving(false);
       }
     }
   }, [
     draft,
     settingsReady,
+    conflicts.length,
     saving,
     props.conversationId,
     props.onDraftSettingsChange,
@@ -696,10 +798,11 @@ export function ComposerAiCapabilityControl(props: {
   // Returns after the write, then reloads authoritative settings without closing the recovery view.
   // 写入完成后返回，并重新加载权威设置，不关闭恢复视图。
   const rebuild = React.useCallback(async () => {
-    if (!props.conversationId || saving) {
+    if (!props.conversationId || mutationPending.current) {
       return;
     }
     const generation = ++saveGeneration.current;
+    mutationPending.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -713,13 +816,16 @@ export function ComposerAiCapabilityControl(props: {
       }
     } finally {
       if (generation === saveGeneration.current) {
+        mutationPending.current = false;
         setSaving(false);
       }
     }
   }, [props.conversationId, saving]);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (!mutationPending.current) setOpen(nextOpen);
+    }}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DialogTrigger asChild>
@@ -762,21 +868,33 @@ export function ComposerAiCapabilityControl(props: {
           </span>
         </TooltipContent>
       </Tooltip>
-      <DialogContent className="composer-capability-dialog">
+      <DialogContent className="composer-capability-dialog" scrollMode="fixed-footer">
         <DialogHeader>
           <DialogTitle>{t("composer.capability.dialogTitle")}</DialogTitle>
-          <DialogDescription className="composer-capability-dialog-note">
+        </DialogHeader>
+        <div className="composer-capability-dialog-body flex min-h-0 flex-col overflow-hidden">
+          <DialogDescription className="mt-3 shrink-0 text-xs text-muted-foreground">
             {t("composer.capability.dialogDescription")}
           </DialogDescription>
-        </DialogHeader>
         {loadState.conversationId === props.conversationId && error
-          ? <p className="settings-muted-line settings-error-text" role="alert">{error}</p> : null}
+          ? <div className="my-2 min-h-0 shrink-0 rounded-md border border-destructive/30 p-3">
+              <p className="text-sm text-destructive" role="alert">
+                {t(loadStatus === "failed" ? "composer.capability.loadFailed" : "composer.capability.operationFailed")}
+              </p>
+              <details className="mt-1 text-xs text-muted-foreground">
+                <summary className="cursor-pointer">{t("composer.capability.errorDetails")}</summary>
+                <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all">{error}</pre>
+              </details>
+            </div> : null}
         {loadStatus === "loading" ? <p role="status">{t("composer.capability.loading")}</p> : null}
         {loadStatus === "failed" ? (
           <div>
             {props.conversationId ? <p className="settings-muted-line">{t("composer.capability.rebuildHint")}</p> : null}
             <div className="flex gap-2">
-              <button className="skill-action-button" type="button" disabled={saving} onClick={() => setReloadVersion((current) => current + 1)}>
+              <button className="skill-action-button" type="button" ref={retryButton} disabled={saving} onClick={() => {
+                retryFocusPending.current = true;
+                setReloadVersion((current) => current + 1);
+              }}>
                 {t("composer.capability.retry")}
               </button>
               {props.conversationId ? <button className="skill-action-button" type="button" disabled={saving} onClick={() => void rebuild()}>
@@ -785,7 +903,7 @@ export function ComposerAiCapabilityControl(props: {
             </div>
           </div>
         ) : null}
-        {settingsReady ? <div className="composer-capability-dialog-grid">
+        {settingsReady ? <div className="composer-capability-dialog-grid flex-1">
           <aside className="composer-capability-dialog-left">
             {capabilities.map((capability) => {
               // directMode controls whether the capability uses one selected route and a switch.
@@ -796,9 +914,17 @@ export function ComposerAiCapabilityControl(props: {
               const extensionSelectionCount = draft.extensionTargetSets[capability]?.length ?? 0;
               // enabled represents direct activation or a non-empty native extension set.
               // enabled 表示直连启用或非空原生扩展集合。
-              const enabled = directMode
+              const storedEnabled = directMode
                 ? draft.enabledCapabilities.includes(capability)
                 : extensionSelectionCount > 0;
+              // mediaAvailable reuses exact route conflicts, including reasoning support, independently from the stored switch.
+              // mediaAvailable 独立于已存开关复用精确路由冲突校验，包括思考档位支持。
+              const mediaAvailable = isMediaUnderstandingCapability(capability) && snapshot
+                ? (mediaEditModes[capability] ?? draft.mediaUnderstandingSelections[capability]?.mode ?? "provider_tool") === draft.mediaUnderstandingSelections[capability]?.mode
+                  && !providerToolSettingsConflicts(snapshot, { ...draft, enabledCapabilities: [capability] })
+                    .some((item) => item.capability === capability)
+                : true;
+              const enabled = storedEnabled && mediaAvailable;
               const targets = snapshot?.providerToolTargets.filter(
                 (target) => target.target.contract.capability === capability
                   && (!isModelExtensionCapability(capability)
@@ -825,14 +951,14 @@ export function ComposerAiCapabilityControl(props: {
                   )}
                   aria-invalid={conflict ? true : undefined}
                   key={capability}
-                  onClick={() => setSelectedCapability(capability)}
-                  role="button"
-                  tabIndex={0}
                 >
                   {directMode ? (
                     <input
+                      aria-label={`${providerToolCapabilityLabel(capability, t)} · ${t("settings.providerTools.enabled")}`}
                       checked={enabled}
-                      disabled={providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
+                      disabled={isMediaUnderstandingCapability(capability)
+                        ? mediaUnderstandingCapabilityToggleDisabled(saving, mediaAvailable, enabled)
+                        : providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
                       onChange={(event) => {
                         event.stopPropagation();
                         const checked = event.currentTarget.checked;
@@ -844,22 +970,10 @@ export function ComposerAiCapabilityControl(props: {
                           }
                           enabledCapabilities.add(capability);
                           if (isMediaUnderstandingCapability(capability)) {
-                            const mediaUnderstandingSelections =
-                              current.mediaUnderstandingSelections[capability]
-                                ? current.mediaUnderstandingSelections
-                                : {
-                                  ...current.mediaUnderstandingSelections,
-                                  [capability]: firstAvailableMediaUnderstandingSelection(
-                                    snapshot!,
-                                    capability,
-                                    targets,
-                                    mediaCandidates,
-                                  ),
-                                };
+                            if (!mediaAvailable) return current;
                             return {
                               ...current,
                               enabledCapabilities: Array.from(enabledCapabilities).sort(),
-                              mediaUnderstandingSelections,
                             };
                           }
                           const first = targets[0];
@@ -884,7 +998,10 @@ export function ComposerAiCapabilityControl(props: {
                       {extensionSelectionCount}
                     </span>
                   )}
-                  <span className="composer-capability-kind-select">
+                  <Button className="composer-capability-kind-select h-auto min-w-0 flex-1 justify-start whitespace-normal text-left" type="button" variant="ghost"
+                    ref={selectedCapability === capability ? selectedCategoryButton : undefined}
+                    aria-pressed={selectedCapability === capability} disabled={saving}
+                    onClick={() => setSelectedCapability(capability)}>
                     <span className={cn(
                       "composer-capability-colored-icon",
                       enabled ? "enabled" : "disabled",
@@ -907,22 +1024,41 @@ export function ComposerAiCapabilityControl(props: {
                         </small>
                       ) : null}
                     </span>
-                  </span>
+                  </Button>
                 </div>
               );
             })}
           </aside>
           <section className="composer-capability-dialog-right">
+            {isMediaUnderstandingCapability(selectedCapability)
+              && draft.enabledCapabilities.includes(selectedCapability)
+              && conflicts.some((conflict) => conflict.capability === selectedCapability) ? (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
+                <span className="text-sm text-muted-foreground">{t("composer.capability.unavailableEnabled")}</span>
+                <Button aria-label={t("composer.capability.disableUnavailable")} variant="outline" size="sm" disabled={saving}
+                  onClick={() => {
+                    if (mutationPending.current) return;
+                    recoveryFocusPending.current = true;
+                    setDraft((current) => ({ ...current,
+                      enabledCapabilities: current.enabledCapabilities.filter((capability) => capability !== selectedCapability),
+                    }));
+                  }}>
+                  {t("composer.capability.disableUnavailable")}
+                </Button>
+              </div>
+            ) : null}
             {isMediaUnderstandingCapability(selectedCapability) ? (
-              selectedMediaTargets.length > 0 || selectedMediaCandidates.length > 0 ? (
                 <div className="composer-capability-route-selectors">
                   <label>
                     <span>{t("composer.capability.mediaBackendMode")}</span>
-                    <Select
+                    <SegmentedControl
+                      aria-label={t("composer.capability.mediaBackendMode")}
                       disabled={saving}
-                      value={selectedMediaSelection?.mode ?? ""}
+                      value={selectedMediaMode}
                       onValueChange={(value) => {
                         const mode = value as PublicAiMediaUnderstandingBackendMode;
+                        if (mutationPending.current) return;
+                        setMediaEditModes((current) => ({ ...current, [selectedCapability]: mode }));
                         const selection = mode === "provider_tool"
                           ? selectedMediaTargets[0]
                             ? providerMediaUnderstandingSelection(selectedMediaTargets[0])
@@ -931,39 +1067,36 @@ export function ComposerAiCapabilityControl(props: {
                             ? modelReplacementSelection(selectedMediaCandidates[0])
                             : undefined;
                         if (selection) {
-                          setDraft((current) => ({
-                            ...current,
-                            mediaUnderstandingSelections: {
-                              ...current.mediaUnderstandingSelections,
-                              [selectedCapability]: selection,
-                            },
+                          updateMediaSelection(selectedCapability, selection);
+                        } else {
+                          setDraft((current) => ({ ...current,
+                            enabledCapabilities: current.enabledCapabilities.filter((capability) => capability !== selectedCapability),
                           }));
                         }
                       }}
                     >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t("settings.providerTools.selectBackendMode")} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {selectedMediaTargets.length > 0 ? (
-                          <SelectItem value="provider_tool">
+                          <SegmentedControlItem value="provider_tool" aria-label={t("composer.capability.mode.provider")}>
                             {t("composer.capability.mode.provider")}
-                          </SelectItem>
-                        ) : null}
-                        {selectedMediaCandidates.length > 0 ? (
-                          <SelectItem value="model_replacement">
+                          </SegmentedControlItem>
+                          <SegmentedControlItem value="model_replacement" aria-label={t("composer.capability.mode.model")}>
                             {t("composer.capability.mode.model")}
-                          </SelectItem>
-                        ) : null}
-                      </SelectContent>
-                    </Select>
+                          </SegmentedControlItem>
+                    </SegmentedControl>
                   </label>
-                  {selectedMediaSelection?.mode === "provider_tool" ? (
+                  {selectedMediaMode === "provider_tool" ? (
                     <>
                       <label>
                         <span>{t("settings.providerTools.model")}</span>
-                        <Select
-                          disabled={saving}
+                        <Combobox
+                          ariaLabel={t("settings.providerTools.model")}
+                          placeholder={t("settings.providerTools.selectModel")}
+                          searchPlaceholder={t("settings.providerTools.selectModel")}
+                          emptyText={t("composer.capability.mediaBackendMissing")}
+                          options={selectedMediaProviderModels.map((target) => ({
+                            value: providerToolModelKey(target), label: target.target.display_name,
+                            keywords: [target.target.provider_id, target.connectionDisplayName, target.target.upstream_target_id],
+                          }))}
+                          disabled={saving || selectedMediaProviderModels.length === 0}
                           value={selectedMediaProviderModelKey}
                           onValueChange={(modelKey) => {
                             const target = selectedMediaTargets.find((candidate) => (
@@ -973,28 +1106,10 @@ export function ComposerAiCapabilityControl(props: {
                               providerToolModelKey(candidate) === modelKey
                             ));
                             if (target) {
-                              setDraft((current) => ({
-                                ...current,
-                                mediaUnderstandingSelections: {
-                                  ...current.mediaUnderstandingSelections,
-                                  [selectedCapability]: providerMediaUnderstandingSelection(target),
-                                },
-                              }));
+                              updateMediaSelection(selectedCapability, providerMediaUnderstandingSelection(target));
                             }
                           }}
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {selectedMediaProviderModels.map((target) => (
-                              <SelectItem
-                                key={providerToolModelKey(target)}
-                                value={providerToolModelKey(target)}
-                              >
-                                {target.target.display_name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        />
                       </label>
                       <label>
                         <span>{t("settings.providerTools.account")}</span>
@@ -1006,17 +1121,11 @@ export function ComposerAiCapabilityControl(props: {
                               (candidate) => candidate.connectionId === connectionId,
                             );
                             if (target) {
-                              setDraft((current) => ({
-                                ...current,
-                                mediaUnderstandingSelections: {
-                                  ...current.mediaUnderstandingSelections,
-                                  [selectedCapability]: providerMediaUnderstandingSelection(target),
-                                },
-                              }));
+                              updateMediaSelection(selectedCapability, providerMediaUnderstandingSelection(target));
                             }
                           }}
                         >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectTrigger><SelectValue placeholder={t("settings.providerTools.selectAccount")} /></SelectTrigger>
                           <SelectContent>
                             {selectedMediaProviderAccounts.map((target) => (
                               <SelectItem key={target.connectionId} value={target.connectionId}>
@@ -1027,42 +1136,30 @@ export function ComposerAiCapabilityControl(props: {
                         </Select>
                       </label>
                     </>
-                  ) : selectedMediaSelection?.mode === "model_replacement" ? (
+                  ) : selectedMediaMode === "model_replacement" ? (
                     <>
                       <label>
                         <span>{t("settings.providerTools.model")}</span>
-                        <Select
-                          disabled={saving}
+                        <Combobox
+                          ariaLabel={t("settings.providerTools.model")}
+                          placeholder={t("settings.providerTools.selectModel")}
+                          searchPlaceholder={t("settings.providerTools.selectModel")}
+                          emptyText={t("composer.capability.mediaBackendMissing")}
+                          options={selectedMediaModelChoices.map((candidate) => ({
+                            value: mediaUnderstandingModelKey(candidate), label: `${candidate.providerDisplayName} · ${candidate.modelDisplayName}`,
+                            keywords: [candidate.selection.provider_id, candidate.selection.model_id, candidate.connectionDisplayName],
+                          }))}
+                          disabled={saving || selectedMediaModelChoices.length === 0}
                           value={selectedMediaModelKey}
                           onValueChange={(modelKey) => {
                             const candidate = selectedMediaCandidates.find(
                               (item) => mediaUnderstandingModelKey(item) === modelKey,
                             );
                             if (candidate) {
-                              setDraft((current) => ({
-                                ...current,
-                                mediaUnderstandingSelections: {
-                                  ...current.mediaUnderstandingSelections,
-                                  [selectedCapability]: modelReplacementSelection(candidate),
-                                },
-                              }));
+                              updateMediaSelection(selectedCapability, modelReplacementSelection(candidate));
                             }
                           }}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder={t("settings.providerTools.selectModel")} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {selectedMediaModelChoices.map((candidate) => (
-                              <SelectItem
-                                key={mediaUnderstandingModelKey(candidate)}
-                                value={mediaUnderstandingModelKey(candidate)}
-                              >
-                                {candidate.providerDisplayName} · {candidate.modelDisplayName}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        />
                       </label>
                       <label>
                         <span>{t("settings.providerTools.account")}</span>
@@ -1074,19 +1171,13 @@ export function ComposerAiCapabilityControl(props: {
                               (item) => item.selection.connection_id === connectionId,
                             );
                             if (candidate) {
-                              setDraft((current) => ({
-                                ...current,
-                                mediaUnderstandingSelections: {
-                                  ...current.mediaUnderstandingSelections,
-                                  [selectedCapability]: modelReplacementSelection(
-                                    candidate,
-                                    supportedMediaReplacementReasoningEffort(
-                                      candidate,
-                                      selectedMediaSelection.reasoning_effort,
-                                    ),
-                                  ),
-                                },
-                              }));
+                              updateMediaSelection(selectedCapability, modelReplacementSelection(
+                                candidate,
+                                supportedMediaReplacementReasoningEffort(
+                                  candidate,
+                                  selectedMediaSelection?.mode === "model_replacement" ? selectedMediaSelection.reasoning_effort : undefined,
+                                ),
+                              ));
                             }
                           }}
                         >
@@ -1110,22 +1201,13 @@ export function ComposerAiCapabilityControl(props: {
                           <span>{t("settings.providerTools.reasoningEffort")}</span>
                           <Select
                             disabled={saving || !selectedMediaModelCandidate}
-                            value={selectedMediaSelection.reasoning_effort ?? "__default__"}
+                            value={(selectedMediaSelection?.mode === "model_replacement" ? selectedMediaSelection.reasoning_effort : undefined) ?? "__default__"}
                             onValueChange={(value) => {
                               if (!selectedMediaModelCandidate) return;
                               const effort = value === "__default__"
                                 ? undefined
                                 : value as PublicAiReasoningEffort;
-                              setDraft((current) => ({
-                                ...current,
-                                mediaUnderstandingSelections: {
-                                  ...current.mediaUnderstandingSelections,
-                                  [selectedCapability]: modelReplacementSelection(
-                                    selectedMediaModelCandidate,
-                                    effort,
-                                  ),
-                                },
-                              }));
+                              updateMediaSelection(selectedCapability, modelReplacementSelection(selectedMediaModelCandidate, effort));
                             }}
                           >
                             <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1151,17 +1233,45 @@ export function ComposerAiCapabilityControl(props: {
                   <p className="composer-capability-media-note settings-muted-line">
                     {t("composer.capability.mediaBackendNote")}
                   </p>
+                  {(selectedMediaMode === "provider_tool" ? selectedMediaTargets.length : selectedMediaCandidates.length) === 0
+                    ? <p className="settings-muted-line" role="status">{t("composer.capability.mediaBackendMissing")}</p> : null}
                 </div>
-              ) : (
-                <div className="composer-capability-dialog-empty">
-                  {t("composer.capability.mediaBackendMissing")}
-                </div>
-              )
-            ) : selectedModels.length && isModelExtensionCapability(selectedCapability) ? (
-              <div className="composer-capability-extension-list">
+            ) : isModelExtensionCapability(selectedCapability) ? (
+              <div className="composer-capability-extension-list" ref={extensionRecoveryList}>
                 <p className="settings-muted-line">
                   {t("composer.capability.extensionHint")}
                 </p>
+                {unavailableExtensionTargets.map((selection) => (
+                  <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 rounded-md border p-3"
+                    key={JSON.stringify([selection.connection_id, selection.target_id])}>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium" title={selection.target_id}>{selection.target_id}</p>
+                      <span className="text-xs text-muted-foreground">{t("settings.providerTools.unavailable")}</span>
+                    </div>
+                    <Button variant="outline" size="sm" disabled={saving} data-extension-recovery
+                      aria-label={`${t("composer.capability.removeUnavailable")} · ${selection.target_id}`}
+                      onClick={() => {
+                        if (mutationPending.current) return;
+                        recoveryFocusPending.current = true;
+                        setDraft((current) => ({ ...current, extensionTargetSets: {
+                          ...current.extensionTargetSets,
+                          [selectedCapability]: (current.extensionTargetSets[selectedCapability] ?? []).filter((saved) =>
+                            saved.connection_id !== selection.connection_id || saved.target_id !== selection.target_id),
+                        } }));
+                      }}>
+                      {t("composer.capability.removeUnavailable")}
+                    </Button>
+                    <details className="col-span-2 min-w-0 text-xs text-muted-foreground">
+                      <summary className="cursor-pointer">{t("composer.capability.unavailableDetails")}</summary>
+                      <dl className="mt-2 space-y-1 break-all">
+                        <dt>{t("settings.providerTools.model")}</dt><dd>{selection.target_id}</dd>
+                        <dt>{t("settings.providerTools.account")}</dt><dd>{selection.connection_id}</dd>
+                      </dl>
+                    </details>
+                  </div>
+                ))}
+                {selectedModels.length === 0 && unavailableExtensionTargets.length === 0
+                  ? <p role="status" className="settings-muted-line">{t("composer.capability.empty.noTargets")}</p> : null}
                 {selectedModels.map((model) => {
                   // modelTargets contains every configured account for one extension model.
                   // modelTargets 包含一个扩展模型的全部已配置账号。
@@ -1259,12 +1369,19 @@ export function ComposerAiCapabilityControl(props: {
                   );
                 })}
               </div>
-            ) : selectedModels.length ? (
+            ) : isDirectProviderToolCapability(selectedCapability) ? (
               <div className="composer-capability-route-selectors">
                 <label>
                   <span>{t("settings.providerTools.model")}</span>
-                  <Select
-                    disabled={saving}
+                  <Combobox
+                    ariaLabel={t("settings.providerTools.model")}
+                    placeholder={t("settings.providerTools.selectModel")}
+                    searchPlaceholder={t("settings.providerTools.selectModel")}
+                    emptyText={t("composer.capability.empty.noTargets")}
+                    options={selectedModels.map((target) => ({ value: target.target.target_id, label: target.target.display_name,
+                      keywords: [target.target.provider_id, target.connectionDisplayName, target.target.upstream_target_id],
+                    }))}
+                    disabled={saving || selectedModels.length === 0}
                     onValueChange={(targetId) => {
                       const compatible = capabilityTargets.filter(
                         (target) => target.target.target_id === targetId,
@@ -1283,16 +1400,7 @@ export function ComposerAiCapabilityControl(props: {
                       }
                     }}
                     value={selectedModel?.target.target_id ?? ""}
-                  >
-                    <SelectTrigger><SelectValue placeholder={t("settings.providerTools.selectModel")} /></SelectTrigger>
-                    <SelectContent>
-                      {selectedModels.map((target) => (
-                        <SelectItem key={target.target.target_id} value={target.target.target_id}>
-                          {target.target.display_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                 </label>
                 <label>
                   <span>{t("settings.providerTools.account")}</span>
@@ -1324,6 +1432,7 @@ export function ComposerAiCapabilityControl(props: {
                     </SelectContent>
                   </Select>
                 </label>
+                {selectedModels.length === 0 ? <p role="status" className="settings-muted-line">{t("composer.capability.empty.noTargets")}</p> : null}
               </div>
             ) : (
               <div className="composer-capability-dialog-empty">
@@ -1332,6 +1441,7 @@ export function ComposerAiCapabilityControl(props: {
             )}
           </section>
         </div> : null}
+        </div>
         <DialogFooter className="composer-capability-dialog-footer">
           <span className="composer-capability-dialog-save-hint">
             {!settingsReady
@@ -1400,6 +1510,18 @@ function providerToolSettingsSignature(
   );
 }
 
+/** Renders a compact metric with keyboard-accessible missing-data guidance.
+ * 渲染紧凑指标，并为缺失数据提供可键盘访问的说明。
+ * Parameters: value is the formatted metric; hint is present only when a missing value needs explanation.
+ * 参数：value 是格式化指标；hint 仅在缺失值需要解释时提供；返回指标或带说明的占位符。
+ */
+function ContextUsageValue({ value, hint }: { value: string; hint?: string }) {
+  if (!hint) return <>{value}</>;
+  return <Tooltip><TooltipTrigger asChild>
+    <span tabIndex={0} aria-label={hint} className="cursor-help rounded-sm border-b border-dotted border-muted-foreground/50 text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">{value}</span>
+  </TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip>;
+}
+
 // normalizedComposerProviderToolSettings upgrades an older in-memory draft with the exact route map.
 // normalizedComposerProviderToolSettings 使用精确路由映射升级旧版内存草稿。
 function normalizedComposerProviderToolSettings(
@@ -1458,6 +1580,24 @@ export function orderedProviderToolCapabilities(
       ...mediaCapabilities,
     ],
   );
+}
+
+// composerProviderToolCapabilities retains configurable empty media modes and saved extension categories for recovery.
+// composerProviderToolCapabilities 保留可配置的空媒体模式与已保存的扩展分类，供用户恢复配置。
+// Parameters: snapshot supplies current targets and settings supplies exact saved choices. Returns ordered unique categories.
+// 参数：snapshot 提供当前目标，settings 提供准确已存选择。返回已排序且去重的分类。
+function composerProviderToolCapabilities(
+  snapshot: PublicAiSettingsSnapshot,
+  settings: ComposerProviderToolSettingsSnapshot,
+): PublicAiProviderToolCapabilityKind[] {
+  return orderProviderToolCapabilities([
+    ...orderedProviderToolCapabilities(snapshot),
+    "image_understand", "video_understand", "audio_understand",
+    ...settings.enabledCapabilities,
+    ...Object.keys(settings.extensionTargetSets).filter((capability) =>
+      isModelExtensionCapability(capability as PublicAiProviderToolCapabilityKind)),
+    ...Object.keys(settings.mediaUnderstandingSelections).filter(isMediaUnderstandingCapability),
+  ] as PublicAiProviderToolCapabilityKind[]);
 }
 
 // PublicAiMediaUnderstandingCapabilityKind is the closed fixed input-only media facade set.
@@ -1726,30 +1866,32 @@ function selectionForTarget(
 
 // providerToolCapabilityColor restores the established capability color tokens.
 // providerToolCapabilityColor 恢复既有能力颜色令牌。
+// Parameters: capability is the closed tool capability; returns a complete existing CSS color-token expression.
+// 参数：capability 是封闭工具能力；返回现有 CSS 完整颜色令牌表达式。
 function providerToolCapabilityColor(capability: PublicAiProviderToolCapabilityKind): string {
   if (capability === "web_search" || capability === "web_extract") {
-    return "#0ea5e9";
+    return "var(--chart-1)";
   }
   if (
     capability === "image_understand"
     || capability === "video_understand"
     || capability === "audio_understand"
   ) {
-    return "#6366f1";
+    return "var(--chart-3)";
   }
   if (capability === "image_generate" || capability === "image_edit") {
-    return "#ec4899";
+    return "var(--chart-5)";
   }
   if (capability === "video_generate" || capability === "video_edit" || capability === "video_extend") {
-    return "#f97316";
+    return "var(--chart-4)";
   }
   if (capability === "speech_synthesize" || capability === "speech_transcribe") {
-    return "#14b8a6";
+    return "var(--chart-2)";
   }
   if (capability === "music_cover") {
-    return "#84cc16";
+    return "var(--chart-2)";
   }
-  return "#a855f7";
+  return "var(--chart-3)";
 }
 
 // providerToolCapabilityLabel localizes one provider tool capability.
@@ -1789,6 +1931,8 @@ function errorMessage(reason: unknown): string {
 
 // ComposerSelectControl renders one WebUI-aligned compact composer selector.
 // ComposerSelectControl 渲染一个对齐 WebUI 的紧凑输入区选择器。
+// Parameters: props supplies the exact selected value, options and change callback; returns a compact selector without inventing a missing selection.
+// 参数：props 提供精确选中值、选项及变更回调；返回不伪造失效选择的紧凑选择器。
 export function ComposerSelectControl(props: {
   // Accessible label for the dropdown trigger.
   // 下拉触发器的无障碍标签。
@@ -1830,14 +1974,21 @@ export function ComposerSelectControl(props: {
   // open controls the Radix select popover so slash commands can reuse it.
   // open 控制 Radix 选择弹窗，使 slash 指令可复用它。
   const [open, setOpen] = React.useState(false);
-  const selectedOption =
-    props.options.find((option) => option.value === props.value) ?? props.options[0];
+  const selectedOption = props.options.find((option) => option.value === props.value);
+  // observedOpenSignal consumes each command once; mounting or re-enabling must not replay it.
+  // observedOpenSignal 每条指令只消费一次；挂载或重新启用时不得重放。
+  const observedOpenSignal = React.useRef(props.openSignal);
 
   React.useEffect(() => {
-    if (props.disabled || props.openSignal === undefined || props.openSignal <= 0) {
+    // changed identifies a new explicit command rather than an availability refresh.
+    // changed 区分新显式指令与可用性刷新。
+    const changed = observedOpenSignal.current !== props.openSignal;
+    observedOpenSignal.current = props.openSignal;
+    if (props.disabled) {
+      setOpen(false);
       return;
     }
-    setOpen(true);
+    if (changed && props.openSignal !== undefined && props.openSignal > 0) setOpen(true);
   }, [props.disabled, props.openSignal]);
 
   const trigger = (
@@ -1878,7 +2029,7 @@ export function ComposerSelectControl(props: {
       ) : (
         trigger
       )}
-      <SelectContent className="composer-select-content" placement="top">
+      <SelectContent className="composer-select-content" placement="auto">
         {props.options.map((option) => (
           <SelectItem className="composer-select-item" key={option.value} value={option.value}>
             <span className="composer-select-item-copy">

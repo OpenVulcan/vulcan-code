@@ -43,12 +43,21 @@ export function generatedMediaIcon(kind: GeneratedMediaKind) {
 
 // clampGeneratedMediaZoom keeps image zoom values inside the supported media viewer range.
 // clampGeneratedMediaZoom 将图片缩放值限制在媒体查看器支持范围内。
-export function clampGeneratedMediaZoom(value: number): number {
-  return Math.min(GENERATED_MEDIA_MAX_ZOOM, Math.max(GENERATED_MEDIA_MIN_ZOOM, value));
+// value is the requested scale; optional fitScale permits a measured image to fit below the ordinary floor.
+// value 是请求比例；可选 fitScale 允许实测图片适配到普通下限以下。
+// Returns the bounded scale; callers without viewport measurements keep the existing ten-percent minimum.
+// 返回限制后的比例；没有视口测量的调用方保留既有百分之十下限。
+export function clampGeneratedMediaZoom(value: number, fitScale: number | null = null): number {
+  // A measured fit may be below the ordinary floor; missing measurements retain the existing floor.
+  // 实测适配比例可低于普通下限；缺少测量时保留既有下限。
+  const minimum = Math.min(GENERATED_MEDIA_MIN_ZOOM, fitScale ?? GENERATED_MEDIA_MIN_ZOOM);
+  return Math.min(GENERATED_MEDIA_MAX_ZOOM, Math.max(minimum, value));
 }
 
 // generatedMediaFitScale returns the best fit scale relative to the original image size.
 // generatedMediaFitScale 返回相对图片原始尺寸的最佳适配缩放比例。
+// viewportSize and naturalSize are measured dimensions; returns a complete-image fit or null until both are usable.
+// viewportSize 与 naturalSize 是实测尺寸；返回完整图片适配比例，任一尺寸不可用时返回 null。
 export function generatedMediaFitScale(
   viewportSize: GeneratedMediaImageSize | null,
   naturalSize: GeneratedMediaImageSize | null,
@@ -56,7 +65,9 @@ export function generatedMediaFitScale(
   if (!viewportSize || !naturalSize || viewportSize.width <= 0 || viewportSize.height <= 0 || naturalSize.width <= 0 || naturalSize.height <= 0) {
     return null;
   }
-  return clampGeneratedMediaZoom(Math.min(1, viewportSize.width / naturalSize.width, viewportSize.height / naturalSize.height));
+  // Fitting must contain the complete image even below the manual viewer's ordinary ten-percent floor.
+  // 即使低于手动查看器普通的百分之十下限，适配也必须容纳完整图片。
+  return Math.min(1, viewportSize.width / naturalSize.width, viewportSize.height / naturalSize.height);
 }
 
 // clampGeneratedMediaImageOffset keeps a panned image reachable inside the viewport.

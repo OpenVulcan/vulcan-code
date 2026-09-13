@@ -3,6 +3,7 @@ import {
   closestCenter,
   DndContext,
   PointerSensor,
+  KeyboardSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -11,6 +12,7 @@ import {
   arrayMove,
   SortableContext,
   verticalListSortingStrategy,
+  sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import {
   Boxes,
@@ -136,9 +138,12 @@ export function ProjectSidebar(props: {
   // expandedConversationProjectIds stores project ids whose conversation list is fully expanded.
   // expandedConversationProjectIds 保存会话列表已完整展开的项目标识。
   const [expandedConversationProjectIds, setExpandedConversationProjectIds] = React.useState<Set<string>>(() => new Set());
-  // projectDragSensors enables pointer dragging only after a small movement threshold.
-  // projectDragSensors 仅在达到小幅移动阈值后启用指针拖拽。
-  const projectDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // projectDragSensors admits pointer movement and keyboard sorting through the dedicated handle.
+  // projectDragSensors 通过专用手柄准入指针移动及键盘排序。
+  const projectDragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   // projectIds stores the explicit project identifiers available in this snapshot.
   // projectIds 保存当前快照中明确存在的项目标识。
   const projectIds = React.useMemo(() => new Set(props.projects.map((project) => project.id)), [props.projects]);
@@ -449,11 +454,13 @@ export function ProjectSidebar(props: {
               {renderSortableProjectSection(visibleProjectRows)}
               {props.projects.length === 0 ? (
                 <SidebarMenuItem>
-                  <SidebarMenuButton className="muted" tooltip={t("sidebar.noProjects")}>
-                    <Folder size={16} />
+                  {/* WorkbenchApp mounts this sidebar only after the authoritative snapshot exists. */}
+                  {/* WorkbenchApp 仅在权威快照存在后挂载此侧栏。 */}
+                  <SidebarMenuButton className="muted" tooltip={t("sidebar.addProject")} onClick={navigate(props.onCreateProject)}>
+                    <FolderPlus size={16} />
                     <span className="vcn-sidebar-label">
                       <strong>{t("sidebar.noProjects")}</strong>
-                      <small>{t("sidebar.waitingWorkspace")}</small>
+                      <small>{locale === "zh-CN" ? "添加文件夹，开始一个项目" : "Add a folder to start a project"}</small>
                     </span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

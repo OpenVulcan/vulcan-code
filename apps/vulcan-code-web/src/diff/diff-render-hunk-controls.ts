@@ -76,7 +76,7 @@ export function hunkSeparatorLabelHtml(
   }
   const expandUpAttribute = expandIndex != null && separatorState.expandUpHunkIndex != null ? ` data-expand-up-index="${separatorState.expandUpHunkIndex}"` : "";
   const expandDownAttribute = expandIndex != null && separatorState.expandDownHunkIndex != null ? ` data-expand-down-index="${separatorState.expandDownHunkIndex}"` : "";
-  const clickableAttribute = expandIndex != null ? ` data-unmodified-lines="" role="button"` : "";
+  const clickableAttribute = expandIndex != null ? ` data-unmodified-lines="" role="button" tabindex="0"` : "";
   const label = `<div data-separator-content=""${clickableAttribute}${expandUpAttribute}${expandDownAttribute}>${escapeHtml(header)}</div>`;
   rememberDiffHunkHeaderHtml(cacheKey, label);
   return label;
@@ -115,7 +115,7 @@ function targetSeparatorControlsHtml(
 function targetExpandButtonHtml(direction: DiffHunkExpansionDirection, hunkIndex?: number): string {
   const dataAttribute = direction === "both" ? "data-expand-both" : direction === "up" ? "data-expand-up" : "data-expand-down";
   const indexAttribute = hunkIndex != null ? ` data-expand-hunk-index="${hunkIndex}"` : "";
-  return `<div role="button" data-expand-button="" ${dataAttribute}=""${indexAttribute}>${targetExpandIconHtml(direction === "both" ? "all" : "single")}</div>`;
+  return `<div role="button" tabindex="0" data-expand-button="" ${dataAttribute}=""${indexAttribute}>${targetExpandIconHtml(direction === "both" ? "all" : "single")}</div>`;
 }
 
 // targetExpandIconHtml emits the target expand SVG paths without relying on a global sprite.

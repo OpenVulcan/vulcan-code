@@ -92,11 +92,11 @@
 }
 
 .provider-tool-extension-model-card-tooltip.summary {
-  color: color-mix(in srgb, #2563eb 78%, var(--foreground));
+  color: var(--primary);
 }
 
 .provider-tool-extension-model-card-tooltip.constraints {
-  color: color-mix(in srgb, #ca8a04 78%, var(--foreground));
+  color: var(--vcn-content-warning);
 }
 
 .provider-tool-extension-model-card-tooltip.limitations {

@@ -40,6 +40,8 @@ interface ProtocolModelOverrideDraft {
 
 // PublicAiModelOverridesDialog edits adapter-declared controls for one provider, model, and protocol.
 // PublicAiModelOverridesDialog 编辑一个供应商、模型与协议由适配器声明的控制项。
+// Parameters: props identifies one provider/model/protocol binding and its overrides; returns protocol-backed fields and guarded save/reset controls.
+// 参数：props 标识一个供应商模型协议绑定及其覆盖；返回基于协议的字段及受保护保存、恢复控件。
 export function PublicAiModelOverridesDialog(props: {
   // User-visible provider name.
   // 用户可见供应商名称。
@@ -72,6 +74,9 @@ export function PublicAiModelOverridesDialog(props: {
   const [parameterValues, setParameterValues] = React.useState<Record<string, string>>({})
   const [error, setError] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
+  // savingRef serializes explicit saves before React publishes the disabled state.
+  // savingRef 在 React 发布禁用状态之前串行化显式保存。
+  const savingRef = React.useRef(false)
   // baselineDraft is the authoritative route value used for semantic dirty tracking.
   // baselineDraft 是用于语义脏状态跟踪的权威路由值。
   const [baselineDraft, setBaselineDraft] = React.useState<ProtocolModelOverrideDraft>({
@@ -138,9 +143,10 @@ export function PublicAiModelOverridesDialog(props: {
   // persist validates browser scalar input and replaces or restores the exact route layer.
   // persist 校验浏览器标量输入，并替换或还原精确路由层。
   const persist = React.useCallback(async (restore: boolean) => {
-    if (!props.providerId || !props.model || !props.protocolId) {
+    if (savingRef.current || !props.providerId || !props.model || !props.protocolId) {
       return
     }
+    savingRef.current = true
     setSaving(true)
     setError(null)
     try {
@@ -152,6 +158,7 @@ export function PublicAiModelOverridesDialog(props: {
         }
         switch (definition.schema.type) {
           case "boolean":
+            if (raw !== "true" && raw !== "false") throw new Error(`${definition.display_name}: ${t("settings.modelExperience.invalidValue")}`)
             modelParameters[definition.id] = { type: "boolean", value: raw === "true" }
             break
           case "integer": {
@@ -165,8 +172,11 @@ export function PublicAiModelOverridesDialog(props: {
           case "decimal":
             modelParameters[definition.id] = { type: "decimal", value: raw }
             break
-          case "string":
           case "enum":
+            if (!Array.isArray(definition.schema.values) || !definition.schema.values.includes(raw)) throw new Error(`${definition.display_name}: ${t("settings.modelExperience.invalidValue")}`)
+            modelParameters[definition.id] = { type: "string", value: raw }
+            break
+          case "string":
             modelParameters[definition.id] = { type: "string", value: raw }
             break
           default:
@@ -175,6 +185,9 @@ export function PublicAiModelOverridesDialog(props: {
       }
       // overrides omits provider-default fields so an empty record restores inheritance.
       // overrides 省略供应商默认字段，使空记录恢复继承。
+      if (!restore && cacheMode === "managed_explicit" && (!props.model.capabilities.prompt_cache.supports_managed_explicit || !props.model.capabilities.prompt_cache.supported_ttl_options.some((option) => option.id === cacheTtl))) {
+        throw new Error(t("settings.modelExperience.invalidValue"))
+      }
       const overrides: PublicAiModelOverrides | undefined = restore ? undefined : {
         ...(cacheMode === "managed_explicit" ? { prompt_cache: {
           mode: "managed_explicit",
@@ -195,6 +208,7 @@ export function PublicAiModelOverridesDialog(props: {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [
@@ -220,14 +234,14 @@ export function PublicAiModelOverridesDialog(props: {
     <Dialog
       open={props.open}
       onOpenChange={(open) => {
-        if (!open && saving) {
+        if (!open && savingRef.current) {
           return
         }
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="max-h-[calc(100vh-2rem)] gap-0 overflow-hidden p-0 sm:max-w-xl">
-        <DialogHeader className="border-b bg-muted/30 px-5 py-4 pr-12">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
           <div className="flex items-start gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
               <SlidersHorizontal className="size-4 text-muted-foreground" />
@@ -245,9 +259,9 @@ export function PublicAiModelOverridesDialog(props: {
             </div>
           </div>
         </DialogHeader>
-        <ScrollArea className="max-h-[calc(100vh-12rem)]">
-          <div className="space-y-4 p-5">
-            <section className="space-y-4 rounded-xl border bg-card/40 p-4">
+        <ScrollArea className="min-h-0 flex-1">
+          <fieldset disabled={saving} className="min-w-0 space-y-4 p-5">
+            <section className="space-y-4">
               <div className="flex items-start gap-2.5">
                 <Database className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <div className="space-y-1">
@@ -264,6 +278,7 @@ export function PublicAiModelOverridesDialog(props: {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    {cacheMode === "managed_explicit" && !promptCache?.supports_managed_explicit && <SelectItem value="managed_explicit" disabled>{t("settings.modelExperience.invalidValue")}</SelectItem>}
                     <SelectItem value="provider_default">
                       {t("settings.modelOverrides.providerDefault")}
                     </SelectItem>
@@ -288,6 +303,7 @@ export function PublicAiModelOverridesDialog(props: {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      {cacheTtl && !promptCache?.supported_ttl_options.some((option) => option.id === cacheTtl) && <SelectItem value={cacheTtl} disabled>{t("settings.modelExperience.invalidValue")}: {cacheTtl}</SelectItem>}
                       {promptCache?.supported_ttl_options.map((option) => (
                         <SelectItem key={option.id} value={option.id}>{option.display_name}</SelectItem>
                       ))}
@@ -297,7 +313,7 @@ export function PublicAiModelOverridesDialog(props: {
               ) : null}
             </section>
 
-            <section className="space-y-4 rounded-xl border bg-card/40 p-4">
+            <section className="space-y-4 border-t pt-4">
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold">{t("settings.modelOverrides.parameters")}</h3>
                 <p className="text-xs leading-relaxed text-muted-foreground">
@@ -329,9 +345,9 @@ export function PublicAiModelOverridesDialog(props: {
                 {error}
               </div>
             ) : null}
-          </div>
+          </fieldset>
         </ScrollArea>
-        <DialogFooter className="m-0 rounded-none px-5 py-3 sm:justify-between">
+        <DialogFooter className="m-0 shrink-0 rounded-none px-5 py-3 sm:justify-between">
           <Button disabled={saving || (!props.overrides && !dirty)} onClick={restore} type="button" variant="ghost">
             <RotateCcw className="mr-2 size-4" />
             {t("settings.modelCapabilities.restore")}
@@ -446,6 +462,8 @@ function protocolDisplayName(protocolId: string | null): string {
 
 // ModelParameterField renders one scalar control exactly from the registered schema.
 // ModelParameterField 严格根据已注册 Schema 渲染一个标量控件。
+// Parameters: props supplies a registered parameter schema and value; returns the appropriate boolean, enum or scalar input.
+// 参数：props 提供已注册参数 Schema 与值；返回对应布尔、枚举或标量输入。
 function ModelParameterField(props: {
   // Registered parameter definition.
   // 已注册参数定义。
@@ -465,7 +483,7 @@ function ModelParameterField(props: {
       ? "enabled"
       : props.value === "false"
         ? "disabled"
-        : "provider-default"
+        : props.value ? "unavailable" : "provider-default"
     return (
       <div className="space-y-2">
         <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
@@ -479,6 +497,7 @@ function ModelParameterField(props: {
             <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
           </SelectTrigger>
           <SelectContent>
+            {selectedValue === "unavailable" && <SelectItem value="unavailable" disabled>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem>}
             <SelectItem value="provider-default">{t("settings.modelOverrides.providerDefault")}</SelectItem>
             <SelectItem value="enabled">{t("settings.modelOverrides.enabled")}</SelectItem>
             <SelectItem value="disabled">{t("settings.modelOverrides.disabled")}</SelectItem>
@@ -503,12 +522,13 @@ function ModelParameterField(props: {
             const optionIndex = Number(value.slice("option-".length))
             props.onChange(values[optionIndex] ?? "")
           }}
-          value={selectedIndex >= 0 ? `option-${selectedIndex}` : "provider-default"}
+          value={selectedIndex >= 0 ? `option-${selectedIndex}` : props.value ? "unavailable" : "provider-default"}
         >
           <SelectTrigger className="w-full" id={fieldId}>
             <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
           </SelectTrigger>
           <SelectContent>
+            {selectedIndex < 0 && props.value && <SelectItem value="unavailable" disabled>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem>}
             <SelectItem value="provider-default">{t("settings.modelOverrides.providerDefault")}</SelectItem>
             {values.map((value, index) => (
               <SelectItem key={`${index}/${value}`} value={`option-${index}`}>{value}</SelectItem>

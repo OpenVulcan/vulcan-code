@@ -14,6 +14,7 @@ import {
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
+import { ConversationV1ToolDomainBody, ConversationV1ToolRawDetails } from "./conversation-v1-tool-domain";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ToolPresentationCard } from "@/components/conversation/conversation-tool-presentation-card";
 import { ConversationV1GeneratedResourceList } from "@/components/conversation/conversation-v1-resource-list";
@@ -175,6 +176,8 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
         <ChevronDown className="tool-presentation-toggle" size={14} aria-hidden="true" />
       </button>
 
+      {presentation.domain.diagnostic ? <div className="v1-tool-card-failure-summary" role="status">{presentation.domain.diagnostic}</div> : null}
+
       <ConversationMeasuredCollapse collapseId={presentation.id} expanded={expanded}>
         <div className="v1-tool-card-detail" data-tool-detail>
           <ToolPresentationBody presentation={presentation} />
@@ -187,6 +190,7 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
             availableReferenceKeys={props.availableExternalRefKeys}
             onOpen={props.onOpenExternalRef}
           />
+          <ConversationV1ToolRawDetails id={presentation.id} input={props.item.tool_call.input} output={props.item.tool_call.output} />
         </div>
       </ConversationMeasuredCollapse>
     </article>
@@ -230,7 +234,7 @@ function ConversationV1ModelExtensionToolCard(props: {
   const generatedResources = props.item.tool_call.generated_resources ?? [];
   // hasOutputSupplement keeps resource and navigation controls inside the return card only when present.
   // hasOutputSupplement 仅在资源或导航控件存在时把它们放入返回卡。
-  const hasOutputSupplement = generatedResources.length > 0 || props.presentation.externalRefs.length > 0;
+  const hasOutputSupplement = generatedResources.length > 0 || props.presentation.externalRefs.length > 0 || props.item.tool_call.output?.model_output !== undefined;
   // outputSupplement is owned by the return payload and stays folded with it.
   // outputSupplement 归返回载荷所有，并随其一起折叠。
   const outputSupplement = hasOutputSupplement ? (
@@ -239,6 +243,7 @@ function ConversationV1ModelExtensionToolCard(props: {
         catalog={props.resourceCatalog ?? null}
         resources={generatedResources}
       />
+      {props.item.tool_call.output?.model_output !== undefined ? <ConversationV1ToolDomainBody domain={props.presentation.domain} /> : null}
       <ToolExternalNavigation
         references={props.presentation.externalRefs}
         availableReferenceKeys={props.availableExternalRefKeys}
@@ -271,17 +276,20 @@ function ConversationV1ModelExtensionToolCard(props: {
             ? <LocalizedToolPresentationText titleKey={props.presentation.titleKey} />
             : props.presentation.title}
         </span>
+        {props.presentation.domain.summary ? <span className="v1-tool-card-target">{props.presentation.domain.summary}</span> : null}
         <ChevronDown className="tool-presentation-toggle" size={14} aria-hidden="true" />
       </button>
+      {props.presentation.domain.diagnostic ? <div className="v1-tool-card-failure-summary" role="status">{props.presentation.domain.diagnostic}</div> : null}
       <ConversationMeasuredCollapse collapseId={props.presentation.id} expanded={props.expanded}>
         <ModelExtensionToolPayloadCards
           defaultInputExpanded={false}
           defaultOutputExpanded
           inputMarkdown={props.presentation.inputMarkdown}
-          outputMarkdown={props.presentation.outputMarkdown}
+          outputMarkdown={props.item.tool_call.output?.model_output !== undefined ? "" : props.presentation.outputMarkdown}
           outputSupplement={outputSupplement}
           presentationId={props.presentation.id}
         />
+        <ConversationV1ToolRawDetails id={props.presentation.id} input={props.item.tool_call.input} output={props.item.tool_call.output} />
       </ConversationMeasuredCollapse>
     </article>
   );
@@ -360,6 +368,7 @@ function toolStateLabel(state: V1ToolPresentationState): string {
     case "interrupted":
       return "已中断";
     case "cancelled":
+      return "已取消";
     case "stopped":
       return "已停止";
   }
@@ -398,7 +407,7 @@ function presentationSummary(presentation: V1ToolPresentation): V1ToolCardSummar
     return { target: presentation.command, format: null };
   }
   return {
-    target: presentation.titleKey ? "" : presentation.toolName,
+    target: presentation.domain.summary,
     format: null,
   };
 }
@@ -427,18 +436,7 @@ function ToolPresentationBody(props: { presentation: V1ToolPresentation }) {
     case "native":
     case "generic":
       return (
-        <div className="v1-tool-card-json-sections">
-          <ToolPayloadSection
-            title={presentation.titleKey ? undefined : "输入"}
-            titleKey={presentation.titleKey ? "toolPresentation.payload.input" : undefined}
-            markdown={presentation.inputMarkdown}
-          />
-          <ToolPayloadSection
-            title={presentation.titleKey ? undefined : "输出"}
-            titleKey={presentation.titleKey ? "toolPresentation.payload.output" : undefined}
-            markdown={presentation.outputMarkdown}
-          />
-        </div>
+        <ConversationV1ToolDomainBody domain={presentation.domain} />
       );
   }
 }
@@ -458,34 +456,6 @@ function LocalizedToolPresentationText(props: LocalizedToolPresentationTextProps
   // t 解析展示模型选择的唯一精确用户文案。
   const { t } = useI18n();
   return <>{t(props.titleKey)}</>;
-}
-
-/** Props for one Markdown-backed event payload section.
- * 一段 Markdown 事件载荷区域的属性。 */
-interface ToolPayloadSectionProps {
-  title?: string;
-  // Optional localized section title for recognized contracts.
-  // 已识别契约使用的可选本地化区域标题。
-  titleKey?: TranslationKey;
-  markdown: string;
-}
-
-/** Renders one event payload section only when it has persisted content.
- * 仅在存在持久化内容时渲染事件载荷区域。 */
-function ToolPayloadSection(props: ToolPayloadSectionProps) {
-  if (!props.markdown) {
-    return null;
-  }
-  return (
-    <section className="v1-tool-card-section">
-      <div className="v1-tool-card-section-title">
-        {props.titleKey
-          ? <LocalizedToolPresentationText titleKey={props.titleKey} />
-          : props.title}
-      </div>
-      <MarkdownBody markdown={props.markdown} />
-    </section>
-  );
 }
 
 /** Renders Markdown already retained by the tool event.

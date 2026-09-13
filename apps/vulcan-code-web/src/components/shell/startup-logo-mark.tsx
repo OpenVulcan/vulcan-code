@@ -18,6 +18,8 @@ export function StartupLogoMark() {
 
 // useStartupLogoScan paints a masked moving highlight into a transparent canvas.
 // useStartupLogoScan 将被 Logo 透明通道裁剪的移动高光绘制到透明画布中。
+// Parameters: canvasRef is the drawing host, logoSrc the image source and logoSize the logical dimensions; returns no value and owns cleanup of its animation and preference listener.
+// 参数：canvasRef 是绘制宿主，logoSrc 是图像来源，logoSize 是逻辑尺寸；不返回值，并负责动画及偏好监听清理。
 function useStartupLogoScan(
   // Canvas reference that receives the animated highlight layer.
   // 接收动态高光层的画布引用。
@@ -79,11 +81,19 @@ function useStartupLogoScan(
     // disposed prevents pending image or animation callbacks from drawing after unmount.
     // disposed 避免卸载后仍由待处理图片或动画回调继续绘制。
     let disposed = false;
+    // reducedMotion preserves the static logo when the user's system disables decorative motion.
+    // reducedMotion 在用户系统禁用装饰动画时保留静态 Logo。
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    // maskReady prevents a preference change from drawing before the image has loaded.
+    // maskReady 防止偏好变化在图片加载前触发绘制。
+    let maskReady = false;
 
     // drawFrame renders one masked scan-light frame.
     // drawFrame 渲染一帧经过蒙版裁剪的扫光。
+    // Parameters: timestamp is the animation frame clock; draws one masked frame and schedules the next permitted frame, returning no value.
+    // 参数：timestamp 是动画帧时钟；绘制一帧蒙版内容并安排下一允许帧，不返回值。
     const drawFrame = (timestamp: number) => {
-      if (disposed) {
+      if (disposed || reducedMotion.matches) {
         return;
       }
       if (startTimestamp === null) {
@@ -138,14 +148,29 @@ function useStartupLogoScan(
       }
       maskContext.clearRect(0, 0, logoSize, logoSize);
       maskContext.drawImage(logoImage, 0, 0, logoSize, logoSize);
-      animationFrame = window.requestAnimationFrame(drawFrame);
+      maskReady = true;
+      if (!reducedMotion.matches) animationFrame = window.requestAnimationFrame(drawFrame);
     };
     logoImage.onerror = () => {
       context.clearRect(0, 0, logoSize, logoSize);
     };
+    // updateMotion stops immediately or resumes one animation loop after a system preference change.
+    // updateMotion 在系统偏好变化后立即停止动画或恢复单一动画循环。
+    // Parameters: none; reads the current reduced-motion preference. Returns no value after stopping or resuming this instance's sole animation loop.
+    // 参数：无，读取当前减少动态效果偏好。停止或恢复本实例唯一动画循环后不返回值。
+    const updateMotion = () => {
+      window.cancelAnimationFrame(animationFrame);
+      context.clearRect(0, 0, logoSize, logoSize);
+      startTimestamp = null;
+      if (!reducedMotion.matches && maskReady) animationFrame = window.requestAnimationFrame(drawFrame);
+    };
+    reducedMotion.addEventListener("change", updateMotion);
 
     return () => {
       disposed = true;
+      reducedMotion.removeEventListener("change", updateMotion);
+      logoImage.onload = null;
+      logoImage.onerror = null;
       window.cancelAnimationFrame(animationFrame);
       context.clearRect(0, 0, logoSize, logoSize);
     };

@@ -159,6 +159,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // historyLoading is process-local; the canonical cursor remains owned by the controller.
   // historyLoading 属于进程内状态；规范游标仍由控制器持有。
   const [historyLoading, setHistoryLoading] = React.useState(false);
+  // historyRequest separates synchronous duplicate clicks and stale owner completions.
+  // historyRequest 区分同步重复点击与过期归属请求的完成。
+  const historyRequest = React.useRef<object | null>(null);
   // ownerReady prevents a stale previous-session window from entering the restored renderer.
   // ownerReady 防止上一会话的过期窗口进入恢复后的渲染器。
   const ownerReady = props.snapshot.owner?.session_id === props.sessionId;
@@ -205,20 +208,28 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   );
 
   React.useEffect(() => {
+    historyRequest.current = null;
     setHistoryLoading(false);
   }, [props.sessionId, props.snapshot.owner?.window_generation]);
 
   // handleLoadMoreHistory prepends one owner-bound V1 page without invoking the old history RPC.
   // handleLoadMoreHistory 前置一页绑定所有者的 V1 事件，不调用旧历史 RPC。
   const handleLoadMoreHistory = React.useCallback(async (): Promise<boolean> => {
-    if (!ownerReady || !props.snapshot.has_more || historyLoading) return false;
+    if (!ownerReady || !props.snapshot.has_more || historyRequest.current !== null) return false;
+    // request unlocks only the attempt that created it, never a subsequent owner's page request.
+    // request 仅解锁创建它的尝试，绝不解锁后续归属的分页请求。
+    const request = {};
+    historyRequest.current = request;
     setHistoryLoading(true);
     try {
       return await props.commands.prependOlder();
     } finally {
-      setHistoryLoading(false);
+      if (historyRequest.current === request) {
+        historyRequest.current = null;
+        setHistoryLoading(false);
+      }
     }
-  }, [historyLoading, ownerReady, props.commands, props.snapshot.has_more]);
+  }, [ownerReady, props.commands, props.snapshot.has_more]);
 
   // handleEditUserPrompt maps the restored icon action back to the exact V1 root-input anchor.
   // handleEditUserPrompt 把恢复后的图标操作映射回精确 V1 根输入锚点。

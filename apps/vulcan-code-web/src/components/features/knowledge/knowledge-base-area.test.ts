@@ -21,7 +21,7 @@ describe("knowledgeDisplayBuildAction", () => {
   it("opens progress instead of starting a duplicate build while generation is running", () => {
     expect(knowledgeDisplayBuildAction(displayIndex({ status: "building", pendingGeneration: "pending-a" }))).toEqual({
       mode: "progress",
-      label: "查看生成进度",
+      label: "knowledge.experience.viewProgress",
       disabled: false,
     });
   });
@@ -29,7 +29,7 @@ describe("knowledgeDisplayBuildAction", () => {
   it("offers continuation when a failed or interrupted generation was retained", () => {
     expect(knowledgeDisplayBuildAction(displayIndex({ status: "failed", pendingGeneration: "pending-a" }))).toEqual({
       mode: "resume",
-      label: "继续生成",
+      label: "knowledge.experience.resume",
       disabled: false,
     });
   });
@@ -37,7 +37,7 @@ describe("knowledgeDisplayBuildAction", () => {
   it("disables generation after a published display corpus is complete", () => {
     expect(knowledgeDisplayBuildAction(displayIndex({ status: "ready", activeGeneration: "active-a" }))).toEqual({
       mode: "complete",
-      label: "显示库已完成",
+      label: "knowledge.experience.displayReady",
       disabled: true,
     });
   });
@@ -45,7 +45,7 @@ describe("knowledgeDisplayBuildAction", () => {
   it("offers rebuild when the published generation became stale", () => {
     expect(knowledgeDisplayBuildAction(displayIndex({ status: "stale", activeGeneration: "active-a" }))).toEqual({
       mode: "start",
-      label: "重新生成",
+      label: "knowledge.experience.regenerate",
       disabled: false,
     });
   });

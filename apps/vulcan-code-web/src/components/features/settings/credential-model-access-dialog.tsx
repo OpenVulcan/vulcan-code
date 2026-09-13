@@ -78,6 +78,8 @@ interface CredentialModelAccessDialogProps {
 
 // CredentialModelAccessDialog renders an ergonomic account-scoped model task instead of raw policy fields.
 // CredentialModelAccessDialog 渲染符合人工操作习惯的账号模型任务，而不是暴露原始策略字段。
+// Parameters: props identifies the account, provider snapshot and mutation callbacks; returns model filtering, access controls and guarded bulk confirmation.
+// 参数：props 标识账号、供应商快照及变更回调；返回模型过滤、访问控制及受保护批量确认。
 export function CredentialModelAccessDialog(props: CredentialModelAccessDialogProps) {
   const { t } = useI18n()
   const [query, setQuery] = React.useState("")
@@ -88,6 +90,9 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   const [disableConfirmationOpen, setDisableConfirmationOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [optimisticEnabled, setOptimisticEnabled] = React.useState<Record<string, boolean>>({})
+  // mutationBusy serializes sync and policy edits against the same account catalog.
+  // mutationBusy 对同一账号目录的同步和策略编辑进行串行化。
+  const mutationBusy = React.useRef(false)
 
   React.useEffect(() => {
     if (!props.open) {
@@ -155,9 +160,10 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   // saveModel applies one switch immediately, then reconciles it with the backend snapshot.
   // saveModel 立即应用一个开关，随后与后端快照协调。
   const saveModel = React.useCallback(async (model: PublicAiModel, enabled: boolean) => {
-    if (!connection || bulkBusy || busyModelId) {
+    if (!connection || mutationBusy.current) {
       return
     }
+    mutationBusy.current = true
     setBusyModelId(model.id)
     setError(null)
     setOptimisticEnabled((current) => ({ ...current, [model.id]: enabled }))
@@ -177,15 +183,17 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
         return next
       })
       setBusyModelId(null)
+      mutationBusy.current = false
     }
   }, [bulkBusy, busyModelId, connection, props])
 
   // saveAll replaces one inherited account policy in one backend operation.
   // saveAll 通过一次后端操作替换一个账号的继承策略。
   const saveAll = React.useCallback(async (enabled: boolean) => {
-    if (!connection || bulkBusy || busyModelId) {
+    if (!connection || mutationBusy.current) {
       return
     }
+    mutationBusy.current = true
     setBulkBusy(true)
     setError(null)
     setOptimisticEnabled(Object.fromEntries(supportModels.map((model) => [model.id, enabled])))
@@ -201,15 +209,17 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
     } finally {
       setOptimisticEnabled({})
       setBulkBusy(false)
+      mutationBusy.current = false
     }
   }, [bulkBusy, busyModelId, connection, props, supportModels])
 
   // synchronize refreshes only dynamic credential directories and retains account access choices.
   // synchronize 仅刷新动态凭据目录，并保留账号访问选择。
   const synchronize = React.useCallback(async () => {
-    if (!connection || syncBusy || directoryKind !== "dynamic") {
+    if (!connection || !connection.enabled || mutationBusy.current || directoryKind !== "dynamic") {
       return
     }
+    mutationBusy.current = true
     setSyncBusy(true)
     setError(null)
     try {
@@ -218,12 +228,13 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
       setError(errorMessage(reason))
     } finally {
       setSyncBusy(false)
+      mutationBusy.current = false
     }
   }, [connection, directoryKind, props, syncBusy])
 
   return (
     <>
-      <Dialog onOpenChange={props.onOpenChange} open={props.open}>
+      <Dialog onOpenChange={(open) => { if (!mutationBusy.current) props.onOpenChange(open) }} open={props.open}>
         <DialogContent className="flex max-h-[min(46rem,calc(100vh-3rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <DialogHeader className="border-b px-6 py-5 text-left">
             <div className="flex min-w-0 items-start gap-3 pr-8">
@@ -231,7 +242,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 <ListChecks className="size-4" aria-hidden="true" />
               </div>
               <div className="min-w-0 flex-1">
-                <DialogTitle className="truncate">
+                <DialogTitle className="break-words">
                   {t("settings.credentialModels.title")} · {connection?.display_name ?? ""}
                 </DialogTitle>
                 <DialogDescription className="mt-1">
@@ -246,7 +257,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
             </div>
           </DialogHeader>
 
-          <div className="sticky top-0 z-10 grid gap-3 border-b bg-background/95 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/85">
+          <div className="grid shrink-0 gap-3 border-b px-6 py-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-medium">
                 {t("settings.credentialModels.count")
@@ -256,7 +267,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
               <div className="flex flex-wrap items-center gap-2">
                 {directoryKind === "dynamic" ? (
                   <Button
-                    disabled={syncBusy || bulkBusy || busyModelId !== null}
+                    disabled={!connection?.enabled || syncBusy || bulkBusy || busyModelId !== null}
                     onClick={() => void synchronize()}
                     size="sm"
                     type="button"
@@ -267,7 +278,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                   </Button>
                 ) : null}
                 <Button
-                  disabled={bulkBusy || busyModelId !== null || supportModels.length === 0}
+                  disabled={syncBusy || bulkBusy || busyModelId !== null || supportModels.length === 0}
                   onClick={() => void saveAll(true)}
                   size="sm"
                   type="button"
@@ -276,7 +287,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                   {t("settings.credentialModels.enableAll")}
                 </Button>
                 <Button
-                  disabled={bulkBusy || busyModelId !== null || supportModels.length === 0}
+                  disabled={syncBusy || bulkBusy || busyModelId !== null || supportModels.length === 0}
                   onClick={() => setDisableConfirmationOpen(true)}
                   size="sm"
                   type="button"
@@ -291,6 +302,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   autoFocus
+                  aria-label={t("settings.credentialModels.search")}
                   className="pl-9"
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder={t("settings.credentialModels.search")}
@@ -298,7 +310,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 />
               </div>
               <Select onValueChange={(value) => setFilter(value as CredentialModelFilter)} value={filter}>
-                <SelectTrigger>
+                <SelectTrigger aria-label={t("settings.modelExperience.usageFilter")} className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -308,11 +320,11 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 </SelectContent>
               </Select>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {t(policy?.defaultEnabled === false
+            {policy ? <p className="text-xs text-muted-foreground">
+              {t(policy.defaultEnabled === false
                 ? "settings.credentialModels.futureDisabled"
                 : "settings.credentialModels.futureEnabled")}
-            </p>
+            </p> : null}
             {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
           </div>
 
@@ -332,8 +344,8 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                          <strong className="truncate text-sm">{model.display_name}</strong>
-                          <span className="max-w-full truncate text-xs text-muted-foreground">({model.id})</span>
+                          <strong className="break-all text-sm">{model.display_name}</strong>
+                          <span className="max-w-full break-all text-xs text-muted-foreground">({model.id})</span>
                         </div>
                         <div className="mt-1.5">
                           <ProviderModelModalitySummary model={model} />
@@ -344,7 +356,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                           ? t("settings.credentialModels.filterEnabled")
                           : t("settings.credentialModels.filterDisabled")}`}
                         checked={enabled}
-                        disabled={bulkBusy || busyModelId !== null}
+                        disabled={syncBusy || bulkBusy || busyModelId !== null}
                         onCheckedChange={(checked) => void saveModel(model, checked)}
                       />
                     </div>
@@ -356,7 +368,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
         </DialogContent>
       </Dialog>
 
-      <AlertDialog onOpenChange={setDisableConfirmationOpen} open={disableConfirmationOpen}>
+      <AlertDialog onOpenChange={(open) => { if (!mutationBusy.current) setDisableConfirmationOpen(open) }} open={disableConfirmationOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.credentialModels.disableConfirmTitle")}</AlertDialogTitle>
@@ -364,9 +376,10 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
               {t("settings.credentialModels.disableConfirmDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("settings.credentialModels.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void saveAll(false)}>
+            <AlertDialogCancel disabled={bulkBusy}>{t("settings.credentialModels.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={bulkBusy} onClick={(event) => { event.preventDefault(); void saveAll(false) }}>
               {t("settings.credentialModels.confirmDisable")}
             </AlertDialogAction>
           </AlertDialogFooter>

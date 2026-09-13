@@ -4,15 +4,15 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #111318;
+  background: var(--background);
 }
 
 .terminal-viewport-loading::after {
   position: absolute;
   top: 12px;
   left: 12px;
-  color: rgb(154 164 183 / 72%);
-  content: "正在加载终端组件…";
+  color: var(--muted-foreground);
+  content: attr(data-loading-label);
   font: 11px/1.4 var(--font-mono, monospace);
 }
 
@@ -22,7 +22,7 @@
 }
 
 .terminal-viewport .xterm-viewport {
-  scrollbar-color: rgb(121 130 149 / 55%) transparent;
+  scrollbar-color: var(--muted-foreground) transparent;
   scrollbar-width: thin;
 }
 
@@ -38,7 +38,7 @@
   min-height: 0;
   padding: 0;
   overflow: hidden;
-  background: #111318;
+  background: var(--background);
 }
 
 .conversation-session-terminal-floating-body {
@@ -48,7 +48,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #111318;
+  background: var(--background);
 }
 
 .project-floating-layer {
@@ -63,6 +63,7 @@
 }
 
 .project-floating-surface {
+  container-type: inline-size;
   position: absolute;
   right: 16px;
   bottom: 26px;
@@ -76,10 +77,10 @@
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   resize: both;
-  border: 1px solid rgb(122 135 158 / 44%);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #111318;
-  box-shadow: 0 20px 54px rgb(0 0 0 / 42%);
+  background: var(--background);
+  box-shadow: var(--vcn-shadow-floating);
   pointer-events: auto;
 }
 
@@ -108,8 +109,8 @@
 
 .project-floating-surface-header {
   min-width: 0;
-  border-bottom: 1px solid rgb(122 135 158 / 28%);
-  background: color-mix(in srgb, var(--background) 94%, #111318);
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
   cursor: move;
   user-select: none;
 }
@@ -172,7 +173,7 @@
 .project-terminal-body {
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
-  background: #111318;
+  background: var(--background);
 }
 
 .project-terminal-body[data-sidebar-collapsed="true"] {
@@ -185,9 +186,9 @@
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
-  border-right: 1px solid rgb(122 135 158 / 28%);
-  color: rgb(226 232 242);
-  background: rgb(24 27 33);
+  border-right: 1px solid var(--border);
+  color: var(--sidebar-foreground);
+  background: var(--sidebar);
 }
 
 .project-terminal-sidebar[data-collapsed="true"] {
@@ -203,7 +204,7 @@
   padding: 7px 5px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: rgb(121 130 149 / 55%) transparent;
+  scrollbar-color: var(--muted-foreground) transparent;
   scrollbar-width: thin;
 }
 
@@ -215,7 +216,7 @@
   place-items: center;
   border: 1px solid transparent;
   border-radius: 7px;
-  color: rgb(185 194 209);
+  color: var(--muted-foreground);
   background: transparent;
   font: 600 10px/1 var(--font-mono, monospace);
   cursor: pointer;
@@ -223,25 +224,25 @@
 
 .project-terminal-compact-session-button:hover,
 .project-terminal-compact-session-button:focus-visible {
-  border-color: rgb(127 141 164 / 44%);
-  color: #fff;
-  background: rgb(44 50 60);
+  border-color: var(--ring);
+  color: var(--foreground);
+  background: var(--accent);
   outline: none;
 }
 
 .project-terminal-compact-session-button[data-active="true"] {
-  border-color: rgb(111 152 216 / 70%);
-  color: #f7f9fc;
-  background: rgb(48 57 71);
-  box-shadow: inset 2px 0 0 rgb(111 169 255 / 92%);
+  border-color: var(--ring);
+  color: var(--foreground);
+  background: var(--accent);
+  box-shadow: inset 2px 0 0 var(--ring);
 }
 
 .project-terminal-compact-session-button[data-status="running"]:not([data-active="true"]) {
-  box-shadow: inset 2px 0 0 rgb(82 202 139 / 86%);
+  box-shadow: inset 2px 0 0 var(--chart-2);
 }
 
 .project-terminal-compact-session-button[data-status="failed"]:not([data-active="true"]) {
-  box-shadow: inset 2px 0 0 rgb(239 108 117 / 86%);
+  box-shadow: inset 2px 0 0 var(--destructive);
 }
 
 .project-terminal-sidebar-create {
@@ -250,7 +251,7 @@
   align-items: center;
   gap: 5px;
   padding: 7px;
-  border-bottom: 1px solid rgb(122 135 158 / 24%);
+  border-bottom: 1px solid var(--border);
 }
 
 .project-terminal-select-trigger {
@@ -258,23 +259,23 @@
   min-width: 0;
   height: 28px;
   appearance: none;
-  border: 1px solid rgb(141 153 174 / 46%);
+  border: 1px solid var(--input);
   border-radius: 6px;
   padding: 0 24px 0 8px;
-  color: rgb(241 244 249);
-  background: rgb(62 68 80);
+  color: var(--foreground);
+  background: var(--background);
   font-size: 11px;
   outline: none;
 }
 
 .project-terminal-select-trigger:hover:not(:disabled) {
-  border-color: rgb(160 176 204 / 66%);
-  background: rgb(70 77 91);
+  border-color: var(--ring);
+  background: var(--accent);
 }
 
 .project-terminal-select-trigger:focus-visible {
-  border-color: rgb(137 177 237 / 88%);
-  box-shadow: 0 0 0 1px rgb(95 143 219 / 36%);
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
   outline: none;
 }
 
@@ -283,18 +284,18 @@
   width: 28px;
   height: 28px;
   place-items: center;
-  border: 1px solid rgb(141 153 174 / 42%);
+  border: 1px solid var(--input);
   border-radius: 6px;
-  color: rgb(218 226 238);
-  background: rgb(45 50 59);
+  color: var(--foreground);
+  background: var(--background);
   cursor: pointer;
 }
 
 .project-terminal-sidebar-add:hover:not(:disabled),
 .project-terminal-sidebar-add:focus-visible {
-  border-color: rgb(137 177 237 / 76%);
-  color: #fff;
-  background: rgb(57 65 78);
+  border-color: var(--ring);
+  color: var(--foreground);
+  background: var(--accent);
   outline: none;
 }
 
@@ -308,7 +309,7 @@
   padding: 5px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: rgb(121 130 149 / 55%) transparent;
+  scrollbar-color: var(--muted-foreground) transparent;
   scrollbar-width: thin;
 }
 
@@ -322,19 +323,19 @@
   border: 1px solid transparent;
   border-radius: 7px;
   padding: 3px;
-  color: rgb(213 220 232);
+  color: var(--foreground);
   background: transparent;
 }
 
 .project-terminal-session-row:hover {
-  border-color: rgb(127 141 164 / 34%);
-  background: rgb(39 44 53);
+  border-color: var(--border);
+  background: var(--accent);
 }
 
 .project-terminal-session-row[data-active="true"] {
-  border-color: rgb(111 152 216 / 58%);
-  color: #f7f9fc;
-  background: rgb(48 57 71);
+  border-color: var(--ring);
+  color: var(--foreground);
+  background: var(--accent);
 }
 
 .project-terminal-session-select {
@@ -353,7 +354,7 @@
 }
 
 .project-terminal-session-select:focus-visible {
-  box-shadow: 0 0 0 1px rgb(137 177 237 / 74%);
+  box-shadow: 0 0 0 1px var(--ring);
   outline: none;
 }
 
@@ -363,16 +364,16 @@
   flex: 0 0 auto;
   margin-top: 3px;
   border-radius: 999px;
-  background: rgb(137 147 165);
+  background: var(--muted-foreground);
 }
 
 .project-terminal-session-row[data-status="running"] .project-terminal-session-status {
-  background: rgb(82 202 139);
-  box-shadow: 0 0 0 2px rgb(82 202 139 / 14%);
+  background: var(--chart-2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--chart-2) 14%, transparent);
 }
 
 .project-terminal-session-row[data-status="failed"] .project-terminal-session-status {
-  background: rgb(239 108 117);
+  background: var(--destructive);
 }
 
 .project-terminal-session-name {
@@ -397,15 +398,15 @@
   place-items: center;
   border: 0;
   border-radius: 5px;
-  color: rgb(166 177 195);
+  color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
 }
 
 .project-terminal-session-actions button:hover:not(:disabled),
 .project-terminal-session-actions button:focus-visible {
-  color: #fff;
-  background: rgb(113 132 161 / 24%);
+  color: var(--foreground);
+  background: var(--accent);
   outline: none;
 }
 
@@ -418,14 +419,14 @@
   width: 100%;
   min-width: 0;
   min-height: 26px;
-  border: 1px solid rgb(137 177 237 / 82%);
+  border: 1px solid var(--ring);
   border-radius: 5px;
   padding: 4px 6px;
-  color: #f7f9fc;
-  background: rgb(29 33 41);
+  color: var(--foreground);
+  background: var(--background);
   font-size: 11px;
   outline: none;
-  box-shadow: 0 0 0 1px rgb(95 143 219 / 34%);
+  box-shadow: 0 0 0 1px var(--ring);
 }
 
 .project-terminal-header-actions {
@@ -450,7 +451,7 @@
 .project-terminal-header-actions button:hover:not(:disabled),
 .project-terminal-header-actions button:focus-visible {
   color: var(--foreground);
-  background: rgb(126 142 169 / 16%);
+  background: var(--accent);
   outline: none;
 }
 
@@ -480,11 +481,11 @@
   height: 30px;
   align-items: center;
   gap: 6px;
-  border: 1px solid rgb(126 161 218 / 52%);
+  border: 1px solid var(--input);
   border-radius: 7px;
   padding: 0 10px;
   color: var(--foreground);
-  background: rgb(95 143 219 / 14%);
+  background: var(--accent);
 }
 
 .project-terminal-error {
@@ -495,11 +496,11 @@
   left: 10px;
   max-height: 72px;
   overflow: auto;
-  border: 1px solid rgb(228 97 97 / 50%);
+  border: 1px solid color-mix(in srgb, var(--destructive) 50%, var(--border));
   border-radius: 7px;
   padding: 7px 9px;
-  color: rgb(255 190 190);
-  background: rgb(78 22 27 / 92%);
+  color: var(--destructive);
+  background: var(--background);
   font-size: 11px;
   pointer-events: auto;
 }
@@ -510,12 +511,12 @@
   bottom: 10px;
   z-index: 2;
   max-width: calc(100% - 24px);
-  border: 1px solid rgb(122 135 158 / 36%);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 5px 8px;
   overflow: hidden;
   color: var(--muted-foreground);
-  background: rgb(17 19 24 / 88%);
+  background: var(--background);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -544,5 +545,59 @@
 
   .project-terminal-current-title small {
     display: none;
+  }
+}
+
+/* Keep errors visible above the read-only terminal's independently sized viewport. */
+/* 将错误保留在只读终端独立定尺寸的视口上方。 */
+.conversation-session-terminal-floating-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-session-terminal-floating-body > details {
+  flex: 0 0 auto;
+  max-height: 30%;
+  overflow: auto;
+  padding: 8px 10px;
+  color: var(--destructive);
+}
+
+.conversation-session-terminal-floating-body > .conversation-session-terminal-screen-frame {
+  flex: 1 1 auto;
+  height: auto;
+}
+
+.project-terminal-error,
+.project-terminal-empty,
+.project-terminal-status {
+  overflow-wrap: anywhere;
+}
+
+.project-terminal-status {
+  white-space: normal;
+}
+
+.project-terminal-error button {
+  margin-inline-start: 8px;
+}
+
+.project-terminal-session-select:disabled,
+.project-terminal-compact-session-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Respond to the actual resizable terminal width, including narrow windows on wide desktops. */
+/* 响应可调整终端的实际宽度，包括宽桌面上的窄窗口。 */
+@container (max-width: 520px) {
+  .project-terminal-body:not([data-sidebar-collapsed="true"]) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(72px, 40%) minmax(0, 1fr);
+  }
+
+  .project-terminal-body:not([data-sidebar-collapsed="true"]) .project-terminal-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
 }

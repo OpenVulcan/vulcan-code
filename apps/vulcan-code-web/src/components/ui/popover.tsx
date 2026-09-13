@@ -77,11 +77,13 @@ function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-// PopoverTitle renders the concise heading of a popover.
-// PopoverTitle 渲染浮层的简短标题。
+// PopoverTitle renders a semantic heading and forwards native heading attributes.
+// PopoverTitle 渲染语义标题并转发原生标题属性。
+// Parameters: props are native h2 attributes. Returns: the styled h2 heading.
+// 参数：props 是原生 h2 属性。返回值：带共享样式的 h2 标题。
 function PopoverTitle({ className, ...props }: React.ComponentProps<"h2">) {
   return (
-    <div
+    <h2
       data-slot="popover-title"
       className={cn("font-medium", className)}
       {...props}

@@ -1,4 +1,5 @@
 import React from "react";
+import "@/styles/session-review-repositories.css";
 import { VceFloatingNode } from "@/components/features/code-context/vce-project-controls";
 import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import {
@@ -122,23 +123,6 @@ export interface ConversationSessionReviewRepository {
   // 最近一次仓库刷新错误。
   error: string | null;
 }
-
-// EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY keeps disabled repositories visible for settings.
-// EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY 让已关闭监听的仓库仍可展示设置。
-const EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY: ConversationSessionReviewSummary = {
-  additions: 0,
-  branchName: null,
-  branchNames: [],
-  changedFiles: 0,
-  deletions: 0,
-  stagedAdditions: 0,
-  stagedChangedFiles: 0,
-  stagedDeletions: 0,
-  unpushedCommits: 0,
-  unstagedAdditions: 0,
-  unstagedChangedFiles: 0,
-  unstagedDeletions: 0,
-};
 
 // ConversationSessionCommitTarget identifies where the local commit draft would land.
 // ConversationSessionCommitTarget 标识本地提交草稿的目标分支位置。
@@ -265,11 +249,21 @@ export function ConversationSessionTodolistPanel(props: {
     ?.map((repository) => `${repository.repositoryKey}:${repository.isPrimary ? "primary" : "secondary"}`)
     .join("\u0000") ?? "";
   const [reviewRepositoryOrderKeys, setReviewRepositoryOrderKeys] = React.useState<string[]>([]);
-  const [collapsedReviewRepositoryKeys, setCollapsedReviewRepositoryKeys] = React.useState<Set<string>>(new Set());
+  // Local selection is used only by callers without a controlled repository key.
+  // 本地选择仅供没有受控仓库键的调用方使用。
+  const [localReviewRepositoryKey, setLocalReviewRepositoryKey] = React.useState<string | null>(null);
   const [monitoringTogglePendingKeys, setMonitoringTogglePendingKeys] = React.useState<Set<string>>(new Set());
   const reviewRepositoryOrderStorageKey = props.reviewRepositoryOrderStorageKey
     ? `vulcan.git-review.repository-order.${props.reviewRepositoryOrderStorageKey}`
     : null;
+  // Monitoring requests belong to one workspace lifetime, even when another workspace reuses the same repo key.
+  // 监听请求属于一个工作区周期，即使另一工作区复用相同仓库键也不会串扰。
+  // Each project visit owns synchronous repository locks; an older visit cannot unlock a newer request.
+  // 每次项目访问持有同步仓库锁；较早访问不能解锁较新请求。
+  const monitoringScope = React.useMemo(() => new Set<string>(), [reviewRepositoryOrderStorageKey]);
+  const monitoringScopeRef = React.useRef(monitoringScope);
+  monitoringScopeRef.current = monitoringScope;
+  React.useEffect(() => setMonitoringTogglePendingKeys(new Set()), [monitoringScope]);
   React.useEffect(() => {
     if (!reviewRepositoryOrderStorageKey) {
       setReviewRepositoryOrderKeys([]);
@@ -308,34 +302,12 @@ export function ConversationSessionTodolistPanel(props: {
     () => orderedReviewRepositories.filter((repository) => repository.monitoringEnabled),
     [orderedReviewRepositories],
   );
-  const orderedReviewRepositoryKey = visibleReviewRepositories
-    .map((repository) => repository.repositoryKey)
-    .join("\u0000");
-  // Default expansion follows repository membership or order changes, not summary refreshes.
-  // 默认展开只跟随仓库集合或顺序变化，不因统计刷新而覆盖用户折叠选择。
-  React.useEffect(() => {
-    setCollapsedReviewRepositoryKeys((current) => {
-      const next = new Set(current);
-      const repositoryKeys = new Set(visibleReviewRepositories.map((repository) => repository.repositoryKey));
-      let changed = false;
-      for (const key of next) {
-        if (!repositoryKeys.has(key)) {
-          next.delete(key);
-          changed = true;
-        }
-      }
-      for (const [index, repository] of visibleReviewRepositories.entries()) {
-        if (index > 0 && !next.has(repository.repositoryKey)) {
-          next.add(repository.repositoryKey);
-          changed = true;
-        }
-        if (index === 0 && next.delete(repository.repositoryKey)) {
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [orderedReviewRepositoryKey, reviewRepositoryLayoutKey]);
+  // The host owns commit identity; absent or removed selection chooses the first monitored repository.
+  // 宿主持有提交身份；选择缺失或被移除时选择首个已监听仓库。
+  const selectedReviewRepository = visibleReviewRepositories.find((repository) => repository.repositoryKey
+    === (props.activeReviewRepositoryKey === undefined ? localReviewRepositoryKey : props.activeReviewRepositoryKey))
+    ?? visibleReviewRepositories[0] ?? null;
+  React.useEffect(() => setLocalReviewRepositoryKey(null), [reviewRepositoryOrderStorageKey]);
   React.useEffect(() => {
     setMonitoringTogglePendingKeys((current) => {
       const repositoryKeys = new Set((props.reviewRepositories ?? []).map((repository) => repository.repositoryKey));
@@ -345,10 +317,14 @@ export function ConversationSessionTodolistPanel(props: {
   }, [reviewRepositoryLayoutKey]);
   // toggleReviewMonitoring serializes one repository preference click until its persistence request settles.
   // toggleReviewMonitoring 在偏好持久化请求结束前串行化单个仓库的开关点击。
+  // Parameters: repositoryKey is the scoped node and enabled is the requested preference. Returns after the host settles and its own lock releases.
+  // 参数：repositoryKey 是作用域内节点，enabled 是请求的偏好。宿主结束且自身锁释放后返回。
   const toggleReviewMonitoring = React.useCallback(async (repositoryKey: string, enabled: boolean) => {
-    if (!props.onToggleReviewMonitoring || monitoringTogglePendingKeys.has(repositoryKey)) {
+    if (!props.onToggleReviewMonitoring || monitoringScope.has(repositoryKey)
+      || props.commitBusyStateForRepository?.(repositoryKey)) {
       return;
     }
+    monitoringScope.add(repositoryKey);
     setMonitoringTogglePendingKeys((current) => {
       const next = new Set(current);
       next.add(repositoryKey);
@@ -357,13 +333,16 @@ export function ConversationSessionTodolistPanel(props: {
     try {
       await props.onToggleReviewMonitoring(repositoryKey, enabled);
     } finally {
-      setMonitoringTogglePendingKeys((current) => {
-        const next = new Set(current);
-        next.delete(repositoryKey);
-        return next;
-      });
+      monitoringScope.delete(repositoryKey);
+      if (monitoringScopeRef.current === monitoringScope) {
+        setMonitoringTogglePendingKeys((current) => {
+          const next = new Set(current);
+          next.delete(repositoryKey);
+          return next;
+        });
+      }
     }
-  }, [monitoringTogglePendingKeys, props.onToggleReviewMonitoring]);
+  }, [monitoringScope, props.commitBusyStateForRepository, props.onToggleReviewMonitoring]);
   const moveReviewRepository = React.useCallback((repositoryKey: string, direction: -1 | 1) => {
     const orderedKeys = normalizeReviewRepositoryOrderKeys(
       reviewRepositoryOrderKeys,
@@ -544,7 +523,9 @@ export function ConversationSessionTodolistPanel(props: {
         {showReviewRepositoryManager ? (
           <ConversationSessionReviewMonitoringManager
             repositories={orderedReviewRepositories}
-            pendingRepositoryKeys={monitoringTogglePendingKeys}
+            pendingRepositoryKeys={new Set([...monitoringTogglePendingKeys,
+              ...orderedReviewRepositories.filter((repository) => props.commitBusyStateForRepository?.(repository.repositoryKey))
+                .map((repository) => repository.repositoryKey)])}
             onMoveRepository={moveReviewRepository}
             onToggleMonitoring={toggleReviewMonitoring}
           />
@@ -559,33 +540,48 @@ export function ConversationSessionTodolistPanel(props: {
           <Minimize2 size={13} />
         </button>
       </div>
-      {visibleReviewRepositories.length ? visibleReviewRepositories.map((repository, index) => (
+      {visibleReviewRepositories.length > 1 ? (
+        <div className="session-review-repository-list" aria-label={t("gitRepository.list")}>
+          {visibleReviewRepositories.map((repository) => (
+            <button type="button" className="session-review-repository-option" key={repository.repositoryKey}
+              aria-pressed={selectedReviewRepository?.repositoryKey === repository.repositoryKey}
+              disabled={props.commitDialogOpen}
+              onClick={() => {
+                setLocalReviewRepositoryKey(repository.repositoryKey);
+                props.onSelectReviewRepository?.(repository.repositoryKey);
+              }}>
+              <span className="session-review-repository-identity">
+                <strong>{repository.repositoryName}</strong>
+                <small>{t(repository.isPrimary ? "gitRepository.primary" : "gitRepository.nested")} · {repository.relativePath}</small>
+              </span>
+              <span className="session-review-repository-status">
+                <span>{repository.summary === null || repository.summary.branchName === null
+                  ? t("gitRepository.branchUnknown") : conversationSessionBranchDisplayName(repository.summary.branchName)}</span>
+                <small>{repository.summary === null ? t("gitRepository.changesUnknown") : t("gitRepository.changedFiles").replace("{count}", String(repository.summary.changedFiles))}</small>
+                {repository.loading ? <LoaderCircle className="spin" size={12} aria-label={t("gitRepository.refreshing")} /> : null}
+                {repository.error ? <span className="session-review-repository-failure" title={repository.error}>{t("gitRepository.readFailed")}</span> : null}
+                {props.commitBusyStateForRepository?.(repository.repositoryKey) ? <span>{t("gitRepository.busy")}</span> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {selectedReviewRepository ? [selectedReviewRepository].map((repository) => (
         <ConversationSessionReviewSection
           key={repository.repositoryKey}
-          commitBusyState={props.commitBusyStateForRepository?.(repository.repositoryKey)
-            ?? (props.activeReviewRepositoryKey === repository.repositoryKey ? props.commitBusyState : null)}
+          commitBusyState={props.commitBusyStateForRepository
+            ? props.commitBusyStateForRepository(repository.repositoryKey)
+            : props.activeReviewRepositoryKey === repository.repositoryKey ? props.commitBusyState : null}
           commitDialogOpen={props.commitDialogOpen && props.activeReviewRepositoryKey === repository.repositoryKey}
           error={repository.error}
           loading={repository.loading}
           relativePath={repository.relativePath}
           repositoryKey={repository.repositoryKey}
           repositoryName={repository.repositoryName}
-          reviewSummary={repository.summary ?? EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY}
+          reviewSummary={repository.summary}
           monitoringEnabled={repository.monitoringEnabled}
           monitoringToggleDisabled={monitoringTogglePendingKeys.has(repository.repositoryKey)
             || Boolean(props.commitBusyStateForRepository?.(repository.repositoryKey))}
-          expanded={index === 0 || !collapsedReviewRepositoryKeys.has(repository.repositoryKey)}
-          onExpandedChange={index === 0 ? undefined : (expanded) => {
-            setCollapsedReviewRepositoryKeys((current) => {
-              const next = new Set(current);
-              if (expanded) {
-                next.delete(repository.repositoryKey);
-              } else {
-                next.add(repository.repositoryKey);
-              }
-              return next;
-            });
-          }}
           onCommitDialogOpenChange={(open) => {
             props.onSelectReviewRepository?.(repository.repositoryKey);
             props.onCommitDialogOpenChange(open);
@@ -593,7 +589,7 @@ export function ConversationSessionTodolistPanel(props: {
           onOpenReviewChanges={() => props.onOpenReviewChanges(repository.repositoryKey)}
           onToggleReviewMonitoring={toggleReviewMonitoring}
         />
-      )) : props.reviewSummary ? (
+      )) : !props.reviewRepositories?.length && props.reviewSummary ? (
         <ConversationSessionReviewSection
           commitBusyState={props.commitBusyState}
           commitDialogOpen={props.commitDialogOpen}
@@ -722,7 +718,7 @@ function ConversationSessionReviewSection(props: {
   commitBusyState: ConversationSessionCommitBusyState;
   // Review summary rendered by this section.
   // 当前区域渲染的审查摘要。
-  reviewSummary: ConversationSessionReviewSummary;
+  reviewSummary: ConversationSessionReviewSummary | null;
   // Optional stable repository key rendered in a multi-repository node.
   // 多仓库节点中展示的可选稳定仓库键。
   repositoryKey?: string;
@@ -765,9 +761,9 @@ function ConversationSessionReviewSection(props: {
   const { t } = useI18n();
   // hasGitCommitOrPushContent tracks whether the compact Git entry can open a meaningful action.
   // hasGitCommitOrPushContent 判断紧凑 Git 入口是否存在可执行的提交或推送内容。
-  const hasGitCommitOrPushContent = props.reviewSummary.stagedChangedFiles > 0
+  const hasGitCommitOrPushContent = props.reviewSummary !== null && (props.reviewSummary.stagedChangedFiles > 0
     || props.reviewSummary.unstagedChangedFiles > 0
-    || props.reviewSummary.unpushedCommits > 0;
+    || props.reviewSummary.unpushedCommits > 0);
   // repositoryMonitoringDisabled prevents stale snapshots from enabling actions after monitoring is turned off.
   // repositoryMonitoringDisabled 防止关闭监听后旧快照仍然启用操作。
   const repositoryMonitoringDisabled = Boolean(props.repositoryKey && props.monitoringEnabled === false);
@@ -777,11 +773,12 @@ function ConversationSessionReviewSection(props: {
   // commitTriggerDisabled disables the entry while Git is busy or no commit/push action is possible.
   // commitTriggerDisabled 在 Git 忙碌或没有可提交/可推送内容时禁用入口。
   const commitTriggerDisabled = repositoryMonitoringDisabled
+    || props.loading || Boolean(props.error)
     || Boolean(props.commitBusyState)
     || !hasGitCommitOrPushContent;
 
   return (
-    <section className="conversation-session-tool-section conversation-session-review-section">
+    <section className="conversation-session-tool-section conversation-session-review-section" data-repository-key={props.repositoryKey}>
       <div className="conversation-session-tool-section-title with-action">
         <span>
           {props.repositoryName ?? t("gitCommitDialog.toolsTitle")}
@@ -816,11 +813,17 @@ function ConversationSessionReviewSection(props: {
           </button>
         ) : null}
       </div>
-      {reviewSectionExpanded ? (
+      {props.error ? <p className="session-review-repository-diagnostic" role="alert">{props.error}</p> : null}
+      {props.error ? <button className="workspace-tool-panel-menu-row conversation-session-review-row"
+        disabled={repositoryMonitoringDisabled || props.loading} onClick={props.onOpenReviewChanges} type="button">
+        <FileDiff size={15} /><span>{t("gitRepository.retryReview")}</span>
+      </button> : null}
+      {props.reviewSummary === null ? <p className="session-review-repository-notice">{t(props.loading ? "gitRepository.loading" : "gitRepository.unavailable")}</p> : null}
+      {reviewSectionExpanded && props.reviewSummary !== null ? (
         <div className="workspace-tool-panel-menu-list conversation-session-review-list">
           <button
             className="workspace-tool-panel-menu-row conversation-session-review-row"
-            disabled={repositoryMonitoringDisabled}
+            disabled={repositoryMonitoringDisabled || props.loading || Boolean(props.error)}
             onClick={props.onOpenReviewChanges}
             type="button"
           >

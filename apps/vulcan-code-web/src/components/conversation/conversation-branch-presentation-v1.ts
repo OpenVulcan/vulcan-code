@@ -1,4 +1,5 @@
 import type { TranslationKey } from "@/i18n-messages";
+import { averageTurnOutputSpeed } from "./conversation-usage-display";
 import type {
   ComposerAttachmentSummary,
   ConversationMessage,
@@ -566,6 +567,7 @@ function turnStatsMetadata(
     turn_kind: "user_turn",
     status: outcome,
     duration_ms: durationMs,
+    output_tokens_per_second: averageTurnOutputSpeed(total.usage.output_tokens, durationMs),
     provider_call_count: total.api_call_count,
     unknown_usage_api_call_count: total.unknown_usage_api_call_count,
     tool_call_count: total.tool_call_count,

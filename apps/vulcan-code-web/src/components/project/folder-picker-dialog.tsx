@@ -64,7 +64,7 @@ export function ProjectFolderPickerDialog({
   onConfirm,
   onOpenChange,
 }: ProjectFolderPickerDialogProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // listing stores the current directory listing returned by the service.
   // listing 保存服务返回的当前目录列表。
   const [listing, setListing] = React.useState<ProjectDirectoryListing | null>(null);
@@ -136,15 +136,22 @@ export function ProjectFolderPickerDialog({
 
   React.useEffect(() => {
     if (!open) {
+      browseSequenceRef.current += 1;
+      setListing(null); setPathInput(""); setLoading(false); setError(null);
       return;
     }
+    setListing(null);
     void loadDirectory(initialPath ?? null);
+    return () => { browseSequenceRef.current += 1; };
   }, [initialPath, loadDirectory, open]);
+
+  // selectedPath is authorized only by the listing that owns the unchanged input path.
+  // selectedPath 仅由与未改写输入路径对应的目录列表授权选择。
+  const selectedPath = listing?.canSelect && pathInput === listing.path ? listing.path : null;
 
   // handleConfirm submits the current path as the new project directory.
   // handleConfirm 将当前路径作为新项目目录提交。
   const handleConfirm = React.useCallback(async () => {
-    const selectedPath = pathInput.trim() || listing?.path || "";
     if (!selectedPath || submittingRef.current) {
       return;
     }
@@ -160,7 +167,7 @@ export function ProjectFolderPickerDialog({
       submittingRef.current = false;
       setSubmitting(false);
     }
-  }, [listing?.path, onConfirm, onOpenChange, pathInput]);
+  }, [onConfirm, onOpenChange, selectedPath]);
 
   // handlePathSubmit loads the manually entered path.
   // handlePathSubmit 加载手动输入的路径。
@@ -173,6 +180,8 @@ export function ProjectFolderPickerDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => !submittingRef.current && onOpenChange(nextOpen)}>
       <DialogContent
         className="project-folder-picker-dialog"
+        size="xl"
+        scrollMode="content-scroll"
         onEscapeKeyDown={(event) => {
           if (submittingRef.current) {
             event.preventDefault();
@@ -264,13 +273,14 @@ export function ProjectFolderPickerDialog({
             </div>
           </section>
         </div>
-        {error ? <div className="project-folder-picker-error">{error}</div> : null}
+        {listing && pathInput !== listing.path && <p role="status" className="text-sm text-muted-foreground">{locale === "zh-CN" ? "请先打开输入的路径，再确认目录。" : "Open the entered path before confirming the directory."}</p>}
+        {error ? <div role="alert" className="project-folder-picker-error">{error}</div> : null}
         {listing?.notice ? <div className="project-folder-picker-notice">{listing.notice}</div> : null}
         <DialogFooter>
           <Button disabled={submitting} onClick={() => onOpenChange(false)} type="button" variant="outline">
             {t("conversation.action.cancel")}
           </Button>
-          <Button disabled={!listing?.canSelect || submitting || loading} onClick={handleConfirm} type="button">
+          <Button disabled={!selectedPath || submitting || loading} onClick={handleConfirm} type="button">
             {submitting ? <Spinner className="size-4" /> : <Check size={16} />}
             {submitting ? t("projectFolderPicker.adding") : (confirmLabel ?? t("sidebar.addProject"))}
           </Button>

@@ -13,6 +13,8 @@ tauri-build = { workspace = true, features = [] }
 [dependencies]
 tauri = { workspace = true, features = [] }
 tauri-plugin-notification.workspace = true
+serde.workspace = true
+notify-rust.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 vulcan-host-tools.workspace = true
 vulcan-provider-adapters.workspace = true
@@ -24,5 +26,19 @@ vulcan-service-kernel.workspace = true
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
-[lints]
-workspace = true
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Registry", "Win32_System_Variant", "Win32_Storage_EnhancedStorage", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# Only the private Windows notification interop module permits audited COM calls.
+# 仅私有 Windows 通知互操作模块允许经过审核的 COM 调用。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"

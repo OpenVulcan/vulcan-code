@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   NOTIFICATION_PREFERENCES_STORAGE_KEY,
   defaultNotificationPreferences,
@@ -27,6 +27,16 @@ class MemoryStorage {
 }
 
 describe("notification preferences", () => {
+  // A denied Storage getter must not crash the settings page before its safe default can be returned.
+  // Storage getter 被拒绝时不能在返回安全默认值前使设置页面崩溃。
+  it("handles clients that reject access to local storage", () => {
+    vi.stubGlobal("window", { get localStorage() { throw new Error("Storage denied"); } });
+    try {
+      expect(loadNotificationPreferences()).toEqual(defaultNotificationPreferences());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("persists and reloads a complete V1 document", () => {
     // storage isolates this test from browser state.
     // storage 将本测试与浏览器状态隔离。

@@ -376,9 +376,11 @@ function VmmSetupDialog({
   ])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!effectiveBusy) onOpenChange(nextOpen) }}>
+      <DialogContent className="flex min-h-0 flex-col" size="xl" scrollMode="fixed-footer" showCloseButton={!effectiveBusy}
+        onEscapeKeyDown={(event) => { if (effectiveBusy) event.preventDefault() }}
+        onInteractOutside={(event) => { if (effectiveBusy) event.preventDefault() }}>
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <BrainCircuit className="size-5" aria-hidden="true" />
             {t("vmm.setup.title")}
@@ -388,8 +390,8 @@ function VmmSetupDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <Progress value={(step + 1) * 25} />
-        <div className="min-h-80 py-1">
+        <Progress className="shrink-0" value={(step + 1) * 25} />
+        <fieldset disabled={effectiveBusy} className="min-h-0 min-w-0 flex-1 overflow-y-auto py-1">
           {step === 0 ? (
             <SetupModeStep
               apiKey={externalApiKey}
@@ -478,9 +480,9 @@ function VmmSetupDialog({
               </AlertDescription>
             </Alert>
           ) : null}
-        </div>
+        </fieldset>
 
-        <DialogFooter className="sm:justify-between">
+        <DialogFooter className="shrink-0 sm:justify-between">
           <Button
             disabled={effectiveBusy}
             onClick={() => {

@@ -45,6 +45,12 @@ export interface UseComposerAttachmentsState {
   // attachments stores staged attachments submitted with the next prompt.
   // attachments 保存下一条提示词将携带的已暂存附件。
   attachments: ComposerAttachmentSummary[];
+  // pendingAttachmentCount counts accepted files still being staged for this exact draft.
+  // pendingAttachmentCount 统计当前精确草稿中仍在暂存的已接受文件。
+  pendingAttachmentCount: number;
+  // hasPendingAttachmentStaging reads the synchronous barrier before any send can clear the draft.
+  // hasPendingAttachmentStaging 在任何发送清空草稿前读取同步屏障。
+  hasPendingAttachmentStaging: () => boolean;
   // setAttachments replaces staged attachments for send failure restore and pending prompt edit.
   // setAttachments 替换已暂存附件，用于发送失败恢复与待发送提示词编辑。
   setAttachments: React.Dispatch<React.SetStateAction<ComposerAttachmentSummary[]>>;
@@ -91,13 +97,28 @@ export interface UseComposerAttachmentsState {
 
 // useComposerAttachments owns attachment validation, staging, drag-drop, and paste behavior.
 // useComposerAttachments 管理附件校验、暂存、拖拽投放与粘贴行为。
+// Parameters: args supplies the current draft owner, staging services and capability limits; returns attachment state, pending counts and synchronous submission guards.
+// 参数：args 提供当前草稿归属、暂存服务与能力限制；返回附件状态、在途计数与同步发送屏障。
 export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseComposerAttachmentsState {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   // attachments stores staged composer attachments submitted with the next prompt.
   // attachments 保存下一条提示词将携带的已暂存输入区附件。
-  const [attachments, setAttachments] = React.useState<ComposerAttachmentSummary[]>(() => args.initialAttachments ?? []);
+  const [attachments, commitAttachments] = React.useState<ComposerAttachmentSummary[]>(() => args.initialAttachments ?? []);
+  // attachmentsRef reserves accurate slots across simultaneous staging batches before the next render.
+  // attachmentsRef 在下一次渲染前为同时暂存的批次保留准确名额。
+  const attachmentsRef = React.useRef(attachments);
+  const setAttachments = React.useCallback<React.Dispatch<React.SetStateAction<ComposerAttachmentSummary[]>>>((update) => {
+    const next = typeof update === "function" ? update(attachmentsRef.current) : update;
+    attachmentsRef.current = next;
+    commitAttachments(next);
+  }, []);
+  // pendingStagingRef is the immediate send barrier; state supplies its visible projection.
+  // pendingStagingRef 是即时发送屏障；state 提供其可见投影。
+  const pendingStagingRef = React.useRef(0);
+  const [pendingAttachmentCount, setPendingAttachmentCount] = React.useState(0);
+  const hasPendingAttachmentStaging = React.useCallback(() => pendingStagingRef.current > 0, []);
   // isAttachmentDragOver highlights the composer when valid files are dragged over it.
   // isAttachmentDragOver 在有效文件拖入输入区时高亮边框。
   const [isAttachmentDragOver, setIsAttachmentDragOver] = React.useState(false);
@@ -140,7 +161,7 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       toast.info(t("composer.attachment.unsupported"));
       return;
     }
-    const availableSlots = MAX_COMPOSER_ATTACHMENTS - attachments.length;
+    const availableSlots = MAX_COMPOSER_ATTACHMENTS - attachmentsRef.current.length - pendingStagingRef.current;
     if (availableSlots <= 0) {
       toast.info(formatComposerAttachmentTranslation(t, "composer.attachment.maxLimit", { count: String(MAX_COMPOSER_ATTACHMENTS) }));
       return;
@@ -150,6 +171,9 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       toast.info(formatComposerAttachmentTranslation(t, "composer.attachment.partialMaxLimit", { count: String(MAX_COMPOSER_ATTACHMENTS) }));
     }
     const staged: ComposerAttachmentSummary[] = [];
+    pendingStagingRef.current += acceptedFiles.length;
+    setPendingAttachmentCount(pendingStagingRef.current);
+    try {
     for (const file of acceptedFiles) {
       if (stagingGeneration !== stagingGenerationRef.current) {
         return;
@@ -161,6 +185,7 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
         }
         if (attachment) {
           const previewFile = await createComposerImagePreviewFile(file);
+          if (stagingGeneration !== stagingGenerationRef.current) return;
           if (previewFile && attachment.assetId) {
             try {
               // previewLocalPath points at a sidecar of the canonical asset and never creates a second attachment index record.
@@ -173,13 +198,13 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
               );
               attachment = { ...attachment, previewLocalPath };
             } catch (error) {
-              toast.error(error instanceof Error ? error.message : String(error));
+              if (stagingGeneration === stagingGenerationRef.current) toast.error(error instanceof Error ? error.message : String(error));
             }
           }
           staged.push(attachment);
         }
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error));
+        if (stagingGeneration === stagingGenerationRef.current) toast.error(error instanceof Error ? error.message : String(error));
       }
     }
     if (!staged.length) {
@@ -200,11 +225,17 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       });
       return [...current, ...unique].slice(0, MAX_COMPOSER_ATTACHMENTS);
     });
+    } finally {
+      if (stagingGeneration === stagingGenerationRef.current) {
+        pendingStagingRef.current -= acceptedFiles.length;
+        setPendingAttachmentCount(pendingStagingRef.current);
+      }
+    }
   }, [
     args.conversationId,
     args.onStageAttachmentBytes,
     args.projectId,
-    attachments.length,
+    setAttachments,
     enabledAttachmentKinds,
     t,
   ]);
@@ -285,14 +316,22 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
   // invalidatePendingAttachmentStaging 推进草稿代际，但不取消规范资产的持久化。
   const invalidatePendingAttachmentStaging = React.useCallback(() => {
     stagingGenerationRef.current += 1;
+    pendingStagingRef.current = 0;
+    setPendingAttachmentCount(0);
     setIsAttachmentDragOver(false);
     if (attachmentFileInputRef.current) {
       attachmentFileInputRef.current.value = "";
     }
   }, []);
+  React.useLayoutEffect(() => {
+    invalidatePendingAttachmentStaging();
+    return () => { stagingGenerationRef.current += 1; pendingStagingRef.current = 0; };
+  }, [args.projectId, args.conversationId, invalidatePendingAttachmentStaging]);
 
   return {
     attachments,
+    pendingAttachmentCount,
+    hasPendingAttachmentStaging,
     setAttachments,
     isAttachmentDragOver,
     setIsAttachmentDragOver,

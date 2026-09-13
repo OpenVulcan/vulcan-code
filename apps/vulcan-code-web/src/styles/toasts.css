@@ -1,0 +1,46 @@
+/* Override the library palette at its declared variable boundary so the current application theme remains authoritative. */
+/* 在通知库声明的变量边界覆盖调色板，保持当前应用主题的权威。 */
+[data-sonner-toaster].toaster[data-sonner-theme] {
+  --normal-bg: var(--popover);
+  --normal-bg-hover: var(--accent);
+  --normal-text: var(--popover-foreground);
+  --normal-border: var(--border);
+  --normal-border-hover: var(--ring);
+  --success-bg: color-mix(in srgb, var(--vcn-content-success) 10%, var(--popover));
+  --success-text: var(--vcn-content-success);
+  --success-border: color-mix(in srgb, var(--vcn-content-success) 30%, var(--border));
+  --info-bg: var(--popover);
+  --info-text: var(--popover-foreground);
+  --info-border: var(--border);
+  --warning-bg: color-mix(in srgb, var(--vcn-content-warning) 10%, var(--popover));
+  --warning-text: var(--vcn-content-warning);
+  --warning-border: color-mix(in srgb, var(--vcn-content-warning) 30%, var(--border));
+  --error-bg: color-mix(in srgb, var(--destructive) 10%, var(--popover));
+  --error-text: var(--destructive);
+  --error-border: color-mix(in srgb, var(--destructive) 30%, var(--border));
+}
+
+/* Native toast actions, descriptions and focus rings share the application's semantic colors. */
+/* 原生通知操作、说明与焦点环共用应用语义颜色。 */
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-description] {
+  color: var(--muted-foreground);
+}
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-button] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-cancel] {
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-close-button] {
+  background: var(--popover);
+  border-color: var(--border);
+  color: var(--popover-foreground);
+}
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-close-button]:hover {
+  background: var(--accent);
+}
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] :is([data-button], [data-close-button]):focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}

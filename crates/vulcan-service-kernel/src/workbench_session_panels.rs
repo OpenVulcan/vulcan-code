@@ -389,6 +389,10 @@ pub(crate) fn session_vmm_policy_summary_from_layers(
     let effective =
         vulcan_vmm::VmmEffectiveConfig::resolve(global_layer, project_layer, session_layer);
     SessionVmmPolicySummary {
+        // The global hook projection is the master switch even when a lower layer sets enabled.
+        // 即使下层配置设置了 enabled，全局 Hook 投影仍是总开关。
+        memory_enabled: vulcan_vmm::VmmEffectiveConfig::resolve(global_layer, None, None).enabled
+            && effective.enabled,
         precheck_mode: vmm_policy_mode_key(summary_layer.precheck_enabled),
         precheck_enabled: effective.precheck_enabled,
         memory_writeback_mode: vmm_policy_mode_key(summary_layer.memory_writeback_enabled),
@@ -952,6 +956,38 @@ mod tests {
     use vulcan_session_core::v1::ids::{ApiCallId, ClientActionId};
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
     use vulcan_vmm::{ContextItem, VmmRecallBatch};
+
+    /// Verifies memory visibility follows the exact global/project/session resolution, not either hook switch.
+    /// 验证记忆可见性遵循准确的全局/项目/会话解析，而非任一注入开关。
+    /// No input or result; all policy layers are in memory and no user configuration is written.
+    /// 无输入输出；所有策略层位于内存，不写入用户配置。
+    #[test]
+    fn session_memory_enablement_respects_exact_scope_layers() {
+        // Global activation is the master gate used by refresh_guard_vmm_hook_snapshot.
+        // 全局启用是 refresh_guard_vmm_hook_snapshot 使用的总开关。
+        let mut global = vulcan_vmm::VmmConfigLayer {
+            enabled: Some(false),
+            precheck_enabled: Some(true),
+            ..Default::default()
+        };
+        // The peer project's policy must not determine this project's enablement.
+        // 其他项目的策略不能决定此项目的启用状态。
+        let project = vulcan_vmm::VmmConfigLayer {
+            enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(!session_vmm_policy_summary_from_layers(&global, None, None).memory_enabled);
+        assert!(!session_vmm_policy_summary_from_layers(&global, Some(&project), None).memory_enabled);
+        global.enabled = Some(true);
+        assert!(session_vmm_policy_summary_from_layers(&global, Some(&project), None).memory_enabled);
+        // A session override remains the final authority even when its project is enabled.
+        // 即使项目已启用，会话覆盖仍是最终权威。
+        let mut session = SessionRuntimeStateEntry::default();
+        session.vmm.enabled = Some(false);
+        let summary = session_vmm_policy_summary_from_layers(&global, Some(&project), Some(&session));
+        assert!(!summary.memory_enabled);
+        assert!(summary.precheck_enabled);
+    }
 
     /// Starts one deterministic physical V1 Provider API for session-panel tests.
     /// 为会话面板测试启动一次确定性的 V1 物理 Provider API。

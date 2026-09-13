@@ -4,6 +4,17 @@ use super::*;
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。
 const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Process-local monotonic catalog identity; it contains no configuration or credential material.
+/// 进程内单调目录身份，不包含配置或凭据内容。
+static MCP_INSPECTION_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+/// Allocates an identity for a newly initialized or replaced catalog without persisting user state.
+/// 为新初始化或替换的目录分配身份，不持久化用户状态。
+fn next_inspection_generation() -> u64 {
+    MCP_INSPECTION_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Clone)]
 pub(super) struct McpRuntimeHandle {
     /// Shared mutable inner state.
@@ -67,6 +78,12 @@ impl McpRuntimeHandle {
     /// 返回当前分区持有的每个服务器的结构化运行时状态。
     pub(super) fn server_states(&self) -> Vec<McpRuntimeServerState> {
         let snapshot = self.snapshot();
+        self.states_from_snapshot(&snapshot)
+    }
+
+    /// Projects states from the caller-owned snapshot so schemas and status share one capture.
+    /// 从调用者持有的快照投影状态，使 Schema 与状态共享同次采集。
+    fn states_from_snapshot(&self, snapshot: &McpRuntimeSnapshot) -> Vec<McpRuntimeServerState> {
         let retry_counts = self
             .inner
             .retry_counts
@@ -129,6 +146,78 @@ impl McpRuntimeHandle {
                 })
             })
             .collect()
+    }
+
+    /// Returns full schemas and states from the same immutable snapshot.
+    /// 从同一不可变快照返回完整 Schema 与状态。
+    pub(super) fn server_inspections(&self) -> Vec<McpRuntimeServerInspection> {
+        let snapshot = self.snapshot();
+        self.states_from_snapshot(&snapshot)
+            .into_iter()
+            .map(|state| {
+                let tools = snapshot.servers[&state.id]
+                    .visible_tool_descriptors()
+                    .iter()
+                    .map(|tool| tool.inspection())
+                    .collect();
+                McpRuntimeServerInspection {
+                    inspection_generation: snapshot.servers[&state.id].inspection_generation,
+                    state,
+                    tools,
+                }
+            })
+            .collect()
+    }
+
+    /// Queries metadata on an already connected transport and rejects a replaced connection.
+    /// 在已连接传输查询元数据，并拒绝连接已替换时的过期结果。
+    pub(super) async fn server_capabilities(
+        &self,
+        server_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let server = self
+            .server_config(server_id)
+            .ok_or_else(|| String::from("未找到 MCP 服务器。"))?;
+        if self
+            .snapshot()
+            .servers
+            .get(server_id)
+            .is_none_or(|entry| entry.status != McpRuntimeServerStatus::Connected)
+        {
+            return Err(String::from("MCP 服务器尚未连接；详情读取不会自动连接。"));
+        }
+        let transport = self
+            .transport_for_server(server_id)
+            .ok_or_else(|| String::from("MCP 连接不可用。"))?;
+        let (prompts, resources) = tokio::join!(
+            run_bounded_optional_capability_discovery(
+                &server,
+                "prompt",
+                MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT,
+                transport.list_prompts()
+            ),
+            run_bounded_optional_capability_discovery(
+                &server,
+                "resource",
+                MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT,
+                transport.list_resources()
+            )
+        );
+        if self
+            .transport_for_server(server_id)
+            .is_none_or(|current| !Arc::ptr_eq(&current, &transport))
+            || self
+                .snapshot()
+                .servers
+                .get(server_id)
+                .is_none_or(|entry| entry.status != McpRuntimeServerStatus::Connected)
+        {
+            return Err(String::from("MCP 连接已经变化，请重新读取详情。"));
+        }
+        Ok(serde_json::json!({
+            "prompts": prompts.as_ref().ok(), "promptError": prompts.as_ref().err().map(|error| server.sanitize_diagnostic(error)),
+            "resources": resources.as_ref().ok(), "resourceError": resources.as_ref().err().map(|error| server.sanitize_diagnostic(error))
+        }))
     }
 
     /// Resolves the currently active transport for one connected server.
@@ -1015,6 +1104,7 @@ async fn refresh_server_tools(
                 schema.description,
                 schema.args_schema,
             )
+            .with_result_schema(schema.result_schema)
         })
         .collect::<Vec<_>>();
 
@@ -1601,6 +1691,7 @@ fn update_server_status(
         server.status = status;
         server.last_error = error;
         if status == McpRuntimeServerStatus::Connected {
+            server.inspection_generation = next_inspection_generation();
             server.cached_tools = tools.clone();
             server.tools = tools;
         } else {
@@ -1703,6 +1794,7 @@ fn update_server_retry_count(inner: &Arc<McpRuntimeInner>, server_id: &str, retr
 /// 在任何连接尝试开始之前，为单个已配置 MCP 服务器构建初始快照。
 fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot {
     McpRuntimeServerSnapshot {
+        inspection_generation: next_inspection_generation(),
         name: server.name.clone(),
         enabled: server.enabled,
         transport_label: server.transport_kind().label().to_string(),
@@ -1771,11 +1863,105 @@ mod optional_capability_tests {
             Ok(())
         }
 
-        /// Returns an empty result because this fixture never exposes tools.
-        /// 返回空结果，因为当前夹具从不暴露工具。
+        /// Fails if metadata inspection accidentally crosses the execution boundary.
+        /// 元数据检查意外跨越执行边界时使测试失败。
         async fn call_tool(&self, _name: &str, _args: Value) -> Result<Value, McpRuntimeError> {
-            Ok(Value::Null)
+            panic!("metadata inspection must never execute tools")
         }
+    }
+
+    /// Verifies full schemas, real connectivity, and metadata-only reads on an isolated transport.
+    /// 在隔离传输上验证完整 Schema、真实连接状态与仅元数据读取。
+    #[tokio::test]
+    async fn mcp_inspection_preserves_schemas_and_never_executes_tools() {
+        // server and inner exist only in this test and never start a process or network connection.
+        // server 与 inner 仅存在于本测试中，从不启动进程或网络连接。
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::UserConfigured,
+            id: String::from("inspection"),
+            name: String::from("Inspection"),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: String::from("unused"),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                env_passthrough: Vec::new(),
+                inherit_environment: false,
+            },
+        };
+        let mut inner = empty_runtime_inner();
+        Arc::get_mut(&mut inner).expect("unique fixture").registry =
+            McpServerRegistry::new(vec![server.clone()]);
+        // input and output exercise unknown extension keywords and nested schemas without normalization.
+        // input 与 output 使用未知扩展关键字和嵌套 Schema 验证不发生归一化。
+        let input = json!({"type":"object", "properties":{"nested":{"type":"array","items":{"$ref":"#/$defs/item"}}}, "$defs":{"item":{"enum":["x","y"]}}, "x-extension":{"preserve":true}});
+        let output =
+            json!({"oneOf":[{"type":"string"},{"type":"null"}], "description":"original output"});
+        let mut snapshot = initial_server_snapshot(&server);
+        snapshot.status = McpRuntimeServerStatus::Connected;
+        snapshot.tools.push(
+            McpRuntimeToolDescriptor::new("inspection", "inspect", "original", input.clone())
+                .with_result_schema(output.clone()),
+        );
+        inner
+            .snapshot
+            .write()
+            .expect("snapshot lock")
+            .servers
+            .insert(server.id.clone(), snapshot);
+        let (event_tx, _) = broadcast::channel(1);
+        inner.transports.write().expect("transport lock").insert(
+            server.id.clone(),
+            Arc::new(ShutdownTrackingTransport {
+                shutdown_count: Arc::new(AtomicUsize::new(0)),
+                event_tx,
+            }),
+        );
+        let handle = McpRuntimeHandle { inner };
+        let inspection = handle.server_inspections();
+        assert_eq!(
+            inspection[0].state.status,
+            McpRuntimeServerStatus::Connected
+        );
+        assert_eq!(inspection[0].tools[0].input_schema, input);
+        assert_eq!(inspection[0].tools[0].output_schema, output);
+        // A replacement catalog gets a new identity even when the server ID and connectivity remain unchanged.
+        // 即使服务器标识与连接状态不变，替换后的目录仍获得新身份。
+        let retained_tools = handle.snapshot().servers[&server.id].tools.clone();
+        update_server_status(
+            &handle.inner,
+            &server.id,
+            McpRuntimeServerStatus::Connected,
+            None,
+            retained_tools,
+        );
+        assert_ne!(
+            handle.server_inspections()[0].inspection_generation,
+            inspection[0].inspection_generation
+        );
+        let metadata = handle
+            .server_capabilities(&server.id)
+            .await
+            .expect("list metadata on existing transport");
+        assert_eq!(metadata["prompts"], json!([]));
+        assert_eq!(metadata["resources"], json!([]));
+        handle
+            .inner
+            .snapshot
+            .write()
+            .expect("snapshot lock")
+            .servers
+            .get_mut(&server.id)
+            .expect("server")
+            .status = McpRuntimeServerStatus::Disconnected;
+        assert!(
+            handle
+                .server_capabilities(&server.id)
+                .await
+                .expect_err("disconnected reads must not connect")
+                .contains("尚未连接")
+        );
     }
 
     /// Builds empty shared MCP runtime state for deterministic teardown tests.

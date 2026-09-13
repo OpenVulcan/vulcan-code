@@ -1,4 +1,21 @@
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
+import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+
+/** Reads the canonical event retained by toolMetadata in conversation-branch-presentation-v1.
+ * 读取 conversation-branch-presentation-v1 的 toolMetadata 保留的规范事件。
+ * Parameter blocks contains projections of one validated event; returns that event or undefined for legacy records.
+ * 参数 blocks 包含同一已验证事件的投影；返回该事件，旧记录返回 undefined。 */
+export function fixedV1ToolEvent(blocks: ToolExecutionConversationBlock[]): ToolCallEvent | undefined {
+  for (const block of blocks) {
+    // This metadata is created in-process from the validated V1 event, not decoded from tool output.
+    // 此元数据由已验证 V1 事件在进程内创建，不从工具输出解码。
+    const metadata = objectValue(block.rawMetadata);
+    if (metadata?.v1_event === true && metadata.v1_tool_event !== undefined) {
+      return metadata.v1_tool_event as ToolCallEvent;
+    }
+  }
+  return undefined;
+}
 
 // argumentsFromMetadata returns the raw tool arguments from normalized metadata.
 // argumentsFromMetadata 从规范化 metadata 中返回原始工具参数。

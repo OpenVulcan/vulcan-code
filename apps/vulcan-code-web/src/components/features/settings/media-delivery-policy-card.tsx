@@ -44,7 +44,7 @@ export interface MediaDeliveryPolicyCardProps {
 export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPolicyCardProps) {
   // Translation follows the existing WebUI locale owner.
   // 翻译遵循既有 WebUI 语言所有者。
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // Baseline owns the revision the user actually edited, not whichever snapshot arrives most recently.
   // 基线持有用户实际编辑的修订，不盲目采用最近到达的任意快照。
   const [baseline, setBaseline] = React.useState(settings);
@@ -139,15 +139,22 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
   }
 
   return (
-    <section className="space-y-4 rounded-xl border p-4" aria-label={t("settings.mediaDelivery.title")}>
+    <section className="min-w-0 space-y-4" aria-label={t("settings.mediaDelivery.title")}>
       <div className="space-y-1">
         <h3 className="text-sm font-semibold">{t("settings.mediaDelivery.title")}</h3>
         <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.description")}</p>
-        <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.uploadRule")}</p>
-        <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.historyRule")}</p>
       </div>
+      {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
+      {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
+      <details className="space-y-2 text-xs text-muted-foreground">
+        <summary className="cursor-pointer">{locale === "zh-CN" ? "投递规则与限制" : "Delivery rules and limits"}</summary>
+        <p>{t("settings.mediaDelivery.uploadRule")}</p>
+        <p>{t("settings.mediaDelivery.historyRule")}</p>
+        <p>{t("settings.mediaDelivery.rawMaximum")}: {settings.maxInlineRawBytes / 1024} KiB；{t("settings.mediaDelivery.totalMaximum")}: {settings.maxTotalEncodedBytes / 1024} KiB</p>
+        <p>{t("settings.mediaDelivery.failureRule")}</p>
+      </details>
       {MEDIA_DELIVERY_PURPOSES.map((purpose) => (
-        <fieldset className="space-y-3 rounded-lg border p-3" disabled={pending} key={purpose}>
+        <fieldset className="min-w-0 space-y-3 border-t pt-3" disabled={pending} key={purpose}>
           <legend className="px-1 text-sm font-medium">{t(PURPOSE_LABELS[purpose])}</legend>
           <div className="grid grid-cols-[minmax(3.5rem,0.65fr)_minmax(5rem,1fr)_minmax(5rem,1fr)] items-center gap-2 text-xs">
             <span>{t("settings.mediaDelivery.kind")}</span>
@@ -183,8 +190,6 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
           </label>
         </fieldset>
       ))}
-      <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.rawMaximum")}: {settings.maxInlineRawBytes / 1024} KiB；{t("settings.mediaDelivery.totalMaximum")}: {settings.maxTotalEncodedBytes / 1024} KiB</p>
-      <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.failureRule")}</p>
       {validation.error ? <p role="alert" className="text-sm text-destructive">{t(validationKeys[validation.error.code])}</p> : null}
       {conflict || error ? <p role="alert" className="text-sm text-destructive">{error ?? t("settings.mediaDelivery.conflict")}</p> : null}
       <div className="flex flex-wrap gap-2">

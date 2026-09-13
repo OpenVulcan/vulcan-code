@@ -10,7 +10,7 @@ import { useI18n } from "@/i18n";
 import type { StatBucket } from "@/service/conversation-event-window-store";
 import type { ConversationTurnStatsTranscriptNode } from "@/service/conversation-event-display-projection";
 import type { UsageCoverage } from "@/service/conversation-usage-coverage";
-import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
+import { averageTurnOutputSpeed, usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
 
 /** Props for one V1-native terminal Turn statistics card.
  * 一张 V1 原生终态 Turn 统计卡的属性。 */
@@ -53,6 +53,12 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   const durationLabel = event.duration_ms === undefined
     ? null
     : formatDuration(event.duration_ms, locale);
+  // Use the same exact output and elapsed-turn contract as the restored branch surface.
+  // 与恢复后的分支界面采用同一精确输出和完整回合耗时契约。
+  const speed = averageTurnOutputSpeed(total.usage.output_tokens, event.duration_ms);
+  // Tiny positive measurements remain distinct from a measured zero.
+  // 微小正数测量仍与测得零值区分。
+  const speedLabel = speed === null ? "-" : `${speed > 0 && speed < 0.1 ? "<0.1" : speed.toFixed(1)} tokens/s`;
   // statisticsRow is the always-visible bordered chip restored from the previous transcript surface.
   // statisticsRow 是从旧转录界面恢复的始终可见带边框胶囊。
   const statisticsRow = (
@@ -81,7 +87,7 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
         >
           <div className="context-usage-card-header turn-stats-card-header">
             <strong>{zh ? "本轮统计" : "Turn usage"}</strong>
-            <span>{durationLabel ?? (zh ? "终态统计" : "Terminal totals")}</span>
+            <span title={speed === null ? (zh ? "缺少完整输出用量或有效回合耗时" : "Complete output usage or valid turn duration is unavailable") : (zh ? `输出 Token ÷ 回合总耗时（${durationLabel}），包含等待与工具执行` : `Output tokens divided by total turn duration (${durationLabel}), including waits and tools`)}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
           </div>
           <TurnStatsUsageRows bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
           <TurnStatsCacheSummary bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
@@ -204,7 +210,7 @@ function TurnStatsCacheSummary(props: { bucket: StatBucket; coverage?: UsageCove
     <div className="turn-stats-cache-summary">
       <div className="turn-stats-cache-header">
         <span>{label}</span>
-        <strong>{percentage === null ? (zh ? "暂无数据" : "No data") : `${percentage.toFixed(1)}%`}</strong>
+        <strong title={percentage === null ? (zh ? "尚无完整输入用量，无法计算缓存命中率" : "Cache hit rate needs complete input usage") : undefined}>{percentage === null ? "-" : `${percentage.toFixed(1)}%`}</strong>
       </div>
       <div
         aria-label={label}

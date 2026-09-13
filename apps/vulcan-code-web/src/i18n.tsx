@@ -1,4 +1,5 @@
 import * as React from "react"
+import { UiTextProvider } from "@/components/ui/ui-text"
 import {
   translations,
   type LocaleCode,
@@ -73,8 +74,11 @@ function I18nProvider(props: {
   // value memoizes the provider payload to avoid unnecessary shell rerenders.
   // value 缓存 provider 载荷，避免外壳不必要重渲染。
   const value = React.useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t])
+  // uiText bridges the existing language authority to primitives without requiring them to import the full catalog.
+  // uiText 将既有语言权威传递给基础组件，不要求基础组件导入完整文案目录。
+  const uiText = React.useMemo(() => ({ close: t("ui.close"), loading: t("ui.loading"), notifications: t("settings.notifications") }), [t])
 
-  return <I18nContext.Provider value={value}>{props.children}</I18nContext.Provider>
+  return <I18nContext.Provider value={value}><UiTextProvider value={uiText}>{props.children}</UiTextProvider></I18nContext.Provider>
 }
 
 // useI18n returns the current WebUI localization helpers.

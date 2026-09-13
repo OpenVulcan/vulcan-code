@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Search } from "lucide-react"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useI18n } from "@/i18n"
@@ -12,6 +12,9 @@ interface LexicalIndexProps {
   // Actual source/index counts; null means unavailable or still loading.
   // 实际源及索引计数，空值表示不可用或仍在加载。
   status: VmmNativeLexicalIndexStatus | null
+  // loading distinguishes an initial read from a completed unavailable result when the owner supplies it.
+  // loading 在归属方提供时区分初始读取与已结束的不可用结果。
+  loading?: boolean
   // Disables actions while another operation owns the channel.
   // 其他操作拥有通道时禁用动作。
   busy: boolean
@@ -27,7 +30,7 @@ interface LexicalIndexProps {
 // 显示实际计数及版本绑定确认，渲染绝不请求推理或修复。
 // Returns a controlled card whose callbacks run only after explicit user actions.
 // 返回受控卡片，仅在用户明确操作后运行回调。
-export function VmmNativeLexicalIndex({ status, busy, onRunAction, onRefresh }: LexicalIndexProps) {
+export function VmmNativeLexicalIndex({ status, loading = true, busy, onRunAction, onRefresh }: LexicalIndexProps) {
   const { t } = useI18n()
   // Retain the displayed version even if the parent receives a newer status later.
   // 即使父级后续收到新状态，也保留显示时的版本。
@@ -52,23 +55,21 @@ export function VmmNativeLexicalIndex({ status, busy, onRunAction, onRefresh }: 
     } finally { setPending(false) }
   }
 
-  return <Card>
+  return <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !pending) setConfirmation(null) }}><Card>
     <CardHeader><CardTitle>{t("memory.lexical.title")}</CardTitle><CardDescription>{t("memory.lexical.description")}</CardDescription></CardHeader>
     <CardContent className="space-y-3">
       {status ? <dl className="grid gap-3 text-sm sm:grid-cols-3">
         <div><dt className="text-muted-foreground">{t("memory.maintenance.activeMemories")}</dt><dd>{status.activeMemoryCount}</dd></div>
         <div><dt className="text-muted-foreground">{t("memory.lexical.documents")}</dt><dd>{status.documentCount}</dd></div>
         <div><dt className="text-muted-foreground">{t("memory.lexical.rows")}</dt><dd>{status.indexedRowCount}</dd></div>
-      </dl> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
+      </dl> : <p className="text-sm text-muted-foreground">{t(loading ? "memory.resources.loading" : "memory.maintenance.readFailed")}</p>}
       <p className="text-xs text-muted-foreground">{t("memory.lexical.countsNote")}</p>
-      <Button disabled={busy || pending || status === null} onClick={() => { setNotice(null); setConfirmation(status) }} variant="outline" type="button"><Search aria-hidden="true" className="size-4" />{t("memory.lexical.rebuild")}</Button>
+      <AlertDialogTrigger asChild><Button disabled={busy || pending || status === null} onClick={() => { setNotice(null); setConfirmation(status) }} variant="outline" type="button"><Search aria-hidden="true" className="size-4" />{t("memory.lexical.rebuild")}</Button></AlertDialogTrigger>
       {notice ? <p role="status" className="text-sm">{notice}</p> : null}
-      <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !pending) setConfirmation(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t("memory.lexical.confirmTitle")}</AlertDialogTitle><AlertDialogDescription>{t("memory.lexical.confirmDescription").replace("{count}", String(confirmation?.activeMemoryCount ?? 0))}</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel disabled={busy || pending}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy || pending} onClick={(event) => { event.preventDefault(); void rebuild() }}>{t("memory.lexical.rebuild")}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
-      </AlertDialog>
     </CardContent>
-  </Card>
+  </Card></AlertDialog>
 }

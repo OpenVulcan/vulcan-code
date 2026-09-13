@@ -1,4 +1,5 @@
 import * as React from "react"
+import { toast } from "sonner"
 import {
   PackagePlus,
   RefreshCw,
@@ -70,6 +71,9 @@ function FeatureShell(props: {
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
   onSelectArea: (area: MainAreaId) => void
+  // Opens the exact enabled statistics mount in the embedded workspace plugin area.
+  // 在内嵌工作区插件区域打开精确的已启用统计挂载点。
+  onOpenUsageStatistics?: () => void
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   // Independent LuaSkills lifecycle actions.
@@ -143,6 +147,8 @@ function FeatureShell(props: {
     const startedAt = window.performance.now()
     try {
       await action()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
     } finally {
       const remainingMs = 450 - (window.performance.now() - startedAt)
       if (remainingMs > 0) {
@@ -171,7 +177,7 @@ function FeatureShell(props: {
         <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
         <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
       </Button>
-      <Button onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">
+      <Button disabled={skillHeaderBusyAction !== null} onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">
         <PackagePlus size={15} />
         <span>{t("skills.action.installLua")}</span>
       </Button>
@@ -228,6 +234,8 @@ function FeatureShell(props: {
         activeMemorySubArea={activeMemorySubArea}
         activeSkillSubArea={activeSkillSubArea}
         activeSettingsSubArea={props.activeSettingsSubArea}
+        onOpenUsageStatistics={props.onOpenUsageStatistics}
+        onOpenDiagnostics={() => props.onSelectSettingsSubArea("runtime-diagnostics")}
         memoryActions={props.memoryActions}
         onOpenCredentialManagement={() => {
           props.onSelectSettingsSubArea("credential-management")

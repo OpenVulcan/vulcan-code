@@ -113,17 +113,19 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
 
 // CredentialUsageOverviewView renders only determined account view data and adapted quota content.
 // CredentialUsageOverviewView 只渲染确定的账号视图数据与已适配额度内容。
+// Parameters: props supplies adapted account usage and pricing facts; returns known values and explicit unknown states without issuing queries.
+// 参数：props 提供已适配账号用量与定价事实；返回已知值和明确未知状态，不发起查询。
 export function CredentialUsageOverviewView(props: CredentialUsageOverviewViewProps) {
   return (
     <>
       <div className="grid grid-cols-2 gap-2 border-t pt-1.5">
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">{props.model.planLabel}</p>
-          <p className="mt-0.5 truncate text-sm font-medium">{props.model.planValue}</p>
+          <p className="mt-0.5 break-words text-sm font-medium">{props.model.planValue}</p>
         </div>
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">{props.model.balanceLabel}</p>
-          <p className="mt-0.5 truncate text-sm font-medium">{props.model.balanceValue}</p>
+          <p className="mt-0.5 break-words text-sm font-medium">{props.model.balanceValue}</p>
         </div>
       </div>
       {props.showQuotaSection ? (
@@ -382,6 +384,8 @@ function CommandCodeUsageSummary(props: { rows: CommandCodeUsageRows }) {
 
 // TavilyUsageSummary renders only provider-reported account-plan consumption.
 // TavilyUsageSummary 仅渲染供应商报告的账号套餐消费。
+// Parameters: props supplies provider-reported plan consumption; returns the corresponding usage summary without estimating absent counters.
+// 参数：props 提供供应商报告的套餐消耗；返回对应用量摘要，不估算缺失计数。
 function TavilyUsageSummary(props: {
   // window is the exact normalized Tavily account-plan allowance.
   // window 是精确规范化的 Tavily 账号套餐额度。
@@ -414,7 +418,7 @@ function TavilyUsageSummary(props: {
           {t("composer.accountCard.used")} {value}
         </span>
       </div>
-      {hasFiniteLimit ? (
+      {hasFiniteLimit && percentage !== null ? (
         <div
           aria-label={`${t("composer.accountCard.tavilyPlanQuota")}: ${Math.round(percentage)}%`}
           aria-valuemax={100}
@@ -424,7 +428,7 @@ function TavilyUsageSummary(props: {
           role="progressbar"
         >
           <div
-            className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-amber-500" : "bg-emerald-500"}`}
+            className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-[var(--vcn-content-warning)]" : "bg-[var(--vcn-content-success)]"}`}
             style={{ width: `${percentage}%` }}
           />
         </div>
@@ -505,6 +509,8 @@ function MiniMaxUsageSummary(props: { rows: MiniMaxUsageRow[] }) {
 
 // UsageWindowMetric renders one exact remaining value and compact progress indicator.
 // UsageWindowMetric 渲染一个精确剩余值和紧凑进度指示器。
+// Parameters: props supplies one quota window and display context; returns its exact remaining value and a progress bar only when determined.
+// 参数：props 提供一个额度窗口与显示上下文；返回精确剩余值，仅在数据确定时渲染进度条。
 function UsageWindowMetric(props: {
   // label names the quota window.
   // label 命名额度周期。
@@ -524,11 +530,11 @@ function UsageWindowMetric(props: {
   const value = usageWindowValue(props.window, t)
   return (
     <div className="min-w-0 space-y-0.5">
-      <div className="flex items-center justify-between gap-1">
-        <span className="truncate text-muted-foreground">{props.label}</span>
-        <span className="shrink-0 tabular-nums">{value}</span>
+      <div className="flex flex-wrap items-center justify-between gap-1">
+        <span className="break-words text-muted-foreground">{props.label}</span>
+        <span className="break-words tabular-nums">{value}</span>
       </div>
-      <div
+      {percentage !== null ? <div
         aria-label={`${props.label}: ${value}`}
         aria-valuemax={100}
         aria-valuemin={0}
@@ -537,19 +543,19 @@ function UsageWindowMetric(props: {
         role="progressbar"
       >
         <div
-          className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-amber-500" : "bg-emerald-500"}`}
+          className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-[var(--vcn-content-warning)]" : "bg-[var(--vcn-content-success)]"}`}
           style={{ width: `${percentage}%` }}
         />
-      </div>
+      </div> : null}
     </div>
   )
 }
 
 // usageWindowPercentage returns the normalized visual percentage without inventing quota.
 // usageWindowPercentage 返回规范化视觉百分比且不虚构额度。
-function usageWindowPercentage(window?: PublicAiAccountUsageWindow): number {
+export function usageWindowPercentage(window?: PublicAiAccountUsageWindow): number | null {
   if (!window || !window.available) {
-    return 0
+    return null
   }
   if (window.unlimited) {
     return 100
@@ -557,21 +563,23 @@ function usageWindowPercentage(window?: PublicAiAccountUsageWindow): number {
   // explicit is the provider-reported remaining percentage.
   // explicit 是供应商报告的剩余百分比。
   const explicit = Number(window.remaining_percent)
-  if (Number.isFinite(explicit)) {
+  if (window.remaining_percent !== undefined && window.remaining_percent.trim() !== "" && Number.isFinite(explicit)) {
     return Math.max(0, Math.min(100, explicit))
   }
   // remaining and total preserve exact count-based quota semantics.
   // remaining 与 total 保留基于次数的精确额度语义。
   const remaining = Number(window.remaining)
   const total = Number(window.total)
-  if (Number.isFinite(remaining) && Number.isFinite(total) && total > 0) {
+  if (window.remaining !== undefined && window.remaining.trim() !== "" && Number.isFinite(remaining) && Number.isFinite(total) && total > 0) {
     return Math.max(0, Math.min(100, (remaining / total) * 100))
   }
-  return 0
+  return null
 }
 
 // usageWindowValue renders exact counts, percentage, unlimited, or unavailable state.
 // usageWindowValue 渲染精确次数、百分比、无限或不可用状态。
+// Parameters: window contains authoritative quota fields and t resolves text; returns known count, percentage, unlimited or unavailable copy.
+// 参数：window 包含权威额度字段，t 解析文案；返回已知次数、百分比、无限或不可用文案。
 export function usageWindowValue(
   window: PublicAiAccountUsageWindow | undefined,
   t: (key: TranslationKey) => string,
@@ -588,12 +596,13 @@ export function usageWindowValue(
   // total determines whether exact remaining/total counts are available.
   // total 决定是否存在精确的剩余数/总数。
   const total = Number(window.total)
-  if (Number.isFinite(total) && total > 0) {
+  if (window.total !== undefined && window.total.trim() !== "" && Number.isFinite(total) && total >= 0) {
     if (window.unit === "USD") {
-      return `${formatCurrencyAmount(window.remaining ?? "0")} / ${formatCurrencyAmount(window.total ?? "0")} USD`
+      return `${window.remaining === undefined ? "-" : formatCurrencyAmount(window.remaining)} / ${formatCurrencyAmount(window.total)} USD`
     }
-    return `${window.remaining ?? "0"} / ${window.total}`
+    return `${window.remaining ?? "-"} / ${window.total}`
   }
+  if (window.remaining !== undefined && window.remaining.trim() !== "") return window.unit === "USD" ? `${formatCurrencyAmount(window.remaining)} USD` : window.remaining
   return window.remaining_percent !== undefined
     ? `${window.remaining_percent}%`
     : "—"
@@ -662,9 +671,11 @@ function credentialBillingKindLabel(
 
 // accountBalanceLabel renders exact balance and currency without numeric coercion.
 // accountBalanceLabel 渲染精确余额和币种且不进行数值强制转换。
+// Parameters: usage supplies the account balance and currency fields; returns their display label without numeric coercion.
+// 参数：usage 提供账号余额与币种字段；返回不经数值强制转换的展示标签。
 function accountBalanceLabel(usage?: PublicAiAccountUsage): string {
   if (!usage?.balance_amount) {
-    return "--"
+    return "-"
   }
   // formattedAmount rounds the provider decimal string without converting it to a floating-point Number.
   // formattedAmount 在不转换为浮点 Number 的情况下舍入供应商金额字符串。

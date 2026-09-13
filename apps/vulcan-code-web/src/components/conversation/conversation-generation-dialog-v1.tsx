@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useI18n } from "@/i18n";
+import { runConversationControlAction } from "./conversation-control-feedback";
 
 /** The exact V1 generation action currently being edited by the dialog.
  * 对话框当前编辑的精确 V1 generation 动作。
@@ -75,6 +76,15 @@ export function ConversationGenerationDialogV1(
   // value is process-local until the generation service commits it.
   // value 在 generation 服务提交前仅存在于进程内。
   const [value, setValue] = React.useState("");
+  // confirming owns the synchronous gap before the parent publishes its request state.
+  // confirming 持有父组件发布请求状态前的同步空隙。
+  const confirming = React.useRef(false);
+  // localSubmitting keeps close, input, and confirm controls consistent while awaiting the callback.
+  // localSubmitting 在等待回调期间保持关闭、输入与确认控件一致。
+  const [localSubmitting, setLocalSubmitting] = React.useState(false);
+  // submitting combines parent authority with the current local confirmation.
+  // submitting 合并父组件权威状态与当前本地确认。
+  const submitting = props.submitting || localSubmitting;
 
   React.useEffect(() => {
     if (props.action?.kind === "edit") {
@@ -88,14 +98,31 @@ export function ConversationGenerationDialogV1(
 
   // confirmDisabled prevents blank fork titles while leaving attachment-only edits valid.
   // confirmDisabled 阻止空白分叉标题，同时保留仅附件编辑的合法性。
-  const confirmDisabled = props.submitting
+  const confirmDisabled = submitting
     || (props.action?.kind === "fork" && value.trim().length === 0);
+
+  /** Confirms the current exact draft once; failures leave the controlled dialog available.
+   * 精确一次确认当前草稿；失败后保留受控弹窗可用。 */
+  const confirm = async () => {
+    if (props.action === null || confirmDisabled || confirming.current) return;
+    confirming.current = true;
+    setLocalSubmitting(true);
+    try {
+      await runConversationControlAction(
+        () => props.onConfirm(props.action?.kind === "fork" ? value.trim() : value),
+        t("conversation.control.actionFailed"),
+      );
+    } finally {
+      confirming.current = false;
+      setLocalSubmitting(false);
+    }
+  };
 
   return (
     <Dialog open={props.action !== null} onOpenChange={(open) => {
-      if (!open && !props.submitting) props.onCancel();
+      if (!open && !submitting && !confirming.current) props.onCancel();
     }}>
-      <DialogContent aria-describedby={undefined} showCloseButton={!props.submitting} size="sm">
+      <DialogContent aria-describedby={undefined} showCloseButton={!submitting} size="sm">
         <DialogHeader>
           <DialogTitle>
             {props.action?.kind === "fork"
@@ -106,7 +133,7 @@ export function ConversationGenerationDialogV1(
         {props.action?.kind === "fork" ? (
           <Input
             aria-label={t("conversation.action.fork")}
-            disabled={props.submitting}
+            disabled={submitting}
             onChange={(event) => setValue(event.target.value)}
             value={value}
           />
@@ -114,7 +141,7 @@ export function ConversationGenerationDialogV1(
           <textarea
             aria-label={t("conversation.userPrompt.edit")}
             className="conversation-generation-dialog-v1-textarea"
-            disabled={props.submitting}
+            disabled={submitting}
             onChange={(event) => setValue(event.target.value)}
             rows={8}
             value={value}
@@ -122,8 +149,8 @@ export function ConversationGenerationDialogV1(
         )}
         <DialogFooter>
           <Button
-            disabled={props.submitting}
-            onClick={props.onCancel}
+            disabled={submitting}
+            onClick={() => { if (!confirming.current) props.onCancel(); }}
             type="button"
             variant="outline"
           >
@@ -131,9 +158,7 @@ export function ConversationGenerationDialogV1(
           </Button>
           <Button
             disabled={confirmDisabled}
-            onClick={() => void props.onConfirm(
-              props.action?.kind === "fork" ? value.trim() : value,
-            )}
+            onClick={() => void confirm()}
             type="button"
           >
             {props.action?.kind === "fork"

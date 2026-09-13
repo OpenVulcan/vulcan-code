@@ -21,6 +21,9 @@ local state = {
     last_revision = 0,
     migration_version = 0,
     host_calls = {},
+    -- fail_usage injects a query-policy failure without accessing any real database.
+    -- fail_usage 注入查询策略失败，不访问任何真实数据库。
+    fail_usage = false,
 }
 
 -- Advance the deterministic fixture clock by one millisecond.
@@ -212,6 +215,7 @@ local function storage_query(request)
     elseif sql:find("SELECT meta_value AS value", 1, true) then
         return { rows = { { value = state.meta[sql_value(params[1])] } } }
     elseif sql:find("COUNT(*) AS requests", 1, true) then
+        if state.fail_usage then error("Plugin SQLite statement cannot use END.") end
         -- aggregate contains the exact bounded local event totals.
         -- aggregate 包含精确有界本地事件总计。
         local aggregate = {
@@ -585,8 +589,20 @@ local usage = decode_result(plugin.usage_get({ arguments = { rangeDays = 30 } })
 assert(usage.credential.configured == false)
 assert(usage.localStats.requests == #state.events)
 
+-- partial_bootstrap proves statistics failure preserves configuration and non-secret credentials.
+-- partial_bootstrap 证明统计失败时仍保留配置和非密钥凭据。
+state.fail_usage = true
+local partial_bootstrap = decode_result(plugin.bootstrap_get({ arguments = { rangeDays = 30 } }))
+assert(partial_bootstrap.settings.requestTimeoutMs == 10000)
+assert(partial_bootstrap.credential.configured == false)
+assert(partial_bootstrap.usage == runtime_vulcan.json.null)
+assert(partial_bootstrap.usageError:find("local usage and quota [statement_policy]", 1, true))
+assert(not partial_bootstrap.usageError:find("SELECT", 1, true))
+state.fail_usage = false
+
 return {
     compiled = true,
+    partial_bootstrap = true,
     encrypted_credential_round_trip = true,
     anonymous_online_smoke = args.online == true,
     request_events = #state.events,

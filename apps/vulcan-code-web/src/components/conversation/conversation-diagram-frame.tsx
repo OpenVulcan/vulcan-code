@@ -6,6 +6,7 @@ import {
   resolveFileTypeIcon,
 } from "@/components/conversation/conversation-file-type-icon";
 import { useI18n } from "@/i18n";
+import { runConversationControlAction } from "./conversation-control-feedback";
 
 // MarkdownDiagramFrameProps describes one shared fenced-diagram presentation.
 // MarkdownDiagramFrameProps 描述一个共享的围栏图表展示框。
@@ -81,7 +82,10 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
             aria-label={copied ? t("markdown.copied") : t("markdown.copyCode")}
             className="markdown-code-action"
             onClick={() => {
-              void props.copySource().then(() => setCopied(true));
+              setCopied(false);
+              void runConversationControlAction(
+                props.copySource, t("conversation.control.copyFailed"),
+              ).then((success) => setCopied(success));
             }}
             title={copied ? t("markdown.copied") : t("markdown.copyCode")}
             type="button"

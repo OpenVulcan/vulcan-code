@@ -70,6 +70,13 @@ export function WorkspaceMemoryPanel(props: {
   const staticCards = props.snapshot?.staticCards ?? [];
   const staticProfile = props.snapshot?.staticProfile ?? null;
 
+  // requestDelete starts a fresh confirmation without carrying another item's previous feedback.
+  // requestDelete 开始新的确认，不携带其他条目的历史反馈。
+  const requestDelete = React.useCallback((target: ContextInjectionDeleteTarget) => {
+    setDeleteNotice(null);
+    setPendingDelete(target);
+  }, []);
+
   React.useLayoutEffect(() => {
     if (stateRouteKeyRef.current === routeKey) {
       return;
@@ -262,7 +269,7 @@ export function WorkspaceMemoryPanel(props: {
           emptyText={t("contextPanel.dynamicEmpty")}
           title={t("contextPanel.dynamic")}
           onLookupTurn={props.onRunVmmAction ? handleLookupTurn : undefined}
-          onRequestDelete={props.onRunVmmAction ? setPendingDelete : undefined}
+          onRequestDelete={props.onRunVmmAction ? requestDelete : undefined}
         />
         {deleteNotice ? <p className="context-injection-delete-notice">{deleteNotice}</p> : null}
       </TabsContent>
@@ -277,7 +284,7 @@ export function WorkspaceMemoryPanel(props: {
           profile={staticProfile}
           title={t("contextPanel.static")}
           onLookupTurn={props.onRunVmmAction ? handleLookupTurn : undefined}
-          onRequestDelete={props.onRunVmmAction ? setPendingDelete : undefined}
+          onRequestDelete={props.onRunVmmAction ? requestDelete : undefined}
         />
         {deleteNotice ? <p className="context-injection-delete-notice">{deleteNotice}</p> : null}
       </TabsContent>
@@ -286,6 +293,7 @@ export function WorkspaceMemoryPanel(props: {
           busy={busyDeleteKey === contextInjectionDeleteKey(pendingDelete)}
           canSuppress={Boolean(props.selectedConversationId && pendingDelete.suppressibleInSession)}
           target={pendingDelete}
+          notice={deleteNotice}
           onCancel={() => setPendingDelete(null)}
           onPermanentDelete={() => void handlePermanentDeleteTarget(pendingDelete)}
           onSuppress={() => void handleSuppressDeleteTarget(pendingDelete)}
@@ -665,6 +673,9 @@ interface ContextInjectionLookupDialogState {
 // ContextInjectionDeleteDialog asks the user which deletion mode should run.
 // ContextInjectionDeleteDialog 询问用户要执行哪种删除模式。
 function ContextInjectionDeleteDialog(props: {
+  // notice exposes the selected operation's outcome inside the still-open confirmation.
+  // notice 在尚未关闭的确认框内展示当前操作结果。
+  notice: string | null;
   // Whether the selected delete target is currently busy.
   // 当前删除目标是否正在处理中。
   busy: boolean;
@@ -707,6 +718,7 @@ function ContextInjectionDeleteDialog(props: {
             {props.target.content}
           </DialogDescription>
         </DialogHeader>
+        {props.notice ? <p className="context-injection-delete-notice" role="alert">{props.notice}</p> : null}
         <DialogFooter className="context-injection-delete-dialog-actions">
           <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="ghost">
             {t("conversation.action.cancel")}

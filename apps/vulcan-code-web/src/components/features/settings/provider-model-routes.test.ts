@@ -132,8 +132,8 @@ describe("buildProviderModelGroups", () => {
     })
 
     expect(groups[0]?.models.get("model-1")).toMatchObject([
-      { serviceEntryId: "default-api", serviceEntryName: "Default API", accountCount: 1 },
-      { serviceEntryId: "fast-api", serviceEntryName: "Fast API", accountCount: 1 },
+      { serviceEntryId: "default-api", serviceEntryName: "Default API", accountCount: 1, accounts: [{ connectionId: "default-account", displayName: "default-account", enabled: true }] },
+      { serviceEntryId: "fast-api", serviceEntryName: "Fast API", accountCount: 1, accounts: [{ connectionId: "fast-account", displayName: "fast-account", enabled: true }] },
     ])
   })
 
@@ -166,6 +166,7 @@ describe("buildProviderModelGroups", () => {
     })
 
     expect(groups[0]?.models.get("model-1")?.[0]?.accountCount).toBe(0)
+    expect(groups[0]?.models.get("model-1")?.[0]?.accounts).toEqual([{ connectionId: "disabled-account", displayName: "disabled-account", enabled: false }])
   })
 
   it("keeps a conversation-disabled model visible for independent model management", () => {

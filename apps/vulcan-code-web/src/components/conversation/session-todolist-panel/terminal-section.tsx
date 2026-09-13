@@ -1,4 +1,5 @@
 import React from "react";
+import { runConversationControlAction } from "../conversation-control-feedback";
 import { Maximize2, Square, TerminalSquare } from "lucide-react";
 import {
   terminalStateClass,
@@ -69,6 +70,9 @@ function ConversationSessionTerminalRow(props: {
   // stopping guards duplicate force-stop requests.
   // stopping 防止重复强制停止请求。
   const [stopping, setStopping] = React.useState(false);
+  // stopInFlight prevents duplicate stop requests before React renders the disabled controls.
+  // stopInFlight 防止 React 渲染禁用控件前重复提交停止请求。
+  const stopInFlight = React.useRef(false);
   // confirmOpen controls the destructive stop confirmation.
   // confirmOpen 控制破坏性停止确认。
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -82,22 +86,26 @@ function ConversationSessionTerminalRow(props: {
     if (props.session.canStop && !stopping) setConfirmOpen(true);
   }, [props.session.canStop, stopping]);
   const handleConfirmStop = React.useCallback(async () => {
-    if (!props.session.canStop || stopping) return;
+    if (!props.session.canStop || stopInFlight.current) return;
+    stopInFlight.current = true;
     setStopping(true);
     try {
-      await props.onStopCommandSession(props.session.id, props.summary?.ownerSessionId ?? null);
-      setConfirmOpen(false);
+      if (await runConversationControlAction(
+        () => props.onStopCommandSession(props.session.id, props.summary?.ownerSessionId ?? null),
+        t("conversation.control.actionFailed"),
+      )) setConfirmOpen(false);
     } finally {
+      stopInFlight.current = false;
       setStopping(false);
     }
-  }, [props, stopping]);
+  }, [props, t]);
   const tooltipText = terminalSessionTooltipText(props.session, props.summary, t);
   const stateLabel = localizedTerminalStateLabel(props.session.state, t);
   return (
     <div className="workspace-tool-panel-menu-row conversation-session-terminal-row">
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="conversation-session-terminal-summary">
+          <div className="conversation-session-terminal-summary" tabIndex={0}>
             <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(props.session.state))} size={15} />
             <span className="conversation-session-terminal-name">{props.session.name}</span>
           </div>

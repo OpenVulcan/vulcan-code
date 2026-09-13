@@ -98,6 +98,14 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
   // activeScopeKeyRef 标识允许接收飞行中弹窗副作用的作用域。
   const activeScopeKeyRef = React.useRef(options.scopeKey);
   activeScopeKeyRef.current = options.scopeKey;
+  // operationGuard owns one synchronous operation for one continuous visit to a conversation.
+  // operationGuard 为每次连续停留的会话持有一个同步操作守卫。
+  // Replacing the guard on scope changes also rejects stale completion after navigating away and back.
+  // 作用域变更时替换守卫，也能拒绝离开后返回同一会话的旧完成事件。
+  const operationGuard = React.useRef({ scopeKey: options.scopeKey, busy: false });
+  if (operationGuard.current.scopeKey !== options.scopeKey) {
+    operationGuard.current = { scopeKey: options.scopeKey, busy: false };
+  }
   // dialogOpen controls the user-facing session goal editor.
   // dialogOpen 控制面向用户的会话目标编辑器。
   const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -123,25 +131,36 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
   // openEditor seeds the goal editor after conflicting composer modes have been disabled.
   // openEditor 在禁用冲突的输入区模式后初始化目标编辑器。
   const openEditor = React.useCallback(async () => {
+    // guard captures this visit's identity before asynchronous mode preparation starts.
+    // guard 在异步模式准备前捕获本次会话访问身份。
+    const guard = operationGuard.current;
+    if (guard.busy) return;
+    guard.busy = true;
+    setSaving(true);
     // editorScopeKey binds asynchronous preparation to the visible session that requested it.
     // editorScopeKey 将异步准备绑定到发起请求的可见会话。
     const editorScopeKey = options.scopeKey;
     // prepared records whether the caller successfully resolved mutually exclusive state.
     // prepared 记录调用方是否成功解除互斥状态。
-    const prepared = await options.onPrepareEditor();
-    if (!prepared || activeScopeKeyRef.current !== editorScopeKey) {
-      return;
+    try {
+      const prepared = await options.onPrepareEditor();
+      if (!prepared || operationGuard.current !== guard || activeScopeKeyRef.current !== editorScopeKey) return;
+      setDialogMode("edit");
+      setObjectiveDraft(options.goal?.objective ?? "");
+      setTokenBudgetDraft(options.goal?.tokenBudget ? String(options.goal.tokenBudget) : "");
+      setDialogOpen(true);
+    } catch (error) {
+      if (operationGuard.current === guard) toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      guard.busy = false;
+      if (operationGuard.current === guard) setSaving(false);
     }
-    setDialogMode("edit");
-    setObjectiveDraft(options.goal?.objective ?? "");
-    setTokenBudgetDraft(options.goal?.tokenBudget ? String(options.goal.tokenBudget) : "");
-    setDialogOpen(true);
   }, [options.goal, options.onPrepareEditor, options.scopeKey]);
 
   // openResumeEditor seeds the next-stage editor from the stopped goal.
   // openResumeEditor 使用已停止目标初始化下一阶段编辑器。
   const openResumeEditor = React.useCallback(() => {
-    if (!options.goal) {
+    if (!options.goal || operationGuard.current.busy) {
       return;
     }
     setDialogMode("resume");
@@ -153,6 +172,10 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
   // save validates and persists the current goal dialog draft.
   // save 校验并持久化当前目标弹窗草稿。
   const save = React.useCallback(async () => {
+    // guard prevents repeated persistence and excludes stale completion from a different visit.
+    // guard 阻止重复持久化，并排除其他会话访问的旧完成事件。
+    const guard = operationGuard.current;
+    if (guard.busy) return;
     // requestScopeKey binds persistence and auto-submit side effects to the initiating session.
     // requestScopeKey 将持久化与自动提交副作用绑定到发起会话。
     const requestScopeKey = options.scopeKey;
@@ -169,13 +192,14 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
       toast.error(t("composer.goal.error.empty"));
       return;
     }
-    if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
+    if (tokenBudget !== null && (!Number.isSafeInteger(tokenBudget) || tokenBudget <= 0)) {
       toast.error(t("composer.goal.error.budgetInvalid"));
       return;
     }
     // shouldAutoSubmit captures pre-save state so the first goal turn starts exactly once.
     // shouldAutoSubmit 捕获保存前状态，确保目标首轮只启动一次。
     const shouldAutoSubmit = !options.goal && dialogMode === "edit" && options.canAutoSubmitCreatedGoal;
+    guard.busy = true;
     setSaving(true);
     try {
       // saved records whether the backend accepted the requested goal mutation.
@@ -183,15 +207,18 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
       const saved = dialogMode === "resume"
         ? await options.onResumeGoal(objective, tokenBudget)
         : await options.onSaveGoal(objective, tokenBudget);
-      if (!saved || activeScopeKeyRef.current !== requestScopeKey) {
+      if (!saved || operationGuard.current !== guard || activeScopeKeyRef.current !== requestScopeKey) {
         return;
       }
       setDialogOpen(false);
       if (shouldAutoSubmit) {
         await options.onSubmitCreatedGoal(objective);
       }
+    } catch (error) {
+      if (operationGuard.current === guard) toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setSaving(false);
+      guard.busy = false;
+      if (operationGuard.current === guard) setSaving(false);
     }
   }, [
     dialogMode,
@@ -209,7 +236,10 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
   // toggleStatus pauses or reactivates the current visible goal.
   // toggleStatus 暂停或重新激活当前可见目标。
   const toggleStatus = React.useCallback(async () => {
-    if (!options.goal) {
+    // guard identifies the accepted mutation and keeps old responses from releasing a newer mutation.
+    // guard 标识已接受变更，防止旧响应释放较新的变更。
+    const guard = operationGuard.current;
+    if (!options.goal || guard.busy) {
       return;
     }
     // nextStatus is the explicit persisted lifecycle transition requested by the user.
@@ -218,22 +248,34 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     if (nextStatus === null) {
       return;
     }
+    guard.busy = true;
     setSaving(true);
     try {
       await options.onUpdateGoalStatus(nextStatus);
+    } catch (error) {
+      if (operationGuard.current === guard) toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setSaving(false);
+      guard.busy = false;
+      if (operationGuard.current === guard) setSaving(false);
     }
   }, [options.goal, options.onUpdateGoalStatus]);
 
   // clear removes the current visible goal after a direct user action.
   // clear 在用户直接操作后移除当前可见目标。
   const clear = React.useCallback(async () => {
+    // guard serializes clear against save, resume, and status changes for this visit.
+    // guard 将清理与本次访问的保存、继续及状态变更串行化。
+    const guard = operationGuard.current;
+    if (guard.busy) return;
+    guard.busy = true;
     setSaving(true);
     try {
       await options.onClearGoal();
+    } catch (error) {
+      if (operationGuard.current === guard) toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setSaving(false);
+      guard.busy = false;
+      if (operationGuard.current === guard) setSaving(false);
     }
   }, [options.onClearGoal]);
 
