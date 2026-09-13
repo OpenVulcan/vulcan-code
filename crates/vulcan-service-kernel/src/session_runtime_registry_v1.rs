@@ -2438,6 +2438,57 @@ impl SessionHandle {
         )
     }
 
+    /// Reads complete durable history at a pinned writer frontier for cross-turn accounting.
+    /// 在固定写入前沿读取完整可靠历史，用于跨回合统计。
+    /// `reader` projects one value; returns storage or owner-consistency failures explicitly.
+    /// `reader` 投影一个值；显式返回存储或所有者一致性错误。
+    pub(crate) fn read_full_durable<T>(
+        &self,
+        reader: impl FnOnce(&SessionDocument) -> T,
+    ) -> Result<T, SessionRuntimeError> {
+        // Pin the storage writer before the publisher, matching mutation lock order.
+        // 先固定存储写入器再固定发布器，与修改锁顺序一致。
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
+        // Prevent publication from advancing the frontier during the full read.
+        // 防止完整读取期间发布推进前沿。
+        let _publisher = self
+            .mutation_publisher
+            .lock()
+            .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        // Flush exactly the resident revision before loading older segments.
+        // 加载旧分段前精确刷写常驻修订。
+        let revision = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+            .memory_revision();
+        self.flush_through_with_writer_and_publisher_locked(revision)?;
+        self.ensure_not_quarantined()?;
+        // Rebuild all durable segments, including history evicted from memory.
+        // 重建全部可靠分段，包含已移出内存的历史。
+        let loaded = load_session_v1_full(&self.storage_locator()?)?;
+        // Reject any mismatch rather than mixing resident and stored generations.
+        // 拒绝任何不一致，避免混用常驻与存储代际。
+        let resident = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+        if resident.memory_revision() != loaded.document.memory_revision()
+            || resident.segment_generation() != loaded.document.segment_generation()
+        {
+            return Err(SessionRuntimeError::GenerationResidentMismatch {
+                resident_revision: resident.memory_revision(),
+                durable_revision: loaded.document.memory_revision(),
+                resident_generation: resident.segment_generation(),
+                durable_generation: loaded.document.segment_generation(),
+            });
+        }
+        Ok(reader(&loaded.document))
+    }
+
     /// Reads one value from the authoritative document without cloning history.
     /// 从权威文档读取一个值，且不克隆历史。
     pub(crate) fn read<T>(

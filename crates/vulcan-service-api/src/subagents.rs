@@ -26,6 +26,10 @@ pub struct SubagentNavigationSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentTaskSummary {
+    /// Messages waiting for steering or subsequent task execution.
+    /// 等待插队投递或后续任务执行的消息。
+    #[serde(default)]
+    pub pending_messages: Vec<SubagentPendingMessage>,
     /// Stable child task conversation identifier.
     /// 稳定的子任务会话标识。
     pub task_id: String,
@@ -78,6 +82,22 @@ pub struct PendingPromptSummary {
     /// Unix-millis creation timestamp text.
     /// Unix 毫秒格式的创建时间文本。
     pub created_at: String,
+}
+
+/// One queued child message; delivery mode distinguishes steering from follow-up work.
+/// 一条待处理子代理消息；投递模式区分插队与后续任务。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentPendingMessage {
+    /// Stable delivery identity.
+    /// 稳定投递身份。
+    pub delivery_id: String,
+    /// Complete message body.
+    /// 完整消息正文。
+    pub message: String,
+    /// True when the next API request should consume this message.
+    /// 下一次 API 请求应消费此消息时为 true。
+    pub steering: bool,
 }
 
 /// Returns a committed pending-prompt edit even when a later queue-panel projection needs refresh.

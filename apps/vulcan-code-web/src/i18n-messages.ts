@@ -1449,6 +1449,9 @@ export type TranslationKey =
   | "conversation.subagent.detail.noResult"
   | "conversation.subagent.detail.target"
   | "conversation.subagent.detail.queued"
+  | "conversation.subagent.detail.steering"
+  | "conversation.subagent.queue.steering"
+  | "conversation.subagent.queue.followup"
   | "conversation.subagent.detail.deliveryMode"
   | "conversation.subagent.detail.targetSessions"
   | "conversation.subagent.detail.note"
@@ -5133,6 +5136,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.noResult": "没有返回内容。",
     "conversation.subagent.detail.target": "目标",
     "conversation.subagent.detail.queued": "是否排队",
+    "conversation.subagent.detail.steering": "是否插队",
+    "conversation.subagent.queue.steering": "待插队",
+    "conversation.subagent.queue.followup": "排队中",
     "conversation.subagent.detail.deliveryMode": "投递模式",
     "conversation.subagent.detail.targetSessions": "目标会话",
     "conversation.subagent.detail.note": "说明",
@@ -8843,6 +8849,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.noResult": "No result content.",
     "conversation.subagent.detail.target": "Target",
     "conversation.subagent.detail.queued": "Queued",
+    "conversation.subagent.detail.steering": "Steering",
+    "conversation.subagent.queue.steering": "Pending guidance",
+    "conversation.subagent.queue.followup": "Queued follow-up",
     "conversation.subagent.detail.deliveryMode": "Delivery mode",
     "conversation.subagent.detail.targetSessions": "Target sessions",
     "conversation.subagent.detail.note": "Note",

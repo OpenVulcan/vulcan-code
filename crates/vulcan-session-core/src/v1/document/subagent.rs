@@ -206,6 +206,80 @@ pub(super) fn validate_subagent_return_history(
 // Keep all mutations on the single authoritative document instance.
 // 所有修改仍作用于唯一权威文档实例。
 impl SessionDocument {
+    /// Returns the child frontier preceding this exact result, preserving idempotent retries.
+    /// 返回本次精确结果之前的子会话回流前沿，保留幂等重试。
+    /// Parameters identify the child and final text; returns the last previously covered source seq.
+    /// 参数标识子会话与最终正文；返回此前已覆盖的最后源序号。
+    pub fn subagent_return_frontier_before(
+        &self,
+        child_session_id: &str,
+        final_text_seq: Seq,
+    ) -> Option<Seq> {
+        self.events
+            .iter()
+            .filter_map(|event| match &event.event {
+                EventBody::SubagentReturn(returned)
+                    if returned.child_session_id == child_session_id
+                        && returned.source_to_seq.value() < final_text_seq.value() =>
+                {
+                    Some(returned.source_to_seq)
+                }
+                _ => None,
+            })
+            .max()
+    }
+
+    /// Builds a return covering every unreturned closed turn, including stopped predecessors.
+    /// 构建覆盖全部尚未回流的闭合回合的结果，包含此前停止的回合。
+    /// `after_seq` is the parent-owned coverage frontier; returns exact nonoverlapping totals.
+    /// `after_seq` 为父会话持有的覆盖前沿；返回精确且不重叠的统计总量。
+    pub fn build_subagent_return_input_since(
+        &self,
+        request: SubagentReturnBuildRequest,
+        after_seq: Option<Seq>,
+    ) -> Result<SubagentReturnInput, DomainError> {
+        // Preserve exact final-body identity and durability validation from the canonical builder.
+        // 保留规范构建器的精确最终正文身份与可靠性校验。
+        let mut input = self.build_subagent_return_input(request)?;
+        // The parent-owned frontier excludes every already returned source event.
+        // 父会话持有的前沿排除全部已经回流的源事件。
+        let from = after_seq.map_or(1, |seq| seq.value() + 1);
+        if from < self.resident_start_seq || from > input.source_from_seq.value() {
+            return Err(DomainError::InvalidStatistics {
+                field: "child_unreturned_source_range",
+            });
+        }
+        // Recompute each closed turn from its API facts, including legacy timing checkpoints.
+        // 从 API 事实重算每个闭合回合，包含旧计时点。
+        let mut totals = Vec::new();
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.seq.value() >= from && event.seq <= input.source_to_seq)
+        {
+            if let EventBody::TurnStats(stats) = &event.event {
+                if stats.start_seq.value() < from {
+                    return Err(DomainError::InvalidStatistics {
+                        field: "child_unreturned_partial_turn",
+                    });
+                }
+                let turn_id = event.turn_id.ok_or(DomainError::InvalidStatistics {
+                    field: "child_unreturned_turn_id",
+                })?;
+                totals.push(self.aggregate_turn_buckets(turn_id, stats.start_seq)?.total);
+            }
+        }
+        input.totals = StatBucket::from_subagent_returns(&totals);
+        // These are turns of the same child, so merging them does not create extra child returns.
+        // 这些是同一子会话的回合，合并它们不产生额外子代理回流次数。
+        input.totals.subagent_return_count = totals
+            .iter()
+            .map(|bucket| bucket.subagent_return_count)
+            .sum();
+        input.source_from_seq = Seq::try_new(from)?;
+        Ok(input)
+    }
+
     /// Builds one exact parent-return input from a fully durable child document.
     /// 从一个完全持久化的子会话文档构建精确的父回流输入。
     pub fn build_subagent_return_input(
@@ -331,6 +405,11 @@ impl SessionDocument {
     ) -> Result<IdempotentMutation<SubagentReturnReceipt>, DomainError> {
         if let Some(receipt) = self.existing_subagent_return(&input)? {
             return Ok(IdempotentMutation::Idempotent(receipt));
+        }
+        if self.events.iter().any(|event| matches!(&event.event,
+            EventBody::SubagentReturn(returned) if returned.child_session_id == input.child_session_id
+                && returned.source_from_seq <= input.source_to_seq && input.source_from_seq <= returned.source_to_seq)) {
+            return Err(DomainError::InvalidStatistics { field: "subagent_return.overlapping_source_range" });
         }
         // A child may outlive its parent turn; its return is the successor's own root semantic.
         // 子任务可能晚于父回合结束；回流自身就是后继回合的根语义。

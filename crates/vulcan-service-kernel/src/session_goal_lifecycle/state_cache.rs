@@ -616,6 +616,7 @@ fn session_goal_summary_from_document(
     }
     let direct = StatBucket::from_api_usages(direct_usages, direct_api_count, direct_tool_count, 0);
     let subagent = StatBucket {
+        output_timing: None,
         api_call_count: subagent_api_count,
         unknown_usage_api_call_count: 0,
         tool_call_count: 0,

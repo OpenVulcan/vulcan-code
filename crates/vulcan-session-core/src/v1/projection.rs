@@ -415,6 +415,21 @@ pub fn project_provider_items_with_sources(
         .collect();
     let mut pending: Vec<(ApiCallId, PendingGroup)> = Vec::new();
 
+    // New immutable return pairs carry timing; legacy pairs keep their existing wire projection.
+    // 新的不可变回流事件对携带计时；旧事件对保持既有线协议投影。
+    let return_statistics: BTreeMap<_, _> = events
+        .iter()
+        .filter_map(|record| match &record.event {
+            EventBody::SubagentReturnStats(stats) if stats.totals.output_timing.is_some() => {
+                Some((
+                    (stats.child_session_id.as_str(), stats.child_turn_stats_seq),
+                    (record.seq, &stats.totals),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+
     for event in events {
         let seq_value = event.seq().value();
         if seq_value < boundary {
@@ -546,12 +561,38 @@ pub fn project_provider_items_with_sources(
             }
             EventBody::SubagentReturn(return_event) => {
                 flush_pending(&mut items, &mut pending)?;
+                // Join only the atomic statistics pair with this exact child and source frontier.
+                // 仅关联当前精确子代理与源前沿对应的原子统计事件对。
+                let (text, source_to_seq) = match return_statistics.get(&(
+                    return_event.child_session_id.as_str(),
+                    return_event.child_turn_stats_seq,
+                )) {
+                    Some((stats_seq, statistics)) => {
+                        // Include coverage identity so repeated automatic feedback can be deduplicated.
+                        // 包含覆盖身份，使重复自动反馈可去重。
+                        let encoded = serde_json::to_string(&serde_json::json!({
+                            "child_session_id": return_event.child_session_id,
+                            "source_from_seq": return_event.source_from_seq,
+                            "source_to_seq": return_event.source_to_seq,
+                            "statistics": statistics,
+                        }))
+                        .map_err(|_| {
+                            DomainError::reference("subagent_statistics", event.seq.value())
+                        })?;
+                        (
+                            format!(
+                                "{}\n\nSubagent statistics for this returned source range (do not count the same range twice):\n{encoded}",
+                                return_event.content
+                            ),
+                            *stats_seq,
+                        )
+                    }
+                    None => (return_event.content.clone(), event.seq),
+                };
                 items.push(SourcedProjectedItem {
                     source_from_seq: event.seq,
-                    source_to_seq: event.seq,
-                    item: ProjectedItem::SubagentReturnText {
-                        text: return_event.content.clone(),
-                    },
+                    source_to_seq,
+                    item: ProjectedItem::SubagentReturnText { text },
                     user_prompt_parameters: None,
                 });
             }

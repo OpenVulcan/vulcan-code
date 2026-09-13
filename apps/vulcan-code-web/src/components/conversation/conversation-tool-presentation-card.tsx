@@ -2020,7 +2020,7 @@ function SubagentOrchestrationDetail(props: {
     <div className="subagent-orchestration-detail">
       {presentation.queued !== null && presentation.queued !== undefined ? (
         <div className="subagent-orchestration-meta">
-          <span>{t("conversation.subagent.detail.queued")}</span>
+          <span>{t(presentation.deliveryMode === "interrupt" ? "conversation.subagent.detail.steering" : "conversation.subagent.detail.queued")}</span>
           <strong>{presentation.queued ? t("conversation.subagent.detail.yes") : t("conversation.subagent.detail.no")}</strong>
         </div>
       ) : null}

@@ -973,6 +973,16 @@ function WorkspaceSubagentPanel(args: {
           <span>{transcriptOwner.error}</span>
         </div>
       ) : null}
+      {task?.pendingMessages?.length ? (
+        <div className="workspace-subagent-message-queue" aria-live="polite">
+          {task.pendingMessages.map((message) => (
+            <div className="workspace-subagent-message-queue-item" key={message.deliveryId}>
+              <strong>{t(message.steering ? "conversation.subagent.queue.steering" : "conversation.subagent.queue.followup")}</strong>
+              <span>{message.message}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <ConversationBranchWorkspaceV1
         providers={args.props.workbench.providers}
         commandSessions={subagentCommandSessions}

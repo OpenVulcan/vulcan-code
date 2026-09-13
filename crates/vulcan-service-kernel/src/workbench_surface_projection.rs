@@ -86,13 +86,26 @@ pub(super) fn subagent_navigation_snapshot_for_parent_from_cached_state(
     let tasks = normalized_projection
         .iter()
         .map(|projection| {
-            subagent_task_summary_from_state(
+            let mut summary = subagent_task_summary_from_state(
                 &projection.state,
                 active_task_id,
                 projection.agent_profile_id.clone(),
-            )
+            );
+            if let Some(runtime) = &guard.agent_runtime {
+                summary.pending_messages = runtime
+                    .task_runtime
+                    .pending_task_messages(projection.state.task_id)?
+                    .into_iter()
+                    .map(|message| vulcan_service_api::SubagentPendingMessage {
+                        delivery_id: message.delivery_id,
+                        message: message.message,
+                        steering: message.steering,
+                    })
+                    .collect();
+            }
+            Ok(summary)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(Some(SubagentNavigationSnapshot {
         parent_conversation_id: parent_session_id.to_string(),
         active_conversation_id: active_task_id.unwrap_or(parent_session_id).to_string(),
@@ -249,6 +262,7 @@ fn subagent_task_summary_from_state(
     agent_profile_id: Option<String>,
 ) -> SubagentTaskSummary {
     SubagentTaskSummary {
+        pending_messages: Vec::new(),
         task_id: state.task_id.to_string(),
         public_task_id: state.public_task_id.clone(),
         label: subagent_navigation_task_label(state),

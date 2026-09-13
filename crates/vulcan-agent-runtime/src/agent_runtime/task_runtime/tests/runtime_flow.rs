@@ -1903,6 +1903,7 @@ fn archived_task_session_rejects_stale_stop_and_execution_claim() {
         .restore_inter_agent_messages_front_after_failure(
             task_id,
             vec![QueuedInterAgentMessage {
+                steering: false,
                 delivery_id: String::from("stale-archived-delivery"),
                 author_session_id: root_session_id,
                 target_task_id: task_id,
@@ -2586,6 +2587,7 @@ fn offline_inter_agent_snapshot_projection_is_atomic_on_identity_conflict() {
     // message identifies all deterministic provider, hidden-record, and display projections for one delivery.
     // message 标识单次投递的全部确定性 Provider、隐藏记录与显示投影。
     let message = QueuedInterAgentMessage {
+        steering: false,
         delivery_id: String::from("offline-delivery"),
         author_session_id: Uuid::new_v4(),
         target_task_id: task_id,
@@ -2628,6 +2630,7 @@ fn offline_inter_agent_snapshot_projection_is_atomic_on_identity_conflict() {
 #[test]
 fn offline_inter_agent_snapshot_projection_reuses_identical_delivery_owner() {
     let message = QueuedInterAgentMessage {
+        steering: false,
         delivery_id: String::from("offline-idempotent-delivery"),
         author_session_id: Uuid::new_v4(),
         target_task_id: Uuid::new_v4(),

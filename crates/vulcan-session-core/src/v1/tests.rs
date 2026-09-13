@@ -384,6 +384,7 @@ fn golden_subagent_return_stats() {
             child_turn_stats_seq: Seq::try_new(12).unwrap(),
             status: SubagentReturnStatus::Final,
             totals: StatBucket {
+                output_timing: None,
                 api_call_count: 3,
                 unknown_usage_api_call_count: 1,
                 tool_call_count: 2,

@@ -7,6 +7,7 @@ impl TaskRuntime {
         let (subagent_mailbox_activity_tx, _) = watch::channel(0_u64);
         let (wait_agent_parent_interruption_tx, _) = watch::channel(0_u64);
         Self {
+            durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
             execution_contexts: RwLock::new(HashMap::new()),

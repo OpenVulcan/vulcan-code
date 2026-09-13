@@ -1713,6 +1713,63 @@ impl SessionDocument {
 
     /// Records one in-turn supplementary input bound to the open turn.
     /// 记录一条绑定开放回合的过程内补充输入。
+    /// `client_action_id` deduplicates delivery and `text` is the complete agent-message envelope.
+    /// `client_action_id` 用于投递去重，`text` 为完整代理消息信封。
+    /// Returns the source sequence; admission is allowed only between physical APIs.
+    /// 返回源序号；仅允许在两次物理 API 之间准入。
+    pub fn append_in_turn_guidance_before_api(
+        &mut self,
+        client_action_id: ClientActionId,
+        text: String,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<Seq>, DomainError> {
+        for event in &self.events {
+            if let EventBody::UserInput(input) = &event.event
+                && input.client_action_id == client_action_id
+            {
+                if input.text == text && input.input_source == UserInputSource::PendingInTurn {
+                    return Ok(IdempotentMutation::Idempotent(event.seq));
+                }
+                return Err(client_action_conflict(&client_action_id));
+            }
+        }
+        self.require_client_action_unused(&client_action_id)?;
+        let turn_id = self.require_open_turn()?.turn_id;
+        if let Some(api) = &self.active_api {
+            return Err(DomainError::TurnCompletionWhileApiActive {
+                turn_id: turn_id.value(),
+                api_call_id: api.api_call_id.value(),
+            });
+        }
+        let text = validate_user_input(text, &[])?;
+        validate_timestamp("updated_at_ms", now_ms)?;
+        self.ensure_transition_capacity(1, 1)?;
+        let mut staged_allocator = self.id_allocator;
+        let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
+        let mut staged_events = Vec::new();
+        let seq = self.stage_event(
+            &mut staged_allocator,
+            &mut staged_events,
+            Some(turn_id),
+            EventVisibility::Provider,
+            EventBody::UserInput(UserInputEvent {
+                parameters: None,
+                client_action_id,
+                input_id,
+                input_source: UserInputSource::PendingInTurn,
+                text,
+                resource_ids: vec![],
+            }),
+            now_ms,
+        )?;
+        self.id_allocator = staged_allocator;
+        self.events.extend(staged_events);
+        self.bump_revision(&[DirtyFile::ActiveTail], now_ms, &[seq]);
+        Ok(IdempotentMutation::Committed(seq))
+    }
+
+    /// Records one in-turn supplementary input bound to the open turn.
+    /// 记录一条绑定开放回合的过程内补充输入。
     pub fn add_pending_in_turn_input(
         &mut self,
         submission: ClientInputSubmission,

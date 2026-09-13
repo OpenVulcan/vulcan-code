@@ -210,11 +210,103 @@ fn dimension_value(sum: u64, unknown: bool) -> Option<u64> {
     if unknown { None } else { Some(sum) }
 }
 
+/// Additive timing evidence keeps averages and speed weighted by their measured request cohort.
+/// 可累加计时证据按实测请求组对平均延迟与速度加权。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderOutputTiming {
+    /// Requests with valid dispatch and completion timestamps, including nonstreaming calls.
+    /// 具有有效分派及完成时间戳的请求数，包含非流式调用。
+    pub total_request_count: u64,
+    /// Sum of measured physical request durations, excluding tool execution.
+    /// 实测物理请求总耗时，不包含工具执行。
+    pub total_request_duration_ms: u64,
+    /// Requests with paired first-token, output-duration and output-token observations.
+    /// 首 Token、输出时长及输出 Token 均配对的请求数。
+    pub request_count: u64,
+    /// Sum of physical request durations for the paired output cohort.
+    /// 配对输出请求组的物理请求耗时总和。
+    pub request_duration_ms: u64,
+    /// Sum of first-token latencies for the paired output cohort.
+    /// 配对输出请求组的首 Token 延迟总和。
+    pub first_token_latency_ms: u64,
+    /// Sum of completion minus first-token timestamps for the paired cohort.
+    /// 配对请求组的完成时间减首 Token 时间总和。
+    pub output_duration_ms: u64,
+    /// Output tokens from exactly the same measured output cohort.
+    /// 来自同一实测输出请求组的输出 Token 数。
+    pub output_tokens: u64,
+}
+
+impl ProviderOutputTiming {
+    /// Extracts additive timing from one API fact; missing checkpoints remain unmeasured.
+    /// 从单个 API 事实提取可累加计时；缺失计时点保持未测量。
+    /// `api` owns timestamps and usage; returns evidence only when request duration is valid.
+    /// `api` 持有时间戳及用量；仅在请求耗时有效时返回证据。
+    pub fn from_api(api: &crate::v1::event::ApiStatsEvent) -> Option<Self> {
+        // Only authoritative dispatch and completion timestamps define physical request duration.
+        // 仅使用权威分派与完成时间戳定义物理请求时长。
+        let (Some(start), Some(end)) = (api.timing.dispatched_at_ms, api.timing.completed_at_ms)
+        else {
+            return None;
+        };
+        if end < start {
+            return None;
+        }
+        // Track all timed requests separately from the output-measured cohort.
+        // 将全部已计时请求与已测输出请求组分别累计。
+        let mut timing = Self {
+            total_request_count: 1,
+            total_request_duration_ms: end.abs_diff(start),
+            ..Self::default()
+        };
+        if let (Some(first), Some(output)) = (api.timing.first_token_at_ms, api.usage.output_tokens)
+            && first >= start
+            && end > first
+        {
+            timing.request_count = 1;
+            timing.request_duration_ms = end.abs_diff(start);
+            timing.first_token_latency_ms = first.abs_diff(start);
+            timing.output_duration_ms = end.abs_diff(first);
+            timing.output_tokens = output;
+        }
+        Some(timing)
+    }
+
+    /// Sums independent timing buckets; no average is averaged again.
+    /// 累加独立计时桶；不对平均值再次求平均。
+    /// `samples` must cover disjoint requests; returns None when no sample exists.
+    /// `samples` 必须覆盖互不重叠的请求；无样本时返回 None。
+    pub fn aggregate<'a>(samples: impl IntoIterator<Item = &'a Self>) -> Option<Self> {
+        // Raw sums preserve weighting when parent and child requests have different durations.
+        // 原始总和在父子请求时长不同时保留正确权重。
+        let mut result = Self::default();
+        // Absence remains unknown rather than creating a zero-valued measurement.
+        // 缺失保持未知，不创建零值测量。
+        let mut observed = false;
+        for sample in samples {
+            observed = true;
+            result.total_request_count += sample.total_request_count;
+            result.total_request_duration_ms += sample.total_request_duration_ms;
+            result.request_count += sample.request_count;
+            result.request_duration_ms += sample.request_duration_ms;
+            result.first_token_latency_ms += sample.first_token_latency_ms;
+            result.output_duration_ms += sample.output_duration_ms;
+            result.output_tokens += sample.output_tokens;
+        }
+        observed.then_some(result)
+    }
+}
+
 /// One turn-level aggregate bucket over API, tool, and subagent facts.
 /// 一个回合级聚合桶，覆盖 API、工具与子代理事实。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StatBucket {
+    /// Additive request timing; absent on historical buckets without measurements.
+    /// 可累加请求计时；缺少测量的历史统计桶不包含此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_timing: Option<ProviderOutputTiming>,
     /// Number of physical Provider API calls in the bucket.
     /// 桶内物理 Provider API 调用数。
     pub api_call_count: u64,
@@ -250,6 +342,7 @@ impl StatBucket {
             tool_call_count,
             subagent_return_count,
             usage: AggregatedUsage::aggregate(samples),
+            output_timing: None,
         }
     }
 
@@ -277,6 +370,11 @@ impl StatBucket {
                     .saturating_add(bucket.subagent_return_count)
             }),
             usage: AggregatedUsage::aggregate_aggregated(totals.iter().map(|bucket| &bucket.usage)),
+            output_timing: ProviderOutputTiming::aggregate(
+                totals
+                    .iter()
+                    .filter_map(|bucket| bucket.output_timing.as_ref()),
+            ),
         }
     }
 }
@@ -328,6 +426,14 @@ impl TurnStatBuckets {
             tool_call_count: direct.tool_call_count + subagent.tool_call_count,
             subagent_return_count: subagent.subagent_return_count,
             usage: total_usage,
+            output_timing: ProviderOutputTiming::aggregate(
+                [
+                    direct.output_timing.as_ref(),
+                    subagent.output_timing.as_ref(),
+                ]
+                .into_iter()
+                .flatten(),
+            ),
         };
         Self {
             direct,

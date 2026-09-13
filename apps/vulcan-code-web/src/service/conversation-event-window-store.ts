@@ -146,6 +146,17 @@ export interface AggregatedUsage {
 /** One aggregate bucket used by terminal turn statistics.
  * 终态回合统计使用的一组聚合桶。 */
 export interface StatBucket {
+  /** Additive timing for measured requests; omitted in older history.
+   * 实测请求的可累加计时；旧历史中省略。 */
+  output_timing?: {
+    total_request_count: number;
+    total_request_duration_ms: number;
+    request_count: number;
+    request_duration_ms: number;
+    first_token_latency_ms: number;
+    output_duration_ms: number;
+    output_tokens: number;
+  };
   api_call_count: number;
   unknown_usage_api_call_count: number;
   tool_call_count: number;

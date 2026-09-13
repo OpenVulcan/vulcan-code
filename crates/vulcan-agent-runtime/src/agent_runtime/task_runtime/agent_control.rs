@@ -13,20 +13,20 @@ enum InterAgentDeliveryMode {
     /// Queue the message behind the current task.
     /// 将消息排在当前任务之后。
     Queue,
-    /// Interrupt the current task before scheduling the message.
-    /// 在调度消息前中断当前任务。
+    /// Steer the current task at its next physical API boundary without cancellation.
+    /// 在下一次物理 API 边界引导当前任务，不取消执行。
     Interrupt,
 }
 
 impl InterAgentDeliveryMode {
-    /// Returns whether this delivery mode is an interrupt request.
-    /// 返回该投递模式是否为插队中断请求。
+    /// Returns whether delivery should precede the next API request.
+    /// 返回该投递是否应排在下一次 API 请求之前。
     ///
     /// # Returns
     /// 返回值
-    /// `true` when the caller asked to interrupt current work.
-    /// 调用方请求中断当前工作时返回 `true`。
-    const fn interrupts_current_task(self) -> bool {
+    /// `true` when the caller requested guidance before the next API.
+    /// 调用方请求在下次 API 前追加引导时返回 `true`。
+    const fn steers_current_task(self) -> bool {
         matches!(self, Self::Interrupt)
     }
 
@@ -86,6 +86,134 @@ impl std::fmt::Display for InterAgentMessageRestoreError {
 }
 
 impl TaskRuntime {
+    /// Defers successful feedback until the V1 owner publishes its exact return statistics.
+    /// 将成功反馈延迟到 V1 所有者发布精确回流统计之后。
+    /// `task_id` and `execution_id` identify the admitted generation; returns registration errors.
+    /// `task_id` 与 `execution_id` 标识准入代际；返回注册错误。
+    pub fn expect_durable_task_return(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<(), String> {
+        // Retain one publication gate per stable child and exact execution generation.
+        // 为稳定子代理及其精确执行代际保留一个发布门控。
+        let mut returns = self
+            .durable_return_mailboxes
+            .write()
+            .map_err(|_| "The durable return registry is locked.")?;
+        if returns
+            .get(&task_id)
+            .is_none_or(|(expected, _)| expected != execution_id)
+        {
+            returns.insert(task_id, (execution_id.to_string(), None));
+        }
+        Ok(())
+    }
+
+    /// Publishes exact V1 feedback once per execution, then retains it for repeated waits.
+    /// 按执行只发布一次精确 V1 反馈，并为重复等待保留反馈。
+    /// `event` contains the canonical statistics; returns identity or mailbox errors.
+    /// `event` 包含规范统计；返回身份或 mailbox 错误。
+    pub fn publish_durable_task_return(
+        &self,
+        execution_id: &str,
+        event: SubagentMailboxEvent,
+    ) -> Result<(), String> {
+        // Resolve the child solely from the typed mailbox identity.
+        // 仅从强类型 mailbox 身份解析子代理。
+        let task_id = SessionId::from(event.child_thread_id);
+        // Serialize publication and cache replacement for this execution.
+        // 将本次执行的发布与缓存替换串行化。
+        let mut returns = self
+            .durable_return_mailboxes
+            .write()
+            .map_err(|_| "The durable return registry is locked.")?;
+        // Preserve the registered generation and its already published receipt.
+        // 保留注册的代际及其已发布回执。
+        let (expected, cached) = returns
+            .get_mut(&task_id)
+            .ok_or("The durable return was not registered.")?;
+        if expected != execution_id {
+            return Err("The durable return execution is stale.".into());
+        }
+        if let Some(previous) = cached {
+            if previous != &event {
+                return Err("The durable return differs from its published feedback.".into());
+            }
+            return Ok(());
+        }
+        self.subagent_mailbox.push_event(event.clone())?;
+        *cached = Some(event);
+        drop(returns);
+        self.notify_subagent_mailbox_activity();
+        Ok(())
+    }
+
+    /// Commits steering messages at a physical request boundary, removing each only after durable acceptance.
+    /// 在物理请求边界提交插队消息，仅在可靠接纳后移除对应消息。
+    /// `task_id` selects the child; `accept` receives the stable delivery id and model envelope.
+    /// `task_id` 选择子代理；`accept` 接收稳定投递 ID 与模型消息信封。
+    /// Returns the consumed count; an acceptance failure leaves the unaccepted message queued.
+    /// 返回消费数量；接纳失败时尚未接纳的消息保留在队列中。
+    pub fn consume_task_steering_messages(
+        &self,
+        task_id: SessionId,
+        mut accept: impl FnMut(&str, &str) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        // Keep admission ordered while each accepted message is committed durably.
+        // 每条接纳消息可靠提交期间保持准入有序。
+        let mut inboxes = self
+            .agent_inboxes
+            .write()
+            .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
+        // Select the exact child inbox; an absent inbox has no pending delivery.
+        // 选择精确子代理 inbox；不存在 inbox 即没有待处理投递。
+        let Some(messages) = inboxes.get_mut(&task_id) else {
+            return Ok(0);
+        };
+        // Count only messages whose durable acceptance succeeded.
+        // 只计算可靠接纳成功的消息。
+        let mut consumed = 0;
+        while let Some(index) = messages.iter().position(|message| message.steering) {
+            // Preserve delivery identity until its durable acceptance succeeds.
+            // 在可靠接纳成功之前保留投递身份。
+            let message = &messages[index];
+            accept(
+                &message.delivery_id,
+                &format_inter_agent_messages_for_model(std::slice::from_ref(message)),
+            )?;
+            messages.remove(index);
+            consumed += 1;
+        }
+        Ok(consumed)
+    }
+
+    /// Returns the authoritative pending message list for a child panel, in delivery order.
+    /// 按投递顺序返回子代理面板的权威待处理消息列表。
+    /// `task_id` selects one child; returns public content without consuming messages.
+    /// `task_id` 选择一个子代理；返回公开内容且不消费消息。
+    pub fn pending_task_messages(
+        &self,
+        task_id: SessionId,
+    ) -> Result<Vec<TaskPendingMessage>, String> {
+        // Read the same inbox used by API-boundary steering and idle follow-ups.
+        // 读取 API 边界插队与空闲续接共同使用的 inbox。
+        let inboxes = self
+            .agent_inboxes
+            .read()
+            .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
+        Ok(inboxes
+            .get(&task_id)
+            .into_iter()
+            .flatten()
+            .map(|message| TaskPendingMessage {
+                delivery_id: message.delivery_id.clone(),
+                message: message.content.clone(),
+                steering: message.steering,
+            })
+            .collect())
+    }
+
     /// Sends one message to a known child agent.
     /// 向一个已知子代理发送一条消息。
     pub async fn invoke_send_message(
@@ -118,7 +246,7 @@ impl TaskRuntime {
     ) -> Result<VulcanToolInvocationResult, String> {
         let parsed = parse_inter_agent_message_args(&args, SEND_MESSAGE_TOOL)?;
         if is_root_agent_target(&parsed.target) {
-            if parsed.delivery_mode.interrupts_current_task() {
+            if parsed.delivery_mode.steers_current_task() {
                 return Err(String::from(
                     "send_message delivery_mode `interrupt` cannot target the root agent.",
                 ));
@@ -127,19 +255,15 @@ impl TaskRuntime {
         }
         let target = self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
         let target_session_id = SessionId::from(target.session_id);
-        // transaction_task_ids define the exact execution scope that must not settle between message admission and interruption.
-        // transaction_task_ids 定义消息准入与中止之间不得收敛的精确执行范围。
-        let transaction_task_ids = if parsed.delivery_mode.interrupts_current_task() {
-            self.task_subtree_ids(target_session_id)?
-        } else {
-            vec![target_session_id]
-        };
-        // transaction_locks keep every interrupted finalizer behind the admitted inbox message.
-        // transaction_locks 让全部被中止执行的终态处理器排在已准入 inbox 消息之后。
+        // transaction_task_ids serialize message admission with this child finalizer.
+        // transaction_task_ids 将消息准入与当前子代理收尾串行化。
+        let transaction_task_ids = vec![target_session_id];
+        // transaction_locks preserve inbox admission before the finalizer selects a successor.
+        // transaction_locks 确保 inbox 准入先于收尾选择后继执行。
         let transaction_locks =
             self.ordered_task_execution_state_locks(transaction_task_ids.as_slice())?;
-        // transaction_guards retain the sorted task boundaries through registry stop and inbox admission.
-        // transaction_guards 在注册表停止与 inbox 准入期间保留排序后的任务边界。
+        // transaction_guards retain the task boundary through inbox admission.
+        // transaction_guards 在 inbox 准入期间持有任务边界。
         let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
         for transaction_lock in &transaction_locks {
             transaction_guards.push(transaction_lock.lock().map_err(|_| {
@@ -156,28 +280,19 @@ impl TaskRuntime {
                 target.agent_id, target.session_id, admitted_target.session_id
             ));
         }
-        // continues_task_turn is sampled inside the same transaction that owns stop and admission.
-        // continues_task_turn 在持有停止与准入事务的同一边界内取样。
+        // continues_task_turn is sampled inside the message admission transaction.
+        // continues_task_turn 在消息准入事务内取样。
         let continues_task_turn = self.task_has_active_or_starting_run(target_session_id)?;
-        // stopped_task_ids preserve interrupt semantics while finalizers remain blocked on the task locks.
-        // stopped_task_ids 在终态处理器仍被任务锁阻挡时保留插队中止语义。
-        let stopped_task_ids = if parsed.delivery_mode.interrupts_current_task() {
-            let stopped_task_ids =
-                self.reserve_and_abort_selected_task_runs(transaction_task_ids.as_slice())?;
-            self.mark_stopped_tasks_with_transaction_locks_held(
-                stopped_task_ids.as_slice(),
-                "user_interrupt",
-            )?;
-            stopped_task_ids
-        } else {
-            Vec::new()
-        };
+        // stopped_task_ids remain empty because guidance never cancels active work.
+        // stopped_task_ids 保持为空，因为引导不会取消当前工作。
+        let stopped_task_ids = Vec::new();
         let delivery_id = self.enqueue_inter_agent_message(
             current_session_id,
             target_session_id,
             admitted_target.agent_id.clone(),
             parsed.message.clone(),
             continues_task_turn,
+            parsed.delivery_mode.steers_current_task(),
         )?;
         let should_resume = !self.task_has_active_or_starting_run(target_session_id)?;
         drop(transaction_guards);
@@ -323,10 +438,12 @@ impl TaskRuntime {
         target_agent_id: String,
         content: String,
         continues_task_turn: bool,
+        steering: bool,
     ) -> Result<String, String> {
         let created_at_ms = current_unix_millis_u64();
         let delivery_id = format!("subagent-message-{target_task_id}-{}", Uuid::new_v4());
         let message = QueuedInterAgentMessage {
+            steering,
             delivery_id: delivery_id.clone(),
             author_session_id,
             target_task_id,
@@ -1246,7 +1363,7 @@ fn build_inter_agent_message_tool_result(
         (SUBAGENT_TASK_ID_KEY): target.session_id.to_string(),
         "queued": true,
         "delivery_mode": delivery_mode.as_str(),
-        "interrupted": delivery_mode.interrupts_current_task(),
+        "interrupted": false,
         "delivery_status": "queued",
         "message": "The message was accepted for the child agent. Do not report a final child result from assumptions; wait for child-agent feedback.",
     });
@@ -1259,7 +1376,7 @@ fn build_inter_agent_message_tool_result(
         "message": message,
         "queued": true,
         "delivery_mode": delivery_mode.as_str(),
-        "interrupted": delivery_mode.interrupts_current_task(),
+        "interrupted": false,
         (INTER_AGENT_CONTINUES_TASK_TURN_KEY): continues_task_turn,
         (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "target_status_before_delivery": target.status,

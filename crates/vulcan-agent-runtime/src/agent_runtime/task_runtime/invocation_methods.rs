@@ -343,6 +343,17 @@ impl TaskRuntime {
             // task_id addresses the same authoritative ownership and inbox used by cached-terminal checks.
             // task_id 定位与缓存终态检查相同的权威运行所有权及 inbox。
             let task_id = SessionId::from(entry.session_id);
+            if entry.status == SubagentStatus::Completed {
+                let returns = self
+                    .durable_return_mailboxes
+                    .read()
+                    .map_err(|_| "The durable return registry is locked.")?;
+                if let Some((_, cached)) = returns.get(&task_id) {
+                    if cached.is_none() {
+                        session_ids.insert(entry.session_id);
+                    }
+                }
+            }
             if entry.status.is_running()
                 || self.task_has_active_or_starting_run(task_id)?
                 || self.inter_agent_message_count_for_task(task_id)? > 0
@@ -434,6 +445,20 @@ impl TaskRuntime {
                 || self.task_has_active_or_starting_run(task_id)?
             {
                 continue;
+            }
+            // V1 completion remains pending until its canonical inclusive statistics are available.
+            // V1 完成在规范包容性统计可用之前保持待处理。
+            if entry.status == SubagentStatus::Completed {
+                let returns = self
+                    .durable_return_mailboxes
+                    .read()
+                    .map_err(|_| "The durable return registry is locked.")?;
+                if let Some((_, cached)) = returns.get(&task_id) {
+                    if let Some(event) = cached {
+                        cached_terminal_events.push(event.clone());
+                    }
+                    continue;
+                }
             }
             // terminal_kind and status_label preserve the exact registry terminal state in the wait contract.
             // terminal_kind 与 status_label 在等待契约中保留精确的注册表终态。

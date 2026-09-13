@@ -1356,6 +1356,30 @@ fn provider_projection_runtime_error(error: impl fmt::Display) -> SessionRuntime
 }
 
 impl ProviderV1StreamSink {
+    /// Publishes queued steering before the next request projection without touching active work.
+    /// 在下一次请求投影前发布插队消息，不触碰当前执行。
+    /// `runtime` owns message delivery; returns the number durably consumed or the exact failure.
+    /// `runtime` 持有消息投递状态；返回可靠消费数量或精确失败。
+    pub(crate) fn consume_subagent_steering(
+        &self,
+        runtime: &vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime,
+    ) -> Result<usize, String> {
+        runtime.consume_task_steering_messages(self.handle.session_id(), |delivery_id, text| {
+            let action = vulcan_session_core::v1::ids::ClientActionId::try_new(delivery_id.to_string())
+                .map_err(|error| error.to_string())?;
+            let text = text.to_string();
+            let now_ms = crate::current_v1_unix_millis()?;
+            self.handle.mutate_durable_if_changed(
+                SessionMutationAdmission::ExistingTurn, SessionFlushReason::InputAccepted,
+                move |document| document.append_in_turn_guidance_before_api(action, text, now_ms)
+                    .map(|result| match result {
+                        vulcan_session_core::v1::document::IdempotentMutation::Committed(seq) => SessionMutationChange::Changed(seq),
+                        vulcan_session_core::v1::document::IdempotentMutation::Idempotent(seq) => SessionMutationChange::Unchanged(seq),
+                    }),
+            ).map(|_| ()).map_err(|error| error.to_string())
+        })
+    }
+
     /// Creates one stream-local sink around the exact registered session handle.
     /// 围绕精确注册的会话句柄创建一个流局部 sink。
     ///
@@ -3165,6 +3189,7 @@ mod tests {
             &app,
             &state,
             &runtime,
+            handle.session_id(),
             "close-execution",
             &mut telemetry,
             &mut sink,

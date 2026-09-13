@@ -555,8 +555,27 @@ struct ActiveTaskRunEntry {
 
 /// One queued inter-agent message waiting for a child-agent safe boundary.
 /// 等待子代理安全边界消费的一条代理间消息。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPendingMessage {
+    /// Stable queue identity used by panel updates.
+    /// 面板更新使用的稳定队列身份。
+    pub delivery_id: String,
+    /// Original message text.
+    /// 原始消息正文。
+    pub message: String,
+    /// Whether delivery occurs before the next API instead of after the task.
+    /// 是否在下一次 API 前投递，而非任务结束后。
+    pub steering: bool,
+}
+
+/// One queued inter-agent message waiting for a child-agent safe boundary.
+/// 等待子代理安全边界消费的一条代理间消息。
 #[derive(Debug, Clone)]
 struct QueuedInterAgentMessage {
+    /// Whether the message is eligible at the next physical request boundary.
+    /// 消息是否应在下一次物理请求边界被消费。
+    steering: bool,
     /// Stable delivery id shared by queue, display records, and host payloads.
     /// 队列、显示记录与宿主载荷共享的稳定投递标识。
     delivery_id: String,
@@ -1008,6 +1027,9 @@ impl CloseAgentArchiveFailure {
 /// Host-managed registry for resumable task sessions and per-session task execution backends.
 /// 宿主管理的可恢复任务会话与按会话划分任务执行后端的注册表。
 pub struct TaskRuntime {
+    /// V1-backed executions awaiting durable return publication; completed entries retain exact feedback.
+    /// 等待可靠回流发布的 V1 执行；已完成条目保留精确反馈。
+    durable_return_mailboxes: RwLock<HashMap<SessionId, (String, Option<SubagentMailboxEvent>)>>,
     /// Stored task-session records keyed by stable task identifier.
     /// 按稳定任务标识索引存储的任务会话记录。
     sessions: RwLock<HashMap<SessionId, TaskSessionRecord>>,

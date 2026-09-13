@@ -68,6 +68,9 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
     // childHandle 在事件订阅开始前持有确定性的 root/TASK 子目录树。
     let child_handle = create_or_load_embedded_task_session_v1(&session_registry, execution_facts)
         .map_err(|error| error.to_string())?;
+    agent_runtime
+        .task_runtime
+        .expect_durable_task_return(task_id, &execution_id)?;
     webui_trace(
         "detached_listener_delegate_started",
         format!(
@@ -209,8 +212,23 @@ fn append_exact_v1_subagent_return(
                 "Detached child completion has no exact durable V1 final assistant receipt.",
             )
         })?;
+    let parent_handle = {
+        let registry = state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .session_runtime_registry
+            .clone();
+        registry
+            .get(parent_session_id)
+            .map_err(|error| error.to_string())?
+    };
+    let after_seq = parent_handle
+        .read_full_durable(|document| {
+            document.subagent_return_frontier_before(&task_id.to_string(), completed_assistant.seq)
+        })
+        .map_err(|error| error.to_string())?;
     let input = child_handle
-        .read(|document| {
+        .read_full_durable(|document| {
             let source_event = document
                 .events()
                 .iter()
@@ -235,25 +253,18 @@ fn append_exact_v1_subagent_return(
                 ));
             }
             document
-                .build_subagent_return_input(SubagentReturnBuildRequest {
-                    final_turn_id,
-                    child_task_id: SubagentTaskId::try_new(task_id.to_string())
-                        .map_err(|error| error.to_string())?,
-                    source_assistant_text_seq: completed_assistant.seq,
-                })
+                .build_subagent_return_input_since(
+                    SubagentReturnBuildRequest {
+                        final_turn_id,
+                        child_task_id: SubagentTaskId::try_new(task_id.to_string())
+                            .map_err(|error| error.to_string())?,
+                        source_assistant_text_seq: completed_assistant.seq,
+                    },
+                    after_seq,
+                )
                 .map_err(|error| error.to_string())
         })
         .map_err(|error| format!("读取子会话 V1 回流事实失败：{error}"))??;
-    let parent_handle = {
-        let registry = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?
-            .session_runtime_registry
-            .clone();
-        registry
-            .get(parent_session_id)
-            .map_err(|error| format!("父会话 V1 owner 不可用：{error}"))?
-    };
     let committed = parent_handle
         .append_subagent_return_with_stats(input, current_v1_unix_millis()?)
         .map_err(|error| format!("子代理 V1 回流提交失败：{error}"))?;
@@ -303,6 +314,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 app,
                 state,
                 agent_runtime,
+                task_id,
                 execution_id,
                 provider_telemetry_guard,
                 provider_v1_sink,
@@ -362,6 +374,61 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             } else {
                 None
             };
+            if let Some(Ok(receipt)) = &v1_return_result {
+                let parent_handle = state
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .session_runtime_registry
+                    .get(parent_session_id)
+                    .map_err(|error| error.to_string())?;
+                let statistics = parent_handle
+                    .read(|document| {
+                        document.events().iter().find_map(|record| {
+                            if record.seq != receipt.stats_seq {
+                                return None;
+                            }
+                            match &record.event {
+                                EventBody::SubagentReturnStats(stats) => Some(stats.totals.clone()),
+                                _ => None,
+                            }
+                        })
+                    })
+                    .map_err(|error| error.to_string())?
+                    .ok_or("The committed child statistics are missing.")?;
+                let metadata = event
+                    .metadata
+                    .as_ref()
+                    .ok_or("The child return metadata is missing.")?;
+                let mut mailbox: vulcan_session_boundary::SubagentMailboxEvent =
+                    serde_json::from_value(metadata["payload"]["subagent_mailbox_event"].clone())
+                        .map_err(|error| error.to_string())?;
+                mailbox.payload["statistics"] =
+                    serde_json::to_value(statistics).map_err(|error| error.to_string())?;
+                agent_runtime
+                    .task_runtime
+                    .publish_durable_task_return(execution_id, mailbox)?;
+            }
+            if let Some(Err(error)) = &v1_return_result {
+                // A persistence failure must wake the parent with its cause instead of waiting forever.
+                // 持久化失败必须携带原因唤醒父会话，避免无限等待。
+                let metadata = event
+                    .metadata
+                    .as_ref()
+                    .ok_or("The child return metadata is missing.")?;
+                let mut mailbox: vulcan_session_boundary::SubagentMailboxEvent =
+                    serde_json::from_value(metadata["payload"]["subagent_mailbox_event"].clone())
+                        .map_err(|error| error.to_string())?;
+                if mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Completed {
+                    mailbox.kind = vulcan_session_boundary::SubagentMailboxEventKind::Failed;
+                    mailbox.payload["status"] = serde_json::json!("failed");
+                    mailbox.payload["error_text"] = serde_json::json!(format!(
+                        "Child return statistics could not be committed: {error}"
+                    ));
+                    agent_runtime
+                        .task_runtime
+                        .publish_durable_task_return(execution_id, mailbox)?;
+                }
+            }
             let consumed = if listener_is_current {
                 match ingest_webui_subagent_runtime_event_for_listener_execution(
                     app,
@@ -500,6 +567,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
+    task_id: SessionId,
     execution_id: &str,
     provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     provider_v1_sink: &mut ProviderV1StreamSink,
@@ -563,10 +631,36 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                 Some(ProviderV1LifecycleFacts::ExcludedNonSession) => {
                     candidate.into_excluded_non_session()
                 }
-                Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => provider_v1_sink
-                    .prepare_request(facts.clone(), candidate)
-                    .await
-                    .map_err(|error| error.to_string()),
+                Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => {
+                    match provider_v1_sink.consume_subagent_steering(&agent_runtime.task_runtime) {
+                        Ok(consumed) => {
+                            if consumed > 0 {
+                                // Refresh the owning root even when another conversation is selected.
+                                // 即使选中了其他会话，也刷新队列所属的根会话。
+                                let refresh = agent_runtime
+                                    .task_runtime
+                                    .active_task_v1_execution_facts(task_id, execution_id)
+                                    .and_then(|facts| {
+                                        emit_webui_subagent_navigation_changed_delta_for_parent(
+                                            app,
+                                            state,
+                                            facts.root_session_id,
+                                        )
+                                    });
+                                if let Err(error) = refresh {
+                                    eprintln!(
+                                        "[subagent] consumed message queue projection failed: {error}"
+                                    );
+                                }
+                            }
+                            provider_v1_sink
+                                .prepare_request(facts.clone(), candidate)
+                                .await
+                                .map_err(|error| error.to_string())
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
                 _ => Err(String::from(
                     "Detached Provider preparation is missing typed request facts.",
                 )),

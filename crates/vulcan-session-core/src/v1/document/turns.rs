@@ -953,8 +953,19 @@ impl SessionDocument {
                 _ => {}
             }
         }
-        let direct =
+        let mut direct =
             StatBucket::from_api_usages(direct_usages, direct_api_count, direct_tool_count, 0);
+        // Measure each physical call once and carry descendant timing through the same buckets.
+        // 每次物理调用只测量一次，并通过同一统计桶传递后代计时。
+        let timings: Vec<_> = turn_events
+            .iter()
+            .filter(|event| event.turn_id == Some(turn_id))
+            .filter_map(|event| match &event.event {
+                EventBody::ApiStats(api) => crate::v1::stats::ProviderOutputTiming::from_api(api),
+                _ => None,
+            })
+            .collect();
+        direct.output_timing = crate::v1::stats::ProviderOutputTiming::aggregate(&timings);
         let subagent = StatBucket::from_subagent_returns(subagent_totals);
         Ok(TurnStatBuckets::combine(direct, subagent))
     }

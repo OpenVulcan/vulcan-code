@@ -158,7 +158,7 @@ pub(super) fn build_wait_agent_tool_candidate(
             id: String::from(WAIT_AGENT_TOOL),
             name: String::from(WAIT_AGENT_TOOL),
             description: String::from(
-                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started.",
+                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started. When present, statistics contains exact unreturned cumulative child usage, including prior stopped turns. Its output_timing contains summed request durations and paired measurements: average first-token latency is first_token_latency_ms / request_count; output speed is output_tokens * 1000 / output_duration_ms. Never divide by all API calls when only some calls have measured timing, and never add repeated feedback for the same execution twice.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -357,7 +357,7 @@ pub(super) fn send_message_args_schema() -> Value {
             "delivery_mode": {
                 "type": "string",
                 "enum": ["queue", "interrupt"],
-                "description": "Use `queue` to run after the target's current task, or `interrupt` to stop the current task and run this message next. Defaults to `queue`."
+                "description": "Use `queue` to run after the target's current task, or `interrupt` to append guidance before its next API request. Interrupt mode does not cancel any active API request, tool, or child task. Defaults to `queue`."
             }
         },
         "required": ["target", "message"],
@@ -1307,6 +1307,9 @@ fn wait_agent_event_summaries(
                 "terminal": wait_agent_mailbox_event_is_terminal(event.kind),
                 "result_available": wait_agent_event_has_result_payload(&event.payload),
             });
+            if let Some(statistics) = event.payload.get("statistics") {
+                summary["statistics"] = statistics.clone();
+            }
             if include_usage_segments
                 && let Some(usage_segments) = event.payload.get("usage_segments")
                 && usage_segments.is_array()

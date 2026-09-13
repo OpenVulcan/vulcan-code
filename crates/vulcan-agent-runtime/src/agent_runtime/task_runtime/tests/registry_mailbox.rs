@@ -177,94 +177,166 @@ async fn agent_orchestration_info_rejects_include_disabled() {
 
 /// Verifies TaskRuntime publishes subagent mailbox lifecycle events on real status transitions.
 /// 验证 TaskRuntime 会在真实状态变化时发布 subagent mailbox 生命周期事件。
-#[test]
-fn task_runtime_publishes_subagent_mailbox_events() {
-    let task_runtime = TaskRuntime::new();
-    let root_session_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
-    let invocation_config = TaskInvocationConfig::main("review this change");
-    let invocation = TaskExecutionRequest {
-        current_session_id: root_session_id,
-        root_session_id,
-        task_id,
-        execution_id: String::from("test-execution"),
-        public_task_id: String::from("agent-review"),
-        prompt: String::from("review this change"),
-        description: Some(String::from("Review code")),
-        subagent: Some(String::from("reviewer")),
-        invocation_config,
-        display_title: String::from("Review code (reviewer)"),
-        parent_task_id: None,
-        depth: 1,
-        snapshot: CoreConversationSnapshot::default(),
-        controller_config: None,
-        is_resumed: false,
-    };
-    let controller_config = build_test_controller_config("Base prompt");
-    let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
-    let running_outcome = TaskExecutionOutcome {
-        task_id,
-        controller_config: controller_config.clone(),
-        resolved_config: resolved_config.clone(),
-        snapshot: CoreConversationSnapshot::default(),
-        provider_turns_executed: 0,
-        tool_calls_processed: 0,
-        final_assistant_message_id: None,
-        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
-        execution_status: TaskExecutionStatus::Running,
-        usage_segments: Vec::new(),
-    };
-    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
-        SessionTurnUsageSegmentKind::SubagentTask,
-        1,
-        Some(&vulcan_core::types::ProviderUsageSnapshot {
-            input_tokens: Some(120),
-            uncached_input_tokens: None,
-            output_tokens: Some(30),
-            reasoning_tokens: Some(10),
-            total_tokens: Some(160),
-            cached_input_tokens: Some(40),
-            cache_creation_input_tokens: None,
-            ..vulcan_core::types::ProviderUsageSnapshot::default()
-        }),
-    );
-    let completed_outcome = TaskExecutionOutcome {
-        final_output_text: String::from("review complete"),
-        execution_status: TaskExecutionStatus::Completed,
-        provider_turns_executed: 1,
-        final_assistant_message_id: Some(String::from("assistant-1")),
-        usage_segments: vec![usage_segment],
-        ..running_outcome.clone()
-    };
+#[tokio::test]
+async fn task_runtime_publishes_subagent_mailbox_events() {
+    // Exercise legacy delivery and V1 delivery gated by durable inclusive statistics.
+    // 覆盖旧投递与等待可靠包容性统计的 V1 投递。
+    for deferred in [false, true] {
+        let task_runtime = TaskRuntime::new();
+        let root_session_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let invocation_config = TaskInvocationConfig::main("review this change");
+        let invocation = TaskExecutionRequest {
+            current_session_id: root_session_id,
+            root_session_id,
+            task_id,
+            execution_id: String::from("test-execution"),
+            public_task_id: String::from("agent-review"),
+            prompt: String::from("review this change"),
+            description: Some(String::from("Review code")),
+            subagent: Some(String::from("reviewer")),
+            invocation_config,
+            display_title: String::from("Review code (reviewer)"),
+            parent_task_id: None,
+            depth: 1,
+            snapshot: CoreConversationSnapshot::default(),
+            controller_config: None,
+            is_resumed: false,
+        };
+        let controller_config = build_test_controller_config("Base prompt");
+        let resolved_config =
+            test_resolved_config(&controller_config, &invocation.invocation_config);
+        let running_outcome = TaskExecutionOutcome {
+            task_id,
+            controller_config: controller_config.clone(),
+            resolved_config: resolved_config.clone(),
+            snapshot: CoreConversationSnapshot::default(),
+            provider_turns_executed: 0,
+            tool_calls_processed: 0,
+            final_assistant_message_id: None,
+            final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+            execution_status: TaskExecutionStatus::Running,
+            usage_segments: Vec::new(),
+        };
+        let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+            SessionTurnUsageSegmentKind::SubagentTask,
+            1,
+            Some(&vulcan_core::types::ProviderUsageSnapshot {
+                input_tokens: Some(120),
+                uncached_input_tokens: None,
+                output_tokens: Some(30),
+                reasoning_tokens: Some(10),
+                total_tokens: Some(160),
+                cached_input_tokens: Some(40),
+                cache_creation_input_tokens: None,
+                ..vulcan_core::types::ProviderUsageSnapshot::default()
+            }),
+        );
+        let completed_outcome = TaskExecutionOutcome {
+            final_output_text: String::from("review complete"),
+            execution_status: TaskExecutionStatus::Completed,
+            provider_turns_executed: 1,
+            final_assistant_message_id: Some(String::from("assistant-1")),
+            usage_segments: vec![usage_segment],
+            ..running_outcome.clone()
+        };
 
-    task_runtime
-        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
-        .expect("running task should store");
-    assert!(
-        !task_runtime
-            .has_subagent_events_for_parent(SessionNodeId::from(root_session_id))
-            .expect("mailbox pending check should succeed"),
-        "running state should not enter the parent mailbox"
-    );
-    task_runtime
-        .store_task_outcome(root_session_id, &invocation, &completed_outcome)
-        .expect("completed task should store");
+        task_runtime
+            .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+            .expect("running task should store");
+        assert!(
+            !task_runtime
+                .has_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+                .expect("mailbox pending check should succeed"),
+            "running state should not enter the parent mailbox"
+        );
+        if deferred {
+            task_runtime
+                .expect_durable_task_return(task_id, &invocation.execution_id)
+                .unwrap();
+        }
+        task_runtime
+            .store_task_outcome(root_session_id, &invocation, &completed_outcome)
+            .expect("completed task should store");
 
-    let events = task_runtime
-        .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
-        .expect("mailbox should drain");
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].kind, SubagentMailboxEventKind::Completed);
-    assert_eq!(events[0].child_thread_id, SessionNodeId::from(task_id));
-    assert_eq!(events[0].payload["agent_kind"], "parent_clone");
-    assert_eq!(events[0].payload["execution_id"], "test-execution");
-    assert!(events[0].payload.get("agent_profile").is_none());
-    assert_eq!(events[0].payload["result_text"], "review complete");
-    assert_eq!(events[0].payload["usage_segments"][0]["input_tokens"], 120);
-    assert_eq!(
-        events[0].payload["usage_segments"][0]["cached_input_tokens"],
-        40
-    );
+        if deferred {
+            assert!(
+                !task_runtime
+                    .has_subagent_events_for_parent(root_session_id.into())
+                    .unwrap()
+            );
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_millis(25),
+                    task_runtime.invoke_wait_agent(root_session_id, json!({"timeout_ms": 10_000})),
+                )
+                .await
+                .is_err(),
+                "completion must wait for its durable statistics"
+            );
+            assert!(
+                task_runtime
+                    .wait_agent_cached_terminal_events(
+                        root_session_id,
+                        &BTreeSet::from([task_id.into()]),
+                        &BTreeSet::new()
+                    )
+                    .unwrap()
+                    .is_empty()
+            );
+            // Publish the canonical cumulative facts instead of the last execution segment.
+            // 发布规范累计事实，替代最后一次执行片段。
+            let mut mailbox: SubagentMailboxEvent = serde_json::from_value(
+                build_task_invocation_result(&invocation, &completed_outcome)
+                    .host_result
+                    .unwrap()
+                    .payload["subagent_mailbox_event"]
+                    .clone(),
+            )
+            .unwrap();
+            mailbox.payload["statistics"] = json!({"api_call_count": 7, "output_timing": {"first_token_latency_ms": 1500, "output_duration_ms": 9000}});
+            task_runtime
+                .publish_durable_task_return(&invocation.execution_id, mailbox.clone())
+                .unwrap();
+            task_runtime
+                .publish_durable_task_return(&invocation.execution_id, mailbox.clone())
+                .unwrap();
+            assert!(
+                task_runtime
+                    .publish_durable_task_return("stale-execution", mailbox.clone())
+                    .is_err()
+            );
+            assert_eq!(
+                task_runtime
+                    .wait_agent_cached_terminal_events(
+                        root_session_id,
+                        &BTreeSet::from([task_id.into()]),
+                        &BTreeSet::new()
+                    )
+                    .unwrap(),
+                vec![mailbox]
+            );
+        }
+
+        let events = task_runtime
+            .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+            .expect("mailbox should drain");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, SubagentMailboxEventKind::Completed);
+        assert_eq!(events[0].child_thread_id, SessionNodeId::from(task_id));
+        assert_eq!(events[0].payload["agent_kind"], "parent_clone");
+        assert_eq!(events[0].payload["execution_id"], "test-execution");
+        assert!(events[0].payload.get("agent_profile").is_none());
+        assert_eq!(events[0].payload["result_text"], "review complete");
+        assert_eq!(events[0].payload["usage_segments"][0]["input_tokens"], 120);
+        assert_eq!(
+            events[0].payload["usage_segments"][0]["cached_input_tokens"],
+            40
+        );
+        if deferred {
+            assert_eq!(events[0].payload["statistics"]["api_call_count"], 7);
+        }
+    }
 }
 
 /// Verifies expert profile invocations are reported as agent-profile subagents.
@@ -592,6 +664,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         .insert(
             task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                steering: false,
                 delivery_id: String::from("same-name-root-message"),
                 author_session_id: root_session_id,
                 target_task_id: task_id,
@@ -1103,6 +1176,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         inboxes.insert(
             parent_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                steering: false,
                 delivery_id: String::from("test-delivery-parent"),
                 author_session_id: root_session_id,
                 target_task_id: parent_task_id,
@@ -1115,6 +1189,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         inboxes.insert(
             child_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                steering: false,
                 delivery_id: String::from("test-delivery-child"),
                 author_session_id: parent_task_id,
                 target_task_id: child_task_id,
@@ -1310,6 +1385,7 @@ async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
         inboxes.insert(
             parent_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                steering: false,
                 delivery_id: String::from("non-cascade-parent-message"),
                 author_session_id: root_session_id,
                 target_task_id: parent_task_id,
@@ -1322,6 +1398,7 @@ async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
         inboxes.insert(
             child_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                steering: false,
                 delivery_id: String::from("non-cascade-child-message"),
                 author_session_id: parent_task_id,
                 target_task_id: child_task_id,
@@ -1577,10 +1654,10 @@ async fn interrupt_agent_rejects_root_self_and_unknown_targets() {
     assert!(unknown_error.contains("Unknown child agent"));
 }
 
-/// Verifies interrupt-mode delivery aborts the current run and resumes the same child with the admitted message.
-/// 验证插队模式投递会中止当前运行，并携带已接纳消息续跑同一子代理。
+/// Verifies steering preserves active work and is consumed only by the next request boundary.
+/// 验证插队保留当前执行，且仅由下一请求边界消费。
 #[tokio::test]
-async fn inter_agent_interrupt_aborts_then_resumes_with_admitted_message() {
+async fn inter_agent_interrupt_preserves_run_until_request_boundary() {
     // task_runtime owns the child registry, active-run reservation, inbox, and resume backend under test.
     // task_runtime 持有本测试中的子代理注册表、活动运行预留、inbox 与续跑后端。
     let task_runtime = Arc::new(TaskRuntime::new());
@@ -1655,42 +1732,67 @@ async fn inter_agent_interrupt_aborts_then_resumes_with_admitted_message() {
         .expect("interrupt message should be admitted");
     assert_eq!(send_result.model_output["queued"], true);
     assert_eq!(send_result.model_output["delivery_mode"], "interrupt");
-    assert_eq!(send_result.model_output["interrupted"], true);
+    assert_eq!(send_result.model_output["interrupted"], false);
     assert_eq!(
         task_runtime
             .inter_agent_message_count_for_task(task_id)
             .expect("interrupted child inbox should remain readable"),
         1
     );
-    // join_error confirms interrupt delivery actually aborts the previous physical execution.
-    // join_error 确认插队投递确实中止了上一条物理执行。
-    let join_error = tokio::time::timeout(Duration::from_secs(1), pending_join)
-        .await
-        .expect("interrupted provider future should settle")
-        .expect_err("interrupted provider future should be cancelled");
-    assert!(join_error.is_cancelled());
-
-    drop(active_guard);
+    assert!(
+        !pending_join.is_finished(),
+        "steering must not cancel the running API or tool"
+    );
+    assert!(
+        captured_snapshot.lock().unwrap().is_none(),
+        "no successor was launched"
+    );
     assert!(
         task_runtime
-            .resume_agent_from_inbox_after_task_settled(root_session_id, task_id)
-            .await
-            .expect("interrupted child should resume from its inbox")
+            .consume_task_steering_messages(task_id, |_, _| Err("disk failure".into()))
+            .is_err()
     );
-    // resumed_snapshot is the exact successor context supplied to the child backend.
-    // resumed_snapshot 是传给子代理后端的精确后继执行上下文。
-    let resumed_snapshot = captured_snapshot
-        .lock()
-        .expect("captured snapshot lock")
-        .clone()
-        .expect("successor snapshot should be captured");
-    assert!(resumed_snapshot.messages.iter().any(|message| {
-        matches!(
-            &message.payload,
-            CoreConversationPayload::AgentMessage { payload, .. }
-                if payload == "replace the current work with this instruction"
-        )
-    }));
+    assert_eq!(
+        task_runtime.pending_task_messages(task_id).unwrap().len(),
+        1
+    );
+    task_runtime.invoke_send_message(root_session_id, json!({
+        "target": "worker-a", "message": "follow up after completion", "delivery_mode": "queue"
+    })).await.unwrap();
+    // Both queue types remain visible until their own admission boundary.
+    // 两种队列消息在各自接纳边界之前都保持可见。
+    let pending = task_runtime.pending_task_messages(task_id).unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|message| message.steering)
+            .collect::<Vec<_>>(),
+        vec![true, false]
+    );
+    // Capture exactly the steering envelope accepted at the next API boundary.
+    // 捕获下一 API 边界接纳的精确插队消息信封。
+    let mut delivered = String::new();
+    assert_eq!(
+        task_runtime
+            .consume_task_steering_messages(task_id, |_, text| {
+                delivered = text.to_string();
+                Ok(())
+            })
+            .unwrap(),
+        1
+    );
+    assert!(delivered.contains("replace the current work with this instruction"));
+    assert_eq!(
+        task_runtime.pending_task_messages(task_id).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        task_runtime.pending_task_messages(task_id).unwrap()[0].message,
+        "follow up after completion"
+    );
+    assert!(!pending_join.is_finished());
+    pending_join.abort();
+    drop(active_guard);
 }
 
 /// Verifies wait_agent returns an activity acknowledgement instead of child output.
@@ -1807,6 +1909,7 @@ async fn wait_agent_returns_consumed_child_feedback() {
     // queued_message represents an admitted successor that has not started its new physical execution yet.
     // queued_message 表示已经接纳、但尚未启动新物理执行的后继投递。
     let queued_message = QueuedInterAgentMessage {
+        steering: false,
         delivery_id: String::from("queued-after-terminal"),
         author_session_id: root_session_id,
         target_task_id: task_id,

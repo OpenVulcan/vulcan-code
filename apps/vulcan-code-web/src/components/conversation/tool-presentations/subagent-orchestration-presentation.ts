@@ -563,6 +563,18 @@ function subagentUsageSummary(
   // 已解析的代理载荷。
   agent: Record<string, unknown> | null,
 ): SubagentUsageSummary | null {
+  // Canonical V1 return statistics include all previously unreturned child execution segments.
+  // 规范 V1 回流统计包含此前尚未回流的全部子代理执行分段。
+  const statistics = objectValue(agent?.statistics);
+  if (statistics) {
+    const usage = objectValue(statistics.usage);
+    return {
+      providerCallCount: numberValue(statistics.api_call_count) ?? 0,
+      toolCallCount: numberValue(statistics.tool_call_count) ?? 0,
+      totalTokens: numberValue(usage?.total_tokens) ?? 0,
+      cachedInputTokens: numberValue(usage?.cache_read_tokens) ?? 0,
+    };
+  }
   const segments = arrayValue(agent?.usage_segments ?? agent?.usageSegments);
   if (segments.length === 0) {
     return null;

@@ -33,6 +33,9 @@ export interface SubagentNavigationSnapshot {
 // SubagentTaskSummary describes one subagent navigation row.
 // SubagentTaskSummary 描述单条子代理导航行。
 export interface SubagentTaskSummary {
+  // Pending messages from the authoritative child inbox, ordered by delivery.
+  // 来自权威子代理收件箱的待处理消息，按投递顺序排列。
+  pendingMessages?: { deliveryId: string; message: string; steering: boolean }[];
   // Stable child task conversation id.
   // 稳定子任务会话标识。
   taskId: string;

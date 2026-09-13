@@ -1196,7 +1196,7 @@ fn runtime_event_changes_subagent_navigation(event: &RuntimeEvent) -> bool {
     event.kind == RuntimeEventKind::ToolFinished
         && matches!(
             runtime_event_tool_name(event),
-            Some("spawn_agent" | "close_agent")
+            Some("spawn_agent" | "close_agent" | "send_message")
         )
 }
 
@@ -1601,15 +1601,15 @@ mod tests {
         let close_finished =
             RuntimeEvent::new(RuntimeEventKind::ToolFinished, "close finished", "")
                 .with_metadata(Some(json!({ "tool_name": "close_agent" })));
-        // send_finished updates an existing child and must rely on its dedicated event-ingest path.
-        // send_finished 更新既有子任务，必须继续使用其专用事件摄取路径。
+        // send_finished refreshes the pending queue even while the child keeps running.
+        // send_finished 在子代理继续运行时也刷新待处理消息队列。
         let send_finished = RuntimeEvent::new(RuntimeEventKind::ToolFinished, "send finished", "")
             .with_metadata(Some(json!({ "tool_name": "send_message" })));
 
         assert!(runtime_event_changes_subagent_navigation(&spawn_finished));
         assert!(runtime_event_changes_subagent_navigation(&close_finished));
         assert!(!runtime_event_changes_subagent_navigation(&spawn_started));
-        assert!(!runtime_event_changes_subagent_navigation(&send_finished));
+        assert!(runtime_event_changes_subagent_navigation(&send_finished));
     }
 
     /// Verifies post-response tool results advance the active context beyond the latest Provider total.

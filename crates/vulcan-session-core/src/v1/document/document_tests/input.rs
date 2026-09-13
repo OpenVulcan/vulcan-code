@@ -3,6 +3,47 @@
 
 use super::*;
 
+/// Steering is replayable, idempotent and stays in the same turn without admitting an active API.
+/// 插队可回放、幂等且保持同一回合，并拒绝在活动 API 内准入。
+#[test]
+fn steering_waits_for_physical_request_boundary() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    let turn = doc.submit_root_input_fixture("original task", vec![], T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    let action = ClientActionId::try_new("steering-delivery")?;
+    assert!(
+        doc.append_in_turn_guidance_before_api(action.clone(), "guidance".into(), T0 + 2)
+            .is_err()
+    );
+    complete_with_usage(&mut doc, api, usage(10, 2), T0 + 3)?;
+    let seq = doc
+        .append_in_turn_guidance_before_api(action.clone(), "guidance".into(), T0 + 4)?
+        .into_value();
+    assert!(
+        !doc.append_in_turn_guidance_before_api(action, "guidance".into(), T0 + 5)?
+            .changed()
+    );
+    assert_eq!(doc.active_turn().unwrap().turn_id, turn);
+    assert!(!doc.active_turn().unwrap().closed);
+    assert!(
+        matches!(&doc.events.iter().find(|event| event.seq == seq).unwrap().event,
+        EventBody::UserInput(input) if input.text == "guidance" && input.input_source == UserInputSource::PendingInTurn)
+    );
+    advance_fixture_durable(&mut doc)?;
+    SessionDocument::from_parts(
+        doc.metadata.clone(),
+        doc.runtime_lock.clone(),
+        doc.compactions.clone(),
+        doc.segment_catalog.clone(),
+        doc.events.clone(),
+    )?;
+    Ok(())
+}
+
 /// Root input is rejected while a turn is still open.
 /// 回合仍然开放时根输入被拒绝。
 #[test]

@@ -3,6 +3,107 @@
 
 use super::*;
 
+/// A final return includes stopped predecessor usage and additive timing exactly once.
+/// 最终回流恰好一次包含此前停止回合的用量与可累加计时。
+#[test]
+fn subagent_return_includes_unreturned_stopped_turn_and_timing() -> Result<(), DomainError> {
+    let mut child = new_document();
+    let mut final_turn = None;
+    let mut final_text = None;
+    for index in 0..2 {
+        let now = T0 + index * 100;
+        let turn = child.submit_root_input_fixture("work", vec![], now)?;
+        let api = child.start_api(
+            ApiPurposeKind::MainGeneration,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            now + 1,
+        )?;
+        final_text = Some(
+            child
+                .append_assistant_text(api, "result", AssistantSemanticStatus::Completed, now + 4)?
+                .into_value(),
+        );
+        child.complete_api_group(
+            api,
+            ApiCompletion {
+                request: ApiRequestSnapshot::new("openai", "gpt-5"),
+                usage: usage(10, 6),
+                status: ApiCallStatus::Completed,
+                end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                error: None,
+                continuation_eligibility: ContinuationEligibility::Forbidden,
+                timing: ApiTimings {
+                    dispatched_at_ms: Some(now + 1),
+                    first_token_at_ms: Some(now + 3),
+                    completed_at_ms: Some(now + 9),
+                    ..Default::default()
+                },
+                provider_source: None,
+                completed_at_ms: now + 9,
+            },
+        )?;
+        child.close_turn(
+            if index == 0 {
+                TurnOutcome::Stopped
+            } else {
+                TurnOutcome::Completed
+            },
+            10,
+            now + 10,
+        )?;
+        final_turn = Some(turn);
+    }
+    advance_fixture_durable(&mut child)?;
+    let input = child.build_subagent_return_input_since(
+        SubagentReturnBuildRequest {
+            final_turn_id: final_turn.unwrap(),
+            child_task_id: SubagentTaskId::try_new("worker")?,
+            source_assistant_text_seq: final_text.unwrap(),
+        },
+        None,
+    )?;
+    assert_eq!(input.totals.api_call_count, 2);
+    assert_eq!(input.totals.usage.output_tokens, Some(12));
+    let timing = input.totals.output_timing.as_ref().unwrap();
+    assert_eq!(
+        (
+            timing.request_count,
+            timing.first_token_latency_ms,
+            timing.output_duration_ms
+        ),
+        (2, 4, 12)
+    );
+    assert_eq!(
+        (timing.total_request_duration_ms, timing.output_tokens),
+        (16, 12)
+    );
+    let mut parent = SessionDocument::new("parent", "project", "parent", T0);
+    parent.submit_root_input_fixture("delegate", vec![], T0)?;
+    parent.append_subagent_return_with_stats(input.clone(), T0 + 200)?;
+    assert!(
+        !parent
+            .append_subagent_return_with_stats(input, T0 + 201)?
+            .changed()
+    );
+    let buckets = parent.aggregate_turn_buckets(
+        parent.active_turn().unwrap().turn_id,
+        parent.active_turn().unwrap().start_seq,
+    )?;
+    assert_eq!(buckets.total.api_call_count, 2);
+    assert_eq!(
+        buckets.total.output_timing.unwrap().first_token_latency_ms,
+        4
+    );
+    // Automatic parent guidance must receive the same additive evidence as wait-agent feedback.
+    // 父会话自动引导必须收到与等待智能体反馈相同的可累加证据。
+    let projected = crate::v1::projection::project_provider_items(parent.events(), None, &[])?;
+    assert!(projected.iter().any(|item| matches!(item,
+        crate::v1::projection::ProjectedItem::SubagentReturnText { text }
+            if text.contains("\"first_token_latency_ms\":4") && text.contains("\"api_call_count\":2")
+    )));
+    Ok(())
+}
+
 /// A durable child return round-trips and exact delivery retry is revision-idempotent.
 /// 可靠子代理回流可以严格往返，且精确重复投递不会制造新修订。
 #[test]

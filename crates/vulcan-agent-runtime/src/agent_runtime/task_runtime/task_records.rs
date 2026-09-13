@@ -66,6 +66,24 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) {
+        if outcome.execution_status == TaskExecutionStatus::Completed {
+            match self.durable_return_mailboxes.read() {
+                Ok(returns)
+                    if returns
+                        .get(&invocation.task_id)
+                        .is_some_and(|(execution, _)| execution == &invocation.execution_id) =>
+                {
+                    return;
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[task-runtime] durable return registry locked; refusing premature completion feedback"
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
         self.publish_subagent_mailbox_event(
             invocation,
             task_session_status_from_execution_status(outcome.execution_status),

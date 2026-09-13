@@ -5,8 +5,8 @@ use super::*;
 use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
 use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
 use vulcan_service_api::{
-    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageCallSummary,
-    SessionProviderUsageSummary, SessionProviderUsageTokenSummary, SessionProviderOutputTiming,
+    ConversationAttentionSummary, ConversationSummary, SessionProviderOutputTiming,
+    SessionProviderUsageCallSummary, SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
 };
 use vulcan_session_core::v1::{
     AggregatedUsage, ApiCallStatus, ApiErrorCategory, ApiPurposeKind, ApiStatsEvent,
@@ -29,6 +29,15 @@ pub(crate) fn session_provider_usage_summary_from_v1_document(
     document: &SessionDocument,
 ) -> Result<Option<SessionProviderUsageSummary>, String> {
     let events = document.events();
+    // Child returns cover disjoint source ranges enforced by the V1 document domain.
+    // 子代理回流覆盖不重叠的源范围，由 V1 文档领域保证。
+    let child_totals: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            EventBody::SubagentReturnStats(stats) => Some(&stats.totals),
+            _ => None,
+        })
+        .collect();
     let terminal_stats = events
         .iter()
         .filter_map(|event| match &event.event {
@@ -65,8 +74,16 @@ pub(crate) fn session_provider_usage_summary_from_v1_document(
         .map(|stats| session_provider_usage_tokens(&stats.usage))
         .transpose()?
         .flatten();
-    let cumulative_usage = (!terminal_stats.is_empty())
-        .then(|| AggregatedUsage::aggregate(terminal_stats.iter().map(|stats| &stats.usage)))
+    let direct_usage = AggregatedUsage::aggregate(terminal_stats.iter().map(|stats| &stats.usage));
+    let cumulative_usage = (!terminal_stats.is_empty() || !child_totals.is_empty())
+        .then(|| {
+            AggregatedUsage::aggregate_aggregated(
+                (!terminal_stats.is_empty())
+                    .then_some(&direct_usage)
+                    .into_iter()
+                    .chain(child_totals.iter().map(|bucket| &bucket.usage)),
+            )
+        })
         .map(|usage| aggregated_provider_usage_tokens(&usage))
         .transpose()?
         .flatten();
@@ -81,12 +98,23 @@ pub(crate) fn session_provider_usage_summary_from_v1_document(
         })
         .transpose()?;
     Ok(Some(SessionProviderUsageSummary {
-        provider_call_count: starts.len(),
+        provider_call_count: starts.len()
+            + child_totals
+                .iter()
+                .map(|bucket| bucket.api_call_count as usize)
+                .sum::<usize>(),
         in_flight_call_count,
-        unknown_usage_call_count,
+        unknown_usage_call_count: unknown_usage_call_count
+            + child_totals
+                .iter()
+                .map(|bucket| bucket.unknown_usage_api_call_count as usize)
+                .sum::<usize>(),
         last_usage,
         cumulative_usage,
-        output_timing: session_provider_output_timing(&terminal_stats)?,
+        output_timing: session_provider_output_timing_with_children(
+            &terminal_stats,
+            &child_totals,
+        )?,
         latest_call,
         usage_revision: document.memory_revision(),
     }))
@@ -122,14 +150,55 @@ fn session_provider_output_timing(
         // 有序有符号时间戳可使用完整 u64 时长范围，避免相减回绕。
         let first_latency = first.abs_diff(start);
         let output_duration = end.abs_diff(first);
-        timing.request_count = timing.request_count.checked_add(1)
+        timing.request_count = timing
+            .request_count
+            .checked_add(1)
             .ok_or("Session Provider timing request count overflow")?;
-        timing.first_token_latency_ms = timing.first_token_latency_ms.checked_add(first_latency)
+        timing.first_token_latency_ms = timing
+            .first_token_latency_ms
+            .checked_add(first_latency)
             .ok_or("Session Provider first-token latency overflow")?;
-        timing.output_duration_ms = timing.output_duration_ms.checked_add(output_duration)
+        timing.output_duration_ms = timing
+            .output_duration_ms
+            .checked_add(output_duration)
             .ok_or("Session Provider output duration overflow")?;
-        timing.output_tokens = timing.output_tokens.checked_add(output)
+        timing.output_tokens = timing
+            .output_tokens
+            .checked_add(output)
             .ok_or("Session Provider measured output tokens overflow")?;
+    }
+    Ok((timing.request_count > 0).then_some(timing))
+}
+
+/// Adds child timing to the same measured cohort as direct session requests.
+/// 将子代理计时加入与本体请求相同的实测口径。
+/// Parameters contain disjoint API and child buckets; returns measured totals or an overflow error.
+/// 参数包含不重叠的 API 与子代理统计桶；返回实测总量或溢出错误。
+fn session_provider_output_timing_with_children(
+    stats: &[&ApiStatsEvent],
+    children: &[&vulcan_session_core::v1::stats::StatBucket],
+) -> Result<Option<SessionProviderOutputTiming>, String> {
+    let mut timing = session_provider_output_timing(stats)?.unwrap_or_default();
+    for child in children
+        .iter()
+        .filter_map(|bucket| bucket.output_timing.as_ref())
+    {
+        timing.request_count = timing
+            .request_count
+            .checked_add(child.request_count)
+            .ok_or("Session timing count overflow")?;
+        timing.first_token_latency_ms = timing
+            .first_token_latency_ms
+            .checked_add(child.first_token_latency_ms)
+            .ok_or("Session latency overflow")?;
+        timing.output_duration_ms = timing
+            .output_duration_ms
+            .checked_add(child.output_duration_ms)
+            .ok_or("Session output duration overflow")?;
+        timing.output_tokens = timing
+            .output_tokens
+            .checked_add(child.output_tokens)
+            .ok_or("Session output tokens overflow")?;
     }
     Ok((timing.request_count > 0).then_some(timing))
 }
@@ -1020,14 +1089,19 @@ mod tests {
             ..Default::default()
         };
         assert!(!session_vmm_policy_summary_from_layers(&global, None, None).memory_enabled);
-        assert!(!session_vmm_policy_summary_from_layers(&global, Some(&project), None).memory_enabled);
+        assert!(
+            !session_vmm_policy_summary_from_layers(&global, Some(&project), None).memory_enabled
+        );
         global.enabled = Some(true);
-        assert!(session_vmm_policy_summary_from_layers(&global, Some(&project), None).memory_enabled);
+        assert!(
+            session_vmm_policy_summary_from_layers(&global, Some(&project), None).memory_enabled
+        );
         // A session override remains the final authority even when its project is enabled.
         // 即使项目已启用，会话覆盖仍是最终权威。
         let mut session = SessionRuntimeStateEntry::default();
         session.vmm.enabled = Some(false);
-        let summary = session_vmm_policy_summary_from_layers(&global, Some(&project), Some(&session));
+        let summary =
+            session_vmm_policy_summary_from_layers(&global, Some(&project), Some(&session));
         assert!(!summary.memory_enabled);
         assert!(summary.precheck_enabled);
     }
