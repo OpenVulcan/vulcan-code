@@ -95,6 +95,27 @@
       "type": "string",
       "enum": ["catalog_exact", "override_exact", "unmatched", "incomplete_usage"]
     },
+    "pricingDetails": {
+      "type": ["object", "null"],
+      "properties": {
+        "currency": { "type": "string" },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tokenField": { "enum": ["uncachedInputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] },
+              "perMillion": { "type": "string" },
+              "cost": { "$ref": "#/$defs/nullableString" }
+            },
+            "required": ["tokenField", "perMillion", "cost"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["currency", "dimensions"],
+      "additionalProperties": false
+    },
     "pricingCatalog": {
       "type": "object",
       "properties": {
@@ -135,6 +156,7 @@
         "pricingMatchStatus": { "$ref": "#/$defs/pricingMatchStatus" },
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
+        "pricingDetails": { "$ref": "#/$defs/pricingDetails" },
         "aggregateRevision": { "type": "integer", "minimum": 0 }
       },
       "required": [
@@ -159,6 +181,7 @@
         "pricingMatchStatus",
         "pricingRevision",
         "pricingSourceId",
+        "pricingDetails",
         "aggregateRevision"
       ],
       "additionalProperties": false
@@ -235,6 +258,7 @@
         "pricingMatchStatus": { "$ref": "#/$defs/pricingMatchStatus" },
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
+        "pricingDetails": { "$ref": "#/$defs/pricingDetails" },
         "terminalAtMs": { "type": "integer" }
       },
       "required": [
@@ -266,6 +290,7 @@
         "pricingMatchStatus",
         "pricingRevision",
         "pricingSourceId",
+        "pricingDetails",
         "terminalAtMs"
       ],
       "additionalProperties": false

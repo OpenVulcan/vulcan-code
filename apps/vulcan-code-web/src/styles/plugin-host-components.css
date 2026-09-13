@@ -65,6 +65,34 @@
   height: min(680px, calc(100vh - 48px));
 }
 
+/* Keep statistics details outside table flow, with readable aligned facts in the host tooltip. */
+/* 将统计详情移出表格排版，在宿主提示层内对齐展示可读事实。 */
+.plugin-help-tooltip-trigger[data-tone="error"] { color: var(--destructive); }
+.plugin-statistics-detail-tooltip { width: 280px; max-width: calc(100vw - 48px); font-size: 12px; }
+.plugin-statistics-detail-tooltip > strong { display: block; margin-bottom: 10px; }
+.plugin-statistics-detail-tooltip p { margin: 10px 0 0; color: color-mix(in srgb, currentColor 80%, transparent); white-space: normal; }
+.plugin-statistics-detail-facts { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); gap: 6px 16px; margin: 0; }
+/* Follow the tooltip foreground so labels stay readable on its inverted surface. */
+/* 跟随提示层前景色，确保名称在反色背景上依然清晰可读。 */
+.plugin-statistics-detail-facts dt { color: color-mix(in srgb, currentColor 80%, transparent); white-space: normal; }
+.plugin-statistics-detail-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: normal; }
+.plugin-statistics-cost-dimension { margin-top: 10px; }
+.plugin-statistics-cost-dimension > strong { display: block; margin-bottom: 3px; font-weight: 500; }
+.plugin-statistics-cost-total { padding-top: 10px; margin-top: 10px; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); font-weight: 600; }
+.plugin-statistics-token-cell, .plugin-statistics-estimate-cell { display: flex; align-items: center; gap: 4px; }
+.plugin-statistics-token-lines { display: grid; gap: 4px; }
+.plugin-statistics-token-lines > div { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.plugin-statistics-token-lines > div:empty { display: none; }
+.plugin-statistics-token-value { display: inline-flex; gap: 3px; align-items: center; font-variant-numeric: tabular-nums; }
+.plugin-statistics-token-value svg { flex-shrink: 0; }
+.plugin-statistics-token-value[data-kind="input"] svg { color: var(--chart-2); }
+.plugin-statistics-token-value[data-kind="output"] svg { color: var(--chart-4); }
+.plugin-statistics-token-value:is([data-kind="cache"], [data-kind="write"]) { color: var(--chart-3); }
+.plugin-statistics-estimate-cell > span { white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.plugin-statistics-model-identity, .plugin-statistics-time { display: grid; gap: 3px; }
+.plugin-statistics-model-identity { white-space: normal; overflow-wrap: anywhere; }
+.plugin-statistics-model-identity > small, .plugin-statistics-time > small { color: var(--muted-foreground); font-size: 11px; }
+
 .plugin-text-document-content,
 .plugin-text-document-state {
   min-height: 0;
@@ -442,7 +470,12 @@
 .plugin-statistics-token-bar > span:first-child { background: var(--chart-1); }
 .plugin-statistics-token-bar > span:last-child { background: var(--chart-2); }
 .plugin-statistics-cache-facts { font-size: 12px; }
-.plugin-statistics-price-editor { margin-block: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); }
+/* Edit prices in the host modal without a second bordered panel inside it. */
+/* 在宿主弹窗内编辑价格，避免再嵌套一层带边框的面板。 */
+.plugin-statistics-price-dialog { width: min(600px, calc(100vw - 32px)); }
+.plugin-statistics-price-editor { min-width: 0; }
+.plugin-statistics-price-editor > .plugin-statistics-section-header { padding-right: 24px; }
+.plugin-statistics-price-editor [role="alert"] { color: var(--destructive); margin: 12px 0 0; }
 
 /* Price editor layout stays host-themed while the mounted plugin owns its state. */
 /* 价格编辑器布局保持宿主主题，同时由挂载插件持有状态。 */
@@ -457,7 +490,7 @@
 /* 各价格维度在桌面与紧凑宽度下均保持独立可编辑。 */
 .plugin-statistics-price-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin: 12px 0;
 }
@@ -521,6 +554,26 @@
   color: var(--muted-foreground);
   font-weight: 500;
 }
+
+/* Fixed detail columns leave model names the remaining width instead of forcing single-line overflow. */
+/* 明细固定列将剩余宽度留给模型名称，避免单行内容撑宽表格。 */
+.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) { table-layout: fixed; min-width: 800px; }
+.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) :is(th, td) { padding: 10px 6px; vertical-align: middle; }
+.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) th { white-space: normal; }
+.plugin-statistics-table td:is(.plugin-statistics-consumer, .plugin-statistics-operation) { white-space: normal; overflow-wrap: anywhere; }
+/* Distribute available width across all facts instead of assigning every spare pixel to the model. */
+/* 将可用宽度分配给各项信息，避免模型列独占所有剩余空间。 */
+.plugin-statistics-daily-table th:nth-child(1), .plugin-statistics-recent-table th:nth-child(1) { width: 10%; }
+.plugin-statistics-daily-table th:nth-child(2) { width: 28%; }
+.plugin-statistics-daily-table th:nth-child(3), .plugin-statistics-recent-table th:nth-child(3) { width: 13%; }
+.plugin-statistics-daily-table th:nth-child(4) { width: 12%; }
+.plugin-statistics-daily-table th:nth-child(5), .plugin-statistics-recent-table th:nth-child(4) { width: 8%; }
+.plugin-statistics-daily-table th:nth-child(6) { width: 19%; }
+.plugin-statistics-daily-table th:nth-child(7) { width: 10%; }
+.plugin-statistics-recent-table th:nth-child(2) { width: 32%; }
+.plugin-statistics-recent-table th:nth-child(5) { width: 20%; }
+.plugin-statistics-recent-table th:nth-child(6) { width: 12%; }
+.plugin-statistics-recent-table th:nth-child(7) { width: 5%; }
 
 .plugin-chart-point {
   cursor: default;

@@ -2,6 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/shared/status";
 import {
   ActivityHeatmap,
@@ -60,6 +61,18 @@ interface PluginUiSdk {
     // Shared Vulcan button component.
     // Vulcan 共享按钮组件。
     Button: typeof Button;
+    // Shared modal root manages focus and dismissal for plugin editors.
+    // 共享弹窗根节点管理插件编辑器的焦点和关闭行为。
+    Dialog: typeof Dialog;
+    // Shared modal content preserves host sizing and scrolling.
+    // 共享弹窗内容保持宿主尺寸和滚动规则。
+    DialogContent: typeof DialogContent;
+    // Shared accessible modal title.
+    // 共享可访问弹窗标题。
+    DialogTitle: typeof DialogTitle;
+    // Shared accessible modal description.
+    // 共享可访问弹窗说明。
+    DialogDescription: typeof DialogDescription;
     // Shared Vulcan status component.
     // Vulcan 共享状态组件。
     StatusPill: typeof StatusPill;
@@ -234,6 +247,10 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     components: {
       Badge,
       Button,
+      Dialog,
+      DialogContent,
+      DialogTitle,
+      DialogDescription,
       StatusPill,
       HelpTooltip,
       MetricCard,

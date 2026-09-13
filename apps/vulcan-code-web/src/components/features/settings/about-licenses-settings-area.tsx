@@ -1,8 +1,8 @@
 import * as React from "react"
 import "@/styles/licenses-settings.css"
-import { ChevronLeft, ChevronRight, RefreshCw, ScrollText } from "lucide-react"
+import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react"
 
-import { PanelTitle } from "@/components/shared/status"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -76,6 +76,9 @@ export function AboutLicensesSettingsArea(props: {
   const [groupId, setGroupId] = React.useState("")
   const [sectionId, setSectionId] = React.useState("")
   const [page, setPage] = React.useState(0)
+  // viewedDependency scopes the modal to the exact package and its associated original license bodies.
+  // viewedDependency 将弹窗限定到精确依赖包及其关联的原始许可证正文。
+  const [viewedDependency, setViewedDependency] = React.useState<GroupDependency | null>(null)
   // Body responses carry their request identity so old requests never paint a new selection.
   // 正文响应携带请求身份，防止旧请求覆盖新选择。
   const [body, setBody] = React.useState<{ sectionId: string; revision: string; text: string; error: string } | null>(null)
@@ -113,7 +116,7 @@ export function AboutLicensesSettingsArea(props: {
   const requestedSectionId = selectedSection?.id
 
   React.useEffect(() => {
-    if (!requestedSectionId || !revision) return
+    if (!viewedDependency || !requestedSectionId || !revision) return
     let active = true
     setBody(null)
     void loadLicenseBody(requestedSectionId, revision).then((result) => {
@@ -122,7 +125,7 @@ export function AboutLicensesSettingsArea(props: {
       if (active) setBody({ sectionId: requestedSectionId, revision, text: "", error: String(error) })
     })
     return () => { active = false }
-  }, [requestedSectionId, revision, bodyRetry])
+  }, [viewedDependency, requestedSectionId, revision, bodyRetry])
 
   // selectGroup resets pagination and body selection only on explicit category navigation.
   // selectGroup 仅在明确切换类别时重置分页和正文选择。
@@ -135,8 +138,7 @@ export function AboutLicensesSettingsArea(props: {
   }
 
   return (
-    <section className="panel full-height settings-detail-panel settings-license-panel">
-      <PanelTitle icon={<ScrollText size={17} />} title={t("settings.licenses.title")} />
+    <section className="settings-preferences-page settings-detail-panel settings-license-panel">
       <div className="settings-license-summary">
         <strong>Vulcan Code</strong><Badge variant="outline">{props.appVersion}</Badge>
         {catalog && <span>{allGroups.length} {t("settings.licenses.types")} · {totalDependencies} {t("settings.licenses.dependencies")}</span>}
@@ -154,7 +156,7 @@ export function AboutLicensesSettingsArea(props: {
           <nav className="settings-license-directory" aria-label={t("settings.licenses.types")}>
             {filteredGroups.map((group) => <Button key={group.id} variant={selectedGroup?.id === group.id ? "secondary" : "ghost"}
               aria-current={selectedGroup?.id === group.id ? "page" : undefined} onClick={() => selectGroup(group.id)}>
-              <span>{group.title || t("settings.licenses.unknown")}</span><Badge variant="outline">{collectLicenseDependencies([group]).length}</Badge>
+              <span className="settings-license-name"><span>{group.title || t("settings.licenses.unknown")}</span></span><Badge variant="outline">{collectLicenseDependencies([group]).length}</Badge>
             </Button>)}
           </nav>
           <div className="settings-license-content">
@@ -171,13 +173,13 @@ export function AboutLicensesSettingsArea(props: {
               </div>
               <div className="settings-license-table-scroll"><table className="settings-license-table">
                 <caption className="sr-only">{selectedGroup.title || t("settings.licenses.unknown")} · {t("settings.licenses.dependencies")}</caption>
-                <thead><tr><th>{t("settings.licenses.dependency")}</th><th>{t("settings.licenses.version")}</th><th>{t("settings.licenses.source")}</th><th>{t("settings.licenses.body")}</th></tr></thead>
+                <thead><tr><th>{t("settings.licenses.dependency")}</th><th>{t("settings.licenses.version")}</th><th>{t("settings.licenses.source")}</th><th>{t("settings.licenses.view")}</th></tr></thead>
                 <tbody>{visibleDependencies.map((dependency) => <tr key={JSON.stringify([dependency.name, dependency.version, dependency.source])}>
                   <td>{dependency.name}</td><td>{dependency.version}</td><td><span>{dependency.source}</span></td>
-                  <td>{dependency.sectionIds.map((id) => <Button key={id} variant={selectedSection?.id === id ? "secondary" : "ghost"} size="sm"
-                    aria-pressed={selectedSection?.id === id} onClick={() => setSectionId(id)}>
-                    {t("settings.licenses.body")} {selectedGroup.sections.findIndex((section) => section.id === id) + 1}
-                  </Button>)}</td>
+                  <td><Button variant="ghost" size="sm" onClick={() => {
+                    setSectionId(dependency.sectionIds[0])
+                    setViewedDependency(dependency)
+                  }}>{t("settings.licenses.view")}</Button></td>
                 </tr>)}</tbody>
               </table></div>
               {matchingDependencies.length > LICENSE_DEPENDENCY_PAGE_SIZE && <div className="settings-license-pagination">
@@ -185,19 +187,27 @@ export function AboutLicensesSettingsArea(props: {
                 <Button variant="outline" size="sm" aria-label={t("settings.licenses.previous")} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={14} /></Button>
                 <Button variant="outline" size="sm" aria-label={t("settings.licenses.next")} disabled={(currentPage + 1) * LICENSE_DEPENDENCY_PAGE_SIZE >= matchingDependencies.length} onClick={() => setPage(currentPage + 1)}><ChevronRight size={14} /></Button>
               </div>}
-              <div className="settings-license-body-heading"><h3>{t("settings.licenses.body")}</h3>
+              <Dialog open={viewedDependency !== null} onOpenChange={(open) => { if (!open) setViewedDependency(null) }}>
+                <DialogContent size="xl" scrollMode="body-scroll" className="settings-license-dialog">
+                  <DialogHeader>
+                    <DialogTitle>{viewedDependency?.name} <span className="text-muted-foreground font-normal">{viewedDependency?.version}</span></DialogTitle>
+                    <DialogDescription>{selectedGroup.title || t("settings.licenses.unknown")}</DialogDescription>
+                  </DialogHeader>
+              {viewedDependency && viewedDependency.sectionIds.length > 1 && <div className="settings-license-body-heading"><h3>{t("settings.licenses.body")}</h3>
                 <Select value={selectedSection?.id} onValueChange={setSectionId}>
                   <SelectTrigger aria-label={t("settings.licenses.variant")}><SelectValue /></SelectTrigger>
-                  <SelectContent>{selectedGroup.sections.map((section, index) => <SelectItem key={section.id} value={section.id}>
+                  <SelectContent>{selectedGroup.sections.filter((section) => viewedDependency.sectionIds.includes(section.id)).map((section, index) => <SelectItem key={section.id} value={section.id}>
                     {t("settings.licenses.body")} {index + 1} · {section.dependencies.length} {t("settings.licenses.dependencies")}
                   </SelectItem>)}</SelectContent>
                 </Select>
-              </div>
-              <p className="settings-hint">{t("settings.licenses.variantHint")}</p>
+              </div>}
+              {viewedDependency && viewedDependency.sectionIds.length > 1 && <p className="settings-hint">{t("settings.licenses.variantHint")}</p>}
               {body?.sectionId === requestedSectionId && body.revision === revision
                 ? body.error ? <div role="alert" className="settings-license-error"><p>{body.error}</p><Button variant="outline" onClick={() => setBodyRetry((value) => value + 1)}>{t("settings.licenses.retry")}</Button></div>
                   : <pre className="settings-license-body" tabIndex={0}>{body.text}</pre>
                 : <p role="status">{t("settings.licenses.loadingBody")}</p>}
+                </DialogContent>
+              </Dialog>
             </>}
           </div>
         </div>}

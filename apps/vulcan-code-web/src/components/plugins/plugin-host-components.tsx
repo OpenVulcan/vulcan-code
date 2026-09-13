@@ -5,6 +5,7 @@ import {
   Calendar,
   CheckCircle2,
   CircleHelp,
+  CircleAlert,
   Clock3,
   Database,
   FileText,
@@ -39,9 +40,12 @@ export interface HelpTooltipProps {
   // Accessible label announced for the focusable question-mark trigger.
   // 可聚焦问号触发器对辅助技术声明的标签。
   ariaLabel: string;
-  // Localized explanatory text displayed inside the tooltip.
-  // Tooltip 内显示的本地化说明文字。
-  content: string;
+  // Localized text or structured facts displayed inside the tooltip.
+  // Tooltip 内显示的本地化文字或结构化信息。
+  content: React.ReactNode;
+  // Error details use a warning glyph; ordinary help retains the question mark.
+  // 错误详情使用警示图标，普通帮助保留问号。
+  tone?: "default" | "error";
   // Hover delay in milliseconds before the tooltip opens.
   // Tooltip 打开前的鼠标悬停延迟毫秒数。
   delayMs?: number;
@@ -58,8 +62,8 @@ export function HelpTooltip(props: HelpTooltipProps) {
   return (
     <Tooltip delayDuration={props.delayMs ?? 500}>
       <TooltipTrigger asChild>
-        <button aria-label={props.ariaLabel} className="plugin-help-tooltip-trigger" type="button">
-          <CircleHelp aria-hidden="true" size={14} />
+        <button aria-label={props.ariaLabel} className="plugin-help-tooltip-trigger" data-tone={props.tone} type="button">
+          {props.tone === "error" ? <CircleAlert aria-hidden="true" size={14} /> : <CircleHelp aria-hidden="true" size={14} />}
         </button>
       </TooltipTrigger>
       <TooltipContent className="plugin-help-tooltip-content" side="top" sideOffset={6}>

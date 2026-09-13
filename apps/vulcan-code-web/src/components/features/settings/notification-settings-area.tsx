@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Bell, Send } from "lucide-react";
+import { toast } from "sonner";
 import { PanelTitle, StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -36,13 +37,12 @@ export function NotificationSettingsArea() {
   // busy 与 busyRef 防止用户触发的权限或测试操作重叠。
   const [busy, setBusy] = React.useState(false);
   const busyRef = React.useRef(false);
-  // error and feedback retain concise actionable results outside the permission value.
-  // error 与 feedback 在权限值之外保留简短可操作结果。
+  // error retains preference failures independently from the permission value.
+  // error 独立于权限值保留偏好保存失败。
   const [error, setError] = React.useState("");
   // Permission-query failure is independent from preference saving and notification delivery failures.
   // 权限查询失败独立于偏好保存和通知投递失败。
   const [permissionError, setPermissionError] = React.useState("");
-  const [feedback, setFeedback] = React.useState("");
   // permissionRevision rejects stale focus-refresh responses.
   // permissionRevision 拒绝过期的焦点刷新响应。
   const permissionRevision = React.useRef(0);
@@ -52,18 +52,31 @@ export function NotificationSettingsArea() {
     // cancelled 与 unsubscribe 保护原生观察器生命周期。
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
-    // refreshPermission checks the native authority without prompting or rewriting saved intent.
-    // refreshPermission 检查原生权威，不弹出授权或改写已保存意图。
-    // Parameters: none. Returns after a non-prompting permission read.
-    // 参数：无。返回值：无提示权限读取后完成。
-    async function refreshPermission(): Promise<void> {
+    // refreshPermission restores authorization for saved enabled intent once; focus refreshes only read it.
+    // refreshPermission 为已保存的开启意图自动申请一次权限；焦点刷新仅查询权限。
+    // Parameters: requestForSavedIntent allows the initial permission request. Returns when permission resolves.
+    // 参数：requestForSavedIntent 允许初次进入时申请权限。返回值：权限处理结束后完成。
+    async function refreshPermission(requestForSavedIntent = false): Promise<void> {
       // revision identifies this exact permission request.
       // revision 标识此次精确权限请求。
       const revision = ++permissionRevision.current;
       try {
         // nextPermission is the current native or browser permission fact.
         // nextPermission 是当前原生或浏览器权限事实。
-        const nextPermission = await shellClient.getNotificationPermission();
+        let nextPermission = await shellClient.getNotificationPermission();
+        if (cancelled || revision !== permissionRevision.current) return;
+        // Request only undecided permission, and share the action lock with the explicit enable switch.
+        // 仅申请尚未决定的权限，并与手动开启开关共用操作锁。
+        if (requestForSavedIntent && preferencesRef.current.channels.local.enabled && nextPermission === "default" && !busyRef.current) {
+          busyRef.current = true;
+          setBusy(true);
+          try {
+            nextPermission = await shellClient.requestNotificationPermission();
+          } finally {
+            busyRef.current = false;
+            if (!cancelled) setBusy(false);
+          }
+        }
         if (!cancelled && revision === permissionRevision.current) {
           setPermission(nextPermission);
           setPermissionError("");
@@ -75,7 +88,7 @@ export function NotificationSettingsArea() {
         }
       }
     }
-    void refreshPermission();
+    void refreshPermission(true);
     void shellClient.subscribeNotificationPresentationChange(() => {
       if (!busyRef.current) void refreshPermission();
     }).then((next) => {
@@ -96,7 +109,6 @@ export function NotificationSettingsArea() {
       preferencesRef.current = next;
       setPreferences(next);
       setError("");
-      setFeedback("");
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -152,7 +164,6 @@ export function NotificationSettingsArea() {
     busyRef.current = true;
     setBusy(true);
     setError("");
-    setFeedback("");
     ++permissionRevision.current;
     // permissionChecked distinguishes a failed preflight read from a rejected OS delivery.
     // permissionChecked 区分发送前权限读取失败与系统投递拒绝。
@@ -164,17 +175,21 @@ export function NotificationSettingsArea() {
       permissionChecked = true;
       setPermission(currentPermission);
       setPermissionError("");
-      if (currentPermission !== "granted") return;
+      if (currentPermission !== "granted") {
+        toast.error(text("尚未获得通知权限，无法发送测试通知。", "Notification permission is required to send a test."));
+        return;
+      }
       await shellClient.showLocalNotification({
         id: "notification-settings-test",
         title: "Vulcan Code",
         body: text("通知测试：会话完成后将在此提醒。", "Notification test: completed conversations will appear here."),
       });
-      setFeedback(text("测试已提交给系统。若没有出现，请检查系统通知与勿扰设置。", "The test was submitted to the system. If it does not appear, check system notification and Do Not Disturb settings."));
+      toast.success(text("测试通知已提交给系统。", "Test notification submitted to the system."));
     } catch (cause) {
-      if (permissionChecked) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      } else {
+      toast.error(text("测试通知发送失败", "Test notification failed"), {
+        description: cause instanceof Error ? cause.message : String(cause),
+      });
+      if (!permissionChecked) {
         setPermission(null);
         setPermissionError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -194,27 +209,30 @@ export function NotificationSettingsArea() {
   // Keep the actionable permission failure visible even when an unrelated preference was saved successfully.
   // 即使无关偏好保存成功，也继续展示可操作的权限失败。
   const displayedError = permissionError || error;
-  return <section className="settings-preferences-page settings-detail-panel">
+  return <section className="settings-preferences-page settings-detail-panel notification-settings-page">
     <PanelTitle icon={<Bell size={17} />} title={t("settings.notifications")} />
     <section className="settings-preferences-section">
       <div className="settings-preference-row">
-        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("保存在当前客户端，下次启动自动恢复。", "Saved on this client and restored at the next launch.")}</p></div>
+        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("开启时自动申请通知权限。设置保存在当前客户端，下次启动自动恢复。", "Enabling automatically requests notification permission. Settings are saved on this client and restored at the next launch.")}</p></div>
         <Switch aria-label={t("settings.notifications.localChannel")} checked={enabled}
           disabled={!capability.supported || busy} onCheckedChange={(checked) => void changeEnabled(checked)} />
       </div>
-      <div className="settings-card-actions">
+      {/* Keep permission feedback and its test action together without adding another settings row.
+          将权限反馈与测试操作放在一起，避免额外堆叠设置行。 */}
+      <div className="notification-permission-row">
+        <div className="settings-card-actions">
         <StatusPill status={effective ? "ready" : enabled ? "warning" : "pending"}
           label={effective ? text("已启用", "Enabled") : enabled ? permissionError ? text("检查失败", "Check failed") : permission === "denied" ? text("系统已阻止", "Blocked by system") : text("等待权限", "Awaiting permission") : text("已关闭", "Off")} />
         <span className="settings-muted-line">{t("settings.notifications.permission")}：{permissionLabel}</span>
+        </div>
+        <Button type="button" size="sm" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{text("发送测试通知", "Send test notification")}</Button>
       </div>
-      {enabled && permission !== "granted" && capability.supported ? <div className="settings-card-actions">
+      {enabled && (permission === "denied" || permissionError) && capability.supported ? <div className="settings-card-actions">
         <Button type="button" variant="outline" disabled={busy} onClick={() => void requestPermission()}>
-          {permission === "denied" || permissionError ? text("重新检查权限", "Recheck permission") : t("settings.notifications.requestPermission")}
+          {text("重新检查权限", "Recheck permission")}
         </Button>
         {permission === "denied" ? <span className="settings-muted-line">{text("请在系统或浏览器设置中允许通知，再重新检查。", "Allow notifications in system or browser settings, then recheck.")}</span> : null}
       </div> : null}
-      <div className="settings-card-actions"><Button type="button" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{text("发送测试通知", "Send test notification")}</Button></div>
-      {feedback ? <p role="status" className="settings-muted-line">{feedback}</p> : null}
     </section>
     <section className="settings-preferences-section">
       <h2>{t("settings.notifications.categories")}</h2>
@@ -231,16 +249,21 @@ export function NotificationSettingsArea() {
     <section className="settings-preferences-section">
       <h2>{t("settings.notifications.privacy")}</h2>
       <label className="settings-preference-row">
-        <span>{t("settings.notifications.showTitle")}</span>
+        <div>
+          <span>{t("settings.notifications.showTitle")}</span>
+          <p className="settings-muted-line">{t("settings.notifications.privacy.description")}</p>
+        </div>
         <Switch checked={preferences.privacy.showConversationTitle} onCheckedChange={(checked) => replacePreferences({
           ...preferencesRef.current, privacy: { showConversationTitle: checked },
         })} />
       </label>
-      <p className="settings-muted-line">{t("settings.notifications.privacy.description")}</p>
     </section>
     {displayedError ? <div className="settings-save-error" role="alert"><p>{permissionError ? text("无法读取系统通知权限，请重新检查。", "System notification permission could not be read. Recheck permission.") : text("操作未完成，请查看详情后重试。", "The operation did not complete. Review the details and retry.")}</p><details><summary>{text("查看详情", "View details")}</summary><pre>{displayedError}</pre></details></div> : null}
-    <details className="settings-muted-line"><summary>{t("settings.notifications.limitations")}</summary>
-      <p>{capability.shellKind === "browser" ? t("settings.notifications.browserLimitation") : t("settings.notifications.desktopLimitation")}</p>
-    </details>
+    {/* Platform limits stay visible as a regular information section, with no disclosure control.
+        平台能力边界作为普通说明区常显，不使用折叠控件。 */}
+    <section className="settings-preferences-section notification-capability-note">
+      <h2>{t("settings.notifications.limitations")}</h2>
+      <p className="settings-muted-line">{capability.shellKind === "browser" ? t("settings.notifications.browserLimitation") : t("settings.notifications.desktopLimitation")}</p>
+    </section>
   </section>;
 }

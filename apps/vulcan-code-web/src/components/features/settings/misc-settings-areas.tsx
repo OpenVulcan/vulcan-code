@@ -136,11 +136,10 @@ export function GitCommitSettingsArea(props: {
     }
   }
   return (
-    <section className="settings-detail-panel settings-preferences-page">
-      <PanelTitle icon={<GitCommitHorizontal size={17} />} title={text("Git 提交", "Git commit")} />
+    <section className="settings-detail-panel settings-preferences-page git-commit-settings-page">
       <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
         <section className="settings-preferences-section">
-          <h2>{text("提交信息生成", "Commit message generation")}</h2>
+          <h2><GitCommitHorizontal size={16} />{text("生成模型", "Generation model")}</h2>
           <div className="settings-form-field">
             <span>{t("settings.gitCommit.summaryModel")}</span>
             <div className="settings-card-actions">
@@ -167,6 +166,9 @@ export function GitCommitSettingsArea(props: {
               <p role="status" className="settings-muted-line">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
             ) : null}
           </div>
+        </section>
+        <section className="settings-preferences-section">
+          <h2>{text("提交信息偏好", "Commit message preferences")}</h2>
           <label className="settings-form-field">
             <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
             <Textarea rows={4} value={draft.summaryExtraPrompt}

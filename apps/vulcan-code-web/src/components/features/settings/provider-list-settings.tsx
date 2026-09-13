@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Boxes, KeyRound, ListChecks, RefreshCw, Star, Trash2 } from "lucide-react"
+import { Boxes, KeyRound, ListChecks, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
@@ -430,10 +430,14 @@ interface CredentialAccountCardProps {
   usage?: PublicAiAccountUsage
 }
 
-// CredentialAccountCard renders the Model Core account-card hierarchy with Vulcan Code actions.
-// CredentialAccountCard 使用 Vulcan Code 操作渲染 Model Core 账号卡片层级。
+// CredentialAccountCard separates account identity, authoritative usage, and management actions in one row.
+// CredentialAccountCard 在单行卡片中分离账号身份、权威用量和管理操作。
+// Parameters: props supplies one credential and its guarded callbacks; returns its account card without changing admission rules.
+// 参数：props 提供一个凭据及受保护回调；返回账号卡片，不改变准入规则。
 function CredentialAccountCard(props: CredentialAccountCardProps) {
   const { t } = useI18n()
+  // usageSupported preserves the provider capability and management-key prerequisites for refreshing usage.
+  // usageSupported 保留刷新用量所需的供应商能力和管理密钥前置条件。
   const usageSupported = props.credentialProfile?.account_usage_query !== "unsupported"
     && (!props.connection.usage_requires_management_key || props.connection.has_management_key)
   // providerName localizes registered built-in names while retaining unknown provider identities.
@@ -450,48 +454,97 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
     : { title: providerName, tags: [] }
   return (
     <Card
-      className="min-h-48 min-w-0 w-full gap-0 border border-border pt-2 ring-0"
+      className="credential-account-card w-full gap-0 border border-border py-0 ring-0"
       size="sm"
     >
-      <CardHeader className="shrink-0">
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <ProviderIcon
-            category={props.provider?.category}
-            className="size-8 shrink-0"
-            providerId={props.connection.provider_id}
-            serviceEntryId={props.connection.service_entry_id}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 truncate text-xs text-muted-foreground" title={serviceEntryPresentation.title}>
-              {serviceEntryPresentation.title}
+      <div className="credential-account-body">
+        <CardHeader className="credential-account-identity">
+          <div className="flex min-w-0 items-start gap-3">
+            <ProviderIcon
+              category={props.provider?.category}
+              className="size-8 shrink-0"
+              providerId={props.connection.provider_id}
+              serviceEntryId={props.connection.service_entry_id}
+            />
+            <div className="min-w-0 flex-1">
+              <CardTitle className="truncate" title={props.connection.display_name}>{props.connection.display_name}</CardTitle>
+              <div className="mt-1 text-xs text-muted-foreground" title={serviceEntryPresentation.title}>
+                {serviceEntryPresentation.title}
+              </div>
+              {serviceEntryPresentation.tags.length > 0 || props.connection.pending_validation || !props.connection.enabled || props.isDefault ? (
+                <CardDescription className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {serviceEntryPresentation.tags.map((tag) => (
+                    <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
+                      {tag}
+                    </Badge>
+                  ))}
+                  {props.connection.pending_validation ? (
+                    <Badge className="h-4 px-1.5 text-[10px]" variant="destructive">
+                      {t("settings.customModels.pendingValidation")}
+                    </Badge>
+                  ) : null}
+                  {!props.connection.enabled ? (
+                    <Badge className="h-4 px-1.5 text-[10px]" variant="secondary">
+                      {t("settings.credentials.disabledStatus")}
+                    </Badge>
+                  ) : null}
+                  {props.isDefault ? <Badge className="h-4 px-1.5 text-[10px]" variant="outline">{t("settings.credentials.currentDefault")}</Badge> : null}
+                </CardDescription>
+              ) : null}
             </div>
-            <CardTitle className="truncate" title={props.connection.display_name}>{props.connection.display_name}</CardTitle>
-            <CardDescription className="mt-0.5 flex min-h-4 flex-wrap items-center gap-1.5">
-              {serviceEntryPresentation.tags.map((tag) => (
-                <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
-                  {tag}
-                </Badge>
-              ))}
-              {props.connection.pending_validation ? (
-                <Badge className="h-4 px-1.5 text-[10px]" variant="destructive">
-                  {t("settings.customModels.pendingValidation")}
-                </Badge>
-              ) : null}
-              {!props.connection.enabled ? (
-                <Badge className="h-4 px-1.5 text-[10px]" variant="secondary">
-                  {t("settings.credentials.disabledStatus")}
-                </Badge>
-              ) : null}
-            </CardDescription>
           </div>
-          <Switch
-            aria-label={props.connection.enabled
-              ? t("settings.credentials.disable")
-              : t("settings.credentials.enable")}
-            checked={props.connection.enabled}
-            disabled={props.busy}
-            onCheckedChange={props.onEnabledChange}
+        </CardHeader>
+
+        <CardContent className="credential-account-usage">
+          <CredentialUsageOverview
+            connection={props.connection}
+            credentialProfile={props.credentialProfile}
+            usage={props.usage}
           />
+        </CardContent>
+      </div>
+      {props.catalogError ? (
+        <p className="credential-account-error text-xs text-destructive" role="status">
+          {props.catalogError}
+        </p>
+      ) : null}
+
+      <CardFooter className="credential-account-footer">
+        <div className="credential-account-actions">
+          <label className="credential-account-enabled">
+            <Switch
+              aria-label={props.connection.enabled
+                ? t("settings.credentials.disable")
+                : t("settings.credentials.enable")}
+              checked={props.connection.enabled}
+              disabled={props.busy}
+              onCheckedChange={props.onEnabledChange}
+            />
+            <span>{t("settings.credentials.enable")}</span>
+          </label>
+          {props.entry?.kind !== "provider_tools" ? (
+            <Button
+              disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
+              onClick={props.onManageModels}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <ListChecks aria-hidden="true" className="size-4" />
+              {t("settings.credentialModels.manage")}
+            </Button>
+          ) : null}
+          {credentialSupportsModelSynchronization(props.modelDirectoryKind) ? (
+            <CredentialIconAction
+              disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
+              label={t("settings.credentials.syncModels")}
+              onClick={props.onSync}
+            >
+              <Boxes className="size-4" />
+            </CredentialIconAction>
+          ) : null}
+        </div>
+        <div className="credential-account-actions">
           {usageSupported ? (
             <CredentialIconAction
               disabled={props.busy || !props.connection.enabled}
@@ -501,66 +554,32 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
               <RefreshCw className={`size-4 ${props.busy ? "animate-spin" : ""}`} />
             </CredentialIconAction>
           ) : null}
+          <CredentialIconAction
+            disabled={props.busy || !props.connection.enabled || props.connection.pending_validation || props.isDefault}
+            label={props.connection.pending_validation
+              ? t("settings.customModels.pendingCannotDefault")
+              : props.isDefault
+                 ? t("settings.credentials.currentDefault")
+                 : t("settings.credentials.setDefault")}
+            onClick={props.onSetDefault}
+          >
+            <Star
+              className={props.isDefault
+                ? "size-4 fill-current text-[var(--vcn-content-warning)]"
+                : "size-4"}
+            />
+          </CredentialIconAction>
+          <CredentialIconAction disabled={props.busy} label={t("settings.credentials.edit")} onClick={props.onEdit}>
+            <Pencil aria-hidden="true" className="size-4" />
+          </CredentialIconAction>
+          <CredentialIconAction
+            disabled={props.busy}
+            label={t("settings.credentials.remove")}
+            onClick={props.onDelete}
+          >
+            <Trash2 className="size-4 text-destructive" />
+          </CredentialIconAction>
         </div>
-      </CardHeader>
-
-      <CardContent className="mt-0.5 flex min-h-0 flex-1 flex-col gap-2">
-        <CredentialUsageOverview
-          connection={props.connection}
-          credentialProfile={props.credentialProfile}
-          usage={props.usage}
-        />
-        {props.catalogError ? (
-          <p className="text-xs text-destructive" role="status">
-            {props.catalogError}
-          </p>
-        ) : null}
-      </CardContent>
-
-      <CardFooter className="mt-auto shrink-0 flex-wrap justify-end gap-2 px-3 py-1.5">
-        {props.entry?.kind !== "provider_tools" ? (
-          <CredentialIconAction
-            disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
-            label={t("settings.credentialModels.manage")}
-            onClick={props.onManageModels}
-          >
-            <ListChecks className="size-4" />
-          </CredentialIconAction>
-        ) : null}
-        {credentialSupportsModelSynchronization(props.modelDirectoryKind) ? (
-          <CredentialIconAction
-            disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
-            label={t("settings.credentials.syncModels")}
-            onClick={props.onSync}
-          >
-            <Boxes className="size-4" />
-          </CredentialIconAction>
-        ) : null}
-        <CredentialIconAction
-          disabled={props.busy || !props.connection.enabled || props.connection.pending_validation || props.isDefault}
-          label={props.connection.pending_validation
-            ? t("settings.customModels.pendingCannotDefault")
-            : props.isDefault
-               ? t("settings.credentials.currentDefault")
-               : t("settings.credentials.setDefault")}
-          onClick={props.onSetDefault}
-        >
-          <Star
-            className={props.isDefault
-              ? "size-4 fill-current text-[var(--vcn-content-warning)]"
-              : "size-4"}
-          />
-        </CredentialIconAction>
-        <CredentialIconAction disabled={props.busy} label={t("settings.credentials.edit")} onClick={props.onEdit}>
-          <KeyRound className="size-4" />
-        </CredentialIconAction>
-        <CredentialIconAction
-          disabled={props.busy}
-          label={t("settings.credentials.remove")}
-          onClick={props.onDelete}
-        >
-          <Trash2 className="size-4 text-destructive" />
-        </CredentialIconAction>
       </CardFooter>
     </Card>
   )

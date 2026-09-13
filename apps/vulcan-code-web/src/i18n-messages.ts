@@ -100,6 +100,7 @@ export type TranslationKey =
   | "settings.licenses.version"
   | "settings.licenses.source"
   | "settings.licenses.body"
+  | "settings.licenses.view"
   | "settings.licenses.previous"
   | "settings.licenses.next"
   | "settings.licenses.variant"
@@ -138,6 +139,12 @@ export type TranslationKey =
   | "settings.modelExperience.capabilityFilter"
   | "settings.modelExperience.allCapabilities"
   | "settings.modelExperience.routes"
+  | "settings.modelExperience.modelColumn"
+  | "settings.modelExperience.understandingUse"
+  | "settings.modelExperience.accessButton"
+  | "settings.modelExperience.candidateExplanation"
+  | "settings.modelExperience.routeSettings"
+  | "settings.modelExperience.bindingSource"
   | "settings.modelExperience.routeAccounts"
   | "settings.modelExperience.available"
   | "settings.modelExperience.accountNotAdmitted"
@@ -2764,6 +2771,12 @@ export type TranslationKey =
   | "settings.diagnostics.providerRequestTrace.clearEmpty"
   | "settings.diagnostics.providerRequestTrace.actionFailed"
   | "settings.diagnostics.providerRequestTrace.description"
+  | "settings.diagnostics.providerRequestTrace.recordedData"
+  | "settings.diagnostics.providerRequestTrace.recordedDataHelp"
+  | "settings.diagnostics.providerRequestTrace.retention"
+  | "settings.diagnostics.providerRequestTrace.retentionHelp"
+  | "settings.diagnostics.providerRequestTrace.privacy"
+  | "settings.diagnostics.providerRequestTrace.privacyHelp"
   | "settings.diagnostics.providerRequestTrace.disabled"
   | "settings.diagnostics.providerRequestTrace.enabled"
   | "settings.diagnostics.providerRequestTrace.saveFailed"
@@ -3795,6 +3808,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.licenses.version": "版本",
     "settings.licenses.source": "来源",
     "settings.licenses.body": "正文",
+    "settings.licenses.view": "查看",
     "settings.licenses.previous": "上一页依赖",
     "settings.licenses.next": "下一页依赖",
     "settings.licenses.variant": "选择原始正文",
@@ -3830,15 +3844,21 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelExperience.usageFilter": "筛选模型用途",
     "settings.modelExperience.allUsages": "全部用途",
     "settings.modelExperience.conversationEnabled": "会话使用已开启",
-    "settings.modelExperience.internalEnabled": "内部使用已开启",
+    "settings.modelExperience.internalEnabled": "插件调用已开启",
     "settings.modelExperience.multimodalEnabled": "多模态理解候选已开启",
     "settings.modelExperience.capabilityFilter": "筛选模型能力",
     "settings.modelExperience.allCapabilities": "全部能力",
     "settings.modelExperience.routes": "接入详情 · {count} 条路线",
+    "settings.modelExperience.modelColumn": "模型",
+    "settings.modelExperience.understandingUse": "多模态理解",
+    "settings.modelExperience.accessButton": "接入",
+    "settings.modelExperience.candidateExplanation": "允许作为图片、视频或音频理解的候选；默认模型在对应理解设置中选择。",
+    "settings.modelExperience.routeSettings": "附加条件",
+    "settings.modelExperience.bindingSource": "绑定来源",
     "settings.modelExperience.routeAccounts": "该路线的凭据账号",
     "settings.modelExperience.available": "可用",
     "settings.modelExperience.accountNotAdmitted": "账号未准入此模型",
-    "settings.modelExperience.internalPurposes": "内部用途：{purposes}",
+    "settings.modelExperience.internalPurposes": "调用用途：{purposes}",
     "settings.modelExperience.candidateHint": "理解候选已开启；默认模型在对应理解设置中独立选择。",
     "settings.modelExperience.noConversation": "无会话响应能力",
     "settings.modelExperience.unavailableCandidates": "不可用的理解候选",
@@ -6442,6 +6462,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.providerRequestTrace.actionFailed": "追踪目录操作失败",
     "settings.diagnostics.providerRequestTrace.description": "开启后，后台会把同一逻辑 Provider 请求及其每次真实重试记录到同一组中，保存最终线上请求、响应元数据、解析前原始返回、chunk 或 WebSocket 帧边界以及失败终态。所属会话的 temp/provider-api-trace 目录固定轮转 4 个逻辑请求槽位；每次尝试最多保留 64 MiB 原始返回，失败和手动终止时已收到的部分内容也不会丢弃。文件可能包含提示词、工具参数、工具结果与 Provider 原文，仅应在诊断期间开启。",
     "settings.diagnostics.providerRequestTrace.disabled": "已关闭",
+    "settings.diagnostics.providerRequestTrace.recordedData": "记录内容",
+    "settings.diagnostics.providerRequestTrace.recordedDataHelp": "同一请求及其重试归为一组，记录实际发送的请求、响应元数据、解析前原始返回、流式分块或 WebSocket 帧边界，以及失败状态。",
+    "settings.diagnostics.providerRequestTrace.retention": "保存范围",
+    "settings.diagnostics.providerRequestTrace.retentionHelp": "每个会话轮转保留 4 组请求，每次尝试最多保存 64 MiB 原始返回。失败或手动停止时，保留已收到的内容。文件位于会话目录：",
+    "settings.diagnostics.providerRequestTrace.privacy": "隐私说明",
+    "settings.diagnostics.providerRequestTrace.privacyHelp": "文件可能包含提示词、工具参数、工具结果和 Provider 原文，仅在排查问题时开启。",
     "settings.diagnostics.providerRequestTrace.enabled": "诊断中",
     "settings.diagnostics.providerRequestTrace.saveFailed": "保存失败",
     "settings.diagnostics.providerRequestTrace.switch": "记录 Provider 请求与原始返回",
@@ -6866,7 +6892,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.modelReplacementMode": "模型代替模式",
     "settings.providerTools.reasoningEffort": "思考级别",
     "settings.providerTools.modelDefaultReasoning": "模型固定 / 默认",
-    "settings.models.internalUse": "内部使用",
+    "settings.models.internalUse": "插件调用",
     "settings.models.loadingCatalog": "正在读取实时模型目录…",
     "settings.models.provider": "供应商",
     "settings.models.liveModels": "实时模型",
@@ -7489,6 +7515,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.licenses.version": "Version",
     "settings.licenses.source": "Source",
     "settings.licenses.body": "Body",
+    "settings.licenses.view": "View",
     "settings.licenses.previous": "Previous dependency page",
     "settings.licenses.next": "Next dependency page",
     "settings.licenses.variant": "Select original body",
@@ -7524,15 +7551,21 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelExperience.usageFilter": "Filter model usage",
     "settings.modelExperience.allUsages": "All uses",
     "settings.modelExperience.conversationEnabled": "Conversation use enabled",
-    "settings.modelExperience.internalEnabled": "Internal use enabled",
+    "settings.modelExperience.internalEnabled": "Plugin calls enabled",
     "settings.modelExperience.multimodalEnabled": "Understanding candidate enabled",
     "settings.modelExperience.capabilityFilter": "Filter model capabilities",
     "settings.modelExperience.allCapabilities": "All capabilities",
     "settings.modelExperience.routes": "Access details · {count} routes",
+    "settings.modelExperience.modelColumn": "Model",
+    "settings.modelExperience.understandingUse": "Understanding",
+    "settings.modelExperience.accessButton": "Access",
+    "settings.modelExperience.candidateExplanation": "Allow as an image, video, or audio understanding candidate. Choose defaults in the corresponding understanding settings.",
+    "settings.modelExperience.routeSettings": "Conditions",
+    "settings.modelExperience.bindingSource": "Binding source",
     "settings.modelExperience.routeAccounts": "Credential accounts for this route",
     "settings.modelExperience.available": "Available",
     "settings.modelExperience.accountNotAdmitted": "Model disabled for this account",
-    "settings.modelExperience.internalPurposes": "Internal uses: {purposes}",
+    "settings.modelExperience.internalPurposes": "Call purposes: {purposes}",
     "settings.modelExperience.candidateHint": "Understanding candidate enabled. Select default models independently in understanding settings.",
     "settings.modelExperience.noConversation": "Conversation responses unavailable",
     "settings.modelExperience.unavailableCandidates": "Unavailable understanding candidates",
@@ -10136,6 +10169,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.providerRequestTrace.actionFailed": "Trace directory action failed",
     "settings.diagnostics.providerRequestTrace.description": "When enabled, the final wire request and every physical retry of one logical Provider request are recorded in one group, together with response metadata, pre-parser raw response bytes, chunk or WebSocket frame boundaries, and the failed outcome. The owning session's temp/provider-api-trace directory rotates through four logical-request slots; each attempt retains up to 64 MiB of raw response data, including bytes received before failure or manual cancellation. Files may contain prompts, tool arguments, tool results, and Provider output; enable this only while diagnosing a problem.",
     "settings.diagnostics.providerRequestTrace.disabled": "Off",
+    "settings.diagnostics.providerRequestTrace.recordedData": "Recorded data",
+    "settings.diagnostics.providerRequestTrace.recordedDataHelp": "Each request and its retries are grouped together, including the wire request, response metadata, raw responses before parsing, stream chunk or WebSocket frame boundaries, and failure status.",
+    "settings.diagnostics.providerRequestTrace.retention": "Retention",
+    "settings.diagnostics.providerRequestTrace.retentionHelp": "Each session rotates through four request groups. Each attempt retains up to 64 MiB of raw response data, including content received before failure or manual cancellation. Files are stored in the session directory:",
+    "settings.diagnostics.providerRequestTrace.privacy": "Privacy",
+    "settings.diagnostics.providerRequestTrace.privacyHelp": "Files may contain prompts, tool arguments, tool results, and Provider output. Enable only while diagnosing an issue.",
     "settings.diagnostics.providerRequestTrace.enabled": "Tracing",
     "settings.diagnostics.providerRequestTrace.saveFailed": "Save failed",
     "settings.diagnostics.providerRequestTrace.switch": "Record Provider requests and raw responses",
@@ -10560,7 +10599,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.modelReplacementMode": "Model replacement mode",
     "settings.providerTools.reasoningEffort": "Reasoning effort",
     "settings.providerTools.modelDefaultReasoning": "Model fixed / default",
-    "settings.models.internalUse": "Internal use",
+    "settings.models.internalUse": "Plugin calls",
     "settings.models.loadingCatalog": "Loading the live model catalog…",
     "settings.models.provider": "Provider",
     "settings.models.liveModels": "Live models",

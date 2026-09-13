@@ -1,11 +1,10 @@
 import {
-  Bug,
   History,
   PlugZap,
 } from "lucide-react";
 import * as React from "react";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
-import { PanelTitle, StatusIcon, StatusPill } from "@/components/shared/status";
+import { PanelTitle, StatusIcon } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -129,26 +128,42 @@ export function LogsArea(props: {
         {visibleLogs.length === 0 ? <p className="settings-muted-line">{locale === "zh-CN" ? "暂无匹配的诊断日志" : "No matching diagnostic logs"}</p> : null}
       </TabsContent>
       <TabsContent value="trace">
-        <PanelTitle icon={<Bug size={17} />} title={t("settings.diagnostics.providerRequestTrace")} />
-        <div className="settings-form-grid">
-          <article className="settings-preference-section">
-            <StatusPill
-              status={props.providerRequestTraceEnabled ? "warning" : "ready"}
-              label={props.providerRequestTraceEnabled
-                ? t("settings.diagnostics.providerRequestTrace.enabled")
-                : t("settings.diagnostics.providerRequestTrace.disabled")}
-            />
-            <strong>{t("settings.diagnostics.providerRequestTrace.completeRequests")}</strong>
-            <details className="settings-diagnostics-explanation"><summary>{locale === "zh-CN" ? "记录范围与隐私说明" : "Recorded data and privacy"}</summary><p>{t("settings.diagnostics.providerRequestTrace.description")}</p></details>
-            <label className="settings-preference-row">
-              <span>{t("settings.diagnostics.providerRequestTrace.switch")}</span>
+        <div className="provider-trace-settings">
+          <article>
+            {/* Keep the setting and its current state together, with recording details always visible below.
+                将设置与当前状态放在一起，下方常显记录说明。 */}
+            <header className="provider-trace-header">
+              <div>
+                <h2>{t("settings.diagnostics.providerRequestTrace.switch")}</h2>
+                <p>{t("settings.diagnostics.providerRequestTrace.completeRequests")}</p>
+              </div>
+              <label className="provider-trace-toggle">
+                <span>{props.providerRequestTraceEnabled
+                  ? t("settings.diagnostics.providerRequestTrace.enabled")
+                  : t("settings.diagnostics.providerRequestTrace.disabled")}</span>
               <Switch
+                aria-label={t("settings.diagnostics.providerRequestTrace.switch")}
                 checked={props.providerRequestTraceEnabled}
                 disabled={savingTraceSetting}
                 onCheckedChange={(enabled) => void handleTraceSettingChange(enabled)}
               />
-            </label>
-            <div className="flex flex-wrap gap-2">
+              </label>
+            </header>
+            <dl className="provider-trace-information">
+              <div>
+                <dt>{t("settings.diagnostics.providerRequestTrace.recordedData")}</dt>
+                <dd>{t("settings.diagnostics.providerRequestTrace.recordedDataHelp")}</dd>
+              </div>
+              <div>
+                <dt>{t("settings.diagnostics.providerRequestTrace.retention")}</dt>
+                <dd>{t("settings.diagnostics.providerRequestTrace.retentionHelp")}<code>temp/provider-api-trace</code></dd>
+              </div>
+              <div>
+                <dt>{t("settings.diagnostics.providerRequestTrace.privacy")}</dt>
+                <dd>{t("settings.diagnostics.providerRequestTrace.privacyHelp")}</dd>
+              </div>
+            </dl>
+            <div className="provider-trace-actions">
               <Button
                 disabled={traceDirectoryBusy}
                 onClick={() => void handleOpenTraceDirectory()}

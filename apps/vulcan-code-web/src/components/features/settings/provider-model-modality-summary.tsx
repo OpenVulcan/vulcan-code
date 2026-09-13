@@ -29,23 +29,42 @@ interface ProviderModelModalitySummaryProps {
   // model contains the normalized capability contract.
   // model 包含归一化能力契约。
   model: PublicAiModel
+  // additionalModels contributes declared modalities from other executable routes of the same model.
+  // additionalModels 补充同一模型其他可执行路由声明的模态。
+  additionalModels?: PublicAiModel[]
 }
 
 // ProviderModelModalitySummary renders compact tooltip-backed modality icons shared by settings surfaces.
 // ProviderModelModalitySummary 渲染设置界面共享的紧凑且带提示的多模态图标。
 export function ProviderModelModalitySummary(props: ProviderModelModalitySummaryProps) {
   const { t } = useI18n()
-  const modalities = providerModelModalities(props.model)
+  // models preserves all executable route declarations when the caller renders a grouped model row.
+  // models 在调用方渲染分组模型行时保留全部可执行路由声明。
+  const models = [props.model, ...(props.additionalModels ?? [])]
+  // routeModalities supplies the existing normalized input/output facts for each route.
+  // routeModalities 提供每条路由既有的归一化输入输出事实。
+  const routeModalities = models.map(providerModelModalities)
+  // modalities merges exact declared kinds without repeating icons for equivalent routes.
+  // modalities 合并精确声明的类型，避免等价路由重复显示图标。
+  const modalities = {
+    input: [...new Set(routeModalities.flatMap((route) => route.input))],
+    output: [...new Set(routeModalities.flatMap((route) => route.output))],
+  }
+  // inputResources merges explicit media declarations across the displayed routes.
+  // inputResources 合并所展示路由的明确媒体声明。
+  const inputResources = [...new Set(models.flatMap((model) => model.capabilities.input_resources ?? []))]
   // genericInputModalities excludes media inputs already represented as explicit understanding capabilities.
   // genericInputModalities 排除已经由明确理解能力表示的媒体输入。
   const genericInputModalities = modalities.input.filter((modality) => (
     modality !== "image" && modality !== "video" && modality !== "audio"
   ))
-  const providerNativeTools = props.model.capabilities.provider_native_tools ?? []
+  // providerNativeTools retains native capabilities from every displayed route.
+  // providerNativeTools 保留每条展示路由的原生能力。
+  const providerNativeTools = [...new Set(models.flatMap((model) => model.capabilities.provider_native_tools ?? []))]
   // builtinCapabilities prevents media-only routes from being hidden by the generic-modality filter.
   // builtinCapabilities 防止仅媒体路由被通用模态过滤器隐藏。
   const builtinCapabilities = modelBuiltinCapabilities({
-    inputResources: props.model.capabilities.input_resources ?? [],
+    inputResources,
     providerNativeTools,
   })
   if (
@@ -59,7 +78,7 @@ export function ProviderModelModalitySummary(props: ProviderModelModalitySummary
     <span className="settings-model-modality-summary">
       <ModelBuiltinCapabilityIcons
         className="settings-model-builtin-capabilities"
-        inputResources={props.model.capabilities.input_resources ?? []}
+        inputResources={inputResources}
         providerNativeTools={providerNativeTools}
       />
       {genericInputModalities.length > 0 ? (

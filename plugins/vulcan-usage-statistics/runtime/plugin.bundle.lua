@@ -501,6 +501,7 @@ local function attach_reference_estimate(row, model_overrides)
         row.pricingMatchStatus = "unmatched"
         row.pricingRevision = vulcan.json.null
         row.pricingSourceId = vulcan.json.null
+        row.pricingDetails = vulcan.json.null
         return row
     end
 
@@ -512,16 +513,15 @@ local function attach_reference_estimate(row, model_overrides)
     }
     local terms = {}
     local maximum_scale = 0
+    -- Preserve exact rates and each computed component for the reference-cost tooltip.
+    -- 为参考费用提示保留精确单价和各项计算结果。
+    row.pricingDetails = { currency = DEFAULT_PRICING_CATALOG.currency, dimensions = vulcan.json.array() }
+    local incomplete = false
     for _, spec in ipairs(term_specs) do
         local price_digits, price_scale = parse_catalog_decimal(spec.price)
         local tokens = token_digits(row[spec.token_field])
         if tokens == nil and price_digits ~= "0" then
-            row.estimatedCost = vulcan.json.null
-            row.estimatedCurrency = vulcan.json.null
-            row.pricingMatchStatus = "incomplete_usage"
-            row.pricingRevision = pricing_revision
-            row.pricingSourceId = pricing_source_id
-            return row
+            incomplete = true
         end
         local term = {
             digits = multiply_unsigned_integers(tokens or "0", price_digits),
@@ -529,6 +529,21 @@ local function attach_reference_estimate(row, model_overrides)
         }
         terms[#terms + 1] = term
         maximum_scale = math.max(maximum_scale, term.scale)
+        row.pricingDetails.dimensions[#row.pricingDetails.dimensions + 1] = {
+            tokenField = spec.token_field,
+            perMillion = spec.price,
+            cost = tokens == nil and price_digits ~= "0" and vulcan.json.null
+                or format_scaled_decimal(term.digits, term.scale),
+        }
+    end
+
+    if incomplete then
+        row.estimatedCost = vulcan.json.null
+        row.estimatedCurrency = vulcan.json.null
+        row.pricingMatchStatus = "incomplete_usage"
+        row.pricingRevision = pricing_revision
+        row.pricingSourceId = pricing_source_id
+        return row
     end
 
     local total_digits = "0"

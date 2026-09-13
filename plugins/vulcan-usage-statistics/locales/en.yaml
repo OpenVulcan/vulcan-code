@@ -1,6 +1,71 @@
 name: Vulcan Usage Statistics
 capability: Query and clear Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
 messages:
+  tokens.details: Token details
+  tokens.uncachedInputTokens: Uncached input
+  tokens.reasoningTokens: Reasoning tokens
+  tokens.totalTokens: Total tokens
+  cost.details: Reference cost details
+  cost.component: Estimated cost
+  cost.unitPrice: Unit price
+  cost.total: Total reference estimate
+  cost.referenceOnly: Calculated from recorded usage and current reference prices, not a provider bill.
+  pricing.actions: Actions
+  pricing.edit: Edit
+  consumer.name.default-worker: Conversation assistant
+  consumer.name.vulcan-code-native-vmm: Memory service
+  consumer.name.vulcan-code-settings-inference-test: Model connection test
+  consumer.name.vulcan-code-provider-validation: Model validation
+  consumer.name.vulcan-code-knowledge-curation: Knowledge curation
+  consumer.name.vulcan-code-knowledge-embedding: Knowledge embeddings
+  consumer.codeContext: Code context
+  consumer.custom: "Custom caller · {{id}}"
+  operation.custom: "Custom operation · {{id}}"
+  operation.conversation: Conversation
+  operation.conversation_respond: Conversation
+  operation.compact: Context compaction
+  operation.warmup: Model warmup
+  operation.image_understand: Image understanding
+  operation.image_generate: Image generation
+  operation.image_edit: Image editing
+  operation.video_understand: Video understanding
+  operation.video_generate: Video generation
+  operation.video_edit: Video editing
+  operation.video_extend: Video extension
+  operation.audio_understand: Audio understanding
+  operation.speech_synthesize: Speech synthesis
+  operation.speech_transcribe: Speech transcription
+  operation.voice_clone: Voice cloning
+  operation.voice_design: Voice design
+  operation.music_generate: Music generation
+  operation.music_cover: Music cover
+  operation.lyrics_generate: Lyrics generation
+  operation.embedding_create: Embeddings
+  operation.rerank_documents: Document reranking
+  operation.web_search: Web search
+  operation.web_extract: Web extraction
+  error.category: Error category
+  error.code: Error code
+  error.requestId: Request ID
+  error.noOriginal: The statistics record does not contain the original error message.
+  failure.unknown: The request did not complete successfully.
+  failure.authentication: Request authentication failed.
+  failure.permission_denied: The request lacks the required permissions.
+  failure.payment_required: The account has insufficient balance or quota.
+  failure.rate_limited: The provider rate limit was exceeded.
+  failure.provider_overloaded: The provider is overloaded.
+  failure.provider_unavailable: The provider service is unavailable.
+  failure.timeout: The request timed out.
+  failure.invalid_request: Request validation failed.
+  failure.context_length_exceeded: The request exceeds the model context window.
+  failure.content_policy: A content policy rejected the request or output.
+  failure.cancelled: The request was cancelled.
+  failure.unclassified: The error is unclassified. See the recorded status below.
+  failure.contract: The request violates the interface contract.
+  failure.authorization: The caller lacks the required authorization.
+  failure.configuration: The inference configuration is unavailable.
+  failure.limit: The request exceeded a configured execution limit.
+  failure.execution: Model inference execution failed.
   snapshot.retained: Showing the previous result until a refresh succeeds.
   tokens.noComposition: Input/output share is unavailable
   tokens.composition: "Input {{input}}% · Output {{output}}%"

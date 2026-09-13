@@ -1,6 +1,71 @@
 name: Vulcan 用量统计
 capability: 通过系统 VLDB 查询和清理 Provider Token 事实，并使用插件自有价目表即时估算参考费用
 messages:
+  tokens.details: Token 明细
+  tokens.uncachedInputTokens: 非缓存输入
+  tokens.reasoningTokens: 推理 Token
+  tokens.totalTokens: 总 Token
+  cost.details: 参考费用明细
+  cost.component: 参考费用
+  cost.unitPrice: 单价
+  cost.total: 参考费用合计
+  cost.referenceOnly: 根据已记录用量和当前参考单价计算，不代表供应商实际账单。
+  pricing.actions: 操作
+  pricing.edit: 编辑
+  consumer.name.default-worker: 会话助手
+  consumer.name.vulcan-code-native-vmm: 记忆服务
+  consumer.name.vulcan-code-settings-inference-test: 模型连接测试
+  consumer.name.vulcan-code-provider-validation: 模型验证
+  consumer.name.vulcan-code-knowledge-curation: 知识库整理
+  consumer.name.vulcan-code-knowledge-embedding: 知识库向量化
+  consumer.codeContext: 代码上下文
+  consumer.custom: "自定义调用方 · {{id}}"
+  operation.custom: "自定义操作 · {{id}}"
+  operation.conversation: 对话生成
+  operation.conversation_respond: 对话生成
+  operation.compact: 上下文压缩
+  operation.warmup: 模型预热
+  operation.image_understand: 图片理解
+  operation.image_generate: 图片生成
+  operation.image_edit: 图片编辑
+  operation.video_understand: 视频理解
+  operation.video_generate: 视频生成
+  operation.video_edit: 视频编辑
+  operation.video_extend: 视频延长
+  operation.audio_understand: 音频理解
+  operation.speech_synthesize: 语音合成
+  operation.speech_transcribe: 语音转写
+  operation.voice_clone: 声音克隆
+  operation.voice_design: 声音设计
+  operation.music_generate: 音乐生成
+  operation.music_cover: 音乐翻唱
+  operation.lyrics_generate: 歌词生成
+  operation.embedding_create: 向量生成
+  operation.rerank_documents: 文档重排
+  operation.web_search: 网页搜索
+  operation.web_extract: 网页内容提取
+  error.category: 错误类别
+  error.code: 错误代码
+  error.requestId: 请求标识
+  error.noOriginal: 此统计记录未保存完整错误原文。
+  failure.unknown: 请求未正常完成。
+  failure.authentication: 请求身份验证失败。
+  failure.permission_denied: 当前请求没有所需权限。
+  failure.payment_required: 账号余额或可用额度不足。
+  failure.rate_limited: 请求频率超过供应商限制。
+  failure.provider_overloaded: 供应商当前负载过高。
+  failure.provider_unavailable: 供应商服务当前不可用。
+  failure.timeout: 请求超时。
+  failure.invalid_request: 请求参数未通过校验。
+  failure.context_length_exceeded: 请求内容超过模型上下文窗口。
+  failure.content_policy: 请求或输出被内容策略拒绝。
+  failure.cancelled: 请求已取消。
+  failure.unclassified: 该错误尚未归类，具体状态见下方记录。
+  failure.contract: 请求不符合接口约定。
+  failure.authorization: 调用方未获得所需授权。
+  failure.configuration: 当前推理配置不可用。
+  failure.limit: 请求超过配置的执行限制。
+  failure.execution: 模型推理执行失败。
   snapshot.retained: 当前显示上次读取结果，刷新成功后更新。
   tokens.noComposition: 暂无可计算的输入与输出占比
   tokens.composition: "输入 {{input}}% · 输出 {{output}}%"
@@ -69,7 +134,7 @@ messages:
   daily.title: 每日模型用量
   daily.empty: 暂无每日用量事实
   daily.date: 日期
-  daily.provider: Provider / 模型
+  daily.provider: 模型 / 供应商
   daily.consumer: 消费者
   daily.operation: 操作
   daily.attempts: 调用
@@ -78,7 +143,7 @@ messages:
   recent.title: 最近真实调用
   recent.empty: 暂无真实调用记录
   recent.time: 时间
-  recent.model: Provider / 模型
+  recent.model: 模型 / 供应商
   recent.consumer: 消费者
   recent.status: 状态
   recent.tokens: Token
@@ -126,7 +191,7 @@ messages:
   pricing.incompleteUsage: 必需用量不完整
   pricing.loadError: 无法读取模型价格
   error.details: 查看错误详情
-  tokens.inputTokens: 输入
+  tokens.inputTokens: 已报告输入（含缓存）
   tokens.outputTokens: 输出
   tokens.cacheReadTokens: 缓存读取
   tokens.cacheWriteTokens: 缓存写入

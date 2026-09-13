@@ -118,7 +118,7 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
 export function CredentialUsageOverviewView(props: CredentialUsageOverviewViewProps) {
   return (
     <>
-      <div className="grid grid-cols-2 gap-2 border-t pt-1.5">
+      <div className="grid grid-cols-2 gap-2 border-t pt-1.5" data-slot="credential-usage-summary">
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">{props.model.planLabel}</p>
           <p className="mt-0.5 break-words text-sm font-medium">{props.model.planValue}</p>
@@ -363,7 +363,7 @@ function CommandCodeUsageSummary(props: { rows: CommandCodeUsageRows }) {
         />
       ) : null}
       {props.rows.purchased || props.rows.free ? (
-        <div className="grid grid-cols-2 gap-1">
+        <div className="grid grid-cols-2 gap-1" data-slot="credential-credit-balances">
           {props.rows.purchased ? (
             <UsageWindowMetric
               label={commandCodeUsageWindowLabel(props.rows.purchased, t)}

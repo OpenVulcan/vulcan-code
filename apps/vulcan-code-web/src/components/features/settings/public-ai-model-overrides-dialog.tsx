@@ -64,6 +64,9 @@ export function PublicAiModelOverridesDialog(props: {
   // Updates dialog visibility.
   // 更新弹窗可见性。
   onOpenChange: (open: boolean) => void
+  // Restores focus to the caller's explicit opener when no DialogTrigger is present.
+  // 没有 DialogTrigger 时，将焦点恢复到调用方明确提供的打开按钮。
+  onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>["onCloseAutoFocus"]
   // Receives the authoritative settings snapshot after save.
   // 保存后接收权威设置快照。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
@@ -240,7 +243,7 @@ export function PublicAiModelOverridesDialog(props: {
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl" onCloseAutoFocus={props.onCloseAutoFocus}>
         <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
           <div className="flex items-start gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">

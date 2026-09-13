@@ -1,6 +1,8 @@
 /* License browsing owns a fixed local directory and one lazily loaded original body. */
 /* 许可证浏览使用固定局部目录，且一次仅懒加载一份原始正文。 */
-.settings-license-panel { container-type: inline-size; }
+.settings-license-panel { container-type: inline-size; gap: 0; font-family: var(--font-sans); font-size: 13px; line-height: 1.6; }
+.settings-license-panel > .settings-hint { margin: 6px 0 0; color: var(--muted-foreground); font-size: 12px; }
+.settings-license-summary > strong { font-size: 14px; font-weight: 600; }
 .settings-license-summary,
 .settings-license-toolbar,
 .settings-license-group-heading,
@@ -9,11 +11,22 @@
 .settings-license-toolbar { margin-block: 0.75rem 1rem; }
 .settings-license-toolbar > input { flex: 1 1 16rem; min-width: 0; }
 .settings-license-summary > span,
-.settings-license-group-heading > span { color: var(--muted-foreground); font-size: 0.8rem; }
+.settings-license-group-heading > span { color: var(--muted-foreground); font-size: 12px; }
 .settings-license-browser { display: grid; grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
 .settings-license-directory { display: grid; gap: 0.3rem; min-width: 0; padding-right: 0.75rem; border-right: 1px solid var(--border); }
-.settings-license-directory > button { justify-content: space-between; height: auto; min-height: 2.4rem; white-space: normal; text-align: left; }
-.settings-license-directory > button > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.settings-license-directory > button { justify-content: space-between; width: 100%; min-width: 0; height: 36px; gap: 10px; white-space: nowrap; text-align: left; font-size: 13px; font-weight: 500; }
+/* Scroll only the overflowing name on hover or keyboard focus, keeping counts stationary. */
+/* 悬停或键盘聚焦时仅滚动超长名称，数量保持固定。 */
+.settings-license-name { flex: 1; min-width: 0; overflow: hidden; container-type: inline-size; }
+.settings-license-name > span { display: block; width: max-content; min-width: 100%; white-space: nowrap; }
+.settings-license-directory > button:is(:hover, :focus-visible) .settings-license-name > span { animation: license-name-scroll 6s ease-in-out infinite alternate; }
+@keyframes license-name-scroll {
+  0%, 15% { transform: translateX(0); }
+  85%, 100% { transform: translateX(min(0px, calc(100cqw - 100%))); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-license-directory > button:is(:hover, :focus-visible) .settings-license-name > span { animation: none; }
+}
 .settings-license-directory > button > span:last-child { flex-shrink: 0; }
 .settings-license-content { min-width: 0; }
 .settings-license-mobile-directory { display: none; }
@@ -21,12 +34,13 @@
 .settings-license-type-options { max-width: calc(100vw - 1rem); }
 .settings-license-type-options [data-slot="select-item"] { white-space: normal; overflow-wrap: anywhere; }
 .settings-license-group-heading h3,
-.settings-license-body-heading h3 { font-size: 0.95rem; margin: 0; }
-.settings-license-table-scroll { overflow: auto; max-height: min(32rem, 42dvh); margin-block: 0.75rem; }
-.settings-license-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left; }
+.settings-license-body-heading h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.settings-license-table-scroll { overflow: auto; max-height: min(44rem, 64dvh); margin-block: 0.75rem; }
+.settings-license-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
 .settings-license-table th,
-.settings-license-table td { border-bottom: 1px solid var(--border); padding: 0.55rem 0.4rem; vertical-align: top; }
-.settings-license-table th { position: sticky; top: 0; z-index: 1; background: var(--card); }
+.settings-license-table td { border-bottom: 1px solid var(--border); padding: 10px 8px; vertical-align: middle; }
+.settings-license-table th { position: sticky; top: 0; z-index: 1; background: var(--background); color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
+.settings-license-table td:nth-child(3) { color: var(--muted-foreground); font-size: 12px; }
 .settings-license-table td:first-child { min-width: 7rem; overflow-wrap: anywhere; }
 .settings-license-table td:nth-child(2) { white-space: nowrap; }
 .settings-license-table td:nth-child(3) { max-width: 20rem; min-width: 10rem; overflow-wrap: anywhere; }
@@ -34,11 +48,12 @@
 .settings-license-pagination { justify-content: flex-end; margin-block: 0.5rem 1rem; }
 .settings-license-body-heading { margin-top: 1rem; }
 .settings-license-body-heading > button { min-width: 14rem; max-width: 100%; }
-.settings-license-body { padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); color: var(--foreground); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.8rem; line-height: 1.6; max-height: 36rem; overflow: auto; }
+.settings-license-body { margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); color: var(--foreground); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-sans); font-size: 13px; line-height: 1.7; max-height: 65dvh; overflow: auto; }
+.settings-license-dialog { font-family: var(--font-sans); }
 .settings-license-error { border: 1px solid var(--destructive); border-radius: var(--radius); padding: 0.85rem; overflow-wrap: anywhere; }
 @container (max-width: 760px) {
   .settings-license-browser { grid-template-columns: minmax(0, 1fr); }
-  .settings-license-table-scroll { max-height: 30dvh; }
+  .settings-license-table-scroll { max-height: 60dvh; }
   .settings-license-directory { display: none; }
   .settings-license-mobile-directory { display: block; margin-bottom: 0.85rem; }
   .settings-license-mobile-directory > button { width: 100%; height: auto; min-height: 2.5rem; white-space: normal; }

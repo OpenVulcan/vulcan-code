@@ -1,5 +1,6 @@
 import * as React from "react"
 import { LoaderCircle } from "lucide-react"
+import { toast } from "sonner"
 
 import { ContextWindowPolicyEditor } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
@@ -202,13 +203,14 @@ function ContextCompactionWindowNodesCard(props: {
     setError(null)
     try {
       props.onSaved(await savePublicAiContextCompactionWindowNodes(draft))
+      toast.success(t("settings.modelExperience.savedNodes"))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       savingRef.current = false
       setSaving(false)
     }
-  }, [draft, props, validationError])
+  }, [draft, props, validationError, t])
 
   return (
     <section className="space-y-4 rounded-xl border p-4">
@@ -218,7 +220,7 @@ function ContextCompactionWindowNodesCard(props: {
       </div>
       <div className="context-basics-node-grid">
         {draft.nodes.map((node, index) => (
-          <label className="grid gap-1.5 text-sm" key={node.id}>
+          <label className="context-basics-node-row" key={node.id}>
             <span className="font-medium">{t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])}</span>
             <Input
               disabled={saving}
@@ -234,12 +236,11 @@ function ContextCompactionWindowNodesCard(props: {
         ))}
       </div>
       <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.warning")}</p>
-      <details className="text-xs text-muted-foreground"><summary>{t("settings.modelExperience.nodeIds")}</summary><p>{draft.nodes.map((node) => node.id).join(" · ")}</p></details>
       {validationError || error ? <p className="text-sm text-destructive">{error ?? validationError}</p> : null}
-      <p className="text-xs text-muted-foreground" role="status">{t(saving ? "settings.modelExperience.savingNodes" : dirty ? "settings.modelExperience.dirtyNodes" : "settings.modelExperience.savedNodes")}</p>
+      {dirty && !saving ? <p className="text-xs text-muted-foreground" role="status">{t("settings.modelExperience.dirtyNodes")}</p> : null}
       <Button disabled={saving || !dirty || validationError !== null} onClick={() => void save()} type="button">
         {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
-        {t("settings.contextCompactionNodes.save")}
+        {t(saving ? "settings.modelExperience.savingNodes" : "settings.contextCompactionNodes.save")}
       </Button>
     </section>
   )

@@ -22,6 +22,7 @@ import { PublicAiModelCapabilityDialog } from "@/components/features/settings/pu
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Combobox } from "@/components/ui/combobox"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -59,6 +60,15 @@ export function ModelListSettingsArea() {
   const [loadAttempt, setLoadAttempt] = React.useState(0)
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
   const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
+  // inspectingModel identifies a read-only access window by exact provider and model, never row position.
+  // inspectingModel 使用准确供应商和模型标识接入详情窗口，不使用行位置。
+  const [inspectingModel, setInspectingModel] = React.useState<{ providerId: string; modelId: string } | null>(null)
+  // accessTrigger restores keyboard focus to the actual button that opened access details.
+  // accessTrigger 将键盘焦点恢复到实际打开接入详情的按钮。
+  const accessTrigger = React.useRef<HTMLButtonElement | null>(null)
+  // routeConditionsTrigger restores focus within the parent access dialog after nested editing.
+  // routeConditionsTrigger 在嵌套编辑结束后将焦点恢复到父级接入窗口内。
+  const routeConditionsTrigger = React.useRef<HTMLButtonElement | null>(null)
   const [editingCapabilityModel, setEditingCapabilityModel] = React.useState<PublicAiModel | null>(null)
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -195,6 +205,17 @@ export function ModelListSettingsArea() {
       record.providerId === selectedGroup.provider.id && !record.executable
     ))
   }, [selectedGroup, snapshot])
+  // inspectedRow reads current route metadata only while the selected provider still owns the window.
+  // inspectedRow 仅在当前供应商仍拥有窗口时读取最新路由元数据。
+  const inspectedRow = inspectingModel?.providerId === selectedGroup?.provider.id
+    ? providerModelRows.find((row) => row.modelId === inspectingModel?.modelId)
+    : undefined
+  React.useEffect(() => {
+    if (inspectingModel && !inspectedRow) {
+      setInspectingModel(null)
+      setEditingRoute(null)
+    }
+  }, [inspectedRow, inspectingModel])
   // selectedProviderLabel supplies the shared collapsed-menu pill label.
   // selectedProviderLabel 为共享收起菜单胶囊提供标签。
   const selectedProviderLabel = selectedGroup
@@ -335,6 +356,14 @@ export function ModelListSettingsArea() {
                     .replace("{total}", String(providerModelRows.length))}
                 </div>
               </div>
+              <div className="settings-model-catalog">
+              {visibleModelRows.length > 0 ? <div className="settings-model-catalog-heading" aria-hidden="true">
+                <span>{t("settings.modelExperience.modelColumn")}</span>
+                <span>{t("settings.models.conversationUse")}</span>
+                <span>{t("settings.modelExperience.understandingUse")}</span>
+                <span>{t("settings.models.internalUse")}</span>
+                <span />
+              </div> : null}
               {!selectedGroup || providerModelRows.length === 0 ? (
                 <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
               ) : visibleModelRows.length === 0 ? (
@@ -352,9 +381,6 @@ export function ModelListSettingsArea() {
                 // conversationEligible follows declared operations, independently from its access preference.
                 // conversationEligible 遵循声明操作，与访问偏好相互独立。
                 const conversationEligible = routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
-                // inputModalities summarizes declared inputs across these exact executable routes.
-                // inputModalities 汇总这些精确可执行路由声明的输入能力。
-                const inputModalities = Array.from(new Set(routes.flatMap((route) => providerModelModalities(route.model).input)))
                 const internalState = internalStateForModel(
                   snapshot,
                   selectedGroup.provider.id,
@@ -377,80 +403,23 @@ export function ModelListSettingsArea() {
                   ),
                 ) ?? false
                 return (
-                  <article className="settings-model-row" key={`${selectedGroup.provider.id}/${modelId}`}>
+                  <article className="settings-model-catalog-row" key={`${selectedGroup.provider.id}/${modelId}`}>
                     <div className="settings-model-row-main">
                       <div className="settings-model-title-line">
-                        <strong>{representative.model.display_name}</strong>
-                        <span className="settings-model-id">({modelId})</span>
-                        <Badge className="settings-model-credential-count" variant="outline">
+                        <strong title={representative.model.display_name}>{representative.model.display_name}</strong>
+                      </div>
+                      <span className="settings-model-id" title={modelId}>{modelId}</span>
+                      <div className="settings-model-catalog-meta">
+                        <ProviderModelModalitySummary model={representative.model} additionalModels={routes.slice(1).map((route) => route.model)} />
+                        <span>
                           {t("settings.models.availableCredentials")
                             .replace("{count}", String(availableAccountCount))}
-                        </Badge>
+                        </span>
                       </div>
-                      {inputModalities.length > 0 ? <p className="settings-model-purpose-summary">{t("settings.models.inputModalities")}：{inputModalities.map((modality) => modelModalityLabel(modality, t)).join("、")}</p> : null}
-                      <details className="settings-model-route-details">
-                        <summary>{t("settings.modelExperience.routes").replace("{count}", String(routes.length))}</summary>
-                        {routes.map((route) => (
-                          <div
-                            className="settings-model-route-content"
-                            key={modelRouteValue(route)}
-                          >
-                            <Button
-                              aria-label={t("settings.models.additionalConditions")
-                                .replace("{protocol}", protocolDisplayName(route.protocolId))}
-                              className="settings-model-route-panel"
-                              disabled={pendingMutationKey !== null}
-                              onClick={() => setEditingRoute(route)}
-                              type="button"
-                              variant="ghost"
-                            >
-                              <span className="settings-model-route-summary">
-                                <span className="settings-model-route-protocol">
-                                  {route.serviceEntryName} ·
-                                  {protocolDisplayName(route.protocolId)}
-                                  <SlidersHorizontal aria-hidden="true" size={14} />
-                                </span>
-                                <span
-                                  className="settings-model-route-binding"
-                                  title={`${route.bindingSource} · ${route.bindingRuleId ?? t("settings.models.routeNoRule")} · r${route.manifestRevision}`}
-                                >
-                                  {route.bindingSource} · {route.bindingRuleId ?? t("settings.models.routeNoRule")} · r{route.manifestRevision}
-                                </span>
-                                <span
-                                  className="settings-model-route-binding"
-                                  title={route.availableProtocols.join(", ")}
-                                >
-                                  {t("settings.models.routeAvailableProtocols")}: {route.availableProtocols.join(", ") || "—"}
-                                </span>
-                              </span>
-                              <ProviderModelModalitySummary model={route.model} />
-                            </Button>
-                            <ul className="settings-model-route-accounts" aria-label={t("settings.modelExperience.routeAccounts")}>
-                              {route.accounts.map((account) => <li key={account.connectionId}>
-                                <span>{account.displayName}</span>
-                                <small>{t(account.enabled ? "settings.modelExperience.available" : "settings.modelExperience.accountNotAdmitted")}</small>
-                              </li>)}
-                            </ul>
-                          </div>
-                        ))}
-                      </details>
-                      {internalState ? <p className="settings-model-purpose-summary">{t("settings.modelExperience.internalPurposes").replace("{purposes}", internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter")))}</p> : null}
-                      {multimodalCandidateEnabled ? <p className="settings-model-purpose-summary">{t("settings.modelExperience.candidateHint")}</p> : null}
                     </div>
-                    <div className="settings-model-switches">
-                      <Button
-                        aria-label={`${t("settings.modelCapabilities.title")} ${representative.model.display_name}`}
-                        disabled={pendingMutationKey !== null}
-                        onClick={() => setEditingCapabilityModel(representative.model)}
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        <SlidersHorizontal aria-hidden="true" size={14} />
-                        {t("settings.modelCapabilities.shortLabel")}
-                      </Button>
-                      {conversationEligible ? <label className="settings-model-switch-control">
-                        <span>{t("settings.models.conversationUse")}</span>
+                      <div className="settings-model-purpose-cell">
+                      <span className="settings-model-purpose-label">{t("settings.models.conversationUse")}</span>
+                      {conversationEligible ? (
                         <Switch
                           aria-label={`${t("settings.models.conversationUse")} ${representative.model.display_name}`}
                           checked={enabled}
@@ -465,12 +434,17 @@ export function ModelListSettingsArea() {
                             ))
                           }}
                         />
-                      </label> : <span className="settings-model-purpose-summary">{t("settings.modelExperience.noConversation")}</span>}
+                      ) : <span title={t("settings.modelExperience.noConversation")} aria-label={t("settings.modelExperience.noConversation")}>—</span>}
+                      </div>
+                      <div className="settings-model-purpose-cell">
+                      <span className="settings-model-purpose-label">{t("settings.modelExperience.understandingUse")}</span>
+                      {/* Tooltip disclosure state belongs to its wrapper, preserving the switch's checked state.
+                          提示层的展开状态由外层元素承担，保留开关自身的选中状态。 */}
                       {multimodalCandidateEligible || multimodalCandidateEnabled ? (
-                        <label className="settings-model-switch-control">
-                          <span>{t("settings.models.multimodalUnderstandingCandidate")}</span>
+                        <Tooltip><TooltipTrigger asChild><span className="inline-flex">
                           <Switch
                             aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${representative.model.display_name}`}
+                            aria-description={t("settings.modelExperience.candidateExplanation")}
                             checked={multimodalCandidateEnabled}
                             disabled={multimodalCandidateToggleDisabled(
                               pendingMutationKey !== null,
@@ -487,18 +461,16 @@ export function ModelListSettingsArea() {
                               ))
                             }}
                           />
-                        </label>
-                      ) : null}
+                        </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.candidateExplanation")}</TooltipContent></Tooltip>
+                      ) : <span>—</span>}
+                      </div>
+                      <div className="settings-model-purpose-cell">
+                      <span className="settings-model-purpose-label">{t("settings.models.internalUse")}</span>
                       {internalState ? (
-                        <label
-                          className="settings-model-switch-control"
-                          title={internalState.operations
-                            .map((operation) => internalOperationLabel(operation, t))
-                            .join("、")}
-                        >
-                          <span>{t("settings.models.internalUse")}</span>
+                        <Tooltip><TooltipTrigger asChild><span className="inline-flex">
                           <Switch
-                            aria-label={`${t("settings.inference.internalToggle")} ${representative.model.display_name}`}
+                            aria-label={`${t("settings.models.internalUse")} ${representative.model.display_name}`}
+                            aria-description={internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter"))}
                             checked={internalState.enabled}
                             disabled={pendingMutationKey !== null}
                             onCheckedChange={(checked) => {
@@ -511,38 +483,117 @@ export function ModelListSettingsArea() {
                               ))
                             }}
                           />
-                        </label>
-                      ) : null}
+                        </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.internalPurposes").replace("{purposes}", internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter")))}</TooltipContent></Tooltip>
+                      ) : <span>—</span>}
+                      </div>
+                    <div className="settings-model-catalog-actions">
+                      <Button
+                        aria-label={`${t("settings.modelCapabilities.title")} ${representative.model.display_name}`}
+                        disabled={pendingMutationKey !== null}
+                        onClick={() => setEditingCapabilityModel(representative.model)}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        {t("settings.modelCapabilities.shortLabel")}
+                      </Button>
+                      <Button
+                        aria-label={`${t("settings.modelExperience.accessButton")} ${representative.model.display_name}`}
+                        onClick={(event) => {
+                          accessTrigger.current = event.currentTarget
+                          setInspectingModel({ providerId: selectedGroup.provider.id, modelId })
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                      >{t("settings.modelExperience.accessButton")}</Button>
                     </div>
                   </article>
                 )
               })}
+              </div>
             </div>
           </section>
         )}
-      <PublicAiModelOverridesDialog
-        model={editingRoute?.model ?? null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setEditingRoute(null)
-          }
-        }}
-        onSaved={(next) => {
-          setSnapshot(next)
+      <Dialog open={inspectedRow !== undefined} onOpenChange={(open) => {
+        if (!open) {
+          setInspectingModel(null)
           setEditingRoute(null)
-        }}
-        open={editingRoute !== null}
-        overrides={snapshot?.modelOverrideRecords.find((record) => (
-          record.providerId === selectedGroup?.provider.id
-          && record.modelId === editingRoute?.model.id
-          && record.protocolId === editingRoute?.protocolId
-        ))?.overrides}
-        protocolId={editingRoute?.protocolId ?? null}
-        providerDisplayName={selectedGroup
-          ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
-          : null}
-        providerId={selectedGroup?.provider.id ?? null}
-      />
+        }
+      }}>
+        <DialogContent size="lg" scrollMode="body-scroll" className="settings-model-access-dialog" onCloseAutoFocus={(event) => {
+          if (accessTrigger.current?.isConnected) {
+            event.preventDefault()
+            accessTrigger.current.focus()
+          }
+        }}>
+          <DialogHeader>
+            <DialogTitle>{inspectedRow?.displayName}</DialogTitle>
+            <DialogDescription>{t("settings.modelExperience.routes").replace("{count}", String(inspectedRow?.routes.length ?? 0))}</DialogDescription>
+          </DialogHeader>
+          <div className="settings-model-access-routes">
+            {inspectedRow?.routes.map((route) => <section className="settings-model-access-route" key={modelRouteValue(route)}>
+              <div className="settings-model-access-route-heading">
+                <div><strong>{route.serviceEntryName}</strong><span>{protocolDisplayName(route.protocolId)}</span></div>
+                <ProviderModelModalitySummary model={route.model} />
+                <Button
+                  aria-label={t("settings.models.additionalConditions").replace("{protocol}", protocolDisplayName(route.protocolId))}
+                  disabled={pendingMutationKey !== null}
+                  onClick={(event) => {
+                    routeConditionsTrigger.current = event.currentTarget
+                    setEditingRoute(route)
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                ><SlidersHorizontal aria-hidden="true" size={14} />{t("settings.modelExperience.routeSettings")}</Button>
+              </div>
+              <dl className="settings-model-access-metadata">
+                <div><dt>{t("settings.modelExperience.bindingSource")}</dt><dd>{route.bindingSource} · {route.bindingRuleId ?? t("settings.models.routeNoRule")} · r{route.manifestRevision}</dd></div>
+                <div><dt>{t("settings.models.routeAvailableProtocols")}</dt><dd>{route.availableProtocols.join(", ") || "—"}</dd></div>
+              </dl>
+              <div className="settings-model-access-accounts">
+                <span>{t("settings.modelExperience.routeAccounts")}</span>
+                <ul className="settings-model-route-accounts">
+                  {route.accounts.map((account) => <li key={account.connectionId}>
+                    <span>{account.displayName}</span>
+                    <small>{t(account.enabled ? "settings.modelExperience.available" : "settings.modelExperience.accountNotAdmitted")}</small>
+                  </li>)}
+                </ul>
+              </div>
+            </section>)}
+          </div>
+          <PublicAiModelOverridesDialog
+            model={editingRoute?.model ?? null}
+            onCloseAutoFocus={(event) => {
+              if (routeConditionsTrigger.current?.isConnected) {
+                event.preventDefault()
+                routeConditionsTrigger.current.focus()
+              }
+            }}
+            onOpenChange={(open) => {
+              if (!open) {
+                setEditingRoute(null)
+              }
+            }}
+            onSaved={(next) => {
+              setSnapshot(next)
+              setEditingRoute(null)
+            }}
+            open={editingRoute !== null}
+            overrides={snapshot?.modelOverrideRecords.find((record) => (
+              record.providerId === selectedGroup?.provider.id
+              && record.modelId === editingRoute?.model.id
+              && record.protocolId === editingRoute?.protocolId
+            ))?.overrides}
+            protocolId={editingRoute?.protocolId ?? null}
+            providerDisplayName={selectedGroup
+              ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
+              : null}
+            providerId={selectedGroup?.provider.id ?? null}
+          />
+        </DialogContent>
+      </Dialog>
       <PublicAiModelCapabilityDialog
         model={editingCapabilityModel}
         onOpenChange={(open) => {

@@ -130,6 +130,9 @@ export function createPluginPanel(sdk) {
   // ErrorState is the shared host error-state component.
   // ErrorState 是共享宿主错误状态组件。
   const ErrorState = sdk.components.ErrorState;
+  // HelpTooltip renders structured details in the host portal, outside table clipping.
+  // HelpTooltip 在宿主门户中渲染结构化详情，避免表格裁切。
+  const HelpTooltip = sdk.components.HelpTooltip;
   // text resolves one plugin locale key with an explicit English source fallback.
   // text 使用明确英语源码回退解析一个插件语言键。
   const text = (key, fallback) => sdk.t(key, fallback);
@@ -395,21 +398,90 @@ export function createPluginPanel(sdk) {
 
   // Render exact usage dimensions and the cache-read share of reported input.
   // 渲染精确用量维度，以及缓存读取占已报告输入的比例。
-  // record is a daily or attempt projection; returns an accessible disclosure.
-  // record 是每日或请求投影；返回可访问的详情展开控件。
-  function tokenDetails(record, open = false) {
-    return h("details", { open },
-      h("summary", null, record.totalTokens === null ? "-" : formatInteger(record.totalTokens)),
-      h("dl", { className: "plugin-control-facts" },
-        ...["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"].flatMap((key) => [
-          h("dt", { key: key + "-label" }, text(`tokens.${key}`, key)),
-          h("dd", { key }, record[key] === null ? "-" : formatInteger(record[key])),
-        ]),
-        h("dt", null, text("tokens.cacheShare", "Cache read / reported input")),
-        h("dd", null, record.inputTokens !== null && record.inputTokens > 0 && record.cacheReadTokens !== null
-          ? `${(record.cacheReadTokens / record.inputTokens * 100).toFixed(1)}%` : "-"),
+  // record is a daily or attempt projection; returns two icon rows and exact hover details.
+  // record 是每日或请求投影；返回两行图标数值及精确悬停详情。
+  function tokenDetails(record) {
+    // Only reported dimensions belong in the tooltip; zero remains a reported value.
+    // 提示仅展示已报告的维度；零仍然属于已报告数值。
+    const dimensions = ["inputTokens", "uncachedInputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "totalTokens"].filter((key) => record[key] !== null);
+    if (dimensions.length === 0) return null;
+    return h("div", { className: "plugin-statistics-token-cell" },
+      h("div", { className: "plugin-statistics-token-lines" },
+        h("div", null, tokenValue("uncachedInputTokens", record.uncachedInputTokens, "input"), tokenValue("outputTokens", record.outputTokens, "output")),
+        h("div", null, tokenValue("cacheReadTokens", record.cacheReadTokens, "cache"),
+          record.cacheWriteTokens !== null && record.cacheWriteTokens > 0 ? tokenValue("cacheWriteTokens", record.cacheWriteTokens, "write") : null),
       ),
+      h(HelpTooltip, { ariaLabel: text("tokens.details", "Token details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
+        h("strong", null, text("tokens.details", "Token details")),
+        facts(dimensions.map((key) => [text(`tokens.${key}`, key), formatInteger(record[key])])),
+        h("p", null, text("tokens.cacheSeparate", "Cache counts are already included in reported input; do not add them again.")),
+      ) }),
     );
+  }
+
+  // facts renders reported label/value pairs. rows contains nullable values; returns one definition list.
+  // facts 渲染已报告的名称和值。rows 包含可为空的值；返回一个定义列表。
+  function facts(rows) {
+    return h("dl", { className: "plugin-statistics-detail-facts" }, ...rows.filter(([, value]) => value !== null && value !== "").map(([label, value], index) => h(React.Fragment, { key: index }, h("dt", null, label), h("dd", null, value))));
+  }
+
+  // tokenValue uses the actual uncached/input/output/cache facts; unknown counts stay unknown.
+  // tokenValue 使用实际非缓存输入、输出及缓存事实；未知计数保持未知。
+  // key supplies the localized label, value is nullable, kind chooses the SVG; returns one compact value.
+  // key 提供本地化名称，value 可为空，kind 选择图标；返回紧凑数值。
+  function tokenValue(key, value, kind) {
+    if (value === null) return null;
+    return h("span", { className: "plugin-statistics-token-value", "data-kind": kind, title: text(`tokens.${key}`, key) },
+      h("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true },
+        kind === "input" ? h("path", { d: "M12 3v18m-7-7 7 7 7-7" })
+          : kind === "output" ? h("path", { d: "M12 21V3m-7 7 7-7 7 7" })
+            : h("path", { d: kind === "write" ? "M4 4h16v5H4zM6 9v11h12V9M12 11v6m-3-3 3 3 3-3" : "M4 4h16v5H4zM6 9v11h12V9M9 13h6" })),
+      h("span", { "aria-label": text(`tokens.${key}`, key) }, formatInteger(value)));
+  }
+
+  // consumerLabel localizes built-in caller identities; arbitrary agent names retain their exact identity.
+  // consumerLabel 本地化内置调用方身份；自定义智能体名称保留精确身份。
+  // id is the persisted caller key; returns a natural-language consumer name.
+  // id 是持久化调用方键；返回自然语言消费者名称。
+  function consumerLabel(id) {
+    if (id.startsWith("vulcan-code-vce:")) return text("consumer.codeContext", "Code context");
+    return text(`consumer.name.${id}`, interpolate(text("consumer.custom", "Custom caller · {{id}}"), { id }));
+  }
+
+  // operationLabel translates protocol operation identifiers without changing the stored operation.
+  // operationLabel 翻译协议操作标识，不改变存储的操作。
+  // operation is the source key; returns localized prose or an explicitly named custom operation.
+  // operation 是来源键；返回本地化说明或明确标注的自定义操作。
+  function operationLabel(operation) {
+    return text(`operation.${operation}`, interpolate(text("operation.custom", "Custom operation · {{id}}"), { id: operation }));
+  }
+
+  // modelIdentity renders the model and its provider as two lines. record supplies exact identities.
+  // modelIdentity 将模型和供应商分两行显示。record 提供精确身份。
+  // Returns a compact, wrapping model cell with the full values available on hover.
+  // 返回紧凑可换行的模型单元格，悬停可读取完整值。
+  function modelIdentity(record) {
+    return h("div", { className: "plugin-statistics-model-identity" }, h("span", { title: record.modelId }, record.modelId), h("small", { title: record.providerId }, record.providerId));
+  }
+
+  // errorDetails exposes all persisted error facts; absent provider prose is explicitly identified.
+  // errorDetails 展示已保存的全部错误事实；明确说明供应商原文缺失。
+  // attempt is one physical request; returns an error tooltip or a placeholder for a successful request.
+  // attempt 是一次真实请求；返回错误提示，成功请求保留占位标记。
+  function errorDetails(attempt) {
+    if (attempt.status === "succeeded" && !attempt.errorCategory && !attempt.errorCode) return "—";
+    return h(HelpTooltip, { tone: "error", ariaLabel: text("error.details", "Error details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
+      h("strong", null, text(`failure.${attempt.errorCategory}`, text("failure.unknown", "The request did not complete successfully."))),
+      facts([
+        [text("recent.status", "Status"), text(`status.${attempt.status}`, attempt.status)],
+        [text("error.category", "Category"), attempt.errorCategory],
+        [text("error.code", "Error code"), attempt.errorCode],
+        ["HTTP", attempt.httpStatus],
+        ["WebSocket", attempt.websocketCloseCode],
+        [text("daily.operation", "Operation"), operationLabel(attempt.operation)],
+        [text("error.requestId", "Request ID"), attempt.attemptId],
+      ]), h("p", null, text("error.noOriginal", "The statistics record does not contain the original error message.")),
+    ) });
   }
 
   // tokenOverview visualizes reported input/output only; cache dimensions never add to that denominator.
@@ -448,16 +520,24 @@ export function createPluginPanel(sdk) {
 
   // Keep short cost cells while exposing the exact estimate and missing-price reason.
   // 保持费用单元格简短，同时提供精确估算与价格缺失原因。
-  // record is a priced runtime projection; returns an accessible disclosure.
-  // record 是运行时定价投影；返回可访问的详情展开控件。
+  // record is a priced runtime projection; returns the estimate and its exact reference-price breakdown.
+  // record 是运行时定价投影；返回估算和精确参考价格明细。
   function estimateDetails(record) {
-    return h("details", null,
-      h("summary", null, formatReferenceEstimate(record)),
-      h("div", { className: "plugin-control-error-details" },
-        record.estimatedCost === null
+    return h("div", { className: "plugin-statistics-estimate-cell" },
+      record.estimatedCost === null ? null : h("span", null, formatReferenceEstimate(record)),
+      h(HelpTooltip, { ariaLabel: text("cost.details", "Reference cost details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
+        h("strong", null, text("cost.details", "Reference cost details")),
+        record.pricingDetails === null ? h("p", null, text("pricing.unpriced", "Unpriced"))
+          : h(React.Fragment, null, ...record.pricingDetails.dimensions.map((dimension) => h("div", { className: "plugin-statistics-cost-dimension", key: dimension.tokenField },
+            h("strong", null, text(`tokens.${dimension.tokenField}`, dimension.tokenField)),
+            facts([[text("cost.component", "Estimated cost"), dimension.cost === null ? null : `${dimension.cost} ${record.pricingDetails.currency}`],
+              [text("cost.unitPrice", "Unit price"), `${dimension.perMillion} ${record.pricingDetails.currency} / 1M Token`]]))),
+          facts([[text("pricing.source", "Price source"), text(record.pricingMatchStatus === "override_exact" || record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]])),
+        h("div", { className: "plugin-statistics-cost-total" }, facts([[text("cost.total", "Total reference estimate"), record.estimatedCost === null
           ? text(record.pricingMatchStatus === "unmatched" ? "pricing.unpriced" : "pricing.incompleteUsage", "Estimate unavailable")
-          : `${record.estimatedCost} ${record.estimatedCurrency}`,
-      ),
+          : `${record.estimatedCost} ${record.estimatedCurrency}`]])),
+        h("p", null, text("cost.referenceOnly", "Calculated from recorded usage and current reference prices; this is not a provider bill.")),
+      ) }),
     );
   }
 
@@ -625,6 +705,7 @@ export function createPluginPanel(sdk) {
       setSelectedPricingModel(modelId);
       setPricingDraft(editablePrices(pricingSettings, modelId));
       setNotice("");
+      setSettingsError("");
     }, [pricingSettings]);
 
     // persistPricingOverrides saves one complete plugin-owned configuration and refreshes estimates.
@@ -641,6 +722,7 @@ export function createPluginPanel(sdk) {
           setPricingSettings(nextSettings);
           setPricingDraft(editablePrices(nextSettings, selectedPricingModel));
           setNotice(successMessage);
+          setSelectedPricingModel("");
         }
         await currentRefresh.current(true);
       } catch (reason) {
@@ -879,7 +961,7 @@ export function createPluginPanel(sdk) {
             value: consumerFilter,
             options: [
               { value: ALL_CONSUMERS, label: text("consumer.all", "All consumers") },
-              ...consumerIds.map((consumerId) => ({ value: consumerId, label: consumerId })),
+              ...consumerIds.map((consumerId) => ({ value: consumerId, label: consumerLabel(consumerId) })),
             ],
             onValueChange: (value) => { setConsumerFilter(value); setDailyOffset(0); setRecentOffset(0); },
           }) : null,
@@ -1064,15 +1146,21 @@ export function createPluginPanel(sdk) {
               options: ["all", "unpriced", "override", "used"].map((value) => ({ value, label: text(`pricing.filter.${value}`, value) })),
               onValueChange: (value) => { setPricingFilter(value); setPricingPage(0); } }),
           ),
+          h(sdk.components.Dialog, { open: section === "pricing" && selectedPricingModel !== "", onOpenChange: (open) => {
+            // Keep the selected model stable until the pending configuration write finishes.
+            // 配置写入完成前保持所选模型稳定。
+            if (!open && !settingsBusyRef.current) setSelectedPricingModel("");
+          } }, h(sdk.components.DialogContent, { scrollMode: "body-scroll", className: "plugin-statistics-price-dialog" },
           h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
             pricingSettings === null ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices"))
               : !selectedPricingModel ? h("p", { className: "plugin-statistics-privacy", role: "status" }, text("pricing.chooseModel", "Select a model in the table below to edit its prices."))
                 : h(React.Fragment, null,
                   h("div", { className: "plugin-statistics-section-header" },
-                    h("h3", { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
+                    h(sdk.components.DialogTitle, { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
                     h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
                       : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
                   ),
+                  h(sdk.components.DialogDescription, null, text("pricing.description", "Enter all four prices, using zero only for explicitly free dimensions.")),
                   h("div", { className: "plugin-statistics-price-grid" },
                     ...PRICE_FIELDS.map((field) => h("label", { className: "plugin-statistics-price-field", key: field.key },
                       h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
@@ -1094,7 +1182,8 @@ export function createPluginPanel(sdk) {
                     !pricingDraftValid ? h("span", { className: "plugin-statistics-privacy" }, text("pricing.validation", "Enter four non-negative decimal prices.")) : null,
                   ),
                 ),
-          ),
+            settingsError ? h("p", { role: "alert" }, settingsError) : null,
+          ))),
           h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${pricingDirectory.currency}` : ""),
           pricingDirectoryLoading ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices")) : null,
           pricingDirectoryError ? h("div", { role: "alert" }, text("pricing.loadError", "Unable to load model prices"),
@@ -1105,11 +1194,14 @@ export function createPluginPanel(sdk) {
               h("th", null, text("pricing.model", "Model")),
               ...PRICE_FIELDS.map((field) => h("th", { key: field.key }, text(field.messageKey, field.fallback))),
               h("th", null, text("pricing.source", "Source")),
+              h("th", null, text("pricing.actions", "Actions")),
             )),
             h("tbody", null, ...visiblePricingModels.map((entry) => h("tr", { key: entry.modelId, "aria-selected": selectedPricingModel === entry.modelId },
-              h("td", null, h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy, onClick: () => selectPricingModel(entry.modelId) }, entry.modelId)),
+              h("td", null, h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy || pricingSettings === null, onClick: () => selectPricingModel(entry.modelId) }, entry.modelId)),
               ...PRICE_FIELDS.map((field) => h("td", { key: field.key, title: entry.prices === null ? "" : entry.prices[field.key] }, formatMoney(entry.prices === null ? null : entry.prices[field.key], sdk.locale))),
               h("td", null, text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source")),
+              h("td", null, h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy || pricingSettings === null,
+                onClick: () => selectPricingModel(entry.modelId) }, text("pricing.edit", "Edit"))),
             ))),
           )),
           h("div", { className: "plugin-statistics-toolbar" },
@@ -1126,7 +1218,7 @@ export function createPluginPanel(sdk) {
           filteredDaily.length === 0 ? h(EmptyState, {
             title: text("daily.empty", "No daily usage facts"),
           }) : h("div", { className: "plugin-statistics-table-wrap" },
-            h("table", { className: "plugin-statistics-table" },
+            h("table", { className: "plugin-statistics-table plugin-statistics-daily-table" },
               h("thead", null, h("tr", null,
                 h("th", null, text("daily.date", "Date")),
                 h("th", null, text("daily.provider", "Provider / model")),
@@ -1140,9 +1232,9 @@ export function createPluginPanel(sdk) {
                 key: `${row.calendarDate}/${row.providerId}/${row.serviceEntryId}/${row.consumerId}/${row.operation}/${row.modelId}`,
               },
                 h("td", null, row.calendarDate),
-                h("td", null, `${row.providerId} / ${row.modelId}`),
-                h("td", null, row.consumerId),
-                h("td", null, row.operation),
+                h("td", null, modelIdentity(row)),
+                h("td", { className: "plugin-statistics-consumer", title: row.consumerId }, consumerLabel(row.consumerId)),
+                h("td", { className: "plugin-statistics-operation", title: row.operation }, operationLabel(row.operation)),
                 h("td", null, `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`),
                 h("td", null, tokenDetails(row)),
                 h("td", null, estimateDetails(row)),
@@ -1159,7 +1251,7 @@ export function createPluginPanel(sdk) {
           filteredAttempts.length === 0 ? h(EmptyState, {
             title: text("recent.empty", "No physical attempt records"),
           }) : h("div", { className: "plugin-statistics-table-wrap" },
-            h("table", { className: "plugin-statistics-table" },
+            h("table", { className: "plugin-statistics-table plugin-statistics-recent-table" },
               h("thead", null, h("tr", null,
                 h("th", null, text("recent.time", "Time")),
                 h("th", null, text("recent.model", "Provider / model")),
@@ -1170,18 +1262,18 @@ export function createPluginPanel(sdk) {
                 h("th", null, text("recent.error", "Error")),
               )),
               h("tbody", null, ...filteredAttempts.slice(0, MAX_RECENT_ATTEMPTS).map((attempt) => h("tr", { key: attempt.attemptId },
-                h("td", null, formatTimestamp(attempt.terminalAtMs)),
-                h("td", null, `${attempt.providerId} / ${attempt.modelId}`),
-                h("td", null, attempt.consumerId),
+                h("td", null, h("div", { className: "plugin-statistics-time" },
+                  h("span", null, new Intl.DateTimeFormat(sdk.locale, { dateStyle: "short" }).format(new Date(attempt.terminalAtMs))),
+                  h("small", null, new Intl.DateTimeFormat(sdk.locale, { timeStyle: "medium" }).format(new Date(attempt.terminalAtMs))))),
+                h("td", null, modelIdentity(attempt)),
+                h("td", { className: "plugin-statistics-consumer", title: attempt.consumerId }, consumerLabel(attempt.consumerId)),
                 h("td", {
                   className: "plugin-statistics-status",
                   "data-status": attempt.status,
                 }, text(`status.${attempt.status}`, attempt.status)),
                 h("td", null, tokenDetails(attempt)),
                 h("td", null, estimateDetails(attempt)),
-                h("td", null, attempt.errorCategory
-                  ? `${attempt.errorCategory}${attempt.errorCode ? ` / ${attempt.errorCode}` : ""}`
-                  : "—"),
+                h("td", null, errorDetails(attempt)),
               ))),
             ),
           ),

@@ -833,7 +833,7 @@ function SystemProviderTable(props: {
                 const providerName = localizedProviderName(provider.id, provider.display_name, t)
                 return (
                   <TableRow key={provider.id}>
-                    <TableCell data-label={t("settings.providers.table.provider")} className="whitespace-normal py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.provider")} className="whitespace-normal py-3 align-middle">
                       <div className="flex items-center gap-3">
                         <ProviderIcon category={provider.category} className="size-[26px]" providerId={provider.id} />
                         <div className="min-w-0">
@@ -844,47 +844,44 @@ function SystemProviderTable(props: {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell data-label={t("settings.providers.table.details")} className="whitespace-normal py-3 align-top">
-                      <details className="provider-management-details">
-                      <summary>{t("settings.modelExperience.providerDetails")}</summary>
-                      <p className="text-sm text-muted-foreground">{providerDescription}</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <ProviderSummaryTooltip
-                          items={provider.service_entries.map((entry) => entry.display_name)}
-                          label={t("settings.providerSummary.serviceEntries").replace(
-                            "{count}",
-                            String(provider.service_entries.length),
-                          )}
-                          title={t("settings.providerSummary.serviceEntriesTitle")}
-                        />
-                        {/* Protocol summary exists only when the provider declares at least one route. */}
-                        {/* 协议摘要仅在供应商至少声明一条路由时显示。 */}
-                        {protocolNames.length > 0 ? (
-                          <ProviderSummaryTooltip
-                            items={protocolNames}
-                            label={t("settings.providerSummary.protocols").replace(
-                              "{count}",
-                              String(protocolNames.length),
-                            )}
-                            title={t("settings.providerSummary.protocolsTitle")}
-                          />
-                        ) : null}
-                      </div>
-                      </details>
+                    <TableCell data-label={t("settings.providers.table.details")} className="py-3 align-middle">
+                      {/* Portaled details preserve row height and support both pointer hover and keyboard focus. */}
+                      {/* 门户提示保持行高稳定，同时支持鼠标悬停与键盘聚焦。 */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button className="text-muted-foreground" size="sm" type="button" variant="ghost">
+                            {t("settings.modelExperience.providerDetails")}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent className="block w-80 max-w-[calc(100vw-2rem)] space-y-3 p-3" side="bottom" sideOffset={6}>
+                          <div className="space-y-1">
+                            <p className="font-medium">{providerName}</p>
+                            <p>{providerDescription}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="font-medium">{t("settings.providerSummary.serviceEntries").replace("{count}", String(provider.service_entries.length))}</p>
+                            <ul className="space-y-1">{provider.service_entries.map((entry) => <li key={entry.id}>{entry.display_name}</li>)}</ul>
+                          </div>
+                          {protocolNames.length > 0 ? <div className="space-y-1">
+                            <p className="font-medium">{t("settings.providerSummary.protocols").replace("{count}", String(protocolNames.length))}</p>
+                            <ul className="space-y-1">{protocolNames.map((name) => <li key={name}>{name}</li>)}</ul>
+                          </div> : null}
+                        </TooltipContent>
+                      </Tooltip>
                     </TableCell>
-                    <TableCell data-label={t("settings.providers.table.configurationStatus")} className="py-3 text-right align-top">
+                    <TableCell data-label={t("settings.providers.table.configurationStatus")} className="py-3 text-right align-middle">
                       <Badge variant={credentialCount > 0 ? "default" : "secondary"}>
                         {credentialCount > 0 ? t("settings.providers.credentialCount").replace("{count}", String(credentialCount)) : t("settings.providers.notConfigured")}
                       </Badge>
                     </TableCell>
-                    <TableCell data-label={t("settings.providers.table.priority")} className="py-3 align-top">
+                    <TableCell data-label={t("settings.providers.table.priority")} className="py-3 align-middle">
                       <ProviderPriorityEditor
                         busy={props.busyProviderId !== null}
                         onSave={(priority) => props.onSavePriority(provider.id, priority)}
                         value={props.priorities[provider.id] ?? 0}
                       />
                     </TableCell>
-                    <TableCell data-label={t("settings.providers.table.operation")} className="py-3 text-right align-top">
+                    <TableCell data-label={t("settings.providers.table.operation")} className="py-3 text-right align-middle">
                       <Button
                         disabled={props.busyProviderId !== null}
                         onClick={() => props.onAddCredential(provider.id)}
@@ -1958,47 +1955,6 @@ function discoveryStateTranslationSegment(
   state: PublicAiCustomProviderProbeResult["status"]["state"],
 ): "notChecked" | "ready" | "empty" | "unsupported" | "authenticationFailed" | "rateLimited" | "temporarilyUnavailable" | "invalidResponse" | "stale" | "failed" {
   return discoveryStateTranslationSegments[state]
-}
-
-// ProviderSummaryTooltip renders one compact count whose hover card lists exact values.
-// ProviderSummaryTooltip 渲染一个紧凑数量摘要，并在悬停卡片中列出精确值。
-//
-// Parameters
-// 参数
-// `label` is the compact summary, `title` names the collection, and `items` are exact entries.
-// `label` 是紧凑摘要，`title` 是集合名称，`items` 是精确条目。
-//
-// Returns
-// 返回值
-// A keyboard-focusable, hover-persistent tooltip trigger.
-// 返回可通过键盘聚焦且允许鼠标驻留的 Tooltip 触发器。
-function ProviderSummaryTooltip(props: {
-  items: string[]
-  label: string
-  title: string
-}) {
-  return (
-    <Tooltip delayDuration={500}>
-      <TooltipTrigger asChild>
-        <button
-          className="inline-flex h-6 items-center rounded-full border border-border px-2.5 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          type="button"
-        >
-          {props.label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="block max-w-md space-y-2 px-3 py-2" side="bottom" sideOffset={6}>
-        <p className="font-medium">{props.title}</p>
-        <div className="flex max-w-sm flex-wrap gap-1.5">
-          {props.items.map((item) => (
-            <span className="rounded border border-background/25 px-1.5 py-0.5" key={item}>
-              {item}
-            </span>
-          ))}
-        </div>
-      </TooltipContent>
-    </Tooltip>
-  )
 }
 
 // uniqueProtocolNames returns the stable unique protocol labels declared by one provider.

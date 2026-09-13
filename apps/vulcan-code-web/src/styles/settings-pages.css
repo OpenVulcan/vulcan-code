@@ -58,10 +58,90 @@
 
 .credential-management-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   justify-content: start;
+  gap: 12px;
+}
+
+/* Keep one account per row and measure only card content for its responsive structure. */
+/* 每行保留一个账号，仅用卡片内容宽度决定内部响应式结构。 */
+.credential-account-card {
+  container: credential-account / inline-size;
+}
+
+.credential-account-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.6fr);
+  gap: 24px;
+  padding: 16px;
+}
+
+.credential-account-body .credential-account-identity {
+  align-content: start;
+  gap: 20px;
+  padding: 0;
+}
+
+.credential-account-enabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.credential-account-body .credential-account-usage {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  padding: 0 0 0 24px;
+  border-left: 1px solid var(--border);
+}
+
+.credential-account-usage [data-slot="credential-usage-summary"] {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* Preserve the two-row quota layout: monthly first, purchased and free credits side by side. */
+/* 保留双行额度结构：每月额度在上，购买与赠送额度在下一行并排。 */
+.credential-account-usage [data-slot="credential-credit-balances"] {
+  column-gap: 12px;
+}
+
+.credential-account-card .credential-account-footer {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 8px 12px;
+}
+
+.credential-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.credential-account-error {
+  margin: 0 16px 12px;
+}
+
+@container credential-account (max-width: 600px) {
+  .credential-account-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .credential-account-body .credential-account-usage {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    padding: 12px 0 0;
+  }
 }
 
 .provider-credential-select {
@@ -223,7 +303,9 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow: visible;
+  /* This bounded pane owns scrolling; visible overflow is clipped by the workspace shell. */
+  /* 此限高正文负责滚动；可见溢出会被工作区外壳裁切。 */
+  overflow: auto;
 }
 
 .model-list-content {
@@ -716,8 +798,19 @@
 
 .context-basics-node-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+  max-width: 480px;
+}
+
+/* Keep each fixed node on its own row, with the unit immediately after its editable value. */
+/* 每个固定节点独占一行，单位紧随可编辑数值。 */
+.context-basics-node-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
 }
 
 .provider-management-directory-content,
@@ -781,7 +874,11 @@
 }
 
 .model-list-layout .settings-model-toolbar {
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 180px) minmax(100px, 130px);
+  grid-template-columns: minmax(0, 1fr) 132px 120px;
+}
+
+.model-list-layout .settings-model-toolbar > [data-slot="select-trigger"] {
+  width: 100%;
 }
 
 @container (max-width: 720px) {
@@ -793,21 +890,6 @@
   .model-list-surface .settings-model-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .model-list-surface .settings-model-search { grid-column: 1 / -1; }
   .model-list-surface .settings-model-toolbar > [data-slot="select-trigger"] { width: 100%; min-width: 0; }
-}
-
-.provider-management-details > summary,
-.settings-model-route-details > summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  padding: 5px 0;
-}
-
-.provider-management-details > summary:focus-visible,
-.settings-model-route-details > summary:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 3px;
 }
 
 .settings-model-route-accounts {
@@ -840,12 +922,89 @@
   gap: 3px;
 }
 
-.model-list-layout .settings-model-switches {
-  width: 310px;
+/* Align independent usage controls without repeating labels or expanding technical details in rows. */
+/* 将独立用途控件按列对齐，不在模型行反复堆叠标签或展开技术详情。 */
+.settings-model-catalog {
+  container-name: model-catalog;
+  container-type: inline-size;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.settings-model-catalog-heading,
+.settings-model-catalog-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
+  grid-template-columns: minmax(0, 1fr) 78px 96px 78px 104px;
+  gap: 12px;
   align-items: center;
+  padding: 16px;
+}
+
+.settings-model-catalog-heading {
+  padding-block: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: center;
+}
+
+.settings-model-catalog-heading > :first-child { text-align: left; }
+.settings-model-catalog-row + .settings-model-catalog-row { border-top: 1px solid var(--border); }
+.settings-model-catalog-row .settings-model-title-line { display: block; }
+.settings-model-catalog-row .settings-model-title-line strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-model-catalog-row .settings-model-id {
+  max-width: 100%;
+  font-size: 11px;
+}
+
+.settings-model-catalog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.settings-model-catalog-meta > span + span { border-left: 1px solid var(--border); padding-left: 10px; }
+.settings-model-purpose-cell { display: flex; align-items: center; justify-content: center; color: var(--muted-foreground); min-width: 0; }
+.settings-model-purpose-label { display: none; }
+.settings-model-catalog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
+.settings-model-catalog-actions > button { padding-inline: 9px; font-size: 12px; }
+
+/* Keep route metadata complete in a dedicated window with one scrollable body. */
+/* 将完整路由元数据放在独立窗口中，正文仅使用一个滚动区域。 */
+.settings-model-access-routes { min-width: 0; }
+.settings-model-access-route { padding-block: 16px; }
+.settings-model-access-route + .settings-model-access-route { border-top: 1px solid var(--border); }
+.settings-model-access-route-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.settings-model-access-route-heading > div:first-child { display: grid; gap: 3px; flex: 1; min-width: 160px; }
+.settings-model-access-route-heading > div:first-child > span { color: var(--muted-foreground); font-size: 12px; }
+.settings-model-access-metadata { display: grid; gap: 10px; margin: 16px 0; }
+.settings-model-access-metadata > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+.settings-model-access-metadata dt,
+.settings-model-access-accounts > span { color: var(--muted-foreground); font-size: 12px; }
+.settings-model-access-metadata dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.settings-model-access-accounts .settings-model-route-accounts { padding-inline: 0; }
+
+@container model-catalog (max-width: 660px) {
+  .settings-model-catalog-heading { display: none; }
+  .settings-model-catalog-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 12px; }
+  .settings-model-catalog-row .settings-model-row-main { grid-column: 1 / -1; }
+  .settings-model-purpose-cell { flex-direction: column; gap: 9px; align-self: start; }
+  .settings-model-purpose-label { display: block; font-size: 11px; text-align: center; }
+  .settings-model-catalog-actions { grid-column: 1 / -1; border-top: 1px solid var(--border); padding-top: 6px; }
 }
 
 .settings-model-unavailable-admissions {
@@ -857,7 +1016,6 @@
 
 @container (max-width: 560px) {
   .model-list-surface .settings-model-row { flex-direction: column; }
-  .model-list-surface .settings-model-switches { width: 100%; }
 }
 
 .model-capability-form {
