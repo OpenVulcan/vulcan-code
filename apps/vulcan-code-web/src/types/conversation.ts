@@ -474,6 +474,22 @@ export interface SessionProviderUsageSummary {
   // Cumulative usable usage across terminal requests.
   // 全部终态请求的可用用量累计值。
   cumulativeUsage?: SessionProviderUsageTokenSummary | null;
+  // Paired timing and output facts from measured session-owned physical requests.
+  // 会话所属已测物理请求的配对计时与输出事实。
+  outputTiming?: {
+    // Number of measured requests.
+    // 已测请求数量。
+    requestCount: number;
+    // Summed dispatch-to-first-token milliseconds.
+    // 分发至首 Token 的累计毫秒数。
+    firstTokenLatencyMs: number;
+    // Summed first-token-to-completion milliseconds for the same requests.
+    // 同一批请求首 Token 至完成的累计毫秒数。
+    outputDurationMs: number;
+    // Output tokens from exactly the measured requests.
+    // 仅属于已测请求的输出 Token 数。
+    outputTokens: number;
+  } | null;
   // Latest physical request lifecycle.
   // 最近一次物理请求生命周期。
   latestCall?: SessionProviderUsageCallSummary | null;

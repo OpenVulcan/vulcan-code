@@ -16,7 +16,11 @@ use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Current native provider-usage schema revision.
 /// 当前原生供应商用量 Schema 修订号。
-pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 7;
+pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 8;
+
+/// Serializes additive schema upgrades independently of usage writes.
+/// 独立于用量写入串行化增量结构升级。
+static PROVIDER_USAGE_SCHEMA_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// Process-local serialization lock for attempt insertion followed by daily rebuild.
 /// attempt 插入后每日重建使用的进程内串行锁。
@@ -103,6 +107,9 @@ pub struct ProviderUsageAttemptRecord {
     /// First semantic output timestamp in Unix milliseconds.
     /// 首个语义输出 Unix 毫秒时间戳。
     pub first_semantic_at_ms: Option<i64>,
+    /// First observed nonempty text or reasoning token timestamp; absent for historical or nonstreaming calls.
+    /// 首个非空文本或推理 Token 的观测时间；历史或非流式调用可为空。
+    pub first_token_at_ms: Option<i64>,
     /// Terminal timestamp in Unix milliseconds.
     /// 终态 Unix 毫秒时间戳。
     pub terminal_at_ms: i64,
@@ -297,6 +304,12 @@ pub struct ProviderUsageDailySummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsageAttemptSummary {
+    /// Exact dispatch timestamp; absent when dispatch was not observed.
+    /// 精确分派时间；未观测到分派时为空。
+    pub dispatched_at_ms: Option<i64>,
+    /// Exact first text/reasoning token timestamp; never inferred from the first semantic event.
+    /// 精确首文本或推理 Token 时间；绝不从首语义事件推测。
+    pub first_token_at_ms: Option<i64>,
     /// Stable physical attempt identity.
     /// 稳定物理 attempt 标识。
     pub attempt_id: String,
@@ -445,13 +458,15 @@ pub async fn ensure_provider_usage_schema(host_runtime: &HostRuntimeHandle) -> R
 ///
 /// # Returns
 /// 返回值
-/// Returns unit after the tables and indexes exist. No `ALTER` runs here: the v1 schema is created whole,
-/// and pre-v1 layouts are neither detected nor upgraded.
-/// 表与索引存在后返回空值。此处不执行任何 `ALTER`：v1 结构被整体创建，v1 之前的布局既不被探测也不被升级。
+/// Returns unit after creation or the nullable first-token upgrade; historical timestamps are never fabricated.
+/// 创建或完成可空首 Token 字段升级后返回空值；绝不编造历史时间戳。
 async fn ensure_provider_usage_schema_at(
     host_runtime: &HostRuntimeHandle,
     logical: LogicalDatabase,
 ) -> Result<(), String> {
+    // Prevent concurrent initialization from racing the nullable column upgrade.
+    // 防止并发初始化竞争可空字段升级。
+    let _schema_guard = PROVIDER_USAGE_SCHEMA_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
     local_sql::execute_script_async(
         &host_runtime.local,
         logical,
@@ -478,6 +493,7 @@ CREATE TABLE IF NOT EXISTS provider_usage_attempts_v3 (
     dispatched_at_ms INTEGER,
     headers_at_ms INTEGER,
     first_semantic_at_ms INTEGER,
+    first_token_at_ms INTEGER,
     terminal_at_ms INTEGER NOT NULL,
     status TEXT NOT NULL,
     dispatched INTEGER NOT NULL,
@@ -577,6 +593,17 @@ VALUES ('health_status', 'ready', 0);
     )
     .await
     .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
+    // Existing revision-seven databases retain every row with unknown first-token timing.
+    // 已有第七版数据库保留全部记录，其首 Token 时间保持未知。
+    let columns = local_sql::query_json_async(&host_runtime.local, logical,
+        "PRAGMA table_info(provider_usage_attempts_v3);", vec![]).await
+        .map_err(|error| format!("读取供应商用量字段失败：{error}"))?;
+    let columns = decode_query_rows::<serde_json::Value>(&columns.json_data)?;
+    if !columns.iter().any(|column| column["name"].as_str() == Some("first_token_at_ms")) {
+        local_sql::execute_script_async(&host_runtime.local, logical,
+            "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN first_token_at_ms INTEGER;", vec![]).await
+            .map_err(|error| format!("升级供应商首 Token 时间字段失败：{error}"))?;
+    }
     write_provider_usage_schema_revision(host_runtime, logical).await?;
     Ok(())
 }
@@ -645,6 +672,7 @@ LIMIT 500;
         LogicalDatabase::SystemStatistics,
         r#"
 SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
+       attempts.dispatched_at_ms, attempts.first_token_at_ms,
        attempts.provider_id, attempts.service_entry_id,
        attempts.mapped_model AS model_id, attempts.transport,
        attempts.http_status, attempts.websocket_close_code,
@@ -732,6 +760,12 @@ LIMIT 200;
 /// 解码一条供应商计费分区在 SQLite 中保持 JSON 的近期 attempt 行。
 #[derive(Debug, Deserialize)]
 struct ProviderUsageAttemptDashboardRow {
+    /// Exact nullable timing checkpoints for computing latency and generation duration.
+    /// 用于计算延迟和生成时长的精确可空时间点。
+    dispatched_at_ms: Option<i64>,
+    /// First observed token timestamp, independent of headers and semantic lifecycle events.
+    /// 首 Token 观测时间，与响应头和语义生命周期事件独立。
+    first_token_at_ms: Option<i64>,
     /// Stable physical attempt identity.
     /// 稳定物理 attempt 标识。
     attempt_id: String,
@@ -792,6 +826,8 @@ impl ProviderUsageAttemptDashboardRow {
             None => Vec::new(),
         };
         Ok(ProviderUsageAttemptSummary {
+            dispatched_at_ms: self.dispatched_at_ms,
+            first_token_at_ms: self.first_token_at_ms,
             attempt_id: self.attempt_id,
             consumer_id: self.consumer_id,
             operation: self.operation,
@@ -949,12 +985,12 @@ INSERT OR IGNORE INTO provider_usage_attempts_v3 (
     input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens,
     output_tokens, reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
     usage_profile_id, usage_profile_revision, usage_source_paths_json,
-    usage_validation_flags_json, provider_billing_details_json, calendar_date
+    usage_validation_flags_json, provider_billing_details_json, calendar_date, first_token_at_ms
 ) SELECT
     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
     ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44,
-    ?45, ?46, ?47, ?48
+    ?45, ?46, ?47, ?48, ?49
 WHERE NOT EXISTS (
     SELECT 1
     FROM provider_usage_attempts_v3 AS existing
@@ -1012,6 +1048,7 @@ WHERE NOT EXISTS (
                 optional_text(record.usage_validation_flags_json.clone()),
                 optional_text(record.provider_billing_details_json.clone()),
                 text(record.calendar_date.clone()),
+                optional_integer(record.first_token_at_ms),
             ]).collect::<Vec<Vec<SqliteValue>>>(),
     ).await
         .map_err(|error| format!("写入供应商 attempt 事实失败：{error}"))?;
@@ -1556,6 +1593,7 @@ mod tests {
             dispatched_at_ms: Some(1),
             headers_at_ms: Some(2),
             first_semantic_at_ms: None,
+            first_token_at_ms: None,
             terminal_at_ms: 3,
             status: String::from("succeeded"),
             dispatched: true,
@@ -1607,6 +1645,8 @@ mod tests {
     #[test]
     fn attempt_dashboard_row_decodes_token_partitions() {
         let row = ProviderUsageAttemptDashboardRow {
+            dispatched_at_ms: None,
+            first_token_at_ms: None,
             attempt_id: String::from("attempt-1"),
             consumer_id: String::from("vmm"),
             operation: String::from("compact"),
@@ -1652,6 +1692,8 @@ mod tests {
     #[test]
     fn attempt_dashboard_row_rejects_corrupt_billing_json() {
         let mut row = ProviderUsageAttemptDashboardRow {
+            dispatched_at_ms: None,
+            first_token_at_ms: None,
             attempt_id: String::from("attempt-1"),
             consumer_id: String::from("webui"),
             operation: String::from("conversation"),

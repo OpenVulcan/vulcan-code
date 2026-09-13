@@ -1222,6 +1222,12 @@ export interface ProviderUsageBillingDetail {
 // ProviderUsageAttemptSummary exposes one recent physical attempt and its frozen pricing source.
 // ProviderUsageAttemptSummary 公开一条近期物理 attempt 及其冻结价格来源。
 export interface ProviderUsageAttemptSummary {
+  /** Exact physical dispatch timestamp; null when unobserved.
+   * 精确物理分派时间；未观测时为空。 */
+  dispatchedAtMs: number | null;
+  /** Exact first text/reasoning token timestamp, independent of transport headers.
+   * 精确首文本或推理 Token 时间，与传输响应头独立。 */
+  firstTokenAtMs: number | null;
   attemptId: string;
   consumerId: string;
   operation: string;

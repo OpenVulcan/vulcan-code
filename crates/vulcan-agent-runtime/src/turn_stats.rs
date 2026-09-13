@@ -264,12 +264,9 @@ pub fn build_session_turn_stats_from_state_with_segments(
         }
         _ => None,
     };
-    stats.output_tokens_per_second = stats.duration_ms.and_then(|duration_ms| {
-        if duration_ms == 0 || stats.output_tokens == 0 {
-            return None;
-        }
-        Some(stats.output_tokens as f64 / (duration_ms as f64 / 1000.0))
-    });
+    // Legacy turn records lack paired per-request first-token checkpoints; elapsed turn time is not output time.
+    // 旧回合记录缺少配对的逐请求首 Token 时间点；整轮耗时不等于输出时长。
+    stats.output_tokens_per_second = None;
 
     Some(stats)
 }

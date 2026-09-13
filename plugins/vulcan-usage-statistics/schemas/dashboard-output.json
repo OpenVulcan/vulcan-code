@@ -157,7 +157,12 @@
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
         "pricingDetails": { "$ref": "#/$defs/pricingDetails" },
-        "aggregateRevision": { "type": "integer", "minimum": 0 }
+        "aggregateRevision": { "type": "integer", "minimum": 0 },
+        "requestDurationMs": { "type": ["number", "null"], "minimum": 0 },
+        "firstTokenLatencyMs": { "type": ["number", "null"], "minimum": 0 },
+        "outputDurationMs": { "type": ["number", "null"], "minimum": 0 },
+        "outputTokensPerSecond": { "type": ["number", "null"], "minimum": 0 },
+        "timedAttemptCount": { "type": "integer", "minimum": 0 }
       },
       "required": [
         "calendarDate",
@@ -182,7 +187,7 @@
         "pricingRevision",
         "pricingSourceId",
         "pricingDetails",
-        "aggregateRevision"
+        "aggregateRevision", "requestDurationMs", "firstTokenLatencyMs", "outputDurationMs", "outputTokensPerSecond", "timedAttemptCount"
       ],
       "additionalProperties": false
     },
@@ -259,7 +264,12 @@
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
         "pricingDetails": { "$ref": "#/$defs/pricingDetails" },
-        "terminalAtMs": { "type": "integer" }
+        "terminalAtMs": { "type": "integer" },
+        "requestDurationMs": { "type": ["number", "null"], "minimum": 0 },
+        "firstTokenLatencyMs": { "type": ["number", "null"], "minimum": 0 },
+        "outputDurationMs": { "type": ["number", "null"], "minimum": 0 },
+        "outputTokensPerSecond": { "type": ["number", "null"], "minimum": 0 },
+        "timedAttemptCount": { "type": "integer", "minimum": 0 }
       },
       "required": [
         "attemptId",
@@ -291,7 +301,7 @@
         "pricingRevision",
         "pricingSourceId",
         "pricingDetails",
-        "terminalAtMs"
+        "terminalAtMs", "requestDurationMs", "firstTokenLatencyMs", "outputDurationMs", "outputTokensPerSecond", "timedAttemptCount"
       ],
       "additionalProperties": false
     },

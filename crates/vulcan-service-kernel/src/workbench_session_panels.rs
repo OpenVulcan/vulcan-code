@@ -6,7 +6,7 @@ use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegi
 use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
 use vulcan_service_api::{
     ConversationAttentionSummary, ConversationSummary, SessionProviderUsageCallSummary,
-    SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
+    SessionProviderUsageSummary, SessionProviderUsageTokenSummary, SessionProviderOutputTiming,
 };
 use vulcan_session_core::v1::{
     AggregatedUsage, ApiCallStatus, ApiErrorCategory, ApiPurposeKind, ApiStatsEvent,
@@ -86,9 +86,52 @@ pub(crate) fn session_provider_usage_summary_from_v1_document(
         unknown_usage_call_count,
         last_usage,
         cumulative_usage,
+        output_timing: session_provider_output_timing(&terminal_stats)?,
         latest_call,
         usage_revision: document.memory_revision(),
     }))
+}
+
+/// Aggregates output tokens and timing from the same canonical terminal request cohort.
+/// 从同一组规范终态请求汇总输出 Token 与计时。
+/// `stats` contains session-owned API facts; returns no measurement when checkpoints are missing.
+/// `stats` 包含会话所属 API 事实；计时点缺失时不返回测量结果。
+/// Checked sums return an explicit error on overflow rather than publishing a distorted speed.
+/// 累加溢出时返回明确错误，避免发布失真的速度。
+fn session_provider_output_timing(
+    stats: &[&ApiStatsEvent],
+) -> Result<Option<SessionProviderOutputTiming>, String> {
+    // Keep measured tokens separate from session-wide usage containing unmeasured history.
+    // 将已测 Token 与包含未测历史的会话总用量分开保存。
+    let mut timing = SessionProviderOutputTiming::default();
+    for stats in stats {
+        // These optional checkpoints and output counts are defined by the V1 API contract.
+        // 这些可选计时点和输出计数由 V1 API 契约定义。
+        let (Some(start), Some(first), Some(end), Some(output)) = (
+            stats.timing.dispatched_at_ms,
+            stats.timing.first_token_at_ms,
+            stats.timing.completed_at_ms,
+            stats.usage.output_tokens,
+        ) else {
+            continue;
+        };
+        if first < start || end <= first {
+            continue;
+        }
+        // Ordered signed timestamps can span the entire u64 duration range without wrapping.
+        // 有序有符号时间戳可使用完整 u64 时长范围，避免相减回绕。
+        let first_latency = first.abs_diff(start);
+        let output_duration = end.abs_diff(first);
+        timing.request_count = timing.request_count.checked_add(1)
+            .ok_or("Session Provider timing request count overflow")?;
+        timing.first_token_latency_ms = timing.first_token_latency_ms.checked_add(first_latency)
+            .ok_or("Session Provider first-token latency overflow")?;
+        timing.output_duration_ms = timing.output_duration_ms.checked_add(output_duration)
+            .ok_or("Session Provider output duration overflow")?;
+        timing.output_tokens = timing.output_tokens.checked_add(output)
+            .ok_or("Session Provider measured output tokens overflow")?;
+    }
+    Ok((timing.request_count > 0).then_some(timing))
 }
 
 /// Projects every currently registered session without opening cold session storage.

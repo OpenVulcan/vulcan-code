@@ -400,11 +400,11 @@ export function createPluginPanel(sdk) {
   // 渲染精确用量维度，以及缓存读取占已报告输入的比例。
   // record is a daily or attempt projection; returns two icon rows and exact hover details.
   // record 是每日或请求投影；返回两行图标数值及精确悬停详情。
-  function tokenDetails(record) {
+  function tokenDetails(record, aggregate = false) {
     // Only reported dimensions belong in the tooltip; zero remains a reported value.
     // 提示仅展示已报告的维度；零仍然属于已报告数值。
     const dimensions = ["inputTokens", "uncachedInputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "totalTokens"].filter((key) => record[key] !== null);
-    if (dimensions.length === 0) return null;
+    if (dimensions.length === 0 && record.requestDurationMs === null) return null;
     return h("div", { className: "plugin-statistics-token-cell" },
       h("div", { className: "plugin-statistics-token-lines" },
         h("div", null, tokenValue("uncachedInputTokens", record.uncachedInputTokens, "input"), tokenValue("outputTokens", record.outputTokens, "output")),
@@ -414,8 +414,49 @@ export function createPluginPanel(sdk) {
       h(HelpTooltip, { ariaLabel: text("tokens.details", "Token details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
         h("strong", null, text("tokens.details", "Token details")),
         facts(dimensions.map((key) => [text(`tokens.${key}`, key), formatInteger(record[key])])),
+        h("div", { className: "plugin-statistics-cost-total" }, facts([
+          [text(aggregate ? "timing.averageRequest" : "timing.request", "Request duration"), record.requestDurationMs === null ? null : `${(record.requestDurationMs / 1000).toFixed(3)} s`],
+          [text(aggregate ? "timing.averageFirstToken" : "timing.firstToken", "First-token latency"), record.firstTokenLatencyMs === null ? null : `${(record.firstTokenLatencyMs / 1000).toFixed(3)} s`],
+          [text(aggregate ? "timing.totalOutput" : "timing.output", "Output duration"), record.outputDurationMs === null ? null : `${(record.outputDurationMs / 1000).toFixed(3)} s`],
+          [text("timing.speed", "Output speed"), record.outputTokensPerSecond === null ? null : `${record.outputTokensPerSecond.toFixed(2)} tokens/s`],
+          [text("timing.samples", "Measured requests"), record.timedAttemptCount > 0 ? formatInteger(record.timedAttemptCount) : null],
+        ])),
+        h("p", null, text("timing.formula", "Output speed uses paired output tokens and completion minus first-token duration; missing timing is not estimated.")),
         h("p", null, text("tokens.cacheSeparate", "Cache counts are already included in reported input; do not add them again.")),
       ) }),
+    );
+  }
+
+  // Format measured milliseconds for compact latency rows; return seconds or minutes plus seconds.
+  // 格式化实测毫秒数用于紧凑延迟行；返回秒或分钟加秒。
+  // milliseconds is a known non-negative interval, never a substituted missing measurement.
+  // milliseconds 是已知非负区间，绝不用于代替缺失测量。
+  function latencyDuration(milliseconds) {
+    // Preserve subsecond precision for short model output intervals.
+    // 为较短的模型输出区间保留毫秒精度。
+    const seconds = milliseconds / 1000;
+    return seconds < 60 ? `${seconds.toFixed(seconds < 1 ? 3 : 2)}s` : `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(2)}s`;
+  }
+
+  // Render first-token latency and full request duration, with generation speed beside duration.
+  // 渲染首 Token 延迟和完整请求耗时，在耗时旁展示生成速度。
+  // record is a schema-validated attempt or daily projection; aggregate selects average labels.
+  // record 是通过 Schema 校验的请求或每日投影；aggregate 选择平均值标签。
+  // Returns a compact two-line latency cell, or an explicit unrecorded state for historical data.
+  // 返回紧凑双行延迟单元格，历史数据缺失时返回明确的未记录状态。
+  function latencyDetails(record, aggregate = false) {
+    if (record.requestDurationMs === null && record.firstTokenLatencyMs === null) {
+      return h("span", { className: "plugin-statistics-latency-unknown" }, text("timing.unrecorded", "Not recorded"));
+    }
+    return h("div", { className: "plugin-statistics-latency" },
+      h("div", null,
+        h("span", null, text(aggregate ? "timing.averageFirstShort" : "timing.firstShort", "First token")),
+        h("span", null, record.firstTokenLatencyMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.firstTokenLatencyMs))),
+      h("div", null,
+        h("span", null, text(aggregate ? "timing.averageTotalShort" : "timing.totalShort", "Total")),
+        h("span", null,
+          record.requestDurationMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.requestDurationMs),
+          record.outputTokensPerSecond === null ? null : ` (${record.outputTokensPerSecond.toFixed(1)} t/s)`)),
     );
   }
 
@@ -1226,6 +1267,7 @@ export function createPluginPanel(sdk) {
                 h("th", null, text("daily.operation", "Operation")),
                 h("th", null, text("daily.attempts", "Attempts")),
                 h("th", null, text("daily.tokens", "Tokens")),
+                h("th", null, text("timing.column", "Latency")),
                 h("th", null, text("daily.cost", "Reference estimate")),
               )),
               h("tbody", null, ...filteredDaily.slice(0, MAX_DAILY_ROWS).map((row) => h("tr", {
@@ -1236,7 +1278,8 @@ export function createPluginPanel(sdk) {
                 h("td", { className: "plugin-statistics-consumer", title: row.consumerId }, consumerLabel(row.consumerId)),
                 h("td", { className: "plugin-statistics-operation", title: row.operation }, operationLabel(row.operation)),
                 h("td", null, `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`),
-                h("td", null, tokenDetails(row)),
+                h("td", null, tokenDetails(row, true)),
+                h("td", null, latencyDetails(row, true)),
                 h("td", null, estimateDetails(row)),
               ))),
             ),
@@ -1258,6 +1301,7 @@ export function createPluginPanel(sdk) {
                 h("th", null, text("recent.consumer", "Consumer")),
                 h("th", null, text("recent.status", "Status")),
                 h("th", null, text("recent.tokens", "Tokens")),
+                h("th", null, text("timing.column", "Latency")),
                 h("th", null, text("recent.cost", "Reference estimate")),
                 h("th", null, text("recent.error", "Error")),
               )),
@@ -1272,6 +1316,7 @@ export function createPluginPanel(sdk) {
                   "data-status": attempt.status,
                 }, text(`status.${attempt.status}`, attempt.status)),
                 h("td", null, tokenDetails(attempt)),
+                h("td", null, latencyDetails(attempt)),
                 h("td", null, estimateDetails(attempt)),
                 h("td", null, errorDetails(attempt)),
               ))),

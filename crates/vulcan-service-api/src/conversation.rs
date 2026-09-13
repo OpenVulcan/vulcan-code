@@ -762,6 +762,25 @@ pub struct SessionProviderUsageCallSummary {
     pub error_code: Option<String>,
 }
 
+/// Paired physical request measurements used to calculate session output performance.
+/// 用于计算会话输出性能的配对物理请求测量。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProviderOutputTiming {
+    /// Number of requests with known output tokens and valid timing checkpoints.
+    /// 输出 Token 已知且计时点有效的请求数量。
+    pub request_count: u64,
+    /// Sum of dispatch-to-first-token intervals in milliseconds.
+    /// 分发至首 Token 区间的累计毫秒数。
+    pub first_token_latency_ms: u64,
+    /// Sum of first-token-to-completion intervals for the same requests.
+    /// 同一批请求从首 Token 至完成区间的累计毫秒数。
+    pub output_duration_ms: u64,
+    /// Output tokens reported by exactly the measured request cohort.
+    /// 仅由已测请求样本组报告的输出 Token 数。
+    pub output_tokens: u64,
+}
+
 /// Projects per-session Provider request counts and token usage at every physical request boundary.
 /// 在每个物理请求边界投影会话级 Provider 请求计数与 Token 用量。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -784,6 +803,10 @@ pub struct SessionProviderUsageSummary {
     /// 全部终态请求的可用用量累计值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cumulative_usage: Option<SessionProviderUsageTokenSummary>,
+    /// Optional measured performance; historical missing checkpoints are never estimated.
+    /// 可选实测性能；历史缺失计时点绝不估算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_timing: Option<SessionProviderOutputTiming>,
     /// Latest physical request lifecycle projection.
     /// 最近一次物理请求的生命周期投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]

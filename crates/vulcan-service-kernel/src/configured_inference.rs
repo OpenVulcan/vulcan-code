@@ -978,6 +978,9 @@ struct InternalInferenceTelemetryFacts {
     /// 精确终态计时。
     started_at_unix_ms: u64,
     first_response_at_unix_ms: Option<u64>,
+    /// First nonempty text or reasoning delta, distinct from transport and item lifecycle events.
+    /// 首个非空文本或推理增量，与传输和响应项生命周期事件分开记录。
+    first_token_at_unix_ms: Option<u64>,
     duration_ms: u64,
     /// Number of provider retries completed after the initial attempt.
     /// 初始尝试后已完成的供应商重试次数。
@@ -1108,6 +1111,7 @@ impl InternalInferenceTelemetryFacts {
     /// Copies exact transport facts from the active physical-attempt record.
     /// 从活动真实尝试记录复制精确传输事实。
     fn with_transport_from(mut self, source: &Self) -> Self {
+        self.first_token_at_unix_ms = source.first_token_at_unix_ms;
         self.transport = source.transport;
         self.dispatched_at_ms = source.dispatched_at_ms;
         self.headers_at_ms = source.headers_at_ms;
@@ -1121,6 +1125,13 @@ impl InternalInferenceTelemetryFacts {
     /// Records exact transport facts emitted by the physical provider dispatcher.
     /// 记录真实供应商分派器发出的精确传输事实。
     fn observe_transport_event(&mut self, event: &AiStreamEvent) {
+        // Empty deltas and response/tool start events cannot establish token generation.
+        // 空增量及响应或工具开始事件不能证明 Token 已开始生成。
+        if self.first_token_at_unix_ms.is_none()
+            && matches!(event, AiStreamEvent::ResponseTextDelta { delta, .. } | AiStreamEvent::ReasoningDelta { delta, .. } if !delta.is_empty())
+        {
+            self.first_token_at_unix_ms = Some(current_unix_millis());
+        }
         let AiStreamEvent::TransportObserved {
             transport,
             dispatched_at_ms,
@@ -1282,6 +1293,7 @@ impl InternalInferenceTelemetryFacts {
             route_revision: selection.route_revision.clone(),
             started_at_unix_ms,
             first_response_at_unix_ms: None,
+            first_token_at_unix_ms: None,
             duration_ms,
             retry_count: 0,
             transport: None,
@@ -1353,6 +1365,7 @@ impl InternalInferenceTelemetryFacts {
             route_revision: route.route_revision.clone(),
             started_at_unix_ms,
             first_response_at_unix_ms: None,
+            first_token_at_unix_ms: None,
             duration_ms,
             retry_count: 0,
             transport: None,
@@ -1856,7 +1869,7 @@ impl ConfiguredInferenceService {
     /// Returns no value; a missing first response produces no fabricated event.
     /// 不返回值；缺少首响应时不会虚构事件。
     fn emit_internal_inference_first_response(&self, facts: &InternalInferenceTelemetryFacts) {
-        let Some(first_response_at_unix_ms) = facts.first_response_at_unix_ms else {
+        let Some(first_response_at_unix_ms) = facts.first_token_at_unix_ms else {
             return;
         };
         let Some(runtime) = self.telemetry_runtime.clone() else {
@@ -4038,7 +4051,13 @@ impl ConfiguredInferenceService {
                                 }
                             }
                         };
+                        // Capture the first-token transition independently of the first semantic response.
+                        // 独立于首个语义响应捕获首 Token 状态变化。
+                        let token_was_observed = active_attempt_facts.first_token_at_unix_ms.is_some();
                         active_attempt_facts.observe_transport_event(&event);
+                        if !token_was_observed && active_attempt_facts.first_token_at_unix_ms.is_some() {
+                            self.emit_internal_inference_first_response(&active_attempt_facts);
+                        }
                         let public_event = Some(event.clone());
                         if public_event.as_ref().is_some_and(|event| {
                             !matches!(
@@ -4058,11 +4077,6 @@ impl ConfiguredInferenceService {
                             let timestamp = current_unix_millis();
                             first_response_at_unix_ms = Some(timestamp);
                             attempt_first_response_at_unix_ms = Some(timestamp);
-                            self.emit_internal_inference_first_response(
-                                &active_attempt_facts
-                                    .clone()
-                                    .with_first_response(Some(timestamp)),
-                            );
                         }
                         match aggregate_restricted_llm_event(
                             event,
@@ -6525,7 +6539,7 @@ fn internal_inference_terminal_payload(
         ),
         (
             String::from("first_token_at_ms"),
-            json!(facts.first_response_at_unix_ms),
+            json!(facts.first_token_at_unix_ms),
         ),
         (String::from("completed_at_ms"), json!(completed_at_unix_ms)),
         (
@@ -6540,7 +6554,7 @@ fn internal_inference_terminal_payload(
             String::from("time_to_first_token_ms"),
             json!(
                 facts
-                    .first_response_at_unix_ms
+                    .first_token_at_unix_ms
                     .map(|timestamp| timestamp.saturating_sub(facts.started_at_unix_ms))
             ),
         ),
@@ -7778,7 +7792,8 @@ mod tests {
             catalog_revision: String::from("catalog-1"),
             route_revision: String::from("sha256:route-1"),
             started_at_unix_ms: 1_000,
-            first_response_at_unix_ms: Some(1_125),
+        first_response_at_unix_ms: Some(1_125),
+        first_token_at_unix_ms: Some(1_125),
             duration_ms: 750,
             retry_count: 1,
             transport: Some(vulcan_ai_contract::AiTransportKind::Http),

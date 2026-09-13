@@ -167,6 +167,7 @@ pub(crate) async fn persist_native_provider_usage_attempt(
             .flatten(),
         headers_at_ms: telemetry_i64(event, "headers_at_ms"),
         first_semantic_at_ms: telemetry_i64(event, "first_event_at_ms"),
+        first_token_at_ms: telemetry_i64(event, "first_token_at_ms"),
         terminal_at_ms: telemetry_required_i64(event, "completed_at_ms")?,
         status,
         dispatched,

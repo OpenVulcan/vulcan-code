@@ -2,6 +2,21 @@ name: Vulcan Usage Statistics
 capability: Query and clear Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
 messages:
   tokens.details: Token details
+  timing.request: Request duration
+  timing.column: Latency
+  timing.firstShort: First token
+  timing.averageFirstShort: Avg first token
+  timing.totalShort: Total
+  timing.averageTotalShort: Avg total
+  timing.unrecorded: Not recorded
+  timing.averageRequest: Average request duration
+  timing.firstToken: First-token latency
+  timing.averageFirstToken: Average first-token latency
+  timing.output: Output duration
+  timing.totalOutput: Measured output duration
+  timing.speed: Average output speed
+  timing.samples: Measured requests
+  timing.formula: Output duration runs from first token to request completion. Speed uses output tokens and duration from the same measured requests; missing timing is never estimated.
   tokens.uncachedInputTokens: Uncached input
   tokens.reasoningTokens: Reasoning tokens
   tokens.totalTokens: Total tokens

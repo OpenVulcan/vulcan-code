@@ -129,7 +129,10 @@ export function turnStatsSummary(
       count: cachedTokens.toLocaleString("en-US"),
     }));
   }
-  const speed = numericMetadata(stats.output_tokens_per_second ?? stats.outputTokensPerSecond);
+  // Historical turn-wide rates cannot be presented as measured token generation speeds.
+  // 历史整轮速率不能作为实测 Token 生成速度显示。
+  const outputDurationMs = numericMetadata(stats.output_duration_ms);
+  const speed = outputDurationMs !== null && outputDurationMs > 0 ? numericMetadata(stats.output_tokens_per_second) : null;
   if (speed && Number.isFinite(speed) && speed > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.outputSpeed", {
       speed: speed.toFixed(1),

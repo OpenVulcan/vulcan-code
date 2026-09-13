@@ -17,9 +17,9 @@ vi.mock("@/components/ui/tooltip", () => {
 });
 
 describe("partial usage display from old persisted V1 events", () => {
-  // Throughput requires exact measurements from the same completed turn, never partial usage or a zero divisor.
-  // 吞吐率要求同一已完成回合的精确测量，绝不使用部分用量或零分母。
-  it("keeps missing timings unknown and computes the established elapsed-turn average", () => {
+  // Throughput requires paired output measurements, never turn duration or a zero divisor.
+  // 吞吐率要求配对的输出测量，绝不使用整轮时长或零分母。
+  it("keeps missing timings unknown and computes paired output throughput", () => {
     expect(averageTurnOutputSpeed(106, 2000)).toBe(53);
     expect(averageTurnOutputSpeed(0, 2000)).toBe(0);
     expect(averageTurnOutputSpeed(106, 0)).toBeNull();
@@ -31,7 +31,7 @@ describe("partial usage display from old persisted V1 events", () => {
 
   // Both UI paths must expose the same measured speed after projection from durable V1 facts.
   // 两条界面路径必须在可靠 V1 事实投影后展示相同测得速度。
-  it("projects exact turn throughput into the live branch tooltip", () => {
+  it("does not substitute turn duration for missing physical first-token timing", () => {
     const events = kimiPartialUsageEvents().map((summary) => summary.event.kind === "turn_stats" ? {
       ...summary, event: { ...summary.event, duration_ms: 2000, buckets: { ...summary.event.buckets, total: { ...summary.event.buckets.total, usage: { ...summary.event.buckets.total.usage, output_tokens: 106 } } } },
     } : summary);
@@ -40,8 +40,9 @@ describe("partial usage display from old persisted V1 events", () => {
     }, (key) => key);
     const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
-    expect(markup).toContain("平均 53.0 tokens/s");
-    expect(markup).toContain("包含等待与工具执行");
+    expect(markup).toContain("平均 -");
+    expect(markup).not.toContain("53.0 tokens/s");
+    expect(markup).toContain("缺少配对的首 Token 时间与输出用量");
   });
 
   // An absent measurement and an explicitly reported zero have different user-visible meanings.

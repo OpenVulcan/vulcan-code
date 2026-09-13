@@ -412,6 +412,8 @@
 }
 
 .context-usage-provider-section {
+  display: grid;
+  gap: 8px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }

@@ -1,11 +1,11 @@
 import type { UsageCoverage, UsageDimension } from "@/service/conversation-usage-coverage";
 
-/** Derives whole-turn output throughput from exact persisted measurements.
- * 根据精确持久化测量计算完整回合输出吞吐率。
- * Parameters outputTokens and durationMs cover the same completed turn, including waits and tools; returns tokens per second or null.
- * 参数 outputTokens 与 durationMs 覆盖同一已完成回合（包括等待与工具）；返回每秒 Token 数或 null。
- * Partial token coverage cannot describe whole-turn throughput and must not be passed here.
- * 部分 Token 覆盖无法代表完整回合吞吐率，不得传入此处。 */
+/** Derives output throughput from paired physical-request measurements.
+ * 根据配对的物理请求测量计算输出吞吐率。
+ * Parameters outputTokens and durationMs cover the same measured requests after their first token; returns tokens per second or null.
+ * 参数 outputTokens 与 durationMs 覆盖同一组已测请求的首 Token 后输出；返回每秒 Token 数或 null。
+ * Never pass total turn duration or tokens from unmeasured requests.
+ * 不得传入整轮时长或未测请求的 Token。 */
 export function averageTurnOutputSpeed(outputTokens: number | null | undefined, durationMs: number | null | undefined): number | null {
   if (outputTokens == null || durationMs == null || !Number.isFinite(outputTokens) || !Number.isFinite(durationMs) || outputTokens < 0 || durationMs <= 0) return null;
   return outputTokens / durationMs * 1000;

@@ -557,23 +557,41 @@
 
 /* Fixed detail columns leave model names the remaining width instead of forcing single-line overflow. */
 /* 明细固定列将剩余宽度留给模型名称，避免单行内容撑宽表格。 */
-.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) { table-layout: fixed; min-width: 800px; }
+.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) { table-layout: fixed; min-width: 1040px; }
 .plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) :is(th, td) { padding: 10px 6px; vertical-align: middle; }
 .plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) th { white-space: normal; }
 .plugin-statistics-table td:is(.plugin-statistics-consumer, .plugin-statistics-operation) { white-space: normal; overflow-wrap: anywhere; }
 /* Distribute available width across all facts instead of assigning every spare pixel to the model. */
 /* 将可用宽度分配给各项信息，避免模型列独占所有剩余空间。 */
-.plugin-statistics-daily-table th:nth-child(1), .plugin-statistics-recent-table th:nth-child(1) { width: 10%; }
-.plugin-statistics-daily-table th:nth-child(2) { width: 28%; }
-.plugin-statistics-daily-table th:nth-child(3), .plugin-statistics-recent-table th:nth-child(3) { width: 13%; }
-.plugin-statistics-daily-table th:nth-child(4) { width: 12%; }
-.plugin-statistics-daily-table th:nth-child(5), .plugin-statistics-recent-table th:nth-child(4) { width: 8%; }
-.plugin-statistics-daily-table th:nth-child(6) { width: 19%; }
-.plugin-statistics-daily-table th:nth-child(7) { width: 10%; }
-.plugin-statistics-recent-table th:nth-child(2) { width: 32%; }
-.plugin-statistics-recent-table th:nth-child(5) { width: 20%; }
-.plugin-statistics-recent-table th:nth-child(6) { width: 12%; }
-.plugin-statistics-recent-table th:nth-child(7) { width: 5%; }
+.plugin-statistics-daily-table th:nth-child(1), .plugin-statistics-recent-table th:nth-child(1) { width: 8%; }
+.plugin-statistics-daily-table th:nth-child(2) { width: 22%; }
+.plugin-statistics-daily-table th:nth-child(3), .plugin-statistics-recent-table th:nth-child(3) { width: 10%; }
+.plugin-statistics-daily-table th:nth-child(4) { width: 9%; }
+.plugin-statistics-daily-table th:nth-child(5) { width: 6%; }
+.plugin-statistics-daily-table th:nth-child(6) { width: 14%; }
+.plugin-statistics-daily-table th:nth-child(7) { width: 21%; }
+.plugin-statistics-daily-table th:nth-child(8) { width: 10%; }
+.plugin-statistics-recent-table th:nth-child(2) { width: 24%; }
+.plugin-statistics-recent-table th:nth-child(4) { width: 7%; }
+.plugin-statistics-recent-table th:nth-child(5) { width: 17%; }
+.plugin-statistics-recent-table th:nth-child(6) { width: 21%; }
+.plugin-statistics-recent-table th:nth-child(7) { width: 9%; }
+.plugin-statistics-recent-table th:nth-child(8) { width: 4%; }
+
+/* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. */
+/* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。 */
+.plugin-statistics-latency {
+  display: grid;
+  gap: 4px;
+  border-inline-start: 3px solid var(--chart-2);
+  padding-inline-start: 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.plugin-statistics-latency > div { display: flex; align-items: baseline; gap: 8px; }
+.plugin-statistics-latency > div > span:first-child { color: var(--muted-foreground); min-width: 42px; }
+.plugin-statistics-latency > div > span:last-child { color: var(--chart-2); }
+.plugin-statistics-latency-unknown { color: var(--muted-foreground); font-size: 11px; }
 
 .plugin-chart-point {
   cursor: default;

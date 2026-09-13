@@ -859,6 +859,9 @@ export type TranslationKey =
   | "composer.contextUsage.noData"
   | "composer.contextUsage.usedPercent"
   | "composer.contextUsage.totalRequests"
+  | "composer.contextUsage.averageFirstToken"
+  | "composer.contextUsage.averageSpeed"
+  | "composer.contextUsage.noTiming"
   | "composer.contextUsage.totalTokens"
   | "composer.capability.mediaBackendMode"
   | "composer.capability.mediaFixedRoute"
@@ -7295,6 +7298,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.noData": "暂无数据",
     "composer.contextUsage.usedPercent": "上下文已使用 {percent}%",
     "composer.contextUsage.totalRequests": "总请求",
+    "composer.contextUsage.averageFirstToken": "平均首 Token",
+    "composer.contextUsage.averageSpeed": "平均速度",
+    "composer.contextUsage.noTiming": "暂无配对的首 Token 计时与输出用量",
     "composer.contextUsage.totalTokens": "总 Tokens",
     "composer.capability.mediaBackendMode": "后端模式",
     "composer.capability.mediaFixedRoute": "固定路由",
@@ -11002,6 +11008,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.noData": "No data",
     "composer.contextUsage.usedPercent": "Context used {percent}%",
     "composer.contextUsage.totalRequests": "Total requests",
+    "composer.contextUsage.averageFirstToken": "Avg first token",
+    "composer.contextUsage.averageSpeed": "Avg speed",
+    "composer.contextUsage.noTiming": "Paired first-token timing and output usage are unavailable",
     "composer.contextUsage.totalTokens": "Total tokens",
     "composer.capability.mediaBackendMode": "Backend mode",
     "composer.capability.mediaFixedRoute": "Fixed route",

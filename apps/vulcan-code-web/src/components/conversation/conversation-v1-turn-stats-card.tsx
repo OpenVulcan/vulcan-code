@@ -1,4 +1,5 @@
 import { Bot } from "lucide-react";
+import type { ReactNode } from "react";
 
 import {
   Tooltip,
@@ -53,9 +54,10 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   const durationLabel = event.duration_ms === undefined
     ? null
     : formatDuration(event.duration_ms, locale);
-  // Use the same exact output and elapsed-turn contract as the restored branch surface.
-  // 与恢复后的分支界面采用同一精确输出和完整回合耗时契约。
-  const speed = averageTurnOutputSpeed(total.usage.output_tokens, event.duration_ms);
+  // Both display surfaces use the same measured request cohort, excluding child aggregates without timing.
+  // 两条显示路径使用同一已测请求样本组，不含缺少计时的子代理聚合。
+  const timing = props.node.usage_coverage?.outputTiming;
+  const speed = averageTurnOutputSpeed(timing?.outputTokens, timing?.outputDurationMs);
   // Tiny positive measurements remain distinct from a measured zero.
   // 微小正数测量仍与测得零值区分。
   const speedLabel = speed === null ? "-" : `${speed > 0 && speed < 0.1 ? "<0.1" : speed.toFixed(1)} tokens/s`;
@@ -87,9 +89,21 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
         >
           <div className="context-usage-card-header turn-stats-card-header">
             <strong>{zh ? "本轮统计" : "Turn usage"}</strong>
-            <span title={speed === null ? (zh ? "缺少完整输出用量或有效回合耗时" : "Complete output usage or valid turn duration is unavailable") : (zh ? `输出 Token ÷ 回合总耗时（${durationLabel}），包含等待与工具执行` : `Output tokens divided by total turn duration (${durationLabel}), including waits and tools`)}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
+            <span title={speed === null ? (zh ? "缺少配对的首 Token 时间与输出用量" : "Paired first-token timing and output usage are unavailable") : (zh ? `已测 ${timing?.requestCount} 次请求：输出 Token ÷ 首 Token 后累计输出时长，不含请求之间的工具等待` : `${timing?.requestCount} measured requests: output tokens divided by summed output duration after first token, excluding inter-request tool waits`)}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
           </div>
-          <TurnStatsUsageRows bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
+          <TurnStatsUsageRows bucket={total} coverage={props.node.usage_coverage?.total} locale={locale}>
+            {timing !== undefined && timing.requestCount > 0 ? <>
+              <TurnStatsMetricRow
+                leftLabel={zh ? "平均首 Token" : "Average first token"}
+                leftValue={formatDuration(timing.firstTokenLatencyMs / timing.requestCount, locale)}
+                rightLabel={zh ? "累计输出时长" : "Total output time"}
+                rightValue={formatDuration(timing.outputDurationMs, locale)}
+              />
+              {durationLabel !== null ? <div className="turn-stats-metric-row">
+                <div className="turn-stats-metric"><span>{zh ? "回合总时长" : "Turn duration"}</span><strong>{durationLabel}</strong></div>
+              </div> : null}
+            </> : null}
+          </TurnStatsUsageRows>
           <TurnStatsCacheSummary bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
           {bucketHasFacts(event.buckets.subagent) ? (
             <section className="turn-stats-subagent-section">
@@ -106,14 +120,21 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   );
 }
 
-/** Renders four paired accounting rows using the existing labels and plain numeric values.
- * 使用既有标签和纯数值渲染四行双列核算数据。
+/** Renders paired accounting and optional timing rows using the existing typography.
+ * 使用既有字体样式渲染双列核算数据及可选计时行。
  *
- * @param props persisted bucket, optional view-only coverage, and display locale.
- *              持久化统计桶、可选纯视图覆盖信息及展示语言。
+ * @param props persisted bucket, optional coverage and timing rows, and display locale.
+ *              持久化统计桶、可选覆盖信息与计时行及展示语言。
  * @returns the aligned metric grid.
  *          对齐后的统计网格。 */
-function TurnStatsUsageRows(props: { bucket: StatBucket; coverage?: UsageCoverage; locale: "zh-CN" | "en-US" }) {
+function TurnStatsUsageRows(props: {
+  bucket: StatBucket;
+  coverage?: UsageCoverage;
+  locale: "zh-CN" | "en-US";
+  // Optional timing rows use the same grid as accounting values.
+  // 可选计时行与核算数据使用同一网格。
+  children?: ReactNode;
+}) {
   // zh selects compact labels while values remain untouched.
   // zh 选择紧凑标签，而数值保持不变。
   const zh = props.locale === "zh-CN";
@@ -155,6 +176,7 @@ function TurnStatsUsageRows(props: { bucket: StatBucket; coverage?: UsageCoverag
         rightLabel={zh ? "合计 Tokens" : "Total tokens"}
         rightValue={total}
       />
+      {props.children}
     </div>
   );
 }

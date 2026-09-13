@@ -1,4 +1,5 @@
 import type { AggregatedUsage, ConversationEventSummary, StatBucket } from "./conversation-event-window-store";
+import { measuredProviderOutput, type ProviderOutputTiming } from "./provider-output-timing";
 
 /** Token dimensions whose partial sums are display evidence, never budget totals.
  * 部分累计仅作为展示证据、绝不作为预算总量的 Token 维度。 */
@@ -53,6 +54,9 @@ export interface UsageCoverage {
 /** Coverage scopes corresponding exactly to the persisted Turn buckets.
  * 与持久化 Turn 统计桶精确对应的覆盖范围。 */
 export interface TurnUsageCoverage {
+  /** Direct API timing cohort; child aggregates do not contain physical timing and are excluded.
+   * 直接 API 计时样本；子代理聚合不含物理计时，因此不纳入。 */
+  outputTiming?: ProviderOutputTiming;
   /** Requests owned by this session, including compaction work.
    * 当前会话拥有的请求，包含压缩工作。 */
   direct: UsageCoverage;
@@ -162,6 +166,9 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
     // API identity prevents reconnect copies from being counted twice.
     // API 身份防止重连副本被重复计数。
     const apis = new Map<number, UsageEvent>();
+    // Accumulate tokens and output intervals from the same measured physical request set.
+    // 从同一组已测物理请求累计 Token 和输出区间。
+    const outputTiming: ProviderOutputTiming = { requestCount: 0, requestDurationMs: 0, firstTokenLatencyMs: 0, outputDurationMs: 0, outputTokens: 0 };
     // Child terminal identity matches the durable core's return deduplication key.
     // 子代理终态身份与可靠核心的回流去重键一致。
     const children = new Map<string, UsageEvent>();
@@ -187,6 +194,16 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
     for (const sample of apis.values()) {
       if (sample.event.kind !== "api_stats") continue;
       addUsage(direct, sample.event.usage, 1);
+      // Never include output tokens from requests whose generation interval is unknown.
+      // 不纳入生成区间未知的请求所产生的输出 Token。
+      const timing = measuredProviderOutput(sample.event.timing, sample.event.usage.output_tokens);
+      if (timing !== null) {
+        outputTiming.requestCount += timing.requestCount;
+        outputTiming.requestDurationMs += timing.requestDurationMs;
+        outputTiming.firstTokenLatencyMs += timing.firstTokenLatencyMs;
+        outputTiming.outputDurationMs += timing.outputDurationMs;
+        outputTiming.outputTokens += timing.outputTokens;
+      }
     }
     for (const sample of children.values()) {
       if (sample.event.kind !== "subagent_return_stats") continue;
@@ -208,6 +225,7 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
       reportedApiCallCount: direct.cacheRatio.reportedApiCallCount + subagent.cacheRatio.reportedApiCallCount,
     };
     result.set(terminal.seq, {
+      outputTiming,
       direct,
       subagent,
       total: finalizeCoverage(total, buckets.total),

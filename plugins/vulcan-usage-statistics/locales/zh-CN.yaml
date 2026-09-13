@@ -2,6 +2,21 @@ name: Vulcan 用量统计
 capability: 通过系统 VLDB 查询和清理 Provider Token 事实，并使用插件自有价目表即时估算参考费用
 messages:
   tokens.details: Token 明细
+  timing.request: 请求总时长
+  timing.column: 延迟
+  timing.firstShort: 首 Token
+  timing.averageFirstShort: 平均首 Token
+  timing.totalShort: 总耗时
+  timing.averageTotalShort: 平均耗时
+  timing.unrecorded: 未记录
+  timing.averageRequest: 平均请求时长
+  timing.firstToken: 首 Token 延迟
+  timing.averageFirstToken: 平均首 Token 延迟
+  timing.output: 输出时长
+  timing.totalOutput: 已测累计输出时长
+  timing.speed: 平均输出速度
+  timing.samples: 已测请求数
+  timing.formula: 输出时长为请求结束减去首 Token 时间。速度按同一组已测请求的输出 Token 与输出时长计算；缺失计时不补算。
   tokens.uncachedInputTokens: 非缓存输入
   tokens.reasoningTokens: 推理 Token
   tokens.totalTokens: 总 Token

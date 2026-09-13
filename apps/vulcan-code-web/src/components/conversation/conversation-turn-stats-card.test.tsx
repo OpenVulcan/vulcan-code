@@ -17,6 +17,9 @@ const TURN_STATS_METADATA = {
     total_tokens: 286_566,
     cached_input_tokens: 282_624,
     output_tokens_per_second: 8.376,
+    output_duration_ms: 36_414,
+    time_to_first_token_ms: 750,
+    timed_api_call_count: 2,
     usage_groups: [
       {
         kind: "regular",

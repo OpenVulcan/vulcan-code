@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import {
   metadataString,
   metadataValue,
@@ -34,8 +36,8 @@ interface TurnStatsUsageSnapshot {
   coverage: UsageCoverage | null;
 }
 
-// TurnStatsTooltipCard renders three aligned aggregate rows, one cache-hit bar, and an optional child-agent section.
-// TurnStatsTooltipCard 渲染三行对齐的总计、一条缓存命中进度条及可选子代理分区。
+// TurnStatsTooltipCard renders paired usage and timing rows, a cache-hit bar, and an optional child-agent section.
+// TurnStatsTooltipCard 渲染双列用量与计时数据、缓存命中进度条及可选子代理分区。
 //
 // Parameters:
 // 参数：metadata 是持久化统计载荷，locale 是界面语言，subagentStats 标识纯子代理统计行。
@@ -76,11 +78,13 @@ export function TurnStatsTooltipCard(props: {
   // Keep the original short label without exposing internal coverage metadata.
   // 保持原有简短标签，不展示内部覆盖元数据。
   const cacheLabel = zh ? "缓存命中率" : "Cache hit rate";
-  // speed comes from the legacy backend or the exact V1 turn projection, using the same elapsed-turn contract.
-  // speed 来自旧后端或精确 V1 回合投影，采用相同的完整回合耗时契约。
-  const speed = numericMetadata(stats.output_tokens_per_second ?? stats.outputTokensPerSecond);
-  // speedLabel is a compact header value because each accounting section is intentionally limited to three rows.
-  // speedLabel 作为紧凑标题值展示，使每个核算分区严格保持三行。
+  // Only the new paired timing contract can establish speed; historical turn-duration estimates are ignored.
+  // 仅新的配对计时契约能够证明速度；忽略历史整轮耗时估算。
+  const outputDurationMs = numericMetadata(stats.output_duration_ms);
+  const firstTokenLatencyMs = numericMetadata(stats.time_to_first_token_ms);
+  const speed = outputDurationMs !== null && outputDurationMs > 0 ? numericMetadata(stats.output_tokens_per_second) : null;
+  // speedLabel keeps the average speed compact in the card header.
+  // speedLabel 在卡片标题中紧凑展示平均速度。
   const speedLabel = speed != null && Number.isFinite(speed) && speed >= 0
     ? `${speed > 0 && speed < 0.1 ? "<0.1" : speed.toFixed(1)} tokens/s`
     : "-";
@@ -89,9 +93,16 @@ export function TurnStatsTooltipCard(props: {
     <>
       <div className="context-usage-card-header turn-stats-card-header">
         <strong>{props.subagentStats ? (zh ? "子代理统计" : "Subagent usage") : (zh ? "本轮统计" : "Turn usage")}</strong>
-        <span title={speedLabel === "-" ? (zh ? "缺少完整输出用量或有效回合耗时" : "Complete output usage or valid turn duration is unavailable") : (zh ? "输出 Token ÷ 回合总耗时，包含等待与工具执行" : "Output tokens divided by total turn duration, including waits and tools")}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
+        <span title={speedLabel === "-" ? (zh ? "缺少配对的首 Token 时间与输出用量" : "Paired first-token timing and output usage are unavailable") : (zh ? "同一组已测请求的输出 Token ÷ 首 Token 后累计输出时长" : "Output tokens divided by summed output duration after first token for the same measured requests")}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
       </div>
-      <TurnStatsUsageRows locale={props.locale} usage={aggregate} />
+      <TurnStatsUsageRows locale={props.locale} usage={aggregate}>
+        {outputDurationMs !== null && outputDurationMs > 0 ? <>
+          <div className="turn-stats-metric-row">
+            {firstTokenLatencyMs !== null ? <div className="turn-stats-metric"><span>{zh ? "平均首 Token" : "Average first token"}</span><strong>{(firstTokenLatencyMs / 1000).toFixed(3)} s</strong></div> : null}
+            <div className="turn-stats-metric"><span>{zh ? "累计输出时长" : "Total output time"}</span><strong>{(outputDurationMs / 1000).toFixed(3)} s</strong></div>
+          </div>
+        </> : null}
+      </TurnStatsUsageRows>
       <div className="turn-stats-cache-summary">
         <div className="turn-stats-cache-header">
           <span>{cacheLabel}</span>
@@ -118,13 +129,13 @@ export function TurnStatsTooltipCard(props: {
   );
 }
 
-// TurnStatsUsageRows renders exactly three aligned rows for one aggregate or child-agent scope.
-// TurnStatsUsageRows 为一个总计或子代理范围严格渲染三行对齐数据。
+// TurnStatsUsageRows renders aligned accounting rows and optional timing rows for one scope.
+// TurnStatsUsageRows 为一个统计范围渲染对齐的核算行及可选计时行。
 //
 // Parameters:
-// 参数：usage 包含当前范围的用量核算字段，locale 选择标签与数字格式。
-// Returns a three-row statistics grid.
-// 返回三行统计网格。
+// 参数：usage 包含用量核算字段，locale 选择显示格式，children 提供可选计时行。
+// Returns a shared two-column statistics grid.
+// 返回统一的双列统计网格。
 function TurnStatsUsageRows(props: {
   // Usage values for the current card section.
   // 当前卡片分区的用量值。
@@ -132,6 +143,9 @@ function TurnStatsUsageRows(props: {
   // Active interface locale.
   // 当前界面语言。
   locale: "zh-CN" | "en-US";
+  // Additional measured timing rows share the accounting grid's spacing and typography.
+  // 附加的已测计时行复用核算网格的间距与字体样式。
+  children?: ReactNode;
 }) {
   // zh selects the compact labels used in each paired row.
   // zh 选择每行双列使用的紧凑标签。
@@ -168,12 +182,13 @@ function TurnStatsUsageRows(props: {
         rightLabel={zh ? "合计 Tokens" : "Total tokens"}
         rightValue={total}
       />
+      {props.children}
     </div>
   );
 }
 
-// TurnStatsMetricRow renders one aligned pair inside the fixed three-row statistics grid.
-// TurnStatsMetricRow 在固定三行统计网格中渲染一组对齐双列。
+// TurnStatsMetricRow renders one aligned pair inside the statistics grid.
+// TurnStatsMetricRow 在统计网格中渲染一组对齐双列。
 //
 // Parameters:
 // 参数：左右标签和值分别描述当前行的两项统计。

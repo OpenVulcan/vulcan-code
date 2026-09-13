@@ -112,7 +112,12 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "outputTokens": 20,
                     "reasoningTokens": 5,
                     "totalTokens": 35,
-                    "aggregateRevision": 7
+                    "aggregateRevision": 7,
+                    "requestDurationMs": 1000,
+                    "firstTokenLatencyMs": null,
+                    "outputDurationMs": null,
+                    "outputTokensPerSecond": null,
+                    "timedAttemptCount": 0
                 },
                 {
                     "calendarDate": "2026-08-15",
@@ -178,7 +183,12 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "audioOutputTokens": null,
                 "totalTokens": 35,
                 "billingDetailsJson": "[]",
-                "terminalAtMs": 1_500
+                "terminalAtMs": 1_500,
+                "requestDurationMs": 1000,
+                "firstTokenLatencyMs": 500,
+                "outputDurationMs": 500,
+                "outputTokensPerSecond": 40,
+                "timedAttemptCount": 1
             }])
         } else if sql.contains("FROM provider_account_usage_snapshots_v1") {
             json!([])

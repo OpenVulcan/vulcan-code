@@ -111,6 +111,22 @@ export function ContextUsageOrb(props: {
   // contentRef receives initial focus so opening the metrics does not immediately show a missing-value tooltip.
   // contentRef 接收初始焦点，避免打开指标时立即弹出缺失值提示并遮挡数值。
   const contentRef = React.useRef<HTMLDivElement>(null);
+  // Both click and delayed hover control the same interactive statistics popover.
+  // 点击和延迟悬停控制同一个可交互统计浮层。
+  const [statisticsOpen, setStatisticsOpen] = React.useState(false);
+  // Pending hover opens are cancelled when the pointer leaves or the component unmounts.
+  // 指针离开或组件卸载时取消待执行的悬停打开。
+  const hoverTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Hover must not steal keyboard focus from the conversation composer.
+  // 悬停不得抢走会话输入区的键盘焦点。
+  const openedByHover = React.useRef(false);
+  // Cancels a scheduled hover open; no input or return value is needed.
+  // 取消已安排的悬停打开；无需输入或返回值。
+  const cancelHoverOpen = React.useCallback(() => {
+    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  }, []);
+  React.useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   if (!props.snapshot) {
     return null;
   }
@@ -126,6 +142,17 @@ export function ContextUsageOrb(props: {
   // providerUsageTotal uses only the cumulative total derived from canonical V1 API facts.
   // providerUsageTotal 仅使用从规范 V1 API 事实派生的累计总量。
   const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens;
+  // The service projects the full session cohort, independent of the loaded transcript window.
+  // 服务投影完整会话样本组，不受已加载转录窗口范围影响。
+  const outputTiming = providerUsage?.outputTiming;
+  // Missing measurements remain unknown; unrelated output tokens never enter the denominator pair.
+  // 缺失测量保持未知；不将无关请求的输出 Token 混入配对计算。
+  const averageFirstToken = outputTiming && outputTiming.requestCount > 0
+    ? `${(outputTiming.firstTokenLatencyMs / outputTiming.requestCount / 1000).toFixed(3)} s` : "-";
+  // Session speed uses summed output tokens divided by the same cohort's summed output duration.
+  // 会话速度使用累计输出 Token 除以同一样本组的累计输出时长。
+  const averageOutputSpeed = outputTiming && outputTiming.outputDurationMs > 0
+    ? `${(outputTiming.outputTokens * 1000 / outputTiming.outputDurationMs).toFixed(1)} t/s` : "-";
   // providerUsageUnknown keeps missing Provider usage explicit in the diagnostic row.
   // providerUsageUnknown 在 Provider 用量缺失时保持诊断行显式可见。
   const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
@@ -181,12 +208,23 @@ export function ContextUsageOrb(props: {
   } as React.CSSProperties;
 
   return (
-    <Popover>
+    <Popover open={statisticsOpen} onOpenChange={(open) => { cancelHoverOpen(); setStatisticsOpen(open); }}>
       <PopoverTrigger asChild>
         <button
           aria-label={contextUsageAriaLabel}
           className={cn("context-usage-control", selectedNode && "is-locked")}
           type="button"
+          onPointerEnter={(event) => {
+            if (event.pointerType !== "mouse" || statisticsOpen) return;
+            cancelHoverOpen();
+            hoverTimer.current = setTimeout(() => {
+              hoverTimer.current = null;
+              openedByHover.current = true;
+              setStatisticsOpen(true);
+            }, 500);
+          }}
+          onPointerLeave={cancelHoverOpen}
+          onPointerDown={() => { cancelHoverOpen(); openedByHover.current = false; }}
         >
           <span
             aria-hidden="true"
@@ -208,7 +246,8 @@ export function ContextUsageOrb(props: {
         className="context-usage-tooltip"
         collisionPadding={12}
         ref={contentRef}
-        onOpenAutoFocus={(event) => { event.preventDefault(); contentRef.current?.focus(); }}
+        onOpenAutoFocus={(event) => { event.preventDefault(); if (!openedByHover.current) contentRef.current?.focus(); }}
+        onCloseAutoFocus={(event) => { if (openedByHover.current) event.preventDefault(); openedByHover.current = false; }}
         side="top"
         sideOffset={8}
       >
@@ -248,6 +287,18 @@ export function ContextUsageOrb(props: {
                 <span>{t("composer.contextUsage.totalTokens")}</span>
                 <strong><ContextUsageValue value={formatCompactProviderCount(providerUsageTotal, "-")}
                   hint={providerUsageTotal == null ? providerUsageUnknown : undefined} /></strong>
+              </div>
+            </div>
+            <div className="context-usage-provider-row">
+              <div className="context-usage-provider-metric">
+                <span>{t("composer.contextUsage.averageFirstToken")}</span>
+                <strong><ContextUsageValue value={averageFirstToken}
+                  hint={outputTiming == null ? t("composer.contextUsage.noTiming") : undefined} /></strong>
+              </div>
+              <div className="context-usage-provider-metric">
+                <span>{t("composer.contextUsage.averageSpeed")}</span>
+                <strong><ContextUsageValue value={averageOutputSpeed}
+                  hint={outputTiming == null ? t("composer.contextUsage.noTiming") : undefined} /></strong>
               </div>
             </div>
           </div>

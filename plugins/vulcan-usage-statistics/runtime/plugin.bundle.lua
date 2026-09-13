@@ -659,11 +659,30 @@ WITH filtered_daily AS (
     WHERE terminal_at_ms >= CAST(strftime('%s', date('now', 'localtime', '-' || (?1 - 1) || ' days'), 'utc') AS INTEGER) * 1000
       AND (?2 = '' OR consumer_id = ?2)
       AND (?5 = '' OR instr(lower(mapped_model), lower(?5)) > 0)
+), timed_attempts AS (
+    SELECT *,
+      CASE WHEN terminal_at_ms >= dispatched_at_ms THEN terminal_at_ms - dispatched_at_ms END AS request_duration_ms,
+      CASE WHEN first_token_at_ms >= dispatched_at_ms AND terminal_at_ms >= first_token_at_ms
+        THEN first_token_at_ms - dispatched_at_ms END AS first_token_latency_ms,
+      CASE WHEN first_token_at_ms >= dispatched_at_ms AND terminal_at_ms >= first_token_at_ms
+        THEN terminal_at_ms - first_token_at_ms END AS output_duration_ms
+    FROM filtered_attempts
 ), page_offsets AS (SELECT ?3 AS daily_offset, ?4 AS recent_offset, ?6 AS sort_order, ?7 AS priced_models, ?8 AS cost_offset)
 ]] .. sql, filter_params)
     end
     local model_overrides = config.modelOverrides
     local daily = (view == "all" or view == "details") and query([[
+, daily_timing AS (
+    SELECT calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model AS model_id,
+      AVG(request_duration_ms) AS requestDurationMs,
+      AVG(first_token_latency_ms) AS firstTokenLatencyMs,
+      SUM(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN output_duration_ms END) AS outputDurationMs,
+      SUM(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN output_tokens END) * 1000.0 /
+        SUM(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN output_duration_ms END) AS outputTokensPerSecond,
+      COUNT(CASE WHEN output_duration_ms > 0 AND output_tokens IS NOT NULL THEN 1 END) AS timedAttemptCount
+    FROM timed_attempts
+    GROUP BY calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model
+)
 SELECT calendar_date AS calendarDate, provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
        model_id AS modelId, attempt_count AS attemptCount,
@@ -672,8 +691,11 @@ SELECT calendar_date AS calendarDate, provider_id AS providerId,
        input_tokens AS inputTokens, uncached_input_tokens AS uncachedInputTokens,
        cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens,
        output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens,
-       total_tokens AS totalTokens, aggregate_revision AS aggregateRevision
+       total_tokens AS totalTokens, aggregate_revision AS aggregateRevision,
+       requestDurationMs, firstTokenLatencyMs, outputDurationMs, outputTokensPerSecond,
+       COALESCE(timedAttemptCount, 0) AS timedAttemptCount
  FROM filtered_daily
+ LEFT JOIN daily_timing USING (calendar_date, provider_id, service_entry_id, consumer_id, operation, model_id)
  ORDER BY CASE WHEN ?6 = 'oldest' THEN calendar_date END ASC,
           CASE WHEN ?6 = 'newest' THEN calendar_date END DESC,
           provider_id, service_entry_id, consumer_id, operation, model_id
@@ -762,8 +784,14 @@ SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
         attempts.audio_output_tokens AS audioOutputTokens,
         attempts.total_tokens AS totalTokens,
         attempts.provider_billing_details_json AS billingDetailsJson,
-        attempts.terminal_at_ms AS terminalAtMs
- FROM filtered_attempts AS attempts
+        attempts.terminal_at_ms AS terminalAtMs,
+        attempts.request_duration_ms AS requestDurationMs,
+        attempts.first_token_latency_ms AS firstTokenLatencyMs,
+        attempts.output_duration_ms AS outputDurationMs,
+        CASE WHEN attempts.output_duration_ms > 0 AND attempts.output_tokens IS NOT NULL
+          THEN attempts.output_tokens * 1000.0 / attempts.output_duration_ms END AS outputTokensPerSecond,
+        CASE WHEN attempts.output_duration_ms > 0 AND attempts.output_tokens IS NOT NULL THEN 1 ELSE 0 END AS timedAttemptCount
+ FROM timed_attempts AS attempts
 ORDER BY CASE WHEN ?6 = 'oldest' THEN attempts.terminal_at_ms END ASC,
          CASE WHEN ?6 = 'newest' THEN attempts.terminal_at_ms END DESC, attempts.attempt_id DESC
 LIMIT 50 OFFSET (SELECT recent_offset FROM page_offsets);
