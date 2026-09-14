@@ -346,6 +346,10 @@ impl CustomProviderDefinition {
                     response_projection_profiles: Vec::new(),
                     provider_request_id_headers: Vec::new(),
                     verified: true,
+                    // User-owned custom routes never declare a bundled reasoning replay contract,
+                    // so their request bytes stay exactly as they were.
+                    // 用户自有自定义路由绝不声明随包推理回传契约，因此其请求字节保持原样。
+                    reasoning_replay_contract: None,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

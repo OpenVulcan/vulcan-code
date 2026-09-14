@@ -49,6 +49,9 @@ pub struct InternalResponsesRequest {
     /// Existing baseline transport identity, retained until the exact target projection is chosen.
     /// 既有基线传输身份，保留到选定精确目标投影为止。
     headers: std::collections::BTreeMap<String, String>,
+    /// Assistant messages captured before the generic encoder could drop any of their content.
+    /// 在通用编码器可能丢弃其内容之前捕获的助手消息。
+    replay_sidecar: vulcan_ai_contract::ReplaySidecar,
 }
 
 impl InternalResponsesRequest {
@@ -60,16 +63,29 @@ impl InternalResponsesRequest {
         &mut self.body
     }
 
-    /// Consumes the owner and returns its semantic body, baseline identity and typed resource table.
-    /// 消费所有者，返回语义正文、基线身份与强类型资源表。
+    /// Returns the assistant replay sidecar this internal request captured.
+    /// 返回本内部请求捕获的助手重放侧车。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The non-serializable sidecar; only the exact target converter of this request may read it.
+    /// 不可序列化侧车；只有本次请求的精确目标转换器可以读取它。
+    pub fn replay_sidecar(&self) -> &vulcan_ai_contract::ReplaySidecar {
+        &self.replay_sidecar
+    }
+
+    /// Consumes the owner and returns its semantic body, baseline identity, typed resources and
+    /// assistant replay sidecar.
+    /// 消费所有者，返回语义正文、基线身份、强类型资源表与助手重放侧车。
     pub(crate) fn into_parts(
         self,
     ) -> (
         Value,
         std::collections::BTreeMap<String, String>,
         Vec<ResourceReference>,
+        vulcan_ai_contract::ReplaySidecar,
     ) {
-        (self.body, self.headers, self.resources)
+        (self.body, self.headers, self.resources, self.replay_sidecar)
     }
 }
 
@@ -94,27 +110,89 @@ pub fn encode_internal_responses_request(
     };
     // Standard callers still select their strict resource encoder at this shared envelope boundary.
     // 标准调用者仍在此共享封装边界选择自身严格资源编码器。
-    let mut encoded = encode_request_envelope(request, &mut resource_encoder)?;
+    let (mut encoded, input_ranges) = encode_request_envelope(request, &mut resource_encoder)?;
     if let Some(limit) = request.output_token_limit {
         // Internal semantics retain the limit even when a particular wire target omits it.
         // 即使某个线路目标省略该限制，内部语义仍然保留它。
         encoded.body["max_output_tokens"] = json!(limit);
     }
+    // The sidecar is captured here, before any target converter can drop a message's content.
+    // 侧车在此处捕获，先于任何目标转换器可能丢弃消息内容之前。
+    let replay_sidecar = request_replay_sidecar(request, &input_ranges);
     Ok(InternalResponsesRequest {
         body: encoded.body,
         headers: encoded.headers,
         resources,
+        replay_sidecar,
     })
+}
+
+/// Captures one sidecar entry per message this envelope actually encoded.
+/// 为本次封装实际编码的每条消息捕获一条侧车条目。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the canonical messages and `input_ranges` attributes each encoded message to the
+/// internal input items it produced.
+/// `request` 持有规范消息，`input_ranges` 把每条已编码消息归属到它所产生的内部输入项。
+///
+/// # Returns
+/// 返回值
+/// Every encoded message in original order, including one that produced no input item.
+/// 按原始顺序排列的每条已编码消息，包含没有产生任何输入项的消息。
+fn request_replay_sidecar(
+    request: &AiExecutionRequest,
+    input_ranges: &[ResponsesMessageInputRange],
+) -> vulcan_ai_contract::ReplaySidecar {
+    let messages = input_ranges
+        .iter()
+        .filter_map(|range| {
+            let message = request.messages.get(range.message_index)?;
+            Some(vulcan_ai_contract::ReplaySidecarMessage {
+                message_index: range.message_index,
+                role: message.role,
+                content: message.content.clone(),
+                input_range: range.input_range.clone(),
+                tool_call_ids: message_tool_call_ids(message),
+            })
+        })
+        .collect();
+    vulcan_ai_contract::ReplaySidecar::new(messages)
+}
+
+/// Returns the provider-visible tool call identities declared by one exact message.
+/// 返回一条精确消息声明的供应商可见工具调用身份。
+fn message_tool_call_ids(message: &vulcan_ai_contract::AiMessage) -> Vec<String> {
+    let mut call_ids = Vec::new();
+    for item in &message.provider_context_items {
+        // Only real tool call items own an identity; outputs and hosted items never add one here.
+        // 只有真正的工具调用项持有身份；输出项与托管项在此绝不新增身份。
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call" | "custom_tool_call")
+        ) && let Some(call_id) = item.get("call_id").and_then(Value::as_str)
+        {
+            call_ids.push(call_id.to_string());
+        }
+    }
+    for item in &message.content {
+        if let vulcan_ai_contract::ContentItem::ToolCall { call } = item {
+            call_ids.push(call.id.clone());
+        }
+    }
+    call_ids
 }
 
 /// Builds the shared envelope for `request` using the explicitly chosen `resource_encoder`.
 /// 使用显式选中的 `resource_encoder` 为 `request` 构建共享封装。
-/// Returns the existing envelope fields; only the strict standard caller may send them without adaptation.
-/// 返回既有封装字段；仅严格标准调用者可以不经适配发送它们。
+/// Returns the existing envelope fields together with the input range each encoded message owned.
+/// 返回既有封装字段，以及每条已编码消息所拥有的输入区间。
+/// Only the strict standard caller may send the envelope without adaptation.
+/// 仅严格标准调用者可以不经适配发送该封装。
 pub(super) fn encode_request_envelope(
     request: &AiExecutionRequest,
     resource_encoder: ResponsesResourceEncoder<'_>,
-) -> Result<EncodedWireRequest, ProtocolConversionError> {
+) -> Result<(EncodedWireRequest, Vec<ResponsesMessageInputRange>), ProtocolConversionError> {
     require_default_cache_policy(&request.prompt_cache, OPENAI_CODEX_RESPONSES_PROFILE_ID)?;
     // The cursor stays bound to the existing Codex continuation proof.
     // 游标继续绑定既有 Codex 延续证明。
@@ -122,7 +200,7 @@ pub(super) fn encode_request_envelope(
         validated_responses_continuation(request, OPENAI_CODEX_RESPONSES_PROFILE_ID)?;
     // Only resource encoding varies; role and item ordering use the shared implementation.
     // 仅资源编码发生变化；角色与项目顺序使用共用实现。
-    let input =
+    let (input, input_ranges) =
         encode_responses_input_with_resources(request, false, continuation, resource_encoder)?;
     // System instructions retain the canonical ordered text projection.
     // 系统指令保持规范有序文本投影。
@@ -190,9 +268,12 @@ pub(super) fn encode_request_envelope(
         // Vulcan 根任务会话同时映射为官方 Codex 的会话身份与线程身份。
         headers.insert(String::from("thread-id"), cache_scope_id.to_string());
     }
-    Ok(EncodedWireRequest {
-        path: String::from("/responses"),
-        headers,
-        body,
-    })
+    Ok((
+        EncodedWireRequest {
+            path: String::from("/responses"),
+            headers,
+            body,
+        },
+        input_ranges,
+    ))
 }

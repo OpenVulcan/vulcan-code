@@ -3,20 +3,25 @@
 
 use crate::{LlmCoreError, reasoning::apply_canonical_reasoning_option};
 use serde_json::{Map, Value, json};
+use vulcan_ai_contract::{ContentItem, MessageRole, ReplaySidecar, ReplaySidecarMessage};
 
 /// Converts a canonical Responses request into an OpenAI-compatible Chat request.
 /// 将规范 Responses 请求转换为 OpenAI 兼容 Chat 请求。
 pub fn responses_to_chat_completions(body: Value) -> Result<Value, LlmCoreError> {
-    responses_to_chat_completions_with_media(body, None)
+    responses_to_chat_completions_with_media(body, None, None)
 }
 
 /// Converts `body` using an explicitly authorized internal media projector, preserving other semantics.
 /// 使用显式授权的内部媒体投影器转换 `body`，保留其他语义。
-/// `media` is absent for standard public conversion; returns exact Chat JSON or a projection error.
-/// 标准公共转换不提供 `media`；返回精确 Chat JSON 或投影错误。
+/// `media` is absent for standard public conversion and `sidecar` is present only for a route that
+/// declared an exact assistant replay contract.
+/// 标准公共转换不提供 `media`；仅当路由声明了精确助手回传契约时才提供 `sidecar`。
+/// Returns exact Chat JSON or a projection error.
+/// 返回精确 Chat JSON 或投影错误。
 pub(crate) fn responses_to_chat_completions_with_media(
     body: Value,
     media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+    sidecar: Option<&ReplaySidecar>,
 ) -> Result<Value, LlmCoreError> {
     let mut result = Map::new();
     copy_if_present(&body, &mut result, "model");
@@ -43,7 +48,12 @@ pub(crate) fn responses_to_chat_completions_with_media(
         }
     }
     if let Some(input) = body.get("input") {
-        append_input_as_chat_messages(input, &mut messages, media)?;
+        match sidecar.filter(|_| input.is_array()) {
+            // declared attribution owns the assistant merge; without it the generic projection stays.
+            // 已声明归属持有助手归并；没有它时保持通用投影。
+            Some(sidecar) => append_declared_chat_messages(input, sidecar, &mut messages, media)?,
+            None => append_input_as_chat_messages(input, &mut messages, media)?,
+        }
     }
     result.insert(
         "messages".to_string(),
@@ -173,6 +183,263 @@ fn append_input_as_chat_messages(
             ));
         }
     }
+    Ok(())
+}
+
+/// One ordered assistant segment recovered for a declared Chat replay contract.
+/// 为已声明 Chat 回传契约恢复的一个有序助手片段。
+enum DeclaredChatSegment {
+    /// Visible reasoning text of this exact turn.
+    /// 当前精确回合的可见推理文本。
+    Reasoning(String),
+    /// Assistant body text of this exact turn.
+    /// 当前精确回合的助手正文。
+    Text(String),
+    /// One assistant tool call with its provider-visible identity.
+    /// 一个携带供应商可见身份的助手工具调用。
+    ToolCall {
+        /// Provider-visible call identity.
+        /// 供应商可见调用身份。
+        call_id: String,
+        /// Registered tool name.
+        /// 已注册工具名。
+        name: String,
+        /// Serialized arguments.
+        /// 序列化后的参数。
+        arguments: String,
+    },
+}
+
+/// Reads the visible reasoning text of one replayed reasoning item, preferring plaintext content.
+/// 读取一个已回放推理项的可见推理文本，优先采用明文 content。
+///
+/// # Remarks
+/// 说明
+/// DeepSeek merges plaintext `content` and ignores `summary`; OpenAI-shaped items carry the text in
+/// `summary`. Reading both keeps one converter correct for every declared route.
+/// DeepSeek 归并明文 `content` 并忽略 `summary`；OpenAI 形状的项把文本放在 `summary`。
+/// 同时读取两者使同一个转换器对所有已声明路由都正确。
+fn reasoning_item_text(item: &Value) -> String {
+    let content = instruction_text(item.get("content").unwrap_or(&Value::Null));
+    if !content.is_empty() {
+        return content;
+    }
+    instruction_text(item.get("summary").unwrap_or(&Value::Null))
+}
+
+/// Recovers the ordered assistant segments of one message from canonical content or raw items.
+/// 从规范内容或原始项中恢复一条消息的有序助手片段。
+///
+/// # Parameters
+/// 参数
+/// `entry` owns the canonical content captured before encoding and `range` holds the exact internal
+/// input items that message produced.
+/// `entry` 持有编码前捕获的规范内容，`range` 持有该消息产生的精确内部输入项。
+///
+/// # Returns
+/// 返回值
+/// Ordered segments from exactly one authority, never a mixture that could duplicate content.
+/// 只来自一个权威来源的有序片段，绝不是可能重复内容的混合结果。
+fn declared_chat_segments(
+    entry: &ReplaySidecarMessage,
+    range: &[Value],
+) -> Result<Vec<DeclaredChatSegment>, LlmCoreError> {
+    if !entry.content.is_empty() {
+        return entry
+            .content
+            .iter()
+            .map(|item| match item {
+                ContentItem::Reasoning { text, .. } => {
+                    Ok(DeclaredChatSegment::Reasoning(text.clone()))
+                }
+                ContentItem::Text { text } | ContentItem::Refusal { text } => {
+                    Ok(DeclaredChatSegment::Text(text.clone()))
+                }
+                ContentItem::StructuredJson { value } => Ok(DeclaredChatSegment::Text(
+                    serde_json::to_string(value).map_err(|error| {
+                        LlmCoreError::new(format!(
+                            "Declared Chat replay structured content could not be encoded: {error}"
+                        ))
+                    })?,
+                )),
+                ContentItem::ToolCall { call } => Ok(DeclaredChatSegment::ToolCall {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: json_string(&call.arguments),
+                }),
+                ContentItem::Resource { .. }
+                | ContentItem::ToolResult { .. }
+                | ContentItem::Citation { .. } => Err(LlmCoreError::new(
+                    "Declared Chat replay cannot represent this assistant content item.",
+                )),
+            })
+            .collect();
+    }
+    // rawItems is the durable provider evidence the V1 rebuild replayed verbatim.
+    // rawItems 是 V1 重建原样回放的可持久化供应商证据。
+    let mut segments = Vec::new();
+    for item in range {
+        match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                let text = reasoning_item_text(item);
+                if !text.is_empty() {
+                    segments.push(DeclaredChatSegment::Reasoning(text));
+                }
+            }
+            Some("message") => {
+                let text = instruction_text(item.get("content").unwrap_or(&Value::Null));
+                if !text.is_empty() {
+                    segments.push(DeclaredChatSegment::Text(text));
+                }
+            }
+            Some("function_call" | "custom_tool_call") => {
+                let call_id = item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        LlmCoreError::new("Declared Chat replay requires a tool call identity.")
+                    })?
+                    .to_string();
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| LlmCoreError::new("Declared Chat replay requires a tool name."))?
+                    .to_string();
+                segments.push(DeclaredChatSegment::ToolCall {
+                    call_id,
+                    name,
+                    arguments: json_string(item.get("arguments").unwrap_or(&Value::Null)),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(segments)
+}
+
+/// Converts one request whose assistant attribution was captured before any encoder could drop it.
+/// 转换一份在任何编码器可能丢弃之前已捕获助手归属的请求。
+///
+/// # Parameters
+/// 参数
+/// `input` is the exact ordered internal input array, `sidecar` attributes its items to original
+/// messages, and `media` remains the only authorized private media projector.
+/// `input` 是精确有序的内部输入数组，`sidecar` 把其中各项归属到原始消息，
+/// `media` 仍是唯一被授权的私有媒体投影器。
+///
+/// # Returns
+/// 返回值
+/// Exactly one Chat message per original assistant message, or a pre-dispatch failure when the
+/// original interleaving cannot be represented losslessly.
+/// 每条原始助手消息恰好对应一条 Chat 消息；原始交错无法无损表示时返回派发前失败。
+fn append_declared_chat_messages(
+    input: &Value,
+    sidecar: &ReplaySidecar,
+    messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<(), LlmCoreError> {
+    let Some(items) = input.as_array() else {
+        return append_input_as_chat_messages(input, messages, media);
+    };
+    let mut cursor = 0usize;
+    for entry in sidecar.messages() {
+        if entry.input_range.start > cursor {
+            // Unattributed leading items keep the generic projection instead of being dropped.
+            // 未被归属的前导项保持通用投影，而不是被丢弃。
+            for item in &items[cursor..entry.input_range.start.min(items.len())] {
+                append_input_item(item, messages, media)?;
+            }
+        }
+        let Some(range) = items.get(entry.input_range.clone()) else {
+            return Err(LlmCoreError::new(
+                "Declared Chat replay attribution exceeds the encoded input length.",
+            ));
+        };
+        if entry.role == MessageRole::Assistant {
+            append_declared_chat_assistant(entry, range, messages)?;
+        } else {
+            for item in range {
+                append_input_item(item, messages, media)?;
+            }
+        }
+        cursor = entry.input_range.end;
+    }
+    for item in items.get(cursor..).unwrap_or_default() {
+        append_input_item(item, messages, media)?;
+    }
+    Ok(())
+}
+
+/// Appends exactly one Chat assistant message for one original assistant message.
+/// 为一条原始助手消息追加恰好一条 Chat 助手消息。
+///
+/// # Returns
+/// 返回值
+/// Success after reasoning, body and tool calls land on one message, or a controlled failure when
+/// Chat cannot represent the original interleaving without reordering history.
+/// 推理、正文与工具调用落在同一条消息上后返回成功；Chat 无法在不重排历史的前提下表示原始交错时返回受控失败。
+fn append_declared_chat_assistant(
+    entry: &ReplaySidecarMessage,
+    range: &[Value],
+    messages: &mut Vec<Value>,
+) -> Result<(), LlmCoreError> {
+    let mut reasoning = String::new();
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+    let mut tool_call_seen = false;
+    for segment in declared_chat_segments(entry, range)? {
+        match segment {
+            DeclaredChatSegment::Reasoning(segment) => {
+                if tool_call_seen && !segment.is_empty() {
+                    return Err(LlmCoreError::new(
+                        "Declared Chat replay cannot place reasoning after a tool call without reordering history.",
+                    ));
+                }
+                reasoning.push_str(segment.as_str());
+            }
+            DeclaredChatSegment::Text(segment) => {
+                // Chat carries one body field beside the tool-call array, so a body can only
+                // precede the calls; a turn that placed text after a call cannot keep its order.
+                // Chat 在工具调用数组之外只有一个正文字段，因此正文只能位于调用之前；
+                // 把正文放在调用之后的回合无法保持原顺序。
+                if tool_call_seen && !segment.is_empty() {
+                    return Err(LlmCoreError::new(
+                        "Declared Chat replay cannot place body text after a tool call without reordering history.",
+                    ));
+                }
+                text.push_str(segment.as_str());
+            }
+            DeclaredChatSegment::ToolCall {
+                call_id,
+                name,
+                arguments,
+            } => {
+                tool_call_seen = true;
+                tool_calls.push(json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                }));
+            }
+        }
+    }
+    if reasoning.is_empty() && text.is_empty() && tool_calls.is_empty() {
+        // A message with nothing to replay contributes no Chat message at all.
+        // 没有任何可回放内容的消息完全不产生 Chat 消息。
+        return Ok(());
+    }
+    let mut message = Map::new();
+    message.insert(String::from("role"), json!("assistant"));
+    // An empty string is the verified empty-body form; it never replaces missing reasoning.
+    // 空字符串是已验证的空正文形态；它绝不替代缺失的推理。
+    message.insert(String::from("content"), Value::String(text));
+    if !reasoning.is_empty() {
+        message.insert(String::from("reasoning_content"), Value::String(reasoning));
+    }
+    if !tool_calls.is_empty() {
+        message.insert(String::from("tool_calls"), Value::Array(tool_calls));
+    }
+    messages.push(Value::Object(message));
     Ok(())
 }
 

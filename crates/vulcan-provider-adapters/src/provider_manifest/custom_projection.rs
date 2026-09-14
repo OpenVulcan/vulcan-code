@@ -376,5 +376,8 @@ fn convert_protocol_route(route: &crate::ProtocolRoute) -> ManifestProtocolRoute
         response_profile_refs: Vec::new(),
         provider_request_id_headers: route.provider_request_id_headers.clone(),
         verified: route.verified,
+        // The compiled route carries the already frozen contract back into the authoring shape.
+        // 已编译路由把此前冻结的契约带回作者形态。
+        reasoning_replay_contract: route.reasoning_replay_contract,
     }
 }

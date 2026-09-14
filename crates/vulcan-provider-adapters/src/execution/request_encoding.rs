@@ -4,15 +4,16 @@
 use super::projection_profiles::{apply_mapping_step, apply_request_projection_profiles};
 use super::route::{route_uses_native_codex_responses, upstream_protocol_for_route};
 use super::{
-    ProviderExecutionClient, ProviderExecutionFailure, ProviderExecutionRoute, pre_dispatch_failure,
+    ProviderExecutionClient, ProviderExecutionFailure, ProviderExecutionRoute,
+    pre_dispatch_failure, unreplayable_history_failure,
 };
 use crate::{
     CodexApplyPatchToolType, CodexWireDialect, CredentialExecutionSecret,
-    CustomModelRequestProjection, RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID,
-    SecondaryRouteSelection,
+    CustomModelRequestProjection, ReasoningReplayContract, RequestProjectorKind,
+    SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem,
     FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax, ModelParameterValue,
@@ -238,6 +239,9 @@ fn project_internal_baseline_for_provider(
     route: &ProviderExecutionRoute,
     request: &AiExecutionRequest,
 ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
+    // Unreplayable persisted reasoning fails before any encoding, with the fixed user copy.
+    // 无法回放的持久化推理在任何编码之前失败，并使用固定用户文案。
+    validate_replayable_reasoning_history(route, request)?;
     // Exact protocol selection occurs before any encoding; there is no standard-Responses preflight.
     // 精确协议选择先于任意编码，不再经过标准 Responses 前置编码。
     let Some(upstream_protocol) = upstream_protocol_for_route(route) else {
@@ -270,6 +274,9 @@ fn project_internal_baseline_for_provider(
         } else {
             AnthropicReasoningMode::ProviderSpecific
         },
+        // The frozen route, never the provider name, selects the declared replay contract.
+        // 由冻结路由而非供应商名称选择已声明的回传契约。
+        reasoning_replay_contract: route.reasoning_replay_contract(),
     };
     project_internal_request_for_provider(
         internal,
@@ -413,7 +420,506 @@ pub(super) fn project_provider_request(
         &encoded.body,
     )
     .map_err(|error| pre_dispatch_failure(format!("Final media projection is invalid: {error}")))?;
+    // A declared reasoning replay contract is proven on the exact bytes that would be dispatched,
+    // never inferred from the in-memory request.
+    // 已声明的推理回传契约在即将分派的精确字节上被证明，绝不从内存请求推断。
+    validate_declared_reasoning_replay_contract(route, request, &encoded)?;
     Ok(encoded)
+}
+
+/// Proves the final wire body satisfies the reasoning replay contract this route declared.
+/// 证明最终线路请求体满足当前路由声明的推理回传契约。
+///
+/// # Parameters
+/// 参数
+/// `route` owns the frozen declaration, `request` owns the durable history that must survive, and
+/// `encoded` is the exact body about to be dispatched.
+/// `route` 持有冻结声明，`request` 持有必须存活的可靠历史，`encoded` 是即将分派的精确正文。
+///
+/// # Returns
+/// 返回值
+/// Success when the declared contract holds, or a pre-dispatch failure naming the exact violation.
+/// 已声明契约成立时返回成功；违反时返回点名精确原因的派发前失败。
+fn validate_declared_reasoning_replay_contract(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let Some(contract) = route.reasoning_replay_contract() else {
+        // No declaration means every previous request byte is preserved exactly.
+        // 未声明意味着既有请求字节被精确保留。
+        return Ok(());
+    };
+    match contract {
+        ReasoningReplayContract::DeepseekResponsesPlaintextV1 => {
+            validate_deepseek_responses_plaintext_replay(request, &encoded.body)
+        }
+        ReasoningReplayContract::DeepseekChatReasoningContentV1 => {
+            validate_deepseek_chat_reasoning_content_replay(request, &encoded.body)
+        }
+        ReasoningReplayContract::DeepseekAnthropicThinkingV1 => {
+            validate_deepseek_anthropic_thinking_replay(request, &encoded.body)
+        }
+    }
+}
+
+/// Proves one DeepSeek Responses body replays every durable reasoning item as plaintext content.
+/// 证明一份 DeepSeek Responses 正文以明文 content 回放每一条可持久化推理项。
+///
+/// # Remarks
+/// 说明
+/// This endpoint merges plaintext `content` into the adjacent assistant message and ignores both
+/// `summary` and `encrypted_content`, so only a non-empty `reasoning_text` array can carry history.
+/// 该端点把明文 `content` 归并进相邻助手消息，并同时忽略 `summary` 与 `encrypted_content`，
+/// 因此只有非空 `reasoning_text` 数组能够承载历史。
+fn validate_deepseek_responses_plaintext_replay(
+    request: &AiExecutionRequest,
+    body: &Value,
+) -> Result<(), ProviderExecutionFailure> {
+    let input = body.get("input").and_then(Value::as_array).ok_or_else(|| {
+        pre_dispatch_failure(
+            "the declared DeepSeek Responses replay contract requires an ordered `input` array",
+        )
+    })?;
+    let mut seen_call_ids = BTreeSet::new();
+    let mut replayed_reasoning = 0usize;
+    for item in input {
+        match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                replayed_reasoning += 1;
+                let parts = item.get("content").and_then(Value::as_array).ok_or_else(|| {
+                    unreplayable_history_failure(
+                        "a replayed DeepSeek reasoning item carries no plaintext `content` array",
+                    )
+                })?;
+                if parts.is_empty() {
+                    return Err(unreplayable_history_failure(
+                        "a replayed DeepSeek reasoning item carries an empty plaintext `content` array",
+                    ));
+                }
+                for part in parts {
+                    let is_plaintext = part.get("type").and_then(Value::as_str)
+                        == Some("reasoning_text")
+                        && part
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| !text.is_empty());
+                    if !is_plaintext {
+                        return Err(unreplayable_history_failure(
+                            "a replayed DeepSeek reasoning content part must be reasoning_text with non-empty text",
+                        ));
+                    }
+                }
+            }
+            Some("function_call") => {
+                let call_id = item.get("call_id").and_then(Value::as_str).ok_or_else(|| {
+                    pre_dispatch_failure("a replayed DeepSeek function_call is missing its call_id")
+                })?;
+                if !seen_call_ids.insert(call_id) {
+                    return Err(pre_dispatch_failure(format!(
+                        "replayed DeepSeek tool call identity `{call_id}` appears more than once"
+                    )));
+                }
+            }
+            Some("function_call_output") => {
+                let call_id = item.get("call_id").and_then(Value::as_str).ok_or_else(|| {
+                    pre_dispatch_failure(
+                        "a replayed DeepSeek function_call_output is missing its call_id",
+                    )
+                })?;
+                if !seen_call_ids.contains(call_id) {
+                    return Err(pre_dispatch_failure(format!(
+                        "replayed DeepSeek tool result `{call_id}` has no preceding tool call"
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    // durableReasoning counts the history this request must preserve from the same durable evidence
+    // the V1 rebuild replays, so a silent drop cannot pass as a request that never had reasoning.
+    // durableReasoning 从 V1 重建所回放的同一可靠证据统计本请求必须保留的历史，
+    // 使静默丢弃无法被伪装成“从未有过推理”的请求。
+    let durable_reasoning = request
+        .messages
+        .iter()
+        .map(|message| {
+            message
+                .provider_context_items
+                .iter()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
+                .count()
+                + message
+                    .content
+                    .iter()
+                    .filter(|item| matches!(item, ContentItem::Reasoning { .. }))
+                    .count()
+        })
+        .sum::<usize>();
+    if replayed_reasoning < durable_reasoning {
+        return Err(unreplayable_history_failure(format!(
+            "the declared DeepSeek Responses replay contract requires {durable_reasoning} plaintext reasoning item(s) but the final body carries {replayed_reasoning}"
+        )));
+    }
+    Ok(())
+}
+
+/// Reads the visible reasoning text of one recorded reasoning item, preferring plaintext content.
+/// 读取一个已记录推理项的可见推理文本，优先采用明文 content。
+///
+/// # Remarks
+/// 说明
+/// DeepSeek Responses merges plaintext `content` and ignores `summary`, while OpenAI-shaped
+/// records carry the text in `summary`; reading both keeps one acceptance rule for every record.
+/// DeepSeek Responses 归并明文 `content` 并忽略 `summary`，而 OpenAI 形状的记录把文本放在
+/// `summary`；同时读取两者使每条记录共用同一条接受规则。
+fn recorded_reasoning_text(item: &Value) -> String {
+    let plaintext = reasoning_plaintext(item);
+    if !plaintext.trim().is_empty() {
+        return plaintext;
+    }
+    item.get("summary")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+        .unwrap_or_default()
+}
+
+/// Reads only the plaintext `content` text of one recorded reasoning item.
+/// 仅读取一个已记录推理项的明文 `content` 文本。
+///
+/// # Remarks
+/// 说明
+/// DeepSeek Responses merges plaintext `content` and ignores `summary` and `encrypted_content`, so
+/// this reader is the only one that answers whether a Responses turn can be replayed at all.
+/// DeepSeek Responses 归并明文 `content` 并忽略 `summary` 与 `encrypted_content`，
+/// 因此只有本读取器能回答一个 Responses 回合究竟能否回放。
+fn reasoning_plaintext(item: &Value) -> String {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+        .unwrap_or_default()
+}
+
+/// Proves the persisted reasoning history of `request` can reach this declared route at all.
+/// 证明 `request` 的持久化推理历史至少能够抵达当前已声明路由。
+///
+/// # Remarks
+/// 说明
+/// This runs before any encoding so a session persisted without replayable reasoning fails with the
+/// fixed user copy instead of a downstream converter diagnostic; the post-projection validators
+/// still prove the exact wire shape afterwards.
+/// 该校验在任何编码之前运行，使缺少可回放推理的持久化会话以固定用户文案失败，
+/// 而不是抛出下游转换器诊断；投影后的校验器仍会继续证明精确线路形态。
+fn validate_replayable_reasoning_history(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let Some(contract) = route.reasoning_replay_contract() else {
+        return Ok(());
+    };
+    let unreplayable = |detail: &str| {
+        unreplayable_history_failure(format!(
+            "{detail} for declared contract `{}`",
+            contract.primitive_id()
+        ))
+    };
+    for message in &request.messages {
+        for item in &message.provider_context_items {
+            if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+                continue;
+            }
+            let replayable = match contract {
+                // Responses ignores both the summary and the opaque continuation, so only a
+                // non-empty plaintext part can carry a persisted turn forward.
+                // Responses 同时忽略摘要与不透明延续，因此只有非空明文项能承载持久化回合。
+                ReasoningReplayContract::DeepseekResponsesPlaintextV1 => reasoning_plaintext(item),
+                // Chat and Anthropic both read the plaintext part or the stored summary.
+                // Chat 与 Anthropic 都读取明文项或已存储摘要。
+                ReasoningReplayContract::DeepseekChatReasoningContentV1
+                | ReasoningReplayContract::DeepseekAnthropicThinkingV1 => {
+                    recorded_reasoning_text(item)
+                }
+            };
+            if replayable.trim().is_empty() {
+                return Err(unreplayable(
+                    "persisted reasoning history carries no replayable text",
+                ));
+            }
+        }
+        for item in &message.content {
+            if let ContentItem::Reasoning { text, .. } = item
+                && text.trim().is_empty()
+            {
+                return Err(unreplayable(
+                    "persisted canonical reasoning carries no replayable text",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Proves one DeepSeek Chat body replays every recorded reasoning turn on its own assistant message.
+/// 证明一份 DeepSeek Chat 正文把每个已记录推理回合回放到其自身的助手消息上。
+///
+/// # Remarks
+/// 说明
+/// This endpoint keeps reasoning on `reasoning_content` beside the body and tool calls of the same
+/// turn, so acceptance must prove three separate facts: no recorded reasoning text was dropped,
+/// every tool call owns a string body field, and every tool result follows its own call.
+/// 该端点把推理放在 `reasoning_content` 上，与同一回合的正文和工具调用并列，
+/// 因此接受条件必须分别证明三件事：没有任何已记录推理文本被丢弃、每个工具调用都持有字符串正文
+/// 字段、每个工具结果都跟随其自身的调用。
+fn validate_deepseek_chat_reasoning_content_replay(
+    request: &AiExecutionRequest,
+    body: &Value,
+) -> Result<(), ProviderExecutionFailure> {
+    let messages = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            pre_dispatch_failure(
+                "the declared DeepSeek Chat replay contract requires an ordered `messages` array",
+            )
+        })?;
+    // durableTexts is every recorded reasoning text this request must still carry afterwards.
+    // durableTexts 是本请求之后仍必须携带的每段已记录推理文本。
+    let mut durable_texts = Vec::new();
+    for message in &request.messages {
+        for item in &message.provider_context_items {
+            if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+                let text = recorded_reasoning_text(item);
+                if text.trim().is_empty() {
+                    // An encrypted-only or summary-less record cannot become `reasoning_content`,
+                    // and dropping it silently is the exact defect this contract exists to stop.
+                    // 仅有密文或缺少文本的记录无法成为 `reasoning_content`，
+                    // 而静默丢弃它正是本契约存在所要阻止的缺陷。
+                    return Err(unreplayable_history_failure(
+                        "a recorded DeepSeek Chat reasoning item carries no text that reasoning_content can replay",
+                    ));
+                }
+                durable_texts.push(text);
+            }
+        }
+        for item in &message.content {
+            if let ContentItem::Reasoning { text, .. } = item
+                && !text.trim().is_empty()
+            {
+                durable_texts.push(text.clone());
+            }
+        }
+    }
+    let mut replayed = Vec::new();
+    let mut seen_tool_call_ids = BTreeSet::new();
+    for message in messages {
+        match message.get("role").and_then(Value::as_str) {
+            Some("assistant") => {
+                if let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str)
+                    && !reasoning.is_empty()
+                {
+                    replayed.push(reasoning.to_string());
+                }
+                let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) else {
+                    continue;
+                };
+                // A tool call without body text must use the verified empty-string form, never a
+                // null body that would also erase a body this turn actually had.
+                // 没有正文的工具调用必须使用已验证的空字符串形态，绝不能使用同时会抹掉本回合真实
+                // 正文的 null。
+                if !tool_calls.is_empty() && !message.get("content").is_some_and(Value::is_string) {
+                    return Err(pre_dispatch_failure(
+                        "a replayed DeepSeek Chat tool call requires a string `content` field",
+                    ));
+                }
+                for call in tool_calls {
+                    let call_id = call.get("id").and_then(Value::as_str).ok_or_else(|| {
+                        pre_dispatch_failure("a replayed DeepSeek Chat tool call is missing its id")
+                    })?;
+                    if !seen_tool_call_ids.insert(call_id) {
+                        return Err(pre_dispatch_failure(format!(
+                            "replayed DeepSeek Chat tool call identity `{call_id}` appears more than once"
+                        )));
+                    }
+                }
+            }
+            Some("tool") => {
+                let call_id = message
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        pre_dispatch_failure(
+                            "a replayed DeepSeek Chat tool result is missing its tool_call_id",
+                        )
+                    })?;
+                if !seen_tool_call_ids.contains(call_id) {
+                    return Err(pre_dispatch_failure(format!(
+                        "replayed DeepSeek Chat tool result `{call_id}` has no preceding tool call"
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    // Each recorded turn must be covered by its own replayed reasoning_content entry: two turns that
+    // happen to share the same text cannot both be satisfied by one entry.
+    // 每个已记录回合必须由各自的 reasoning_content 项覆盖：
+    // 恰好文本相同的两个回合不能被同一项同时满足。
+    let mut consumed = vec![false; replayed.len()];
+    for (ordinal, text) in durable_texts.iter().enumerate() {
+        let matched = replayed
+            .iter()
+            .enumerate()
+            .position(|(index, reasoning)| !consumed[index] && reasoning.contains(text.as_str()));
+        match matched {
+            Some(index) => consumed[index] = true,
+            None => {
+                // The ordinal identifies the missing turn without disclosing any reasoning text.
+                // 序号标识缺失的回合，且不披露任何推理正文。
+                return Err(unreplayable_history_failure(format!(
+                    "recorded DeepSeek Chat reasoning turn {} could not reach the final body as reasoning_content",
+                    ordinal + 1
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Proves one DeepSeek Anthropic body replays every recorded reasoning turn as native thinking.
+/// 证明一份 DeepSeek Anthropic 正文把每个已记录推理回合回放为原生 thinking。
+///
+/// # Remarks
+/// 说明
+/// The real endpoint accepts a `thinking` block with or without a signature, so acceptance here
+/// checks delivery and structure rather than the presence of a signature: no recorded reasoning was
+/// dropped, no redacted block was invented, and tool identities still pair in order.
+/// 真实端点接受带或不带签名的 `thinking` 块，因此此处校验交付与结构，而不是签名是否存在：
+/// 没有任何已记录推理被丢弃、没有编造 redacted 块、工具身份仍按序配对。
+fn validate_deepseek_anthropic_thinking_replay(
+    request: &AiExecutionRequest,
+    body: &Value,
+) -> Result<(), ProviderExecutionFailure> {
+    let messages = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            pre_dispatch_failure(
+                "the declared DeepSeek Anthropic replay contract requires an ordered `messages` array",
+            )
+        })?;
+    // durableTexts is every recorded reasoning text this request must still deliver afterwards.
+    // durableTexts 是本请求之后仍必须交付的每段已记录推理文本。
+    let mut durable_texts = Vec::new();
+    for message in &request.messages {
+        for item in &message.provider_context_items {
+            if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+                let text = recorded_reasoning_text(item);
+                if text.trim().is_empty() {
+                    return Err(unreplayable_history_failure(
+                        "a recorded DeepSeek Anthropic reasoning item carries no text that a thinking block can carry",
+                    ));
+                }
+                durable_texts.push(text);
+            }
+        }
+        for item in &message.content {
+            if let ContentItem::Reasoning { text, .. } = item {
+                if text.trim().is_empty() {
+                    return Err(unreplayable_history_failure(
+                        "a recorded DeepSeek Anthropic reasoning item carries no text that a thinking block can carry",
+                    ));
+                }
+                durable_texts.push(text.clone());
+            }
+        }
+    }
+    let mut replayed = Vec::new();
+    let mut seen_tool_use_ids = BTreeSet::new();
+    for message in messages {
+        let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for block in blocks {
+            match block.get("type").and_then(Value::as_str) {
+                Some("thinking") => {
+                    let thinking = block
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !thinking.is_empty() {
+                        replayed.push(thinking.to_string());
+                    }
+                }
+                // This endpoint does not support redacted thinking, so producing one is a defect
+                // rather than a fallback.
+                // 该端点不支持 redacted thinking，因此产出它属于缺陷，而不是回退。
+                Some("redacted_thinking") => {
+                    return Err(pre_dispatch_failure(
+                        "the declared DeepSeek Anthropic replay contract forbids redacted_thinking",
+                    ));
+                }
+                Some("tool_use") => {
+                    let call_id = block.get("id").and_then(Value::as_str).ok_or_else(|| {
+                        pre_dispatch_failure("a replayed DeepSeek tool_use is missing its id")
+                    })?;
+                    if !seen_tool_use_ids.insert(call_id) {
+                        return Err(pre_dispatch_failure(format!(
+                            "replayed DeepSeek tool_use identity `{call_id}` appears more than once"
+                        )));
+                    }
+                }
+                Some("tool_result") => {
+                    let call_id = block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            pre_dispatch_failure(
+                                "a replayed DeepSeek tool_result is missing its tool_use_id",
+                            )
+                        })?;
+                    if !seen_tool_use_ids.contains(call_id) {
+                        return Err(pre_dispatch_failure(format!(
+                            "replayed DeepSeek tool result `{call_id}` has no preceding tool_use"
+                        )));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Each recorded turn must be covered by its own replayed thinking block: two turns that happen
+    // to share the same text cannot both be satisfied by one block.
+    // 每个已记录回合必须由各自的 thinking 块覆盖：
+    // 恰好文本相同的两个回合不能被同一个块同时满足。
+    let mut consumed = vec![false; replayed.len()];
+    for (ordinal, text) in durable_texts.iter().enumerate() {
+        let matched = replayed
+            .iter()
+            .enumerate()
+            .position(|(index, thinking)| !consumed[index] && thinking.contains(text.as_str()));
+        match matched {
+            Some(index) => consumed[index] = true,
+            None => {
+                // The ordinal identifies the missing turn without disclosing any reasoning text.
+                // 序号标识缺失的回合，且不披露任何推理正文。
+                return Err(unreplayable_history_failure(format!(
+                    "recorded DeepSeek Anthropic reasoning turn {} could not reach the final body as a thinking block",
+                    ordinal + 1
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Projects one frozen model's closed Codex behavior onto the final native Responses envelope.

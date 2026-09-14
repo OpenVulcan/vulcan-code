@@ -2,7 +2,8 @@
 //! 暂存 Manifest 替换、一致配置激活与受保护的补偿。
 
 use super::catalog_views::{
-    effective_catalog_snapshot_from_generation, resolve_model_catalog_overlays_from_inputs,
+    CatalogProjectionUse, effective_catalog_snapshot_from_generation,
+    resolve_model_catalog_overlays_from_inputs,
 };
 use super::{
     ProviderManifestRuntimeSnapshot, ProviderRuntimeActivationSnapshot, PublicAiRuntime,
@@ -874,6 +875,7 @@ impl PublicAiRuntime {
             generation_guard.manifests.as_ref(),
             &generation_guard.source_catalogs,
             &generation_guard.usage_cache,
+            CatalogProjectionUse::Management,
         )?
         .snapshot();
         Ok(Some(ProviderManifestRuntimeSnapshot {

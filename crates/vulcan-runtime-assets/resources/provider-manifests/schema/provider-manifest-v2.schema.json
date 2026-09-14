@@ -791,6 +791,13 @@
                 },
                 "verified": {
                   "type": "boolean"
+                },
+                "reasoning_replay_contract": {
+                  "enum": [
+                    "deepseek_responses_plaintext_v1",
+                    "deepseek_chat_reasoning_content_v1",
+                    "deepseek_anthropic_thinking_v1"
+                  ]
                 }
               }
             }

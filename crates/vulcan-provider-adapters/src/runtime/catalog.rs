@@ -3,7 +3,8 @@
 
 use super::catalog_policy::{
     MANUAL_MODEL_CATALOG_SCHEMA_REVISION, apply_model_catalog_overlays_with_account_access,
-    manual_custom_catalog, validate_resolved_catalog_limits,
+    manual_custom_catalog, retain_models_with_valid_limits, validate_catalog_model_count,
+    validate_resolved_catalog_limits,
 };
 use super::catalog_sources::{
     build_manifest_identity_catalog, empty_model_source_catalog, model_discovery_is_remote,
@@ -396,7 +397,9 @@ impl PublicAiRuntime {
                         catalog.connection_id, observation.connection_id
                     ));
                 }
-                validate_resolved_catalog_limits(catalog)?;
+                // Source observations retain invalid model facts for management and repair.
+                // 来源观测保留无效模型事实，以供管理与修复。
+                validate_catalog_model_count(catalog)?;
             }
         }
         let _refresh_guard = self.catalog_refresh_flight.try_lock().map_err(|_| {
@@ -928,6 +931,7 @@ impl PublicAiRuntime {
             manifest.as_deref(),
             &mut catalog,
         )
+        .map(|_| retain_models_with_valid_limits(&mut catalog))
         .and_then(|_| validate_resolved_catalog_limits(&catalog))
         {
             self.record_catalog_refresh_failure(
@@ -1079,6 +1083,7 @@ impl PublicAiRuntime {
             account_usage.as_ref(),
             &mut catalog,
         )?;
+        retain_models_with_valid_limits(&mut catalog);
         validate_resolved_catalog_limits(&catalog)?;
         self.replace_catalog_locked(catalog)?;
         self.advance_catalog_state_revision_locked()?;

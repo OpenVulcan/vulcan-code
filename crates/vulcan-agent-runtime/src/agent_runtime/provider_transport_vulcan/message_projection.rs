@@ -6,8 +6,10 @@ use crate::agent_runtime::provider_request_bridge_conversation::build_core_conve
 use serde_json::Value;
 use std::collections::BTreeSet;
 use vulcan_ai_contract::{
-    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ToolCall as PublicToolCall,
-    ToolResult, canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
+    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ProviderReplayProjection,
+    ProviderReplayRoute, ToolCall as PublicToolCall, ToolResult,
+    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
+    project_provider_replay,
 };
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::types::{
@@ -142,9 +144,11 @@ pub(super) fn core_message_to_public(
             tool_calls,
             ..
         } => {
-            // providerContextItems prefer complete ordinary output replay before remote compaction state.
-            // providerContextItems 优先采用完整普通输出重放，其次才采用远端压缩状态。
-            let mut provider_context_items = replay_provider_context_items_for_route(
+            // projection delegates every durable replay decision to the shared strong-typed entry so
+            // this legacy shape can never disagree with the V1 rebuild about what may be replayed.
+            // projection 把每一项可持久化重放判定都交给共享的强类型入口，使这个旧形态绝不会与
+            // V1 重建在“什么可以重放”上产生分歧。
+            let projection = replay_projection_for_route(
                 provider_message_state.as_ref(),
                 provider_id,
                 connection_id,
@@ -152,7 +156,23 @@ pub(super) fn core_message_to_public(
                 protocol_profile_id,
                 model_id,
             )?;
+            let (mut content, mut provider_context_items) = match projection {
+                ProviderReplayProjection::ProviderItems(items) => (Vec::new(), items),
+                ProviderReplayProjection::CanonicalContent(content) => (content, Vec::new()),
+                ProviderReplayProjection::Unusable(reason) => {
+                    return Err(provider_failure(
+                        provider_id,
+                        format!("Persisted public replay envelope cannot be replayed: {reason:?}")
+                            .as_str(),
+                    ));
+                }
+                // A missing or foreign envelope contributes no durable provider-owned payload.
+                // 缺失或外来封套不贡献任何可持久化供应商持有载荷。
+                ProviderReplayProjection::RouteMismatch => (Vec::new(), Vec::new()),
+            };
             if provider_context_items.is_empty() {
+                // Route-bound opaque compaction items keep their prior precedence over rebuilt local text.
+                // 绑定路由的不透明压缩项保持其先于本地重建文本的既有优先级。
                 provider_context_items = responses_compaction_items_for_route(
                     provider_message_state.as_ref(),
                     provider_id,
@@ -162,28 +182,9 @@ pub(super) fn core_message_to_public(
                     model_id,
                 )?;
             }
-            if let Some(content) = replay_content_for_route(
-                provider_message_state.as_ref(),
-                provider_id,
-                connection_id,
-                route_fingerprint,
-                protocol_profile_id,
-                model_id,
-            )? {
-                return Ok(AiMessage {
-                    role: MessageRole::Assistant,
-                    content: if provider_context_items.is_empty() {
-                        content
-                    } else {
-                        Vec::new()
-                    },
-                    provider_context_items,
-                });
-            }
-            let mut content = Vec::new();
-            // Opaque compaction items replace the anchor's local diagnostic text on their exact route.
-            // 不透明压缩项在精确路由上替代锚点的本地诊断文本。
-            if provider_context_items.is_empty() {
+            if content.is_empty() && provider_context_items.is_empty() {
+                // localContent is the last resort and never claims provider-owned fidelity.
+                // localContent 是最后手段，绝不声称具备供应商持有的保真度。
                 if !reasoning.is_empty() {
                     content.push(ContentItem::Reasoning {
                         text: reasoning.clone(),
@@ -259,8 +260,8 @@ pub(super) fn core_message_to_public(
     }
 }
 
-/// Reads durable ordered replay content only for the exact active execution route.
-/// 仅为当前精确执行路由读取可持久化的有序重放内容。
+/// Reads the shared strong-typed replay projection for the exact active execution route.
+/// 为当前精确执行路由读取共享的强类型重放投影。
 ///
 /// # Parameters
 /// 参数
@@ -270,21 +271,23 @@ pub(super) fn core_message_to_public(
 ///
 /// # Returns
 /// 返回值
-/// Exact ordered content for a matching route, no replay for a different route, or a controlled
-/// error when a declared replay envelope is malformed.
-/// 路由匹配时返回精确有序内容；路由不同时不重放；已声明封套损坏时返回受控错误。
-fn replay_content_for_route(
+/// The same four-way projection the V1 rebuild uses, or a controlled error when a declared replay
+/// envelope is malformed.
+/// 返回与 V1 重建完全相同的四态投影；已声明封套损坏时返回受控错误。
+fn replay_projection_for_route(
     provider_message_state: Option<&Value>,
     provider_id: &str,
     connection_id: &str,
     route_fingerprint: &str,
     protocol_profile_id: &str,
     model_id: &str,
-) -> Result<Option<Vec<ContentItem>>, VulcanCoreError> {
+) -> Result<ProviderReplayProjection, VulcanCoreError> {
+    // The legacy Core shape keeps its namespaced wrapper, and only this reader may unwrap it.
+    // 旧 Core 形态保留其命名空间包装，且只有本读取函数可以解开它。
     let Some(replay_value) =
         provider_message_state.and_then(|state| state.pointer("/vulcan_ai/replay"))
     else {
-        return Ok(None);
+        return Ok(ProviderReplayProjection::RouteMismatch);
     };
     let envelope: ProviderReplayEnvelope =
         serde_json::from_value(replay_value.clone()).map_err(|error| {
@@ -293,75 +296,16 @@ fn replay_content_for_route(
                 format!("Persisted public replay envelope is invalid: {error}").as_str(),
             )
         })?;
-    if !envelope.matches_route(
-        provider_id,
-        connection_id,
-        route_fingerprint,
-        protocol_profile_id,
-        model_id,
-    ) {
-        return Ok(None);
-    }
-    Ok(Some(envelope.content))
-}
-
-/// Reads exact Responses output items from one route-matched replay envelope.
-/// 从一份路由匹配的重放封套读取精确 Responses 输出项。
-///
-/// # Parameters
-/// 参数
-/// `provider_message_state` is the persisted assistant extension; the remaining identifiers
-/// define the only physical route allowed to replay provider-owned output items.
-/// `provider_message_state` 是持久化的助手扩展；其余标识定义唯一允许重放供应商输出项的物理路由。
-///
-/// # Returns
-/// 返回值
-/// The validated ordered provider item list for an exact route, or an empty list otherwise.
-/// 精确路由匹配时返回已验证的有序供应商项列表，否则返回空列表。
-fn replay_provider_context_items_for_route(
-    provider_message_state: Option<&Value>,
-    provider_id: &str,
-    connection_id: &str,
-    route_fingerprint: &str,
-    protocol_profile_id: &str,
-    model_id: &str,
-) -> Result<Vec<Value>, VulcanCoreError> {
-    // replayValue is the only durable extension allowed to own ordinary provider output items.
-    // replayValue 是唯一允许持有普通供应商输出项的持久化扩展。
-    let Some(replay_value) =
-        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/replay"))
-    else {
-        return Ok(Vec::new());
-    };
-    // envelope validates the closed format before any route-owned payload becomes visible.
-    // envelope 在任何路由专属载荷可见前校验封闭格式。
-    let envelope: ProviderReplayEnvelope =
-        serde_json::from_value(replay_value.clone()).map_err(|error| {
-            provider_failure(
-                provider_id,
-                format!("Persisted public replay envelope is invalid: {error}").as_str(),
-            )
-        })?;
-    if !envelope.matches_route(
-        provider_id,
-        connection_id,
-        route_fingerprint,
-        protocol_profile_id,
-        model_id,
-    ) {
-        return Ok(Vec::new());
-    }
-    if !envelope
-        .provider_context_items
-        .iter()
-        .all(is_replayable_codex_responses_item)
-    {
-        return Err(provider_failure(
+    Ok(project_provider_replay(
+        &envelope,
+        &ProviderReplayRoute {
             provider_id,
-            "Persisted public replay envelope contains a non-replayable provider context item.",
-        ));
-    }
-    Ok(envelope.provider_context_items)
+            connection_id,
+            route_fingerprint,
+            protocol_profile_id,
+            model_id,
+        },
+    ))
 }
 
 /// Reads route-bound remote Responses compaction items from one canonical assistant state.

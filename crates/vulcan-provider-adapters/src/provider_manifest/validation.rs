@@ -501,6 +501,28 @@ fn validate_engine_contract(
             ));
         }
     }
+    // A declared reasoning replay contract is engine capability too, so it must close over the
+    // same engine contract as every provider tool primitive.
+    // 已声明的推理回传契约同样属于引擎能力，因此必须与供应商工具原语一样在引擎契约中闭合。
+    for (service_index, service) in manifest.services.iter().enumerate() {
+        for (route_index, route) in service.protocol_routes.iter().enumerate() {
+            let Some(contract) = route.reasoning_replay_contract else {
+                continue;
+            };
+            let primitive = contract.primitive_id();
+            if !required_execution.contains(primitive) {
+                errors.push(ManifestValidationError::new(
+                    "engine_contract_missing_used_execution_primitive",
+                    format!(
+                        "$.services[{service_index}].protocol_routes[{route_index}].reasoning_replay_contract"
+                    ),
+                    format!(
+                        "used reasoning replay contract `{primitive}` is absent from engine_contract.required_execution_primitives"
+                    ),
+                ));
+            }
+        }
+    }
 
     let required_transformers = contract
         .required_transformers
@@ -7415,6 +7437,7 @@ mod tests {
                     response_profile_refs: Vec::new(),
                     provider_request_id_headers: Vec::new(),
                     verified: true,
+                    reasoning_replay_contract: None,
                 }],
                 model_defaults_override: None,
             }],
@@ -7570,6 +7593,37 @@ mod tests {
                 "missing {expected}: {errors:?}"
             );
         }
+    }
+
+    /// Verifies a declared reasoning replay contract must close over the engine contract.
+    /// 验证已声明的推理回传契约必须在引擎契约中闭合。
+    #[test]
+    fn reasoning_replay_contract_requires_declared_engine_primitive() {
+        // contract is the exact closed value a DeepSeek Responses route declares.
+        // contract 是 DeepSeek Responses 路由声明的精确封闭取值。
+        let contract =
+            crate::provider_manifest::schema::ReasoningReplayContract::DeepseekResponsesPlaintextV1;
+        let mut manifest = minimal_manifest();
+        manifest.services[0].protocol_routes[0].reasoning_replay_contract = Some(contract);
+
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("an undeclared reasoning replay contract must fail closed");
+        assert!(
+            errors.iter().any(|error| {
+                error.code == "engine_contract_missing_used_execution_primitive"
+                    && error.path.ends_with("reasoning_replay_contract")
+            }),
+            "the reasoning replay contract gate did not fire: {errors:?}"
+        );
+
+        // declared closes the same contract, so the manifest must then validate cleanly.
+        // declared 闭合同一契约，因此该 Manifest 必须通过校验。
+        manifest
+            .engine_contract
+            .required_execution_primitives
+            .push(String::from(contract.primitive_id()));
+        validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect("a declared reasoning replay contract must validate");
     }
 
     /// Verifies publication and provenance timestamps are real canonical UTC instants.

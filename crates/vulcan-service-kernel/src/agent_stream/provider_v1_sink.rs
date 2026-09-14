@@ -23,8 +23,9 @@ use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
     PreparedToolInvocationIdentity, persistent_tool_output_from_result,
 };
 use vulcan_ai_contract::{
-    AiMessage, ContentItem, MessageRole, ResourceKind, ResourceReference, ResourceSourceKind,
-    ToolCall as AiToolCall, ToolResult as AiToolResult,
+    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ProviderReplayProjection,
+    ProviderReplayRoute, ResourceKind, ResourceReference, ResourceSourceKind,
+    ToolCall as AiToolCall, ToolResult as AiToolResult, project_provider_replay,
 };
 use vulcan_change_set::{PersistentChangeSetError, persistent_change_set_from_host_result};
 use vulcan_context::protocol::validate_session_conversation_message_identities;
@@ -933,6 +934,161 @@ async fn register_provider_generated_resources(
         .collect())
 }
 
+/// Exact frozen route identity used to accept or reject one durable replay envelope.
+/// 用于接受或拒绝一份可持久化重放封套的精确冻结路由身份。
+///
+/// # Remarks
+/// 说明
+/// Every field is copied from the frozen execution this request already validated, so a replay
+/// decision can never be based on a later global model selection.
+/// 所有字段都复制自本请求已经校验过的冻结执行，因此重放判定绝不会基于之后的全局模型选择。
+struct V1ReplayRouteIdentity {
+    /// Provider definition identifier of the frozen execution.
+    /// 冻结执行的供应商定义标识。
+    provider_id: String,
+    /// Credential connection identifier of the frozen execution.
+    /// 冻结执行的凭据连接标识。
+    connection_id: String,
+    /// Non-secret resolved request URL of the frozen execution.
+    /// 冻结执行不含秘密的已解析请求 URL。
+    route_fingerprint: String,
+    /// Protocol profile identifier of the frozen execution.
+    /// 冻结执行的协议 Profile 标识。
+    protocol_profile_id: String,
+    /// Upstream model identifier of the frozen execution.
+    /// 冻结执行的上游模型标识。
+    model_id: String,
+    /// Frozen reasoning-replay contract of the route this request will dispatch to.
+    /// 本次请求将要派发到的路由所冻结的推理回传契约。
+    ///
+    /// # Remarks
+    /// 说明
+    /// The contract decides whether a mismatch is fatal: only a route that promised to replay
+    /// provider-owned reasoning must refuse to continue without it, while a route that declared no
+    /// contract keeps its previous request bytes.
+    /// 契约决定失配是否致命：只有承诺回传供应商持有推理的路由才必须拒绝在缺失它的情况下继续，
+    /// 未声明契约的路由保持其既有请求字节。
+    reasoning_replay_contract: Option<vulcan_ai_contract::ReasoningReplayContract>,
+}
+
+impl V1ReplayRouteIdentity {
+    /// Copies the frozen route identity from one validated preparation candidate.
+    /// 从一个已校验的准备候选复制冻结路由身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The identity of a real session request, or `None` for a state-only fixture without a frozen
+    /// execution; such a fixture must never be treated as a matching route.
+    /// 真实会话请求的身份；对缺少冻结执行的状态夹具返回 `None`，此类夹具绝不能被当作匹配路由。
+    fn from_candidate(candidate: &ProviderRequestPreparationCandidate) -> Option<Self> {
+        // execution is the same frozen carrier validated before any V1 history rebuild.
+        // execution 是 V1 历史重建前已经校验过的同一冻结载体。
+        let execution = &candidate.media_context.as_ref()?.execution;
+        Some(Self {
+            provider_id: execution.route.provider.id.clone(),
+            connection_id: execution.route.connection.id.clone(),
+            // The producing adapter binds replay signatures with this exact `/responses` convention.
+            // 产生端适配器正是用这个 `/responses` 约定绑定重放签名。
+            route_fingerprint: execution.route.request_url("/responses"),
+            protocol_profile_id: execution.route.protocol_route.protocol_profile_id.clone(),
+            model_id: execution.model.id.clone(),
+            reasoning_replay_contract: execution.route.reasoning_replay_contract(),
+        })
+    }
+
+    /// Borrows this identity as the contract-level projection route.
+    /// 把本身份借用为契约层的投影路由。
+    fn as_route(&self) -> ProviderReplayRoute<'_> {
+        ProviderReplayRoute {
+            provider_id: &self.provider_id,
+            connection_id: &self.connection_id,
+            route_fingerprint: &self.route_fingerprint,
+            protocol_profile_id: &self.protocol_profile_id,
+            model_id: &self.model_id,
+        }
+    }
+}
+
+/// Resolves the ordered assistant payload for one projected assistant group.
+/// 为一个投影的助手组解析有序助手载荷。
+///
+/// # Parameters
+/// 参数
+/// `content` is the locally rebuilt canonical content, `envelope` is this group's durable replay
+/// source when one exists, and `route` is the frozen identity of the dispatching request.
+/// `content` 是本地重建的规范内容，`envelope` 是该组存在时的可持久化重放来源，
+/// `route` 是正在分派请求的冻结身份。
+///
+/// # Returns
+/// 返回值
+/// One mutually exclusive payload pair. Provider items replace canonical content only for the route
+/// they belong to, while an unusable envelope becomes a controlled error instead of a silent local
+/// rebuild.
+/// 返回一对互斥载荷。供应商原生项仅在属于其路由时替代规范内容；不可用封套会变成受控错误，
+/// 而不是静默的本地重建。
+fn resolve_projected_assistant_replay(
+    content: Vec<ContentItem>,
+    envelope: Option<&ProviderReplayEnvelope>,
+    route: Option<&V1ReplayRouteIdentity>,
+    projected_item_id: &str,
+) -> Result<(Vec<ContentItem>, Vec<serde_json::Value>), SessionRuntimeError> {
+    let projection = envelope.map(|envelope| match route {
+        Some(route) => project_provider_replay(envelope, &route.as_route()),
+        // A state-only fixture has no frozen execution and must never match a real envelope.
+        // 仅状态夹具没有冻结执行，因此绝不能匹配真实封套。
+        None => ProviderReplayProjection::RouteMismatch,
+    });
+    match projection {
+        // Provider items and canonical content are mutually exclusive so no tool call, no reasoning
+        // segment and no body text can be written twice.
+        // 供应商项与规范内容互斥，使任何工具调用、推理片段与正文都不会被写入两次。
+        Some(ProviderReplayProjection::ProviderItems(items)) => Ok((Vec::new(), items)),
+        Some(ProviderReplayProjection::CanonicalContent(replayed)) => Ok((replayed, Vec::new())),
+        Some(ProviderReplayProjection::Unusable(reason)) => {
+            Err(unreplayable_replay_runtime_error(format!(
+                "projected item {projected_item_id} holds an envelope this engine cannot replay: {reason:?}"
+            )))
+        }
+        Some(ProviderReplayProjection::RouteMismatch) | None => {
+            // A mismatch must never become a silent signature-free rebuild while the turn actually
+            // carries reasoning and the target route promised to replay provider-owned reasoning.
+            // 当该回合确实携带推理、且目标路由承诺回传供应商持有推理时，
+            // 失配绝不能被变成静默的无签名本地重建。
+            let reasoning_at_stake = content
+                .iter()
+                .any(|item| matches!(item, ContentItem::Reasoning { .. }));
+            let target_replays_reasoning =
+                route.is_some_and(|route| route.reasoning_replay_contract.is_some());
+            if reasoning_at_stake && target_replays_reasoning {
+                return Err(unreplayable_replay_runtime_error(format!(
+                    "projected item {projected_item_id} has reasoning whose durable envelope belongs to another route"
+                )));
+            }
+            // A turn with no reasoning at stake keeps the plain local text behaviour, and a route
+            // that declared no contract must keep its previous request bytes.
+            // 没有推理风险的回合保持原有纯文本行为；未声明契约的路由必须保持其既有请求字节。
+            Ok((content, Vec::new()))
+        }
+    }
+}
+
+/// Reports one unreplayable reasoning history with the shared controlled user copy.
+/// 使用共享的受控用户文案报告一次不可回传的推理历史。
+///
+/// # Remarks
+/// 说明
+/// The copy has exactly one owning place so the session, adapter and WebUI layers cannot drift
+/// apart, and the technical reason is appended as missing-evidence detail only: it never contains
+/// reasoning text, a signature, a credential or a raw request body.
+/// 该文案只有一个归属处，使会话层、适配器层与 WebUI 层不会各自漂移；
+/// 技术原因只作为「缺失证据」附加，绝不含推理正文、签名、凭据或原始请求体。
+fn unreplayable_replay_runtime_error(technical_reason: impl fmt::Display) -> SessionRuntimeError {
+    provider_projection_runtime_error(format!(
+        "{}\n{technical_reason}",
+        vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_MESSAGE
+    ))
+}
+
 /// Rebuilds the only transport candidate that may leave the V1 preparation owner.
 /// 重建唯一允许离开 V1 准备 owner 的传输候选。
 ///
@@ -1004,6 +1160,9 @@ fn rebuild_provider_transport_candidate(
         request_messages.push(text_ai_message(role, source.content.clone()));
     }
 
+    // replay_route is the frozen identity a durable envelope must match before it may replace canonical content.
+    // replay_route 是可持久化封套在替代规范内容前必须匹配的冻结身份。
+    let replay_route = V1ReplayRouteIdentity::from_candidate(&candidate);
     for (index, item) in snapshot.items.iter().enumerate() {
         match item {
             ProjectedItem::SystemText { role, text, .. } => {
@@ -1057,7 +1216,7 @@ fn rebuild_provider_transport_candidate(
                 text,
                 reasoning,
                 tool_calls,
-                ..
+                provider_source,
             } => {
                 let mut content = Vec::new();
                 if let Some(reasoning) = reasoning.as_ref().filter(|value| !value.is_empty()) {
@@ -1085,10 +1244,22 @@ fn rebuild_provider_transport_candidate(
                         },
                     });
                 }
+                // replay prefers the durable provider-native items of the exact frozen route; the
+                // canonical content built above stays the fallback this envelope does not own.
+                // replay 在精确冻结路由上优先使用可持久化供应商原生项；上面构建的规范内容仍作为
+                // 该封套并不拥有的路由的回退。
+                let (content, provider_context_items) = resolve_projected_assistant_replay(
+                    content,
+                    provider_source
+                        .as_deref()
+                        .and_then(|source| source.replay.as_ref()),
+                    replay_route.as_ref(),
+                    provider_projection_message_id(index).as_str(),
+                )?;
                 request_messages.push(AiMessage {
                     role: MessageRole::Assistant,
                     content,
-                    provider_context_items: Vec::new(),
+                    provider_context_items,
                 });
             }
             ProjectedItem::ToolResult {
@@ -4482,5 +4653,327 @@ mod tests {
             persistent_change_set_from_tool_result(&result).expect("non change-set should pass"),
             None
         );
+    }
+
+    /// Builds the frozen route identity used by the replay decision tests.
+    /// 构建重放判定测试使用的冻结路由身份。
+    fn deepseek_replay_route() -> V1ReplayRouteIdentity {
+        V1ReplayRouteIdentity {
+            provider_id: String::from("provider-1"),
+            connection_id: String::from("connection-1"),
+            route_fingerprint: String::from("https://provider.invalid/v1/responses"),
+            protocol_profile_id: String::from("profile-1"),
+            model_id: String::from("model-1"),
+            reasoning_replay_contract: Some(
+                vulcan_ai_contract::ReasoningReplayContract::DeepseekResponsesPlaintextV1,
+            ),
+        }
+    }
+
+    /// Builds the same frozen route identity without any declared replay contract.
+    /// 构建同一冻结路由身份，但不声明任何回传契约。
+    fn undeclared_replay_route() -> V1ReplayRouteIdentity {
+        V1ReplayRouteIdentity {
+            reasoning_replay_contract: None,
+            ..deepseek_replay_route()
+        }
+    }
+
+    /// Builds one non-empty durable envelope retaining its original ordered reasoning items.
+    /// 构建一份非空且保留其原始有序推理项的可持久化封套。
+    fn durable_reasoning_envelope() -> ProviderReplayEnvelope {
+        ProviderReplayEnvelope::new(
+            "provider-1",
+            "connection-1",
+            "https://provider.invalid/v1/responses",
+            "profile-1",
+            "model-1",
+            durable_canonical_content(),
+            vec![
+                json!({
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning_text", "text": "durable-reasoning"}]
+                }),
+                json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "durable-answer"}]
+                }),
+            ],
+        )
+    }
+
+    /// Builds the canonical assistant content that the durable envelope above fully covers.
+    /// 构建上面可持久化封套完全覆盖的规范助手内容。
+    fn durable_canonical_content() -> Vec<ContentItem> {
+        vec![
+            ContentItem::Reasoning {
+                text: String::from("durable-reasoning"),
+                signature: None,
+            },
+            ContentItem::Text {
+                text: String::from("durable-answer"),
+            },
+        ]
+    }
+
+    /// Verifies a matching frozen route replaces canonical content with the durable provider items.
+    /// 验证匹配的冻结路由用可持久化供应商项替代规范内容。
+    #[test]
+    fn projected_assistant_replay_prefers_durable_items_on_matching_route() {
+        let envelope = durable_reasoning_envelope();
+        let route = deepseek_replay_route();
+        let (content, items) = resolve_projected_assistant_replay(
+            durable_canonical_content(),
+            Some(&envelope),
+            Some(&route),
+            "v1-provider-message-1",
+        )
+        .expect("a fully covered matching route must replay");
+
+        assert!(
+            content.is_empty(),
+            "provider items and canonical content are mutually exclusive"
+        );
+        assert_eq!(items, envelope.provider_context_items);
+    }
+
+    /// Verifies a foreign route refuses a reasoning turn instead of rebuilding it unsigned.
+    /// 验证外来路由拒绝推理回合，而不是把它重建成无签名形态。
+    ///
+    /// # Remarks
+    /// 说明
+    /// The plan forbids a mismatch from becoming a silent `signature: None` rebuild. The refusal is
+    /// deliberately scoped: a turn with no reasoning at stake keeps its plain local text, and a
+    /// route that declared no contract must keep its previous request bytes.
+    /// 计划禁止把失配变成静默的 `signature: None` 重建。拒绝被刻意限定范围：
+    /// 没有推理风险的回合保持原有纯文本，未声明契约的路由必须保持其既有请求字节。
+    #[test]
+    fn projected_assistant_replay_refuses_reasoning_on_foreign_route() {
+        let envelope = durable_reasoning_envelope();
+        let foreign = V1ReplayRouteIdentity {
+            connection_id: String::from("connection-2"),
+            ..deepseek_replay_route()
+        };
+
+        let error = resolve_projected_assistant_replay(
+            durable_canonical_content(),
+            Some(&envelope),
+            Some(&foreign),
+            "v1-provider-message-1",
+        )
+        .expect_err("a foreign route must not rebuild a reasoning turn unsigned");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains(vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_MESSAGE),
+            "the refusal must carry the shared controlled user copy: {message}"
+        );
+        assert!(
+            message.contains("v1-provider-message-1"),
+            "the refusal must retain the missing-evidence detail: {message}"
+        );
+        // The controlled copy must never carry reasoning text, a signature or a credential.
+        // 受控文案绝不含推理正文、签名或凭据。
+        assert!(
+            !message.contains("durable-reasoning") && !message.contains("durable-answer"),
+            "the refusal must not disclose reasoning or body text: {message}"
+        );
+
+        // A turn with no reasoning at stake still falls back to its plain local text.
+        // 没有推理风险的回合仍回退为原有纯文本。
+        let text_only = vec![ContentItem::Text {
+            text: String::from("durable-answer"),
+        }];
+        let (content, items) = resolve_projected_assistant_replay(
+            text_only.clone(),
+            Some(&envelope),
+            Some(&foreign),
+            "v1-provider-message-1",
+        )
+        .expect("a turn without reasoning at stake must keep the plain local text");
+        assert_eq!(content, text_only);
+        assert!(items.is_empty());
+
+        // A route that declared no contract keeps its previous behaviour byte for byte.
+        // 未声明契约的路由逐字节保持其既有行为。
+        let undeclared = V1ReplayRouteIdentity {
+            connection_id: String::from("connection-2"),
+            ..undeclared_replay_route()
+        };
+        let (content, items) = resolve_projected_assistant_replay(
+            durable_canonical_content(),
+            Some(&envelope),
+            Some(&undeclared),
+            "v1-provider-message-1",
+        )
+        .expect("a route without a declared contract must keep its previous bytes");
+        assert_eq!(content, durable_canonical_content());
+        assert!(items.is_empty());
+    }
+
+    /// Verifies a state-only fixture without a frozen execution never invents a matching route.
+    /// 验证缺少冻结执行的状态夹具绝不会凭空认定匹配路由。
+    #[test]
+    fn projected_assistant_replay_never_invents_a_route_for_state_only_fixtures() {
+        let envelope = durable_reasoning_envelope();
+        let (content, items) = resolve_projected_assistant_replay(
+            durable_canonical_content(),
+            Some(&envelope),
+            None,
+            "v1-provider-message-1",
+        )
+        .expect("a state-only fixture must stay conservative");
+
+        assert_eq!(content, durable_canonical_content());
+        assert!(items.is_empty());
+    }
+
+    /// Verifies an envelope that no longer covers canonical output fails before dispatch.
+    /// 验证不再覆盖规范输出的封套会在分派前失败。
+    #[test]
+    fn projected_assistant_replay_rejects_unusable_envelope() {
+        // damaged drops the assistant message while canonical content still declares its text.
+        // damaged 丢弃助手消息，而规范内容仍声明其正文。
+        let mut envelope = durable_reasoning_envelope();
+        envelope
+            .provider_context_items
+            .retain(|item| item["type"] != "message");
+        let route = deepseek_replay_route();
+
+        let error = resolve_projected_assistant_replay(
+            durable_canonical_content(),
+            Some(&envelope),
+            Some(&route),
+            "v1-provider-message-1",
+        )
+        .expect_err("an envelope that no longer covers canonical output must fail before dispatch");
+
+        assert!(
+            format!("{error}").contains("v1-provider-message-1"),
+            "the failure must name the projected item it refused: {error}"
+        );
+    }
+
+    /// Verifies the real V1 rebuild keeps a durable envelope conservative without a frozen route.
+    /// 验证真实 V1 重建在缺少冻结路由时对可持久化封套保持保守。
+    #[test]
+    fn provider_transport_rebuild_keeps_durable_envelope_conservative()
+    -> Result<(), SessionRuntimeError> {
+        let facts = request_facts();
+        let envelope = durable_reasoning_envelope();
+        let snapshot = SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs: Vec::new(),
+            segment_generation: 1,
+            current_compaction_id: None,
+            document_revision: 1,
+            retained_from_seq: Seq::try_new(1).expect("valid retained seq"),
+            through_seq: Seq::try_new(1).expect("valid through seq"),
+            items: vec![ProjectedItem::AssistantText {
+                text: String::from("durable-answer"),
+                reasoning: Some(String::from("durable-reasoning")),
+                tool_calls: Vec::new(),
+                provider_source: Some(Box::new(vulcan_session_core::v1::event::ProviderSource {
+                    provider: String::from("provider-1"),
+                    profile: Some(String::from("profile-1")),
+                    model: String::from("model-1"),
+                    connection_id: Some(String::from("connection-1")),
+                    message_id: Some(String::from("message-1")),
+                    response_id: None,
+                    replay: Some(envelope.clone()),
+                    covered_until_seq: Seq::try_new(1).expect("valid covered seq"),
+                    fingerprint_sha256: String::from("0").repeat(64),
+                })),
+            }],
+            sourced_items: Vec::new(),
+            project_directory: std::path::PathBuf::from("D:/project"),
+            provider_usage_budget_anchor: None,
+            initialized_locked_baseline: None,
+        };
+        let candidate = ProviderRequestPreparationCandidate {
+            media_context: None,
+            exact_request: AiExecutionRequest {
+                operation: AiOperation::ConversationRespond,
+                model_id: facts.request.model.clone(),
+                cache_scope_id: None,
+                continuation: None,
+                messages: vec![text_ai_message(
+                    MessageRole::User,
+                    String::from("legacy-message"),
+                )],
+                tools: Vec::new(),
+                native_tools: Vec::new(),
+                tool_choice: Default::default(),
+                parallel_tool_calls: Default::default(),
+                structured_output: Default::default(),
+                stop_sequences: Vec::new(),
+                prompt_cache: Default::default(),
+                reasoning_effort: None,
+                reasoning_output: Default::default(),
+                model_parameters: BTreeMap::new(),
+                resources: Vec::new(),
+                output_token_limit: None,
+            },
+            controller_config: vulcan_core::types::ControllerConfig {
+                provider_id: facts.request.provider.clone(),
+                model_id: facts.request.model.clone(),
+                temperature: facts.request.temperature,
+                ..Default::default()
+            },
+            controller_snapshot: ConversationSnapshot::default(),
+            request_snapshot: CoreProviderRequestSnapshot {
+                provider_id: facts.request.provider.clone(),
+                model_id: facts.request.model.clone(),
+                system_prompt: String::from("legacy-system"),
+                prompt_layers: ProviderPromptLayers::default(),
+                prompt: String::from("legacy-message"),
+                prompt_in_history: true,
+                history: Vec::new(),
+                temperature: facts.request.temperature,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: ProviderContinuation::default(),
+            },
+            context_budget: None,
+            request_budget_guard: Some(ProviderRequestBudgetGuard::new_v1(
+                facts.request.provider.clone(),
+                facts.request.model.clone(),
+                "test-profile",
+                "sha256:test-route",
+                ModelCapabilities::default(),
+                ProviderRuntimeReasoningResolution::default(),
+                None,
+                None,
+                None,
+            )),
+            locked_baseline: LockedBaselineProjection::empty(),
+            dynamic_prompt_layers: ProviderPromptLayers::default(),
+        };
+
+        let rebuilt = rebuild_provider_transport_candidate(
+            snapshot,
+            &facts,
+            candidate,
+            media::PreparedV1UserMedia {
+                prompts: BTreeMap::new(),
+                bindings: Vec::new(),
+            },
+        )?;
+        let assistant = rebuilt
+            .transport
+            .exact_request
+            .messages
+            .iter()
+            .find(|message| message.role == MessageRole::Assistant)
+            .expect("the provider-sourced assistant group must survive the rebuild");
+
+        assert_eq!(assistant.content, durable_canonical_content());
+        assert!(
+            assistant.provider_context_items.is_empty(),
+            "an unfrozen route must never replay another route's provider items"
+        );
+        Ok(())
     }
 }

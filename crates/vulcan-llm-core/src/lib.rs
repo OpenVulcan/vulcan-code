@@ -94,6 +94,14 @@ pub struct ProviderRouteContext {
     /// Exact reasoning projection contract for Anthropic-shaped routes.
     /// Anthropic 形状路由所采用的精确推理投影契约。
     pub anthropic_reasoning_mode: AnthropicReasoningMode,
+    /// Exact reasoning replay contract declared by this frozen route, if any.
+    /// 当前冻结路由声明的精确推理回传契约（如有）。
+    ///
+    /// # Remarks
+    /// 说明
+    /// `None` keeps every existing target converter on its current byte-exact behavior.
+    /// `None` 使每个既有目标转换器保持其当前逐字节行为。
+    pub reasoning_replay_contract: Option<vulcan_ai_contract::ReasoningReplayContract>,
 }
 
 /// Converts one canonical Responses body for the selected provider route.
@@ -289,6 +297,7 @@ mod tests {
         let context = ProviderRouteContext {
             upstream_protocol: UpstreamProtocol::OpenAiChatCompletions,
             anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+            reasoning_replay_contract: None,
         };
 
         let result = project_responses_for_provider(
@@ -313,6 +322,7 @@ mod tests {
         let context = ProviderRouteContext {
             upstream_protocol: UpstreamProtocol::OpenAiChatCompletions,
             anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+            reasoning_replay_contract: None,
         };
 
         let result = project_responses_for_provider(
@@ -330,6 +340,7 @@ mod tests {
         let context = ProviderRouteContext {
             upstream_protocol: UpstreamProtocol::OpenAiChatCompletions,
             anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+            reasoning_replay_contract: None,
         };
 
         let result = project_responses_for_provider(
@@ -388,6 +399,7 @@ mod tests {
                 &ProviderRouteContext {
                     upstream_protocol: UpstreamProtocol::OpenAiResponses,
                     anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+                    reasoning_replay_contract: None,
                 }
             )
             .expect("Responses role preservation"),
@@ -523,6 +535,7 @@ mod tests {
             &ProviderRouteContext {
                 upstream_protocol: UpstreamProtocol::AnthropicMessages,
                 anthropic_reasoning_mode: AnthropicReasoningMode::ProviderSpecific,
+                reasoning_replay_contract: None,
             },
         )
         .expect("Anthropic native search should convert");
@@ -576,6 +589,7 @@ mod tests {
         let context = ProviderRouteContext {
             upstream_protocol: UpstreamProtocol::GeminiInteractions,
             anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+            reasoning_replay_contract: None,
         };
         let result = project_responses_for_provider(
             json!({
@@ -615,5 +629,820 @@ mod tests {
             tools.iter().any(|tool| tool["type"] == "google_search")
                 && tools.iter().any(|tool| tool["type"] == "code_execution")
         }));
+    }
+
+    /// Builds one minimal Chat-bound request carrying the supplied ordered messages.
+    /// 构建一个携带给定有序消息的最小 Chat 请求。
+    fn declared_chat_request(
+        messages: Vec<vulcan_ai_contract::AiMessage>,
+    ) -> vulcan_ai_contract::AiExecutionRequest {
+        declared_chat_request_with_tools(messages, Vec::new())
+    }
+
+    /// Builds one minimal Chat-bound request that also advertises executable tools.
+    /// 构建一个同时公布可执行工具的最小 Chat 请求。
+    fn declared_chat_request_with_tools(
+        messages: Vec<vulcan_ai_contract::AiMessage>,
+        tools: Vec<vulcan_ai_contract::ToolDefinition>,
+    ) -> vulcan_ai_contract::AiExecutionRequest {
+        vulcan_ai_contract::AiExecutionRequest {
+            operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+            model_id: String::from("deepseek-chat"),
+            cache_scope_id: None,
+            continuation: None,
+            messages,
+            tools,
+            native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
+            prompt_cache: Default::default(),
+            reasoning_effort: None,
+            reasoning_output: Default::default(),
+            model_parameters: std::collections::BTreeMap::new(),
+            resources: Vec::new(),
+            output_token_limit: None,
+        }
+    }
+
+    /// Projects one minimal request down the exact declared Chat contract.
+    /// 把一份最小请求沿精确已声明 Chat 契约投影。
+    fn project_declared_chat(
+        messages: Vec<vulcan_ai_contract::AiMessage>,
+    ) -> Result<serde_json::Value, LlmCoreError> {
+        project_declared_chat_with_tools(messages, Vec::new())
+    }
+
+    /// Projects one tool-carrying request down the exact declared Chat contract.
+    /// 把一份携带工具的请求沿精确已声明 Chat 契约投影。
+    fn project_declared_chat_with_tools(
+        messages: Vec<vulcan_ai_contract::AiMessage>,
+        tools: Vec<vulcan_ai_contract::ToolDefinition>,
+    ) -> Result<serde_json::Value, LlmCoreError> {
+        let internal =
+            encode_internal_responses_request(&declared_chat_request_with_tools(messages, tools))
+                .map_err(|error| LlmCoreError::new(error.to_string()))?;
+        let context = ProviderRouteContext {
+            upstream_protocol: UpstreamProtocol::OpenAiChatCompletions,
+            anthropic_reasoning_mode: AnthropicReasoningMode::ProviderSpecific,
+            reasoning_replay_contract: Some(
+                vulcan_ai_contract::ReasoningReplayContract::DeepseekChatReasoningContentV1,
+            ),
+        };
+        Ok(project_internal_request_for_provider(
+            internal,
+            &context,
+            crate::OPENAI_CHAT_PROFILE_ID,
+        )?
+        .body)
+    }
+
+    /// Builds one assistant message carrying the exact durable provider evidence of one turn.
+    /// 构建一条携带一个回合精确可持久化供应商证据的助手消息。
+    fn durable_assistant(
+        items: Vec<serde_json::Value>,
+        content: Vec<vulcan_ai_contract::ContentItem>,
+    ) -> vulcan_ai_contract::AiMessage {
+        vulcan_ai_contract::AiMessage {
+            role: vulcan_ai_contract::MessageRole::Assistant,
+            content,
+            provider_context_items: items,
+        }
+    }
+
+    /// Verifies one declared Chat turn lands reasoning, body and tool calls on one message.
+    /// 验证一个已声明 Chat 回合把推理、正文与工具调用落在同一条消息上。
+    #[test]
+    fn declared_chat_contract_merges_one_assistant_message_per_turn() {
+        // durableItems are exactly what a V1 rebuild replays verbatim for one assistant turn.
+        // durableItems 是 V1 重建为一个助手回合原样回放的内容。
+        let body = project_declared_chat(vec![
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("hi"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            durable_assistant(
+                vec![
+                    json!({
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "durable-reasoning"}]
+                    }),
+                    json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "durable-answer"}]
+                    }),
+                    json!({
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "read_file",
+                        "arguments": "{}"
+                    }),
+                ],
+                Vec::new(),
+            ),
+        ])
+        .expect("the declared Chat contract must project");
+
+        let assistants = body["messages"]
+            .as_array()
+            .expect("Chat messages")
+            .iter()
+            .filter(|message| message["role"] == "assistant")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            assistants.len(),
+            1,
+            "one declared turn must produce exactly one assistant message: {assistants:#?}"
+        );
+        assert_eq!(assistants[0]["reasoning_content"], "durable-reasoning");
+        assert_eq!(assistants[0]["content"], "durable-answer");
+        assert_eq!(assistants[0]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(
+            assistants[0]["tool_calls"][0]["function"]["name"],
+            "read_file"
+        );
+    }
+
+    /// Verifies two declared turns never collapse into one Chat assistant message.
+    /// 验证两个已声明回合绝不塌缩成一条 Chat 助手消息。
+    ///
+    /// # Remarks
+    /// 说明
+    /// Provider-side adjacent-message merging makes cross-turn binding impossible to recover
+    /// afterwards, so one original turn must stay exactly one Chat message.
+    /// 一旦供应商把相邻消息归并，跨回合归属便无法事后恢复，
+    /// 因此一个原始回合必须恰好保持一条 Chat 消息。
+    #[test]
+    fn declared_chat_contract_keeps_two_turns_as_two_assistant_messages() {
+        let body = project_declared_chat(vec![
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("hi"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            durable_assistant(
+                vec![
+                    json!({
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "first-reasoning"}]
+                    }),
+                    json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "first-answer"}]
+                    }),
+                ],
+                Vec::new(),
+            ),
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("again"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            durable_assistant(
+                vec![
+                    json!({
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "second-reasoning"}]
+                    }),
+                    json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "second-answer"}]
+                    }),
+                ],
+                Vec::new(),
+            ),
+        ])
+        .expect("the declared Chat contract must project");
+
+        let assistants = body["messages"]
+            .as_array()
+            .expect("Chat messages")
+            .iter()
+            .filter(|message| message["role"] == "assistant")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            assistants.len(),
+            2,
+            "two declared turns must stay two assistant messages: {assistants:#?}"
+        );
+        // Each turn keeps its own reasoning and body; nothing is concatenated across the boundary.
+        // 每个回合保留自己的推理与正文；跨边界不发生任何拼接。
+        assert_eq!(assistants[0]["reasoning_content"], "first-reasoning");
+        assert_eq!(assistants[0]["content"], "first-answer");
+        assert_eq!(assistants[1]["reasoning_content"], "second-reasoning");
+        assert_eq!(assistants[1]["content"], "second-answer");
+    }
+
+    /// Verifies parallel tool calls of one declared turn stay one ordered tool-call batch.
+    /// 验证一个已声明回合的并行工具调用保持为一个有序工具调用批次。
+    #[test]
+    fn declared_chat_contract_keeps_parallel_tool_calls_in_one_message() {
+        let body = project_declared_chat(vec![
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("read both"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            durable_assistant(
+                vec![
+                    json!({
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "durable-reasoning"}]
+                    }),
+                    json!({
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "read_file",
+                        "arguments": "{\"path\":\"a\"}"
+                    }),
+                    json!({
+                        "type": "function_call",
+                        "call_id": "call-2",
+                        "name": "read_file",
+                        "arguments": "{\"path\":\"b\"}"
+                    }),
+                ],
+                Vec::new(),
+            ),
+        ])
+        .expect("the declared Chat contract must project");
+
+        let assistants = body["messages"]
+            .as_array()
+            .expect("Chat messages")
+            .iter()
+            .filter(|message| message["role"] == "assistant")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            assistants.len(),
+            1,
+            "one turn stays one message no matter how many calls it made: {assistants:#?}"
+        );
+        let calls = assistants[0]["tool_calls"]
+            .as_array()
+            .expect("parallel calls stay one ordered array");
+        assert_eq!(
+            calls.len(),
+            2,
+            "both parallel calls must survive: {calls:#?}"
+        );
+        assert_eq!(calls[0]["id"], "call-1");
+        assert_eq!(calls[1]["id"], "call-2");
+        // The empty-string body is the verified form for a tool-only turn.
+        // 空字符串正文是仅工具回合的已验证形态。
+        assert_eq!(assistants[0]["content"], "");
+        assert_eq!(assistants[0]["reasoning_content"], "durable-reasoning");
+    }
+
+    /// Verifies a tool-carrying request replays every earlier reasoned turn, tool-free included.
+    /// 验证携带工具的请求回放此前每一个已推理回合，包括未调用工具的回合。
+    ///
+    /// # Remarks
+    /// 说明
+    /// DeepSeek enables reasoning by default and requires the whole prior reasoning to be returned
+    /// once the request advertises tools, so a turn that answered without calling a tool must still
+    /// carry its `reasoning_content` instead of being dropped as "not a tool turn".
+    /// DeepSeek 默认开启推理，且一旦请求公布工具就要求回传全部先前推理，
+    /// 因此没有调用工具就作答的回合仍必须携带其 `reasoning_content`，
+    /// 而不能因为它「不是工具回合」被丢弃。
+    #[test]
+    fn declared_chat_contract_replays_every_reasoned_turn_when_tools_are_advertised() {
+        let body = project_declared_chat_with_tools(
+            vec![
+                vulcan_ai_contract::AiMessage {
+                    role: vulcan_ai_contract::MessageRole::User,
+                    content: vec![vulcan_ai_contract::ContentItem::Text {
+                        text: String::from("what is the cache key?"),
+                    }],
+                    provider_context_items: Vec::new(),
+                },
+                // toolFree is a fully answered turn that never called a tool.
+                // toolFree 是一个完整作答、从未调用工具的回合。
+                durable_assistant(
+                    vec![
+                        json!({
+                            "type": "reasoning",
+                            "content": [{"type": "reasoning_text", "text": "tool-free-reasoning"}]
+                        }),
+                        json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "tool-free-answer"}]
+                        }),
+                    ],
+                    Vec::new(),
+                ),
+                vulcan_ai_contract::AiMessage {
+                    role: vulcan_ai_contract::MessageRole::User,
+                    content: vec![vulcan_ai_contract::ContentItem::Text {
+                        text: String::from("now read the file"),
+                    }],
+                    provider_context_items: Vec::new(),
+                },
+                durable_assistant(
+                    vec![
+                        json!({
+                            "type": "reasoning",
+                            "content": [{"type": "reasoning_text", "text": "tool-calling-reasoning"}]
+                        }),
+                        json!({
+                            "type": "function_call",
+                            "call_id": "call-1",
+                            "name": "read_file",
+                            "arguments": "{}"
+                        }),
+                    ],
+                    Vec::new(),
+                ),
+            ],
+            vec![vulcan_ai_contract::ToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                input_schema: json!({"type": "object", "properties": {}}),
+                input_format: Default::default(),
+                strict: false,
+            }],
+        )
+        .expect("a tool-carrying declared Chat request must project");
+
+        // The advertised tools survive, so the reasoning requirement is exercised under them.
+        // 公布的工具确实存在，因此推理要求是在带工具的前提下被检验的。
+        assert_eq!(body["tools"][0]["function"]["name"], "read_file");
+        let reasonings = body["messages"]
+            .as_array()
+            .expect("Chat messages")
+            .iter()
+            .filter_map(|message| message["reasoning_content"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reasonings,
+            vec!["tool-free-reasoning", "tool-calling-reasoning"],
+            "every earlier reasoned turn must be replayed in order: {:#?}",
+            body["messages"]
+        );
+        // The tool-free turn keeps its own body; the tool turn keeps the verified empty form.
+        // 无工具回合保留自己的正文；工具回合保留已验证的空字符串形态。
+        assert_eq!(body["messages"][1]["content"], "tool-free-answer");
+        assert_eq!(body["messages"][3]["content"], "");
+        assert_eq!(body["messages"][3]["tool_calls"][0]["id"], "call-1");
+    }
+
+    /// Verifies a turn with a tool call but no body keeps the verified empty-string form.
+    /// 验证带工具调用但没有正文的回合保持已验证的空字符串形态。
+    #[test]
+    fn declared_chat_contract_uses_empty_body_for_tool_only_turn() {
+        let body = project_declared_chat(vec![durable_assistant(
+            vec![
+                json!({
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning_text", "text": "durable-reasoning"}]
+                }),
+                json!({
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "read_file",
+                    "arguments": "{}"
+                }),
+            ],
+            Vec::new(),
+        )])
+        .expect("the declared Chat contract must project");
+
+        let assistant = &body["messages"][0];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["reasoning_content"], "durable-reasoning");
+        assert_eq!(assistant["content"], "");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call-1");
+    }
+
+    /// Verifies a canonical unsigned reasoning turn still reaches Chat through the sidecar.
+    /// 验证一条无签名的规范推理回合仍能通过侧车抵达 Chat。
+    #[test]
+    fn declared_chat_contract_replays_canonical_reasoning_without_a_signature() {
+        // canonical is the exact shape the generic encoder drops because it carries no signature.
+        // canonical 是通用编码器因缺少签名而丢弃的精确形态。
+        let body = project_declared_chat(vec![durable_assistant(
+            Vec::new(),
+            vec![vulcan_ai_contract::ContentItem::Reasoning {
+                text: String::from("unsigned-reasoning"),
+                signature: None,
+            }],
+        )])
+        .expect("the declared Chat contract must project");
+
+        let assistant = &body["messages"][0];
+        assert_eq!(assistant["reasoning_content"], "unsigned-reasoning");
+        assert_eq!(assistant["content"], "");
+        assert!(assistant.get("tool_calls").is_none());
+    }
+
+    /// Verifies every interleaving Chat cannot represent fails before dispatch instead of flattening.
+    /// 验证每一种 Chat 无法表示的交错都在派发前失败，而不是被压平。
+    ///
+    /// # Remarks
+    /// 说明
+    /// Chat carries one body field beside the tool-call array, so any body placed after a call is
+    /// reordered on the wire. Both shapes below must be refused, including the one where the body
+    /// only appears after the call and no earlier body existed to make the split obvious.
+    /// Chat 在工具调用数组之外只有一个正文字段，因此任何位于调用之后的正文都会在线路上被重排。
+    /// 以下两种形态都必须被拒绝，包括正文只出现在调用之后、此前没有正文因而拆分不显眼的那种。
+    #[test]
+    fn declared_chat_contract_rejects_unrepresentable_interleaving() {
+        // interleaved splits one turn's body around its tool call.
+        // interleaved 把一个回合的正文拆在工具调用两侧。
+        let interleaved = vec![
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "first"}]
+            }),
+            json!({
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "read_file",
+                "arguments": "{}"
+            }),
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "second"}]
+            }),
+        ];
+        // trailingBody places the only body after the call, which the earlier guard let through.
+        // trailingBody 把唯一的正文放在调用之后，此前那个守卫会放行这种形态。
+        let trailing_body = vec![
+            json!({
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": "durable-reasoning"}]
+            }),
+            json!({
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "read_file",
+                "arguments": "{}"
+            }),
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "after-the-call"}]
+            }),
+        ];
+
+        for items in [interleaved, trailing_body] {
+            let outcome = project_declared_chat(vec![durable_assistant(items.clone(), Vec::new())]);
+            let error =
+                outcome.expect_err("an unrepresentable interleaving must fail before dispatch");
+            assert!(
+                error.to_string().contains("after a tool call"),
+                "the failure must name the reordering for {items:#?}: {error}"
+            );
+        }
+    }
+
+    /// Builds one assistant message carrying only canonical content.
+    /// 构建一条仅携带规范内容的助手消息。
+    fn canonical_assistant(
+        content: Vec<vulcan_ai_contract::ContentItem>,
+    ) -> vulcan_ai_contract::AiMessage {
+        vulcan_ai_contract::AiMessage {
+            role: vulcan_ai_contract::MessageRole::Assistant,
+            content,
+            provider_context_items: Vec::new(),
+        }
+    }
+
+    /// Projects one minimal request down the exact declared Anthropic contract.
+    /// 把一份最小请求沿精确已声明 Anthropic 契约投影。
+    fn project_declared_anthropic(
+        messages: Vec<vulcan_ai_contract::AiMessage>,
+    ) -> Result<serde_json::Value, LlmCoreError> {
+        // Anthropic requires a positive output budget, which the shared minimal request omits.
+        // Anthropic 要求正输出预算，而共用最小请求没有设置它。
+        let mut request = declared_chat_request(messages);
+        request.output_token_limit = Some(1_024);
+        let internal = encode_internal_responses_request(&request)
+            .map_err(|error| LlmCoreError::new(error.to_string()))?;
+        let context = ProviderRouteContext {
+            upstream_protocol: UpstreamProtocol::AnthropicMessages,
+            anthropic_reasoning_mode: AnthropicReasoningMode::ProviderSpecific,
+            reasoning_replay_contract: Some(
+                vulcan_ai_contract::ReasoningReplayContract::DeepseekAnthropicThinkingV1,
+            ),
+        };
+        Ok(project_internal_request_for_provider(
+            internal,
+            &context,
+            crate::ANTHROPIC_MESSAGES_PROFILE_ID,
+        )?
+        .body)
+    }
+
+    /// Returns every content block of one projected Anthropic body in message order.
+    /// 按消息顺序返回一份已投影 Anthropic 正文的全部内容块。
+    fn anthropic_blocks(body: &serde_json::Value) -> Vec<serde_json::Value> {
+        body["messages"]
+            .as_array()
+            .expect("Anthropic messages")
+            .iter()
+            .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+            .collect()
+    }
+
+    /// Verifies the declared Anthropic route replays the original signature without any bridge.
+    /// 验证已声明 Anthropic 路由回放原始签名且完全不经桥接。
+    #[test]
+    fn declared_anthropic_contract_replays_original_signature_without_a_bridge() {
+        let body = project_declared_anthropic(vec![
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("hi"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            canonical_assistant(vec![
+                vulcan_ai_contract::ContentItem::Reasoning {
+                    text: String::from("recorded-thinking"),
+                    signature: Some(String::from("anthropic#original-payload")),
+                },
+                vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("recorded-body"),
+                },
+                vulcan_ai_contract::ContentItem::ToolCall {
+                    call: vulcan_ai_contract::ToolCall {
+                        id: String::from("call-1"),
+                        name: String::from("read_file"),
+                        arguments: json!({}),
+                        signature: None,
+                    },
+                },
+            ]),
+        ])
+        .expect("the declared Anthropic contract must project");
+
+        let blocks = anthropic_blocks(&body);
+        let kinds = blocks
+            .iter()
+            .filter_map(|block| block.get("type").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec!["text", "thinking", "text", "tool_use"],
+            "thinking, body and tool_use must keep their original order: {blocks:#?}"
+        );
+        let thinking = blocks
+            .iter()
+            .find(|block| block["type"] == "thinking")
+            .expect("the recorded thinking block must be present");
+        // The signature must be the exact original payload, never a synthesized bridge envelope.
+        // 签名必须是精确原始载荷，绝不是合成桥接封装。
+        assert_eq!(thinking["signature"], "original-payload");
+        assert_eq!(thinking["thinking"], "recorded-thinking");
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block["type"] != "redacted_thinking"),
+            "a declared DeepSeek route must never emit redacted_thinking: {blocks:#?}"
+        );
+    }
+
+    /// Verifies recorded reasoning without a proven signature replays as text and invents nothing.
+    /// 验证缺少已证实签名的已记录推理以文本回放，且不编造任何签名。
+    ///
+    /// # Remarks
+    /// 说明
+    /// Verified against the real DeepSeek endpoint: a `thinking` block without a signature is
+    /// accepted, so failing the request would be an unnecessary compatibility break, while emitting
+    /// an empty or foreign signature is forbidden.
+    /// 已对真实 DeepSeek 端点验证：不带签名的 `thinking` 块被接受，
+    /// 因此让请求失败是不必要的兼容破坏，而输出空签名或外来签名则被禁止。
+    #[test]
+    fn declared_anthropic_contract_replays_text_without_inventing_a_signature() {
+        let unsigned = [
+            None,
+            Some(String::from("openai#foreign-payload")),
+            Some(String::from("untagged-payload")),
+        ];
+
+        for signature in unsigned {
+            let body = project_declared_anthropic(vec![canonical_assistant(vec![
+                vulcan_ai_contract::ContentItem::Reasoning {
+                    text: String::from("recorded-thinking"),
+                    signature,
+                },
+            ])])
+            .expect("recorded reasoning without a proven signature must still be sendable");
+
+            let thinking = anthropic_blocks(&body)
+                .into_iter()
+                .find(|block| block["type"] == "thinking")
+                .expect("the recorded thinking block must be present");
+            assert_eq!(thinking["thinking"], "recorded-thinking");
+            assert!(
+                thinking.get("signature").is_none(),
+                "an unproven signature must be omitted, never replaced: {thinking:#?}"
+            );
+        }
+    }
+
+    /// Verifies parallel tool calls keep one-to-one identity pairing with their results.
+    /// 验证并行工具调用与其结果保持一一对应的身份配对。
+    ///
+    /// # Remarks
+    /// 说明
+    /// Anthropic pairs a `tool_result` to its `tool_use` by identifier, so a reordered, duplicated or
+    /// dropped identifier would silently attach a result to the wrong call.
+    /// Anthropic 以标识把 `tool_result` 配到对应的 `tool_use`，
+    /// 因此标识一旦错序、重复或丢失，结果就会被静默挂到错误的调用上。
+    #[test]
+    fn declared_anthropic_contract_pairs_parallel_tool_calls_with_their_results() {
+        let body = project_declared_anthropic(vec![
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![vulcan_ai_contract::ContentItem::Text {
+                    text: String::from("read both"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            canonical_assistant(vec![
+                vulcan_ai_contract::ContentItem::Reasoning {
+                    text: String::from("recorded-thinking"),
+                    signature: Some(String::from("anthropic#original-payload")),
+                },
+                vulcan_ai_contract::ContentItem::ToolCall {
+                    call: vulcan_ai_contract::ToolCall {
+                        id: String::from("call-1"),
+                        name: String::from("read_file"),
+                        arguments: json!({"path": "a"}),
+                        signature: None,
+                    },
+                },
+                vulcan_ai_contract::ContentItem::ToolCall {
+                    call: vulcan_ai_contract::ToolCall {
+                        id: String::from("call-2"),
+                        name: String::from("read_file"),
+                        arguments: json!({"path": "b"}),
+                        signature: None,
+                    },
+                },
+            ]),
+            vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::Tool,
+                content: vec![
+                    vulcan_ai_contract::ContentItem::ToolResult {
+                        result: vulcan_ai_contract::ToolResult {
+                            call_id: String::from("call-1"),
+                            is_error: false,
+                            content: json!("body-a"),
+                        },
+                    },
+                    vulcan_ai_contract::ContentItem::ToolResult {
+                        result: vulcan_ai_contract::ToolResult {
+                            call_id: String::from("call-2"),
+                            is_error: false,
+                            content: json!("body-b"),
+                        },
+                    },
+                ],
+                provider_context_items: Vec::new(),
+            },
+        ])
+        .expect("the declared Anthropic contract must project parallel calls with their results");
+
+        let blocks = anthropic_blocks(&body);
+        let kinds = blocks
+            .iter()
+            .filter_map(|block| block["type"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                "text",
+                "thinking",
+                "tool_use",
+                "tool_use",
+                "tool_result",
+                "tool_result"
+            ],
+            "parallel calls and their results must keep their order: {blocks:#?}"
+        );
+        let call_ids = blocks
+            .iter()
+            .filter(|block| block["type"] == "tool_use")
+            .map(|block| block["id"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        let result_ids = blocks
+            .iter()
+            .filter(|block| block["type"] == "tool_result")
+            .map(|block| {
+                block["tool_use_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        // Both directions matter: a missing id loses a result and a duplicated id rebinds one.
+        // 两个方向都要紧：标识缺失会丢结果，标识重复会重新绑定结果。
+        assert_eq!(call_ids, vec!["call-1", "call-2"]);
+        assert_eq!(result_ids, vec!["call-1", "call-2"]);
+    }
+
+    /// Verifies a recorded reasoning item with no text at all fails before dispatch.
+    /// 验证完全不含文本的已记录推理项在派发前失败。
+    #[test]
+    fn declared_anthropic_contract_rejects_reasoning_without_text() {
+        let outcome = project_declared_anthropic(vec![canonical_assistant(vec![
+            vulcan_ai_contract::ContentItem::Reasoning {
+                text: String::new(),
+                signature: Some(String::from("anthropic#original-payload")),
+            },
+        ])]);
+
+        let error = outcome.expect_err("reasoning with no text must fail before dispatch");
+        assert!(
+            error.to_string().contains("thinking"),
+            "the failure must name the thinking block: {error}"
+        );
+    }
+
+    /// Verifies a bare-envelope replay still reaches Anthropic through its persisted items.
+    /// 验证裸封套回放仍能通过其可持久化项抵达 Anthropic。
+    ///
+    /// # Remarks
+    /// 说明
+    /// `ProviderItems` replay carries no canonical content, so the persisted items are the only
+    /// authority; the original signature is replayed only when its provenance tag proves ownership.
+    /// `ProviderItems` 回放不携带规范内容，因此可持久化项是唯一权威；
+    /// 仅当来源标记证明归属时才回放原始签名。
+    #[test]
+    fn declared_anthropic_contract_replays_bare_envelope_items_without_redacting() {
+        let item = json!({
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "recorded-thinking"}],
+            "encrypted_content": "anthropic#original-payload"
+        });
+
+        let body = project_declared_anthropic(vec![durable_assistant(vec![item], Vec::new())])
+            .expect("a bare envelope replay must reach Anthropic");
+        let thinking = anthropic_blocks(&body)
+            .into_iter()
+            .find(|block| block["type"] == "thinking")
+            .expect("the persisted reasoning item must become a thinking block");
+        assert_eq!(thinking["thinking"], "recorded-thinking");
+        assert_eq!(thinking["signature"], "original-payload");
+
+        // An untagged value is never replayed as a signature, and never becomes redacted thinking.
+        // 未标记的值绝不被当作签名回放，也绝不变成 redacted thinking。
+        let untagged = project_declared_anthropic(vec![durable_assistant(
+            vec![json!({
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "recorded-thinking"}],
+                "encrypted_content": "untagged-opaque"
+            })],
+            Vec::new(),
+        )])
+        .expect("a persisted item without a proven signature must still be sendable");
+        let blocks = anthropic_blocks(&untagged);
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block["type"] != "redacted_thinking"),
+            "a declared DeepSeek route must never emit redacted_thinking: {blocks:#?}"
+        );
+        let thinking = blocks
+            .iter()
+            .find(|block| block["type"] == "thinking")
+            .expect("the persisted reasoning item must become a thinking block");
+        assert!(thinking.get("signature").is_none());
+    }
+
+    /// Verifies a persisted reasoning item with no text fails instead of becoming a redaction.
+    /// 验证不含文本的可持久化推理项失败，而不是变成 redaction。
+    #[test]
+    fn declared_anthropic_contract_rejects_textless_persisted_reasoning() {
+        // encryptedOnly is exactly the shape the bridge would have turned into redacted_thinking.
+        // encryptedOnly 正是桥接会转成 redacted_thinking 的形态。
+        let outcome = project_declared_anthropic(vec![durable_assistant(
+            vec![json!({"type": "reasoning", "encrypted_content": "opaque"})],
+            Vec::new(),
+        )]);
+
+        assert!(
+            outcome.is_err(),
+            "a textless record must fail instead of becoming redacted_thinking: {outcome:#?}"
+        );
     }
 }

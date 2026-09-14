@@ -320,7 +320,7 @@ pub fn project_internal_request_for_provider(
 ) -> Result<EncodedWireRequest, LlmCoreError> {
     // Consume the internal owner; it is never serialized or sent as a wire request.
     // 消费内部所有者；内部对象绝不直接序列化或发送为线路请求。
-    let (body, baseline_headers, resources) = request.into_parts();
+    let (body, baseline_headers, resources, replay_sidecar) = request.into_parts();
     // Exact profile validation precedes body conversion and therefore precedes any transport work.
     // 精确 Profile 校验先于正文转换，因此也先于任意传输工作。
     let projector = InternalMediaProjector::new(profile_id, context.upstream_protocol, &resources)?;
@@ -339,12 +339,27 @@ pub fn project_internal_request_for_provider(
         .to_string();
     // Every target is projected independently, including standard Responses.
     // 每个目标均独立投影，包括标准 Responses。
+    // declaredChatSidecar hands the captured attribution only to the converter that declared it.
+    // declaredChatSidecar 只把已捕获的归属交给声明它的转换器。
+    let declared_chat_sidecar = matches!(
+        context.reasoning_replay_contract,
+        Some(vulcan_ai_contract::ReasoningReplayContract::DeepseekChatReasoningContentV1)
+    )
+    .then_some(&replay_sidecar);
+    // declaredAnthropicSidecar is the same one-converter ownership rule for the Anthropic target.
+    // declaredAnthropicSidecar 是 Anthropic 目标上同一条“只交付声明者”规则。
+    let declared_anthropic_sidecar = matches!(
+        context.reasoning_replay_contract,
+        Some(vulcan_ai_contract::ReasoningReplayContract::DeepseekAnthropicThinkingV1)
+    )
+    .then_some(&replay_sidecar);
     let projected = match context.upstream_protocol {
         UpstreamProtocol::OpenAiResponses => project_standard_responses(body, projector)?,
         UpstreamProtocol::OpenAiChatCompletions => {
             crate::responses_to_chat::responses_to_chat_completions_with_media(
                 body,
                 Some(projector),
+                declared_chat_sidecar,
             )?
         }
         UpstreamProtocol::AnthropicMessages => {
@@ -352,6 +367,7 @@ pub fn project_internal_request_for_provider(
                 body,
                 context.anthropic_reasoning_mode,
                 Some(projector),
+                declared_anthropic_sidecar,
             )?
         }
         UpstreamProtocol::GeminiGenerateContent => {

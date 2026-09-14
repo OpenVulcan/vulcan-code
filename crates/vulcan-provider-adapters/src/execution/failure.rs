@@ -58,6 +58,50 @@ pub(crate) fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecut
     }
 }
 
+/// Stable subcategory for a session whose persisted reasoning history cannot reach this route.
+/// 持久化推理历史无法抵达当前路由时的稳定子类别。
+///
+/// # Remarks
+/// 说明
+/// This is the machine-readable reason for the one compatibility consequence the repair protocol
+/// deliberately accepts: a session persisted with only `encrypted_content` or a summary cannot be
+/// replayed as plaintext, so the turn fails before dispatch instead of silently resuming without
+/// its reasoning.
+/// 这是修复协议刻意接受的那一项兼容后果的机器可读原因：仅以 `encrypted_content` 或摘要持久化的
+/// 会话无法作为明文回放，因此该回合在派发前失败，而不是静默地在丢失推理的情况下继续。
+pub const REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY: &str = "reasoning_replay_unreplayable";
+
+/// Fixed user-visible copy for an unreplayable reasoning history, owned by exactly one module.
+/// 推理历史无法回放时固定的用户可见文案，且只由一个模块持有。
+pub const REASONING_REPLAY_UNREPLAYABLE_MESSAGE: &str =
+    "当前路由无法安全回传此会话的历史推理。请新建会话，或切回产生该历史的原路由。";
+
+/// Creates the structured pre-dispatch failure for an unreplayable reasoning history.
+/// 为无法回放的推理历史创建结构化分派前失败。
+///
+/// # Parameters
+/// 参数
+/// `technical_reason` is the English diagnostic retained for logs and tests; it never reaches the
+/// user-facing `message`, which stays the fixed copy.
+/// `technical_reason` 是保留给日志与测试的英文诊断；它绝不进入用户可见的 `message`，
+/// 后者始终保持固定文案。
+///
+/// # Returns
+/// 返回值
+/// A terminal, non-dispatched failure that no retry and no protocol fallback may replace.
+/// 终态、未分派且不允许任何重试或协议回退替代的失败。
+pub(crate) fn unreplayable_history_failure(
+    technical_reason: impl Into<String>,
+) -> ProviderExecutionFailure {
+    let mut failure = pre_dispatch_failure(REASONING_REPLAY_UNREPLAYABLE_MESSAGE);
+    failure.error.subcategory = Some(String::from(REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY));
+    // The diagnostic travels in the field reserved for a controlled upstream message, which the
+    // display path reads separately from `message`.
+    // 诊断信息走“受控上游消息”这一预留字段，展示路径会把它与 `message` 分开读取。
+    failure.error.upstream_message = Some(technical_reason.into());
+    failure
+}
+
 /// Converts a deterministic protocol failure.
 /// 转换确定性协议失败。
 pub(super) fn protocol_failure(error: ProtocolConversionError) -> ProviderExecutionFailure {

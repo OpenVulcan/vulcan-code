@@ -1392,6 +1392,38 @@ mod tests {
         assert!(classify_retry_reason(&error, true).is_none());
     }
 
+    /// Verifies an unreplayable reasoning history is never retried or routed elsewhere.
+    /// 验证无法回放的推理历史绝不会被重试或改走其他路由。
+    ///
+    /// # Remarks
+    /// 说明
+    /// The repair protocol accepts exactly one compatibility consequence: a session whose reasoning
+    /// cannot be replayed fails visibly. Retrying it would re-send identical history, and switching
+    /// protocol would silently drop the reasoning this contract exists to protect.
+    /// 修复协议只接受一项兼容后果：推理无法回放的会话可见失败。重试会重发同样的历史，
+    /// 切换协议则会静默丢弃本契约存在所要保护的推理。
+    #[test]
+    fn unreplayable_reasoning_history_is_terminal_and_never_switches_route() {
+        let mut error = structured_provider_error(AiErrorCategory::InvalidRequest, false);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut error
+        else {
+            panic!("structured error expected");
+        };
+        details.subcategory = Some(String::from(
+            vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY,
+        ));
+        details.stage = String::from("prepare");
+        details.message =
+            String::from(vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_MESSAGE);
+        details.dispatch_outcome = DispatchOutcome::NotDispatched;
+
+        assert!(policy().next_retry(&error, 0, false).is_none());
+        assert!(classify_retry_reason(&error, true).is_none());
+    }
+
     /// Verifies visible assistant output marks the attempt as unsafe to replay.
     /// 验证可见助手输出会把本次尝试标记为不适合重放。
     #[test]

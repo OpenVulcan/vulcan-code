@@ -991,6 +991,10 @@ pub struct ProtocolRoute {
     /// Whether this route has completed real verification.
     /// 此路由是否已完成真实验证。
     pub verified: bool,
+    /// Optional closed reasoning-replay contract compiled from the owning manifest route.
+    /// 从所属 Manifest 路由编译得到的可选封闭推理回传契约。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_replay_contract: Option<crate::provider_manifest::ReasoningReplayContract>,
 }
 
 impl ProtocolRoute {

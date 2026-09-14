@@ -862,6 +862,32 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
   `chatgpt-plan` 入口声明。它把 `reconciliation_required` 标记为结果与用量待确认，保留请求和
   response 身份并禁止盲重放；没有供应商查询/幂等契约前不能称为自动重试。
 
+### 7.2 推理回传契约
+
+`protocol_routes[].reasoning_replay_contract` 声明该路由**端到端实现**了哪一种历史推理回传形态。
+它不是展示字段：取值只允许本引擎同时具备请求投影、目标侧接受条件、最终线路断言和回归测试的形态。
+
+| 取值 | 形态 | 已核实的端点事实 |
+| --- | --- | --- |
+| `deepseek_responses_plaintext_v1` | 有序原始项按序写入 `input`，每条历史推理必须含非空明文 `reasoning_text` 数组 | 明文 `content` 被接受；`summary` 与 `encrypted_content` 被忽略 |
+| `deepseek_chat_reasoning_content_v1` | 一条原始助手消息形成**一条** Chat 助手消息，推理进 `reasoning_content`、正文进 `content`、并行调用进 `tool_calls` | 有工具调用且无正文时 `content: ""` 被接受 |
+| `deepseek_anthropic_thinking_v1` | 按规范顺序生成 `thinking`／正文／`tool_use`；签名只在来源标记证明归属时回放原始载荷 | 端点下发签名但**不校验**：无签名、空文本、伪造签名均被接受 |
+
+作者要求：
+
+1. 声明该字段的路由必须把对应原语列入 `engine_contract.required_execution_primitives`，
+   否则 `validate-all` 以 `engine_contract_missing_used_execution_primitive` 失败关闭；
+2. 引擎注册表只公布已端到端实现的原语，因此清单声明一个引擎未注册的取值同样失败关闭；
+3. 取值按**冻结线路形态**声明，不按供应商名称推断：同名供应商的另一条路由、或另一供应商的相同协议
+   都不会自动继承；未声明的路由逐字节保持原有请求行为；
+4. 已验证事实与未验证未知必须分开记录。没有真实脱敏端点证据的签名或形态要求保持显式未知，
+   不得据“协议支持某字段”推断其必填或可省略。
+
+回传失败的用户可见后果是固定的：历史推理确实存在却无法在**当前已声明路由**上安全回放时，
+派发前失败并给出固定文案「当前路由无法安全回传此会话的历史推理。请新建会话，或切回产生该历史的原路由。」。
+该失败为终态、不可重试，也不会自动改用其他协议；机器可读原因由稳定的
+`reasoning_replay_unreplayable` 子类别承载，诊断中不含推理正文、签名、凭据或原始请求体。
+
 ## 8. Fixtures 与测试证据
 
 fixtures 不是“JSON 能解析”的占位文件，而是走生产编译器与消费者的可执行证据。当前支持两类：
@@ -1031,6 +1057,7 @@ Operation/Tool declaration 来源和选择 snapshot。UI 不得再实现第二�
 - [ ] 未写宿主保护请求根，未引入脚本/表达式/候选字段 fallback；
 - [ ] 网络宿主、路径、MIME、字节数、数量、轮询与取消均有界；
 - [ ] 特殊 request/response/error/usage 有可执行 fixture；
+- [ ] 声明 `reasoning_replay_contract` 的路由已把该原语列入 `required_execution_primitives`，且其线路形态有真实脱敏端点证据或保持显式未知；
 - [ ] 注册 OAuth 凭据已验证后续真实请求读取最新秘密修订版，401 恢复不切换账号、模型或协议；
 - [ ] 图片/视频/文件模型的 upload 和 operation 绑定可在 JSON 中解释；
 - [ ] `validate-all`、`fixture-check`、目标 crate 测试和 release gate 通过；

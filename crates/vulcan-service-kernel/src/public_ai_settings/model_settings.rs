@@ -4,8 +4,9 @@
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use vulcan_provider_adapters::{
-    ConnectionModelAccessPolicy, ConnectionModelCatalog, ModelCapabilityOverrides,
+    ConnectionModel, ConnectionModelAccessPolicy, ConnectionModelCatalog, ModelCapabilityOverrides,
     ModelExecutionOverrides, PersistedAiConfiguration, PublicAiRuntime,
+    model_capability_limit_issue,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -119,8 +120,8 @@ pub(crate) struct PublicAiModelEnabledSaveRequest {
     restore: bool,
 }
 
-/// Reports whether one model belongs to an account independently from its access switch.
-/// 报告一个模型是否属于某个账号，且不受其访问开关影响。
+/// Reads one account model from the management catalog independently from its access switch.
+/// 从独立于访问开关的管理目录读取一个账号模型。
 ///
 /// # Parameters
 /// 参数
@@ -131,20 +132,20 @@ pub(crate) struct PublicAiModelEnabledSaveRequest {
 ///
 /// # Returns
 /// 返回值
-/// `true` only when the model remains in the resolved support directory after access policy is removed.
-/// 仅当移除访问策略后模型仍位于已解析支持目录中时返回 `true`。
-fn connection_supports_model(
+/// The resolved model, including invalid limits, or `None` when the identity is absent.
+/// 返回包含无效限制证据的已解析模型；身份不存在时返回 `None`。
+fn connection_management_model(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     connection_id: &str,
     model_id: &str,
-) -> Result<bool, String> {
-    let mut support_configuration = configuration.clone();
-    support_configuration.allow_all_connection_models_for_support(connection_id);
+) -> Result<Option<ConnectionModel>, String> {
     Ok(runtime
-        .resolved_model_catalog_snapshot(&support_configuration)?
+        .settings_catalog_snapshot(configuration)?
+        .model_support_catalogs
         .get(connection_id)
-        .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id)))
+        .and_then(|catalog| catalog.models.iter().find(|model| model.id == model_id))
+        .cloned())
 }
 
 /// Reads one account's signed initial checkbox policy from a coherent settings generation.
@@ -224,11 +225,16 @@ fn set_connection_models_enabled_respecting_provider_access(
         );
     }
     for model in &support_catalog.models {
-        if !runtime.model_is_enabled_for_connection(
-            configuration,
-            connection_id,
-            model.id.as_str(),
-        )? {
+        // Enable All never grants access to a model quarantined by its resolved limits.
+        // “全部启用”绝不授予最终限制异常模型的访问资格。
+        if model_capability_limit_issue(connection_id, model.id.as_str(), &model.capabilities)
+            .is_some()
+            || !runtime.model_is_enabled_for_connection(
+                configuration,
+                connection_id,
+                model.id.as_str(),
+            )?
+        {
             configuration.set_connection_model_enabled(connection_id, model.id.as_str(), false);
         }
     }
@@ -266,16 +272,29 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
                 request.connection_id
             )
         })?;
-    if !connection_supports_model(
+    let Some(management_model) = connection_management_model(
         runtime.as_ref(),
         &current_configuration,
         request.connection_id.as_str(),
         request.model_id.as_str(),
-    )? {
+    )?
+    else {
         return Err(format!(
             "Credential connection `{}` does not support model `{}`.",
             request.connection_id, request.model_id
         ));
+    };
+    if request.enabled {
+        if let Some(issue) = model_capability_limit_issue(
+            request.connection_id.as_str(),
+            request.model_id.as_str(),
+            &management_model.capabilities,
+        ) {
+            return Err(format!(
+                "Model `{}` cannot be enabled until its configuration is repaired: {issue}",
+                request.model_id
+            ));
+        }
     }
     if request.enabled
         && !runtime.model_is_enabled_for_connection(
@@ -393,10 +412,9 @@ pub(crate) async fn service_save_public_ai_connection_models_enabled(
                 request.connection_id
             )
         })?;
-    let mut support_configuration = current_configuration.clone();
-    support_configuration.allow_all_connection_models_for_support(request.connection_id.as_str());
     let support_catalog = runtime
-        .resolved_model_catalog_snapshot(&support_configuration)?
+        .settings_catalog_snapshot(&current_configuration)?
+        .model_support_catalogs
         .get(request.connection_id.as_str())
         .cloned();
     let Some(support_catalog) = support_catalog else {

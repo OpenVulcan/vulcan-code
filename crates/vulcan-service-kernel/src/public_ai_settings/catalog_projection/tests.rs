@@ -77,6 +77,70 @@ fn openrouter_account_projection_uses_signed_initial_checks() {
     assert!(explicit[0].model_enabled_overrides.is_empty());
 }
 
+/// Verifies a malformed video model appears as a blocked diagnostic instead of a callable route.
+/// 验证异常视频模型显示为受阻诊断，而不进入可调用路由。
+#[test]
+fn zero_limit_media_model_has_a_blocked_management_record() {
+    let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+    let providers = runtime.providers().expect("providers should resolve");
+    let mut configuration = PersistedAiConfiguration::default();
+    let connection = CredentialConnection {
+        id: String::from("openrouter-account"),
+        provider_id: String::from("openrouter"),
+        service_entry_id: String::from("public-api"),
+        credential_profile_id: String::from("api-key"),
+        credential_mode: CredentialMode::Token,
+        credential_id: String::from("openrouter-credential"),
+        display_name: String::from("OpenRouter account"),
+        secret_reference: String::from("openrouter-secret"),
+        management_secret_reference: None,
+        service_origin_override: None,
+        prompt_cache_by_protocol: BTreeMap::new(),
+    };
+    configuration
+        .connection_graph
+        .add_connection(&providers, connection.clone())
+        .expect("account should register");
+    let model = vulcan_provider_adapters::ConnectionModel {
+        id: String::from("google/veo-3.1"),
+        display_name: String::from("Google: Veo 3.1"),
+        capabilities: ModelCapabilities {
+            context_limit: Some(0),
+            output_limit: Some(0),
+            output_resources: vec![vulcan_ai_contract::ResourceKind::Video],
+            ..ModelCapabilities::default()
+        },
+        capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
+        protocol_variants: BTreeMap::new(),
+        resolved_protocol_binding: None,
+    };
+    let catalogs = BTreeMap::from([(
+        connection.id.clone(),
+        ConnectionModelCatalog {
+            connection_id: connection.id.clone(),
+            models: vec![model],
+            generation: 1,
+            page_count: 1,
+            discovery_schema_revision: String::from("openrouter.models.v1"),
+        },
+    )]);
+
+    let records = build_public_ai_model_route_records(
+        &configuration,
+        &providers,
+        &catalogs,
+        &BTreeMap::new(),
+    );
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].executable);
+    assert!(
+        records[0]
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("effective context limit of zero"))
+    );
+}
+
 /// Verifies blocked custom models remain visible with an exact backend-owned reason.
 /// 验证被阻止的自定义模型仍保持可见，并携带精确的后端原因。
 #[test]

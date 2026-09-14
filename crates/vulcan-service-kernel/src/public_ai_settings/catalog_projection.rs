@@ -388,6 +388,14 @@ pub(super) fn build_public_ai_model_route_records(
             continue;
         };
         for model in &catalog.models {
+            // A malformed discovered limit remains visible as a blocked management record,
+            // even when the model has no conversation operation (for example video output).
+            // 发现限制异常的模型保留为受阻管理记录，即使它没有会话操作（例如视频输出）。
+            let limit_issue = vulcan_provider_adapters::model_capability_limit_issue(
+                connection_id,
+                model.id.as_str(),
+                &model.capabilities,
+            );
             // Conversation route records are intentionally narrower than the provider's full
             // system-model inventory. Generation-only system models belong to provider extensions;
             // custom providers remain conversation-only and keep their management diagnostics.
@@ -397,6 +405,7 @@ pub(super) fn build_public_ai_model_route_records(
                 .custom_providers
                 .contains_key(connection.provider_id.as_str())
                 && !catalog_model_supports_text_conversation(model)
+                && limit_issue.is_none()
             {
                 continue;
             }
@@ -427,9 +436,9 @@ pub(super) fn build_public_ai_model_route_records(
                 .map(str::to_string);
             // unavailableReason is computed from the same captured provider/catalog generation.
             // unavailableReason 从同一捕获供应商/目录代际计算。
-            let unavailable_reason = if let Some(required_primitive) =
-                required_runtime_primitive.as_deref()
-            {
+            let unavailable_reason = if let Some(limit_issue) = limit_issue {
+                Some(limit_issue)
+            } else if let Some(required_primitive) = required_runtime_primitive.as_deref() {
                 Some(format!(
                     "Model '{}' requires runtime primitive '{}', which is not registered by this build.",
                     model.id, required_primitive

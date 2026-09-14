@@ -281,6 +281,127 @@ fn openrouter_account_starts_with_signed_models_and_can_select_discovery() {
     );
 }
 
+/// Verifies one zero-limit media model cannot block healthy models or disappear from management.
+/// 验证一个零限制媒体模型既不能阻断健康模型，也不能从管理目录消失。
+#[test]
+fn zero_limit_openrouter_media_model_is_quarantined_per_model() {
+    let (runtime, configuration) = two_account_runtime();
+    let discovered = with_protocol_variants(
+        parse_openrouter_model_catalog(
+            "one",
+            2,
+            r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"GPT-5.6 Sol","context_length":8192,"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},{"id":"google/veo-3.1","name":"Google: Veo 3.1","context_length":0,"architecture":{"input_modalities":["text","image"],"output_modalities":["video"]},"top_provider":{"context_length":0,"max_completion_tokens":0}}]}"#,
+        )
+        .expect("OpenRouter discovery facts should parse"),
+        &[
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            OPENAI_CHAT_PROFILE_ID,
+            OPENAI_RESPONSES_PROFILE_ID,
+        ],
+    );
+    install_source_catalog(&runtime, discovered);
+
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("one malformed media model must not abort the connection projection");
+    let settings = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("management projection should retain the malformed model");
+    let effective = settings
+        .catalogs
+        .get("one")
+        .expect("account catalog should exist");
+    assert_eq!(
+        effective
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openai/gpt-5.6-sol"],
+    );
+    let support = settings
+        .model_support_catalogs
+        .get("one")
+        .expect("account management catalog should exist");
+    let blocked = support
+        .models
+        .iter()
+        .find(|model| model.id == "google/veo-3.1")
+        .expect("blocked video model should remain visible");
+    assert_eq!(blocked.capabilities.context_limit, Some(0));
+    assert!(
+        crate::model_capability_limit_issue("one", blocked.id.as_str(), &blocked.capabilities)
+            .is_some()
+    );
+    assert!(
+        settings
+            .source_catalogs
+            .get("one")
+            .expect("source evidence should remain visible")
+            .models
+            .iter()
+            .any(|model| model.id == "google/veo-3.1")
+    );
+
+    // An explicit account denial keeps the source diagnostic without blocking healthy models.
+    // 显式账号拒绝保留来源诊断，且不会阻断健康模型。
+    let mut disabled = configuration.clone();
+    disabled.set_connection_model_enabled("one", "google/veo-3.1", false);
+    runtime
+        .reapply_model_catalog_overlays(&disabled)
+        .expect("an unselected invalid model must not block publication");
+    let disabled_settings = runtime
+        .settings_catalog_snapshot(&disabled)
+        .expect("management snapshot should still resolve");
+    assert!(
+        disabled_settings
+            .model_support_catalogs
+            .get("one")
+            .expect("management catalog should remain present")
+            .models
+            .iter()
+            .any(|model| model.id == "google/veo-3.1")
+    );
+
+    // A deliberate user override repairs the observed zero without changing its source evidence.
+    // 用户显式覆盖可修复观测到的零值，且不会改写来源证据。
+    let mut repaired = configuration.clone();
+    repaired.model_capability_overrides.insert(
+        PersistedAiConfiguration::provider_model_key("openrouter", "google/veo-3.1"),
+        crate::ModelCapabilityOverrides {
+            context_limit: Some(8_192),
+            output_limit: Some(1_024),
+            ..crate::ModelCapabilityOverrides::default()
+        },
+    );
+    runtime
+        .reapply_model_catalog_overlays(&repaired)
+        .expect("a deliberate positive override should allow publication");
+    let repaired_settings = runtime
+        .settings_catalog_snapshot(&repaired)
+        .expect("repaired settings should resolve");
+    assert!(
+        repaired_settings
+            .catalogs
+            .get("one")
+            .expect("repaired account catalog should exist")
+            .models
+            .iter()
+            .any(|model| model.id == "google/veo-3.1")
+    );
+    assert!(
+        repaired_settings
+            .source_catalogs
+            .get("one")
+            .expect("source evidence should remain")
+            .models
+            .iter()
+            .any(
+                |model| model.id == "google/veo-3.1" && model.capabilities.context_limit == Some(0)
+            )
+    );
+}
+
 /// Verifies candidate capability differences are checked after inherited limits resolve.
 /// 验证候选能力差异会在继承限制解析完成后接受校验。
 #[test]

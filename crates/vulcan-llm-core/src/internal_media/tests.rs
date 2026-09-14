@@ -56,6 +56,7 @@ fn context(upstream_protocol: UpstreamProtocol) -> ProviderRouteContext {
     ProviderRouteContext {
         upstream_protocol,
         anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+        reasoning_replay_contract: None,
     }
 }
 

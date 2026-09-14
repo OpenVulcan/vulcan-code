@@ -29,9 +29,11 @@ use capabilities::{
     manual_model_capability_evidence,
 };
 pub use capabilities::{
-    apply_host_default_reasoning_policy, model_supports_reasoning, model_supports_text_conversation,
+    apply_host_default_reasoning_policy, model_capability_limit_issue, model_supports_reasoning,
+    model_supports_text_conversation,
 };
 pub(super) use capabilities::{
+    retain_models_with_valid_limits, validate_catalog_model_count,
     validate_resolved_catalog_limits, validate_resolved_model_capability_limits,
 };
 

@@ -16,6 +16,11 @@ fn current_execution_registry_contains_only_runtime_backed_primitives() {
         registry.execution_primitives,
         BTreeSet::from([
             String::from("conversation_media_analyze"),
+            // Each DeepSeek replay contract owns projection, acceptance and its own wire tests.
+            // 每个 DeepSeek 回传契约都具备投影、接受条件与各自的线路测试。
+            String::from("deepseek_anthropic_thinking_v1"),
+            String::from("deepseek_chat_reasoning_content_v1"),
+            String::from("deepseek_responses_plaintext_v1"),
             String::from("http_json_async_poll"),
             String::from("http_json_sse"),
             String::from("http_json_sync"),

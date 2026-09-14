@@ -25,9 +25,13 @@ mod wire_capture;
 pub(crate) mod test_support;
 
 pub use failure::ProviderExecutionFailure;
+pub use failure::{
+    REASONING_REPLAY_UNREPLAYABLE_MESSAGE, REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY,
+};
 pub(crate) use failure::{
     http_failure, http_send_transport_failure, pre_dispatch_failure,
     response_headers_protocol_failure, sanitize_provider_execution_failure, transport_failure,
+    unreplayable_history_failure,
 };
 pub use prepared_media::{
     AdmittedLocalMediaSource, CONVERSATION_MEDIA_INPUT_OPERATION_ID,

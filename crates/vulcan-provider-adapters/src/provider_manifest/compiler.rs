@@ -1911,6 +1911,7 @@ fn compile_protocol_route(
         response_projection_profiles,
         provider_request_id_headers: route.provider_request_id_headers.clone(),
         verified: route.verified,
+        reasoning_replay_contract: route.reasoning_replay_contract,
     })
 }
 

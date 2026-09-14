@@ -439,6 +439,17 @@ impl ModelSourcePolicy {
     }
 }
 
+/// Re-exports the shared reasoning replay contract so manifest authoring keeps naming one type.
+/// 重新导出共享推理回传契约，使 Manifest 作者侧始终命名同一个类型。
+///
+/// # Remarks
+/// 说明
+/// The closed value set lives in the shared contract crate because the target projectors in
+/// `vulcan-llm-core` must name the same type without depending on this adapter crate.
+/// 封闭取值集合位于共享契约 crate，因为 `vulcan-llm-core` 中的目标投影器必须命名同一类型，
+/// 而不能依赖本适配器 crate。
+pub use vulcan_ai_contract::ReasoningReplayContract;
+
 /// One verified protocol route declared by the manifest.
 /// 由 Manifest 声明的单条已验证协议路由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -503,6 +514,16 @@ pub struct ManifestProtocolRoute {
     /// 此路由是否已完成真实验证。
     #[serde(default)]
     pub verified: bool,
+    /// Optional closed reasoning-replay contract frozen into this exact protocol route.
+    /// 冻结到当前精确协议路由的可选封闭推理回传契约。
+    ///
+    /// # Remarks
+    /// 说明
+    /// Omitting the field keeps every existing behavior byte for byte, so a legacy manifest never
+    /// silently gains a replay shape it did not declare.
+    /// 省略该字段会逐字节保留全部既有行为，因此旧 Manifest 绝不会静默获得它未声明的重放形态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_replay_contract: Option<ReasoningReplayContract>,
 }
 
 /// Deserializes one nullable patch field so `null` becomes `Some(None)` (Clear) while a

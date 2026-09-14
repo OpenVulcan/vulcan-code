@@ -352,32 +352,47 @@ export function ModelListSettingsArea() {
                   {t("settings.models.blockedRouteDiagnostics")}
                 </div>
                 <div className="settings-model-row-list">
-                  {blockedModelRoutes.map((record) => (
-                    <article
-                      className="settings-model-row"
-                      key={JSON.stringify([record.connectionId, record.modelId])}
-                    >
-                      <div className="settings-model-row-main">
-                        <div className="settings-model-title-line">
-                          <strong>{record.modelId}</strong>
-                          <Badge variant="outline">{record.protocolId ?? "—"}</Badge>
+                  {blockedModelRoutes.map((record) => {
+                    // blockedModel keeps the capability editor reachable while execution stays blocked.
+                    // blockedModel 让能力编辑入口保持可达，同时继续阻止模型执行。
+                    const blockedModel = snapshot.modelSupportCatalogs[record.connectionId]?.models.find(
+                      (model) => model.id === record.modelId,
+                    )
+                    return (
+                      <article
+                        className="settings-model-row"
+                        key={JSON.stringify([record.connectionId, record.modelId])}
+                      >
+                        <div className="settings-model-row-main">
+                          <div className="settings-model-title-line">
+                            <strong>{record.modelId}</strong>
+                            <Badge variant="outline">{record.protocolId ?? "—"}</Badge>
+                          </div>
+                          {record.codexBehavior ? (
+                            <span className="settings-model-route-binding">
+                              {t("settings.models.codexBehavior")}: {codexBehaviorSummary(record.codexBehavior)}
+                            </span>
+                          ) : null}
+                          {record.requiredRuntimePrimitive ? (
+                            <span className="settings-model-route-binding">
+                              {t("settings.models.requiredRuntimePrimitive")}: {record.requiredRuntimePrimitive}
+                            </span>
+                          ) : null}
+                          <span className="settings-validation-error">
+                            {t("settings.models.routeUnavailableReason")}: {record.unavailableReason ?? t("settings.models.routeUnresolved")}
+                          </span>
+                          {blockedModel ? <Button
+                            aria-label={`${t("settings.modelCapabilities.title")} ${record.modelId}`}
+                            disabled={pendingMutationKey !== null}
+                            onClick={() => setEditingCapabilityModel(blockedModel)}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >{t("settings.modelCapabilities.shortLabel")}</Button> : null}
                         </div>
-                        {record.codexBehavior ? (
-                          <span className="settings-model-route-binding">
-                            {t("settings.models.codexBehavior")}: {codexBehaviorSummary(record.codexBehavior)}
-                          </span>
-                        ) : null}
-                        {record.requiredRuntimePrimitive ? (
-                          <span className="settings-model-route-binding">
-                            {t("settings.models.requiredRuntimePrimitive")}: {record.requiredRuntimePrimitive}
-                          </span>
-                        ) : null}
-                        <span className="settings-validation-error">
-                          {t("settings.models.routeUnavailableReason")}: {record.unavailableReason ?? t("settings.models.routeUnresolved")}
-                        </span>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    )
+                  })}
                 </div>
               </section>
             ) : null}

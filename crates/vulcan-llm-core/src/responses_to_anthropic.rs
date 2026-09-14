@@ -6,6 +6,7 @@ use crate::{
     reasoning::canonical_reasoning_effort,
 };
 use serde_json::{Map, Value, json};
+use vulcan_ai_contract::{ContentItem, MessageRole, ReplaySidecar, ReplaySidecarMessage};
 
 /// Converts one canonical Responses request into an Anthropic Messages request.
 /// 将一份规范 Responses 请求转换为 Anthropic Messages 请求。
@@ -19,17 +20,20 @@ pub(crate) fn responses_to_anthropic_messages_for_route(
     body: Value,
     reasoning_mode: AnthropicReasoningMode,
 ) -> Result<Value, LlmCoreError> {
-    responses_to_anthropic_messages_with_media(body, reasoning_mode, None)
+    responses_to_anthropic_messages_with_media(body, reasoning_mode, None, None)
 }
 
 /// Converts `body` with exact `reasoning_mode` and optional trusted internal `media` projection.
 /// 使用精确 `reasoning_mode` 与可选可信内部 `media` 投影转换 `body`。
+/// `sidecar` is present only for a route that declared an exact assistant replay contract.
+/// 仅当路由声明了精确助手回传契约时才提供 `sidecar`。
 /// Returns Anthropic JSON or an explicit mapping error; standard callers cannot inject private media.
 /// 返回 Anthropic JSON 或明确映射错误；标准调用者不能注入私有媒体。
 pub(crate) fn responses_to_anthropic_messages_with_media(
     body: Value,
     reasoning_mode: AnthropicReasoningMode,
     media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+    sidecar: Option<&ReplaySidecar>,
 ) -> Result<Value, LlmCoreError> {
     let model = required_string(&body, "/model", "Responses model")?;
     let mut result = Map::new();
@@ -42,7 +46,14 @@ pub(crate) fn responses_to_anthropic_messages_with_media(
 
     let mut messages = Vec::new();
     if let Some(input) = body.get("input") {
-        append_anthropic_input(input, &mut messages, media)?;
+        match sidecar.filter(|_| input.is_array()) {
+            // declared attribution owns the assistant blocks; without it the generic path stays.
+            // 已声明归属持有助手内容块；没有它时保持通用路径。
+            Some(sidecar) => {
+                append_declared_anthropic_messages(input, sidecar, &mut messages, media)?
+            }
+            None => append_anthropic_input(input, &mut messages, media)?,
+        }
     }
     normalize_anthropic_messages(&mut messages)?;
     result.insert(String::from("messages"), Value::Array(messages));
@@ -145,6 +156,295 @@ fn append_text_value(
         }
     }
     Ok(())
+}
+
+/// Builds one Anthropic thinking block from the exact recorded same-route reasoning.
+/// 从精确的已记录同路由推理构建一个 Anthropic thinking 块。
+///
+/// # Parameters
+/// 参数
+/// `text` is the complete recorded reasoning and `signature` is the provenance-tagged value the
+/// Anthropic decoder stored beside it, when one exists.
+/// `text` 是完整的已记录推理，`signature` 是 Anthropic 解码器与其一同存储的带来源标记值（若存在）。
+///
+/// # Returns
+/// 返回值
+/// The verified `thinking` block, or an explicit refusal to replay reasoning that carries no text.
+/// 已验证的 `thinking` 块；或明确拒绝回放不含文本的推理。
+///
+/// # Remarks
+/// 说明
+/// Verified against the real endpoint on 2026-09-13: DeepSeek accepts a `thinking` block with the
+/// original signature, without any signature, with empty text plus a signature, and even with a
+/// fabricated signature, and it never validates the value. The frozen shape therefore follows this
+/// engine's own integrity rules instead of endpoint tolerance: the text is required, and the
+/// signature is emitted only when the original payload proves it belongs to this provider.
+/// 已于 2026-09-13 对真实端点验证：DeepSeek 接受带原始签名、不带签名、空文本加签名，
+/// 甚至带伪造签名的 `thinking` 块，且从不校验该值。因此冻结形态依据本引擎自身的完整性规则，
+/// 而不是端点的容忍度：文本必需，且仅当原始载荷能证明归属本供应商时才输出签名。
+fn declared_anthropic_thinking_block(
+    text: &str,
+    signature: Option<&str>,
+) -> Result<Value, LlmCoreError> {
+    if text.trim().is_empty() {
+        return Err(LlmCoreError::new(
+            "Declared Anthropic replay requires reasoning text that a thinking block can carry.",
+        ));
+    }
+    let mut block = Map::from_iter([
+        (
+            String::from("type"),
+            Value::String(String::from("thinking")),
+        ),
+        (String::from("thinking"), Value::String(text.to_string())),
+    ]);
+    // A missing or foreign signature omits the field entirely; it is never replaced by an empty
+    // string, by a bridge envelope, or by visible text.
+    // 签名缺失或来源不符时完全省略该字段；绝不用空字符串、桥接封装或可见文本替代。
+    if let Some(payload) = signature.and_then(|signature| {
+        crate::compatible_provider_signature(crate::SIGNATURE_PROVIDER_ANTHROPIC, signature)
+    }) {
+        block.insert(
+            String::from("signature"),
+            Value::String(payload.to_string()),
+        );
+    }
+    Ok(Value::Object(block))
+}
+
+/// Converts one request whose assistant attribution was captured before any encoder could drop it.
+/// 转换一份在任何编码器可能丢弃之前已捕获助手归属的请求。
+///
+/// # Parameters
+/// 参数
+/// `input` is the exact ordered internal input array, `sidecar` attributes its items to original
+/// messages, and `media` remains the only authorized private media projector.
+/// `input` 是精确有序的内部输入数组，`sidecar` 把其中各项归属到原始消息，
+/// `media` 仍是唯一被授权的私有媒体投影器。
+///
+/// # Returns
+/// 返回值
+/// Ordered `thinking`, body and `tool_use` blocks per original assistant message, or a pre-dispatch
+/// failure when a required thinking block cannot be proven sendable.
+/// 每条原始助手消息对应有序的 `thinking`、正文与 `tool_use` 块；
+/// 必需的 thinking 块无法证明可发送时返回派发前失败。
+fn append_declared_anthropic_messages(
+    input: &Value,
+    sidecar: &ReplaySidecar,
+    messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<(), LlmCoreError> {
+    let Some(items) = input.as_array() else {
+        return append_anthropic_input(input, messages, media);
+    };
+    let mut cursor = 0usize;
+    for entry in sidecar.messages() {
+        if entry.input_range.start > cursor {
+            // Unattributed leading items keep the generic projection instead of being dropped.
+            // 未被归属的前导项保持通用投影，而不是被丢弃。
+            for item in &items[cursor..entry.input_range.start.min(items.len())] {
+                append_anthropic_item(item, messages, media)?;
+            }
+        }
+        let Some(range) = items.get(entry.input_range.clone()) else {
+            return Err(LlmCoreError::new(
+                "Declared Anthropic replay attribution exceeds the encoded input length.",
+            ));
+        };
+        if entry.role == MessageRole::Assistant {
+            append_declared_anthropic_assistant(entry, range, messages)?;
+        } else {
+            for item in range {
+                append_anthropic_item(item, messages, media)?;
+            }
+        }
+        cursor = entry.input_range.end;
+    }
+    for item in items.get(cursor..).unwrap_or_default() {
+        append_anthropic_item(item, messages, media)?;
+    }
+    Ok(())
+}
+
+/// Appends the ordered thinking, body and tool-call blocks of one original assistant message.
+/// 追加一条原始助手消息的有序 thinking、正文与工具调用块。
+///
+/// # Parameters
+/// 参数
+/// `entry` owns the canonical content and `range` holds the exact internal input items that message
+/// produced, including persisted reasoning that carries no proven provider signature.
+/// `entry` 持有规范内容，`range` 持有该消息产生的精确内部输入项，
+/// 其中包含没有已证实供应商签名的可持久化推理。
+///
+/// # Remarks
+/// 说明
+/// Exactly one authority owns the turn: canonical content when it carries reasoning, otherwise the
+/// ordered persisted items, which is the shape an intact bare envelope replays. Mixing them could
+/// duplicate or reorder thinking, so the choice is exclusive.
+/// 一个回合只由一个权威持有：规范内容含推理时用规范内容，否则用有序可持久化项——
+/// 后者正是完整裸封套回放出的形态。混合两者可能重复或错排 thinking，因此该选择是互斥的。
+fn append_declared_anthropic_assistant(
+    entry: &ReplaySidecarMessage,
+    range: &[Value],
+    messages: &mut Vec<Value>,
+) -> Result<(), LlmCoreError> {
+    let canonical_owns_reasoning = entry
+        .content
+        .iter()
+        .any(|item| matches!(item, ContentItem::Reasoning { .. }));
+    let recorded_reasoning = range
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
+        .count();
+    if recorded_reasoning > 0 && !canonical_owns_reasoning {
+        return append_recorded_anthropic_assistant(range, messages);
+    }
+    append_canonical_anthropic_assistant(&entry.content, messages)
+}
+
+/// Appends the ordered blocks of one assistant message from its canonical content.
+/// 从规范内容追加一条助手消息的有序块。
+fn append_canonical_anthropic_assistant(
+    content: &[ContentItem],
+    messages: &mut Vec<Value>,
+) -> Result<(), LlmCoreError> {
+    for item in content {
+        match item {
+            ContentItem::Reasoning { text, signature } => {
+                let block = declared_anthropic_thinking_block(text, signature.as_deref())?;
+                push_anthropic_block(messages, "assistant", block);
+            }
+            ContentItem::Text { text } | ContentItem::Refusal { text } => {
+                push_anthropic_block(messages, "assistant", json!({"type":"text","text":text}));
+            }
+            ContentItem::StructuredJson { value } => {
+                push_anthropic_block(
+                    messages,
+                    "assistant",
+                    json!({"type":"text","text": canonical_json(value)}),
+                );
+            }
+            ContentItem::ToolCall { call } => {
+                push_anthropic_block(
+                    messages,
+                    "assistant",
+                    json!({
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.arguments,
+                    }),
+                );
+            }
+            ContentItem::Resource { .. }
+            | ContentItem::ToolResult { .. }
+            | ContentItem::Citation { .. } => {
+                return Err(LlmCoreError::new(
+                    "Declared Anthropic replay cannot represent this assistant content item.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Appends the ordered blocks of one assistant message from its persisted provider items.
+/// 从可持久化供应商项追加一条助手消息的有序块。
+///
+/// # Remarks
+/// 说明
+/// A persisted item may carry the original signature in `encrypted_content`; `thinking_item_signature`
+/// accepts it only when the provenance tag proves it belongs to this provider, so an untagged value
+/// can never be replayed as a signature.
+/// 可持久化项可能在 `encrypted_content` 中携带原始签名；`thinking_item_signature` 仅在来源标记
+/// 证明其归属本供应商时才接受它，因此未标记的值永远不能被当作签名回放。
+fn append_recorded_anthropic_assistant(
+    range: &[Value],
+    messages: &mut Vec<Value>,
+) -> Result<(), LlmCoreError> {
+    for item in range {
+        match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                let text = recorded_reasoning_text(item);
+                let block = declared_anthropic_thinking_block(
+                    &text,
+                    thinking_item_signature(item).as_deref(),
+                )?;
+                push_anthropic_block(messages, "assistant", block);
+            }
+            Some("message") => {
+                let text = responses_message_text(item);
+                if !text.is_empty() {
+                    push_anthropic_block(
+                        messages,
+                        "assistant",
+                        json!({"type":"text","text": text}),
+                    );
+                }
+            }
+            Some("function_call" | "custom_tool_call") => {
+                let call_id = required_call_id(item, "replayed tool call")?;
+                let name = required_string(item, "/name", "Replayed tool call name")?;
+                let arguments = object_arguments(item.get("arguments"), name)?;
+                push_anthropic_block(
+                    messages,
+                    "assistant",
+                    json!({"type":"tool_use","id":call_id,"name":name,"input":arguments}),
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Reads the concatenated reasoning text of one persisted reasoning item.
+/// 读取一个可持久化推理项的拼接推理文本。
+fn recorded_reasoning_text(item: &Value) -> String {
+    let plaintext = text_parts(item.get("content"));
+    if !plaintext.trim().is_empty() {
+        return plaintext;
+    }
+    text_parts(item.get("summary"))
+}
+
+/// Reads the concatenated `text` fields of one text-part array.
+/// 读取一个文本项数组中拼接后的 `text` 字段。
+fn text_parts(value: Option<&Value>) -> String {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Reads the original provider signature of one persisted reasoning item, when proven.
+/// 在可证明时读取一个可持久化推理项的原始供应商签名。
+fn thinking_item_signature(item: &Value) -> Option<String> {
+    let value = item.get("encrypted_content").and_then(Value::as_str)?;
+    // The provenance tag is only *checked* here; the still-tagged value is handed on so exactly one
+    // place performs the extraction. Unwrapping in both places would strip the tag twice and lose
+    // the signature entirely.
+    // 此处只**检查**来源标记，并把仍带标记的值继续传递，使解封只发生在一个地方。
+    // 两处都解封会把标记去掉两次，从而彻底丢失签名。
+    crate::compatible_provider_signature(crate::SIGNATURE_PROVIDER_ANTHROPIC, value)
+        .map(|_| value.to_string())
+}
+
+/// Reads the concatenated visible text of one assistant `message` item.
+/// 读取一个助手 `message` 项拼接后的可见正文。
+fn responses_message_text(item: &Value) -> String {
+    match item.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
 }
 
 /// Appends one Responses input value to ordered Anthropic messages.

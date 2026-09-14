@@ -186,6 +186,70 @@ pub(in crate::runtime) fn validate_resolved_model_capability_limits(
     Ok(())
 }
 
+/// Returns the exact invalid-limit diagnostic used by execution and settings projections.
+/// 返回执行与设置投影共用的精确限制异常诊断。
+///
+/// # Parameters
+/// 参数
+/// `connection_id`, `model_id`, and `capabilities` identify one resolved account model.
+/// `connection_id`、`model_id` 与 `capabilities` 标识一个已解析账号模型。
+///
+/// # Returns
+/// 返回值
+/// The blocked reason, or `None` when both present token limits are positive.
+/// 返回阻止原因；已存在的令牌限制均为正数时返回 `None`。
+pub fn model_capability_limit_issue(
+    connection_id: &str,
+    model_id: &str,
+    capabilities: &ModelCapabilities,
+) -> Option<String> {
+    validate_resolved_model_capability_limits(connection_id, model_id, capabilities).err()
+}
+
+/// Keeps malformed model limits out of executable catalogs without changing discovery evidence.
+/// 将限制异常的模型移出可执行目录，同时保留原始发现证据。
+///
+/// # Parameters
+/// 参数
+/// `catalog` is the effective projection; its source catalog remains available for diagnostics.
+/// `catalog` 是生效投影；其来源目录仍可用于诊断。
+pub(in crate::runtime) fn retain_models_with_valid_limits(catalog: &mut ConnectionModelCatalog) {
+    let connection_id = catalog.connection_id.as_str();
+    catalog.models.retain(|model| {
+        validate_resolved_model_capability_limits(
+            connection_id,
+            model.id.as_str(),
+            &model.capabilities,
+        )
+        .is_ok()
+    });
+}
+
+/// Validates the bounded size of a catalog without treating source model facts as executable.
+/// 校验目录大小边界，不把来源模型事实误当作可执行能力。
+///
+/// # Parameters
+/// 参数
+/// `catalog` is either an immutable source or a management projection.
+/// `catalog` 是不可变来源或管理投影。
+///
+/// # Returns
+/// 返回值
+/// Success when the catalog remains inside the process resource boundary.
+/// 目录未超过进程资源边界时返回成功。
+pub(in crate::runtime) fn validate_catalog_model_count(
+    catalog: &ConnectionModelCatalog,
+) -> Result<(), String> {
+    if catalog.models.len() > crate::PROVIDER_MODEL_CATALOG_MAX_MODELS {
+        return Err(format!(
+            "Connection `{}` exceeds the {}-model runtime catalog boundary.",
+            catalog.connection_id,
+            crate::PROVIDER_MODEL_CATALOG_MAX_MODELS
+        ));
+    }
+    Ok(())
+}
+
 /// Validates every final model limit in one credential-scoped catalog.
 /// 校验一个凭据作用域目录中的每个最终模型限制。
 ///
@@ -201,13 +265,7 @@ pub(in crate::runtime) fn validate_resolved_model_capability_limits(
 pub(in crate::runtime) fn validate_resolved_catalog_limits(
     catalog: &ConnectionModelCatalog,
 ) -> Result<(), String> {
-    if catalog.models.len() > crate::PROVIDER_MODEL_CATALOG_MAX_MODELS {
-        return Err(format!(
-            "Connection `{}` exceeds the {}-model runtime catalog boundary.",
-            catalog.connection_id,
-            crate::PROVIDER_MODEL_CATALOG_MAX_MODELS
-        ));
-    }
+    validate_catalog_model_count(catalog)?;
     for model in &catalog.models {
         validate_resolved_model_capability_limits(
             catalog.connection_id.as_str(),

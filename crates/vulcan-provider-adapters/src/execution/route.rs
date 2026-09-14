@@ -171,6 +171,20 @@ impl ProviderExecutionRoute {
         })
     }
 
+    /// Returns the closed reasoning-replay contract this exact protocol route declared.
+    /// 返回当前精确协议路由声明的封闭推理回传契约。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The frozen contract compiled from the owning manifest route, or `None` when the route
+    /// declared no contract and must keep its previous request bytes.
+    /// 从所属 Manifest 路由编译得到的冻结契约；路由未声明契约时必须返回 `None` 并保持既有请求字节。
+    pub fn reasoning_replay_contract(
+        &self,
+    ) -> Option<crate::provider_manifest::ReasoningReplayContract> {
+        self.protocol_route.reasoning_replay_contract
+    }
+
     /// Returns the exact request URL for this immutable route.
     /// 返回该不可变路由的精确请求 URL。
     ///

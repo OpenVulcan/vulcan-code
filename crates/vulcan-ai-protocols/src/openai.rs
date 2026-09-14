@@ -228,6 +228,7 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         internal_input::encode_request_envelope(request, &mut encode_responses_resource)
+            .map(|(encoded, _)| encoded)
     }
 
     /// Creates one isolated Codex Responses stream decoder.
@@ -619,6 +620,25 @@ fn encode_messages(request: &AiExecutionRequest) -> Result<Vec<Value>, ProtocolC
         .collect()
 }
 
+/// Attributes one encoded message to the exact internal input items it produced.
+/// 把一条已编码消息归属到它所产生的精确内部输入项。
+///
+/// # Remarks
+/// 说明
+/// `message_index` is absolute in `AiExecutionRequest::messages`, so a continuation cursor can never
+/// shift the attribution of the messages this envelope actually encoded.
+/// `message_index` 是 `AiExecutionRequest::messages` 中的绝对索引，
+/// 因此延续游标绝不会使本封装实际编码的消息归属发生错位。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResponsesMessageInputRange {
+    /// Absolute index of the encoded message.
+    /// 已编码消息的绝对索引。
+    pub(super) message_index: usize,
+    /// Half-open range of internal input items this message produced, possibly empty.
+    /// 本条消息产生的内部输入项的半开区间，可以为空。
+    pub(super) input_range: std::ops::Range<usize>,
+}
+
 /// Encodes public messages into OpenAI Responses input items.
 /// 将公共消息编码为 OpenAI Responses 输入项。
 fn encode_responses_input(
@@ -632,21 +652,27 @@ fn encode_responses_input(
         continuation,
         &mut encode_responses_resource,
     )
+    .map(|(input, _)| input)
 }
 
 /// Encodes `request` with the selected resource projector while preserving message and replay order.
 /// 使用选中的资源投影器编码 `request`，同时保持消息与重放顺序。
 /// `include_system_messages` and `continuation` retain the existing role and cursor contract.
 /// `include_system_messages` 与 `continuation` 保持既有角色和游标契约。
-/// Returns ordered input items or an exact content/replay conversion error.
-/// 返回有序输入项，或精确的内容与重放转换错误。
+/// Returns ordered input items together with the half-open input range each encoded message
+/// produced, so a caller can still attribute items after a message contributes none.
+/// 返回有序输入项，以及每条已编码消息产生的半开输入区间，
+/// 使调用方在一条消息没有贡献任何项时仍能归属。
 fn encode_responses_input_with_resources(
     request: &AiExecutionRequest,
     include_system_messages: bool,
     continuation: Option<&vulcan_ai_contract::AiContinuation>,
     resource_encoder: internal_input::ResponsesResourceEncoder<'_>,
-) -> Result<Vec<Value>, ProtocolConversionError> {
+) -> Result<(Vec<Value>, Vec<ResponsesMessageInputRange>), ProtocolConversionError> {
     let mut input = Vec::new();
+    // input_ranges keeps one entry per encoded message even when that message yields no item.
+    // input_ranges 为每条已编码消息保留一个条目，即使该消息没有产生任何项。
+    let mut input_ranges = Vec::new();
     let message_start = continuation
         .map(|continuation| continuation.covered_message_count)
         .unwrap_or(0);
@@ -666,7 +692,16 @@ fn encode_responses_input_with_resources(
     custom_tool_call_ids.extend(responses_custom_tool_call_ids(
         &request.messages[..message_start],
     ));
-    for message in &request.messages[message_start..] {
+    for (relative_index, message) in request.messages[message_start..].iter().enumerate() {
+        // rangeIndex is reserved before encoding so a skipped message keeps a zero-length range
+        // instead of shifting every later message's attribution.
+        // rangeIndex 在编码前预留，使被跳过的消息保留零长度区间，而不会使后续消息的归属整体错位。
+        let range_start = input.len();
+        let range_index = input_ranges.len();
+        input_ranges.push(ResponsesMessageInputRange {
+            message_index: message_start + relative_index,
+            input_range: range_start..range_start,
+        });
         match message.role {
             MessageRole::Tool => {
                 for item in &message.content {
@@ -798,8 +833,9 @@ fn encode_responses_input_with_resources(
                 input.push(json!({ "role": role, "content": content }));
             }
         }
+        input_ranges[range_index].input_range = range_start..input.len();
     }
-    Ok(input)
+    Ok((input, input_ranges))
 }
 
 /// Collects exact custom call IDs from raw provider replay items, never from normalized function calls.

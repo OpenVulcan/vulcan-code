@@ -177,66 +177,48 @@ fn ordinary_replay_content_requires_exact_connection_route() {
         }
     });
 
-    assert!(
-        replay_content_for_route(
-            Some(&state),
-            "custom:proxy",
-            "connection-a",
-            "https://proxy.example/v1/responses",
-            "openai-codex-responses.v1",
-            "gpt-5-codex",
-        )
-        .expect("matching route should decode")
-        .is_some()
-    );
-    assert!(
-        replay_content_for_route(
-            Some(&state),
-            "custom:proxy",
+    // matching projects the durable provider items of this exact route.
+    // matching 投影本精确路由的可持久化供应商项。
+    let ProviderReplayProjection::ProviderItems(items) = replay_projection_for_route(
+        Some(&state),
+        "custom:proxy",
+        "connection-a",
+        "https://proxy.example/v1/responses",
+        "openai-codex-responses.v1",
+        "gpt-5-codex",
+    )
+    .expect("matching provider context should decode") else {
+        panic!("a matching route must project its durable provider items");
+    };
+    assert_eq!(items[0]["id"], "reasoning-item");
+    // foreignRoutes proves one changed identifier alone is enough to stop replaying this envelope.
+    // foreignRoutes 证明只要有一个标识改变，就足以停止重放本封套。
+    for (label, connection, endpoint) in [
+        (
+            "credential mismatch",
             "connection-b",
             "https://proxy.example/v1/responses",
-            "openai-codex-responses.v1",
-            "gpt-5-codex",
-        )
-        .expect("credential mismatch should be a safe local fallback")
-        .is_none()
-    );
-    assert!(
-        replay_content_for_route(
-            Some(&state),
-            "custom:proxy",
+        ),
+        (
+            "endpoint mismatch",
             "connection-a",
             "https://proxy.example/changed/responses",
-            "openai-codex-responses.v1",
-            "gpt-5-codex",
-        )
-        .expect("endpoint mismatch should be a safe local fallback")
-        .is_none()
-    );
-    assert_eq!(
-        replay_provider_context_items_for_route(
-            Some(&state),
-            "custom:proxy",
-            "connection-a",
-            "https://proxy.example/v1/responses",
-            "openai-codex-responses.v1",
-            "gpt-5-codex",
-        )
-        .expect("matching provider context should decode")[0]["id"],
-        "reasoning-item"
-    );
-    assert!(
-        replay_provider_context_items_for_route(
-            Some(&state),
-            "custom:proxy",
-            "connection-b",
-            "https://proxy.example/v1/responses",
-            "openai-codex-responses.v1",
-            "gpt-5-codex",
-        )
-        .expect("credential mismatch should not replay provider context")
-        .is_empty()
-    );
+        ),
+    ] {
+        assert_eq!(
+            replay_projection_for_route(
+                Some(&state),
+                "custom:proxy",
+                connection,
+                endpoint,
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .expect("a foreign route must stay a safe local fallback"),
+            ProviderReplayProjection::RouteMismatch,
+            "{label} must not replay another route's envelope"
+        );
+    }
     // switchedRouteMessage proves provider-owned items never cross a protocol boundary.
     // switchedRouteMessage 证明供应商持有项绝不会跨越协议边界。
     let switched_route_message = core_message_to_public(

@@ -5,6 +5,7 @@ use super::activation::runtime_configuration_for_manifest_catalog;
 use super::catalog_policy::{
     apply_model_catalog_overlays_with_account_access, manual_custom_catalog,
     manual_custom_catalog_for_provider, model_supports_text_conversation,
+    retain_models_with_valid_limits, validate_catalog_model_count,
     validate_resolved_catalog_limits, validate_resolved_model_capability_limits,
 };
 use super::catalog_sources::{empty_model_source_catalog, resolved_model_source_policy};
@@ -20,6 +21,18 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use vulcan_ai_contract::AccountUsageSnapshot;
+
+/// Selects whether a catalog is executable or retains invalid models for management diagnostics.
+/// 选择目录用于执行，还是保留异常模型供管理诊断。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CatalogProjectionUse {
+    /// Only models with valid effective limits can reach request selection.
+    /// 只有最终限制有效的模型可进入请求选择。
+    Execution,
+    /// The settings inventory preserves source identities and their invalid limit evidence.
+    /// 设置目录保留来源模型身份及其无效限制证据。
+    Management,
+}
 
 /// One browser-settings catalog projection derived from a single immutable provider generation.
 /// 从单一不可变供应商代际派生的一份浏览器设置目录投影。
@@ -265,6 +278,7 @@ pub(super) fn resolve_model_catalog_overlays_from_inputs(
     manifests: &crate::provider_manifest::ResolvedProviderCatalog,
     source_catalogs: &RuntimeConnectionCatalogs,
     usage_cache: &BTreeMap<String, AccountUsageSnapshot>,
+    projection_use: CatalogProjectionUse,
 ) -> Result<RuntimeConnectionCatalogs, String> {
     // effective accumulates only catalogs reconstructable from the explicit input set.
     // effective 仅累积可从显式输入集合重建的目录。
@@ -331,7 +345,13 @@ pub(super) fn resolve_model_catalog_overlays_from_inputs(
             manifest,
             &mut catalog,
         )?;
-        validate_resolved_catalog_limits(&catalog)?;
+        match projection_use {
+            CatalogProjectionUse::Execution => {
+                retain_models_with_valid_limits(&mut catalog);
+                validate_resolved_catalog_limits(&catalog)?;
+            }
+            CatalogProjectionUse::Management => validate_catalog_model_count(&catalog)?,
+        }
         effective.replace(catalog);
     }
     Ok(effective)
@@ -376,6 +396,7 @@ fn provider_conversation_model_is_supported_in_generation(
         generation.manifests.as_ref(),
         &generation.source_catalogs,
         &generation.usage_cache,
+        CatalogProjectionUse::Execution,
     )?;
     Ok(support_configuration
         .connection_graph
@@ -531,6 +552,7 @@ impl PublicAiRuntime {
             generation.manifests.as_ref(),
             &generation.source_catalogs,
             &generation.usage_cache,
+            CatalogProjectionUse::Execution,
         )?
         .snapshot();
         // support_configuration removes only account access switches for the management inventory.
@@ -546,6 +568,7 @@ impl PublicAiRuntime {
             generation.manifests.as_ref(),
             &generation.source_catalogs,
             &generation.usage_cache,
+            CatalogProjectionUse::Management,
         )?
         .snapshot();
         // source_catalogs is the pre-overlay discovery inventory captured with this generation.
@@ -1212,6 +1235,7 @@ impl PublicAiRuntime {
             generation.manifests.as_ref(),
             &generation.source_catalogs,
             &generation.usage_cache,
+            CatalogProjectionUse::Execution,
         )
     }
 
@@ -1248,6 +1272,7 @@ impl PublicAiRuntime {
             manifests,
             &source_catalogs,
             &usage_cache,
+            CatalogProjectionUse::Execution,
         )
     }
 
@@ -1319,6 +1344,7 @@ impl PublicAiRuntime {
             generation.as_ref(),
             &mut catalog,
         )?;
+        retain_models_with_valid_limits(&mut catalog);
         validate_resolved_catalog_limits(&catalog)?;
         Ok(catalog.models.iter().any(|model| model.id == model_id))
     }

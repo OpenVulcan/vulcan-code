@@ -375,6 +375,20 @@ impl EnginePrimitiveRegistry {
         ] {
             registry.execution_primitives.insert(primitive.to_string());
         }
+        // A reasoning replay contract is advertised only once its request projection, replay
+        // acceptance and regression tests ship together, so the remaining declared values are
+        // added together with their own implementation.
+        // 推理回传契约只在其请求投影、重放接受条件与回归测试一同交付后才公布，
+        // 因此其余取值会随各自的实现一并加入。
+        for contract in [
+            ReasoningReplayContract::DeepseekResponsesPlaintextV1,
+            ReasoningReplayContract::DeepseekChatReasoningContentV1,
+            ReasoningReplayContract::DeepseekAnthropicThinkingV1,
+        ] {
+            registry
+                .execution_primitives
+                .insert(contract.primitive_id().to_string());
+        }
         // The closed upload primitive family from plan §16.3; ids match the
         // `UploadPrimitiveKind` snake_case contract.
         // 方案 §16.3 的封闭上传原语族；标识与 `UploadPrimitiveKind` snake_case 契约一致。

@@ -118,6 +118,13 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   const supportModels = connection
     ? props.snapshot?.modelSupportCatalogs[connection.id]?.models ?? []
     : []
+  // blockedModels uses backend route diagnostics to keep unsafe models visible but not enableable.
+  // blockedModels 使用后端路由诊断，让不安全模型保持可见但不可启用。
+  const blockedModels = React.useMemo(() => new Map(
+    (props.snapshot?.modelRouteRecords ?? [])
+      .filter((record) => record.connectionId === connection?.id && !record.executable)
+      .map((record) => [record.modelId, record.unavailableReason] as const),
+  ), [connection?.id, props.snapshot?.modelRouteRecords])
   const effectiveModelIds = React.useMemo(
     () => new Set(
       connection
@@ -337,6 +344,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
               <div className="grid gap-2">
                 {visibleModels.map((model) => {
                   const enabled = modelIsEnabled(model.id)
+                  const blockedReason = blockedModels.get(model.id)
                   return (
                     <div
                       className="flex min-h-16 items-center gap-3 rounded-lg border bg-card px-3 py-2.5"
@@ -350,13 +358,16 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                         <div className="mt-1.5">
                           <ProviderModelModalitySummary model={model} />
                         </div>
+                        {blockedReason ? <p className="mt-1 text-xs text-destructive" role="status">
+                          {t("settings.models.routeUnavailableReason")}: {blockedReason}
+                        </p> : null}
                       </div>
                       <Switch
                         aria-label={`${model.display_name}: ${enabled
                           ? t("settings.credentialModels.filterEnabled")
                           : t("settings.credentialModels.filterDisabled")}`}
                         checked={enabled}
-                        disabled={syncBusy || bulkBusy || busyModelId !== null}
+                        disabled={syncBusy || bulkBusy || busyModelId !== null || (blockedModels.has(model.id) && !enabled)}
                         onCheckedChange={(checked) => void saveModel(model, checked)}
                       />
                     </div>

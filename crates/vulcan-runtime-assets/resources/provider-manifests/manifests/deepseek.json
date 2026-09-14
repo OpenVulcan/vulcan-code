@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
-  "revision": 11,
+  "revision": 14,
   "published_at": "2026-09-10T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -10,7 +10,11 @@
       "anthropic-messages.v1",
       "openai-responses.v1"
     ],
-    "required_execution_primitives": [],
+    "required_execution_primitives": [
+      "deepseek_responses_plaintext_v1",
+      "deepseek_chat_reasoning_content_v1",
+      "deepseek_anthropic_thinking_v1"
+    ],
     "required_upload_primitives": [],
     "required_transformers": [
       "copy_request_field",
@@ -69,7 +73,8 @@
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
-          "verified": true
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
         },
         {
           "protocol_profile_id": "anthropic-messages.v1",
@@ -84,7 +89,8 @@
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
-          "verified": true
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_anthropic_thinking_v1"
         },
         {
           "protocol_profile_id": "openai-responses.v1",
@@ -95,7 +101,8 @@
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
-          "verified": true
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_responses_plaintext_v1"
         }
       ]
     }
