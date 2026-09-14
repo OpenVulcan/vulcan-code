@@ -37,6 +37,9 @@ import type {
 // VmmNativeMaintenancePageProps 将原生保留控制绑定到共享动作通道。
 interface VmmNativeMaintenancePageProps {
   busy: boolean
+  // A repair link may open the index tab directly without executing a rebuild.
+  // 修复入口可以直达索引页，但不会直接执行重建。
+  initialView?: "recycle" | "index"
   onRunAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -55,11 +58,11 @@ interface RecycleConfirmation {
 
 // VmmNativeMaintenancePage renders scheduled cleanup status and the native recycle bin.
 // VmmNativeMaintenancePage 渲染定期清洗状态与原生回收站。
-export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMaintenancePageProps) {
+export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunAction }: VmmNativeMaintenancePageProps) {
   const { t, locale } = useI18n()
   // maintenanceView makes recovery the first task while retaining all maintenance controls.
   // maintenanceView 将恢复作为首要任务，同时保留全部维护控件。
-  const [maintenanceView, setMaintenanceView] = React.useState("recycle")
+  const [maintenanceView, setMaintenanceView] = React.useState<"recycle" | "cleanup" | "index">(initialView)
   const [status, setStatus] = React.useState<VmmNativeRetentionStatusSummary | null>(null)
   // Full-text state is independent of the embedding route and vector generation.
   // 全文状态独立于嵌入路由与向量代次。
@@ -326,6 +329,20 @@ export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMainten
         <div className="flex flex-wrap gap-2"><Button ref={cleanupTrigger} disabled={controlsBusy || status?.running} onClick={() => void previewCleanup()} type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button><Button disabled={controlsBusy} onClick={() => void loadPage()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button></div>
       </div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
+      {vectorStatus && (!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0) ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3" role="alert">
+          <div className="flex items-start gap-2">
+            <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 text-destructive" />
+            <div>
+              <p className="text-sm font-medium">{t(vectorStatus.configured ? "memory.maintenance.vectorRebuildRequired" : "memory.maintenance.vectorRouteUnavailable")}</p>
+              {vectorStatus.configured
+                ? <p className="mt-1 text-xs text-muted-foreground">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
+                : vectorStatus.error ? <p className="mt-1 text-xs text-destructive">{vectorStatus.error}</p> : null}
+            </div>
+          </div>
+          <Button onClick={() => setMaintenanceView("index")} size="sm" type="button" variant="outline">{t(vectorStatus.configured ? "memory.vectorHealth.openRepair" : "memory.maintenance.vectorTitle")}</Button>
+        </div>
+      ) : null}
 
       <div className="vmm-section-tabs">
         {([['recycle','memory.maintenance.recycleBin'],['cleanup','memory.workspace.cleanup'],['index','memory.workspace.index']] as const).map(([id,label]) => <button key={id} type="button" aria-pressed={maintenanceView === id} onClick={() => setMaintenanceView(id)}>{t(label)}</button>)}

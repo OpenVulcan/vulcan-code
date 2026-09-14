@@ -2342,6 +2342,16 @@ export type TranslationKey =
   | "memory.maintenance.vectorCompatible"
   | "memory.maintenance.vectorRebuildCounts"
   | "memory.maintenance.previewVectorRebuild"
+  | "memory.vectorHealth.checkFailed"
+  | "memory.vectorHealth.routeUnavailable"
+  | "memory.vectorHealth.routeHelp"
+  | "memory.vectorHealth.activeBlocked"
+  | "memory.vectorHealth.activeHelp"
+  | "memory.vectorHealth.recycledBlocked"
+  | "memory.vectorHealth.recycledHelp"
+  | "memory.vectorHealth.openRepair"
+  | "memory.vectorHealth.openEmbeddingSettings"
+  | "memory.vectorHealth.retry"
   | "memory.maintenance.confirmVectorRebuildTitle"
   | "memory.maintenance.confirmVectorRebuildDescription"
   | "memory.maintenance.rebuildVectors"
@@ -4002,7 +4012,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.workspace.projectRules": "项目独立规则",
     "memory.workspace.effectiveFiles": "当前生效组合",
     "memory.workspace.otherFiles": "其他资源文件",
-    "memory.workspace.index": "检索索引",
+    "memory.workspace.index": "向量与检索索引",
     "memory.workspace.cleanup": "清洗运行状态",
     "app.subtitle": "Ai Coding",
     "notifications.appTitle": "Vulcan Code",
@@ -5999,9 +6009,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.saveConfirmAction": "确认保存并应用",
     "memory.resources.resetConfirmAction": "确认恢复内置内容",
     "memory.resources.userPromptOnly": "用户提示词（不接收 system、assistant 或 tool 内容）",
-    "memory.maintenance.title": "清洗与回收",
-    "memory.maintenance.description": "启用周期清洗后按当前设置运行；这里可查看策略、预览人工清洗影响并维护回收站。",
-    "memory.maintenance.invalidResponse": "原生 VMM 清洗接口返回了不匹配的结果。",
+    "memory.maintenance.title": "内部维护",
+    "memory.maintenance.description": "检查并重建向量与全文索引，查看清洗状态并维护回收站。向量重建需要先预检再确认。",
+    "memory.maintenance.invalidResponse": "原生 VMM 维护接口返回了不匹配的结果。",
     "memory.maintenance.readFailed": "读取失败，请刷新重试。",
     "memory.maintenance.runNow": "立即清洗",
     "memory.lexical.title": "全文检索索引",
@@ -6043,6 +6053,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.vectorCompatible": "所有活动记忆与回收站可恢复记忆均使用当前嵌入路由对应的向量代次。",
     "memory.maintenance.vectorRebuildCounts": "需要重建 {memories} 条记忆（活动 {active}，回收站 {recycled}），涉及 {spaces} 个旧向量代次。",
     "memory.maintenance.previewVectorRebuild": "预检向量重建",
+    "memory.vectorHealth.checkFailed": "无法检查记忆向量状态",
+    "memory.vectorHealth.routeUnavailable": "记忆的 Embedding 路由不可用",
+    "memory.vectorHealth.routeHelp": "请先在“模型与服务”修复 Embedding 路由，再检查是否需要重建向量。",
+    "memory.vectorHealth.activeBlocked": "记忆读写已被向量代次阻断",
+    "memory.vectorHealth.activeHelp": "{count} 条活动记忆使用旧向量代次；所有项目的自动召回与回写都会在进入模型前失败。请预检并重建向量。",
+    "memory.vectorHealth.recycledBlocked": "回收站存在旧向量代次",
+    "memory.vectorHealth.recycledHelp": "{count} 条可恢复记忆使用旧向量代次；恢复这些记忆前需要重建。",
+    "memory.vectorHealth.openRepair": "前往向量重建",
+    "memory.vectorHealth.openEmbeddingSettings": "前往模型与服务",
+    "memory.vectorHealth.retry": "重新检查",
     "memory.maintenance.confirmVectorRebuildTitle": "确认重建原生记忆向量？",
     "memory.maintenance.confirmVectorRebuildDescription": "将按当前嵌入路由重建 {memories} 条记忆（活动 {active}，回收站 {recycled}），覆盖 {projects} 个项目、{batches} 个有界批次，目标维度为 {dimension}。执行前会再次校验预检版本与路由。",
     "memory.maintenance.rebuildVectors": "确认重建",
@@ -7723,7 +7743,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.workspace.projectRules": "Project overrides",
     "memory.workspace.effectiveFiles": "Active composition",
     "memory.workspace.otherFiles": "Other resource files",
-    "memory.workspace.index": "Search indexes",
+    "memory.workspace.index": "Vector and search indexes",
     "memory.workspace.cleanup": "Cleanup status",
     "app.subtitle": "Ai Coding",
     "notifications.appTitle": "Vulcan Code",
@@ -9720,9 +9740,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.saveConfirmAction": "Save and apply",
     "memory.resources.resetConfirmAction": "Restore built-in content",
     "memory.resources.userPromptOnly": "User prompt only (system, assistant, and tool content are not accepted)",
-    "memory.maintenance.title": "Cleanup and recycle bin",
-    "memory.maintenance.description": "Periodic cleanup follows the current settings when enabled. Inspect policy, preview manual cleanup, and maintain recycled data here.",
-    "memory.maintenance.invalidResponse": "The native VMM retention API returned an unexpected result.",
+    "memory.maintenance.title": "Internal maintenance",
+    "memory.maintenance.description": "Check and rebuild vectors and full-text indexes, inspect cleanup status, and maintain the recycle bin. Vector rebuild requires a preview and confirmation.",
+    "memory.maintenance.invalidResponse": "The native VMM maintenance API returned an unexpected result.",
     "memory.maintenance.readFailed": "Could not load this status. Refresh to retry.",
     "memory.maintenance.runNow": "Run cleanup now",
     "memory.lexical.title": "Full-text search index",
@@ -9764,6 +9784,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.vectorCompatible": "All active and recoverable recycle-bin memories use the vector generation for the current embedding route.",
     "memory.maintenance.vectorRebuildCounts": "Rebuild {memories} memories (active {active}, recycle bin {recycled}) across {spaces} older vector generations.",
     "memory.maintenance.previewVectorRebuild": "Preview vector rebuild",
+    "memory.vectorHealth.checkFailed": "Could not check memory vector status",
+    "memory.vectorHealth.routeUnavailable": "The memory embedding route is unavailable",
+    "memory.vectorHealth.routeHelp": "Fix the embedding route in Models and services, then check whether vectors need rebuilding.",
+    "memory.vectorHealth.activeBlocked": "Memory reads and writes are blocked by vector generation",
+    "memory.vectorHealth.activeHelp": "{count} active memories use an older vector generation. Automatic recall and writeback for every project fail before reaching a model. Preview and rebuild the vectors.",
+    "memory.vectorHealth.recycledBlocked": "The recycle bin contains older vector generations",
+    "memory.vectorHealth.recycledHelp": "{count} recoverable memories use an older vector generation. Rebuild them before restoration.",
+    "memory.vectorHealth.openRepair": "Open vector rebuild",
+    "memory.vectorHealth.openEmbeddingSettings": "Open models and services",
+    "memory.vectorHealth.retry": "Check again",
     "memory.maintenance.confirmVectorRebuildTitle": "Rebuild native-memory vectors?",
     "memory.maintenance.confirmVectorRebuildDescription": "This rebuilds {memories} memories (active {active}, recycle bin {recycled}) across {projects} projects in {batches} bounded batches using the current embedding route at dimension {dimension}. The preview version and route are revalidated before execution.",
     "memory.maintenance.rebuildVectors": "Confirm rebuild",

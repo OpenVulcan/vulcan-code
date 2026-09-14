@@ -211,11 +211,22 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
             current_unix_millis_value().saturating_sub(hook_snapshot_started_at)
         ),
     );
-    Ok(shared_prompt_precheck_plan(
+    let plan = shared_prompt_precheck_plan(
         &effective_vmm_config,
         &precheck_hook_snapshots,
         vmm_precheck_ready,
-    ))
+    );
+    // Record the effective precheck decision; the UI-ready flag alone does not prove dispatch.
+    // 记录最终 PreCheck 决策；界面显示就绪本身不能证明已经派发。
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=plan session={} precheck_ready={} diagnostic={:?} hooks={} skip={}",
+        session_id,
+        vmm_precheck_ready,
+        effective_vmm_config.diagnose_precheck_flow(true),
+        precheck_hook_snapshots.len(),
+        plan.should_skip_precheck,
+    );
+    Ok(plan)
 }
 
 /// Replaces a Continue request's retained process state with the complete durable V1 controller history.
@@ -983,6 +994,29 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
         } else {
             (profile_request.run().await, precheck_request.skip())
         };
+        // Keep handler failures visible even when the dispatch policy allows the model turn to continue.
+        // 即使派发策略允许模型回合继续，也让处理器失败可见。
+        match precheck_outcome.report.as_ref() {
+            Ok(report) => eprintln!(
+                "[webui-service][vmm-precheck] stage=hook_result session={} run={} completed={:?} failures={}",
+                session_id,
+                run_precheck,
+                report.completed_hooks,
+                report.failures.len(),
+            ),
+            Err(error) => eprintln!(
+                "[webui-service][vmm-precheck] stage=hook_result session={} run={} dispatch_error={}",
+                session_id, run_precheck, error,
+            ),
+        }
+        if let Ok(report) = precheck_outcome.report.as_ref() {
+            for failure in &report.failures {
+                eprintln!(
+                    "[webui-service][vmm-precheck] stage=hook_failure session={} hook={} error={}",
+                    session_id, failure.hook_id, failure.message,
+                );
+            }
+        }
         webui_after_precheck_trace(
             "after_precheck_00_outcome_ready",
             format!(
@@ -1108,12 +1142,23 @@ pub(crate) fn start_webui_precheck_or_continue(
     let Some(expected_kernel_generation) =
         capture_webui_prompt_preparation_generation(state, session_id, &start.preparation_turn_id)?
     else {
+        eprintln!(
+            "[webui-service][vmm-precheck] stage=dispatch session={} result=owner_closed",
+            session_id,
+        );
         webui_trace(
             "precheck_dispatch_owner_closed",
             format!("session={session_id} turn_id={}", start.preparation_turn_id),
         );
         return Ok(false);
     };
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=dispatch session={} source={:?} has_hooks={} skip={}",
+        session_id,
+        start.source,
+        precheck_plan.has_precheck_hooks,
+        precheck_plan.should_skip_precheck,
+    );
     webui_trace(
         "precheck_dispatch_entered",
         format!(

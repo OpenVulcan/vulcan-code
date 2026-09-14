@@ -413,6 +413,19 @@ pub(super) async fn handle_finished_stream_event(
     }
     // A completion request exists only when terminal memory projection opened a completed-turn hook.
     // 仅当终态内存投影打开完成回合 Hook 时才存在完成请求。
+    // Record the terminal gate by default so a missing hook dispatch has a visible cause.
+    // 默认记录终态闸门，使未派发 Hook 的原因可见。
+    eprintln!(
+        "[webui-service][vmm-writeback] stage=completion_gate session={} terminal_settled={} turn_completed={} successor_started={} request_present={}",
+        finished_session_id,
+        terminal_authority_settled,
+        logical_turn_completed,
+        started_next_prompt,
+        final_report_apply
+            .as_ref()
+            .and_then(|apply| apply.completion_request.as_ref())
+            .is_some(),
+    );
     if terminal_authority_settled
         && logical_turn_completed
         && !started_next_prompt

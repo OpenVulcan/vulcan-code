@@ -50,7 +50,9 @@ mod transcript;
 mod tests;
 
 use transcript::{
-    append_shared_user_prompt_record_with_attachments, patch_latest_prechecked_user_prompt_record,
+    append_shared_user_prompt_record_with_attachments,
+    append_shared_visible_user_prompt_record_with_attachments,
+    patch_latest_prechecked_user_prompt_record,
 };
 
 /// Reconstructs the last safely applied output-style snapshot for a prompt turn.
@@ -590,6 +592,24 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
             input.attachments.clone(),
             input.source,
         )?);
+    } else if append_visible_user_prompt_record
+        && let Some(existing_message_id) = input.existing_canonical_user_message_id.as_deref()
+    {
+        // Durable V1 history already owns this message; only its visible transcript row is new.
+        // 可靠 V1 历史已持有此消息；此处只新增其可见转录记录。
+        debug_assert_eq!(
+            canonical_user_message_id.as_deref(),
+            Some(existing_message_id)
+        );
+        visible_user_prompt_record_id =
+            Some(append_shared_visible_user_prompt_record_with_attachments(
+                runtime_state,
+                input.session_id,
+                &now,
+                &sanitized_prompt,
+                input.attachments.clone(),
+                input.source,
+            )?);
     } else if append_canonical_user_message {
         append_user_text_message(
             &mut runtime_state.conversation_state,

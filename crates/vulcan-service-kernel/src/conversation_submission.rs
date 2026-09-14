@@ -40,6 +40,7 @@ use crate::session_v1_lifecycle::{
     CreateRootSessionV1Request, PromptAttachmentOrigin, create_and_register_root_session_v1,
     get_or_load_session_v1, register_project_prompt_attachments_v1,
 };
+use crate::webui_prompt_lifecycle::user_root_dispatch_authority_from_v1_handle;
 
 use super::{
     ExistingSubmissionAdmissionAuthorization, HostRuntimeHandle, MaterializedPromptSession,
@@ -2891,6 +2892,42 @@ async fn service_start_conversation_execution(
         agent_runtime.public_ai_runtime.as_ref(),
         runtime_state,
     )?;
+    // The admitted V1 root owns the Provider user identity before Hook preparation begins.
+    // 已接纳的 V1 根输入在 Hook 准备开始前持有 Provider 用户身份。
+    let direct_canonical_user_message_id = if append_user_records {
+        let root_input_seq = handle
+            .read(|document| document.active_turn().map(|turn| turn.start_seq))
+            .map_err(|error| format!("读取直接提交的 V1 根回合失败：{error}"))?
+            .ok_or_else(|| String::from("直接提交的 V1 根回合不存在。"))?;
+        let root_authority =
+            user_root_dispatch_authority_from_v1_handle(handle.as_ref(), root_input_seq)?;
+        if root_authority.client_action_id != accepted_action_id {
+            return Err(format!(
+                "直接提交的 V1 根输入身份不匹配：期望 `{}`，实际 `{}`。",
+                accepted_action_id.as_str(),
+                root_authority.client_action_id.as_str()
+            ));
+        }
+        let projection = handle
+            .capture_controller_projection_snapshot()
+            .map_err(|error| format!("捕获直接提交的 V1 投影失败：{error}"))?;
+        let canonical_user_message_id =
+            crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
+                &projection,
+                root_input_seq,
+            )?;
+        let mut projected_state =
+            crate::agent_stream::provider_v1_sink::provider_projection_controller_state(
+                &projection,
+            )?;
+        // Visible transcript rows remain a separate workspace projection; V1 replaces only logical messages.
+        // 可见转录记录仍属独立工作区投影；V1 只替换逻辑消息。
+        projected_state.records = std::mem::take(&mut runtime_state.conversation_state.records);
+        runtime_state.conversation_state = projected_state;
+        Some(canonical_user_message_id)
+    } else {
+        None
+    };
     webui_submit_trace(
         "submit_prompt_runtime_options_ready",
         format!(
@@ -2924,8 +2961,8 @@ async fn service_start_conversation_execution(
                 provider_visible_agent_messages: Vec::new(),
                 attachments,
                 provider_attachments: Some(provider_attachments),
-                existing_canonical_user_message_id: None,
-                append_canonical_user_message: append_user_records,
+                existing_canonical_user_message_id: direct_canonical_user_message_id,
+                append_canonical_user_message: false,
                 append_visible_user_prompt_record: append_user_records,
                 source: prompt_source,
                 vmm_runtime_ready: vmm_readiness.service_ready,

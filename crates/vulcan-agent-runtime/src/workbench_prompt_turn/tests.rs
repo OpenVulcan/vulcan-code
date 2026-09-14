@@ -505,6 +505,65 @@ fn edited_user_prompt_reuses_existing_canonical_message_id() {
     assert!(start.visible_user_prompt_record_id.is_none());
 }
 
+/// Verifies a newly admitted V1 root keeps its durable message identity while gaining one visible row.
+/// 验证新接纳的 V1 根输入在新增一条可见记录时仍保留其可靠消息身份。
+#[test]
+fn durable_v1_root_adds_visible_record_without_second_canonical_message() {
+    // runtime_state starts with the exact message reconstructed from the V1 Provider projection.
+    // runtime_state 从 V1 Provider 投影重建出的精确消息开始。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_text_message(
+        &mut runtime_state.conversation_state,
+        "v1-provider-message-1",
+        "首次输入",
+        Vec::new(),
+    )
+    .expect("durable root message should be valid");
+    let mut hook_runtime = ConversationHookRuntime::new();
+
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id: SessionId::from_u128(904),
+            session_title: "新会话",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("durable-root-entry"),
+            continuation_action_id: None,
+            prompt: "首次输入",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            provider_attachments: None,
+            existing_canonical_user_message_id: Some(String::from("v1-provider-message-1")),
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: true,
+            source: PendingSessionPromptSource::UserFollowup,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            owning_project_id: Some(String::from("project-a")),
+        },
+    )
+    .expect("durable root should create a visible record without a second message");
+
+    assert_eq!(
+        start.canonical_user_message_id.as_deref(),
+        Some("v1-provider-message-1")
+    );
+    assert_eq!(runtime_state.conversation_state.messages.len(), 1);
+    assert_eq!(runtime_state.conversation_state.records.len(), 1);
+    assert_eq!(
+        start.visible_user_prompt_record_id.as_deref(),
+        Some(runtime_state.conversation_state.records[0].id.as_str())
+    );
+    assert_eq!(
+        start.boundary_events[1].payload["visible_user_prompt_record_id"],
+        runtime_state.conversation_state.records[0].id
+    );
+}
+
 /// Verifies typed VMM recall anchors target the exact visible canonical user message.
 /// 验证类型化 VMM 召回锚点会指向精确的可见规范用户消息。
 #[test]

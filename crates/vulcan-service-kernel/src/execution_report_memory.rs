@@ -894,6 +894,41 @@ pub(super) fn spawn_conversation_completion_hook_task(
         completion_request.restrict_vmm_runtime_readiness(ready);
         let outcome = completion_request.run().await;
         let session_id = outcome.session_id;
+        // Record hook dispatch by default without logging conversation content.
+        // 默认记录 Hook 派发结果，不输出对话正文。
+        match outcome.report.as_ref() {
+            Ok(report) => eprintln!(
+                "[webui-service][vmm-writeback] stage=hook_result session={} turn={} service_ready={} payload_ready={:?} postaction_completed={} failures={} effects={}",
+                session_id,
+                outcome.turn_id,
+                ready,
+                report
+                    .payload
+                    .value
+                    .get("vmm_runtime_ready")
+                    .and_then(serde_json::Value::as_bool),
+                report
+                    .completed_hooks
+                    .iter()
+                    .any(|hook| hook == "builtin.vmm.post_action"),
+                report.failures.len(),
+                outcome.vmm_writeback_effects.len(),
+            ),
+            Err(error) => eprintln!(
+                "[webui-service][vmm-writeback] stage=hook_result session={} turn={} service_ready={} dispatch_error={}",
+                session_id, outcome.turn_id, ready, error,
+            ),
+        }
+        // Continue-policy hook failures are carried in a successful dispatch report, not its Result error.
+        // Continue 策略的 Hook 失败存于成功调度报告内，而非 Result 错误中。
+        if let Ok(report) = outcome.report.as_ref() {
+            for failure in &report.failures {
+                eprintln!(
+                    "[webui-service] completed-turn hook handler failed for {}: hook={} error={}",
+                    outcome.turn_id, failure.hook_id, failure.message
+                );
+            }
+        }
         if let Err(error) = outcome.report.as_ref() {
             eprintln!(
                 "[webui-service] completed-turn hook failed for {}: {error}",

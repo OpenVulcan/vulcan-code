@@ -1103,6 +1103,12 @@ impl VmmClient for NativeVmmClient {
         &self,
         request: PreCheckRequest,
     ) -> Result<PreCheckResponse, VmmClientError> {
+        // The native endpoint trace distinguishes absent dispatch from local recall with no model call.
+        // 原生端点诊断区分未派发与无需模型调用的本地召回。
+        eprintln!(
+            "[native-vmm][precheck] stage=received session={} project={} operation={}",
+            request.session_id, request.host_project_id, request.operation_id,
+        );
         let now = now_ns()?;
         let subject_id = subject_id(request.user_id)?;
         let session_source_id = session_source_id(&request.session_id)?;
@@ -1118,6 +1124,10 @@ impl VmmClient for NativeVmmClient {
                 None,
             )
             .await?;
+        eprintln!(
+            "[native-vmm][precheck] stage=session_admitted session={}",
+            request.session_id,
+        );
         // Stamp the access admitted under this same operation guard, not a later binding lookup.
         // 标记此操作守卫下准入的访问范围，而不是事后重新查询的绑定。
         let read_source = memory_read_source_from_access(&access)?;
@@ -1126,6 +1136,10 @@ impl VmmClient for NativeVmmClient {
         let session_status =
             self.memory_session_status(&subject_id, &access.write_scope, &session_source_id)?;
         if !session_status.allows_runtime_memory() {
+            eprintln!(
+                "[native-vmm][precheck] stage=session_paused session={} status={:?}",
+                request.session_id, session_status,
+            );
             return Ok(PreCheckResponse {
                 read_source,
                 should_inject: false,
@@ -1186,6 +1200,13 @@ impl VmmClient for NativeVmmClient {
         let vulcan_memorymesh_core::CommandResult::PreCheck(result) = result else {
             return Err(unexpected_result("PreCheck"));
         };
+        eprintln!(
+            "[native-vmm][precheck] stage=core_result session={} context_items={} should_inject={} degraded={}",
+            request.session_id,
+            result.context_items.len(),
+            result.should_inject,
+            result.degraded,
+        );
         let context_items = result
             .context_items
             .iter()
@@ -1230,8 +1251,32 @@ impl VmmClient for NativeVmmClient {
         request: PostActionRequest,
         permit: &vulcan_vmm::VmmWritebackPermit,
     ) -> Result<PostActionResponse, VmmClientError> {
-        permit.validate_request(&request)?;
-        self.post_action_admitted(request, Some(permit)).await
+        // The endpoint trace identifies the exact accepted request without exposing its dialogue.
+        // 端点诊断标识准确请求，但不暴露对话内容。
+        eprintln!(
+            "[native-vmm][postaction] stage=received session={} project={} operation={}",
+            request.session_id, request.host_project_id, request.operation_id,
+        );
+        if let Err(error) = permit.validate_request(&request) {
+            eprintln!(
+                "[native-vmm][postaction] stage=permit session={} result=error kind={}",
+                request.session_id, error.kind,
+            );
+            return Err(error);
+        }
+        let session_id = request.session_id.clone();
+        let response = self.post_action_admitted(request, Some(permit)).await;
+        match &response {
+            Ok(result) => eprintln!(
+                "[native-vmm][postaction] stage=returned session={} accepted={} status={:?}",
+                session_id, result.accepted, result.session_memory_status,
+            ),
+            Err(error) => eprintln!(
+                "[native-vmm][postaction] stage=returned session={} result=error kind={}",
+                session_id, error.kind,
+            ),
+        }
+        response
     }
 
     /// Advances the durable compact boundary for one native project session.

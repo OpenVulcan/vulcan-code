@@ -874,12 +874,24 @@ async fn handle_vmm_precheck(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
-    if !invocation_vmm_runtime_ready(&invocation) {
+    let runtime_ready = invocation_vmm_runtime_ready(&invocation);
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=hook_entry session={:?} runtime_ready={}",
+        invocation_session_id(&invocation),
+        runtime_ready,
+    );
+    if !runtime_ready {
         return Ok(HookResult::default());
     }
     let config = runtime
         .resolve_effective_config(&invocation)
         .map_err(HookError::handler)?;
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=hook_config session={:?} backend={:?} diagnostic={:?}",
+        invocation_session_id(&invocation),
+        config.backend_mode,
+        config.diagnose_precheck_flow(true),
+    );
     if !should_run_vmm_precheck(&config) {
         return Ok(HookResult::default());
     }
@@ -887,10 +899,25 @@ async fn handle_vmm_precheck(
     let client = resolve_vmm_client(&runtime, &config).await?;
     let request = precheck_request_from_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
-    let response = client
-        .pre_check(request)
-        .await
-        .map_err(|error| HookError::handler(error.to_string()))?;
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=request session={} project={} operation={}",
+        request.session_id, request.host_project_id, request.operation_id,
+    );
+    let response = client.pre_check(request).await.map_err(|error| {
+        eprintln!(
+            "[webui-service][vmm-precheck] stage=response session={:?} result=error kind={}",
+            invocation_session_id(&invocation),
+            error.kind,
+        );
+        HookError::handler(error.to_string())
+    })?;
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=response session={:?} result=ok context_items={} should_inject={} degraded={}",
+        invocation_session_id(&invocation),
+        response.context_items.len(),
+        response.should_inject,
+        response.degraded,
+    );
     let mut metadata = BTreeMap::new();
     metadata.insert(
         HOOK_METADATA_VMM_SESSION_STATUS_EFFECT.to_string(),
@@ -920,15 +947,32 @@ async fn handle_vmm_post_action(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
-    if !invocation_vmm_runtime_ready(&invocation)
-        || !vmm_post_action_payload_is_final(&invocation.payload.value)
-    {
+    // These two authoritative gates decide whether a completed hook may write memory.
+    // 这两个权威闸门决定完成 Hook 是否允许写入记忆。
+    let runtime_ready = invocation_vmm_runtime_ready(&invocation);
+    let final_turn = vmm_post_action_payload_is_final(&invocation.payload.value);
+    eprintln!(
+        "[webui-service][vmm-writeback] stage=postaction_entry session={:?} runtime_ready={} final_turn={}",
+        invocation_session_id(&invocation),
+        runtime_ready,
+        final_turn,
+    );
+    if !runtime_ready || !final_turn {
         return Ok(HookResult::default());
     }
     let config = runtime
         .resolve_effective_config(&invocation)
         .map_err(HookError::handler)?;
-    if config.diagnose_writeback_flow(true) != VmmConfigDiagnostic::Ready {
+    // The effective configuration may disable writeback even when the service is ready.
+    // 即使服务就绪，有效配置仍可能禁止回写。
+    let writeback_diagnostic = config.diagnose_writeback_flow(true);
+    eprintln!(
+        "[webui-service][vmm-writeback] stage=postaction_config session={:?} backend={:?} diagnostic={:?}",
+        invocation_session_id(&invocation),
+        config.backend_mode,
+        writeback_diagnostic,
+    );
+    if writeback_diagnostic != VmmConfigDiagnostic::Ready {
         return Ok(HookResult::default());
     }
     let mut request =
@@ -955,6 +999,14 @@ async fn handle_vmm_post_action(
     }
     .map_err(|error| HookError::handler(error.to_string()))?;
     request.expected_source = Some(source.clone());
+    // Confirm projection and source resolution without printing memory text.
+    // 确认载荷投影与来源解析成功，但不输出记忆正文。
+    eprintln!(
+        "[webui-service][vmm-writeback] stage=postaction_request session={:?} project={} operation={}",
+        invocation_session_id(&invocation),
+        request.host_project_id,
+        request.operation_id,
+    );
     // The generation is admitted atomically with current configuration; later rebinding can revoke every clone.
     // 代次与当前配置原子准入；后续重绑可以撤销全部克隆。
     let permit = runtime
@@ -972,6 +1024,10 @@ async fn handle_vmm_post_action(
     let client = match resolve_vmm_client(&runtime, &config).await {
         Ok(client) => client,
         Err(error) => {
+            eprintln!(
+                "[webui-service][vmm-writeback] stage=client_resolution session={:?} result=error",
+                invocation_session_id(&invocation),
+            );
             effects.push(VmmWritebackHookEffect::Enqueue {
                 permit_id: permit.id(),
                 request,
@@ -993,7 +1049,19 @@ async fn handle_vmm_post_action(
             ),
         });
     } else {
-        match accepted_post_action(client.as_ref(), request.clone(), &permit).await {
+        let delivery = accepted_post_action(client.as_ref(), request.clone(), &permit).await;
+        match &delivery {
+            Ok(_) => eprintln!(
+                "[webui-service][vmm-writeback] stage=postaction_delivery session={:?} result=accepted",
+                invocation_session_id(&invocation),
+            ),
+            Err(error) => eprintln!(
+                "[webui-service][vmm-writeback] stage=postaction_delivery session={:?} result=error kind={}",
+                invocation_session_id(&invocation),
+                error.kind,
+            ),
+        }
+        match delivery {
             Ok(status) => effects.push(VmmWritebackHookEffect::SessionStatus {
                 status,
                 permit_id: permit.id(),
@@ -1016,6 +1084,11 @@ async fn handle_vmm_post_action(
             }),
         }
     }
+    eprintln!(
+        "[webui-service][vmm-writeback] stage=postaction_effects session={:?} count={}",
+        invocation_session_id(&invocation),
+        effects.len(),
+    );
     Ok(vmm_writeback_effect_result(effects))
 }
 

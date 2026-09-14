@@ -58,7 +58,7 @@ it("renders exact short durations and distinguishes failed reads from loading", 
     await act(async () => button("清洗运行状态", view.container).click())
     expect(view.container.textContent).toContain("1 分钟")
     expect(view.container.textContent).toContain("86,400,001 毫秒")
-    await act(async () => button("检索索引").click())
+    await act(async () => button("向量与检索索引").click())
     const vector = [...view.container.querySelectorAll('[data-slot="card"]')].find((entry) => entry.textContent?.includes("向量代次与重建"))!
     expect(vector.textContent).not.toContain("正在加载")
     expect(vector.textContent).toContain("返回了不匹配的结果")
@@ -68,7 +68,7 @@ it("renders exact short durations and distinguishes failed reads from loading", 
 it("does not leave a completed missing lexical status in an endless loading state", async () => {
   const view = await mount(async () => null)
   try {
-    await act(async () => button("检索索引", view.container).click())
+    await act(async () => button("向量与检索索引", view.container).click())
     expect(view.container.textContent).toContain("读取失败，请刷新重试。")
     expect(view.container.textContent).not.toContain("正在加载原生资源")
     expect(button("重建全文索引", view.container).disabled).toBe(true)
@@ -115,7 +115,7 @@ it("keeps a vector rejection inside its confirmation and restores the exact trig
   const run = vi.fn(async (action: string, payload?: Record<string, unknown>) => action === "native_vector_rebuild" ? null : maintenanceReply(action, payload))
   const view = await mount(run)
   try {
-    await act(async () => button("检索索引").click())
+    await act(async () => button("向量与检索索引").click())
     const trigger = button("预检向量重建", view.container)
     await act(async () => { trigger.focus(); trigger.click() })
     const dialog = document.querySelector('[role="alertdialog"]')!

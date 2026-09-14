@@ -115,6 +115,36 @@ pub(super) fn append_shared_user_prompt_record_with_attachments(
         attachments.clone(),
     )
     .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
+    append_shared_visible_user_prompt_record_with_attachments(
+        runtime_state,
+        session_id,
+        now,
+        prompt,
+        attachments,
+        source,
+    )
+}
+
+/// Appends one visible prompt record for a canonical user message already owned by durable history.
+/// 为已由可靠历史持有的规范用户消息追加一条可见提示词记录。
+///
+/// # Parameters / 参数
+/// `runtime_state` receives the transcript record; `session_id` owns its identity.
+/// `runtime_state` 接收转录记录；`session_id` 持有其身份。
+/// `now`, `prompt`, `attachments`, and `source` preserve the accepted prompt presentation.
+/// `now`、`prompt`、`attachments` 和 `source` 保留已接纳提示词的展示内容。
+///
+/// # Returns / 返回值
+/// Returns the new visible record id or an exact record identity error.
+/// 返回新可见记录标识，或准确的记录身份错误。
+pub(super) fn append_shared_visible_user_prompt_record_with_attachments(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    prompt: &str,
+    attachments: Vec<ConversationAttachment>,
+    source: PendingSessionPromptSource,
+) -> Result<String, String> {
     runtime_state.ui_state.unread = false;
     let record_id = build_session_record_message_id(
         session_id,

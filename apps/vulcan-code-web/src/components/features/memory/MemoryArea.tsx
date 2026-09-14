@@ -14,6 +14,7 @@ import { VmmAdvancedPage } from "./vmm-advanced-page"
 import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
 import { VmmNativeProjectPage } from "./vmm-native-project-page"
 import { VmmNativeMaintenancePage } from "./vmm-native-maintenance-page"
+import { VmmNativeVectorHealthAlert } from "./vmm-native-vector-health-alert"
 import { VmmNativeResourcesPage } from "./vmm-native-resources-page"
 import { VmmNativeRuntimePolicy } from "./vmm-native-runtime-policy"
 import { VmmOverviewPage } from "./vmm-overview-page"
@@ -181,6 +182,23 @@ export function MemoryArea(props: {
   const nativeDeployment = vmmUsesNativeMemoryMaintenance(
     props.snapshot.experienceState.deployment,
   )
+  // A repair link opens the vector index tab while ordinary maintenance navigation keeps its saved default.
+  // 修复入口直达向量索引页，普通维护导航仍保留原有默认页。
+  const [maintenanceEntryView, setMaintenanceEntryView] = React.useState<"recycle" | "index">("recycle")
+  // A successfully saved embedding route invalidates the health reading shown on this page.
+  // 成功保存向量路由后，当前页面展示的健康状态必须重新读取。
+  const [vectorStatusRevision, setVectorStatusRevision] = React.useState(0)
+  // openVectorRepair selects the guarded native rebuild workflow without starting a mutation.
+  // openVectorRepair 仅导航到受保护的原生重建流程，不启动任何写入。
+  const openVectorRepair = () => {
+    setMaintenanceEntryView("index")
+    props.onSelectSection("maintenance")
+  }
+  React.useEffect(() => {
+    // Leaving maintenance resets the ordinary sidebar entry to the recycle view.
+    // 离开内部维护后，普通侧栏入口恢复到回收站视图。
+    if (activeSection !== "maintenance") setMaintenanceEntryView("recycle")
+  }, [activeSection])
   // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
   // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
   const catalogLoadRequested = React.useRef(false)
@@ -328,6 +346,11 @@ export function MemoryArea(props: {
     <section className="vmm-memory-page">
       <div className="vmm-memory-shell status-only">
         <main className="vmm-memory-main vmm-status-page">
+          {nativeDeployment ? <VmmNativeVectorHealthAlert
+            onRunAction={props.actions.onRunVmmAction}
+            onOpenRepair={openVectorRepair}
+            onOpenEmbeddingSettings={() => props.onSelectSection("inference")}
+          /> : null}
           <VmmOverviewPage
             busy={operationBusy}
             onControl={async (action) => {
@@ -362,7 +385,13 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmInferenceSettings />
+            <VmmNativeVectorHealthAlert
+              key={vectorStatusRevision}
+              onRunAction={props.actions.onRunVmmAction}
+              onOpenRepair={openVectorRepair}
+              onOpenEmbeddingSettings={() => props.onSelectSection("inference")}
+            />
+            <VmmInferenceSettings onEmbeddingRouteSaved={() => setVectorStatusRevision((revision) => revision + 1)} />
           </main>
         </div>
       </section>
@@ -467,13 +496,20 @@ export function MemoryArea(props: {
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
             {nativeDeployment ? (
-              <VmmContentPage
-                busy={operationBusy}
-                notice={notice}
-                onRunAction={runAction}
-                result={result}
-                snapshot={props.snapshot}
-              />
+              <>
+                <VmmNativeVectorHealthAlert
+                  onRunAction={props.actions.onRunVmmAction}
+                  onOpenRepair={openVectorRepair}
+                  onOpenEmbeddingSettings={() => props.onSelectSection("inference")}
+                />
+                <VmmContentPage
+                  busy={operationBusy}
+                  notice={notice}
+                  onRunAction={runAction}
+                  result={result}
+                  snapshot={props.snapshot}
+                />
+              </>
             ) : (
               <VmmDataPage
                 busy={operationBusy}
@@ -513,7 +549,7 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmNativeMaintenancePage busy={operationBusy} onRunAction={runAction} />
+            <VmmNativeMaintenancePage busy={operationBusy} initialView={maintenanceEntryView} onRunAction={runAction} />
           </main>
         </div>
       </section>

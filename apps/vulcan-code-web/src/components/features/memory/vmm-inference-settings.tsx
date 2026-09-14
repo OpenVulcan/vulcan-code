@@ -45,6 +45,9 @@ import type {
 // VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
 interface VmmInferenceSettingsProps {
   onRequiredRouteReady?: (ready: boolean) => void
+  // Called only after the embedding route mutation is durably accepted.
+  // 仅在向量路由变更被持久化接受后调用。
+  onEmbeddingRouteSaved?: () => void
 }
 
 // VMM_REQUIRED_LLM_PURPOSES lists the foundational LLM routes required before VMM can be initialized.
@@ -112,6 +115,7 @@ export function vmmRequiredInferenceReady(
 // VmmInferenceSettings 管理 VMM 推理路由的加载、变更与验证。
 export function VmmInferenceSettings({
   onRequiredRouteReady,
+  onEmbeddingRouteSaved,
 }: VmmInferenceSettingsProps = {}) {
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
@@ -298,8 +302,13 @@ export function VmmInferenceSettings({
         route,
         reasoningEffort: operation === "conversation_respond" && route ? "none" : undefined,
       }),
-    )
-  }, [runSnapshotMutation])
+    ).then((saved) => {
+      // Model connectivity can remain green while a newly saved route invalidates stored vectors.
+      // 模型连通性仍可能显示绿色，但新保存的路由会使已有向量失效。
+      if (saved && operation === "embedding_create") onEmbeddingRouteSaved?.()
+      return saved
+    })
+  }, [onEmbeddingRouteSaved, runSnapshotMutation])
 
   return (
     <section className="rounded-xl border bg-card p-3">
