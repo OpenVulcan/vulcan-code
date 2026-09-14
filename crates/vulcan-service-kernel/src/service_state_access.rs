@@ -416,8 +416,8 @@ pub(crate) fn sync_agent_luaskills_tool_cache(
         let tauri_handle = guard.luaskills_runtime.as_ref().ok_or_else(|| {
             String::from("service is still starting; LuaSkills runtime is not ready")
         })?;
-        let engine = tauri_handle.engine.lock().map_err(|_| {
-            String::from("LuaSkills 引擎锁已损坏，无法同步 Agent Runtime 工具缓存。")
+        let engine = tauri_handle.engine.read().map_err(|_| {
+            String::from("LuaSkills 引擎读锁已损坏，无法同步 Agent Runtime 工具缓存。")
         })?;
         engine
             .list_entries_for_authority(

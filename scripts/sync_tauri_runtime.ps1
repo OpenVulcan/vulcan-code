@@ -1,4 +1,4 @@
-﻿# sync_tauri_runtime.ps1 synchronizes runtime resources into the stable output tree.
+# sync_tauri_runtime.ps1 synchronizes runtime resources into the stable output tree.
 # sync_tauri_runtime.ps1 用于把运行时资源同步到稳定的 output 目录树。
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +36,14 @@ $OutputPathComparison = if ($IsWindowsPlatform) { [System.StringComparison]::Ord
 # SourceConfigDir points at repository-owned packaged configuration templates.
 # SourceConfigDir 指向仓库持有的打包配置模板目录。
 $SourceConfigDir = Join-Path $ProjectDir "config"
+
+# KeepExistingConfigRelativePaths lists packaged config files seeded only when the destination is absent.
+# KeepExistingConfigRelativePaths 列出仅在目标缺失时才播种的打包配置文件。
+# The LuaSkills runtime settings document becomes user-owned state after first launch, so syncing it
+# must never replace values the user or the settings RPC already persisted in output/config.
+# LuaSkills 运行时设置文档在首次启动后成为用户自有状态，因此同步它绝不能替换用户或设置 RPC
+# 已持久化到 output/config 中的值。
+$KeepExistingConfigRelativePaths = @("luaskills-runtime-setting.json")
 
 # SourceResourcesDir points at the repository-owned runtime resource catalog.
 # SourceResourcesDir 指向仓库持有的运行时资源目录。
@@ -225,6 +233,76 @@ function Remove-ItemAllowLocked {
     }
 }
 
+# Publish one packaged file only while the destination still does not exist.
+# 仅在目标仍不存在时发布单个打包文件。
+# SourceFile is the packaged template and DestinationFile is the user-owned state path.
+# SourceFile 是打包模板，DestinationFile 是用户自有状态路径。
+# The staging file is created with FileMode.CreateNew and published with a same-directory File.Move
+# that fails when the destination exists, so a concurrent run can never overwrite the winner.
+# 暂存文件以 FileMode.CreateNew 创建，并用目标已存在即失败的同目录 File.Move 发布，
+# 因此并发运行绝不会覆盖赢家文件。
+# This function returns true when published, false when the destination existed or was locked, and
+# throws for every other failure.
+# 此函数发布成功时返回 true；目标已存在或因占用跳过时返回 false；其他失败一律抛出。
+function Publish-FileOnlyWhenAbsent {
+    param(
+        [string]$SourceFile,
+        [string]$DestinationFile
+    )
+
+    # An existing destination is authoritative user state that is never inspected or replaced.
+    # 已存在的目标是权威用户状态，绝不被读取或替换。
+    if (Test-Path -LiteralPath $DestinationFile) {
+        return $false
+    }
+
+    $DestinationParent = Split-Path $DestinationFile -Parent
+    New-Item -ItemType Directory -Path $DestinationParent -Force | Out-Null
+    # StagedPath stays inside the destination directory so publishing remains a same-directory move.
+    # StagedPath 保持在目标目录内，使发布始终是同目录移动。
+    $StagedName = "{0}.sync-{1}-{2}.tmp" -f (Split-Path $DestinationFile -Leaf), $PID, [System.Guid]::NewGuid().ToString("N")
+    $StagedPath = Join-Path $DestinationParent $StagedName
+    try {
+        # CreateNew proves this run owns a brand-new staging file instead of reusing a stale one.
+        # CreateNew 证明本次运行独占一个全新暂存文件，而不是复用陈旧文件。
+        $StagedStream = [System.IO.File]::Open($StagedPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $SourceBytes = [System.IO.File]::ReadAllBytes($SourceFile)
+            $StagedStream.Write($SourceBytes, 0, $SourceBytes.Length)
+            $StagedStream.Flush($true)
+        }
+        finally {
+            $StagedStream.Dispose()
+        }
+
+        try {
+            # File.Move without an overwrite flag throws instead of replacing an existing destination.
+            # 不带覆盖标志的 File.Move 会抛出，而不会替换已存在的目标。
+            [System.IO.File]::Move($StagedPath, $DestinationFile)
+            return $true
+        }
+        catch {
+            if (Test-IsLockedFileError -ErrorRecord $_) {
+                Write-Warning "Skipped locked output file; restart the running application before using the new resource: $DestinationFile"
+                return $false
+            }
+            if (Test-Path -LiteralPath $DestinationFile) {
+                # Another run published the destination first, so its file wins and this run keeps nothing.
+                # 另一次运行已先发布目标，因此以它的文件为准，本次运行不保留任何内容。
+                return $false
+            }
+            throw
+        }
+    }
+    finally {
+        # StagedPath is removed only while this run still owns it after a failed or lost publish.
+        # 仅在发布失败或落败且本次运行仍持有暂存文件时移除 StagedPath。
+        if (Test-Path -LiteralPath $StagedPath) {
+            $null = Remove-ItemAllowLocked -LiteralPath $StagedPath
+        }
+    }
+}
+
 # Copy-DirectoryContents overlays one source directory onto one output directory.
 # Copy-DirectoryContents 用于把一个源目录覆盖同步到一个输出目录。
 # SourceDirectory is the directory whose immediate children should be copied.
@@ -239,7 +317,8 @@ function Copy-DirectoryContents {
     param(
         [string]$SourceDirectory,
         [string]$DestinationDirectory,
-        [switch]$Clean
+        [switch]$Clean,
+        [string[]]$KeepExistingRelativePaths = @()
     )
 
     if (-not (Test-Path -LiteralPath $SourceDirectory -PathType Container)) {
@@ -265,12 +344,18 @@ function Copy-DirectoryContents {
             New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
             continue
         }
+        if ($KeepExistingRelativePaths -contains $RelativePath) {
+            # Declared user-owned files are seeded only once and never overwritten by later syncs.
+            # 已声明的用户自有文件只播种一次，后续同步绝不覆盖。
+            $null = Publish-FileOnlyWhenAbsent -SourceFile $SourceItem.FullName -DestinationFile $DestinationPath
+            continue
+        }
         $null = Copy-FileAllowLockedDestination -SourceFile $SourceItem.FullName -DestinationFile $DestinationPath
     }
 }
 
 Write-Host "==> Syncing packaged config..."
-Copy-DirectoryContents -SourceDirectory $SourceConfigDir -DestinationDirectory $OutputConfigDir
+Copy-DirectoryContents -SourceDirectory $SourceConfigDir -DestinationDirectory $OutputConfigDir -KeepExistingRelativePaths $KeepExistingConfigRelativePaths
 
 Write-Host "==> Syncing packaged resources..."
 Copy-DirectoryContents -SourceDirectory $SourceResourcesDir -DestinationDirectory $OutputResourcesDir

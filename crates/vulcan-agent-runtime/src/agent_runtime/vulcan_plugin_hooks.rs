@@ -159,7 +159,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::Path;
-    use std::sync::Mutex;
+    use std::sync::RwLock;
     use vulcan_hooks::{HookMode, HookPointDescriptor};
 
     /// Writes one minimal hook-only Vulcan Plugin package.
@@ -262,7 +262,7 @@ lua_runtime:
         fs::create_dir_all(&plugin_state_root).expect("create plugin state root");
         fs::create_dir_all(&plugin_runtime_root).expect("create plugin runtime root");
         let manager = VulcanPluginRuntimeManager::new(
-            Arc::new(Mutex::new(test_engine(&runtime_root))),
+            Arc::new(RwLock::new(test_engine(&runtime_root))),
             plugin_root,
             user_plugin_root,
             bridge_root,

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use vulcan_workspace_store::local_database_runtime::LocalDatabaseRuntime;
 
 use super::LuaRuntimeDatabaseProviderMode;
-use super::database_bridge::HostExecutionChannel;
+use super::database_bridge::{HostExecutionChannel, HostExecutionChannelSnapshot};
 use super::database_callbacks::{SkillLanceDbProvider, SkillSqliteProvider};
 
 /// One installed pair of providers together with the channel that runs their work.
@@ -51,6 +51,15 @@ impl InstalledHostDatabaseProviders {
     /// 在本次安装的最后一个所有者被丢弃前返回 `true`。
     pub fn is_open(&self) -> bool {
         !self.channel.is_closed()
+    }
+
+    /// Return exact database channel counters for diagnostics without accessing stored data.
+    /// 返回数据库通道的精确诊断计数，不访问已存数据。
+    ///
+    /// Takes no parameters and returns the current monotonic channel snapshot.
+    /// 不接收参数，返回当前单调的通道快照。
+    pub fn diagnostics_snapshot(&self) -> HostExecutionChannelSnapshot {
+        self.channel.diagnostics_snapshot()
     }
 }
 

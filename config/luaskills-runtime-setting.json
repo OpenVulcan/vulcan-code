@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "vmPool": {
-    "minSize": 1,
-    "maxSize": 2,
+    "minSize": 4,
+    "maxSize": 8,
     "idleTtlSecs": 30
   },
   "runLuaPool": {
     "minSize": 1,
-    "maxSize": 4,
+    "maxSize": 2,
     "idleTtlSecs": 60
   },
   "toolCache": {

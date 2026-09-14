@@ -242,6 +242,27 @@ pub fn spawn_service_bootstrap(
         .expect("failed to spawn Vulcan service bootstrap thread");
 }
 
+/// Build a user-facing LuaSkills startup warning from one exact bootstrap error.
+/// 根据一次确定的 LuaSkills 引导错误生成用户可见的启动警告。
+///
+/// `error` is the bootstrap failure; the result includes manual recovery only for settings errors.
+/// `error` 是引导失败原因；返回值仅在设置错误时包含手动恢复指引。
+fn luaskills_startup_warning_message(error: &str) -> String {
+    if [
+        "failed to read LuaSkills runtime settings `",
+        "failed to parse LuaSkills runtime settings `",
+        "invalid LuaSkills runtime settings `",
+    ]
+    .iter()
+    .any(|prefix| error.starts_with(prefix))
+    {
+        return format!(
+            "LuaSkills 配置无法加载：{error}。请备份并手动修复该配置文件，然后重启应用；原文件不会被自动覆盖。"
+        );
+    }
+    String::from("LuaSkills 不可用，插件内容组件继续运行；请查看启动日志了解原因。")
+}
+
 /// Runs the real startup sequence owned by the WebUI service.
 /// 运行由 WebUI 服务持有的真实启动顺序。
 fn run_service_bootstrap(
@@ -514,7 +535,7 @@ fn run_service_bootstrap(
                     None,
                     crate::workspace_persistence_versions::empty_luaskills_catalog(),
                     StartupStepStatus::Warning,
-                    String::from("LuaSkills 不可用，插件内容组件继续运行"),
+                    luaskills_startup_warning_message(&error),
                 )
             }
         };
@@ -756,11 +777,11 @@ fn run_service_bootstrap(
     // agent_luaskills_runtime is absent in degraded mode while the independent plugin runtime remains mounted.
     // agent_luaskills_runtime 在降级模式下为空，而独立插件运行时仍保持挂载。
     let agent_luaskills_runtime = luaskills_runtime.as_ref().and_then(|runtime_handle| {
-        let engine = match runtime_handle.engine.lock() {
+        let engine = match runtime_handle.engine.read() {
             Ok(engine) => engine,
             Err(_) => {
                 logs.push(String::from(
-                    "[webui-service] LuaSkills engine lock is poisoned; provider Lua tools are disabled",
+                    "[webui-service] LuaSkills engine read lock is poisoned; provider Lua tools are disabled",
                 ));
                 return None;
             }
@@ -1834,5 +1855,38 @@ mod native_vmm_bootstrap_tests {
 
         effective.backend_mode = vulcan_vmm::VmmBackendMode::Native;
         assert!(native_vmm_bootstrap_is_required(&effective));
+    }
+}
+
+#[cfg(test)]
+mod luaskills_startup_warning_tests {
+    use super::{luaskills_startup_warning_message, startup_steps_with_status};
+    use crate::service_bootstrap::StartupStepStatus;
+    use time::OffsetDateTime;
+
+    /// Verify an invalid user file reaches the displayed startup step with exact recovery context.
+    /// 验证无效用户文件的精确路径、原因和恢复指引进入界面显示的启动步骤。
+    #[test]
+    fn invalid_settings_warning_survives_startup_projection() {
+        let error = "invalid LuaSkills runtime settings `C:\\Vulcan\\output\\config\\luaskills-runtime-setting.json`: unsupported LuaSkills runtime settings schema: 2";
+        let message = luaskills_startup_warning_message(error);
+        let steps = startup_steps_with_status(
+            OffsetDateTime::now_utc(),
+            &[("luaskills", StartupStepStatus::Warning, message.as_str())],
+        );
+        let displayed = steps[0].message.as_deref().expect("startup step message");
+        assert!(displayed.contains("C:\\Vulcan\\output\\config\\luaskills-runtime-setting.json"));
+        assert!(displayed.contains("schema: 2"));
+        assert!(displayed.contains("手动修复"));
+        assert!(displayed.contains("重启应用"));
+    }
+
+    /// Verify unrelated engine failures do not receive a misleading settings-file diagnosis.
+    /// 验证无关引擎故障不会被错误投影成设置文件问题。
+    #[test]
+    fn unrelated_failure_keeps_generic_warning() {
+        let message = luaskills_startup_warning_message("创建 LuaSkills 引擎失败：VM 初始化失败");
+        assert!(!message.contains("配置文件"));
+        assert!(message.contains("启动日志"));
     }
 }

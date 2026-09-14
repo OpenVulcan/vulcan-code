@@ -157,10 +157,22 @@ WebUI. Do not request or relay sensitive values.
 该配置只约束受管 Node/Python 调用，不会强制中断普通 Lua handler、同步 FFI 或
 `vulcan.process.exec`；这些边界必须由对应技能或 LuaSkills 运行时自身提供明确上限。
 
-LuaSkills 宿主会在调用等待 5 秒、30 秒以及之后每 60 秒输出一次阶段诊断。`engine_lock_wait`
-表示仍在等待进程级引擎锁，`skill_body_or_host_call` 表示已经进入 Lua 技能或其宿主调用；诊断
-中的 `blocking_runtime_operation` 表示 RunLua 生命周期等通用阻塞操作已经开始。诊断只包含规范
-工具名、进程内调用关联 ID、阶段与耗时，不包含完整参数。
+LuaSkills 宿主会在调用等待 5 秒、30 秒以及之后每 60 秒输出一次阶段诊断。`engine_read_lock_wait`
+表示仍在等待宿主引擎读锁，`engine_write_lock_wait` 表示仍在等待宿主引擎写锁，`skill_body_or_host_call`
+表示已经进入 Lua 技能或其宿主调用；诊断中的 `blocking_runtime_operation` 表示 RunLua 生命周期
+等通用阻塞操作已经开始。诊断只包含规范工具名、进程内调用关联 ID、阶段与耗时，不包含完整参数。
+
+宿主引擎使用读写锁：普通技能调用、一次性 runLua、持久 runLua 会话与插件 System lease 只取读锁，
+因此宿主锁不再阻断独立调用并发进入 LuaSkills。普通技能与一次性 runLua 分别使用主池和 runLua 池；
+插件 System lease 使用每租约专用 VM，不占用这两个池。池的 `maxSize` 限制 VM 租约数，但不单独决定实际执行并发：
+LuaSkills 0.5.5 的文件型 runLua 在执行期间为切换进程工作目录持有 `lock_runlua_cwd_guard`，
+System lease 指定工作目录时也持有同一把锁。这两类调用会在上游工作目录锁处相互等待，
+即使宿主读锁和各自 VM 资源均可用。普通技能调用与这两类调用分别可以重叠。
+技能安装、更新、
+卸载、启停、重载与技能包配置写入取写锁，并在排空在途读锁之后才变更引擎状态。单次锁等待超过
+1 秒时另输出 `engine-read-lock-slow` 或 `engine-write-lock-slow`；写锁慢诊断只包含管理动作标签
+（如 `refresh`、`install`），不包含技能标识与来源定位值。`runtime-config` 虽只暴露只读的
+`describe` 与 `validate` 动作，但其上游入口声明在 `&mut LuaEngine` 上，因此仍取写锁。
 
 ## 9. 外部修改、显式刷新与事件
 

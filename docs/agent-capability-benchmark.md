@@ -418,6 +418,12 @@ vulcan-code 不是「又一个终端 coding agent」，而是一个**桌面级 A
 
 ## 5. 专项：LuaSkills 并发与串行化的取证结论
 
+> **实施状态（2026-09-14）**：本节 §5.6 的第一步宿主读写锁迁移已实施，记录见
+> [`docs/completed/20260914/01-LUASKILLS_CONCURRENCY_AND_VM_DEFAULTS.md`](completed/20260914/01-LUASKILLS_CONCURRENCY_AND_VM_DEFAULTS.md)。
+> 本节引用的行号是**改动前的取证基线**；改动后 `lock_runtime_engine` 取读锁、`lock_runtime_engine_mut` 取写锁，
+> 慢锁诊断标签为 `engine-read-lock-slow` / `engine-write-lock-slow`。下文插件加载锁与编译缓存仍是建议，
+> 本次没有实现。
+
 本节针对「串行究竟发生插件初始化还是 LuaSkills 工具调用」这一分歧，逐条列出**代码事实**，不下结论式断言。
 
 ### 5.1 事实 A：VM 池数量确实可由宿主配置（用户指正成立）
@@ -457,7 +463,7 @@ vulcan-code 不是「又一个终端 coding agent」，而是一个**桌面级 A
 关键旁证（代码自身措辞）：
 
 - `luaskills_runtime.rs:668-669` 注释：*"measures only contention for the **process-wide** LuaSkills engine"*（进程级）；
-- `:673-677` 专设 `[luaskills-runtime][engine-lock-slow]`（≥1 s 竞争打点）；
+- `:673-689` 分设 `[luaskills-runtime][engine-read-lock-slow]`（≥1 s 读锁竞争打点）与 `[skill-call-slow]`，两者分离说明「锁等待」与「Lua 体耗时」被区别观测；
 - `:684-689` 另设 `[luaskills-runtime][skill-call-slow]`，两者分离说明「锁等待」与「Lua 体耗时」被区别观测。
 
 引擎共享范围：`service_bootstrap.rs:780` `Arc::clone(&runtime_handle.engine)`，
@@ -516,8 +522,13 @@ fn lock_runtime_engine_mut(..) -> MutexGuard  // 写锁
 | `service_bootstrap.rs:759`、`service_state_access.rs:419`（列入口/读状态） | `.lock()` | `.read()` |
 | `vulcan-plugin-runtime/src/runtime.rs:237` `RwLock<Option<Arc<Mutex<LuaEngine>>>>` | 内层 `Mutex` | 内层同步替换为 `RwLock` |
 
-效果：工具调用按 VM 池 `max_size` 真并发；技能装载/生命周期/配置写入仍独占，并天然构成上游 FFI 所描述的
+效果：普通技能调用可在主池 `max_size` 内并发；技能装载/生命周期/配置写入仍独占，并天然构成上游 FFI 所描述的
 *"quiescent free barrier"*（写锁需等在途读锁排空）。
+
+文件型 runLua 和指定工作目录的 System lease 在 LuaSkills 0.5.5 内部还会为进程工作目录切换获取
+`lock_runlua_cwd_guard`。二者即使持有不同 VM，也不能并发执行该段 Lua 代码；内联 runLua 请求不触发这把锁，
+可以证明独立 runLua 池最大值 2 时第 3 路等待归还，但 Vulcan 对 AI 暴露的一次性 runLua 目前使用文件入口。
+因此“宿主读写锁已解除跨路径独占”不能推导成“所有工具按各自池上限真并发”。
 
 **第二步：把「插件加载顺序」独立成锁（正确锁点）**
 
@@ -549,7 +560,7 @@ fn lock_runtime_engine_mut(..) -> MutexGuard  // 写锁
 | --- | --- | --- |
 | 编译期 | `fn assert_sync<T: Sync>() {}` + `assert_sync::<LuaEngine>()` | 通过即证明读锁并发成立 |
 | 运行期 | `vm_pool.max_size` = 8，并发 8 个不同目录的 `codekit-ast-tree` | 修复后墙钟 ≈ 单次 ×1；修复前 ≈ ×8 |
-| 日志 | `[engine-lock-slow]` 与 `[skill-call-slow]` 分布 | 修复后前者应基本消失 |
+| 日志 | `[engine-read-lock-slow]` / `[engine-write-lock-slow]` 与 `[skill-call-slow]` 分布 | 修复后前两者应基本消失 |
 | 回归 | 技能 install/update/enable/disable/uninstall、配置写入、插件 lease 创建 | 行为不变，写锁仍独占 |
 
 ---
@@ -559,5 +570,7 @@ fn lock_runtime_engine_mut(..) -> MutexGuard  // 写锁
 1. codex 与 dsh 的确切测试用例总数未逐一统计（仅统计了文件规模与测试文件存在性）。
 2. kimi-cli 的 MCP 支持范围未完整取证（未在 `src/` 找到独立 MCP 客户端实现）。
 3. OpenCode 的上下文压缩与长任务恢复细节未深入取证。
-4. 各项目的真实端到端性能未做基准测试；本报告的并发结论基于代码结构而非实测吞吐。
+4. 各项目的真实端到端性能未做基准测试；2026-09-14 新增的隔离并发契约测试证明了入场与等待，
+   仍不等同于真实项目下的吞吐基准。隔离宿主技能压力测试在 8、16、64 路时测得进程线程峰值为
+   23、39、135（同进程基线 7），全部完成后均回落至 7。
 5. `output/` 目录与权威资源的一致性此前已抽样验证（vulcan-debug-runtime 15 文件、bridge.lua 逐字节相同），但未全量校验。

@@ -157,10 +157,15 @@ async fn execute_runtime_config_tool(
     let request_text = serde_json::to_string(&upstream_request).map_err(|error| {
         NativeToolError::new(format!("Failed to encode runtime-config request: {error}"))
     })?;
+    // The upstream `runtime-config` dispatch is declared on `&mut LuaEngine` even though the exposed
+    // describe/validate actions are read-only, so this host entry follows the real signature and takes
+    // the write guard instead of assuming read-only behavior from the action names.
+    // 上游 `runtime-config` 分发虽只暴露只读的 describe/validate 动作，却声明在 `&mut LuaEngine` 上，
+    // 因此本宿主入口遵循真实签名取写守卫，而不是按动作名假定只读。
     let response_text = runtime
         .engine
-        .lock()
-        .map_err(|_| NativeToolError::new("LuaSkills runtime lock is poisoned"))?
+        .write()
+        .map_err(|_| NativeToolError::new("LuaSkills runtime write lock is poisoned"))?
         .dispatch_runtime_config_tool_json(&request_text);
     let response = serde_json::from_str::<Value>(&response_text).map_err(|error| {
         NativeToolError::new(format!("Failed to decode runtime-config response: {error}"))

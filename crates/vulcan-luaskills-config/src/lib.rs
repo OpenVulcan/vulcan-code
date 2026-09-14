@@ -382,13 +382,13 @@ impl Default for LuaSkillsRuntimeSettings {
         Self {
             schema_version: LUASKILLS_RUNTIME_SETTINGS_SCHEMA_VERSION,
             vm_pool: LuaVmPoolSettings {
-                min_size: 1,
-                max_size: 2,
+                min_size: 4,
+                max_size: 8,
                 idle_ttl_secs: 30,
             },
             run_lua_pool: LuaVmPoolSettings {
                 min_size: 1,
-                max_size: 4,
+                max_size: 2,
                 idle_ttl_secs: 60,
             },
             tool_cache: LuaSkillsToolCacheSettings {
@@ -494,7 +494,12 @@ pub fn load_runtime_settings(config_directory: &Path) -> Result<LuaSkillsRuntime
             path.display()
         )
     })?;
-    settings.normalized()
+    settings.normalized().map_err(|error| {
+        format!(
+            "invalid LuaSkills runtime settings `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 /// Validate and atomically save one Vulcan-owned settings document.

@@ -5,6 +5,22 @@ use super::*;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Compile-time proof that one shared Lua engine may be reached through a read/write lock.
+/// 共享 Lua 引擎可通过读写锁并发访问的编译期证明。
+///
+/// The host holds the engine in an `Arc<RwLock<LuaEngine>>`, so concurrent readers are only sound
+/// while the engine stays `Send + Sync`. Asserting it here fails the build instead of silently
+/// allowing a later dependency change to reintroduce an engine type that cannot be shared.
+/// 宿主以 `Arc<RwLock<LuaEngine>>` 持有引擎，因此只有在引擎保持 `Send + Sync` 时并发读才是安全的。
+/// 在此断言可在依赖变化导致引擎不可共享时直接让构建失败，而不是静默放行。
+const _: () = {
+    /// Asserts that one type may cross threads and be shared behind a lock.
+    /// 断言某类型可跨线程并在锁后共享。
+    const fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<LuaEngine>();
+};
+
 /// One host-owned public Lua runtime lease bound to an exact conversation owner.
 /// 一条绑定到精确会话所有者的宿主自有公开 Lua 运行时租约。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +63,12 @@ pub(super) struct RunLuaSessionRegistry {
 pub struct LuaSkillsRuntimeHandle {
     /// Shared LuaSkills engine reused by later skill-facing panels and workflows.
     /// 供后续技能面板与工作流复用的共享 LuaSkills 引擎。
-    pub engine: Arc<Mutex<LuaEngine>>,
+    ///
+    /// Ordinary execution takes a read guard so independent calls overlap, while the upstream
+    /// methods requiring `&mut LuaEngine` take the write guard and form the engine change barrier.
+    /// 普通执行取读守卫以使相互独立的调用可以重叠；要求 `&mut LuaEngine` 的上游方法取写守卫，
+    /// 并构成引擎变更屏障。
+    pub engine: Arc<RwLock<LuaEngine>>,
     /// Stable runtime root reserved for bundled LuaSkills resources and state.
     /// 为内建 LuaSkills 资源与状态保留的稳定运行时根目录。
     pub runtime_root: PathBuf,
@@ -128,7 +149,7 @@ impl LuaSkillsRuntimeHandle {
     /// Creates an agent-facing handle from one already initialized shared LuaSkills engine.
     /// 根据一个已初始化的共享 LuaSkills 引擎创建面向 Agent 的句柄。
     pub fn from_shared_engine(
-        engine: Arc<Mutex<LuaEngine>>,
+        engine: Arc<RwLock<LuaEngine>>,
         runtime_root: PathBuf,
         skill_roots: Vec<RuntimeSkillRoot>,
         entry_count: usize,
@@ -336,6 +357,25 @@ pub enum LuaSkillsManagementAction {
         /// 目标技能的稳定标识符。
         skill_id: String,
     },
+}
+
+impl LuaSkillsManagementAction {
+    /// Return one stable English diagnostic label for write-lock contention reporting.
+    /// 返回一个用于写锁竞争上报的稳定英文诊断标签。
+    ///
+    /// The label never contains a skill id or a source locator, so slow write-lock diagnostics stay
+    /// free of user identifiers while remaining attributable to one management action.
+    /// 该标签不包含技能标识或来源定位值，因此写锁慢诊断既能归因到单次管理动作，又不携带用户标识。
+    pub(super) fn diagnostic_label(&self) -> &'static str {
+        match self {
+            Self::Refresh => "refresh",
+            Self::Install { .. } => "install",
+            Self::Update { .. } => "update",
+            Self::Enable { .. } => "enable",
+            Self::Disable { .. } => "disable",
+            Self::Uninstall { .. } => "uninstall",
+        }
+    }
 }
 
 /// Structured host-side outcome returned after one management action completes.

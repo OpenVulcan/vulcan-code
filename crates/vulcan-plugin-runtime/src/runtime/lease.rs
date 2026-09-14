@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 impl VulcanPluginRuntimeManager {
     /// Creates one LuaSkills managed System lease for an exact validated package.
@@ -311,8 +311,14 @@ pub(super) fn required_lua_runtime(
 /// 在异步执行器线程之外运行一个同步 LuaSkills 操作。
 /// Locks the supplied shared `engine` on a blocking worker and returns `operation`'s typed result or a task/engine error.
 /// 在阻塞工作线程锁定传入的共享`engine`，返回`operation`的强类型结果或任务/引擎错误。
+///
+/// The read guard is sufficient because `operation` only receives `&LuaEngine`: every plugin lease
+/// create, evaluate, status and close entry is an upstream `&self` method. Distinct plugin leases
+/// therefore overlap, while a skill-management write still drains them before it mutates the engine.
+/// 读守卫已经足够，因为 `operation` 只接收 `&LuaEngine`：插件租约的创建、执行、状态与关闭入口
+/// 在上游都是 `&self` 方法。因此不同插件租约可以重叠，而技能管理写操作仍会在变更引擎前排空它们。
 pub(super) async fn call_engine_blocking<T>(
-    engine: Arc<Mutex<LuaEngine>>,
+    engine: Arc<RwLock<LuaEngine>>,
     operation: impl FnOnce(&LuaEngine) -> Result<T, VulcanPluginRuntimeError> + Send + 'static,
 ) -> Result<T, VulcanPluginRuntimeError>
 where
@@ -320,8 +326,8 @@ where
 {
     tokio::task::spawn_blocking(move || {
         let engine = engine
-            .lock()
-            .map_err(|_| VulcanPluginRuntimeError::new("LuaSkills engine lock is poisoned."))?;
+            .read()
+            .map_err(|_| VulcanPluginRuntimeError::new("LuaSkills engine read lock is poisoned."))?;
         operation(&engine)
     })
     .await

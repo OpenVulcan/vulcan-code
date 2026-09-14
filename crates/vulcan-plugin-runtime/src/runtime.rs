@@ -234,7 +234,7 @@ struct VulcanPluginManagerState {
     manager_id: String,
     /// Shared LuaSkills engine used for host-managed bridge leases.
     /// 用于宿主受管桥接租约的共享 LuaSkills 引擎。
-    engine: RwLock<Option<Arc<Mutex<LuaEngine>>>>,
+    engine: RwLock<Option<Arc<RwLock<LuaEngine>>>>,
     /// Root containing deployed Vulcan Plugin packages.
     /// 包含已部署 Vulcan 插件包的根目录。
     vulcan_plugin_root: PathBuf,
@@ -314,7 +314,7 @@ impl Drop for VulcanPluginManagerState {
         let Some(engine) = engine_slot.as_ref() else {
             return;
         };
-        let Ok(engine) = engine.lock() else {
+        let Ok(engine) = engine.read() else {
             return;
         };
         for session in sessions.values() {
@@ -402,7 +402,7 @@ impl VulcanPluginRuntimeManager {
     /// Returns a manager initialized with an empty catalog snapshot.
     /// 返回以空目录快照初始化的管理器。
     pub fn new(
-        engine: Arc<Mutex<LuaEngine>>,
+        engine: Arc<RwLock<LuaEngine>>,
         vulcan_plugin_root: PathBuf,
         user_plugin_root: PathBuf,
         bridge_package_root: PathBuf,
@@ -465,7 +465,7 @@ impl VulcanPluginRuntimeManager {
     /// A fully initialized shared manager.
     /// 返回完整初始化的共享管理器。
     fn new_with_optional_engine(
-        engine: Option<Arc<Mutex<LuaEngine>>>,
+        engine: Option<Arc<RwLock<LuaEngine>>>,
         vulcan_plugin_root: PathBuf,
         user_plugin_root: PathBuf,
         bridge_package_root: PathBuf,
@@ -522,7 +522,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回值
     /// Returns unit after the engine and fixed bridge are published.
     /// 发布引擎与固定桥接后返回空值。
-    pub fn attach_runtime_engine(&self, engine: Arc<Mutex<LuaEngine>>) -> Result<(), String> {
+    pub fn attach_runtime_engine(&self, engine: Arc<RwLock<LuaEngine>>) -> Result<(), String> {
         let mut slot = self
             .state
             .engine
@@ -546,7 +546,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回值
     /// The shared engine required by one executable plugin operation.
     /// 单次执行型插件操作所需的共享引擎。
-    fn runtime_engine(&self) -> Result<Arc<Mutex<LuaEngine>>, VulcanPluginRuntimeError> {
+    fn runtime_engine(&self) -> Result<Arc<RwLock<LuaEngine>>, VulcanPluginRuntimeError> {
         self.state
             .engine
             .read()

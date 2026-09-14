@@ -159,8 +159,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
         enableRunLua: true,
         enableRunLuaSession: true,
       },
-      vmPool: { minSize: 1, maxSize: 2, idleTtlSecs: 30 },
-      runLuaPool: { minSize: 1, maxSize: 4, idleTtlSecs: 60 },
+      vmPool: { minSize: 4, maxSize: 8, idleTtlSecs: 30 },
+      runLuaPool: { minSize: 1, maxSize: 2, idleTtlSecs: 60 },
       toolCache: { maxEntries: 1000, defaultTtlSecs: 1800, maxTtlSecs: 1800 },
       network: {
         allowDownloads: true,

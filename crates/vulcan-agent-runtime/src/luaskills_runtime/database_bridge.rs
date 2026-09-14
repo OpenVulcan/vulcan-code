@@ -58,10 +58,10 @@
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 
 /// Default worker count for one host execution channel.
@@ -84,6 +84,69 @@ pub const HOST_EXECUTION_CHANNEL_CALL_TIMEOUT: Duration = Duration::from_secs(30
 /// 一个排队的工作单元：它拥有自己所需的一切，包括把结果发送到哪里。
 type ChannelJob = Box<dyn FnOnce() + Send + 'static>;
 
+/// One monotonic diagnostic snapshot of a bounded host database execution channel.
+/// 有界宿主数据库执行通道的一份单调诊断快照。
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct HostExecutionChannelSnapshot {
+    /// Successfully admitted jobs, including jobs still queued or running.
+    /// 成功入场的作业数，含仍在排队或执行的作业。
+    pub admitted: u64,
+    /// Jobs rejected because the bounded queue was full.
+    /// 因有界队列已满而拒绝的作业数。
+    pub saturated: u64,
+    /// Jobs that started on one worker.
+    /// 已在工作线程上开始的作业数。
+    pub started: u64,
+    /// Jobs completed on a worker, including failures and panics.
+    /// 工作线程已完成的作业数，含失败与 panic。
+    pub completed: u64,
+    /// Caller waits that expired while their jobs might still complete later.
+    /// 调用方等待超时数；对应作业之后仍可能完成。
+    pub caller_timeouts: u64,
+    /// Maximum number of workers simultaneously executing jobs.
+    /// 同时执行作业的工作线程峰值。
+    pub peak_active_workers: usize,
+    /// Accumulated queue wait time for jobs that started, in milliseconds.
+    /// 已启动作业累计排队等待毫秒数。
+    pub queue_wait_ms: u64,
+    /// Accumulated worker execution time for completed jobs, in milliseconds.
+    /// 已完成作业累计工作线程执行毫秒数。
+    pub execution_ms: u64,
+}
+
+/// Atomic backing counters shared by callers and database workers.
+/// 由调用方与数据库工作线程共享的原子计数器。
+#[derive(Default)]
+struct HostExecutionChannelCounters {
+    /// Successfully admitted jobs.
+    /// 成功入场的作业。
+    admitted: AtomicU64,
+    /// Full-queue rejections.
+    /// 队列已满的拒绝。
+    saturated: AtomicU64,
+    /// Started jobs.
+    /// 已启动作业。
+    started: AtomicU64,
+    /// Completed jobs.
+    /// 已完成作业。
+    completed: AtomicU64,
+    /// Caller wait timeouts.
+    /// 调用方等待超时。
+    caller_timeouts: AtomicU64,
+    /// Jobs currently running on workers.
+    /// 当前正在工作线程上执行的作业。
+    active_workers: AtomicUsize,
+    /// Peak simultaneous worker jobs.
+    /// 工作线程同时执行作业的峰值。
+    peak_active_workers: AtomicUsize,
+    /// Aggregate queue wait duration in milliseconds.
+    /// 累计排队等待毫秒数。
+    queue_wait_ms: AtomicU64,
+    /// Aggregate job execution duration in milliseconds.
+    /// 累计作业执行毫秒数。
+    execution_ms: AtomicU64,
+}
+
 /// Bounded, closable channel that runs asynchronous database work for synchronous callbacks.
 /// 为同步回调运行异步数据库工作的有界可关闭通道。
 ///
@@ -103,6 +166,9 @@ pub struct HostExecutionChannel<C> {
     workers: Vec<std::thread::JoinHandle<()>>,
     closed: Arc<AtomicBool>,
     call_timeout: Duration,
+    /// Exact admission, rejection, wait, and worker counters for this channel lifetime.
+    /// 此通道生命周期内精确的入场、拒绝、等待及工作线程计数。
+    counters: Arc<HostExecutionChannelCounters>,
 }
 
 impl<C> HostExecutionChannel<C> {
@@ -212,6 +278,7 @@ where
             workers: handles,
             closed,
             call_timeout,
+            counters: Arc::new(HostExecutionChannelCounters::default()),
         }
     }
 
@@ -252,10 +319,22 @@ where
             })?;
         let context = self.context.clone();
         let handle = self.handle.clone();
+        let counters = Arc::clone(&self.counters);
+        let queued_at = Instant::now();
         // The result channel is bounded to exactly one message because a job reports exactly once.
         // 结果通道的界恰为一条消息，因为每个作业恰好报告一次。
         let (result_sender, result_receiver) = sync_channel::<Result<T, String>>(1);
         let queued: ChannelJob = Box::new(move || {
+            counters.started.fetch_add(1, Ordering::Relaxed);
+            counters.queue_wait_ms.fetch_add(
+                u64::try_from(queued_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
+            let active = counters.active_workers.fetch_add(1, Ordering::Relaxed) + 1;
+            counters
+                .peak_active_workers
+                .fetch_max(active, Ordering::Relaxed);
+            let execution_started_at = Instant::now();
             // Driving the future happens here, on a worker thread with no runtime context, which is the
             // direction Tokio supports and the reason no runtime is nested.
             // 驱动 future 在此发生，位于无运行时上下文的工作线程上，这是 Tokio 支持的方向，也是不嵌套运行时的
@@ -269,13 +348,35 @@ where
                     panic_message(payload.as_ref())
                 )),
             };
+            counters.active_workers.fetch_sub(1, Ordering::Relaxed);
+            counters.completed.fetch_add(1, Ordering::Relaxed);
+            counters.execution_ms.fetch_add(
+                u64::try_from(execution_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
             // A receiver that is already gone means the caller timed out; the result is simply dropped.
             // 接收方已消失意味着调用方已超时；结果直接丢弃即可。
             let _ = result_sender.send(outcome);
         });
         match sender.try_send(queued) {
-            Ok(()) => {}
+            Ok(()) => {
+                self.counters.admitted.fetch_add(1, Ordering::Relaxed);
+            }
             Err(TrySendError::Full(_)) => {
+                let rejected = self.counters.saturated.fetch_add(1, Ordering::Relaxed) + 1;
+                // Power-of-two samples keep overload visible without logging every rejected callback.
+                // 按 2 的幂采样既能呈现过载趋势，也避免为每次拒绝都写日志。
+                if rejected.is_power_of_two() {
+                    let snapshot = self.diagnostics_snapshot();
+                    eprintln!(
+                        "[luaskills-runtime][database-channel-saturated] admitted={} started={} completed={} rejected={} peak_active_workers={}",
+                        snapshot.admitted,
+                        snapshot.started,
+                        snapshot.completed,
+                        snapshot.saturated,
+                        snapshot.peak_active_workers,
+                    );
+                }
                 return Err(format!(
                     "LuaSkills host execution channel is saturated; `{label}` was rejected rather than queued."
                 ));
@@ -289,11 +390,53 @@ where
         match result_receiver.recv_timeout(self.call_timeout) {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(error),
-            Err(_) => Err(format!(
-                "LuaSkills host execution channel call `{label}` exceeded its {} second timeout and was not \
+            Err(RecvTimeoutError::Timeout) => {
+                let timeouts = self
+                    .counters
+                    .caller_timeouts
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1;
+                // The full counter remains queryable while timeout logs stay bounded under an outage.
+                // 完整计数仍可查询，同时在故障期间限制超时日志数量。
+                if timeouts.is_power_of_two() {
+                    let snapshot = self.diagnostics_snapshot();
+                    eprintln!(
+                        "[luaskills-runtime][database-channel-timeout] admitted={} started={} completed={} caller_timeouts={} queue_wait_ms={} execution_ms={}",
+                        snapshot.admitted,
+                        snapshot.started,
+                        snapshot.completed,
+                        snapshot.caller_timeouts,
+                        snapshot.queue_wait_ms,
+                        snapshot.execution_ms,
+                    );
+                }
+                Err(format!(
+                    "LuaSkills host execution channel call `{label}` exceeded its {} second timeout and was not \
 cancelled; the operation may still complete.",
-                self.call_timeout.as_secs_f64()
+                    self.call_timeout.as_secs_f64()
+                ))
+            }
+            Err(RecvTimeoutError::Disconnected) => Err(format!(
+                "LuaSkills host execution channel worker ended before `{label}` returned."
             )),
+        }
+    }
+
+    /// Return atomic diagnostic counters for this exact channel lifetime.
+    /// 返回本通道精确生命周期内的原子诊断计数。
+    ///
+    /// Takes no parameters and returns a read-only snapshot; live workers may advance it afterward.
+    /// 不接收参数，返回只读快照；活动工作线程之后仍可能推进计数。
+    pub fn diagnostics_snapshot(&self) -> HostExecutionChannelSnapshot {
+        HostExecutionChannelSnapshot {
+            admitted: self.counters.admitted.load(Ordering::Relaxed),
+            saturated: self.counters.saturated.load(Ordering::Relaxed),
+            started: self.counters.started.load(Ordering::Relaxed),
+            completed: self.counters.completed.load(Ordering::Relaxed),
+            caller_timeouts: self.counters.caller_timeouts.load(Ordering::Relaxed),
+            peak_active_workers: self.counters.peak_active_workers.load(Ordering::Relaxed),
+            queue_wait_ms: self.counters.queue_wait_ms.load(Ordering::Relaxed),
+            execution_ms: self.counters.execution_ms.load(Ordering::Relaxed),
         }
     }
 
@@ -474,9 +617,145 @@ mod tests {
             .run("overflow", |()| async { Ok(json!({ "overflow": true })) })
             .expect_err("a full channel must reject work");
         assert!(error.contains("saturated"), "unexpected error: {error}");
+        let snapshot = channel.diagnostics_snapshot();
+        assert_eq!(snapshot.admitted, 2);
+        assert_eq!(snapshot.saturated, 1);
+        assert_eq!(snapshot.started, 1);
+        assert_eq!(snapshot.peak_active_workers, 1);
 
         let _ = hold_sender.send(());
         holder.join().expect("join holding job thread");
+    }
+
+    /// Verify the production four-worker and 64-queue boundary with exact admission counters.
+    /// 验证生产态四工作线程与 64 队列边界及精确入场计数。
+    #[test]
+    fn production_limits_admit_four_active_and_sixty_four_queued_jobs() {
+        let runtime = runtime();
+        let channel = Arc::new(HostExecutionChannel::start_with_limits(
+            runtime.handle().clone(),
+            (),
+            HOST_EXECUTION_CHANNEL_WORKERS,
+            HOST_EXECUTION_CHANNEL_QUEUE_CAPACITY,
+            Duration::from_millis(10),
+        ));
+        let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (entered_sender, entered_receiver) = std::sync::mpsc::channel::<()>();
+        let mut holders = Vec::new();
+        for _ in 0..HOST_EXECUTION_CHANNEL_WORKERS {
+            let held_channel = Arc::clone(&channel);
+            let held_release = Arc::clone(&release);
+            let entered_sender = entered_sender.clone();
+            holders.push(std::thread::spawn(move || {
+                let _ = held_channel.run("held", move |()| async move {
+                    entered_sender.send(()).expect("report worker entry");
+                    let (lock, wake) = &*held_release;
+                    let held = lock.lock().expect("acquire held worker gate");
+                    let (released, _) = wake
+                        .wait_timeout_while(held, Duration::from_secs(10), |released| !*released)
+                        .expect("wait for worker release");
+                    assert!(*released, "test must release every held worker");
+                    Ok(json!({"done": true}))
+                });
+            }));
+        }
+        drop(entered_sender);
+        for _ in 0..HOST_EXECUTION_CHANNEL_WORKERS {
+            entered_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("all four workers must enter");
+        }
+        for _ in 0..HOST_EXECUTION_CHANNEL_QUEUE_CAPACITY {
+            let error = channel
+                .run("queued", |()| async { Ok(json!({"queued": true})) })
+                .expect_err("a queued job cannot complete while workers are held");
+            assert!(error.contains("timeout"));
+        }
+        let error = channel
+            .run("overflow", |()| async { Ok(json!({"overflow": true})) })
+            .expect_err("the 65th queued job must be rejected");
+        let snapshot = channel.diagnostics_snapshot();
+        let (lock, wake) = &*release;
+        *lock.lock().expect("release held workers") = true;
+        wake.notify_all();
+        for holder in holders {
+            holder.join().expect("join held channel caller");
+        }
+        assert!(error.contains("saturated"));
+        assert_eq!(snapshot.admitted, 68);
+        assert_eq!(snapshot.saturated, 1);
+        assert_eq!(snapshot.started, 4);
+        assert_eq!(snapshot.completed, 0);
+        assert_eq!(snapshot.peak_active_workers, 4);
+        assert_eq!(snapshot.caller_timeouts, 68);
+    }
+
+    /// Verify eight simultaneous callers use four workers and four queue slots without rejection.
+    /// 验证八路同时调用只占四个工作线程及四个队列槽位，不发生拒绝。
+    #[test]
+    fn eight_database_callbacks_queue_without_saturation() {
+        let runtime = runtime();
+        let channel = Arc::new(HostExecutionChannel::start_with_limits(
+            runtime.handle().clone(),
+            (),
+            HOST_EXECUTION_CHANNEL_WORKERS,
+            HOST_EXECUTION_CHANNEL_QUEUE_CAPACITY,
+            Duration::from_secs(5),
+        ));
+        let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (entered_sender, entered_receiver) = std::sync::mpsc::channel::<()>();
+        let mut callers = Vec::new();
+        for _ in 0..8 {
+            let channel = Arc::clone(&channel);
+            let release = Arc::clone(&release);
+            let entered_sender = entered_sender.clone();
+            callers.push(std::thread::spawn(move || {
+                channel.run("eight-way", move |()| async move {
+                    entered_sender.send(()).expect("report callback entry");
+                    let (lock, wake) = &*release;
+                    let held = lock.lock().expect("acquire callback gate");
+                    let (released, _) = wake
+                        .wait_timeout_while(held, Duration::from_secs(10), |released| !*released)
+                        .expect("wait for callback release");
+                    assert!(*released, "test must release callback");
+                    Ok(json!({"done": true}))
+                })
+            }));
+        }
+        drop(entered_sender);
+        for _ in 0..HOST_EXECUTION_CHANNEL_WORKERS {
+            entered_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("four workers must start");
+        }
+        let started_at = Instant::now();
+        let snapshot = loop {
+            let snapshot = channel.diagnostics_snapshot();
+            if snapshot.admitted == 8 {
+                break snapshot;
+            }
+            assert!(
+                started_at.elapsed() < Duration::from_secs(5),
+                "eight callers must enter"
+            );
+            std::thread::yield_now();
+        };
+        let (lock, wake) = &*release;
+        *lock.lock().expect("release callback gate") = true;
+        wake.notify_all();
+        for caller in callers {
+            assert_eq!(
+                caller
+                    .join()
+                    .expect("join database caller")
+                    .expect("callback succeeds")["done"],
+                true
+            );
+        }
+        assert_eq!(snapshot.started, 4);
+        assert_eq!(snapshot.peak_active_workers, 4);
+        assert_eq!(snapshot.saturated, 0);
+        assert_eq!(channel.diagnostics_snapshot().completed, 8);
     }
 
     /// Verifies closing the channel rejects later callbacks with a closed-channel error.

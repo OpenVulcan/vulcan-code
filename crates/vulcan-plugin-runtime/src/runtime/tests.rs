@@ -8,7 +8,7 @@ use super::VulcanPluginRuntimeManager;
 use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// Writes one hook-only package whose Lua module retains an invocation counter.
 /// 写入一个仅含 hook 的插件包，其 Lua 模块会保留调用计数器。
@@ -244,7 +244,7 @@ pub(super) fn test_manager(
     fs::create_dir_all(&managed_runtime_distribution_root)
         .expect("create managed runtime distribution root");
     VulcanPluginRuntimeManager::new(
-        Arc::new(Mutex::new(test_engine(runtime_root))),
+        Arc::new(RwLock::new(test_engine(runtime_root))),
         vulcan_plugin_root,
         user_plugin_root,
         bridge_root,

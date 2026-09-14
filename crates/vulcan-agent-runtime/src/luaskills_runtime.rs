@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
 
@@ -42,6 +42,9 @@ mod runlua;
 static LUASKILLS_HOST_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 mod schema;
 mod types;
+
+#[cfg(test)]
+mod concurrency_tests;
 
 pub use runlua::{
     RUNLUA_SESSION_TOOL_NAME, RUNLUA_TOOL_NAME, build_runlua_tool_candidates,
@@ -141,7 +144,7 @@ fn bootstrap_luaskills_runtime_blocking() -> Result<LuaSkillsBootstrapReport, St
     let operation_progress_events = Arc::new(Mutex::new(VecDeque::new()));
     install_luaskills_operation_progress_callback(operation_progress_events.clone());
 
-    let engine = Arc::new(Mutex::new(engine));
+    let engine = Arc::new(RwLock::new(engine));
     Ok(LuaSkillsBootstrapReport {
         handle: LuaSkillsRuntimeHandle {
             engine,
@@ -266,10 +269,11 @@ where
                 let elapsed_ms = started_at.elapsed().as_millis();
                 let stage_label = match stage.load(Ordering::Acquire) {
                     0 => "thread_queued",
-                    1 => "engine_lock_wait",
+                    1 => "engine_read_lock_wait",
                     2 => "skill_body_or_host_call",
                     3 => "result_delivery",
                     4 => "blocking_runtime_operation",
+                    5 => "engine_write_lock_wait",
                     _ => "unknown",
                 };
                 eprintln!(
@@ -482,7 +486,20 @@ fn perform_luaskills_management_action_blocking(
     handle: &LuaSkillsRuntimeHandle,
     action: LuaSkillsManagementAction,
 ) -> Result<LuaSkillsManagementReport, String> {
+    // write_lock_operation stays free of skill ids and source locators while keeping one slow
+    // write-lock wait attributable to the management action that requested it.
+    // write_lock_operation 不含技能标识与来源定位值，同时让一次写锁慢等待可归因到发起它的管理动作。
+    let write_lock_operation = action.diagnostic_label();
+    // write_lock_started_at measures only host write-lock contention against in-flight readers.
+    // write_lock_started_at 仅测量宿主写锁相对在途读锁的竞争耗时。
+    let write_lock_started_at = Instant::now();
     let mut engine = lock_runtime_engine_mut(handle)?;
+    let write_lock_wait_ms = write_lock_started_at.elapsed().as_millis();
+    if write_lock_wait_ms >= 1_000 {
+        eprintln!(
+            "[luaskills-runtime][engine-write-lock-slow] operation={write_lock_operation} elapsed_ms={write_lock_wait_ms}"
+        );
+    }
     let message = match action {
         LuaSkillsManagementAction::Refresh => {
             engine
@@ -665,14 +682,14 @@ pub async fn call_luaskills_tool_entry(
         "luaskills-tool-call",
         operation_label,
         move |stage, invocation_id| {
-        // lock_started_at measures only contention for the process-wide LuaSkills engine.
-        // lock_started_at 仅测量进程级 LuaSkills 引擎锁的竞争耗时。
+        // lock_started_at measures only host read-lock contention for the shared LuaSkills engine.
+        // lock_started_at 仅测量共享 LuaSkills 引擎的宿主读锁竞争耗时。
         let lock_started_at = Instant::now();
         let engine = lock_runtime_engine(&handle)?;
         let lock_wait_ms = lock_started_at.elapsed().as_millis();
         if lock_wait_ms >= 1_000 {
                 eprintln!(
-                    "[luaskills-runtime][engine-lock-slow] invocation_id={invocation_id} operation={tool_name} elapsed_ms={lock_wait_ms}"
+                    "[luaskills-runtime][engine-read-lock-slow] invocation_id={invocation_id} operation={tool_name} elapsed_ms={lock_wait_ms}"
                 );
         }
         stage.store(2, Ordering::Release);
@@ -994,24 +1011,33 @@ fn default_user_skill_root() -> PathBuf {
 
 /// Acquire one immutable runtime-engine guard from the shared host handle.
 /// 从共享宿主句柄中获取一份只读运行时引擎锁守卫。
+///
+/// Multiple read guards may coexist, so independent skill, runLua and plugin calls overlap instead
+/// of being serialized by the host. The guard must not be held across `.await`.
+/// 多份读守卫可以并存，因此相互独立的技能、runLua 与插件调用可以重叠，而不再被宿主串行化。
+/// 该守卫不得跨越 `.await` 持有。
 fn lock_runtime_engine(
     handle: &LuaSkillsRuntimeHandle,
-) -> Result<std::sync::MutexGuard<'_, LuaEngine>, String> {
+) -> Result<std::sync::RwLockReadGuard<'_, LuaEngine>, String> {
     handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 运行时锁已损坏，无法读取技能目录。"))
+        .read()
+        .map_err(|_| String::from("LuaSkills 运行时读锁已损坏，无法读取技能目录。"))
 }
 
 /// Acquire one mutable runtime-engine guard from the shared host handle.
 /// 从共享宿主句柄中获取一份可变运行时引擎锁守卫。
+///
+/// The write guard waits for every in-flight read guard to drain, which is exactly the engine
+/// change barrier required by upstream methods that take `&mut LuaEngine`.
+/// 写守卫会等待所有在途读守卫排空，这正是取 `&mut LuaEngine` 的上游方法所需的引擎变更屏障。
 fn lock_runtime_engine_mut(
     handle: &LuaSkillsRuntimeHandle,
-) -> Result<std::sync::MutexGuard<'_, LuaEngine>, String> {
+) -> Result<std::sync::RwLockWriteGuard<'_, LuaEngine>, String> {
     handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 运行时锁已损坏，无法执行技能管理操作。"))
+        .write()
+        .map_err(|_| String::from("LuaSkills 运行时写锁已损坏，无法执行技能管理操作。"))
 }
 
 /// Build one normalized skill catalog from the active engine and the current runtime root layout.

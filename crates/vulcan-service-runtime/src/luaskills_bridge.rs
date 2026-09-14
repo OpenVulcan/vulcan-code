@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use crate::managed_runtime_bootstrap::{
@@ -137,7 +137,7 @@ impl LuaSkillConfigCapabilityCache {
 pub struct TauriLuaSkillsHandle {
     /// Shared LuaSkills engine kept alive for later plugin panels and hooks.
     /// 为后续插件面板与 hook 保持存活的共享 LuaSkills 引擎。
-    pub engine: Arc<Mutex<LuaEngine>>,
+    pub engine: Arc<RwLock<LuaEngine>>,
     /// Runtime root resolved from the prepared Vulcan output bundle.
     /// 从准备好的 Vulcan output 包解析出的运行时根目录。
     pub runtime_root: PathBuf,
@@ -395,7 +395,7 @@ where
     // managed_runtime_environment_root 将可写环境保留在 LuaSkills 自有数据目录内。
     let managed_runtime_environment_root = runtime_root.join("dependencies").join("envs");
     Ok(TauriLuaSkillsHandle {
-        engine: Arc::new(Mutex::new(engine)),
+        engine: Arc::new(RwLock::new(engine)),
         runtime_root,
         managed_runtime_distribution_root,
         managed_runtime_environment_root,
@@ -415,8 +415,8 @@ pub fn load_luaskills_catalog(
 ) -> Result<TauriLuaSkillsCatalog, String> {
     let engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法读取插件目录。"))?;
+        .read()
+        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法读取插件目录。"))?;
     build_luaskills_catalog(handle, &engine)
 }
 
@@ -434,8 +434,8 @@ pub fn describe_luaskill_package_config(
 ) -> Result<Option<RuntimeSkillPackageConfigDescriptor>, String> {
     let engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法读取技能包配置。"))?;
+        .read()
+        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法读取技能包配置。"))?;
     describe_host_safe_package_config(&engine, skill_id)
 }
 
@@ -453,8 +453,8 @@ pub fn validate_luaskill_package_config(
 ) -> Result<RuntimeSkillPackageConfigStatus, String> {
     let engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法校验技能包配置。"))?;
+        .read()
+        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法校验技能包配置。"))?;
     engine.validate_skill_package_config(skill_id)
 }
 
@@ -474,8 +474,8 @@ pub fn set_luaskill_package_config(
 ) -> Result<(SkillConfigWriteResult, RuntimeSkillPackageConfigDescriptor), String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法更新技能包配置。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法更新技能包配置。"))?;
     let result = engine.set_skill_config_values(skill_id, values, Some(expected_revision))?;
     let descriptor = describe_host_safe_package_config(&engine, skill_id)?
         .ok_or_else(|| format!("技能 `{skill_id}` 未声明技能包配置。"))?;
@@ -498,8 +498,8 @@ pub fn delete_luaskill_package_config_value(
 ) -> Result<(SkillConfigDeleteResult, RuntimeSkillPackageConfigDescriptor), String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法删除技能包配置。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法删除技能包配置。"))?;
     let result = engine.delete_skill_config_value(skill_id, key, Some(expected_revision))?;
     let descriptor = describe_host_safe_package_config(&engine, skill_id)?
         .ok_or_else(|| format!("技能 `{skill_id}` 未声明技能包配置。"))?;
@@ -521,8 +521,8 @@ pub fn poll_luaskill_package_config_events(
 ) -> Result<RuntimeSkillConfigEventBatch, String> {
     let engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法轮询技能包配置事件。"))?;
+        .read()
+        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法轮询技能包配置事件。"))?;
     engine.poll_skill_config_events(after_sequence, limit)
 }
 
@@ -540,8 +540,8 @@ pub fn refresh_luaskill_package_config(
 ) -> Result<Vec<RuntimeSkillConfigStoreRefresh>, String> {
     let engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法刷新技能包配置。"))?;
+        .read()
+        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法刷新技能包配置。"))?;
     engine.refresh_skill_config(store_scope)
 }
 
@@ -835,8 +835,8 @@ pub fn refresh_luaskills_catalog(
 ) -> Result<TauriLuaSkillsCatalog, String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法刷新插件目录。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法刷新插件目录。"))?;
     engine
         .reload_from_roots(&handle.skill_roots)
         .map_err(|error| format!("刷新 LuaSkills 运行时失败：{error}"))?;
@@ -853,8 +853,8 @@ pub fn install_luaskill(
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法安装技能。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法安装技能。"))?;
     let user_root = ordinary_user_root(handle)?;
     let request = SkillInstallRequest {
         skill_id: normalize_optional_field(skill_id),
@@ -877,8 +877,8 @@ pub fn update_luaskill(
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法更新技能。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法更新技能。"))?;
     let target_root = target_root_for_skill(handle, &skill_id)?;
     let request = SkillInstallRequest {
         skill_id: Some(skill_id),
@@ -913,8 +913,8 @@ pub fn set_luaskill_enabled(
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法切换技能状态。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法切换技能状态。"))?;
     let target_root = target_root_for_skill(handle, &skill_id)?;
     if enabled {
         if target_root.name.eq_ignore_ascii_case("ROOT") {
@@ -965,8 +965,8 @@ pub fn uninstall_luaskill(
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
     let mut engine = handle
         .engine
-        .lock()
-        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法卸载技能。"))?;
+        .write()
+        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法卸载技能。"))?;
     let target_root = ordinary_uninstall_target_root_for_skill(handle, &skill_id)?;
     let result = engine
         .uninstall_skill_in_root(
