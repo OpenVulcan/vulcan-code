@@ -158,6 +158,29 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // eventWindowSnapshot supplies the durable selected-session tool-panel facts.
   // eventWindowSnapshot 提供选中会话可靠的工具面板事实。
   const eventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
+  // routeDraftConversation ends draft-only chrome once the exact durable summary is present.
+  // routeDraftConversation 在精确持久摘要出现后结束仅草稿界面状态。
+  const routeDraftConversation = props.selectedConversation ? null : props.selectedDraftConversation;
+  // sidebarNavigationTargetId keeps both sidebar highlights on the clicked target until a failed selection reveals the original route.
+  // sidebarNavigationTargetId 使侧栏两处高亮跟随点击目标，选择失败并恢复原路由时一同回退。
+  const sidebarNavigationTargetId = props.conversationNavigation
+    && (props.conversationNavigation.phase !== "entering" || props.selectedConversationId === props.conversationNavigation.targetId)
+    ? props.conversationNavigation.targetId
+    : null;
+  // sidebarActiveProjectId follows the clicked conversation while project tool ownership stays authoritative.
+  // sidebarActiveProjectId 在点击时跟随目标会话，同时项目工具归属仍以权威状态为准。
+  const sidebarActiveProjectId = sidebarNavigationTargetId
+    ? props.workbench.conversations.find((conversation) => conversation.id === sidebarNavigationTargetId)?.projectId ?? props.activeProjectId
+    : props.activeProjectId;
+  // The selected V1 owner is the reveal gate for a navigated durable session.
+  // 选中 V1 归属是持久会话导航入场的显示门槛。
+  React.useLayoutEffect(() => {
+    const navigation = props.conversationNavigation;
+    if (navigation?.phase !== "waiting-owner" || props.selectedConversationId !== navigation.targetId) return;
+    if (!hasServiceRuntime() || eventWindowSnapshot.owner?.session_id === navigation.targetId) {
+      props.onConversationNavigationReady?.(navigation.targetId);
+    }
+  }, [eventWindowSnapshot.owner?.session_id, props.conversationNavigation, props.onConversationNavigationReady, props.selectedConversationId]);
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
@@ -173,8 +196,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // contextTabCacheKey stores the current conversation-scoped right tab memory key.
   // contextTabCacheKey 保存当前会话范围的右侧页签记忆键。
   const contextTabCacheKey = React.useMemo(
-    () => workspaceContextTabCacheKey(props.workbench, props.selectedConversationId, props.selectedDraftConversation),
-    [props.selectedConversationId, props.selectedDraftConversation, props.workbench],
+    () => workspaceContextTabCacheKey(props.workbench, props.selectedConversationId, routeDraftConversation),
+    [props.selectedConversationId, routeDraftConversation, props.workbench],
   );
   // contextTabStateEntry stores tab state together with the cache key it belongs to.
   // contextTabStateEntry 将页签状态与所属缓存键一起保存。
@@ -246,7 +269,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const skillHeaderActionRunningRef = React.useRef(false);
   // hasSelectedChatConversation is true only for an existing persisted conversation surface.
   // hasSelectedChatConversation 仅在当前界面是已存在的持久化会话时为真。
-  const hasSelectedChatConversation = props.mainView === "chat" && !props.selectedDraftConversation && Boolean(props.selectedConversationId);
+  const hasSelectedChatConversation = props.mainView === "chat" && !routeDraftConversation && Boolean(props.selectedConversationId);
   // selectedChatProject resolves the selected persisted conversation project for Git review summaries.
   // selectedChatProject 解析当前持久化会话所属项目以加载 Git 审查摘要。
   const selectedChatProject = hasSelectedChatConversation && props.selectedConversation?.projectId
@@ -398,7 +421,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     : null;
 
   React.useEffect(() => {
-    if (props.mainView !== "chat" || props.selectedDraftConversation !== null) {
+    if (props.mainView !== "chat" || routeDraftConversation !== null) {
       props.onNotificationPresentationContextChange({
         conversationViewActive: false,
         visibleConversationId: null,
@@ -426,7 +449,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     props.mainView,
     props.onNotificationPresentationContextChange,
     props.selectedConversationId,
-    props.selectedDraftConversation,
+    routeDraftConversation,
   ]);
   React.useEffect(() => {
     setContextTabStateEntry({
@@ -1392,9 +1415,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCopyText={props.onCopyText}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
         onSelectConversation={props.onSelectConversation}
+        onFirstSubmissionReconciled={props.onFirstSubmissionReconciled}
         layoutStabilityKey={[
           props.selectedConversationId ?? "none",
-          props.selectedDraftConversation?.id ?? "persisted",
+          routeDraftConversation?.id ?? "persisted",
           sessionTodolist ? "todolist-progress" : "no-todolist-progress",
           props.workbench.sessionGoal ? `goal-${props.workbench.sessionGoal.status}` : "no-goal",
           sessionReviewSummary && sessionReviewSummary.changedFiles > 0 ? "review-summary" : "no-review-summary",
@@ -1470,12 +1494,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   return (
     <div className={`workspace-panel-shell${props.mainView === "memory" ? " vmm-workspace-host" : ""}`} ref={shellRef}>
       <ProjectSidebar
-        activeProjectId={props.activeProjectId}
+        activeProjectId={sidebarActiveProjectId}
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
         expandedProjectIds={props.workbench.expandedProjectIds}
         pinnedConversationIds={props.pinnedConversationIds}
-        selectedConversationId={props.selectedConversationId}
+        selectedConversationId={sidebarNavigationTargetId ?? props.selectedConversationId}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
@@ -1500,6 +1524,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       />
       <SidebarInset className="workspace-inset">
         <WorkspaceResizableBody
+          conversationNavigationPhase={props.mainView === "chat" ? props.conversationNavigation?.phase ?? null : null}
+          conversationNavigationShowLoading={props.mainView === "chat" && props.conversationNavigation?.showLoading === true}
           rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
           rightPanelOpen={effectiveRightPanelOpen}
           contextPanelActiveTabId={contextTabState.activeTabId}
@@ -1507,7 +1533,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           reviewFocusRequest={reviewFocusRequest}
           startup={props.startup}
           workbench={props.workbench}
-          selectedDraftConversation={props.selectedDraftConversation}
+          selectedDraftConversation={routeDraftConversation}
           selectedConversation={props.selectedConversation}
           isSelectedConversationPinned={props.selectedConversation ? props.pinnedConversationIds.has(props.selectedConversation.id) : false}
           selectedConversationId={props.selectedConversationId}

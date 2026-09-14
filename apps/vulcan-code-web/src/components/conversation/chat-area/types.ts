@@ -34,6 +34,9 @@ export interface ChatAreaProps {
   // Selected parent conversation id.
   // 当前选中的父会话标识。
   selectedConversationId: string | null;
+  // Retires the exact optimistic first prompt after canonical V1 correlation.
+  // 在规范 V1 精确关联后移除对应乐观首条提示词。
+  onFirstSubmissionReconciled?: (conversationId: string, clientSubmissionId: string) => void;
   // Current Git review summary shown beside compact session progress.
   // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
   sessionReviewSummary: ConversationSessionReviewSummary | null;

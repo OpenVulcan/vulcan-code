@@ -1,4 +1,5 @@
 import React from "react";
+import { ConversationLoadingCenter } from "@/components/conversation/conversation-chrome";
 import {
   WorkspaceContextPanel,
   type WorkspaceContextTabItem,
@@ -109,6 +110,12 @@ export function WorkspaceResizableBody(props: {
   // Current selected conversation id.
   // 当前选中会话标识。
   selectedConversationId: string | null;
+  // Visual phase for a sidebar-initiated conversation handoff.
+  // 侧栏发起会话交接时的视觉阶段。
+  conversationNavigationPhase?: "exiting" | "loading" | "waiting-owner" | "entering" | null;
+  // Whether a not-yet-initialized target needs the intermediate loading indicator.
+  // 尚未初始化的目标是否需要中间载入指示。
+  conversationNavigationShowLoading?: boolean;
   // Main chat surface rendered inside the workspace body.
   // 渲染在工作区主体内的主会话界面。
   children: React.ReactNode;
@@ -436,6 +443,9 @@ export function WorkspaceResizableBody(props: {
           ))}
         </div>
       ) : null}
+      {props.conversationNavigationShowLoading && (props.conversationNavigationPhase === "loading" || props.conversationNavigationPhase === "waiting-owner") ? (
+        <div className="conversation-navigation-progress"><ConversationLoadingCenter /></div>
+      ) : null}
     </section>
   );
   // renderedMainContent lets registered page panels share one adaptive layout implementation.
@@ -463,7 +473,7 @@ export function WorkspaceResizableBody(props: {
     ), mainContent);
 
   return (
-    <div ref={dockedLayoutRef} className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context")}>
+    <div ref={dockedLayoutRef} className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context", props.conversationNavigationPhase && `conversation-navigation-${props.conversationNavigationPhase}`)}>
       <ConsoleHeader
         className={props.headerTitle ? "workspace-custom-header" : undefined}
         draftConversation={props.selectedDraftConversation}

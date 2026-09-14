@@ -195,6 +195,12 @@ export function WorkbenchApp(props: {
     },
     [conversationEventWindowRegistry],
   );
+  // isConversationInitialized exposes the registry's exact active or retained hydration state to navigation.
+  // isConversationInitialized 向导航暴露 registry 中精确会话的活动或保留初始化状态。
+  const isConversationInitialized = React.useCallback(
+    (conversationId: string) => conversationEventWindowRegistry.hasInitializedSession(conversationId),
+    [conversationEventWindowRegistry],
+  );
 
   // forceCloseAfterShutdownFailure asks the native shell to admit the confirmed close exactly once.
   // forceCloseAfterShutdownFailure 请求原生壳接受已经确认的单次强制关闭。
@@ -784,6 +790,7 @@ export function WorkbenchApp(props: {
               workbenchDelta={workbenchDelta}
               onWorkbenchDeltaConsumed={handleWorkbenchDeltaConsumed}
               onSelectedConversationIdChanged={handleSelectedConversationIdChanged}
+              isConversationInitialized={isConversationInitialized}
             />
           </ConversationEventWindowExternalStoreProvider>
         </ConversationLiveStreamProvider>

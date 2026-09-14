@@ -1,6 +1,7 @@
 import React from "react";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
+import type { DraftConversationPendingSubmission } from "@/components/workspace/workspace-resizable-body";
 
 // ConversationSubmissionStatus renders one bounded, non-blocking first-submit preparation stage.
 // ConversationSubmissionStatus 渲染首条提交的有界非阻塞准备阶段。
@@ -32,6 +33,38 @@ export function ConversationLoadingCenter() {
           <strong>{t("conversation.loading.title")}</strong>
         </div>
         <span className="shimmer">{t("conversation.loading.requesting")}</span>
+        <div className="conversation-loading-bar" aria-hidden="true">
+          <div className="conversation-loading-bar-value" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// DraftSubmissionTranscript shows the accepted first prompt before the durable session and V1 owner exist.
+// DraftSubmissionTranscript 在持久会话与 V1 归属建立前展示已接纳的首条提示词。
+// Parameters: submission is the exact pending draft action; surfaceId is its current draft or durable id; scrollRef owns the timeline viewport.
+// 参数：submission 是精确的待处理草稿动作；surfaceId 是当前草稿或持久标识；scrollRef 持有时间线视口。
+// Returns: a transcript-shaped optimistic user row that can hand off to the canonical renderer.
+// 返回值：可交接给规范渲染器的转录形态乐观用户行。
+export function DraftSubmissionTranscript(props: {
+  submission: DraftConversationPendingSubmission;
+  surfaceId: string;
+  scrollRef: React.Ref<HTMLElement>;
+}) {
+  return (
+    <section className="conversation-panel conversation-draft-submission" data-conversation-surface-id={props.surfaceId} ref={props.scrollRef}>
+      <div className="conversation-scroll-content">
+        <div className="timeline">
+          <article className="message-row user" data-client-action-id={props.submission.clientSubmissionId}>
+            {props.submission.attachments.length > 0 ? (
+              <ul className="conversation-draft-attachment-names">
+                {props.submission.attachments.map((attachment) => <li key={attachment.fileName}>{attachment.fileName}</li>)}
+              </ul>
+            ) : null}
+            <div className="user-bubble"><p className="user-prompt-text">{props.submission.prompt}</p></div>
+          </article>
+        </div>
       </div>
     </section>
   );

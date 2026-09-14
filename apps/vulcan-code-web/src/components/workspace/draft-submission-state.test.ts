@@ -26,13 +26,12 @@ function pendingDraft(clientSubmissionId = "client-1"): DraftConversationSelecti
 }
 
 describe("draft submission materialization", () => {
-  it("keeps the optimistic submission under the durable id until the sidebar row arrives", () => {
+  it("keeps the optimistic submission under the durable id until canonical input arrives", () => {
     expect(materializeAcknowledgedDraftSubmission(
       pendingDraft(),
       "draft-project-1",
       "client-1",
       "conversation-1",
-      false,
     )).toEqual({
       ...pendingDraft(),
       id: "conversation-1",
@@ -43,14 +42,13 @@ describe("draft submission materialization", () => {
     });
   });
 
-  it("retires the draft immediately when the authoritative row won the acknowledgement race", () => {
+  it("keeps the optimistic submission even when the sidebar row wins the acknowledgement race", () => {
     expect(materializeAcknowledgedDraftSubmission(
       pendingDraft(),
       "draft-project-1",
       "client-1",
       "conversation-1",
-      true,
-    )).toBeNull();
+    )?.pendingSubmission?.clientSubmissionId).toBe("client-1");
   });
 
   it("preserves a newer unrelated draft and retires only the matching transition", () => {
@@ -60,9 +58,9 @@ describe("draft submission materialization", () => {
       "draft-project-1",
       "client-1",
       "conversation-1",
-      false,
     )).toBe(current);
-    expect(retireMaterializedDraftSubmission(current, "conversation-1")).toBe(current);
-    expect(retireMaterializedDraftSubmission({ ...current, id: "conversation-1" }, "conversation-1")).toBeNull();
+    expect(retireMaterializedDraftSubmission(current, "conversation-1", "client-2")).toBe(current);
+    expect(retireMaterializedDraftSubmission({ ...current, id: "conversation-1" }, "conversation-1", "client-1")?.pendingSubmission?.clientSubmissionId).toBe("client-2");
+    expect(retireMaterializedDraftSubmission({ ...current, id: "conversation-1" }, "conversation-1", "client-2")).toBeNull();
   });
 });

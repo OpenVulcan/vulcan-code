@@ -220,7 +220,6 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
           submittedSelectionId,
           clientSubmissionId,
           nextConversationId,
-          materializedConversationAlreadyVisible,
         ));
       }
       setSelectedConversationId((current) => (

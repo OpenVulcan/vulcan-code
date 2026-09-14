@@ -469,31 +469,88 @@ vulcan-code 不是「又一个终端 coding agent」，而是一个**桌面级 A
 | 证据 | 内容 |
 | --- | --- |
 | `D:\projects\vulcan-luaskills` 全仓 grep | `Mutex<LuaEngine>` **零命中** |
-| 上游 `src/runtime/engine.rs` | **零个** `pub fn ...(&mut self)`；`call_skill` 等入口均为 `&self` |
+| 上游 `src/runtime/engine.rs` | 方法按可变性二分：**热路径全部 `&self`**（`call_skill`、runlua、lease create/eval/status/close、`list_entries*`、help）；**仅 21 个冷路径方法为 `&mut self`**（技能 load/reload、install/update/enable/disable/uninstall 共 17 个、技能配置写入 3 个） |
 | 上游 `LuaEngine` 字段 | `skills`/`entry_registry`/`pool`/`runlua_pool`/各服务均为 `Arc<..>` 共享；无 `Rc`/`RefCell`/`Cell` |
 | 上游 `src/ffi.rs:50-52` | 其自带 `Mutex<Option<LuaEngine>>`，注释说明用途是 *"removal forms a quiescent free barrier"*（**引擎替换/释放屏障**），非逐次调用串行 |
 | 上游 `src/ffi.rs:76-84` | 线程局部 `ACTIVE_FFI_ENGINE_IDS`，守卫语义为 *"reject **same-thread reentrant** access"*（仅拒同线程重入） |
 
 → 上游的锁用于「引擎代次替换」与「同线程重入保护」；**跨线程并发未被上游禁止**。
 
-### 5.5 综合与待裁决点
+### 5.5 裁决结论：锁范围过宽，且同步原语选错
 
-两条观察可以同时为真：
+上游 `LuaEngine` 的方法按可变性**清晰二分**（已用跨行签名扫描核实，见 §5.4）：
 
-1. 锁确实在工具调用期间被持有（事实 C）→ 池的 `max_size` 对入口调用吞吐**不产生**提升；
-2. 但**实际体感的主要串行源是插件初始化**（事实 B）——因为 init 持锁时长（磁盘读 + 编译约 80 KB）远大于常规技能调用。
+| 类别 | 方法 | 需要的访问 |
+| --- | --- | --- |
+| **热路径（全部 `&self`）** | `call_skill`、`execute_runlua_request_json_inline`、`create_runtime_lease_json`、`eval_runtime_lease_json`、`runtime_lease_status_json`、`close_runtime_lease_json`、`list_entries*`、help 渲染 | **只读** |
+| **冷路径（21 个 `&mut self`）** | `load_from_roots`、`reload_from_roots`；`install/update/enable/disable/uninstall_skill` ×(普通/`_in_root`/`system_*`) 共 17 个；`set_skill_config_value(s)`、`delete_skill_config_value` | **独占** |
 
-因此「串行在插件初始化」与「锁在工具调用期间被持有」并不矛盾：**同一把锁，init 持有得久得多。**
+而 Vulcan 侧用的是 `std::sync::Mutex`：
 
-**需要项目方裁决的一个问题**：`lock_runtime_engine` 覆盖 `call_skill` 全程是**有意**（认定 `LuaEngine` 不保证并发安全，池仅用于 runlua 隔离），还是**锁范围过宽**（本意只保护引擎代次/句柄）？
+```rust
+pub engine: Arc<Mutex<LuaEngine>>,           // types.rs:50
+fn lock_runtime_engine(..)     -> MutexGuard  // 命名像读锁，实际独占
+fn lock_runtime_engine_mut(..) -> MutexGuard  // 写锁
+```
 
-**可一次性裁决的实验**（无需改代码，只需配置）：
-将 `vm_pool.max_size` 由 2 调到 8，并发发起 8 次重 LuaSkills 调用（如 8 个不同目录的 `codekit-ast-tree`），测量墙钟时间。
+**`Mutex` 的「读」守卫同样是独占的**，于是所有 `&self` 热路径被强行串行化。
+两个 helper 的命名（`lock_runtime_engine` / `lock_runtime_engine_mut`）表明**本意就是读/写之分**，
+这是一次 `Mutex` ↔ `RwLock` 的选型错误，而非设计取舍。
 
-- 若耗时 ≈ 单次 × 8 → 锁在调用期被持有，池无效；
-- 若耗时 ≈ 单次 × 1 → 池生效，此前「全局串行」判断错误。
+上游池本身正是按并发设计的：`LuaVmPool` 注释为 *"Pool of Lua VM instances with **opportunistic scaling**"*
+（`engine.rs:569-575`，内部 `Mutex<LuaVmPoolState>` + `Condvar`），`acquire_vm(&self)` → `pool.acquire(..)`。
+**这把进程级 `Mutex` 恰好把池的按需扩容能力锁死——既无收益，又反向压制并发。**
 
-日志中同时观察 `[engine-lock-slow]`（锁竞争）与 `[skill-call-slow]`(Lua 体) 的分布，可直接区分两类耗时。
+旁证：`mlua` 已启用 `send` 特性（上游 `Cargo.toml:36`），`LuaEngine` 无任何显式 `impl !Send/!Sync`，
+字段全为 `Arc` 共享 —— 具备 `Sync` 前提（**须以编译期断言确认，不可假定**）。
+
+### 5.6 修正方案
+
+**第一步：`Arc<Mutex<LuaEngine>>` → `Arc<RwLock<LuaEngine>>`**
+
+| 改动点 | 现状 | 改为 |
+| --- | --- | --- |
+| `lock_runtime_engine`（热路径，8 处调用） | `.lock()` 独占 | **`.read()` 并发** |
+| `lock_runtime_engine_mut`（技能管理/配置写入） | `.lock()` | **`.write()` 独占** |
+| `vulcan-plugin-runtime/src/runtime/lease.rs:321-325` `call_engine_blocking` | `.lock()` | **`.read()`** |
+| `service_bootstrap.rs:759`、`service_state_access.rs:419`（列入口/读状态） | `.lock()` | `.read()` |
+| `vulcan-plugin-runtime/src/runtime.rs:237` `RwLock<Option<Arc<Mutex<LuaEngine>>>>` | 内层 `Mutex` | 内层同步替换为 `RwLock` |
+
+效果：工具调用按 VM 池 `max_size` 真并发；技能装载/生命周期/配置写入仍独占，并天然构成上游 FFI 所描述的
+*"quiescent free barrier"*（写锁需等在途读锁排空）。
+
+**第二步：把「插件加载顺序」独立成锁（正确锁点）**
+
+插件路径现在 `create`（load bridge+bundle）与 `invoke`（eval lease）**都**走同一个引擎锁。
+正确做法是**只对加载阶段加序**：
+
+- 新增**按插件（或全局）的 load 锁**，仅在 `create_managed_lease` 的加载段持有
+  （`lease.rs:67` 读 bundle、`:107` 读 bridge、`bridge.lua:364` 编译进沙箱）；
+- 加载完成后**释放**；后续 `evaluate_bridge_function` 的 `eval` 只取引擎**读**锁；
+- 依据：`bridge.lua:339-341` 有「单租约不变式——重复 load 直接报错」，**加载顺序需要确定性**，
+  但**已加载租约的执行不需要全局互斥**。
+
+**第三步（正交但复利）：按插件代次缓存已编译 bundle**
+
+消除 `stateless` 插件每次调用重读 + 重编译约 80 KB 的开销（context7 87.7 KB / usage-statistics 79.3 KB），
+并把第二步 load 锁的持有时长从「磁盘 IO + 编译」压到「查表」。
+
+**需一并评估的副作用**
+
+1. `run_luaskills_blocking_task_async_with_diagnostics`（`luaskills_runtime.rs:226-228`）**每次调用新起一个 OS 线程**；
+   锁放开后并发变真，线程数将随并发线性增长 —— 应改为有界阻塞池（保留其分级看门狗诊断）。
+2. 写锁等待时长 = 最长在途调用时长，技能重载在重工具运行期间会延后 —— 语义正确，但需要 UI 可解释反馈。
+3. 若未来考虑用 `arc-swap` 式的引擎整体替换替代写锁，需注意宿主回调是**进程级单槽**
+   （`set_host_tool_callback` 等），两个引擎并存会互相覆盖，故当前阶段 `RwLock` 是更安全的收敛点。
+
+**验证计划（改前 / 改后各一次）**
+
+| 项 | 方法 | 预期 |
+| --- | --- | --- |
+| 编译期 | `fn assert_sync<T: Sync>() {}` + `assert_sync::<LuaEngine>()` | 通过即证明读锁并发成立 |
+| 运行期 | `vm_pool.max_size` = 8，并发 8 个不同目录的 `codekit-ast-tree` | 修复后墙钟 ≈ 单次 ×1；修复前 ≈ ×8 |
+| 日志 | `[engine-lock-slow]` 与 `[skill-call-slow]` 分布 | 修复后前者应基本消失 |
+| 回归 | 技能 install/update/enable/disable/uninstall、配置写入、插件 lease 创建 | 行为不变，写锁仍独占 |
 
 ---
 

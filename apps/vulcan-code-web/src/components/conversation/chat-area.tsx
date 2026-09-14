@@ -3,6 +3,7 @@ import { ChatAreaComposerDockLayer } from "@/components/conversation/chat-area/c
 import {
   ConversationLoadingCenter,
   ConversationSubmissionStatus,
+  DraftSubmissionTranscript,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
 import {
@@ -349,12 +350,12 @@ export function ChatArea(props: ChatAreaProps) {
     : null;
   // showConversationLoadingOnly covers only the exact V1 owner handoff for a persisted selection.
   // showConversationLoadingOnly 仅覆盖持久化选择的精确 V1 归属切换阶段。
-  const showConversationLoadingOnly = Boolean(selectedConversation && !eventWindowOwnerReady);
+  const showConversationLoadingOnly = Boolean(selectedConversation && !eventWindowOwnerReady && !props.selectedDraftConversation?.pendingSubmission);
   const selectedProject = selectedConversation ? projectForConversation(props.workbench, selectedConversation) : null;
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? t("conversation.unlinkedProject");
   const isEmptyConversation = Boolean(
     (props.selectedDraftConversation && !props.selectedDraftConversation.pendingSubmission)
-      || (selectedConversation && eventWindowOwnerReady && !eventWindowHasVisibleTranscript(authoritativeEvents)),
+      || (selectedConversation && eventWindowOwnerReady && !props.selectedDraftConversation?.pendingSubmission && !eventWindowHasVisibleTranscript(authoritativeEvents)),
   );
   // isMaterializingConversationSurface identifies the brief draft-to-summary frame that must remain visually blank.
   // isMaterializingConversationSurface 标识草稿转为真实摘要期间必须保持空白的短暂帧。
@@ -370,23 +371,14 @@ export function ChatArea(props: ChatAreaProps) {
   const transientReasoningStatus = useConversationTransientReasoningStatus(
     activeSurfaceConversationId,
   );
-  // retainedFirstSubmissionKeyRef preserves the exact optimistic correlation across draft ID promotion.
-  // retainedFirstSubmissionKeyRef 在草稿标识转正期间保留精确乐观关联身份。
-  const retainedFirstSubmissionKeyRef = React.useRef<string | null>(null);
-  // pendingFirstSubmissionKey exists only for the first prompt submitted from a draft surface.
-  // pendingFirstSubmissionKey 仅存在于从草稿界面提交的首条提示词。
-  const pendingFirstSubmissionKey = props.selectedDraftConversation?.pendingSubmission?.clientSubmissionId ?? null;
-  if (pendingFirstSubmissionKey) {
-    retainedFirstSubmissionKeyRef.current = pendingFirstSubmissionKey;
-  }
-  // retainedFirstSubmissionKey is accepted after materialization only when the V1 UserInput carries the same correlation.
-  // retainedFirstSubmissionKey 仅在物化后的 V1 UserInput 携带相同关联时继续生效。
-  const retainedFirstSubmissionKey = retainedFirstSubmissionKeyRef.current;
-  const firstSubmissionTransitionKey = pendingFirstSubmissionKey
-    ?? (retainedFirstSubmissionKey
-      && eventWindowHasAuthoritativeSubmissionCorrelation(authoritativeEvents, retainedFirstSubmissionKey)
-      ? retainedFirstSubmissionKey
-      : null);
+  // Canonical correlation retires only this accepted first prompt after it is already renderable.
+  // 规范关联只在该首条提示词已经可渲染后移除同一乐观记录。
+  React.useEffect(() => {
+    const pending = props.selectedDraftConversation?.pendingSubmission;
+    if (selectedConversation && pending && eventWindowOwnerReady && !pendingSubmissionVisible) {
+      props.onFirstSubmissionReconciled?.(selectedConversation.id, pending.clientSubmissionId);
+    }
+  }, [eventWindowOwnerReady, pendingSubmissionVisible, props.onFirstSubmissionReconciled, props.selectedDraftConversation?.pendingSubmission, selectedConversation]);
   // transientReasoningStatusVisible tracks insertion and removal; the shared ResizeObserver owns node reflow.
   // transientReasoningStatusVisible 跟踪插入与移除；共享 ResizeObserver 负责节点重排。
   const transientReasoningStatusVisible = transientReasoningStatus !== null;
@@ -409,14 +401,10 @@ export function ChatArea(props: ChatAreaProps) {
     thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
     emptyPromptVisible,
     emptyPromptLeaving,
-    firstSubmissionMaskVisible,
-    firstSubmissionMaskLeaving,
   } = useConversationVisualTransitions({
     surfaceKey: visualSurfaceKey,
     isEmptyConversation,
     displayedThinkingBlock: displayedStreamingReasoningBlock,
-    firstSubmissionTransitionKey,
-    firstSubmissionMaterializing: isMaterializingConversationSurface,
   });
   // reasoningDisplaySignature is a stable scroll-restoration marker for V1 reasoning filtering.
   // reasoningDisplaySignature 是 V1 思考过滤使用的稳定滚动恢复标记。
@@ -660,20 +648,18 @@ export function ChatArea(props: ChatAreaProps) {
       {props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible ? (
         <ConversationSubmissionStatus stage={props.selectedDraftConversation.pendingSubmission.stage} />
       ) : null}
+      {!selectedConversation && props.selectedDraftConversation?.pendingSubmission ? (
+        <DraftSubmissionTranscript
+          scrollRef={workspaceRef}
+          submission={props.selectedDraftConversation.pendingSubmission}
+          surfaceId={props.selectedDraftConversation.id}
+        />
+      ) : null}
       {visibleStreamingThinkingOverlayBlock && activeSurfaceConversationId ? (
         <StreamingThinkingOverlay
           block={visibleStreamingThinkingOverlayBlock}
           conversationId={activeSurfaceConversationId}
           leaving={streamingThinkingOverlayLeaving}
-        />
-      ) : null}
-      {firstSubmissionMaskVisible ? (
-        <div
-          aria-hidden="true"
-          className={cn(
-            "conversation-first-submission-mask",
-            firstSubmissionMaskLeaving && "leaving",
-          )}
         />
       ) : null}
       {composerDock}

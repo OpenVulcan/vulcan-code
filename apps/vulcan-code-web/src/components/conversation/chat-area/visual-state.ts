@@ -9,9 +9,6 @@ import {
 // CONVERSATION_ENTRY_MOTION_MS 与空提示和输入区入场过渡时长保持一致。
 const CONVERSATION_ENTRY_MOTION_MS = 360;
 
-// FIRST_SUBMISSION_MASK_FADE_MS defines the visual-only mask fade after entry motion settles.
-// FIRST_SUBMISSION_MASK_FADE_MS 定义入场动画稳定后纯视觉遮罩的淡出时长。
-const FIRST_SUBMISSION_MASK_FADE_MS = 500;
 
 // thinkingOverlayBlockSignature identifies one displayed thinking block without importing the legacy transcript parser.
 // thinkingOverlayBlockSignature 在不导入旧转录解析器的前提下标识一个已显示的思考块。
@@ -24,9 +21,6 @@ function thinkingOverlayBlockSignature(block: ConversationBlock): string {
   ].join("\u0000");
 }
 
-// FirstSubmissionMaskPhase describes the visual-only first-submit mask lifecycle.
-// FirstSubmissionMaskPhase 描述首次提交纯视觉遮罩的生命周期。
-type FirstSubmissionMaskPhase = "hidden" | "holding" | "leaving";
 
 // UseThinkingDisplayModeOptions defines the authoritative preference and persistence action.
 // UseThinkingDisplayModeOptions 定义权威偏好与持久化操作。
@@ -62,12 +56,6 @@ export interface UseConversationVisualTransitionsOptions {
   // Live thinking block that should currently occupy the floating overlay.
   // 当前应占用浮动面板的实时思考块。
   displayedThinkingBlock: ConversationBlock | null;
-  // Exact optimistic submission identity retained across draft materialization.
-  // 在草稿物化过程中保留的精确乐观提交身份。
-  firstSubmissionTransitionKey: string | null;
-  // Whether the current blank frame is the same draft-to-conversation materialization.
-  // 当前空白帧是否属于同一次草稿到会话物化过程。
-  firstSubmissionMaterializing: boolean;
 }
 
 // ConversationVisualTransitionsState exposes retained visual state for ChatArea rendering.
@@ -85,12 +73,6 @@ export interface ConversationVisualTransitionsState {
   // Whether the empty-conversation prompt is in its exit phase.
   // 空会话提示是否处于退场阶段。
   emptyPromptLeaving: boolean;
-  // Whether the first-submit visual mask remains mounted.
-  // 首次提交纯视觉遮罩是否仍保持挂载。
-  firstSubmissionMaskVisible: boolean;
-  // Whether the first-submit visual mask is fading out.
-  // 首次提交纯视觉遮罩是否正在淡出。
-  firstSubmissionMaskLeaving: boolean;
 }
 
 // useThinkingDisplayMode synchronizes a backend preference with optimistic user selections.
@@ -176,18 +158,9 @@ export function useConversationVisualTransitions(
   // emptyPromptLeaving marks the empty prompt exit animation.
   // emptyPromptLeaving 标记空提示退场动画。
   const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
-  // firstSubmissionMaskPhase retains a visual-only cover without gating transcript or Composer state.
-  // firstSubmissionMaskPhase 保留纯视觉覆盖层，不阻塞转录或输入区状态。
-  const [firstSubmissionMaskPhase, setFirstSubmissionMaskPhase] = React.useState<FirstSubmissionMaskPhase>("hidden");
   // previousSurfaceKeyRef detects actual surface changes before paint.
   // previousSurfaceKeyRef 在绘制前检测真实界面变化。
   const previousSurfaceKeyRef = React.useRef(options.surfaceKey);
-  // previousEmptyConversationRef detects the one empty-to-materialized transition before paint.
-  // previousEmptyConversationRef 在绘制前检测唯一的空白到物化过渡。
-  const previousEmptyConversationRef = React.useRef(options.isEmptyConversation);
-  // firstSubmissionMaskKeyRef owns the exact submission currently covered by the mask.
-  // firstSubmissionMaskKeyRef 持有当前由遮罩覆盖的精确提交身份。
-  const firstSubmissionMaskKeyRef = React.useRef<string | null>(null);
   // displayedThinkingSignature identifies content changes inside one live overlay block.
   // displayedThinkingSignature 标识单个实时浮层块内部的内容变化。
   const displayedThinkingSignature = options.displayedThinkingBlock
@@ -206,43 +179,11 @@ export function useConversationVisualTransitions(
     setThinkingOverlayLeaving(false);
     setEmptyPromptVisible(options.isEmptyConversation);
     setEmptyPromptLeaving(false);
-    // preserveFirstSubmissionMask allows only the exact draft promotion or its declared materialization frame.
-    // preserveFirstSubmissionMask 仅允许精确草稿转正或其已声明物化帧继续保留遮罩。
-    const preserveFirstSubmissionMask = firstSubmissionMaskKeyRef.current !== null
-      && (
-        firstSubmissionMaskKeyRef.current === options.firstSubmissionTransitionKey
-        || options.firstSubmissionMaterializing
-      );
-    if (!preserveFirstSubmissionMask) {
-      firstSubmissionMaskKeyRef.current = null;
-      setFirstSubmissionMaskPhase("hidden");
-    }
   }, [
     options.displayedThinkingBlock,
-    options.firstSubmissionMaterializing,
-    options.firstSubmissionTransitionKey,
     options.isEmptyConversation,
     options.surfaceKey,
   ]);
-
-  React.useLayoutEffect(() => {
-    // wasEmpty captures the committed visual state before the current render.
-    // wasEmpty 捕获当前渲染前已经提交的视觉状态。
-    const wasEmpty = previousEmptyConversationRef.current;
-    previousEmptyConversationRef.current = options.isEmptyConversation;
-    if (options.isEmptyConversation) {
-      firstSubmissionMaskKeyRef.current = null;
-      setFirstSubmissionMaskPhase("hidden");
-      return;
-    }
-    if (!wasEmpty || !options.firstSubmissionTransitionKey) {
-      return;
-    }
-    // The layout-phase commit guarantees the opaque mask exists before the first non-empty frame paints.
-    // 布局阶段提交保证首个非空帧绘制前不透明遮罩已经存在。
-    firstSubmissionMaskKeyRef.current = options.firstSubmissionTransitionKey;
-    setFirstSubmissionMaskPhase("holding");
-  }, [options.firstSubmissionTransitionKey, options.isEmptyConversation, options.surfaceKey]);
 
   React.useEffect(() => {
     if (options.displayedThinkingBlock) {
@@ -298,37 +239,10 @@ export function useConversationVisualTransitions(
     return () => window.clearTimeout(exitTimer);
   }, [emptyPromptVisible, options.isEmptyConversation, options.surfaceKey]);
 
-  React.useEffect(() => {
-    if (firstSubmissionMaskPhase !== "holding") {
-      return;
-    }
-    // revealTimer starts fading only after the existing content-entry motion has completed.
-    // revealTimer 仅在现有内容入场动画完成后启动淡出。
-    const revealTimer = window.setTimeout(() => {
-      setFirstSubmissionMaskPhase("leaving");
-    }, CONVERSATION_ENTRY_MOTION_MS);
-    return () => window.clearTimeout(revealTimer);
-  }, [firstSubmissionMaskPhase]);
-
-  React.useEffect(() => {
-    if (firstSubmissionMaskPhase !== "leaving") {
-      return;
-    }
-    // removeTimer unmounts the non-interactive mask after its opacity transition.
-    // removeTimer 在透明度过渡完成后卸载不可交互遮罩。
-    const removeTimer = window.setTimeout(() => {
-      firstSubmissionMaskKeyRef.current = null;
-      setFirstSubmissionMaskPhase("hidden");
-    }, FIRST_SUBMISSION_MASK_FADE_MS);
-    return () => window.clearTimeout(removeTimer);
-  }, [firstSubmissionMaskPhase]);
-
   return {
     visibleThinkingBlock,
     thinkingOverlayLeaving,
     emptyPromptVisible,
     emptyPromptLeaving,
-    firstSubmissionMaskVisible: firstSubmissionMaskPhase !== "hidden",
-    firstSubmissionMaskLeaving: firstSubmissionMaskPhase === "leaving",
   };
 }

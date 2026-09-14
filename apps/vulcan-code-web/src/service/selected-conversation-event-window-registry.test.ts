@@ -123,6 +123,26 @@ function registryFixture(): {
 }
 
 describe("selected conversation event window registry", () => {
+  it("reports initialization only after exact hydration and while the window remains active or retained", async () => {
+    // The active entry starts uninitialized and becomes reusable only after hydration finishes.
+    // 活动条目起初未初始化，只有 hydration 完成后才可复用。
+    const fixture = registryFixture();
+    expect(fixture.registry.hasInitializedSession("session-a")).toBe(false);
+    const firstSelection = fixture.registry.selectSession("session-a");
+    expect(fixture.registry.hasInitializedSession("session-a")).toBe(false);
+    await firstSelection;
+    expect(fixture.registry.hasInitializedSession("session-a")).toBe(true);
+
+    await fixture.registry.selectSession("session-b");
+    expect(fixture.registry.hasInitializedSession("session-a")).toBe(true);
+    expect(fixture.registry.hasInitializedSession("session-b")).toBe(true);
+    expect(fixture.registry.hasInitializedSession("session-c")).toBe(false);
+
+    fixture.registry.dispose();
+    expect(fixture.registry.hasInitializedSession("session-a")).toBe(false);
+    expect(fixture.registry.hasInitializedSession("session-b")).toBe(false);
+  });
+
   it("retains the requested oldest cached window when caching the outgoing session reaches capacity", async () => {
     // Eight inactive windows and one active window exercise the exact cache-capacity boundary.
     // 八个非活动窗口与一个活动窗口覆盖精确缓存容量边界。

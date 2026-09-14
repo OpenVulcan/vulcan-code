@@ -230,6 +230,19 @@ export class SelectedConversationEventWindowRegistry {
     return this.statusCache;
   }
 
+  /** Reports whether an exact session already has a hydrated active or retained window.
+   * 报告精确会话是否已有完成初始化的活动窗口或保留窗口。
+   *
+   * @param sessionId exact durable session identity to inspect.
+   *                  待检查的精确持久化会话标识。
+   * @returns whether switching can restore an initialized event window.
+   *          切换时是否能恢复已初始化的事件窗口。 */
+  hasInitializedSession(sessionId: string): boolean {
+    if (this.disposed) return false;
+    if (this.activeEntry?.sessionId === sessionId) return this.activeEntry.hydrated;
+    return this.retainedWindows.has(sessionId);
+  }
+
   /** Returns commands bound to the current exact controller entry.
    * 返回绑定到当前精确控制器条目的命令。
    *

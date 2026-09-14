@@ -73,6 +73,27 @@
   overflow: hidden;
 }
 
+.workspace-resizable-body-shell .workspace-main-shell > :not(.conversation-navigation-progress) {
+  transition: opacity 200ms ease;
+}
+
+.workspace-resizable-body-shell:is(.conversation-navigation-exiting, .conversation-navigation-loading, .conversation-navigation-waiting-owner) .workspace-main-shell > :not(.conversation-navigation-progress) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.conversation-navigation-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-resizable-body-shell .workspace-main-shell > :not(.conversation-navigation-progress) {
+    transition: none;
+  }
+}
+
 .workspace-resizable-body {
   min-width: 0;
   min-height: 0;
@@ -91,6 +112,7 @@
 }
 
 .workspace-main-shell {
+  position: relative;
   min-width: 0;
   min-height: 0;
   height: 100%;

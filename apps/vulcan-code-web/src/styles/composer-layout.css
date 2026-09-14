@@ -60,6 +60,20 @@
   transition: width 180ms ease;
 }
 
+.conversation-loading-card .conversation-loading-bar-value {
+  width: 36%;
+  animation: conversation-loading-progress 1.3s ease-in-out infinite alternate;
+}
+
+@keyframes conversation-loading-progress {
+  from { transform: translateX(-65%); }
+  to { transform: translateX(245%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-loading-card .conversation-loading-bar-value { animation: none; width: 100%; }
+}
+
 .conversation-submission-status {
   position: absolute;
   left: 50%;
@@ -80,25 +94,14 @@
   pointer-events: none;
 }
 
-.conversation-first-submission-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-  background: var(--background);
-  opacity: 1;
-  transition: opacity 500ms ease;
-  will-change: opacity;
-}
-
-.conversation-first-submission-mask.leaving {
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .conversation-first-submission-mask {
-    display: none;
-  }
+.conversation-draft-attachment-names {
+  max-width: min(72%, 760px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .media-upload-progress-stack {

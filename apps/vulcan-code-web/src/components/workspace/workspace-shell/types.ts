@@ -78,6 +78,15 @@ export interface WorkspaceShellProps {
   // Selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId: string | null;
+  // Visual navigation target and phase are separate from the authoritative selected session.
+  // 视觉导航目标与阶段独立于权威选中会话。
+  conversationNavigation?: { targetId: string; phase: "exiting" | "loading" | "waiting-owner" | "entering"; showLoading: boolean } | null;
+  // Releases the loading surface after the exact selected event-window owner is ready.
+  // 精确选中事件窗口归属就绪后解除加载界面。
+  onConversationNavigationReady?: (conversationId: string) => void;
+  // Retires the optimistic first prompt only after its canonical user input is visible.
+  // 仅在对应规范用户输入可见后移除乐观首条提示词。
+  onFirstSubmissionReconciled?: (conversationId: string, clientSubmissionId: string) => void;
   // Explicit project that owns project-level floating tools.
   // 持有项目级浮动工具的明确项目。
   activeProjectId: string | null;

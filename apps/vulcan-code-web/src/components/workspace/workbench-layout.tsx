@@ -253,6 +253,9 @@ export function WorkbenchLayout(props: {
   // Publishes the exact durable conversation selected by the local workbench route.
   // 发布本地工作台路由选中的精确持久化会话。
   onSelectedConversationIdChanged: (conversationId: string | null) => void;
+  // Reports whether the exact conversation already owns a hydrated event window.
+  // 报告精确会话是否已有完成初始化的事件窗口。
+  isConversationInitialized: (conversationId: string) => boolean;
 }) {
   React.useEffect(() => {
     // handleWorkspacePointerOwner routes input ownership from explicit pointer targets before bubble handlers run.
@@ -360,6 +363,24 @@ export function WorkbenchLayout(props: {
   // conversationSelectionRequestVersionRef prevents an older selection response from committing after a newer click.
   // conversationSelectionRequestVersionRef 防止较早的选择响应在较新的点击之后提交。
   const conversationSelectionRequestVersionRef = React.useRef(0);
+  // conversationNavigation owns visual feedback while the authoritative route remains on its previous session.
+  // conversationNavigation 在权威路由仍属于原会话期间管理视觉反馈。
+  const [conversationNavigation, setConversationNavigation] = React.useState<{
+    sourceId: string | null;
+    targetId: string;
+    phase: "exiting" | "loading" | "waiting-owner" | "entering";
+    showLoading: boolean;
+  } | null>(null);
+  // External route changes cancel an in-flight visual selection and invalidate its service response.
+  // 外部路由变化会取消正在进行的视觉选择，并使其服务响应失效。
+  React.useEffect(() => {
+    if (conversationNavigation
+      && selectedConversationId !== conversationNavigation.sourceId
+      && selectedConversationId !== conversationNavigation.targetId) {
+      conversationSelectionRequestVersionRef.current += 1;
+      setConversationNavigation(null);
+    }
+  }, [conversationNavigation, selectedConversationId]);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(
@@ -1001,6 +1022,9 @@ export function WorkbenchLayout(props: {
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
+  // actionDraftConversation ends draft-only commands as soon as the durable conversation summary exists.
+  // actionDraftConversation 在持久会话摘要出现后立即结束仅草稿命令。
+  const actionDraftConversation = selectedConversation ? null : selectedDraftConversation;
   // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
   // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
   const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
@@ -1023,16 +1047,16 @@ export function WorkbenchLayout(props: {
   // consoleWorkbenchState reprojects selected-session fields from the UI-local selection.
   // consoleWorkbenchState 根据 UI 本地选择重新投影当前会话字段。
   const consoleWorkbenchState = React.useMemo<WorkbenchSnapshot>(() => {
-    const projectedConversationId = selectedDraftConversation ? null : selectedConversationId;
+    const projectedConversationId = selectedDraftConversation && !selectedConversation ? null : selectedConversationId;
     return workbenchWithSelectedConversationProjection(workbenchState, projectedConversationId);
-  }, [selectedConversationId, selectedDraftConversation, workbenchState]);
+  }, [selectedConversation, selectedConversationId, selectedDraftConversation, workbenchState]);
   // Align ownership before paint so a cached route switch cannot flash the previous owner's loading placeholder.
   // 在绘制前对齐归属，使缓存路由切换不会闪现旧归属对应的加载占位。
   React.useLayoutEffect(() => {
     props.onSelectedConversationIdChanged(
-      selectedDraftConversation ? null : selectedConversationId,
+      selectedDraftConversation && !selectedConversation ? null : selectedConversationId,
     );
-  }, [props.onSelectedConversationIdChanged, selectedConversationId, selectedDraftConversation]);
+  }, [props.onSelectedConversationIdChanged, selectedConversation, selectedConversationId, selectedDraftConversation]);
   // showStartupOverlay blocks workspace interaction until the real service bootstrap completes.
   // showStartupOverlay 在真实服务启动完成前阻塞工作区交互。
   const showStartupOverlay = !props.startup.ready && props.startup.phase !== "browser-preview";
@@ -1141,7 +1165,7 @@ export function WorkbenchLayout(props: {
     handleEditPendingPrompt,
   } = useWorkbenchSessionActions({
     selectedConversation,
-    selectedDraftConversation,
+    selectedDraftConversation: actionDraftConversation,
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
   });
@@ -1170,7 +1194,7 @@ export function WorkbenchLayout(props: {
     translate: i18n.t,
     selectedConversation,
     selectedConversationId,
-    selectedDraftConversation,
+    selectedDraftConversation: actionDraftConversation,
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
     setDraftConversation,
@@ -1265,16 +1289,46 @@ export function WorkbenchLayout(props: {
     }
   }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, i18n.t, workbenchState]);
 
-  // handleSelectConversation selects a conversation and persists its read marker.
-  // handleSelectConversation 选择会话并持久化它的已读标记。
+  // handleConversationNavigationReady starts the 200 ms reveal only for the current target owner.
+  // handleConversationNavigationReady 仅为当前目标归属启动 200 毫秒入场。
+  const handleConversationNavigationReady = React.useCallback((conversationId: string) => {
+    const requestVersion = conversationSelectionRequestVersionRef.current;
+    setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "waiting-owner"
+      ? { ...current, phase: "entering" }
+      : current);
+    window.setTimeout(() => {
+      if (conversationSelectionRequestVersionRef.current === requestVersion) {
+        setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
+      }
+    }, 200);
+  }, []);
+
+  // handleSelectConversation selects a conversation with immediate sidebar feedback and exact-owner reveal.
+  // handleSelectConversation 以即时侧栏反馈和精确归属入场选择会话。
   const handleSelectConversation = React.useCallback((conversationId: string) => {
     handleOpenWorkspaceChat();
-    // requestVersion keeps the visible route on its current fully owned snapshot until the target snapshot is ready.
-    // requestVersion 在目标快照就绪前让可见路由继续使用当前完整归属快照。
+    // requestVersion keeps old responses and animations from overtaking the newest click.
+    // requestVersion 防止旧响应和动画越过最新点击。
     const requestVersion = conversationSelectionRequestVersionRef.current + 1;
     conversationSelectionRequestVersionRef.current = requestVersion;
+    const sourceId = selectedConversationIdRef.current;
+    // showLoading is based on the registry's exact initialized window at click time.
+    // showLoading 根据点击时 registry 中精确会话的已初始化窗口判定。
+    const showLoading = !props.isConversationInitialized(conversationId);
+    setConversationNavigation({ sourceId, targetId: conversationId, phase: "exiting", showLoading });
+    const fadedOut = new Promise<void>((resolve) => {
+      window.setTimeout(() => {
+        if (conversationSelectionRequestVersionRef.current === requestVersion) {
+          setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "exiting"
+            ? { ...current, phase: "loading" }
+            : current);
+        }
+        resolve();
+      }, 200);
+    });
     void selectConversation(conversationId)
-      .then((snapshot) => {
+      .then(async (snapshot) => {
+        await fadedOut;
         if (conversationSelectionRequestVersionRef.current !== requestVersion) {
           return null;
         }
@@ -1290,10 +1344,17 @@ export function WorkbenchLayout(props: {
             snapshot,
             { selectedConversationSource: "incoming" },
           ));
+          setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading });
         } else {
           // Browser preview has no service snapshot but still owns a local-only route.
           // 浏览器预览没有服务快照，但仍持有本地路由。
           setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
+          setConversationNavigation({ sourceId, targetId: conversationId, phase: "entering", showLoading });
+          window.setTimeout(() => {
+            if (conversationSelectionRequestVersionRef.current === requestVersion) {
+              setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
+            }
+          }, 200);
         }
         // Read-marker persistence is ancillary and must never turn a successful navigation into an error toast.
         // 已读标记持久化属于附属操作，绝不能把成功导航变成错误提示。
@@ -1320,6 +1381,12 @@ export function WorkbenchLayout(props: {
         if (conversationSelectionRequestVersionRef.current !== requestVersion) {
           return;
         }
+        setConversationNavigation({ sourceId, targetId: conversationId, phase: "entering", showLoading });
+        window.setTimeout(() => {
+          if (conversationSelectionRequestVersionRef.current === requestVersion) {
+            setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
+          }
+        }, 200);
         const message = error instanceof Error ? error.message : String(error);
         if (message === "会话已被删除，已经清理。") {
           // Clear the deleted route before applying the refreshed authoritative snapshot.
@@ -1339,6 +1406,7 @@ export function WorkbenchLayout(props: {
   }, [
     applyProjectActionSnapshot,
     handleOpenWorkspaceChat,
+    props.isConversationInitialized,
     liveStreamStore,
     loadWorkbenchSnapshot,
     selectedConversationIdRef,
@@ -1845,8 +1913,8 @@ export function WorkbenchLayout(props: {
     i18n.t,
   ]);
 
-  // Complete draft materialization only after the authoritative sidebar row becomes visible.
-  // 仅在权威侧栏行可见后完成草稿转正状态。
+  // Release the selection guard when the row arrives; keep the optimistic prompt until canonical correlation.
+  // 侧栏行到达时释放选择保护；乐观提示词保留到规范关联完成。
   React.useEffect(() => {
     const pendingConversationId = pendingMaterializedConversationIdRef.current;
     if (!pendingConversationId) {
@@ -1854,9 +1922,14 @@ export function WorkbenchLayout(props: {
     }
     if (workbenchState.conversations.some((conversation) => conversation.id === pendingConversationId)) {
       pendingMaterializedConversationIdRef.current = null;
-      setDraftConversation((current) => retireMaterializedDraftSubmission(current, pendingConversationId));
     }
   }, [workbenchState.conversations]);
+
+  // handleFirstSubmissionReconciled removes only the optimistic prompt replaced by the exact V1 input.
+  // handleFirstSubmissionReconciled 仅移除被精确 V1 输入替换的乐观提示词。
+  const handleFirstSubmissionReconciled = React.useCallback((conversationId: string, clientSubmissionId: string) => {
+    setDraftConversation((current) => retireMaterializedDraftSubmission(current, conversationId, clientSubmissionId));
+  }, []);
 
 
   // Keep local sidebar selection inside the active conversation lifecycle domain after deltas apply.
@@ -1947,6 +2020,9 @@ export function WorkbenchLayout(props: {
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
+            conversationNavigation={conversationNavigation}
+            onConversationNavigationReady={handleConversationNavigationReady}
+            onFirstSubmissionReconciled={handleFirstSubmissionReconciled}
             onNotificationPresentationContextChange={handleNotificationPresentationContextChange}
             chromeActions={shellChromeActions}
             titlebarDragRegion={windowDragRegionEnabled}
