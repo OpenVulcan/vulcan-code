@@ -1,4 +1,7 @@
 import * as React from "react";
+import { KnowledgeSkippedDocuments } from "./KnowledgeSkippedDocuments";
+import { KnowledgeFileConfirmationDialog, type KnowledgeFileReviewTarget } from "./KnowledgeFileConfirmationDialog";
+import type { KnowledgeFileConfirmation } from "@/types";
 import { BookOpen, Database, Download, FolderInput, FolderPen, Plus, RefreshCw, Search, Settings2, Trash2, Upload, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { KnowledgeLibraryViewerDialog } from "@/components/features/knowledge/KnowledgeLibraryViewerDialog";
 import { KnowledgeLibraryCreateDialog, type KnowledgeLibraryCreateDialogModel } from "@/components/features/knowledge/KnowledgeLibraryCreateDialog";
 import { KnowledgeOperationProgress } from "@/components/features/knowledge/KnowledgeOperationProgress";
+import { KnowledgeMessageDialog, KnowledgeOperationFeedback } from "@/components/features/knowledge/KnowledgeFeedback";
 import { KnowledgePackageImportDialog, KnowledgePackagePickerDialog } from "@/components/features/knowledge/KnowledgePackageDialogs";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
@@ -142,6 +146,9 @@ export function knowledgeDisplayBuildAction(displayIndex: KnowledgeDisplayIndexS
   if (displayIndex.pendingGeneration) {
     return { mode: "resume", label: "knowledge.experience.resume", disabled: false };
   }
+  if (displayIndex.skippedDocuments?.some((document) => document.reason === "not_selected")) {
+    return { mode: "resume", label: "knowledge.experience.resume", disabled: false };
+  }
   if (displayIndex.status === "ready" && displayIndex.activeGeneration) {
     return { mode: "complete", label: "knowledge.experience.displayReady", disabled: true };
   }
@@ -162,6 +169,9 @@ export function KnowledgeBaseArea() {
   // libraries stores the authoritative registry rows loaded from the service.
   // libraries 保存从服务加载的权威注册记录。
   const [libraries, setLibraries] = React.useState<KnowledgeLibrarySummary[]>([]);
+  // fileReview freezes the exact operation until the user confirms or cancels the inspected list.
+  // fileReview 冻结精确操作，直到用户确认或取消已检查清单。
+  const [fileReview, setFileReview] = React.useState<KnowledgeFileReviewTarget | null>(null);
   // Library read state distinguishes an initial request, a valid empty registry and a failed refresh.
   // 知识库读取状态区分首次请求、有效空目录与刷新失败。
   const [librariesLoading, setLibrariesLoading] = React.useState(true);
@@ -267,6 +277,9 @@ export function KnowledgeBaseArea() {
   // importError stores the terminal failure inside the progress dialog.
   // importError 在进度对话框内保存终态失败信息。
   const [importError, setImportError] = React.useState("");
+  // actionError owns non-job failures displayed by the shared in-window dialog.
+  // actionError 持有由窗口内共享弹窗展示的非任务失败。
+  const [actionError, setActionError] = React.useState<string | null>(null);
   // importOutcome preserves the authoritative command result even if final progress refresh fails.
   // importOutcome 即使最终进度刷新失败也会保留权威命令结果。
   const [importOutcome, setImportOutcome] = React.useState<"completed" | "cancelled" | "failed" | null>(null);
@@ -547,7 +560,13 @@ export function KnowledgeBaseArea() {
 
   // startDirectoryImport closes the picker and hands execution to the retained backend runtime.
   // startDirectoryImport 关闭目录选择器并将执行交给保留的后端运行时。
-  const startDirectoryImport = React.useCallback(async (libraryId: string, path: string, sourceId: string | null = null) => {
+  const startDirectoryImport = React.useCallback(async (libraryId: string, path: string, sourceId: string | null = null, confirmation?: KnowledgeFileConfirmation) => {
+    if (!confirmation) {
+      setSourcePickerTarget(null);
+      setImportProgressOpen(false);
+      setFileReview({ kind: "import", libraryId, sourceRoot: path, sourceId });
+      return;
+    }
     if (!acquireBusy("directory-import")) return;
     setSourcePickerTarget(null);
     setImportLibraryId(libraryId);
@@ -566,7 +585,7 @@ export function KnowledgeBaseArea() {
     try {
       // job is persisted before the service returns, so polling never races a missing operation row.
       // job 在服务返回前已经持久化，因此轮询不会与缺失的操作记录发生竞态。
-      const job = await importKnowledgeDirectory(libraryId, path, sourceId);
+      const job = await importKnowledgeDirectory(libraryId, path, sourceId, confirmation);
       trackedOperationJobId.current = job.id;
       handledTerminalJobId.current = null;
       setImportJob(job);
@@ -644,7 +663,12 @@ export function KnowledgeBaseArea() {
   // startDerivedOperation 启动一个分离式显示库或向量构建，并复用持久化轮询。
   // Parameters: operation selects the derived stage and libraryId identifies the exact target.
   // 参数：operation 选择派生阶段，libraryId 标识精确目标。
-  const startDerivedOperation = React.useCallback(async (operation: "display-build" | "vector-build", libraryId: string): Promise<void> => {
+  const startDerivedOperation = React.useCallback(async (operation: "display-build" | "vector-build", libraryId: string, confirmation?: KnowledgeFileConfirmation): Promise<void> => {
+    if (operation === "display-build" && !confirmation) {
+      setImportProgressOpen(false);
+      setFileReview({ kind: "display", libraryId });
+      return;
+    }
     if (!acquireBusy(operation)) return;
     setImportLibraryId(libraryId);
     trackedOperationJobId.current = null;
@@ -659,7 +683,7 @@ export function KnowledgeBaseArea() {
     setImportProgressOpen(true);
     try {
       const job = operation === "display-build"
-        ? await buildKnowledgeDisplayIndex(libraryId)
+        ? await buildKnowledgeDisplayIndex(libraryId, confirmation!)
         : await buildKnowledgeVectorIndex(libraryId);
       trackedOperationJobId.current = job.id;
       setImportJob(job);
@@ -709,20 +733,20 @@ export function KnowledgeBaseArea() {
       await refreshLibraries();
       toast.success(successDetail ?? t("knowledge.operationCompleted").replace("{operation}", label));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       releaseBusy(operation);
     }
   }, [acquireBusy, refreshLibraries, releaseBusy, t]);
 
-  // refreshLibraryList reloads registry state with local busy feedback and error toast ownership.
-  // refreshLibraryList 使用本地忙碌反馈与错误 Toast 归属重新加载注册状态。
+  // refreshLibraryList reloads registry state with local busy feedback and an in-window error dialog.
+  // refreshLibraryList 使用本地忙碌反馈与窗口内错误弹窗重新加载注册状态。
   const refreshLibraryList = React.useCallback(async () => {
     if (!acquireBusy("refresh")) return;
     try {
       await refreshLibraries();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       releaseBusy("refresh");
     }
@@ -744,7 +768,7 @@ export function KnowledgeBaseArea() {
       setCreateCompatibilityOverride("");
       setCreateDialogOpen(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       releaseBusy("create");
     }
@@ -772,7 +796,7 @@ export function KnowledgeBaseArea() {
       setEditingLibraryId(selectedLibrary.id);
       setSettingsDialogOpen(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       releaseBusy("settings");
     }
@@ -783,7 +807,7 @@ export function KnowledgeBaseArea() {
   const createLibrary = React.useCallback(async (model: KnowledgeLibraryCreateDialogModel) => {
     const name = createName.trim();
     if (!name) {
-      toast.error(t("knowledge.nameRequired"));
+      setActionError(t("knowledge.nameRequired"));
       return;
     }
     const routeFromCandidate = (candidate: PublicAiInternalInferenceCandidate | null) => candidate ? ({
@@ -882,7 +906,7 @@ export function KnowledgeBaseArea() {
       setSelectedLibraryId(result.library.id);
       setPackageInspection(null);
       toast.success(result.replacedExisting ? t("knowledge.package.replaceCompleted") : t("knowledge.package.importCompleted"));
-      result.warnings.forEach((warning) => toast.warning(warning));
+      if (result.warnings.length > 0) setActionError(result.warnings.join("\n"));
     } finally {
       releaseBusy(operation);
     }
@@ -946,6 +970,7 @@ export function KnowledgeBaseArea() {
                 <div className="knowledge-title-editor"><Input aria-label={t("knowledge.name")} disabled={pageBusy} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} /><p>{selectedLibrary.description || t("knowledge.defaultDescription")}</p></div>
                 <div className="knowledge-actions">
                   <Button disabled={pageBusy} onClick={() => void openSettingsDialog()} variant="outline"><Settings2 size={15} />{t("knowledge.experience.configure")}</Button>
+                  <Button disabled={pageBusy} onClick={() => setFileReview({ kind: "ignored", libraryId: selectedLibrary.id })} variant="outline">{t("knowledge.files.ignored")} ({selectedLibrary.settings.ignoredFiles?.length ?? 0})</Button>
                   <Button disabled={pageBusy || !renameDraft.trim() || renameDraft.trim() === selectedLibrary.name} onClick={() => void runMutation("rename", t("knowledge.saveName"), async () => {
                     await renameKnowledgeLibrary(selectedLibrary.id, renameDraft.trim(), selectedLibrary.description);
                   })} variant="outline">{t("knowledge.saveName")}</Button>
@@ -998,12 +1023,16 @@ export function KnowledgeBaseArea() {
                         ><Wrench size={15} />{t(displayBuildAction?.label ?? "knowledge.experience.buildDisplay")}</Button>
                       ) : null}
                       {selectedLibrary.settings.embedding.enabled ? (
-                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status !== "ready" || selectedLibrary.settings.vectorIndex.status === "building"} onClick={() => void startDerivedOperation("vector-build", selectedLibrary.id)} variant="outline"><Database size={15} />{t("knowledge.experience.buildVectors")}</Button>
+                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status !== "ready" || selectedLibrary.settings.displayIndex.generatedDocumentCount === 0 || selectedLibrary.settings.vectorIndex.status === "building"} onClick={() => void startDerivedOperation("vector-build", selectedLibrary.id)} variant="outline"><Database size={15} />{t("knowledge.experience.buildVectors")}</Button>
                       ) : null}
                     </div>
                   </>
                 ) : null}
               </section>
+              {selectedLibrary.settings.curation.enabled ? <>
+                <p className="text-sm text-muted-foreground">{t("knowledge.skipped.policy")}</p>
+                <KnowledgeSkippedDocuments documents={selectedLibrary.settings.displayIndex.skippedDocuments} />
+              </> : null}
               <section className="knowledge-sources">
                 <header className="knowledge-sources-header">
                   <div>
@@ -1129,6 +1158,16 @@ export function KnowledgeBaseArea() {
         submitLabel={t("memory.common.save")}
         title={t("knowledge.experience.settingsTitle")}
       />
+      {fileReview ? <KnowledgeFileConfirmationDialog
+        key={JSON.stringify(fileReview)} target={fileReview}
+        ignoredFiles={libraries.find((library) => library.id === fileReview.libraryId)?.settings.ignoredFiles ?? []}
+        onClose={() => setFileReview(null)} onRulesChanged={refreshLibraries}
+        onConfirm={(confirmation) => {
+          setFileReview(null);
+          if (fileReview.kind === "import") void startDirectoryImport(fileReview.libraryId, fileReview.sourceRoot, fileReview.sourceId, confirmation);
+          else if (fileReview.kind === "display") void startDerivedOperation("display-build", fileReview.libraryId, confirmation);
+        }}
+      /> : null}
       <KnowledgeLibraryViewerDialog library={viewerLibrary} onOpenChange={handleViewerOpenChange} open={viewerLibrary !== null} />
       <KnowledgePackagePickerDialog onOpenChange={setPackagePickerOpen} onSelect={inspectPackage} open={packagePickerOpen} />
       <KnowledgePackageImportDialog
@@ -1178,31 +1217,39 @@ export function KnowledgeBaseArea() {
       }} open={importProgressOpen}>
         <DialogContent
           className="knowledge-import-dialog"
-          onOpenAutoFocus={(event) => event.preventDefault()}
+          size="xl"
+          layout="document"
+          scrollMode="fixed-footer"
           showCloseButton={!operationDialogRunning || Boolean(importJob?.id)}
         >
-          <DialogHeader>
+          <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
             <DialogTitle>{displayedOperationKind === "repair"
               ? t("knowledge.operationDialog.title.repair")
               : (displayedOperationKind === "rebuild"
                 ? t("knowledge.operationDialog.title.rebuild")
                 : (displayedOperationKind === "display_build" ? t("knowledge.experience.displayOperation") : (displayedOperationKind === "vector_build" ? t("knowledge.experience.vectorOperation") : t("knowledge.operationDialog.title.import"))))}</DialogTitle>
           </DialogHeader>
-          <KnowledgeOperationProgress cancelRequested={importCancelRequested} job={importJob} outcome={importOutcome} running={operationDialogRunning} />
-          {importError ? <pre className="knowledge-import-dialog-error">{importError}</pre> : null}
-          {importWarnings.length > 0 ? <pre className="knowledge-import-warnings">{importWarnings.join("\n")}</pre> : null}
-          <DialogFooter>
+          <div className="knowledge-operation-dialog-body">
+            {importError ? <KnowledgeOperationFeedback message={importError} /> : null}
+            <KnowledgeOperationProgress cancelRequested={importCancelRequested} job={importJob} outcome={importOutcome} running={operationDialogRunning} />
+            {importWarnings.length > 0 ? <details className="knowledge-operation-warnings"><summary>{t("knowledge.feedback.warnings").replace("{count}", String(importWarnings.length))}</summary><pre>{importWarnings.join("\n")}</pre></details> : null}
+          </div>
+          <DialogFooter className="m-0 shrink-0">
             {operationDialogRunning && importLibraryId ? (
               <>
                 <Button disabled={!importJob?.id} onClick={hideOperationProgress} type="button" variant="ghost">{t("knowledge.experience.background")}</Button>
                 <Button disabled={!importJob?.id || importCancelRequested} onClick={() => void requestImportCancellation()} type="button" variant="outline">{importCancelRequested ? t("knowledge.importDialog.cancelling") : t(displayedOperationKind === "import" ? "knowledge.cancelImport" : "knowledge.cancelOperation")}</Button>
               </>
             ) : (
-              <Button onClick={() => setImportProgressOpen(false)} type="button">{t("knowledge.importDialog.close")}</Button>
+              <>
+                {importOutcome === "failed" && displayedOperationKind === "display_build" && importLibraryId ? <Button disabled={pageBusy} onClick={() => void startDerivedOperation("display-build", importLibraryId)} type="button" variant="outline"><RefreshCw size={14} />{t("knowledge.experience.resume")}</Button> : null}
+                <Button onClick={() => setImportProgressOpen(false)} type="button">{t("knowledge.importDialog.close")}</Button>
+              </>
             )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <KnowledgeMessageDialog message={actionError} onClose={() => setActionError(null)} />
     </section>
   );
 }

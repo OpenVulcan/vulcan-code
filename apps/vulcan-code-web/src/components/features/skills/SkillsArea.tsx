@@ -41,6 +41,7 @@ export function SkillsArea(props: {
       {props.activeTab === "catalog" ? (
         <LuaSkillsPanel
           actions={props.skillActions}
+          operationProgress={props.workbench.luaSkills.operationProgress ?? null}
           skills={props.workbench.luaSkills.skills}
         />
       ) : props.activeTab === "plugins" ? (

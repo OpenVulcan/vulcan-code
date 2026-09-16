@@ -1,10 +1,13 @@
 import * as React from "react";
 import { ChevronDown, Copy } from "lucide-react";
+import { TodoListResult } from "./conversation-todo-result";
 import { Button } from "@/components/ui/button";
+import { ConversationToolResultTabs, toolResultMode } from "./conversation-tool-result-tabs";
 import { MarkdownMessage } from "./conversation-markdown";
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "./conversation-measured-collapse";
 import { domainObject, type V1ToolDomainPresentation, type V1ToolDomainSection } from "./tool-presentations/v1-tool-domain-presentation";
 import type { ToolJsonValue, ToolPayload } from "@/service/conversation-event-window-store";
+import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import "@/styles/tool-domain.css";
 
 // FIELD_LABELS translates exact protocol members without merging aliases or inferring ownership.
@@ -94,10 +97,12 @@ export function ConversationV1ToolDomainBody(props: { domain: V1ToolDomainPresen
     {props.domain.diagnostic ? <div className="v1-tool-domain-error" role="status">{props.domain.diagnostic}</div> : null}
     {props.domain.sections.map((section, index) => section.presentation === "configuration-package"
       ? <ConfigurationPackageResult key={`${section.title}:${index}`} section={section} />
+      : section.presentation === "todo-list" ? <TodoListResult key={`${section.title}:${index}`} section={section} />
       : <section key={`${section.title}:${index}`} className="v1-tool-domain-section"><h4>{section.title}</h4>{section.markdown && typeof section.value === "string" ? <BoundedToolMarkdown text={section.value} /> : <ToolResultValue value={section.value} />}</section>)}
     {props.domain.sections.length === 0 && !props.domain.diagnostic ? <div className="v1-tool-domain-muted">尚无可展示结果</div> : null}
   </div>;
 }
+
 
 /** Shows package identity and completeness on one row, with declarations available on demand.
  * 将技能包身份与完整性显示在一行，按需展开声明。
@@ -142,6 +147,14 @@ function BoundedToolMarkdown(props: { text: string }) {
   // expanded 仅用于展示，绝不修改持久化 Markdown。
   const [expanded, setExpanded] = React.useState(false);
   return <div className="v1-tool-domain-markdown">{props.text.length <= 1600 || expanded ? <MarkdownMessage content={props.text} eager /> : <div className="v1-tool-domain-text">{props.text.slice(0, 900)}</div>}{props.text.length > 1600 ? <Button size="sm" variant="ghost" onClick={() => setExpanded(!expanded)}>{expanded ? "收起全文" : `展开全文（${props.text.length} 字符）`}</Button> : null}</div>;
+}
+
+/** Renders an unknown tool's readable result and exact raw payloads as three peer tabs.
+ * 将未知工具的可读结果与精确原始载荷渲染为三个同级标签页。
+ * Parameters event and domain supply authoritative data; id isolates tab identity. Returns lazy, copyable detail panels.
+ * 参数 event 与 domain 提供权威数据；id 隔离标签身份。返回按需挂载且可复制的详情面板。 */
+export function ConversationV1GenericToolDetails(props: { event: ToolCallEvent; domain: V1ToolDomainPresentation; id: string }) {
+  return <ConversationToolResultTabs event={props.event}>{toolResultMode(props.event) === "direct" ? <ConversationV1ToolDomainBody domain={props.domain} /> : undefined}</ConversationToolResultTabs>;
 }
 
 /** Keeps the complete input and output behind a remembered, independently expandable details control.

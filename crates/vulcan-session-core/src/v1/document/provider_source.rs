@@ -3,9 +3,11 @@
 
 use super::{ActiveApiState, ensure_api_request_field, provider_source_of};
 use crate::v1::errors::DomainError;
-use crate::v1::event::{ConversationEvent, ProviderSource, ProviderSourceInput};
+use crate::v1::event::{
+    ConversationEvent, ProviderFingerprintVersion, ProviderSource, ProviderSourceInput,
+};
 use crate::v1::ids::Seq;
-use crate::v1::projection::provider_visible_fingerprint;
+use crate::v1::projection::{provider_visible_fingerprint, validate_provider_fingerprint};
 
 /// Validates one typed Provider source against the immutable active API route.
 /// 校验一份强类型 Provider 来源是否匹配不可变活动 API 路由。
@@ -75,6 +77,7 @@ pub(super) fn build_provider_source(
         response_id: source_input.response_id.clone(),
         replay: source_input.replay.clone(),
         covered_until_seq,
+        fingerprint_version: Some(ProviderFingerprintVersion::ImmutableProjectionV1),
         fingerprint_sha256,
     })
 }
@@ -114,11 +117,14 @@ pub(super) fn provider_source_at_seq(
         .ok_or_else(|| DomainError::reference("provider_source", seq.value()))
 }
 
-/// Requires a previously durable Provider source to equal the terminal typed source completely.
-/// 要求此前已可靠落盘的 Provider 来源与终态强类型来源完全一致。
+/// Requires matching route/coverage and verifies the durable digest under its original format.
+/// 要求路由、覆盖范围一致，并按原始格式验证持久化摘要。
+/// `events` supplies immutable facts; successful verification never upgrades an existing checkpoint.
+/// `events` 提供不可变事实；校验成功绝不升级既有检查点。
 pub(super) fn ensure_provider_source_matches(
     expected: &ProviderSource,
     actual: &ProviderSource,
+    events: &[ConversationEvent],
 ) -> Result<(), DomainError> {
     ensure_api_request_field(
         "provider_source.provider",
@@ -152,9 +158,7 @@ pub(super) fn ensure_provider_source_matches(
         &expected.covered_until_seq,
         &actual.covered_until_seq,
     )?;
-    ensure_api_request_field(
-        "provider_source.fingerprint_sha256",
-        &expected.fingerprint_sha256,
-        &actual.fingerprint_sha256,
-    )
+    // A checkpoint loaded before API completion retains its original hash contract.
+    // 在 API 完成前重载的检查点保留原始哈希契约。
+    validate_provider_fingerprint(events, actual)
 }

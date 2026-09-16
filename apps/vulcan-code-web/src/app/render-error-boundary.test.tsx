@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import React, { act, Suspense } from "react";
+import React, { act, Suspense, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { RenderErrorBoundary } from "./render-error-boundary";
@@ -22,7 +22,7 @@ it("contains a rejected feature chunk and leaves sibling navigation available", 
   const LazyFailure = React.lazy(async () => { throw new Error("合成模块无法加载"); });
   const navigate = vi.fn();
   await act(async () => root.render(<><button onClick={navigate}>导航</button><RenderErrorBoundary resetKey="failed" fallback={(error) => <p role="alert">{error.message}</p>}><Suspense fallback="加载"><LazyFailure /></Suspense></RenderErrorBoundary></>));
-  expect(host.querySelector('[role="alert"]')?.textContent).toBe("合成模块无法加载");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("合成模块无法加载");
   await act(async () => host.querySelector("button")!.click());
   expect(navigate).toHaveBeenCalledTimes(1);
   await act(async () => root.render(<><button onClick={navigate}>导航</button><RenderErrorBoundary resetKey="healthy" fallback={(error) => <p role="alert">{error.message}</p>}><p>正常页面</p></RenderErrorBoundary></>));
@@ -40,6 +40,27 @@ it("preserves healthy component state when navigation identity changes", async (
   await act(async () => host.querySelector("button")!.click());
   await act(async () => root.render(<RenderErrorBoundary resetKey="two" fallback={() => null}><Draft /></RenderErrorBoundary>));
   expect(host.textContent).toBe("草稿 1");
+});
+
+it("retains the React component stack in the visible diagnostic", async () => {
+  // RenderFailure throws from a named component so the captured stack has a stable owner.
+  // RenderFailure 从具名组件抛错，使捕获的组件栈具有稳定归属。
+  // Returns no healthy node because every render fails deliberately.
+  // 返回值：由于每次渲染都故意失败，不返回正常节点。
+  function RenderFailure(): ReactNode {
+    throw new Error("合成渲染失败");
+  }
+
+  await act(async () => root.render(
+    <RenderErrorBoundary fallback={(error) => <pre role="alert">{error.message}</pre>}>
+      <RenderFailure />
+    </RenderErrorBoundary>,
+  ));
+
+  const diagnostic = host.querySelector('[role="alert"]')?.textContent ?? "";
+  expect(diagnostic).toContain("合成渲染失败");
+  expect(diagnostic).toContain("React component stack:");
+  expect(diagnostic).toContain("RenderFailure");
 });
 
 it("exposes explicit localized boot recovery without reloading automatically", async () => {

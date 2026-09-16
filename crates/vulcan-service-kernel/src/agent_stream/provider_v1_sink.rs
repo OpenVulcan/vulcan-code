@@ -1038,6 +1038,12 @@ fn resolve_projected_assistant_replay(
         // 仅状态夹具没有冻结执行，因此绝不能匹配真实封套。
         None => ProviderReplayProjection::RouteMismatch,
     });
+    // reasoningRequiresReplay distinguishes a real replay obligation from plain assistant text.
+    // reasoningRequiresReplay 区分真实推理回传义务与普通 assistant 正文。
+    let reasoning_requires_replay = content
+        .iter()
+        .any(|item| matches!(item, ContentItem::Reasoning { .. }))
+        && route.is_some_and(|route| route.reasoning_replay_contract.is_some());
     match projection {
         // Provider items and canonical content are mutually exclusive so no tool call, no reasoning
         // segment and no body text can be written twice.
@@ -1049,17 +1055,12 @@ fn resolve_projected_assistant_replay(
                 "projected item {projected_item_id} holds an envelope this engine cannot replay: {reason:?}"
             )))
         }
-        Some(ProviderReplayProjection::RouteMismatch) | None => {
+        Some(ProviderReplayProjection::RouteMismatch) => {
             // A mismatch must never become a silent signature-free rebuild while the turn actually
             // carries reasoning and the target route promised to replay provider-owned reasoning.
             // 当该回合确实携带推理、且目标路由承诺回传供应商持有推理时，
             // 失配绝不能被变成静默的无签名本地重建。
-            let reasoning_at_stake = content
-                .iter()
-                .any(|item| matches!(item, ContentItem::Reasoning { .. }));
-            let target_replays_reasoning =
-                route.is_some_and(|route| route.reasoning_replay_contract.is_some());
-            if reasoning_at_stake && target_replays_reasoning {
+            if reasoning_requires_replay {
                 return Err(unreplayable_replay_runtime_error(format!(
                     "projected item {projected_item_id} has reasoning whose durable envelope belongs to another route"
                 )));
@@ -1067,6 +1068,17 @@ fn resolve_projected_assistant_replay(
             // A turn with no reasoning at stake keeps the plain local text behaviour, and a route
             // that declared no contract must keep its previous request bytes.
             // 没有推理风险的回合保持原有纯文本行为；未声明契约的路由必须保持其既有请求字节。
+            Ok((content, Vec::new()))
+        }
+        None => {
+            // Missing evidence is distinct from a present envelope that names another route. Both
+            // remain fail-closed when the target requires provider-owned reasoning replay.
+            // 缺少证据不同于“封套存在但属于其他路由”；目标要求供应商推理回传时二者都保持失败关闭。
+            if reasoning_requires_replay {
+                return Err(unreplayable_replay_runtime_error(format!(
+                    "projected item {projected_item_id} has reasoning but no durable replay envelope"
+                )));
+            }
             Ok((content, Vec::new()))
         }
     }
@@ -4829,6 +4841,30 @@ mod tests {
         assert!(items.is_empty());
     }
 
+    /// Missing replay evidence is reported separately from an envelope owned by another route.
+    /// 缺失重放证据与“封套属于其他路由”分别报告。
+    #[test]
+    fn projected_assistant_replay_reports_missing_envelope_distinctly() {
+        let route = deepseek_replay_route();
+        let error = resolve_projected_assistant_replay(
+            durable_canonical_content(),
+            None,
+            Some(&route),
+            "v1-provider-message-27",
+        )
+        .expect_err("reasoning without durable replay evidence must fail before dispatch");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("v1-provider-message-27 has reasoning but no durable replay envelope"),
+            "the diagnostic must identify missing evidence precisely: {message}"
+        );
+        assert!(
+            !message.contains("belongs to another route"),
+            "missing evidence must not be misreported as a route mismatch: {message}"
+        );
+    }
+
     /// Verifies an envelope that no longer covers canonical output fails before dispatch.
     /// 验证不再覆盖规范输出的封套会在分派前失败。
     #[test]
@@ -4874,6 +4910,7 @@ mod tests {
                 reasoning: Some(String::from("durable-reasoning")),
                 tool_calls: Vec::new(),
                 provider_source: Some(Box::new(vulcan_session_core::v1::event::ProviderSource {
+                    fingerprint_version: None,
                     provider: String::from("provider-1"),
                     profile: Some(String::from("profile-1")),
                     model: String::from("model-1"),

@@ -70,3 +70,83 @@ it("deleting one key preserves the unsaved draft of another key", async () => {
   expect((document.getElementById("lua-skill-config-api_token") as HTMLInputElement).value).toBe("uncommitted-secret");
   expect((document.getElementById("lua-skill-config-endpoint") as HTMLInputElement).value).toBe("");
 });
+
+it("surfaces a storage-domain watcher failure that carries no skill id", async () => {
+  const actions = { onDescribeLuaSkillConfig: async () => descriptor,
+    onValidateLuaSkillConfig: async () => ({ complete: true, missing: [], invalid: [], businessIssues: [] }),
+    onPollLuaSkillConfigEvents: vi.fn().mockResolvedValue({ nextSequence: "9", events: [
+      { sequence: "9", type: "config_watch_failed", storeScope: "skills", skillId: null, revision: "3",
+        changedKeys: [], source: "watcher", restartRequiredKeys: [], complete: null,
+        error: { key: null, code: "CONFIG_WATCH_FAILED", message: "watcher unavailable" } }] })
+  } as unknown as SkillActionProps;
+  await act(async () => root.render(<LuaSkillConfigDialog actions={actions} skill={skill} open onOpenChange={() => {}} />));
+  // The dialog schedules its first poll after 1500 ms, so this waits real time
+  // instead of faking timers that the recursive poll would otherwise starve.
+  // 弹窗在 1500 毫秒后调度首次轮询，因此这里等待真实时间，而不是伪造会让递归轮询饥饿的定时器。
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
+  expect(document.body.textContent).toContain("CONFIG_WATCH_FAILED");
+  expect(document.body.textContent).toContain("watcher unavailable");
+});
+
+it("ignores storage-domain watcher failures from another store scope", async () => {
+  const actions = { onDescribeLuaSkillConfig: async () => descriptor,
+    onValidateLuaSkillConfig: async () => ({ complete: true, missing: [], invalid: [], businessIssues: [] }),
+    onPollLuaSkillConfigEvents: vi.fn().mockResolvedValue({ nextSequence: "10", events: [
+      { sequence: "10", type: "config_watch_failed", storeScope: "system-skills", skillId: null, revision: "4",
+        changedKeys: [], source: "watcher", restartRequiredKeys: [], complete: null,
+        error: { key: null, code: "CONFIG_WATCH_FAILED", message: "other store watcher unavailable" } }] })
+  } as unknown as SkillActionProps;
+  await act(async () => root.render(<LuaSkillConfigDialog actions={actions} skill={skill} open onOpenChange={() => {}} />));
+  // The dialog waits for the first real poll so the assertion covers the actual retained-event path.
+  // 弹窗等待首次真实轮询，使断言覆盖实际的保留事件路径。
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
+  expect(document.body.textContent).not.toContain("other store watcher unavailable");
+});
+
+it("ignores package events from another store scope even when the skill id matches", async () => {
+  const describe = vi.fn().mockResolvedValue(descriptor);
+  const actions = { onDescribeLuaSkillConfig: describe,
+    onValidateLuaSkillConfig: async () => ({ complete: true, missing: [], invalid: [], businessIssues: [] }),
+    onPollLuaSkillConfigEvents: vi.fn().mockResolvedValue({ nextSequence: "10", events: [
+      { sequence: "10", type: "config_changed", storeScope: "system-skills", skillId: "fixture", revision: "4",
+        changedKeys: ["endpoint"], source: "external_reload", restartRequiredKeys: [], complete: true,
+        error: null }] })
+  } as unknown as SkillActionProps;
+  await act(async () => root.render(<LuaSkillConfigDialog actions={actions} skill={skill} open onOpenChange={() => {}} />));
+  // The foreign-store package event must not trigger a descriptor reload for this dialog.
+  // 其他存储域的技能包事件不得触发当前弹窗重新加载描述符。
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
+  expect(describe).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a watcher failure through local writes and clears it after external reload recovery", async () => {
+  const poll = vi.fn()
+    .mockResolvedValueOnce({ nextSequence: "11", events: [
+      { sequence: "11", type: "config_watch_failed", storeScope: "skills", skillId: null, revision: "3",
+        changedKeys: [], source: "watcher", restartRequiredKeys: [], complete: null,
+        error: { key: null, code: "CONFIG_WATCH_FAILED", message: "watcher needs recovery" } }] })
+    .mockResolvedValueOnce({ nextSequence: "12", events: [
+      { sequence: "12", type: "config_changed", storeScope: "skills", skillId: "fixture", revision: "3",
+        changedKeys: ["endpoint"], source: "local_write", restartRequiredKeys: [], complete: true,
+        error: null }] })
+    .mockResolvedValue({ nextSequence: "13", events: [
+      { sequence: "13", type: "config_changed", storeScope: "skills", skillId: "fixture", revision: "3",
+        changedKeys: ["endpoint"], source: "external_reload", restartRequiredKeys: [], complete: true,
+        error: null }] });
+  const actions = { onDescribeLuaSkillConfig: async () => descriptor,
+    onValidateLuaSkillConfig: async () => ({ complete: true, missing: [], invalid: [], businessIssues: [] }),
+    onPollLuaSkillConfigEvents: poll } as unknown as SkillActionProps;
+  await act(async () => root.render(<LuaSkillConfigDialog actions={actions} skill={skill} open onOpenChange={() => {}} />));
+  // The first poll records the watcher failure for this store.
+  // 首次轮询记录当前存储域的监听故障。
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
+  expect(document.body.textContent).toContain("watcher needs recovery");
+  // A local write proves storage access only and must preserve the watcher warning.
+  // 本地写入只证明存储可访问，必须保留监听警告。
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
+  expect(document.body.textContent).toContain("watcher needs recovery");
+  // An external reload from the same store proves watcher recovery and clears the warning.
+  // 同一存储域的外部重载证明监听已恢复，并清除警告。
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
+  expect(document.body.textContent).not.toContain("watcher needs recovery");
+}, 15000);

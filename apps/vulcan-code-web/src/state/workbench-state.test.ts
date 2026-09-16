@@ -216,3 +216,40 @@ describe("applySubagentPanelRouteResponse route-only hydration", () => {
     );
   });
 });
+
+describe("LuaSkills operation progress delta", () => {
+  // operationProgressDelta builds one focused install-progress replacement.
+  // operationProgressDelta 构建一条聚焦的安装进度替换增量。
+  const operationProgressDelta = (generation: number) => ({
+    generation,
+    delta: {
+      kind: "luaSkillsOperationProgressChanged" as const,
+      payload: { progress: {
+        correlationId: "luaskills-op-0", action: "install", inFlight: true,
+        overflowed: false, sawUpstreamTerminal: false, phases: 1,
+        latestPhase: "downloading_archive", percent: 10,
+      } },
+    },
+  });
+
+  it("replaces only operation progress and leaves the rest of the catalog intact", () => {
+    const current = browserFallbackSnapshot();
+    const next = applyWorkbenchDelta(current, operationProgressDelta(1));
+    expect(next.luaSkills.operationProgress?.correlationId).toBe("luaskills-op-0");
+    expect(next.luaSkills.operationProgress?.latestPhase).toBe("downloading_archive");
+    // The focused envelope owns one field, so the skill rows must be untouched.
+    // 聚焦 envelope 只拥有一个字段，因此技能行必须保持不变。
+    expect(next.luaSkills.skills).toEqual(current.luaSkills.skills);
+  });
+
+  it("applies at an equal generation because it owns its own lifecycle domain", () => {
+    // This is what makes a reconnect work: progress owns an independent lifecycle
+    // domain, so the generation gate must not drop it. If the delta kind is missing
+    // from that list the update is silently discarded instead.
+    // 这正是重连得以工作的原因：进度拥有独立生命周期域，因此 generation 门禁不得丢弃它。
+    // 若该增量类型不在该列表中，更新会被静默丢弃。
+    const current = { ...browserFallbackSnapshot(), revision: 4 };
+    const next = applyWorkbenchDelta(current, operationProgressDelta(4));
+    expect(next.luaSkills.operationProgress?.correlationId).toBe("luaskills-op-0");
+  });
+});

@@ -4,6 +4,7 @@
 use super::*;
 use crate::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 use tempfile::tempdir;
+mod selection_tests;
 
 /// Verifies library IDs reject non-canonical and path-like input.
 /// 验证知识库标识符拒绝非规范格式与路径式输入。
@@ -179,6 +180,468 @@ fn hybrid_settings(
     }
 }
 
+/// Verifies exclusions survive successful publication and source edits reopen generation without deleting raw content.
+/// 验证忽略项随成功发布持久化，修改来源后可重新生成，且原始内容不被删除。
+/// Uses isolated temporary storage and no model calls; returns after all lifecycle assertions pass.
+/// 使用隔离临时存储且不调用模型，全部生命周期断言通过后返回。
+#[tokio::test]
+async fn display_skips_publish_complete_and_allow_later_supplementation() {
+    use crate::knowledge_base::{
+        KnowledgeDisplayChunk, KnowledgeDisplayDocument, KnowledgeDisplayIndexStatus,
+        KnowledgeDisplaySkippedDocument, KnowledgeModelSnapshot, KnowledgeOperationKind,
+        KnowledgeOperationObservability,
+    };
+    // The fixture owns an isolated database and two raw sources.
+    // 夹具持有隔离数据库及两份原始来源。
+    let (temporary, runtime, library_id) = in_process_runtime("超大来源忽略").await;
+    // The source root is separate from the managed library storage.
+    // 来源根目录与托管知识库存储分离。
+    let source_root = temporary.path().join("sources");
+    fs::create_dir(&source_root).expect("create sources");
+    fs::write(source_root.join("info.md"), "x".repeat(70_000)).expect("write oversized source");
+    fs::write(source_root.join("normal.md"), "# 普通文档\n可检索内容")
+        .expect("write normal source");
+    runtime
+        .import_markdown_directory(&library_id, &source_root)
+        .await
+        .expect("import raw sources");
+    runtime
+        .set_library_settings(&library_id, &hybrid_settings(None))
+        .await
+        .expect("enable curation");
+    // Imported summaries provide authoritative identities, paths and measured sizes.
+    // 导入摘要提供权威标识、路径及实测大小。
+    let documents = runtime
+        .list_documents(&library_id, None, 10, 0)
+        .await
+        .expect("list sources");
+    // The oversized source remains present in the raw corpus throughout this test.
+    // 超大来源在整个测试中始终保留于原始库。
+    let oversized = documents
+        .iter()
+        .find(|document| document.relative_path == "info.md")
+        .expect("find oversized source");
+    // One normal source is published to prove that an exclusion cannot block other documents.
+    // 发布一份普通来源，以验证忽略项不会阻塞其他文档。
+    let normal = documents
+        .iter()
+        .find(|document| document.relative_path == "normal.md")
+        .expect("find normal source");
+    // The complete exclusion snapshot uses the imported size, not a fabricated token estimate.
+    // 完整忽略快照使用导入大小，而不是推测的 Token 数量。
+    let skipped = vec![KnowledgeDisplaySkippedDocument {
+        reason: crate::knowledge_base::KnowledgeFileDisposition::Oversized,
+        source_document_id: oversized.id.clone(),
+        relative_path: oversized.relative_path.clone(),
+        byte_size: oversized.byte_size,
+        byte_limit: 65_536,
+    }];
+    // One job and generation model the worker's durable publication sequence.
+    // 一个任务和代次模拟工作器的持久化发布顺序。
+    let job = runtime
+        .start_external_operation(&library_id, KnowledgeOperationKind::DisplayBuild, 2)
+        .await
+        .expect("start build");
+    // Captured source revision guards publication against concurrent source edits.
+    // 捕获来源修订，以防止并发来源修改后的过期发布。
+    let revision = runtime
+        .inspect_index_integrity(&library_id)
+        .await
+        .expect("inspect revision")
+        .content_revision;
+    // A fresh canonical generation isolates the output from prior builds.
+    // 新规范代次将输出与此前构建隔离。
+    let generation = Uuid::new_v4().to_string();
+    // The real Jieba FTS index receives a real display document and chunk.
+    // 真实结巴 FTS 索引接收真实显示文档及切片。
+    let index = runtime
+        .prepare_display_generation(&library_id, &generation)
+        .await
+        .expect("prepare generation");
+    runtime
+        .begin_display_generation(&library_id, &generation, revision)
+        .await
+        .expect("begin generation");
+    // The generated document represents only the normal source.
+    // 生成文档仅代表普通来源。
+    let display = KnowledgeDisplayDocument {
+        id: format!("display-{generation}"),
+        source_document_id: normal.id.clone(),
+        source_sha256: crate::knowledge_base::sha256_hex("# 普通文档\n可检索内容".as_bytes()),
+        relative_path: normal.relative_path.clone(),
+        folder_path: String::new(),
+        title: String::from("普通文档"),
+        summary: String::from("可检索内容"),
+        keywords: Vec::new(),
+        symbols: Vec::new(),
+        embedding_text: String::from("可检索内容"),
+        markdown: String::from("# 普通文档\n可检索内容"),
+        generation: generation.clone(),
+        generated_at_ms: 1,
+    };
+    // The chunk obeys the same document and generation identities as production writes.
+    // 切片与生产写入相同，遵守文档和代次身份一致性。
+    let chunk = KnowledgeDisplayChunk {
+        id: format!("{}:0", display.id),
+        display_document_id: display.id.clone(),
+        ordinal: 0,
+        heading_path: String::from("普通文档"),
+        start_line: 1,
+        end_line: 2,
+        content: display.markdown.clone(),
+        embedding_text: display.embedding_text.clone(),
+        generation: generation.clone(),
+    };
+    runtime
+        .write_display_document(&library_id, &index, &display, &[chunk])
+        .await
+        .expect("write display");
+    runtime
+        .update_operation_observability(
+            &job.id,
+            &KnowledgeOperationObservability {
+                skipped_documents: skipped.clone(),
+                ..KnowledgeOperationObservability::default()
+            },
+        )
+        .await
+        .expect("persist exclusions");
+    // The successful model identity is retained alongside the visible exclusion list.
+    // 成功模型身份与可见忽略列表一起保留。
+    let snapshot = KnowledgeModelSnapshot {
+        route: guard_route("curation"),
+        dimensions: None,
+        capability_revision: None,
+        captured_at_ms: 1,
+    };
+    assert_eq!(
+        runtime
+            .activate_display_generation(&library_id, &generation, &index, revision as i64, false)
+            .await
+            .expect("publish nonempty corpus"),
+        1
+    );
+    runtime
+        .mark_display_generation_ready(
+            &library_id,
+            &generation,
+            revision,
+            snapshot.clone(),
+            1,
+            skipped.clone(),
+        )
+        .await
+        .expect("mark ready with exclusions");
+    runtime
+        .finish_external_operation(&job.id, 2)
+        .await
+        .expect("finish both processed sources");
+    // Read back durable state rather than relying on the input snapshots.
+    // 读回持久化状态，而不是依赖输入快照。
+    let ready = runtime
+        .get_library(&library_id)
+        .await
+        .expect("reload library");
+    assert_eq!(
+        ready.settings.display_index.status,
+        KnowledgeDisplayIndexStatus::Ready
+    );
+    assert_eq!(ready.settings.display_index.generated_document_count, 1);
+    assert_eq!(ready.settings.display_index.skipped_documents, skipped);
+    assert!(ready.settings.display_index.last_error.is_none());
+    assert!(ready.settings.display_index.pending_generation.is_none());
+    // The completed job counts skipped work without inflating published documents.
+    // 完成任务统计已忽略处理量，但不虚增发布文档数。
+    let finished = runtime
+        .latest_import_job(&library_id)
+        .await
+        .expect("load job")
+        .expect("job exists");
+    assert_eq!(finished.state, "completed");
+    assert_eq!(finished.processed_index_items, 2);
+    assert_eq!(finished.total_index_items, 2);
+    assert_eq!(finished.observability.skipped_documents, skipped);
+    assert_eq!(
+        runtime
+            .read_document(&library_id, &oversized.id)
+            .await
+            .expect("raw source retained")
+            .content
+            .len(),
+        70_000
+    );
+    assert_eq!(
+        runtime
+            .read_display_document(&library_id, &normal.id)
+            .await
+            .expect("normal display remains readable")
+            .markdown,
+        display.markdown
+    );
+
+    // A fresh preview retains the successful row and visibly disables the oversized source.
+    // 新预览保留成功记录，并明确禁用超大来源。
+    let preview = runtime
+        .preview_knowledge_display(&library_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        preview
+            .entries
+            .iter()
+            .find(|row| row.relative_path == "normal.md")
+            .unwrap()
+            .disposition,
+        crate::knowledge_base::KnowledgeFileDisposition::Completed
+    );
+    assert_eq!(
+        preview
+            .entries
+            .iter()
+            .find(|row| row.relative_path == "info.md")
+            .unwrap()
+            .disposition,
+        crate::knowledge_base::KnowledgeFileDisposition::Oversized
+    );
+    // Copying a retained result uses stored content and chunks with no model, leaving the active generation intact.
+    // 复制保留结果使用已存内容及切片，不调用模型，且保持活动代次不变。
+    let copied_generation = Uuid::new_v4().to_string();
+    // The isolated destination is not visible before publication.
+    // 隔离目标在发布前不可见。
+    let copied_index = runtime
+        .prepare_display_generation(&library_id, &copied_generation)
+        .await
+        .unwrap();
+    assert!(
+        runtime
+            .copy_display_source_to_generation(
+                &library_id,
+                &normal.id,
+                "wrong-hash",
+                &copied_generation,
+                &copied_index
+            )
+            .await
+            .is_err()
+    );
+    runtime
+        .copy_display_source_to_generation(
+            &library_id,
+            &normal.id,
+            &display.source_sha256,
+            &copied_generation,
+            &copied_index,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .list_display_generation_source_hashes(&library_id, &copied_generation, &copied_index)
+            .await
+            .unwrap()
+            .get(&normal.id),
+        Some(&display.source_sha256)
+    );
+    assert_eq!(
+        runtime
+            .read_display_document(&library_id, &normal.id)
+            .await
+            .unwrap()
+            .generation,
+        generation
+    );
+    runtime
+        .activate_display_generation(
+            &library_id,
+            &copied_generation,
+            &copied_index,
+            revision as i64,
+            false,
+        )
+        .await
+        .unwrap();
+    // Published copies preserve the exact original chunk body and use collision-free new identities.
+    // 已发布副本保留精确原始切片正文，并使用无冲突的新身份。
+    let copied_chunks = runtime
+        .list_display_chunks(&library_id, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(copied_chunks.len(), 1);
+    assert_eq!(copied_chunks[0].content, display.markdown);
+    assert_eq!(copied_chunks[0].generation, copied_generation);
+    assert_ne!(copied_chunks[0].display_document_id, display.id);
+
+    // Empty output is accepted only with the explicit all-skipped publication flag.
+    // 只有显式全部忽略标志才允许空输出发布。
+    let empty_generation = Uuid::new_v4().to_string();
+    // An empty prepared index cannot publish through the ordinary success path.
+    // 空的已准备索引不能通过普通成功路径发布。
+    let empty_index = runtime
+        .prepare_display_generation(&library_id, &empty_generation)
+        .await
+        .expect("prepare empty generation");
+    assert!(
+        runtime
+            .activate_display_generation(
+                &library_id,
+                &empty_generation,
+                &empty_index,
+                revision as i64,
+                false
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .activate_display_generation(
+                &library_id,
+                &empty_generation,
+                &empty_index,
+                revision as i64,
+                true
+            )
+            .await
+            .expect("allow explicitly all-skipped corpus"),
+        0
+    );
+    runtime
+        .activate_display_generation(&library_id, &generation, &index, revision as i64, false)
+        .await
+        .expect("restore nonempty publication before source edit");
+
+    // Source modification follows the existing synchronization path and makes another build available.
+    // 来源修改遵循现有同步路径，使再次构建变为可用。
+    fs::write(source_root.join("info.md"), "# 已缩小的索引\n正常内容")
+        .expect("shorten oversized source");
+    runtime
+        .import_markdown_directory(&library_id, &source_root)
+        .await
+        .expect("sync modified source");
+    // Persisted stale state prevents the completed-build guard from blocking supplementation.
+    // 持久化过期状态避免已完成构建护栏阻止补充。
+    let stale = runtime
+        .get_library(&library_id)
+        .await
+        .expect("reload stale state");
+    assert_eq!(
+        stale.settings.display_index.status,
+        KnowledgeDisplayIndexStatus::Stale
+    );
+    assert!(
+        runtime
+            .read_document(&library_id, &oversized.id)
+            .await
+            .expect("read shortened source")
+            .document
+            .byte_size
+            < 65_536
+    );
+    // A later publication replaces the old exclusion snapshot rather than accumulating stale entries.
+    // 后续发布替换旧忽略快照，而不是累积过期条目。
+    let revised = runtime
+        .inspect_index_integrity(&library_id)
+        .await
+        .expect("new revision")
+        .content_revision;
+    // A fresh generation receives both current sources before publication, without faking document counts.
+    // 新代次在发布前写入两份当前来源，不伪造文档数量。
+    let supplemented_generation = Uuid::new_v4().to_string();
+    // The replacement index remains separate until every source has been written.
+    // 替换索引在全部来源写入完成前保持独立。
+    let supplemented_index = runtime
+        .prepare_display_generation(&library_id, &supplemented_generation)
+        .await
+        .expect("prepare supplemented generation");
+    for source in runtime
+        .list_documents(&library_id, None, 10, 0)
+        .await
+        .expect("list revised sources")
+    {
+        // Read the actual reimported body to preserve the source identity and hash.
+        // 读取实际重新导入的正文，以保留来源身份和哈希。
+        let raw = runtime
+            .read_document(&library_id, &source.id)
+            .await
+            .expect("read revised body");
+        // The synthetic model result still uses real current raw content and a new generation identity.
+        // 合成模型结果仍使用真实当前原文和新代次身份。
+        let revised_document = KnowledgeDisplayDocument {
+            id: format!("display-{supplemented_generation}-{}", source.id),
+            source_document_id: source.id,
+            source_sha256: crate::knowledge_base::sha256_hex(raw.content.as_bytes()),
+            relative_path: source.relative_path,
+            markdown: raw.content.clone(),
+            generation: supplemented_generation.clone(),
+            ..display.clone()
+        };
+        // One real chunk is sufficient to prove the supplemented document is published and readable.
+        // 一条真实切片足以验证补充文档已发布并可读取。
+        let revised_chunk = KnowledgeDisplayChunk {
+            id: format!("{}:0", revised_document.id),
+            display_document_id: revised_document.id.clone(),
+            ordinal: 0,
+            heading_path: String::new(),
+            start_line: 1,
+            end_line: 2,
+            content: raw.content.clone(),
+            embedding_text: raw.content,
+            generation: supplemented_generation.clone(),
+        };
+        runtime
+            .write_display_document(
+                &library_id,
+                &supplemented_index,
+                &revised_document,
+                &[revised_chunk],
+            )
+            .await
+            .expect("write revised display document");
+    }
+    assert_eq!(
+        runtime
+            .activate_display_generation(
+                &library_id,
+                &supplemented_generation,
+                &supplemented_index,
+                revised as i64,
+                false
+            )
+            .await
+            .expect("activate supplemented generation"),
+        2
+    );
+    runtime
+        .mark_display_generation_ready(
+            &library_id,
+            &supplemented_generation,
+            revised,
+            snapshot,
+            2,
+            Vec::new(),
+        )
+        .await
+        .expect("publish supplemented outcome");
+    assert!(
+        runtime
+            .read_display_document(&library_id, &oversized.id)
+            .await
+            .expect("read supplemented document")
+            .markdown
+            .contains("已缩小的索引")
+    );
+    assert!(
+        runtime
+            .get_library(&library_id)
+            .await
+            .expect("reload supplemented library")
+            .settings
+            .display_index
+            .skipped_documents
+            .is_empty()
+    );
+}
+
 /// Drives every guard on the vector-generation publication path, including the success that follows them.
 /// 驱动向量代次发布路径上的每一条护栏，包括其后的成功路径。
 ///
@@ -247,7 +710,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
     // 所要阻止的不匹配；因此被取代的代次是通过真实的显示库流程激活的，而不是写进设置的。
     let superseded = Uuid::new_v4().to_string();
     runtime
-        .mark_display_generation_ready(&library_id, &superseded, 7, snapshot.clone(), 1)
+        .mark_display_generation_ready(&library_id, &superseded, 7, snapshot.clone(), 1, Vec::new())
         .await
         .expect("activate a superseded display generation");
     // Assert the precondition rather than assume it: the guard below reports the same message for an
@@ -282,7 +745,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
     // the index would otherwise be published without the immutable identity that makes it interpretable.
     // 护栏 5：代次匹配后，缺失的模型指纹仍然阻止发布——否则索引会在缺失使其可解释的不可变身份的情况下被发布。
     runtime
-        .mark_display_generation_ready(&library_id, &generation, 7, snapshot.clone(), 1)
+        .mark_display_generation_ready(&library_id, &generation, 7, snapshot.clone(), 1, Vec::new())
         .await
         .expect("activate the matching display generation");
     let matched = runtime

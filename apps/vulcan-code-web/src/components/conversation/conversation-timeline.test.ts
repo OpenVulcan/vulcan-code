@@ -184,14 +184,33 @@ describe("conversation timeline chronological projection", () => {
     expect(process.process.items[0].sourceMessages).toEqual([...commentaryThinking.sourceMessages, ...commentary.sourceMessages]);
     expect(process.process.items[1].leadingThinking).toBeUndefined();
     if (status === "completed") {
-      expect(process.process.items[2]).toBe(finalThinking);
-      expect(timeline.find((entry) => entry.kind === "item" && entry.finalAssistantOutput)).toMatchObject({ item: final });
+      expect(process.process.items).toHaveLength(2);
+      expect(timeline.find((entry) => entry.kind === "item" && entry.finalAssistantOutput)).toMatchObject({
+        item: { id: final.id, leadingThinking: finalThinking.blocks,
+          sourceMessages: [...finalThinking.sourceMessages, ...final.sourceMessages] },
+      });
     } else {
       expect(process.process.items[2]).toMatchObject({ id: "final", leadingThinking: finalThinking.blocks });
       expect(timeline.some((entry) => entry.kind === "item" && entry.finalAssistantOutput)).toBe(false);
     }
     expect(commentary.leadingThinking).toBeUndefined();
     expect(final.leadingThinking).toBeUndefined();
+  });
+
+  // A direct answer owns its initial reasoning without leaving an empty independent process group.
+  // 直接回答承接首次思考，不留下空的独立过程分组。
+  it("attaches initial reasoning directly to the final answer", () => {
+    // reasoning is retained unchanged in the final row's preview.
+    // reasoning 原样保留在最终行的预览中。
+    const reasoning = createTimelineRenderItem("initial", "assistant", "thinking");
+    const timeline = projectConversationTimelineItems([
+      createTimelineRenderItem("user", "user", "markdown"), reasoning,
+      createTimelineRenderItem("answer", "assistant", "markdown"),
+    ], undefined, false);
+    expect(timeline.some((entry) => entry.kind === "process")).toBe(false);
+    expect(timeline.find((entry) => entry.kind === "item" && entry.finalAssistantOutput)).toMatchObject({
+      item: { id: "answer", leadingThinking: reasoning.blocks },
+    });
   });
 
   it("preserves commentary before later tool and compaction failure events", () => {

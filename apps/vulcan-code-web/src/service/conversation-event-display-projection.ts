@@ -178,6 +178,9 @@ export interface ConversationProcessTranscriptNode extends ConversationTranscrip
 export interface ConversationAssistantTranscriptNode extends ConversationTranscriptNodeBase {
   kind: "assistant_final";
   item: AssistantMarkdownDisplayItem;
+  /** Consecutive reasoning immediately before this answer in the same Turn, in canonical order.
+   * 同一回合中紧邻当前回答之前的连续思考，保持规范顺序。 */
+  leading_reasoning: readonly AssistantReasoningDisplayItem[];
   api_stats: ApiStatsEvent | null;
   root_input: ConversationRootInputAnchor | null;
   /** Exact terminal TurnStats seq for the completed owning Turn.
@@ -290,12 +293,24 @@ export function projectConversationTranscriptDisplay(
     }
     if (item.kind === "assistant_text") {
       if (finalAssistantSeqByTurn.get(turnKey(item.turn_id)) === item.seq) {
+        // Only the trailing reasoning run in this Turn belongs to the final answer's gutter.
+        // 仅当前回合末尾的连续思考属于最终回答的左侧入口。
+        const leadingReasoning: AssistantReasoningDisplayItem[] = [];
+        while (processItems.length > 0) {
+          // preceding is the exact next ownership candidate in reverse canonical order.
+          // preceding 是逆向规范顺序中紧邻的归属候选项。
+          const preceding = processItems.at(-1);
+          if (!preceding || preceding.kind !== "assistant_reasoning" || preceding.turn_id !== item.turn_id) break;
+          leadingReasoning.unshift(preceding);
+          processItems.pop();
+        }
         flushProcess();
         nodes.push({
           kind: "assistant_final",
           seq: item.seq,
           turn_id: item.turn_id,
           item,
+          leading_reasoning: leadingReasoning,
           api_stats: apiStatsById.get(item.assistant.api_call_id) ?? null,
           root_input: rootInputByTurn.get(turnKey(item.turn_id)) ?? null,
           turn_end_seq: turnEndSeqByTurn.get(turnKey(item.turn_id)) ?? null,

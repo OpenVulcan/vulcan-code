@@ -1,9 +1,7 @@
 import React from "react";
 import type { ConversationBlock } from "@/components/conversation/conversation-model";
-import {
-  normalizeThinkingDisplayMode,
-  type ThinkingDisplayMode,
-} from "@/components/conversation/thinking-display";
+import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
+import { useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 
 // CONVERSATION_ENTRY_MOTION_MS matches the empty-prompt and Composer entry transition duration.
 // CONVERSATION_ENTRY_MOTION_MS 与空提示和输入区入场过渡时长保持一致。
@@ -22,15 +20,15 @@ function thinkingOverlayBlockSignature(block: ConversationBlock): string {
 }
 
 
-// UseThinkingDisplayModeOptions defines the authoritative preference and persistence action.
-// UseThinkingDisplayModeOptions 定义权威偏好与持久化操作。
+// UseThinkingDisplayModeOptions defines the global default and exact session scope.
+// UseThinkingDisplayModeOptions 定义全局默认值及精确会话作用域。
 export interface UseThinkingDisplayModeOptions {
   // Optional backend-projected display mode.
   // 后端投影的可选展示模式。
   authoritativeMode: string | null | undefined;
-  // Persists one user-selected display mode through the workbench service.
-  // 通过工作台服务持久化一个用户选择的展示模式。
-  onSelectMode: (mode: ThinkingDisplayMode) => Promise<boolean>;
+  // Exact conversation or draft whose local display choice is resolved.
+  // 需要解析本地展示选择的精确会话或草稿。
+  conversationId: string | null;
 }
 
 // ThinkingDisplayModeState exposes the effective mode and guarded selection action.
@@ -39,8 +37,8 @@ export interface ThinkingDisplayModeState {
   // Effective mode used by transcript filtering and composer controls.
   // 转录过滤与输入区控件使用的生效模式。
   mode: ThinkingDisplayMode;
-  // Applies one optimistic preference with stale-result-safe rollback.
-  // 应用一次带过期结果安全回滚的乐观偏好。
+  // Saves only the current session's explicit display preference.
+  // 仅保存当前会话的明确展示偏好。
   selectMode: (mode: ThinkingDisplayMode) => void;
 }
 
@@ -75,64 +73,14 @@ export interface ConversationVisualTransitionsState {
   emptyPromptLeaving: boolean;
 }
 
-// useThinkingDisplayMode synchronizes a backend preference with optimistic user selections.
-// useThinkingDisplayMode 将后端偏好与用户乐观选择保持同步。
-// Parameters: options provides the authoritative value and persistence callback.
-// 参数：options 提供权威值与持久化回调。
-// Returns: the effective mode and a stale-result-safe selection action.
-// 返回值：生效模式与过期结果安全的选择操作。
+// Resolves a session override without rewriting the global service preference.
+// 解析会话覆盖值，不改写全局服务偏好。
+// Parameters: options provides the authoritative global default and exact conversation ID.
+// 参数：options 提供权威全局默认值及精确会话标识。
+// Returns the effective mode and session-scoped selection action.
+// 返回生效模式及会话作用域内的选择操作。
 export function useThinkingDisplayMode(options: UseThinkingDisplayModeOptions): ThinkingDisplayModeState {
-  // authoritativeMode is the normalized current backend preference.
-  // authoritativeMode 是规范化后的当前后端偏好。
-  const authoritativeMode = normalizeThinkingDisplayMode(options.authoritativeMode);
-  // mode stores the optimistic preference rendered by the current workbench.
-  // mode 保存当前工作台渲染的乐观偏好。
-  const [mode, setMode] = React.useState<ThinkingDisplayMode>(authoritativeMode);
-  // authoritativeModeRef exposes the latest backend value to retained async callbacks.
-  // authoritativeModeRef 向保留的异步回调暴露最新后端值。
-  const authoritativeModeRef = React.useRef(authoritativeMode);
-  authoritativeModeRef.current = authoritativeMode;
-  // pendingModeRef identifies the latest optimistic value awaiting persistence.
-  // pendingModeRef 标识等待持久化的最新乐观值。
-  const pendingModeRef = React.useRef<ThinkingDisplayMode | null>(null);
-  // requestVersionRef prevents an older completion from rolling back a newer selection.
-  // requestVersionRef 防止较早完成结果回滚较新的选择。
-  const requestVersionRef = React.useRef(0);
-
-  React.useEffect(() => {
-    // pendingMode is the optimistic selection that may intentionally differ from an older snapshot.
-    // pendingMode 是可能有意区别于旧快照的乐观选择。
-    const pendingMode = pendingModeRef.current;
-    if (pendingMode && pendingMode !== authoritativeMode) {
-      return;
-    }
-    if (pendingMode === authoritativeMode) {
-      pendingModeRef.current = null;
-    }
-    setMode(authoritativeMode);
-  }, [authoritativeMode]);
-
-  // selectMode applies one optimistic value and lets only the latest failed request roll it back.
-  // selectMode 应用一个乐观值，仅允许最新失败请求执行回滚。
-  const selectMode = React.useCallback((nextMode: ThinkingDisplayMode) => {
-    // requestVersion identifies this preference request among overlapping selections.
-    // requestVersion 在重叠选择中标识本次偏好请求。
-    const requestVersion = requestVersionRef.current + 1;
-    requestVersionRef.current = requestVersion;
-    pendingModeRef.current = nextMode;
-    setMode(nextMode);
-    void options.onSelectMode(nextMode).then((saved) => {
-      if (requestVersionRef.current !== requestVersion) {
-        return;
-      }
-      pendingModeRef.current = null;
-      if (!saved) {
-        setMode(authoritativeModeRef.current);
-      }
-    });
-  }, [options.onSelectMode]);
-
-  return { mode, selectMode };
+  return useThinkingDisplayPreference(options.conversationId, options.authoritativeMode);
 }
 
 // useConversationVisualTransitions owns scope-safe thinking-overlay and empty-prompt exit retention.

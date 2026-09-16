@@ -5,6 +5,7 @@ import {
   CircleStop,
   Clock3,
   FileText,
+  FolderSearch,
   LoaderCircle,
   TerminalSquare,
   Wrench,
@@ -13,8 +14,9 @@ import {
 
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
-import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
-import { ConversationV1ToolDomainBody, ConversationV1ToolRawDetails } from "./conversation-v1-tool-domain";
+import { ConversationToolResultTabs } from "./conversation-tool-result-tabs";
+import { ConversationMediaGenerationResult, isMediaGenerationTool } from "./conversation-media-generation-result";
+import { ConversationV1GenericToolDetails, ConversationV1ToolDomainBody } from "./conversation-v1-tool-domain";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ToolPresentationCard } from "@/components/conversation/conversation-tool-presentation-card";
 import { ConversationV1GeneratedResourceList } from "@/components/conversation/conversation-v1-resource-list";
@@ -32,6 +34,8 @@ import { resolveV1ToolPresentation } from "@/components/conversation/tool-presen
 import { modelExtensionToolCapability } from "@/components/conversation/tool-presentations/model-extension-tool-presentation";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { FileTypeIcon } from "./conversation-file-type-icon";
+import { resolveFileTypeIcon } from "./conversation-file-type-icon";
 import type { ExternalResourceRef } from "@/service/conversation-event-window-store";
 import type { ToolCallDisplayItem } from "@/service/conversation-event-display-projection";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
@@ -165,7 +169,11 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
             ? <LocalizedToolPresentationText titleKey={presentation.titleKey} />
             : presentation.title}
         </span>
-        <span className="v1-tool-card-target">{summary.target}</span>
+        <span className="v1-tool-card-target file-access-target">
+          {presentation.kind === "file_change" && presentation.files.length === 1 ? <FileTypeIcon icon={resolveFileTypeIcon(presentation.files[0].path)} /> : null}
+          {presentation.kind === "file_access" && presentation.action === "read" && presentation.targets.length === 1 ? <FileTypeIcon icon={resolveFileTypeIcon(presentation.targets[0])} /> : null}
+          {summary.target}
+        </span>
         {summary.format ? <span className="file-change-text-format">{summary.format}</span> : null}
         {presentation.kind === "file_change" ? (
           <span className="file-change-counts" data-change-counts>
@@ -180,7 +188,9 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
 
       <ConversationMeasuredCollapse collapseId={presentation.id} expanded={expanded}>
         <div className="v1-tool-card-detail" data-tool-detail>
-          <ToolPresentationBody presentation={presentation} />
+          {presentation.kind === "generic"
+            ? <ConversationV1GenericToolDetails event={props.item.tool_call} domain={presentation.domain} id={presentation.id} />
+            : <ConversationToolResultTabs event={props.item.tool_call}><ToolPresentationBody presentation={presentation} /></ConversationToolResultTabs>}
           <ConversationV1GeneratedResourceList
             catalog={props.resourceCatalog ?? null}
             resources={props.item.tool_call.generated_resources ?? []}
@@ -190,7 +200,6 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
             availableReferenceKeys={props.availableExternalRefKeys}
             onOpen={props.onOpenExternalRef}
           />
-          <ConversationV1ToolRawDetails id={presentation.id} input={props.item.tool_call.input} output={props.item.tool_call.output} />
         </div>
       </ConversationMeasuredCollapse>
     </article>
@@ -232,6 +241,11 @@ function ConversationV1ModelExtensionToolCard(props: {
   // generatedResources is the exact resource list retained by the tool-call event.
   // generatedResources 是工具调用事件保留的精确资源列表。
   const generatedResources = props.item.tool_call.generated_resources ?? [];
+  // Media bodies are eager and resolve private paths from the same canonical event as the raw tabs.
+  // 媒体正文同步加载，从与原始标签页相同的规范事件解析私有路径。
+  const resultBody = isMediaGenerationTool(props.item.tool_call.tool_name)
+    ? <ConversationMediaGenerationResult event={props.item.tool_call} />
+    : <ConversationV1ToolDomainBody domain={props.presentation.domain} />;
   // hasOutputSupplement keeps resource and navigation controls inside the return card only when present.
   // hasOutputSupplement 仅在资源或导航控件存在时把它们放入返回卡。
   const hasOutputSupplement = generatedResources.length > 0 || props.presentation.externalRefs.length > 0 || props.item.tool_call.output?.model_output !== undefined;
@@ -243,7 +257,7 @@ function ConversationV1ModelExtensionToolCard(props: {
         catalog={props.resourceCatalog ?? null}
         resources={generatedResources}
       />
-      {props.item.tool_call.output?.model_output !== undefined ? <ConversationV1ToolDomainBody domain={props.presentation.domain} /> : null}
+      {props.item.tool_call.output?.model_output !== undefined ? resultBody : null}
       <ToolExternalNavigation
         references={props.presentation.externalRefs}
         availableReferenceKeys={props.availableExternalRefKeys}
@@ -281,15 +295,9 @@ function ConversationV1ModelExtensionToolCard(props: {
       </button>
       {props.presentation.domain.diagnostic ? <div className="v1-tool-card-failure-summary" role="status">{props.presentation.domain.diagnostic}</div> : null}
       <ConversationMeasuredCollapse collapseId={props.presentation.id} expanded={props.expanded}>
-        <ModelExtensionToolPayloadCards
-          defaultInputExpanded={false}
-          defaultOutputExpanded
-          inputMarkdown={props.presentation.inputMarkdown}
-          outputMarkdown={props.item.tool_call.output?.model_output !== undefined ? "" : props.presentation.outputMarkdown}
-          outputSupplement={outputSupplement}
-          presentationId={props.presentation.id}
-        />
-        <ConversationV1ToolRawDetails id={props.presentation.id} input={props.item.tool_call.input} output={props.item.tool_call.output} />
+        <ConversationToolResultTabs event={props.item.tool_call}>
+          {outputSupplement ?? resultBody}
+        </ConversationToolResultTabs>
       </ConversationMeasuredCollapse>
     </article>
   );
@@ -309,7 +317,7 @@ function ToolPresentationIcon(props: ToolPresentationIconProps) {
   }
   // Icon is selected only from the typed presentation identity.
   // Icon 仅从强类型展示身份中选择。
-  const Icon = props.icon === "file"
+  const Icon = props.icon === "folder-search" ? FolderSearch : props.icon === "file"
     ? FileText
     : props.icon === "shell"
       ? TerminalSquare

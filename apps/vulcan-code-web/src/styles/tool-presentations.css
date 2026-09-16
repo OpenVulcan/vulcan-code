@@ -183,8 +183,8 @@
   width: 100%;
 }
 
-/* Model-extension headers remain stable while input and output own separate expansion controls. */
-/* 模型扩展标题保持稳定，输入与返回分别持有独立展开控件。 */
+/* Tool headers remain stable while input and output share one tabbed detail surface. */
+/* 工具标题保持稳定，输入与输出共用标签式详情区域。 */
 .tool-presentation-card.model-extension-tool {
   gap: 0;
 }
@@ -215,18 +215,24 @@
 }
 
 .model-extension-tool-payloads {
-  display: grid;
-  gap: 4px;
+  min-width: 0;
+  gap: 8px;
 }
 
-.model-extension-payload-summary {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
+/* Keep the selected tab visible using Radix's authoritative active-state attribute. */
+/* 使用 Radix 的权威激活状态属性突出当前标签。 */
+.model-extension-tool-payloads [role="tab"][data-state="active"] { color: var(--foreground); }
+.model-extension-tool-payloads [role="tab"][data-state="active"]::after { opacity: 1; }
 
 .model-extension-payload-body {
-  max-height: 280px;
-  overflow: auto;
-  padding-left: 22px;
+  /* Tab panels only switch content; the concrete result/code viewer owns vertical scrolling. */
+  /* Tab 面板只切换内容，纵向滚动由具体结果或代码视图负责。 */
+  max-height: none;
+  overflow: visible;
+  /* Tabs and content share the tool's left edge; code blocks keep only their internal reading padding. */
+  /* 标签页及内容与工具左边缘对齐，代码块仅保留自身的阅读内边距。 */
+  margin: 0;
+  padding: 0;
 }
 
 .tool-presentation-card.provider-search-tool {
@@ -253,7 +259,7 @@
 .generic-tool-markdown-body {
   max-height: 280px;
   overflow: auto;
-  padding-left: 23px;
+  padding-left: 0;
 }
 
 .tool-presentation-raw-footer {
@@ -307,7 +313,7 @@
   gap: 10px;
   max-width: 100%;
   overflow: hidden;
-  padding-left: 23px;
+  padding-left: 0;
 }
 
 .file-access-item {
@@ -350,14 +356,16 @@
   overflow-wrap: anywhere;
 }
 
-.markdown-tool-block .markdown-message .markdown-code-block {
+.markdown-tool-block .markdown-message .markdown-code-block,
+.model-extension-payload-body .markdown-message .markdown-code-block {
   max-height: 420px;
   display: flex;
   flex-direction: column;
   margin: 0;
 }
 
-.markdown-tool-block .markdown-code-scroll {
+.markdown-tool-block .markdown-code-scroll,
+.model-extension-payload-body .markdown-code-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -531,8 +539,7 @@
   min-width: 0;
   display: grid;
   gap: 8px;
-  padding: 8px 0 0 23px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  padding: 8px 0 0;
 }
 
 .ask-question-item {
@@ -775,7 +782,9 @@
   min-width: 0;
   max-width: 100%;
   display: inline-flex;
-  align-items: center;
+  /* Mixed font sizes share a text baseline; centering each line box lifts the format badge. */
+  /* 不同字号共享文字基线，避免各行框分别居中导致格式标签上浮。 */
+  align-items: baseline;
   gap: 6px;
   overflow: hidden;
   color: var(--foreground);
@@ -785,6 +794,12 @@
 
 .file-change-path.multi {
   display: inline-flex;
+}
+
+/* File icons remain optically centered without participating in the text baseline. */
+/* 文件图标保持视觉居中，不参与文字基线计算。 */
+.file-change-path > .file-change-icon-stack {
+  align-self: center;
 }
 
 .file-change-path-text {
@@ -831,6 +846,22 @@
   white-space: nowrap;
 }
 
+/* Operation labels and file icons share the same compact baseline as the path. */
+/* 操作提示与文件图标和路径共享紧凑基线。 */
+.file-operation-label { flex: none; white-space: nowrap; color: var(--muted-foreground); }
+.file-access-target { display: inline-flex; align-items: center; min-width: 0; gap: 6px; }
+.file-access-target > .file-type-icon { flex: none; }
+
+/* Tab roots, panels and the V1 adapter shell must not wrap the content viewport in another scrollbar. */
+/* Tab 根节点、面板和 V1 适配外壳不得在内容视口之外再包一层滚动条。 */
+.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-tool-payloads,
+.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-payload-body,
+.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .v1-tool-card-detail:has(> .model-extension-tool-payloads) {
+  max-height: none; overflow: visible; scrollbar-gutter: auto;
+}
+.model-extension-payload-body > .markdown-tool-block,
+.model-extension-payload-body > .tool-presentation-output-scroll { padding-inline: 0; }
+
 .file-change-added {
   color: var(--diff-addition-base);
 }
@@ -848,9 +879,8 @@
 .file-change-tree {
   display: grid;
   gap: 6px;
-  margin-left: 8px;
-  padding-left: 12px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  margin-left: 0;
+  padding-left: 0;
 }
 
 .file-change-tree-item {

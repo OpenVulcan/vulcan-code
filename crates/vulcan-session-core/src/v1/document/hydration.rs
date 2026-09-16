@@ -27,7 +27,7 @@ use crate::v1::event::{
     ApiEndReason, ApiPurposeKind, DisplayNoticeKind, EventBody, SystemContextOperation, TurnOutcome,
 };
 use crate::v1::ids::{ApiCallId, IdAllocator, JS_SAFE_INTEGER_MAX, Seq, TurnId};
-use crate::v1::projection::{provider_visible_fingerprint, validate_system_context_event};
+use crate::v1::projection::{validate_provider_fingerprint, validate_system_context_event};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Validates the immutable source boundary of one forked session.
@@ -217,14 +217,7 @@ impl SessionDocument {
                             actual: source.covered_until_seq.value(),
                         });
                     }
-                    let expected_fingerprint =
-                        provider_visible_fingerprint(&self.events, self.events[index].seq)?;
-                    if source.fingerprint_sha256 != expected_fingerprint {
-                        return Err(DomainError::ImmutableFieldMutation {
-                            entity: "provider_source",
-                            field: "fingerprint_sha256",
-                        });
-                    }
+                    validate_provider_fingerprint(&self.events, &source)?;
                     if let Some(replay) = &source.replay
                         && !replay.matches_route(
                             &source.provider,

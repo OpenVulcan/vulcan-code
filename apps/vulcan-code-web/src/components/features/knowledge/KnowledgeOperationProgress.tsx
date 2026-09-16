@@ -1,8 +1,9 @@
 import * as React from "react";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { Activity, Braces, Database, Gauge, LoaderCircle, Server, Sparkles } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { KnowledgeSkippedDocuments } from "./KnowledgeSkippedDocuments";
 import type {
   KnowledgeImportJobSummary,
   KnowledgeOperationObservability,
@@ -45,29 +46,35 @@ export function KnowledgeOperationProgress(props: {
   const { t } = useI18n();
   const job = props.job;
   const observability = job?.observability ?? EMPTY_OBSERVABILITY;
+  // Skip counts are part of processed progress but never inflate generated document counts.
+  // 忽略数量计入处理进度，但绝不虚增已生成文档数量。
+  const skippedCount = observability.skippedDocuments?.length ?? 0;
   const currentRequest = observability.currentRequest;
   const isImport = job?.operationKind === "import";
   const total = isImport ? job?.totalFiles ?? 0 : job?.totalIndexItems ?? 0;
   const processed = isImport ? job?.processedFiles ?? 0 : job?.processedIndexItems ?? 0;
-  const percent = total > 0 ? Math.min(100, Math.max(0, Math.round((processed / total) * 100))) : null;
+  const percent = total > 0 ? Math.min(processed >= total ? 100 : 99, Math.max(0, Math.round((processed / total) * 100))) : null;
+  // outcome falls back to the durable job when reopening a completed operation.
+  // outcome 在重新打开已结束操作时使用持久化任务终态。
+  const outcome = props.outcome ?? job?.state;
   const status = props.cancelRequested
     ? t("knowledge.experience.cancelling")
-    : props.outcome === "failed"
+    : outcome === "failed"
       ? t("knowledge.experience.failed")
-      : props.outcome === "cancelled"
+      : outcome === "cancelled"
         ? t("knowledge.experience.cancelled")
-        : props.outcome === "completed"
+        : outcome === "completed"
           ? t("knowledge.experience.completed")
           : props.running
             ? t("knowledge.experience.running")
             : t("knowledge.experience.waiting");
 
   return (
-    <div className="knowledge-operation-progress">
+    <div className="knowledge-operation-progress" data-outcome={outcome}>
       <div className="knowledge-operation-progress-head">
         <div>
           <strong>{status}</strong>
-          <span>{job?.phase ?? "queued"}</span>
+          <span>{t(knowledgeOperationPhaseKey(job?.phase))}</span>
         </div>
         <span className="knowledge-operation-progress-percent">
           {percent === null ? t("knowledge.experience.processing") : `${percent}%`}
@@ -87,8 +94,11 @@ export function KnowledgeOperationProgress(props: {
 
       <div className="knowledge-operation-progress-meta">
         <span>{t("knowledge.experience.items").replace("{done}", String(processed)).replace("{total}", total ? String(total) : "?")}</span>
-        <span>{job?.processedBytes ?? 0} bytes</span>
+        {isImport ? <span>{job?.processedBytes ?? 0} bytes</span> : null}
+        {job?.operationKind === "display_build" && skippedCount > 0 ? <span>{t("knowledge.skipped.counts").replace("{generated}", String(Math.max(0, processed - skippedCount))).replace("{skipped}", String(skippedCount))}</span> : null}
       </div>
+
+      <KnowledgeSkippedDocuments documents={observability.skippedDocuments} />
 
       <div className="knowledge-operation-stat-grid">
         <OperationStat icon={<Sparkles size={14} />} label={t("knowledge.experience.llmRequests")} value={observability.llmRequestCount} detail={t("knowledge.experience.retries").replace("{count}", String(observability.llmRetryCount))} />
@@ -105,8 +115,8 @@ export function KnowledgeOperationProgress(props: {
         </div>
         {currentRequest ? (
           <div className="knowledge-operation-request-meta">
-            <span>{currentRequest.phase} · {currentRequest.protocol || "provider"}</span>
-            <span>{currentRequest.status} · {t("knowledge.experience.requestTokens").replace("{input}", formatCount(currentRequest.inputTokens, t("knowledge.experience.unknown"))).replace("{output}", formatCount(currentRequest.outputTokens, t("knowledge.experience.unknown")))}</span>
+            <span>{t(knowledgeOperationPhaseKey(currentRequest.phase))} · {currentRequest.protocol || "provider"}</span>
+            <span>{t(knowledgeRequestStatusKey(currentRequest.status))} · {t("knowledge.experience.requestTokens").replace("{input}", formatCount(currentRequest.inputTokens, t("knowledge.experience.unknown"))).replace("{output}", formatCount(currentRequest.outputTokens, t("knowledge.experience.unknown")))}</span>
           </div>
         ) : (
           <div className="knowledge-operation-empty">{t("knowledge.experience.preparing")}</div>
@@ -114,15 +124,18 @@ export function KnowledgeOperationProgress(props: {
       </section>
 
       {currentRequest ? (
-        <div className="knowledge-operation-stream">
-          <MarkdownMessage key={currentRequest.requestId} content={currentRequest.outputMarkdown || t("knowledge.experience.waitingStream")} defaultCodeWrap eager streaming={props.running} />
-        </div>
+        <details className="knowledge-operation-output">
+          <summary>{t("knowledge.feedback.output")}</summary>
+          <div className="knowledge-operation-stream">
+            <MarkdownMessage key={currentRequest.requestId} content={currentRequest.outputMarkdown || t("knowledge.experience.waitingStream")} defaultCodeWrap eager streaming={props.running && currentRequest.status === "running"} />
+          </div>
+        </details>
       ) : null}
 
       <section className="knowledge-operation-history">
         <div className="knowledge-operation-section-title">
           <span><LoaderCircle size={14} /> {t("knowledge.experience.recentRequests")}</span>
-          <span>{currentRequest?.label ?? ""}</span>
+          <span title={currentRequest?.label}>{currentRequest?.label ?? ""}</span>
         </div>
         {observability.recentRequests.length === 0 ? (
           <div className="knowledge-operation-empty">{t("knowledge.experience.noHistory")}</div>
@@ -153,15 +166,52 @@ function OperationStat(props: { icon: React.ReactNode; label: string; value: Rea
 // RecentRequestRow renders one compact request history item.
 // RecentRequestRow 渲染一条紧凑的请求历史记录。
 function RecentRequestRow(props: { request: KnowledgeOperationRequestSummary }) {
+  // t translates durable request statuses for the user.
+  // t 为用户翻译持久化请求状态。
+  const { t } = useI18n();
   const request = props.request;
   return (
     <div className="knowledge-operation-history-row">
-      <span className="knowledge-operation-history-status">{request.status}</span>
-      <span className="knowledge-operation-history-label">{request.label}</span>
+      <span className="knowledge-operation-history-status" data-status={request.status}>{t(knowledgeRequestStatusKey(request.status))}</span>
+      <span className="knowledge-operation-history-label" title={request.label}>{request.label}</span>
       <span>{request.model}</span>
       <span>{request.durationMs == null ? "—" : `${request.durationMs} ms`}</span>
     </div>
   );
+}
+
+// knowledgeRequestStatusKey maps a persisted status to its localized display label.
+// knowledgeRequestStatusKey 将持久化状态映射为本地化显示标签。
+// Parameters: status is the backend status. Returns: the corresponding translation key.
+// 参数：status 是后端状态。返回值：对应翻译键。
+function knowledgeRequestStatusKey(status: string): TranslationKey {
+  switch (status) {
+    case "completed": return "knowledge.experience.completed";
+    case "failed": return "knowledge.experience.failed";
+    case "cancelled": return "knowledge.experience.cancelled";
+    case "running": return "knowledge.experience.running";
+    default: return "knowledge.experience.waiting";
+  }
+}
+
+// knowledgeOperationPhaseKey localizes known job phases without exposing internal phase identifiers.
+// knowledgeOperationPhaseKey 翻译已知任务阶段，避免显示内部阶段标识。
+// Parameters: phase is the optional backend phase. Returns: its user-facing translation key.
+// 参数：phase 是可选后端阶段。返回值：面向用户的翻译键。
+function knowledgeOperationPhaseKey(phase: string | undefined): TranslationKey {
+  switch (phase) {
+    case "curating": return "knowledge.experience.displayOperation";
+    case "embedding": return "knowledge.experience.vectorOperation";
+    case "scanning": return "knowledge.importPhase.scanning";
+    case "parsing": return "knowledge.importPhase.parsing";
+    case "committing": return "knowledge.importPhase.committing";
+    case "indexing": return "knowledge.importPhase.indexing";
+    case "repairing": return "knowledge.importPhase.repairing";
+    case "rebuilding": return "knowledge.importPhase.rebuilding";
+    case "verifying": return "knowledge.importPhase.verifying";
+    case "finalizing": return "knowledge.importPhase.finalizing";
+    default: return "knowledge.experience.preparing";
+  }
 }
 
 // formatCount keeps unknown provider usage explicit instead of pretending it is zero.

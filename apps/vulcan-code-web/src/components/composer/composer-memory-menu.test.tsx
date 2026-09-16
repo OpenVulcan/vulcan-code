@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { ComposerAttachmentMenu } from "./composer-attachment-controls"
+import { ComposerSettingsMenu } from "./composer-attachment-controls"
 
 // React's concurrent test environment explicitly supports act for this isolated DOM harness.
 // 为独立 DOM 测试明确启用 React 并发测试环境的 act 支持。
@@ -41,7 +41,7 @@ it.each([false, true])("keeps settings reachable when policy editing is %s", asy
   vi.stubGlobal("ResizeObserver", MenuResizeObserver)
   document.body.append(container)
   try {
-    await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ComposerAttachmentMenu
+    await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ComposerSettingsMenu
       capabilities={[]} thinkingDisplayMode="popup_only" planModeEnabled={false}
       sessionVmmPolicy={null} vmmAvailable={enabled} vmmStatus={enabled ? "not_ready" : "disabled"}
       onOpenMemorySettings={navigate} onPick={() => {}} onThinkingDisplayModeChange={() => {}}
@@ -53,7 +53,7 @@ it.each([false, true])("keeps settings reachable when policy editing is %s", asy
     // 键盘激活打开真实用户使用的同一个可访问菜单。
     const trigger = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
     await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })))
-    const memoryMenu = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent === "VMM 记忆")!
+    const memoryMenu = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent === "记忆选项")!
     expect(memoryMenu).toBeDefined()
     await act(async () => memoryMenu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })))
     expect(document.body.textContent).toContain(enabled ? "记忆尚未就绪，仍可配置会话策略" : "当前作用域未启用记忆")

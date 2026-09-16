@@ -1358,6 +1358,16 @@ pub struct ProviderSourceInput {
     pub replay: Option<ProviderReplayEnvelope>,
 }
 
+/// Frozen fingerprint format, independent of outbound request filtering policy.
+/// 冻结的指纹格式，独立于出站请求过滤策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFingerprintVersion {
+    /// Hash immutable projected facts, preserving partial assistant text and reasoning.
+    /// 哈希不可变投影事实，保留部分 assistant 正文与推理。
+    ImmutableProjectionV1,
+}
+
 /// Provider-native replay identity and fingerprint carried by one API group.
 /// 一个 API 组携带的 Provider 原生重放身份与指纹。
 ///
@@ -1402,6 +1412,10 @@ pub struct ProviderSource {
     /// Local main-event seq covered by this replay checkpoint.
     /// 该重放检查点覆盖到的本地主事件 seq。
     pub covered_until_seq: Seq,
+    /// Explicit hash contract; absent only on legacy checkpoints with either known unversioned format.
+    /// 显式哈希契约；仅两种已知无版本历史格式的检查点缺省此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint_version: Option<ProviderFingerprintVersion>,
     /// Real SHA-256 hex digest of the immutable Provider-visible projection.
     /// 不可变 Provider 可见投影的真实 SHA-256 十六进制摘要。
     pub fingerprint_sha256: String,

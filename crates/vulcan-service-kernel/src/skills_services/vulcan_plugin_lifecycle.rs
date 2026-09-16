@@ -115,7 +115,6 @@ pub(super) async fn set_vulcan_plugin_enabled(
     }
     // management_guard serializes catalog, lifecycle, persistence, and hook ownership transfer.
     // management_guard 串行化目录、生命周期、持久化与 Hook 所有权交接。
-    let _management_guard = lock_luaskills_management_mutation().await;
     // provider_configuration is the immutable rollback baseline for this transaction.
     // provider_configuration 是本次事务的不可变回滚基线。
     let provider_configuration = provider_configuration_from_state(&state)?;

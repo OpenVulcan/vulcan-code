@@ -19,7 +19,7 @@ import {
 } from "@/components/features/skills/lua-skill-card";
 import { LuaSkillConfigDialog } from "@/components/features/skills/lua-skill-config-dialog";
 import { useI18n } from "@/i18n";
-import type { LuaSkillSummary } from "@/types";
+import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
 // LuaSkillStatusFilter identifies the enabled-state subset shown in the LuaSkills list.
@@ -60,11 +60,17 @@ export function LuaSkillsPanel(props: {
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   actions: SkillActionProps;
+  // Latest install or update operation progress, or null when none is tracked.
+  // 最近的安装或更新操作进度；未跟踪任何操作时为 null。
+  operationProgress?: LuaSkillsOperationProgressSummary | null;
   // Lua Skill rows.
   // Lua Skill 行。
   skills: LuaSkillSummary[];
 }) {
   const { t, locale } = useI18n();
+  // operationProgress is the latest tracked install or update, or null when none is.
+  // operationProgress 是最近跟踪的安装或更新；没有时为 null。
+  const operationProgress = props.operationProgress ?? null;
   // actionError retains the latest lifecycle failure instead of leaving an unhandled rejection.
   // actionError 保留最近的生命周期失败，避免未处理的拒绝。
   const [actionError, setActionError] = React.useState("");
@@ -154,6 +160,91 @@ export function LuaSkillsPanel(props: {
       setBusyAction(null);
     }
   }, []);
+  // configWatchIssues retains unresolved configuration-watch or reload failures by
+  // their exact store and optional package identity.
+  // configWatchIssues 按精确存储域与可选技能包身份保留尚未恢复的配置监听或重载失败。
+  //
+  // The list owns these instead of the configuration dialog because a broken watcher
+  // affects every package in its store even when no dialog is open. Multiple stores
+  // remain independent, so recovery in one cannot hide an unresolved failure in another.
+  // 它们由列表而非配置弹窗持有，因为监听损坏会影响对应存储域中的全部技能包——包括没有
+  // 弹窗打开时。多个存储域彼此独立，因此一个域恢复时不能隐藏另一个域尚未恢复的故障。
+  const [configWatchIssues, setConfigWatchIssues] = React.useState<Array<{
+    code: string;
+    message: string;
+    skillId: string | null;
+    storeScope: string;
+  }>>([]);
+  // configEventCursor is this list's own poll position. The retained engine queue is
+  // shared, so the dialog keeps an independent cursor over the same events.
+  // configEventCursor 是本列表自己的轮询位置。保留引擎队列是共享的，因此弹窗在同一批
+  // 事件上保有独立游标。
+  const configEventCursorRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    const poll = async (): Promise<void> => {
+      try {
+        const batch = await props.actions.onPollLuaSkillConfigEvents(
+          configEventCursorRef.current,
+        );
+        if (cancelled) {
+          return;
+        }
+        configEventCursorRef.current = batch.nextSequence;
+        if (batch.events.length > 0) {
+          setConfigWatchIssues((current) => {
+            // unresolved retains independent failures instead of letting the newest
+            // store event erase a still-broken sibling store.
+            // unresolved 保留彼此独立的故障，避免最新存储域事件抹掉仍然损坏的同级存储域。
+            const unresolved = new Map(current.map((issue) => [
+              `${issue.storeScope}\0${issue.skillId ?? ""}`,
+              issue,
+            ]));
+            for (const event of batch.events) {
+              const skillId = event.skillId ?? null;
+              const exactKey = `${event.storeScope}\0${skillId ?? ""}`;
+              const storeKey = `${event.storeScope}\0`;
+              if (event.error) {
+                unresolved.set(exactKey, {
+                  code: event.error.code,
+                  message: event.error.message,
+                  skillId,
+                  storeScope: event.storeScope,
+                });
+                continue;
+              }
+              // Only an event produced by the external reload path proves the watcher
+              // for this store is alive. A successful local write proves storage only.
+              // 只有外部重载路径产生的事件才能证明当前存储域的监听器仍然存活；成功的本地
+              // 写入只能证明存储可用。
+              if (event.source === "external_reload") {
+                unresolved.delete(storeKey);
+                unresolved.delete(exactKey);
+              }
+            }
+            return [...unresolved.values()];
+          });
+        }
+      } catch {
+        // A failed poll keeps the last known issue: clearing it here would hide the
+        // very failure this banner exists to report.
+        // 轮询失败时保留上一次已知问题：在此清除它会隐藏横幅本应报告的失败。
+      } finally {
+        if (!cancelled) {
+          timeoutId = window.setTimeout(() => void poll(), 3000);
+        }
+      }
+    };
+    timeoutId = window.setTimeout(() => void poll(), 1500);
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [props.actions]);
+
 
   return (
     <div className="skill-page-body lua-skill-page-body">
@@ -161,6 +252,66 @@ export function LuaSkillsPanel(props: {
         <p>{locale.startsWith("zh") ? "技能操作失败，请重试。" : "Skill action failed. Try again."}</p>
         <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{actionError}</pre></details>
       </div> : null}
+      {operationProgress ? <div
+        className={operationProgress.outcome === "failed" ? "skill-empty-state warning" : "skill-empty-state"}
+        role={operationProgress.outcome === "failed" ? "alert" : "status"}
+      >
+        <p>{locale.startsWith("zh")
+          ? (operationProgress.inFlight
+            ? `正在${operationProgress.action === "update" ? "更新" : "安装"}技能包…`
+            : operationProgress.outcome === "succeeded"
+              ? "技能包操作已完成。"
+              : "技能包操作失败。")
+          : (operationProgress.inFlight
+            ? `Skill package ${operationProgress.action === "update" ? "update" : "install"} in progress…`
+            : operationProgress.outcome === "succeeded"
+              ? "Skill package operation completed."
+              : "Skill package operation failed.")}</p>
+        <p>{[
+          operationProgress.skillId ?? null,
+          operationProgress.latestPhase ?? null,
+          operationProgress.percent != null ? `${operationProgress.percent}%` : null,
+          operationProgress.bytesDone != null && operationProgress.bytesTotal != null
+            ? `${operationProgress.bytesDone}/${operationProgress.bytesTotal}`
+            : null,
+        ].filter(Boolean).join(" · ")}</p>
+        {/* A failure carries only a fixed host-owned message; arbitrary upstream text
+            never crosses the service boundary. Overflowed says phases were dropped so
+            a client does not read a gap as a stall. */}
+        {/* 失败只携带宿主自有的固定文案；任意上游文本绝不跨越服务边界。overflowed 说明阶段
+            曾被丢弃，使客户端不会把空档读成卡死。 */}
+        {operationProgress.message || operationProgress.overflowed ? <p>
+          {operationProgress.message ?? ""}
+          {operationProgress.overflowed
+            ? `${operationProgress.message ? " " : ""}${locale.startsWith("zh")
+              ? "（部分阶段已被丢弃）"
+              : "(some phases were dropped)"}`
+            : ""}
+        </p> : null}
+        {/* The engine write lock is held for the entire install or update, including
+            download and verification, so unrelated skill operations queue behind it.
+            The concurrency plan requires that queueing to be shown as an explicit
+            limitation instead of being hidden. */}
+        {/* 引擎写锁在整次安装或更新期间持有，含下载与校验，因此无关的技能操作会在其后排队。
+            并发方案要求把该排队作为明确限制显示，而不是隐藏。 */}
+        {operationProgress.inFlight ? <p>{locale.startsWith("zh")
+          ? "安装/更新期间技能引擎被独占持有（含下载与校验），其他技能操作会排队等待。"
+          : "The skill engine is held exclusively during install/update, including download and verification, so other skill operations queue behind it."}</p> : null}
+      </div> : null}
+      {configWatchIssues.map((configWatchIssue) => <div
+        key={`${configWatchIssue.storeScope}\0${configWatchIssue.skillId ?? ""}`}
+        role="alert"
+        className="skill-empty-state warning"
+      >
+        <p>{locale.startsWith("zh")
+          ? (configWatchIssue.skillId
+            ? `配置监听异常（${configWatchIssue.skillId} · ${configWatchIssue.storeScope}）`
+            : `配置监听异常（影响 ${configWatchIssue.storeScope} 中的全部技能包）`)
+          : (configWatchIssue.skillId
+            ? `Configuration watch failure (${configWatchIssue.skillId} · ${configWatchIssue.storeScope})`
+            : `Configuration watch failure (affects every package in ${configWatchIssue.storeScope})`)}</p>
+        <pre className="plugin-control-error-details">{configWatchIssue.code}: {configWatchIssue.message}</pre>
+      </div>)}
       <div className="agent-catalog-filter-row skill-list-filter-row">
         <label className="agent-catalog-search-input skill-list-search-input">
           <Search size={15} />
@@ -281,7 +432,15 @@ export function LuaSkillInstallDialog(props: {
   const installFormId = React.useId();
   // sourceType stores the selected install source kind.
   // sourceType 保存当前选择的安装来源类型。
-  const [sourceType, setSourceType] = React.useState<"github" | "url">("github");
+  //
+  // GitHub is the only selectable kind: upstream source policy rejects
+  // `SkillInstallSourceType::Url` unconditionally for install and update alike, so the
+  // host boundary rejects it too and offering it here would present a choice that can
+  // never succeed.
+  // 只有 GitHub 可选：上游来源策略对安装与更新都无条件拒绝
+  // `SkillInstallSourceType::Url`，因此宿主边界同样拒绝它，在此提供该选项只会呈现一个永远
+  // 不可能成功的选择。
+  const [sourceType, setSourceType] = React.useState<"github">("github");
   // source stores the install source locator.
   // source 保存安装来源定位值。
   const [source, setSource] = React.useState("");
@@ -333,13 +492,12 @@ export function LuaSkillInstallDialog(props: {
         <form id={installFormId} className="lua-skill-install-form min-h-0 overflow-y-auto" onSubmit={submitInstall}>
           <label className="lua-skill-install-field">
             <span>{t("skills.lua.sourceType")}</span>
-            <Select disabled={installing} value={sourceType} onValueChange={(value) => setSourceType(value as "github" | "url")}>
+            <Select disabled={installing} value={sourceType} onValueChange={(value) => setSourceType(value as "github")}>
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="github">GitHub</SelectItem>
-                <SelectItem value="url">URL</SelectItem>
               </SelectContent>
             </Select>
           </label>
@@ -348,7 +506,7 @@ export function LuaSkillInstallDialog(props: {
             <input
               autoFocus
               disabled={installing}
-              placeholder={sourceType === "github" ? t("skills.lua.placeholderGithub") : t("skills.lua.placeholderUrl")}
+              placeholder={t("skills.lua.placeholderGithub")}
               value={source}
               onChange={(event) => setSource(event.target.value)}
             />

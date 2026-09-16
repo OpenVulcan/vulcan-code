@@ -192,8 +192,8 @@ describe("ConversationV1DisplayRenderer", () => {
         status: "streaming",
       }),
     ];
-    // inlineMarkup preserves both canonical reasoning events inline.
-    // inlineMarkup 在内联区域保留两条 canonical 思考事件。
+    // inlineMarkup keeps reasoning in the answer's gutter preview rather than independent rows.
+    // inlineMarkup 将思考保留在回答的左侧预览中，而不是独立行。
     const inlineMarkup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
@@ -223,18 +223,16 @@ describe("ConversationV1DisplayRenderer", () => {
       </I18nProvider>,
     );
 
-    expect(seqOffset(inlineMarkup, 1)).toBeLessThan(seqOffset(inlineMarkup, 2));
-    expect(seqOffset(inlineMarkup, 2)).toBeLessThan(seqOffset(inlineMarkup, 3));
-    expect(firstInlineMarkup).toContain("first reasoning");
-    expect(firstInlineMarkup).not.toContain("second reasoning");
-    expect(firstInlineMarkup).toContain("answer after reasoning");
-    expect(popupOnlyMarkup).toContain("first reasoning");
-    expect(popupOnlyMarkup).not.toContain("second reasoning");
-    expect(popupOnlyMarkup).toContain("answer after reasoning");
-    expect(seqOffset(popupOnlyMarkup, 1)).toBeLessThan(seqOffset(popupOnlyMarkup, 2));
-    expect(inlineMarkup).toContain('class="thinking-block"');
-    expect(inlineMarkup).toContain("思考过程");
-    expect(inlineMarkup).not.toContain("已工作");
+    for (const markup of [inlineMarkup, firstInlineMarkup, popupOnlyMarkup]) {
+      expect(seqOffset(markup, 3)).toBeGreaterThan(-1);
+      expect(markup).toContain("assistant-flow assistant-with-thinking");
+      expect(markup.match(/thinking-preview-trigger compact/g)).toHaveLength(1);
+      expect(markup).not.toContain("thinking-block");
+      expect(markup).not.toContain("first reasoning");
+      expect(markup).not.toContain("second reasoning");
+      expect(markup).toContain("answer after reasoning");
+      expect(markup).not.toContain("已工作");
+    }
   });
 
   it("connects one hydrated controller to the standalone React test host", async () => {

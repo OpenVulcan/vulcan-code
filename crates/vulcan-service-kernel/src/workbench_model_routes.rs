@@ -366,6 +366,36 @@ pub(super) async fn service_select_workbench_thinking_display_mode(
     Ok(workbench)
 }
 
+/// Saves the default tool-group folding preference without changing session overrides.
+/// 保存工具分组默认折叠偏好，不改变会话覆盖值。
+/// Parameters: app publishes snapshots, state owns configuration, enabled is the explicit default.
+/// 参数：app 发布快照，state 持有配置，enabled 是明确的默认值。
+/// Returns the refreshed workbench or an explicit persistence error.
+/// 返回刷新后的工作台或明确的持久化错误。
+pub(super) async fn service_save_tool_collapse_default(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    // Persist only on explicit user action; loading never rewrites older configuration.
+    // 仅在用户明确操作时持久化；加载时不改写旧配置。
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存默认工具折叠设置失败",
+        |configuration| {
+            configuration.tool_collapse_default_enabled = Some(enabled);
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
 /// Persists the WebUI locale in the shared Vulcan configuration file.
 /// 将 WebUI 语言持久化到共享 Vulcan 配置文件中。
 ///

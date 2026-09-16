@@ -2,6 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { useComposerSessionDraft, type UseComposerSessionDraftState } from "./use-composer-session-draft";
 import { useComposerSendController, type ComposerSendController } from "./use-composer-send-controller";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
@@ -18,6 +19,9 @@ vi.mock("@/service/conversation-session-drafts-v1", () => ({ sessionDraftClientV
 // Tests do not load locale resources or emit user-visible toasts.
 // 测试不加载语言资源，也不发出用户可见提示。
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+// Capture visible persistence diagnostics without rendering toast UI.
+// 捕获可见持久化诊断，不渲染提示界面。
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
 // No image preview is created because these transaction tests use no files.
 // 事务测试不使用文件，因此不会创建图片预览。
 vi.mock("@/service/conversation-actions-service", () => ({
@@ -216,6 +220,27 @@ describe("composer send preflight ownership", () => {
     });
     expect(controller.draftInput).toBe("freeze-b prompt");
     expect(clearSettings).toHaveBeenCalledTimes(1);
+  });
+
+  // A storage validation error must retain the unsent text and expose the actual failure.
+  // 存储校验错误必须保留未发送文本并展示实际失败原因。
+  it("preserves unsent text and reports the checkpoint error when draft persistence fails", async () => {
+    // failure is a synthetic backend error; no real session data is changed.
+    // failure 是合成后端错误；不修改真实会话数据。
+    const failure = new Error("provider_source_fingerprint_mismatch: checkpoint seq 31");
+    draftRpc.read.mockResolvedValue({ sessionId: "fingerprint-error", text: "unsent question", attachments: [] });
+    draftRpc.write.mockRejectedValue(failure);
+    await act(async () => root.render(<Harness sessionId="fingerprint-error" />));
+    await act(async () => sender.sendDraft());
+    expect(controller.draftInput).toBe("unsent question");
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(sender.isSubmissionActive()).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith("composer.error.draftPersistFailed", {
+      description: failure.message,
+    });
+    // Let owner cleanup persist successfully after the failure assertion.
+    // 失败断言后允许所有者清理正常持久化。
+    draftRpc.write.mockImplementation(async (sessionId: string, text: string, attachments: ComposerAttachmentSummary[]) => ({ sessionId, text, attachments }));
   });
 
   // Backend rejection restores the submitted snapshot while retaining text typed after consumption.

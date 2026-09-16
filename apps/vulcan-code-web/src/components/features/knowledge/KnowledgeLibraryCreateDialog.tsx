@@ -213,6 +213,7 @@ export function KnowledgeLibraryCreateDialog({
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12"><DialogTitle>{title ?? t("knowledge.experience.createTitle")}</DialogTitle></DialogHeader>
         <fieldset disabled={busy} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {requiresCuration ? <p className="text-sm text-muted-foreground">{t("knowledge.skipped.policy")}</p> : null}
           <Input aria-label={t("knowledge.name")} onChange={(event) => onNameChange(event.target.value)} placeholder={t("knowledge.name")} value={name} />
           <label className="space-y-1"><span>{t("knowledge.experience.retrievalMode")}</span><Select onValueChange={(value) => onRetrievalModeChange(value as KnowledgeRetrievalMode)} value={retrievalMode}>
             <SelectTrigger><SelectValue /></SelectTrigger>

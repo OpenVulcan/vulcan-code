@@ -357,6 +357,31 @@ impl Default for KnowledgeDisplayIndexStatus {
     }
 }
 
+use super::selection::{KnowledgeFileDisposition, KnowledgeIgnoredFile};
+
+/// Records an oversized source excluded from AI curation without deleting raw content.
+/// 记录因过大而未参与 AI 整理的来源，原始内容不会删除。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDisplaySkippedDocument {
+    /// Explicit exclusion reason; legacy records represent oversized sources.
+    /// 明确忽略原因，旧记录代表超大来源。
+    #[serde(default)]
+    pub reason: KnowledgeFileDisposition,
+    /// Stable source identity used when the source is imported again.
+    /// 再次导入来源时使用的稳定文档标识。
+    pub source_document_id: String,
+    /// Library-relative path displayed in the exclusion list.
+    /// 忽略列表展示的库内相对路径。
+    pub relative_path: String,
+    /// Source-file size recorded by the raw-corpus importer.
+    /// 原始库导入器记录的源文件字节数。
+    pub byte_size: u64,
+    /// Explicit byte threshold that caused this exclusion.
+    /// 本次忽略使用的明确字节阈值。
+    pub byte_limit: u64,
+}
+
 /// Stores durable display-corpus generation state independently from raw content.
 /// 将显示库生成状态与原始内容独立持久化。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -402,6 +427,10 @@ pub struct KnowledgeDisplayIndexState {
     /// 当前显示库代次中已校验的显示文档数量。
     #[serde(default)]
     pub generated_document_count: u64,
+    /// Oversized sources omitted from this generation; these are not generated documents.
+    /// 当前代次忽略的超大来源，不计入已生成文档数量。
+    #[serde(default)]
+    pub skipped_documents: Vec<KnowledgeDisplaySkippedDocument>,
     /// Last explicit display-corpus error.
     /// 最近一次显示库构建错误。
     #[serde(default)]
@@ -452,6 +481,10 @@ pub struct KnowledgeVectorIndexState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeLibrarySettings {
+    /// User-managed exclusions scoped to this library, source root and relative path.
+    /// 用户维护的忽略项，限定于当前知识库、来源根目录及相对路径。
+    #[serde(default)]
+    pub ignored_files: Vec<KnowledgeIgnoredFile>,
     /// Initialization and retrieval mode selected by the user.
     /// 用户选择的初始化与检索模式。
     #[serde(default)]
@@ -483,6 +516,7 @@ impl Default for KnowledgeLibrarySettings {
     /// 返回旧资料库兼容的原始 BM25 策略。
     fn default() -> Self {
         Self {
+            ignored_files: Vec::new(),
             retrieval_mode: KnowledgeRetrievalMode::RawBm25,
             fallback_policy: KnowledgeFallbackPolicy::ExplicitOnly,
             curation: KnowledgeCurationSettings {
@@ -1538,6 +1572,9 @@ pub struct KnowledgeOperationRequestSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct KnowledgeOperationObservability {
+    /// Full exclusion list for the current display build, including failed or cancelled runs.
+    /// 当前显示库构建的完整忽略列表，失败或取消后也会保留。
+    pub skipped_documents: Vec<KnowledgeDisplaySkippedDocument>,
     /// Number of LLM API requests dispatched by the worker.
     /// 工作器实际发起的 LLM API 请求数量。
     pub llm_request_count: u64,
@@ -1575,6 +1612,7 @@ impl Default for KnowledgeOperationObservability {
     /// 创建一份累计用量明确为零的初始可观测快照。
     fn default() -> Self {
         Self {
+            skipped_documents: Vec::new(),
             llm_request_count: 0,
             llm_retry_count: 0,
             embedding_request_count: 0,

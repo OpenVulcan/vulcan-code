@@ -120,6 +120,10 @@ pub struct WorkbenchSnapshot {
     /// 从共享配置文件解析出的思考输出展示模式。
     #[serde(default)]
     pub thinking_display_mode: String,
+    /// Persisted default tool-group folding preference; omitted only by older snapshots.
+    /// 持久化的工具分组默认折叠偏好；仅旧快照缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_collapse_default_enabled: Option<bool>,
     /// Git commit dialog settings resolved from the shared configuration file.
     /// 从共享配置文件解析出的 Git 提交弹窗设置。
     #[serde(default)]

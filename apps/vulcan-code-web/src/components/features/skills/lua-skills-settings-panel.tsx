@@ -20,6 +20,7 @@ import type {
   LuaVmPoolSettings,
 } from "@/types"
 
+import { LuaSkillsInferenceRoutes } from "./lua-skills-inference-routes"
 import type { SkillActionProps } from "./skill-area-types"
 
 // LuaVmPoolKey identifies one exact VM pool in the package settings document.
@@ -721,6 +722,13 @@ export function LuaSkillsSettingsPanel(props: {
           </Button>
         </div>
       </fieldset>
+
+      {/* The internal model routes live outside the runtime-settings fieldset on
+          purpose: saving runtime settings must not disable the route pickers, and a
+          route change must not appear to be part of the unsaved runtime draft. */}
+      {/* 内部模型路由刻意位于运行时设置 fieldset 之外：保存运行时设置不得禁用路由选择器，
+          路由变更也不得看起来属于未保存的运行时草稿。 */}
+      <LuaSkillsInferenceRoutes />
     </section>
   )
 }

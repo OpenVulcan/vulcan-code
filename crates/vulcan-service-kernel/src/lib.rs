@@ -172,6 +172,8 @@ mod host_tools_settings;
 mod internal_ai;
 mod knowledge_base_services;
 mod licenses;
+mod luaskills_install_progress;
+mod luaskills_model;
 mod mcp_settings;
 mod media_upload;
 mod native_vmm;
@@ -571,6 +573,12 @@ pub fn service_prepare_for_app_shutdown(
             )),
         };
         vce_shutdown?;
+        // LuaSkills model and progress callbacks are process-wide and may retain service-owned
+        // runtime handles, so the successful shutdown boundary removes them explicitly.
+        // LuaSkills 模型与进度回调是进程级的，并可能保留服务持有的运行时句柄，因此正常关闭
+        // 边界必须显式移除它们。
+        crate::luaskills_model::shutdown_global();
+        crate::luaskills_install_progress::shutdown_global();
         return Ok(stopped_task_ids);
     }
     let mut errors = Vec::new();

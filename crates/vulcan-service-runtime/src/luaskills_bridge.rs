@@ -69,10 +69,20 @@ enum RootSkillBootstrapSourceType {
 impl RootSkillBootstrapSourceType {
     /// Converts the declarative bootstrap source type into the upstream LuaSkills source enum.
     /// 将声明式引导来源类型转换为上游 LuaSkills 来源枚举。
-    fn into_runtime_source_type(self) -> SkillInstallSourceType {
+    ///
+    /// `Url` is refused rather than converted: upstream rejects
+    /// `SkillInstallSourceType::Url` unconditionally by source policy, so a ROOT bootstrap
+    /// declaring it would fail on every start with an upstream policy string. Refusing it
+    /// here reports the reason once, in the host's own words.
+    /// `Url` 被拒绝而不是被转换：上游按来源策略无条件拒绝 `SkillInstallSourceType::Url`，
+    /// 因此声明它的 ROOT 引导会在每次启动时以上游策略文案失败。在此拒绝它可以用宿主自己的措辞
+    /// 一次性说明原因。
+    fn into_runtime_source_type(self) -> Result<SkillInstallSourceType, String> {
         match self {
-            Self::Github => SkillInstallSourceType::Github,
-            Self::Url => SkillInstallSourceType::Url,
+            Self::Github => Ok(SkillInstallSourceType::Github),
+            Self::Url => Err(String::from(
+                "来源类型 `url` 已被上游来源策略停用，无法使用；请将该技能的来源类型改为 `github`。",
+            )),
         }
     }
 }
@@ -843,6 +853,26 @@ pub fn refresh_luaskills_catalog(
     build_luaskills_catalog(handle, &engine)
 }
 
+/// Formats one post-commit projection failure for a committed skill mutation.
+/// 为一次已提交的技能变更格式化后置投影失败。
+///
+/// The engine call is the commit point: once it returns, the package change is on disk.
+/// A later failure is therefore a projection failure, and its message must name the
+/// mutation that completed, because every caller — including the operation-progress
+/// projection that records `Succeeded`/`Failed` from this result — treats any error as
+/// a failed operation.
+/// 引擎调用即提交点：它一旦返回，包变更就已在盘上。因此后续失败是投影失败，其消息必须点名
+/// 已完成的变更，因为每个调用方——包括据此记录 `Succeeded`/`Failed` 的操作进度投影——都会把
+/// 任何错误当作操作失败。
+fn post_commit_projection_failure(
+    skill_id: &str,
+    completed_action: &str,
+    failed_step: &str,
+    error: &str,
+) -> String {
+    format!("技能 `{skill_id}` 已{completed_action}，但{failed_step}：{error}")
+}
+
 /// Installs one LuaSkills package into the ordinary USER root.
 /// 将单个 LuaSkills 包安装到普通 USER 根。
 pub fn install_luaskill(
@@ -864,8 +894,18 @@ pub fn install_luaskill(
     let result = engine
         .install_skill_in_root(&handle.skill_roots, &user_root, &request)
         .map_err(|error| format!("安装 LuaSkills 技能失败：{error}"))?;
-    invalidate_config_capability_cache(handle, &result.skill_id)?;
-    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    // The install is committed on disk once install_skill_in_root returns, so a later
+    // failure is a projection failure rather than an install failure. Its message must
+    // say the package was installed, because reporting a bare failure here would tell
+    // the caller and the operation-progress projection that nothing changed.
+    // install_skill_in_root 返回后安装已在盘上提交，因此后续失败是投影失败而不是安装失败。
+    // 其消息必须说明包已安装，因为在此报告裸失败会让调用方与操作进度投影以为什么都没变。
+    invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
+        post_commit_projection_failure(&result.skill_id, "安装", "配置能力缓存失效失败", &error)
+    })?;
+    let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
+        post_commit_projection_failure(&result.skill_id, "安装", "刷新技能目录失败", &error)
+    })?;
     Ok((result.message, catalog))
 }
 
@@ -899,8 +939,18 @@ pub fn update_luaskill(
             .update_skill_in_root(&handle.skill_roots, &target_root, &request)
             .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
     };
-    invalidate_config_capability_cache(handle, &result.skill_id)?;
-    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    // The update is committed on disk once the engine call returns, so a later failure
+    // is a projection failure rather than an update failure. Its message must say the
+    // package was updated, because a bare failure here would tell the caller and the
+    // operation-progress projection that the previous version is still current.
+    // 引擎调用返回后更新已在盘上提交，因此后续失败是投影失败而不是更新失败。其消息必须说明
+    // 包已更新，因为裸失败会让调用方与操作进度投影以为旧版本仍然是当前版本。
+    invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
+        post_commit_projection_failure(&result.skill_id, "更新", "配置能力缓存失效失败", &error)
+    })?;
+    let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
+        post_commit_projection_failure(&result.skill_id, "更新", "刷新技能目录失败", &error)
+    })?;
     Ok((result.message, catalog))
 }
 
@@ -948,7 +998,16 @@ pub fn set_luaskill_enabled(
             )
             .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
     }
-    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    // The enable or disable is committed on disk once the engine call returns, so a
+    // later failure is a projection failure. Its message must name the state change
+    // that already took effect, because a bare failure here would tell the caller and
+    // the catalog projection that the previous enabled state is still current.
+    // 引擎调用返回后启用或停用已在盘上提交，因此后续失败是投影失败。其消息必须点名已经生效的
+    // 状态变更，因为裸失败会让调用方与目录投影以为先前的启停状态仍然是当前状态。
+    let completed_action = if enabled { "启用" } else { "停用" };
+    let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
+        post_commit_projection_failure(&skill_id, completed_action, "刷新技能目录失败", &error)
+    })?;
     let message = if enabled {
         format!("已启用技能 `{skill_id}`。")
     } else {
@@ -976,8 +1035,18 @@ pub fn uninstall_luaskill(
             &SkillUninstallOptions::default(),
         )
         .map_err(|error| format!("卸载 LuaSkills 技能失败：{error}"))?;
-    invalidate_config_capability_cache(handle, &result.skill_id)?;
-    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    // The uninstall is committed on disk once the engine call returns, so a later
+    // failure is a projection failure rather than an uninstall failure. Its message
+    // must say the package was uninstalled, because a bare failure here would tell the
+    // caller and the operation-progress projection that the package is still present.
+    // 引擎调用返回后卸载已在盘上提交，因此后续失败是投影失败而不是卸载失败。其消息必须说明
+    // 包已卸载，因为裸失败会让调用方与操作进度投影以为包仍然存在。
+    invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
+        post_commit_projection_failure(&result.skill_id, "卸载", "配置能力缓存失效失败", &error)
+    })?;
+    let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
+        post_commit_projection_failure(&result.skill_id, "卸载", "刷新技能目录失败", &error)
+    })?;
     Ok((result.message, catalog))
 }
 
@@ -1142,7 +1211,7 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     let databases_dir = runtime_root.join("databases");
     let config_dir = runtime_root.join("config");
     let state_dir = runtime_root.join("state");
-    let download_root = temp_dir.join("downloads");
+    let download_root = luaskills_download_cache_root(runtime_root);
     let root_skills_dir = runtime_root.join("skills");
     // user_skills_dir is normalized before it becomes a LuaSkills RuntimeSkillRoot.
     // user_skills_dir 在成为 LuaSkills RuntimeSkillRoot 前完成原生路径规范化。
@@ -1214,10 +1283,19 @@ fn ensure_configured_root_skills_installed(
 
         let install_message = format!("正在安装 LuaSkills 技能：{}", configured_skill.skill_id);
         progress(&install_message);
+        // The source type is resolved before the install request is built, so a disabled
+        // source type fails with the skill identifier attached instead of a bare policy
+        // error, and no partially-built request reaches the engine.
+        // 来源类型在构建安装请求之前解析，因此被停用的来源类型会带着技能标识失败，而不是一条
+        // 裸的策略错误，并且不会有半成品请求到达引擎。
+        let resolved_source_type = configured_skill
+            .source_type
+            .into_runtime_source_type()
+            .map_err(|error| format!("ROOT 引导技能 `{}`：{error}", configured_skill.skill_id))?;
         let install_request = SkillInstallRequest {
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
-            source_type: configured_skill.source_type.into_runtime_source_type(),
+            source_type: resolved_source_type,
         };
         engine
             .system_install_skill_in_root(
@@ -1239,9 +1317,14 @@ fn ensure_configured_root_skills_installed(
 
     if installed_any_skill {
         progress("正在刷新 LuaSkills 技能根");
-        engine
-            .reload_from_roots(skill_roots)
-            .map_err(|error| format!("刷新 LuaSkills 技能根失败：{error}"))?;
+        // Every system install above is already committed on disk, so a reload failure
+        // must not read as "no default skill was installed": the next bootstrap would
+        // otherwise re-attempt installs that already succeeded.
+        // 上面的每次系统安装都已在盘上提交，因此重载失败不得被读成「没有安装任何默认技能」：
+        // 否则下一次引导会重新尝试那些已经成功的安装。
+        engine.reload_from_roots(skill_roots).map_err(|error| {
+            format!("ROOT 默认技能已安装，但刷新 LuaSkills 技能根失败：{error}")
+        })?;
     } else {
         progress("LuaSkills 默认技能已存在，正在加载目录");
     }
@@ -1321,8 +1404,24 @@ fn resolve_named_skill_root(
 fn parse_skill_install_source_type(source_type: &str) -> Result<SkillInstallSourceType, String> {
     match source_type.trim().to_ascii_lowercase().as_str() {
         "github" => Ok(SkillInstallSourceType::Github),
-        "url" => Ok(SkillInstallSourceType::Url),
-        other => Err(format!("不支持的 LuaSkills 安装来源类型：{other}")),
+        // Upstream rejects `SkillInstallSourceType::Url` unconditionally by source policy
+        // (`skill/manager.rs`: "public URL skill install is disabled by source policy"),
+        // for install and for update alike. Accepting it here would only defer that
+        // rejection by one layer and surface an upstream policy string instead of a host
+        // message, so the dead source type is refused at the host boundary.
+        // 上游按来源策略无条件拒绝 `SkillInstallSourceType::Url`（`skill/manager.rs`：
+        // "public URL skill install is disabled by source policy"），安装与更新皆然。在此接受它
+        // 只会把该拒绝推迟一层，并暴露上游策略文案而不是宿主文案，因此这个已死的来源类型在宿主
+        // 边界即被拒绝。
+        "url" => Err(String::from(
+            "URL 安装来源已被上游来源策略停用，无法使用；请改用 GitHub 来源安装 LuaSkills 技能包。",
+        )),
+        // Naming the supported set keeps a typo recoverable: without it the caller only
+        // learns that its value is unknown, not what to send instead.
+        // 点名支持集使拼写错误可恢复：否则调用方只知道自己的取值未知，而不知道该改发什么。
+        other => Err(format!(
+            "不支持的 LuaSkills 安装来源类型：{other}；当前支持：github。"
+        )),
     }
 }
 
@@ -1481,8 +1580,36 @@ fn default_user_skill_root() -> PathBuf {
         .join("skills")
 }
 
+/// Returns the LuaSkills skill download cache root beneath one runtime root.
+/// 返回某个运行时根之下的 LuaSkills 技能下载缓存根。
+///
+/// Vulcan owns only this root: LuaSkills owns the file layout inside it, so no caller
+/// may enumerate, prune, or assume a particular cache file path. It is deliberately a
+/// sibling of the managed-runtime staging directory rather than a parent, because the
+/// managed-runtime installer wipes its own staging directory before each repair.
+/// Vulcan 只持有这个根：其内部文件布局由 LuaSkills 持有，因此任何调用方都不得枚举、清理或
+/// 假定某个具体缓存文件路径。它刻意与受管运行时暂存目录**平级**而非其父目录，因为受管运行时
+/// 安装器在每次修复前会清空它自己的暂存目录。
+pub fn luaskills_download_cache_root(runtime_root: &Path) -> PathBuf {
+    runtime_root.join("temp").join("downloads")
+}
+
 /// Builds a skill manager for one mounted root.
 /// 为单个已挂载根构建技能管理器。
+///
+/// This manager serves read-only catalog metadata only: every caller uses it for
+/// `is_skill_enabled`, `disabled_record`, or `install_record`, and never for an
+/// install, update, or download. Network download is therefore disabled here rather
+/// than left at a permissive default, so the read-only property is enforced by
+/// construction instead of relying on no future caller adding a download.
+/// The real install path does not use this manager: it goes through the engine,
+/// whose `SkillManager` takes `allow_network_download` from `host_options`, which
+/// the production bootstrap sets from the user's `network.allow_downloads` setting.
+/// 本管理器只服务只读目录元数据：所有调用方都只用它做 `is_skill_enabled`、
+/// `disabled_record` 或 `install_record`，绝不用于安装、更新或下载。因此这里禁用网络下载，
+/// 而不是留下一处宽松默认值，使只读属性由构造强制，而不是依赖未来没有调用方新增下载。
+/// 真实安装路径不使用本管理器：它经引擎，而引擎的 `SkillManager` 从 `host_options` 取
+/// `allow_network_download`，生产引导再从用户的 `network.allow_downloads` 设置注入。
 fn build_skill_manager_for_root(
     handle: &TauriLuaSkillsHandle,
     root_name: &str,
@@ -1503,8 +1630,11 @@ fn build_skill_manager_for_root(
     Ok(SkillManager::new(SkillManagerConfig {
         skill_root,
         lifecycle_root,
-        download_cache_root: handle.runtime_root.join("temp").join("downloads"),
-        allow_network_download: true,
+        download_cache_root: luaskills_download_cache_root(&handle.runtime_root),
+        // Catalog metadata never downloads, so this manager is built without that
+        // capability instead of inheriting a permissive default.
+        // 目录元数据从不下载，因此本管理器在构建时就不具备该能力，而不是继承宽松默认值。
+        allow_network_download: false,
         github_base_url: None,
         github_api_base_url: None,
         official_skill_hub_base_url: None,
@@ -1661,4 +1791,207 @@ mod tests {
             "0"
         );
     }
+}
+
+#[cfg(test)]
+#[path = "luaskills_bridge/local_github_tests.rs"]
+mod local_github_tests;
+
+/// Verifies the skill download cache and the managed-runtime staging root never overlap.
+/// 验证技能下载缓存与受管运行时暂存根绝不相交。
+///
+/// A managed-runtime repair wipes its own staging directory before installing, so any
+/// overlap with the skill download cache would destroy cached skill archives. The
+/// two roots are siblings under `temp` precisely so this cannot happen.
+/// 受管运行时修复在安装前会清空它自己的暂存目录，因此与技能下载缓存的重叠会摧毁已缓存的
+/// 技能归档。两个根刻意是 `temp` 下的**平级**目录，正是为了杜绝这种情况。
+#[test]
+fn download_cache_and_managed_runtime_staging_never_overlap() {
+    let runtime_root = PathBuf::from("runtime-root");
+    let skill_cache = luaskills_download_cache_root(&runtime_root);
+    let staging = crate::managed_runtime_installer::managed_runtime_download_root(&runtime_root);
+
+    assert_ne!(skill_cache, staging);
+    // Containment is asserted in both directions, because either nesting order would
+    // let one wipe reach the other.
+    // 双向断言包含关系，因为任一嵌套顺序都会让一次清空波及另一方。
+    assert!(
+        !skill_cache.starts_with(&staging),
+        "the skill cache must not live inside managed-runtime staging"
+    );
+    assert!(
+        !staging.starts_with(&skill_cache),
+        "managed-runtime staging must not live inside the skill cache"
+    );
+    // The versioned component directory is what a repair actually wipes, so it is
+    // asserted separately from the staging root.
+    // 修复实际清空的是版本化组件目录，因此它要与暂存根分开断言。
+    let component = staging.join("uv-1.2.3-x86_64-pc-windows-msvc");
+    assert!(component.starts_with(&staging));
+    assert!(!component.starts_with(&skill_cache));
+}
+
+/// Verifies a post-commit failure names the mutation that already completed.
+/// 验证后置失败会点名已经完成的变更。
+///
+/// The engine call commits the package change, so an error raised afterwards must not
+/// read as "nothing changed": the caller and the operation-progress projection both
+/// treat any error as a failed operation.
+/// 引擎调用提交了包变更，因此其后抛出的错误不得被读成「什么都没变」：调用方与操作进度投影
+/// 都会把任何错误当作操作失败。
+#[test]
+fn post_commit_failure_names_the_completed_mutation() {
+    let message = post_commit_projection_failure(
+        "fixture-skill",
+        "安装",
+        "刷新技能目录失败",
+        "catalog unavailable",
+    );
+
+    // The skill id and the completed action must both be present, so the message cannot
+    // be mistaken for a bare install failure.
+    // 技能标识与已完成的动作必须同时出现，使该消息不会被误读为一次裸的安装失败。
+    assert!(message.contains("fixture-skill"), "{message}");
+    assert!(message.contains("已安装"), "{message}");
+    assert!(message.contains("刷新技能目录失败"), "{message}");
+    assert!(message.contains("catalog unavailable"), "{message}");
+    // The underlying error is preserved rather than replaced by the wrapper.
+    // 底层错误被保留，而不是被包装文案替换。
+    assert!(!message.contains("安装 LuaSkills 技能失败"), "{message}");
+}
+
+/// Verifies each mutation reports its own completed action.
+/// 验证每种变更报告各自的已完成动作。
+#[test]
+fn post_commit_failure_distinguishes_each_mutation() {
+    for (action, expected) in [("安装", "已安装"), ("更新", "已更新"), ("卸载", "已卸载")]
+    {
+        let message = post_commit_projection_failure("fixture", action, "步骤失败", "boom");
+        assert!(message.contains(expected), "{message}");
+    }
+    // The three actions must not collapse into one shared label.
+    // 三种动作不得塌缩成同一个共享标签。
+    let installed = post_commit_projection_failure("f", "安装", "s", "e");
+    let updated = post_commit_projection_failure("f", "更新", "s", "e");
+    assert_ne!(installed, updated);
+}
+
+/// Verifies no mutation path reintroduces a bare post-commit `?`.
+/// 验证没有变更路径重新引入裸的后置 `?`。
+///
+/// The engine call commits the package change, so a bare `?` on either projection step
+/// would propagate an unexplained error and let the caller conclude that nothing
+/// changed. This pins the invariant at the source level, because the defect is invisible
+/// to the type system and would only show up as a misleading user-visible message.
+/// 引擎调用提交了包变更，因此两个投影步骤上任一裸 `?` 都会传出无法解释的错误，并让调用方
+/// 断定什么都没变。这里在源码层面锁住该不变量，因为类型系统看不见这个缺陷，它只会表现为一条
+/// 误导用户的提示。
+#[test]
+fn no_bare_post_commit_projection_failure_remains() {
+    let source = include_str!("luaskills_bridge.rs");
+    // Only the production half is scanned: this test's own needles appear verbatim in
+    // the test half, so scanning the whole file would match itself.
+    // 只扫描生产代码那一半：本测试自己的待查字符串原样出现在测试那一半，扫描全文会匹配到自身。
+    let production = source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("the source always has a first segment");
+    for bare in [
+        "invalidate_config_capability_cache(handle, &result.skill_id)?;",
+        "reload_catalog_after_management(handle, &mut engine)?;",
+    ] {
+        assert!(
+            !production.contains(bare),
+            "a bare post-commit call remains and would report a committed change as a failure: {bare}"
+        );
+    }
+    // The shared formatter must still be the one every site uses, so the guard above
+    // cannot be satisfied by deleting the calls instead of contextualizing them.
+    // 共享格式化函数仍必须是每个调用点使用的那一个，使上面的守卫无法通过删除调用来满足，
+    // 而不是通过补充上下文。
+    assert!(production.contains("fn post_commit_projection_failure("));
+    assert!(
+        production
+            .matches("post_commit_projection_failure(")
+            .count()
+            >= 7
+    );
+}
+
+/// Verifies the host refuses the dead `url` source type instead of deferring rejection.
+/// 验证宿主拒绝已死的 `url` 来源类型，而不是把拒绝推迟到上游。
+///
+/// Upstream rejects `SkillInstallSourceType::Url` unconditionally, so accepting it here
+/// would only replace a host message with an upstream policy string after a round trip.
+/// 上游无条件拒绝 `SkillInstallSourceType::Url`，因此在此接受它只会在一趟往返之后把宿主
+/// 消息换成上游策略文案。
+#[test]
+fn url_install_source_is_refused_at_the_host_boundary() {
+    let error = parse_skill_install_source_type("url")
+        .expect_err("upstream rejects the url source type unconditionally");
+
+    // The message must point at a source type that actually works, and must not be the
+    // generic unknown-type message, because `url` is a known but disabled source.
+    // 消息必须指向真正可用的来源类型，且不得是通用的未知类型消息，因为 `url` 是已知但被停用的
+    // 来源。
+    assert!(error.contains("GitHub"), "{error}");
+    assert!(!error.contains("不支持的"), "{error}");
+    // GitHub stays accepted, and parsing stays case-insensitive and trimmed.
+    // GitHub 保持被接受，且解析保持大小写不敏感与裁剪。
+    assert!(parse_skill_install_source_type(" GitHub ").is_ok());
+    assert!(parse_skill_install_source_type("GITHUB").is_ok());
+    // Source types upstream supports but the host does not implement stay unknown
+    // rather than being silently mapped onto GitHub.
+    // 上游支持但宿主未实现的来源类型保持未知，而不是被静默映射到 GitHub。
+    for unimplemented in ["official_hub", "private_url_manifest"] {
+        let unknown = parse_skill_install_source_type(unimplemented)
+            .expect_err("an unimplemented source type must not be accepted");
+        assert!(unknown.contains(unimplemented), "{unknown}");
+        // Naming the supported set keeps a typo recoverable: the caller learns what to
+        // send instead of only that its own value is unknown.
+        // 点名支持集使拼写错误可恢复：调用方得知该改发什么，而不只是自己的取值未知。
+        assert!(unknown.contains("github"), "{unknown}");
+    }
+}
+
+/// Verifies a ROOT bootstrap declaring the disabled `url` source type fails with a host message.
+/// 验证声明了已停用 `url` 来源类型的 ROOT 引导会以宿主消息失败。
+///
+/// The bootstrap path reaches upstream through the System plane, but upstream still
+/// rejects `SkillInstallSourceType::Url` unconditionally, so converting it would fail on
+/// every start with an upstream policy string.
+/// 引导路径经 System 面到达上游，但上游仍无条件拒绝 `SkillInstallSourceType::Url`，因此转换
+/// 它会在每次启动时以上游策略文案失败。
+#[test]
+fn root_bootstrap_refuses_the_disabled_url_source_type() {
+    assert!(
+        RootSkillBootstrapSourceType::Github
+            .into_runtime_source_type()
+            .is_ok()
+    );
+    let error = RootSkillBootstrapSourceType::Url
+        .into_runtime_source_type()
+        .expect_err("upstream rejects the url source type unconditionally");
+
+    // The message must name the replacement source type instead of only refusing.
+    // 消息必须点名替代的来源类型，而不是只做拒绝。
+    assert!(error.contains("github"), "{error}");
+    assert!(error.contains("url"), "{error}");
+}
+
+/// Verifies the disabled variant still deserializes from configuration.
+/// 验证已停用的变体仍可从配置反序列化。
+///
+/// Removing the variant outright would turn an existing configuration into an opaque
+/// serde `unknown variant` error at parse time, before the reason above can be reported.
+/// 直接移除该变体会让既有配置在解析期就变成一条不可读的 serde `unknown variant` 错误，
+/// 使上面的原因无从报告。
+#[test]
+fn disabled_root_bootstrap_source_type_still_deserializes() {
+    let parsed: RootSkillBootstrapSourceType =
+        serde_json::from_str("\"url\"").expect("an existing `url` declaration must still parse");
+    assert!(matches!(parsed, RootSkillBootstrapSourceType::Url));
+    let github: RootSkillBootstrapSourceType =
+        serde_json::from_str("\"github\"").expect("the supported declaration must parse");
+    assert!(matches!(github, RootSkillBootstrapSourceType::Github));
 }

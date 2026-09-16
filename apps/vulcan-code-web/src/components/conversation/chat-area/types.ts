@@ -3,7 +3,6 @@ import type {
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
-import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
@@ -69,9 +68,6 @@ export interface ChatAreaProps {
   // Opens the project knowledge-library management surface.
   // 打开项目知识库管理界面。
   onOpenKnowledge: () => void;
-  // Persists the active thinking display mode.
-  // 持久化当前思考展示模式。
-  onSelectWorkbenchThinkingDisplayMode: (mode: ThinkingDisplayMode) => Promise<boolean>;
   // Routes one composer slash command.
   // 路由一个输入区斜杠命令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;

@@ -1,4 +1,5 @@
 import React from "react";
+import { useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { toast } from "sonner";
 import {
   ArrowDown,
@@ -827,6 +828,9 @@ function WorkspaceSubagentPanel(args: {
   // taskId stores the subagent child conversation id represented by this tab.
   // taskId 保存该页签代表的子代理子会话标识。
   const taskId = args.tab.subagentTaskId ?? null;
+  // A child transcript uses its own display choice, never its parent's session override.
+  // 子转录使用自己的展示选择，绝不使用父会话的会话覆盖值。
+  const thinkingPreference = useThinkingDisplayPreference(taskId, args.props.workbench.thinkingDisplayMode);
   // navigation stores the matching backend subagent projection for this parent conversation.
   // navigation 保存该父会话匹配的后端子代理投影。
   const navigation = parentConversationId && args.props.workbench.subagentNavigation?.parentConversationId === parentConversationId
@@ -991,7 +995,7 @@ function WorkspaceSubagentPanel(args: {
         initialExpandedState={args.expandedStates.current.get(taskId) ?? null}
         onExpandedStateChange={writeSubagentExpandedState}
         onOpenSubagentPanel={args.props.onOpenSubagentPanel}
-        reasoningDisplayMode={args.props.workbench.thinkingDisplayMode ?? "popup_only"}
+        reasoningDisplayMode={thinkingPreference.mode}
         scrollRef={scrollRef}
         sessionId={taskId}
         sessionRunning={Boolean(task?.isRunning)}

@@ -71,6 +71,9 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   const [settings, setSettings] = React.useState<VmmNativeResourceSettingsSummary | null>(null)
   const [selectedPath, setSelectedPath] = React.useState("")
   const [file, setFile] = React.useState<VmmNativeResourceFileContent | null>(null)
+  // filePending preserves editor geometry while preventing edits to the previous file during a read.
+  // filePending 在读取期间保持编辑器布局，同时禁止编辑上一个文件。
+  const [filePending, setFilePending] = React.useState(false)
   // fileReadRevision lets an explicit refresh retry a failed read of the same selected resource.
   // fileReadRevision 允许显式刷新重试同一选中资源的失败读取。
   const [fileReadRevision, setFileReadRevision] = React.useState(0)
@@ -131,18 +134,21 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   React.useEffect(() => {
     if (!selectedPath) {
       setFile(null)
+      setFilePending(false)
       setEditorText("")
       setEditUnlocked(false)
       return
     }
     let active = true
-    setFile(null)
-    setEditorText("")
+    setFilePending(true)
     setEditUnlocked(false)
     setConfirmation(null)
     void onRunAction("native_resource_read", { path: selectedPath }).then((result) => {
       if (!active) return
+      setFilePending(false)
       if (result?.data.kind !== "native_resource_file") {
+        setFile(null)
+        setEditorText("")
         setError(t("memory.resources.invalidResponse"))
         return
       }
@@ -258,12 +264,14 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
     <div className="flex w-full min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 className="text-lg font-semibold">{t("memory.resources.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.resources.description")}</p></div>
-        <Button disabled={busy} onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
+        <Button disabled={busy} inert={filePending} onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
       </div>
       <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? t("memory.resources.loading")}</span></div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
 
-      <fieldset className="min-w-0" disabled={busy}>
+      {/* Keep short reads non-interactive without toggling every control's disabled opacity. */}
+      {/* 短暂读取期间禁止交互，但不切换所有控件的禁用透明度。 */}
+      <fieldset className="min-w-0" disabled={busy} inert={filePending} aria-busy={filePending}>
       <Tabs onValueChange={(value) => setActiveGroup(value as ResourceGroup)} value={activeGroup}>
         <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="prompt">{t("memory.resources.promptTab")}</TabsTrigger><TabsTrigger value="pii">{t("memory.resources.piiTab")}</TabsTrigger><TabsTrigger value="noise">{t("memory.resources.noiseTab")}</TabsTrigger></TabsList>
         {(["prompt", "pii", "noise"] as const).map((group) => (

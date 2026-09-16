@@ -249,6 +249,9 @@ impl KnowledgeBaseRuntime {
         let _guard = self.library_mutation_guard(library_id).await?;
         let current = self.get_library(library_id).await?;
         let mut next = settings.clone();
+        // Only explicit file-management actions can change ignore rules.
+        // 只有明确的文件管理操作才能修改忽略规则。
+        next.ignored_files = current.settings.ignored_files.clone();
         // Preserve immutable model identity while allowing profile canonicalization to update its owner.
         // 保留不可变模型身份，同时允许 profile 规范化更新快照所属者。
         let retain_snapshot_owner = |current_snapshot: &Option<KnowledgeModelSnapshot>,

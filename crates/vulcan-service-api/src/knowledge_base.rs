@@ -277,6 +277,14 @@ pub struct KnowledgeProjectBindingRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeImportRequest {
+    /// Exact preflight fingerprint confirmed by the user; empty legacy requests are rejected by the service.
+    /// 用户确认的精确执行前指纹，空的旧请求会被服务拒绝。
+    #[serde(default)]
+    pub preview_fingerprint: String,
+    /// Explicit selected keys; unavailable entries are rejected, never silently included.
+    /// 明确选中的键，不可选项会被拒绝，绝不静默纳入。
+    #[serde(default)]
+    pub selected_file_keys: Vec<String>,
     /// Immutable target library identifier.
     /// 不可变目标知识库标识符。
     pub library_id: String,

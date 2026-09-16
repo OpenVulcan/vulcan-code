@@ -638,8 +638,18 @@ fn vmm_memory_snapshot_ignores_blank_selected_session_project_id() {
     // 全局关闭必须关闭所有项目，但不能抹掉项目的显式覆盖。
     configuration.vmm.enabled = Some(false);
     let disabled_snapshot = vmm_memory_snapshot(&scoped_workspace, &configuration, None, None);
-    assert!(disabled_snapshot.project_scopes.iter().all(|scope| !scope.memory_enabled));
-    assert!(disabled_snapshot.project_scopes.iter().all(|scope| scope.has_override));
+    assert!(
+        disabled_snapshot
+            .project_scopes
+            .iter()
+            .all(|scope| !scope.memory_enabled)
+    );
+    assert!(
+        disabled_snapshot
+            .project_scopes
+            .iter()
+            .all(|scope| scope.has_override)
+    );
 }
 
 /// Verifies catalog refresh resolves exact global default ids to visible identity values.

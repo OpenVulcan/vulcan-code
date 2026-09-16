@@ -4,7 +4,6 @@ import type {
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
-import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/SkillsArea";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
@@ -178,9 +177,6 @@ export interface WorkspaceShellProps {
   // Selects the active reasoning effort for the workbench.
   // 选择工作台当前推理强度。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
-  // Persists the active thinking display mode for the workbench.
-  // 持久化工作台当前思考展示模式。
-  onSelectWorkbenchThinkingDisplayMode: (mode: ThinkingDisplayMode) => Promise<boolean>;
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   // Independent LuaSkills lifecycle actions.

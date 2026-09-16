@@ -202,7 +202,11 @@ function workspaceTree(
                 : [])),
               expandedUserPromptIds: [],
               expandedToolPresentationIds,
-              measuredCollapseById: {},
+              // Content tests explicitly expand every tool sequence; lifecycle defaults have their own interaction suite.
+              // 内容测试明确展开所有工具分组；生命周期默认值由独立交互测试验证。
+              measuredCollapseById: Object.fromEntries(timeline.flatMap((entry) => entry.kind === "process"
+                ? entry.process.items.map((item) => [`tool-sequence:${entry.process.id}:${item.renderKey ?? item.id}`, { expanded: true }])
+                : [])),
             }}
             onCopyText={() => undefined}
             onExpandedStateChange={() => undefined}
@@ -260,13 +264,18 @@ describe("ConversationBranchWorkspaceV1", () => {
     });
     try {
       await React.act(async () => root.render(workspaceTree(streaming, mode, [], true)));
-      expect(host.querySelector(".thinking-block")).not.toBeNull();
+      expect(host.querySelector(".thinking-block")).toBeNull();
+      expect(host.querySelector(".thinking-gutter-anchor")).not.toBeNull();
       if (mode === "popup_only") {
-        expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
+        expect(host.querySelector(".thinking-preview-indicator")).not.toBeNull();
         expect(host.querySelector(".thinking-body")).toBeNull();
       } else {
-        expect(host.querySelector(".thinking-body")?.textContent).toContain("末尾校验标记");
+        expect(host.querySelector(".thinking-body")).toBeNull();
         expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+        // Reading the first segment uses the same gutter preview as later reasoning.
+        // 阅读首段思考时使用与后续思考相同的左侧预览。
+        await React.act(async () => host.querySelector<HTMLButtonElement>(".thinking-preview-trigger")!.click());
+        expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
       }
       await React.act(async () => root.render(workspaceTree(completed, mode, [], true)));
       expect(host.querySelector(".thinking-block")).toBeNull();
@@ -280,11 +289,15 @@ describe("ConversationBranchWorkspaceV1", () => {
       const surface = document.querySelector<HTMLElement>(".thinking-preview-surface")!;
       expect(surface.textContent).toContain("末尾校验标记");
       expect(host.contains(surface)).toBe(false);
-      // A final assistant response keeps its preceding reasoning as the standard collapsed row.
-      // 最终助手回复之前的思考保留为标准折叠行。
+      // A final answer owns the complete preceding reasoning through the same gutter entry.
+      // 最终回答通过相同的左侧入口承接完整前置思考。
       const final = [completed[0], completed[1], completeTurnEvents()[4]];
       await React.act(async () => root.render(workspaceTree(final, mode)));
-      expect(host.querySelector(".thinking-toggle")?.getAttribute("aria-expanded")).toBe("false");
+      expect(host.querySelector(".thinking-toggle")).toBeNull();
+      expect(host.querySelector(".thinking-gutter-anchor")).toBeNull();
+      expect(host.querySelector(".assistant-final-output .assistant-with-thinking")).not.toBeNull();
+      await React.act(async () => host.querySelector<HTMLButtonElement>(".assistant-final-output .thinking-preview-trigger")!.click());
+      expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
       expect(host.querySelector(".tool-with-thinking")).toBeNull();
       expect(host.textContent).toContain("已经完成核对。");
       // A later tool makes this assistant text intermediate; its prefix owns the full preceding reasoning.
@@ -337,7 +350,8 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(markup).toContain("运行配置");
       expect(markup).toContain("配置完整");
       expect(markup).toContain("vulcan-codekit");
-      expect(markup).toContain("原始详情");
+      expect(markup).not.toContain("原始详情");
+      expect(Array.from(host.querySelectorAll('[role="tab"]'), tab => tab.textContent)).toEqual(["配置详情", "输入", "输出"]);
       expect(markup).not.toContain("raw-only-revision");
       expect(markup).not.toContain("更新运行配置");
     } finally {
@@ -349,7 +363,7 @@ describe("ConversationBranchWorkspaceV1", () => {
 
   // Mode changes must reproject the same completed ledger without waiting for a new provider event.
   // 模式变化必须重新投影同一份已结束账本，不能等待新的供应商事件。
-  it("preserves independent final reasoning and tool prefixes under every persisted preference", () => {
+  it("uses gutter entries for final reasoning and tools under every persisted preference", () => {
     // events includes two reasoning segments in each completed logical Turn.
     // events 在每个已完成逻辑回合中包含两段思考。
     const events = completeTurnEvents().flatMap((summary) => summary.event.kind === "assistant_text"
@@ -392,8 +406,9 @@ describe("ConversationBranchWorkspaceV1", () => {
       // markup uses the production branch shell, including its exact row filtering.
       // markup 使用生产分支外壳，包含其精确行过滤逻辑。
       const markup = renderWorkspace(history, mode);
-      expect(markup.match(/class="thinking-block[" ]/g)?.length ?? 0, mode).toBe(expectedCount);
-      expect(markup.match(/thinking-preview-trigger compact/g)?.length ?? 0, mode).toBe(2);
+      expect(markup).not.toContain("thinking-block");
+      expect(markup.match(/assistant-flow assistant-with-thinking/g)?.length ?? 0, mode).toBe(expectedCount);
+      expect(markup.match(/thinking-preview-trigger compact/g)?.length ?? 0, mode).toBe(4);
       expect(markup, mode).toContain("已经完成核对。");
       expect(markup, mode).toContain("rg current-call-chain");
       expect(markup, mode).toContain("turn-stats-row");
@@ -497,7 +512,8 @@ describe("ConversationBranchWorkspaceV1", () => {
     ]);
 
     expect(markup).toContain("查看技能 · terminal-session");
-    expect(markup).toContain("读取文件 · tui_test.py · 第 10-24 行");
+    expect(markup).toContain("读取");
+    expect(markup).toContain("tui_test.py · 第 10-24 行");
     expect(markup).toContain("file-access-operation-icon");
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).not.toContain("model_output");

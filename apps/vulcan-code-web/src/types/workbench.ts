@@ -192,6 +192,9 @@ export interface WorkbenchSnapshot {
   // Thinking-output display mode resolved from the shared service configuration.
   // 从共享服务配置解析出的思考输出展示模式。
   thinkingDisplayMode?: ThinkingDisplayMode | null;
+  // Persisted default for tool-group folding; older snapshots preserve the enabled default.
+  // 工具分组折叠的持久化默认值；旧快照保留默认开启行为。
+  toolCollapseDefaultEnabled?: boolean | null;
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;

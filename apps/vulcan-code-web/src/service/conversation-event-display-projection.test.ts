@@ -130,6 +130,28 @@ function asTool(item: ReturnType<typeof projectConversationEventDisplay>[number]
 }
 
 describe("conversation V1 event display projection", () => {
+  // Only consecutive same-turn reasoning belongs to the final response; earlier tools and Turns remain intact.
+  // 仅连续的同回合思考归属最终回复；之前的工具与其他回合保持完整。
+  it("attaches trailing reasoning without crossing a tool or Turn boundary", () => {
+    // events contain tool-owned reasoning followed by two final-owned reasoning segments.
+    // events 包含工具所属思考，以及两段最终回复所属思考。
+    const events = [summary(1, reasoning("tool reasoning")), summary(2, tool(1, "completed")),
+      summary(3, { ...reasoning("final first"), api_call_id: 12 } as ConversationEventBody), summary(4, { ...reasoning("final second"), api_call_id: 12 } as ConversationEventBody), summary(5, { kind: "assistant_text", api_call_id: 12, text: "answer", status: "completed" })];
+    // nodes use the production projector and preserve source sequence identities.
+    // nodes 使用生产投影器并保留源序列身份。
+    const nodes = projectConversationTranscriptDisplay(projectConversationEventDisplay(events));
+    expect(nodes.map(node => node.kind)).toEqual(["process_group", "assistant_final"]);
+    expect(nodes[0].kind === "process_group" && nodes[0].items.map(item => item.seq)).toEqual([1, 2]);
+    expect(nodes[1].kind === "assistant_final" && nodes[1].leading_reasoning.map(item => item.seq)).toEqual([3, 4]);
+    // direct requires no empty process group; different-turn reasoning must not disappear into the answer.
+    // direct 不应产生空过程组；不同回合的思考不能被并入当前回答而消失。
+    const direct = projectConversationTranscriptDisplay(projectConversationEventDisplay([summary(1, reasoning("first")), summary(2, assistant("answer"))]));
+    expect(direct.map(node => node.kind)).toEqual(["assistant_final"]);
+    const separate = projectConversationTranscriptDisplay(projectConversationEventDisplay([summary(1, reasoning("previous turn")), { ...summary(2, assistant("answer")), turn_id: 8 }]));
+    expect(separate.map(node => node.kind)).toEqual(["process_group", "assistant_final"]);
+    expect(separate[1].kind === "assistant_final" && separate[1].leading_reasoning).toEqual([]);
+  });
+
   it("derives user, process, and final-answer hierarchy while hiding structural ledger facts", () => {
     // emptyBucket provides an exact zero-value terminal statistics bucket.
     // emptyBucket 提供一个精确零值终态统计桶。

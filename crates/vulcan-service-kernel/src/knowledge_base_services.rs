@@ -2,8 +2,10 @@
 //! 宿主原生知识库服务处理器。
 
 use super::*;
+mod display_requests;
 use crate::session_goal_lifecycle::{current_v1_goal_unix_millis, session_v1_handle_from_state};
 use crate::session_request_config_v1::set_knowledge_library_selection_v1;
+use display_requests::{execute_knowledge_display_source, knowledge_display_request_fits};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -49,22 +51,25 @@ use vulcan_workbench_model::{
 };
 use vulcan_workspace_store::knowledge_base::{
     KnowledgeBaseRuntime, KnowledgeCurationSettings, KnowledgeDisplayChunk,
-    KnowledgeDisplayDocument, KnowledgeDisplayIndexStatus, KnowledgeDocumentContent,
-    KnowledgeEmbeddingSettings, KnowledgeFallbackPolicy, KnowledgeFtsQuery,
-    KnowledgeLibrarySettings, KnowledgeLibrarySummary, KnowledgeModelSnapshot,
+    KnowledgeDisplayDocument, KnowledgeDisplayIndexStatus, KnowledgeDisplaySkippedDocument,
+    KnowledgeDocumentContent, KnowledgeEmbeddingSettings, KnowledgeFallbackPolicy,
+    KnowledgeFtsQuery, KnowledgeLibrarySettings, KnowledgeLibrarySummary, KnowledgeModelSnapshot,
     KnowledgeOperationCurrentRequest, KnowledgeOperationKind, KnowledgeOperationObservability,
     KnowledgeOperationRequestSummary, KnowledgeRetrievalMode, KnowledgeRouteBindingKind,
     KnowledgeRouteReference, KnowledgeSearchResult, KnowledgeVectorIndexState,
     KnowledgeVectorIndexStatus, chunk_markdown, normalize_markdown_newlines,
     resolve_embedding_batch_size, sha256_hex,
 };
+use vulcan_workspace_store::knowledge_base::{
+    KnowledgeFileConfirmation, KnowledgeFileDisposition, KnowledgeIgnoredFile,
+};
 
 /// Fixed prompt identifier for the versioned display-corpus curation contract.
 /// 显示库整理契约使用的固定版本化提示词标识。
 const KNOWLEDGE_DISPLAY_PROMPT_VERSION: &str = "knowledge-display-v1";
-/// Maximum source characters sent to one curation call to keep one document bounded.
-/// 单份文档整理调用允许发送的最大来源字符数。
-const KNOWLEDGE_DISPLAY_SOURCE_CHAR_LIMIT: usize = 240_000;
+/// Maximum serialized request bytes, including the reserved schema-repair instructions.
+/// 完整序列化请求的字节上限，包含预留的 Schema 修复指令。
+const KNOWLEDGE_DISPLAY_INPUT_BYTE_LIMIT: usize = 65_536;
 /// Suffix used to isolate one bounded schema-repair retry from the original request.
 /// 用于将一次有界 Schema 修复重试与原始请求隔离的后缀。
 const KNOWLEDGE_DISPLAY_SCHEMA_REPAIR_SUFFIX: &str = "-schema-repair";
@@ -319,6 +324,27 @@ impl Drop for KnowledgeHostAiCancellationMonitor {
 }
 
 impl KnowledgeOperationReporter {
+    /// Persists every exclusion before generation; returns a storage error instead of hiding omissions.
+    /// 在生成前持久化全部忽略项，保存失败时返回错误，避免静默遗漏。
+    /// `documents` is the complete list for this run, including an empty list on a fresh retry.
+    /// `documents` 是本次执行的完整列表，重新执行时也可传入空列表。
+    async fn record_skipped_documents(
+        &self,
+        documents: &[KnowledgeDisplaySkippedDocument],
+    ) -> Result<(), String> {
+        // Keep subsequent streaming snapshots from overwriting the durable exclusions.
+        // 确保后续流式快照不会覆盖已持久化的忽略项。
+        let snapshot = {
+            // Locked reporter state owns the only live observability snapshot.
+            // 加锁的报告器状态持有唯一实时可观测快照。
+            let mut state = self.state.lock().await;
+            state.snapshot.skipped_documents = documents.to_vec();
+            state.snapshot.clone()
+        };
+        self.runtime
+            .update_operation_observability(&self.job_id, &snapshot)
+            .await
+    }
     /// Creates one reporter with a zeroed cumulative usage snapshot.
     /// 创建一个累计用量归零的报告器。
     fn new(runtime: KnowledgeBaseRuntime, job_id: String) -> Self {
@@ -822,7 +848,7 @@ fn knowledge_display_output_schema() -> Value {
             "title": { "type": "string", "minLength": 1 },
             "summary": { "type": "string", "minLength": 1 },
             "keywords": { "type": "array", "items": { "type": "string" }, "maxItems": 32 },
-            "symbols": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+            "symbols": { "type": "array", "items": { "type": "string" } },
             "markdown": { "type": "string", "minLength": 1 },
             "embedding_text": { "type": "string", "minLength": 1 }
         },
@@ -849,7 +875,7 @@ fn knowledge_display_batch_output_schema() -> Value {
                         "title": { "type": "string", "minLength": 1 },
                         "summary": { "type": "string", "minLength": 1 },
                         "keywords": { "type": "array", "items": { "type": "string" }, "maxItems": 32 },
-                        "symbols": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+                        "symbols": { "type": "array", "items": { "type": "string" } },
                         "markdown": { "type": "string", "minLength": 1 },
                         "embedding_text": { "type": "string", "minLength": 1 }
                     },
@@ -886,7 +912,7 @@ fn knowledge_curation_caller(consumer_profile_id: &str) -> Result<InferenceCalle
         deadline_unix_ms: None,
         budget: InferenceCallerBudget {
             max_concurrent_executions: 1,
-            max_input_units_per_request: Some(65_536),
+            max_input_units_per_request: Some(KNOWLEDGE_DISPLAY_INPUT_BYTE_LIMIT as u64),
             max_output_tokens_per_request: Some(8_192),
             max_requests_per_minute: None,
             max_input_units_per_minute: None,
@@ -1078,9 +1104,8 @@ fn knowledge_display_request(
 ) -> Result<ResponsesExecutionRequest, String> {
     let reasoning_effort =
         parse_knowledge_reasoning_effort(settings.curation.reasoning_effort.as_deref())?;
-    let bounded_content = knowledge_display_source_content(content);
     let user_prompt = format!(
-        "Source path: {relative_path}\nSource title: {title}\n\n<untrusted_markdown>\n{bounded_content}\n</untrusted_markdown>",
+        "Source path: {relative_path}\nSource title: {title}\n\n<untrusted_markdown>\n{content}\n</untrusted_markdown>",
     );
     Ok(ResponsesExecutionRequest {
         contract_version: INFERENCE_CONTRACT_VERSION,
@@ -1133,19 +1158,6 @@ fn knowledge_display_request(
         resources: Vec::new(),
         output_token_limit: Some(8_192),
     })
-}
-
-/// Bounds one source body before it enters an LLM request while preserving whole characters.
-/// 在进入 LLM 请求前限制单份来源正文，并保证不会截断字符。
-fn knowledge_display_source_content(content: &str) -> String {
-    if content.chars().count() > KNOWLEDGE_DISPLAY_SOURCE_CHAR_LIMIT {
-        content
-            .chars()
-            .take(KNOWLEDGE_DISPLAY_SOURCE_CHAR_LIMIT)
-            .collect()
-    } else {
-        content.to_string()
-    }
 }
 
 /// Groups complete source values by count and combined UTF-8 byte size.
@@ -1213,7 +1225,7 @@ fn knowledge_display_batch_request(
                 item.source_marker,
                 item.source.document.relative_path,
                 item.source.document.title,
-                knowledge_display_source_content(item.source.content.as_str()),
+                item.source.content,
             )
         })
         .collect::<Vec<_>>()
@@ -1406,8 +1418,9 @@ async fn execute_knowledge_display_attempt(
     let response = port.wait_response(&execution);
     let (response, observation) = tokio::join!(response, observer);
     if let Err(error) = observation {
-        reporter.finish_request_error("failed").await;
-        return Err(format!("{error}"));
+        // Preview delivery is observational; wait_response owns validated output and execution failure.
+        // 预览投递仅用于观测；wait_response 唯一负责已校验输出及执行失败。
+        eprintln!("[knowledge-base] preview interrupted for {label}: {error}");
     }
     match response {
         Ok(response) => {
@@ -1511,7 +1524,6 @@ fn normalize_knowledge_display_draft(
             .into_iter()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .take(64)
             .collect(),
         markdown: normalize_markdown_newlines(draft.markdown.trim()),
         embedding_text: draft.embedding_text.trim().to_string(),
@@ -1596,8 +1608,13 @@ async fn execute_knowledge_display_draft(
 pub(super) async fn service_build_knowledge_display_index(
     state: SharedServiceBridgeState,
     library_id: String,
+    confirmation: KnowledgeFileConfirmation,
 ) -> Result<Value, String> {
     let runtime = retained_knowledge_runtime(&state)?;
+    runtime
+        .preview_knowledge_display(&library_id)
+        .await?
+        .confirmed_entries(&confirmation)?;
     let library = runtime.get_library(&library_id).await?;
     if knowledge_display_generation_is_current(&library.settings) {
         return Err(String::from(
@@ -1623,12 +1640,17 @@ pub(super) async fn service_build_knowledge_display_index(
     let job_id = job.id.clone();
     let worker_runtime = runtime.clone();
     tokio::spawn(async move {
-        match run_knowledge_display_index(worker_state, worker_library_id.clone(), job_id.clone())
-            .await
+        match run_knowledge_display_index(
+            worker_state,
+            worker_library_id.clone(),
+            job_id.clone(),
+            confirmation,
+        )
+        .await
         {
             Ok(result) => {
                 let processed = result
-                    .get("publishedDocuments")
+                    .get("processedDocuments")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 if let Err(error) = worker_runtime
@@ -1674,6 +1696,11 @@ pub(super) async fn service_build_knowledge_display_index(
 /// 参数：`settings` 是持久化资料库策略，其 ready 标记会在来源变更时失效。返回值：仅当不存在待完成代次且全部持久化来源字段匹配时返回 true。
 fn knowledge_display_generation_is_current(settings: &KnowledgeLibrarySettings) -> bool {
     settings.display_index.status == KnowledgeDisplayIndexStatus::Ready
+        && !settings
+            .display_index
+            .skipped_documents
+            .iter()
+            .any(|document| document.reason == KnowledgeFileDisposition::NotSelected)
         && settings.display_index.active_generation.is_some()
         && settings.display_index.pending_generation.is_none()
         && settings.display_index.source_content_revision.is_some()
@@ -1689,6 +1716,7 @@ async fn run_knowledge_display_index(
     state: SharedServiceBridgeState,
     library_id: String,
     job_id: String,
+    confirmation: KnowledgeFileConfirmation,
 ) -> Result<Value, String> {
     let runtime = retained_knowledge_runtime(&state)?;
     let library = runtime.get_library(&library_id).await?;
@@ -1719,6 +1747,16 @@ async fn run_knowledge_display_index(
         .set_display_index_status(&library_id, KnowledgeDisplayIndexStatus::Building, None)
         .await?;
     let build_result = async {
+        // Revalidate after the job has reserved the library, before any LLM request or generation mutation.
+        // 任务预留知识库后重新验证，在任何 LLM 请求或代次变更之前完成。
+        let preview = runtime.preview_knowledge_display(&library_id).await?;
+        // Only user-confirmed ready rows may reach the model.
+        // 只有用户确认的可选记录可以送入模型。
+        let selected_ids: BTreeSet<String> = preview
+            .confirmed_entries(&confirmation)?
+            .iter()
+            .filter_map(|entry| entry.document_id.clone())
+            .collect();
         let source_integrity = runtime.inspect_index_integrity(&library_id).await?;
         let pending_generation = settings
             .display_index
@@ -1746,13 +1784,45 @@ async fn run_knowledge_display_index(
         runtime
             .begin_display_generation(&library_id, &generation, source_integrity.content_revision)
             .await?;
-        let existing_hashes = if resumed {
+        let mut existing_hashes = if resumed {
             runtime
                 .list_display_generation_source_hashes(&library_id, &generation, &fts_index)
                 .await?
         } else {
             BTreeMap::new()
         };
+        if !resumed {
+            // Supplementation reuses unchanged published results, never charging the model for them again.
+            // 补充复用未变化的已发布结果，绝不再次为其调用模型。
+            for entry in preview
+                .entries
+                .iter()
+                .filter(|entry| entry.already_completed)
+            {
+                // Display preview rows always identify an imported document and its normalized digest.
+                // 显示预览记录始终标识已导入文档及其规范化摘要。
+                let id = entry
+                    .document_id
+                    .as_deref()
+                    .ok_or_else(|| String::from("已完成记录缺少文档标识。"))?;
+                // Exact hashes protect reuse from a stale confirmation.
+                // 精确哈希避免复用过期确认。
+                let hash = entry
+                    .content_sha256
+                    .as_deref()
+                    .ok_or_else(|| String::from("已完成记录缺少摘要。"))?;
+                runtime
+                    .copy_display_source_to_generation(
+                        &library_id,
+                        id,
+                        hash,
+                        &generation,
+                        &fts_index,
+                    )
+                    .await?;
+                existing_hashes.insert(id.to_string(), hash.to_string());
+            }
+        }
 
         let mut offset = 0_u32;
         let mut source_documents = Vec::new();
@@ -1771,13 +1841,56 @@ async fn run_knowledge_display_index(
             offset = offset.saturating_add(page_len as u32);
         }
         let total_documents = source_documents.len() as u64;
+        // Re-evaluate current sizes on every run; a shortened/reimported source is never permanently excluded.
+        // 每次根据当前大小重新评估，缩小并重新导入的来源不会被永久排除。
+        let skipped_documents = preview
+            .entries
+            .iter()
+            .filter(|entry| {
+                !entry.already_completed
+                    && !entry
+                        .document_id
+                        .as_ref()
+                        .is_some_and(|id| selected_ids.contains(id))
+            })
+            .map(|entry| {
+                Ok(KnowledgeDisplaySkippedDocument {
+                    source_document_id: entry
+                        .document_id
+                        .clone()
+                        .ok_or_else(|| String::from("显示预览缺少文档标识。"))?,
+                    relative_path: entry.relative_path.clone(),
+                    byte_size: entry.byte_size,
+                    byte_limit: vulcan_workspace_store::knowledge_base::KNOWLEDGE_SOURCE_BYTE_LIMIT,
+                    reason: if entry.disposition == KnowledgeFileDisposition::Ready {
+                        KnowledgeFileDisposition::NotSelected
+                    } else {
+                        entry.disposition
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        // Unselected sources stay in the raw corpus and are visible as this-run-only exclusions.
+        // 未选来源继续保留于原始库，并明确显示为仅本次跳过。
+        let source_documents = source_documents
+            .into_iter()
+            .filter(|document| {
+                selected_ids.contains(&document.id) || existing_hashes.contains_key(&document.id)
+            })
+            .collect();
+        reporter
+            .record_skipped_documents(&skipped_documents)
+            .await?;
+        // Skipped sources are processed outcomes, not generated documents or failures.
+        // 忽略来源属于已处理结果，不属于已生成文档或失败。
+        let skipped_count = skipped_documents.len() as u64;
         let mut generated_documents = u64::try_from(existing_hashes.len())
             .map_err(|_| String::from("恢复显示库进度时已保存文档数量溢出"))?;
         runtime
             .update_external_operation_progress(
                 &job_id,
                 "curating",
-                generated_documents,
+                generated_documents + skipped_count,
                 total_documents,
                 None,
             )
@@ -1835,33 +1948,21 @@ async fn run_knowledge_display_index(
                 let item = marked_batch
                     .first()
                     .ok_or_else(|| String::from("资料库整理批次为空"))?;
-                match knowledge_display_request(
+                match execute_knowledge_display_source(
+                    port.as_ref(),
+                    &capability,
+                    &job_id,
                     &settings,
-                    &item.source.document.id,
-                    &item.source.document.relative_path,
-                    &item.source.document.title,
-                    &item.source.content,
-                ) {
-                    Ok(request) => match execute_knowledge_display_draft(
-                        port.as_ref(),
-                        &capability,
-                        knowledge_ai_call_context(&job_id, request.request_id.as_str()),
-                        request,
-                        item.source.document.relative_path.as_str(),
-                        &reporter,
-                    )
-                    .await
-                    {
-                        Ok(draft) => {
-                            drafts.insert(item.source_marker.clone(), draft);
-                        }
-                        Err(error) => failed_documents
-                            .push(format!("{}：{}", item.source.document.relative_path, error)),
-                    },
-                    Err(error) => failed_documents.push(format!(
-                        "{}：构建整理请求失败：{}",
-                        item.source.document.relative_path, error
-                    )),
+                    &item.source,
+                    &reporter,
+                )
+                .await
+                {
+                    Ok(draft) => {
+                        drafts.insert(item.source_marker.clone(), draft);
+                    }
+                    Err(error) => failed_documents
+                        .push(format!("{}：{}", item.source.document.relative_path, error)),
                 }
             } else {
                 let expected_markers = marked_batch
@@ -1873,7 +1974,14 @@ async fn run_knowledge_display_index(
                     .map(|item| item.source.document.relative_path.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let batch_result = match knowledge_display_batch_request(&settings, &marked_batch) {
+                let batch_result = match knowledge_display_batch_request(&settings, &marked_batch)
+                    .and_then(|request| {
+                        if knowledge_display_request_fits(&request)? {
+                            Ok(request)
+                        } else {
+                            Err(String::from("批量整理请求超过字节限额，将分别整理来源文档"))
+                        }
+                    }) {
                     Ok(request) => match execute_knowledge_display_request(
                         port.as_ref(),
                         &capability,
@@ -1899,38 +2007,22 @@ async fn run_knowledge_display_index(
                     Err(_batch_error) => {
                         for item in &marked_batch {
                             let item_label = item.source.document.relative_path.as_str();
-                            let single_result = knowledge_display_request(
+                            let single_result = execute_knowledge_display_source(
+                                port.as_ref(),
+                                &capability,
+                                &job_id,
                                 &settings,
-                                &item.source.document.id,
-                                item_label,
-                                &item.source.document.title,
-                                &item.source.content,
+                                &item.source,
+                                &reporter,
                             )
-                            .map_err(|error| format!("{}：构建整理请求失败：{}", item_label, error))
-                            .map(|request| (request, item_label.to_string()));
+                            .await;
                             match single_result {
-                                Ok((request, stable_label)) => {
-                                    match execute_knowledge_display_draft(
-                                        port.as_ref(),
-                                        &capability,
-                                        knowledge_ai_call_context(
-                                            &job_id,
-                                            request.request_id.as_str(),
-                                        ),
-                                        request,
-                                        stable_label.as_str(),
-                                        &reporter,
-                                    )
-                                    .await
-                                    {
-                                        Ok(draft) => {
-                                            drafts.insert(item.source_marker.clone(), draft);
-                                        }
-                                        Err(error) => failed_documents
-                                            .push(format!("{}：{}", item_label, error)),
-                                    }
+                                Ok(draft) => {
+                                    drafts.insert(item.source_marker.clone(), draft);
                                 }
-                                Err(error) => failed_documents.push(error),
+                                Err(error) => {
+                                    failed_documents.push(format!("{item_label}：{error}"))
+                                }
                             }
                         }
                     }
@@ -1983,7 +2075,7 @@ async fn run_knowledge_display_index(
                     .update_external_operation_progress(
                         &job_id,
                         "curating",
-                        generated_documents,
+                        generated_documents + skipped_count,
                         total_documents,
                         Some(&item.source.document.relative_path),
                     )
@@ -1997,20 +2089,26 @@ async fn run_knowledge_display_index(
                 .take(20)
                 .cloned()
                 .collect::<Vec<_>>()
-                .join("；");
+                .join("\n\n");
             return Err(format!(
-                "显示库整理有 {} 份文档失败，已保留成功结果；重新执行将继续补充。失败项：{}",
+                "显示库整理有 {} 份文档失败，已保留成功结果；重新执行将继续补充。\n\n失败项：\n{}",
                 failed_documents.len(),
                 preview
             ));
         }
 
+        // An all-skipped build has no batch loop, so cancellation must also be checked before publication.
+        // 全部忽略的构建不会进入批次循环，因此发布前也必须检查取消状态。
+        if runtime.operation_is_cancelled(&job_id).await? {
+            return Err(String::from("资料库显示库整理操作已取消"));
+        }
         let document_count = runtime
             .activate_display_generation(
                 &library_id,
                 &generation,
                 &fts_index,
                 source_integrity.content_revision as i64,
+                total_documents > 0 && skipped_count == total_documents,
             )
             .await?;
         let curation_snapshot = KnowledgeModelSnapshot {
@@ -2030,6 +2128,7 @@ async fn run_knowledge_display_index(
                 source_integrity.content_revision,
                 curation_snapshot,
                 document_count,
+                skipped_documents.clone(),
             )
             .await?;
         Ok::<Value, String>(json!({
@@ -2037,6 +2136,8 @@ async fn run_knowledge_display_index(
             "generation": generation,
             "documents": generated_documents,
             "publishedDocuments": document_count,
+            "processedDocuments": document_count + skipped_count,
+            "skippedDocuments": skipped_documents,
             "status": ready.settings.display_index.status,
         }))
     }
@@ -2810,6 +2911,7 @@ fn knowledge_settings_from_request(
         captured_at_ms,
     });
     let settings = KnowledgeLibrarySettings {
+        ignored_files: Vec::new(),
         retrieval_mode,
         fallback_policy,
         curation: KnowledgeCurationSettings {
@@ -3028,13 +3130,67 @@ pub(super) async fn service_import_knowledge_directory(
     request: KnowledgeImportRequest,
 ) -> Result<Value, String> {
     let job = retained_knowledge_runtime(&state)?
-        .start_import_markdown_directory_for_source(
+        .start_confirmed_knowledge_import(
             &request.library_id,
             request.source_id.as_deref(),
             &PathBuf::from(request.source_root),
+            KnowledgeFileConfirmation {
+                fingerprint: request.preview_fingerprint,
+                selected_keys: request.selected_file_keys,
+            },
         )
         .await?;
     serde_json::to_value(job).map_err(|error| format!("serialize knowledge operation: {error}"))
+}
+
+/// Returns a read-only directory preview; parameters identify the library, root and optional existing source.
+/// 返回只读目录预览，参数标识知识库、根目录及可选现有来源。
+pub(super) async fn service_preview_knowledge_import(
+    state: SharedServiceBridgeState,
+    library_id: String,
+    source_root: String,
+    source_id: Option<String>,
+) -> Result<Value, String> {
+    serde_json::to_value(
+        retained_knowledge_runtime(&state)?
+            .preview_knowledge_import(
+                &library_id,
+                &PathBuf::from(source_root),
+                source_id.as_deref(),
+            )
+            .await?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Returns the current display-generation confirmation list without starting model work.
+/// 返回当前显示生成确认清单，不启动模型工作。
+pub(super) async fn service_preview_knowledge_display(
+    state: SharedServiceBridgeState,
+    library_id: String,
+) -> Result<Value, String> {
+    serde_json::to_value(
+        retained_knowledge_runtime(&state)?
+            .preview_knowledge_display(&library_id)
+            .await?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Updates explicit persistent ignores; returns the new list without deleting source or generated content.
+/// 更新明确的持久忽略项，返回新列表，不删除来源或生成内容。
+pub(super) async fn service_update_knowledge_ignored_files(
+    state: SharedServiceBridgeState,
+    library_id: String,
+    files: Vec<KnowledgeIgnoredFile>,
+    ignored: bool,
+) -> Result<Value, String> {
+    serde_json::to_value(
+        retained_knowledge_runtime(&state)?
+            .update_knowledge_ignored_files(&library_id, files, ignored)
+            .await?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Requests cooperative cancellation for one exact active knowledge operation.
@@ -3967,7 +4123,10 @@ mod tests {
 
     /// Builds one deterministic source document fixture for batching tests.
     /// 为分组测试构建一份确定性的来源文档夹具。
-    fn test_knowledge_display_source(id: &str, byte_size: usize) -> KnowledgeDocumentContent {
+    pub(super) fn test_knowledge_display_source(
+        id: &str,
+        byte_size: usize,
+    ) -> KnowledgeDocumentContent {
         let content = "x".repeat(byte_size);
         KnowledgeDocumentContent {
             document: KnowledgeDocumentSummary {

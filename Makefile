@@ -42,7 +42,11 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync vite start stop status build build-release build-local-luaskills release run run-release br br-release br-local-luaskills licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+
+# LUASKILLS_PATH is the overridable repository-relative checkout used only by explicit local integration targets.
+# LUASKILLS_PATH 是仅供显式本地联调目标使用、可覆盖的仓库相对检出路径。
+LUASKILLS_PATH ?= ../../projects/vulcan-luaskills
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -65,11 +69,13 @@ help:
 	@echo "  make vite stop     # stop the standalone WebUI Vite dev server"
 	@echo "  make vite status   # show the standalone WebUI Vite dev server status"
 	@echo "  make build         # Tauri/WebUI debug build"
+	@echo "  make build-local-luaskills # debug build with local LuaSkills checkout"
 	@echo "  make build-release # Tauri/WebUI release build"
 	@echo "  make release       # Tauri/WebUI release build"
 	@echo "  make run           # run Tauri/WebUI debug build; Vite is managed separately"
 	@echo "  make run-release   # run Tauri/WebUI release build"
 	@echo "  make br            # build and run Tauri/WebUI debug; Vite is managed separately"
+	@echo "  make br-local-luaskills # build and run with local LuaSkills checkout"
 	@echo "  make br-release    # build and run Tauri/WebUI release"
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make deps          # install host, bundled tools, and Lua dependencies"
@@ -131,6 +137,11 @@ build:
 build-release:
 	$(call route-command,build release)
 
+# build-local-luaskills explicitly binds the unpublished local LuaSkills checkout for one debug build.
+# build-local-luaskills 为一次 debug 构建明确绑定未发布的本地 LuaSkills 检出。
+build-local-luaskills:
+	$(call route-command,build-local-luaskills $(LUASKILLS_PATH))
+
 # release routes the short release build command or becomes a companion no-op for paired goals.
 # release 路由短形式 release 构建命令，或在组合目标中作为伴随空操作。
 release:
@@ -159,6 +170,11 @@ br:
 # br-release 路由 release 构建并运行命令。
 br-release:
 	$(call route-command,br release)
+
+# br-local-luaskills explicitly builds against the local checkout before launching the debug binary.
+# br-local-luaskills 在启动 debug 二进制前明确使用本地检出完成构建。
+br-local-luaskills:
+	$(call route-command,br-local-luaskills $(LUASKILLS_PATH))
 
 # licenses routes Rust third-party notice generation.
 # licenses 路由 Rust 第三方声明生成命令。

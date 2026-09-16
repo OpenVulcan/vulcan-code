@@ -17,6 +17,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_list_project_knowledge_bindings",
     "service_list_knowledge_sources",
     "service_import_knowledge_directory",
+    "service_preview_knowledge_import",
+    "service_preview_knowledge_display",
+    "service_update_knowledge_ignored_files",
     "service_cancel_knowledge_import",
     "service_get_knowledge_import_job",
     "service_rebuild_knowledge_index",
@@ -95,6 +98,27 @@ pub(super) async fn dispatch(
         "service_import_knowledge_directory" => {
             service_import_knowledge_directory(state, rpc_required_param(params, "request")?).await
         }
+        "service_preview_knowledge_import" => {
+            service_preview_knowledge_import(
+                state,
+                rpc_required_param(params, "libraryId")?,
+                rpc_required_param(params, "sourceRoot")?,
+                rpc_optional_param(params, "sourceId")?,
+            )
+            .await
+        }
+        "service_preview_knowledge_display" => {
+            service_preview_knowledge_display(state, rpc_required_param(params, "libraryId")?).await
+        }
+        "service_update_knowledge_ignored_files" => {
+            service_update_knowledge_ignored_files(
+                state,
+                rpc_required_param(params, "libraryId")?,
+                rpc_required_param(params, "files")?,
+                rpc_required_param(params, "ignored")?,
+            )
+            .await
+        }
         "service_cancel_knowledge_import" => {
             service_cancel_knowledge_import(
                 state,
@@ -153,8 +177,12 @@ pub(super) async fn dispatch(
             service_search_knowledge_library(state, rpc_required_param(params, "request")?).await
         }
         "service_build_knowledge_display_index" => {
-            service_build_knowledge_display_index(state, rpc_required_param(params, "libraryId")?)
-                .await
+            service_build_knowledge_display_index(
+                state,
+                rpc_required_param(params, "libraryId")?,
+                rpc_required_param(params, "confirmation")?,
+            )
+            .await
         }
         "service_build_knowledge_vector_index" => {
             service_build_knowledge_vector_index(state, rpc_required_param(params, "libraryId")?)

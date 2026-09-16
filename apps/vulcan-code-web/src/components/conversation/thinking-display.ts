@@ -76,10 +76,10 @@ export function hiddenThinkingBlockIdsForDisplayMode(
   return new Set();
 }
 
-// integrateProcessThinking associates reasoning with the next tool or intermediate assistant row after final-answer extraction.
-// integrateProcessThinking 在最终回答提取后，将思考关联到紧随的工具或中间助手行。
-// items contains process rows only; isAssistantContent reuses the timeline's content classifier. Returns immutable display copies.
-// items 仅包含过程行；isAssistantContent 复用时间线正文分类器。返回不可变展示副本。
+// integrateProcessThinking associates reasoning with the next tool or assistant row before final-answer extraction.
+// integrateProcessThinking 在最终回答提取前，将思考关联到紧随的工具或助手行。
+// items contains one turn's body; isAssistantContent reuses the timeline's content classifier. Returns immutable display copies.
+// items 包含单个回合的正文；isAssistantContent 复用时间线正文分类器。返回不可变展示副本。
 export function integrateProcessThinking(
   items: readonly ConversationRenderItem[],
   isAssistantContent: (item: ConversationRenderItem) => boolean,

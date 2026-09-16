@@ -43,7 +43,9 @@
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 48px 20px calc(var(--composer-dock-height, 132px) + 48px);
+  /* Keep the 32px reasoning gutter and focus outline inside narrow conversation viewports. */
+  /* 在窄会话视口内为 32px 思考侧栏及焦点轮廓保留空间。 */
+  padding: 48px 36px calc(var(--composer-dock-height, 132px) + 48px);
   overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;

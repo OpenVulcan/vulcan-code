@@ -19,6 +19,64 @@ function desktopRules(name: string): string {
   return root.nodes.filter((node: { type: string }) => node.type === "rule").map((node: { toString(): string }) => node.toString()).join("\n");
 }
 
+it("keeps the absolute thinking trigger inside a tool row without increasing its line height", () => {
+  // style uses the actual card and gutter rules; no test-only dimensions hide overflow.
+  // style 使用真实卡片与侧栏规则，不用测试专属尺寸掩盖溢出。
+  const style = document.createElement("style");
+  style.textContent = desktopRules("tool-presentations") + desktopRules("special-blocks");
+  // row mirrors the last tool in a scrolling group, where the marker must not extend its scroll area.
+  // row 对应滚动组末行工具，思考入口不得扩大该组滚动范围。
+  const row = document.createElement("div");
+  row.className = "assistant-flow tool-with-thinking";
+  row.innerHTML = '<button class="thinking-preview-trigger compact"></button><div class="tool-presentation-card"><button class="tool-presentation-summary">command</button></div>';
+  document.head.appendChild(style); document.body.appendChild(row);
+  try {
+    // summaryHeight derives the unchanged one-line summary box from source rules, excluding layout mocks.
+    // summaryHeight 从源码规则计算未改变的单行摘要高度，不依赖布局模拟值。
+    const rules = postcss.parse(desktopRules("tool-presentations"));
+    // declaration avoids jsdom's incomplete inheritance handling for font: inherit.
+    // declaration 避开 jsdom 对 font: inherit 不完整的继承处理。
+    // Parameters select an exact source rule/member; returns its numeric value or fails if removed.
+    // 参数选定精确源码规则与字段；返回数值，规则被移除时直接失败。
+    const declaration = (selector: string, property: string): number => {
+      const rule = rules.nodes.find((node: { selector: string }) => node.selector === selector);
+      return Number.parseFloat(rule.nodes.find((node: { prop: string }) => node.prop === property).value);
+    };
+    const summaryHeight = declaration(".tool-presentation-card", "font-size") * declaration(".tool-presentation-summary", "line-height") + 2 * declaration(".tool-presentation-summary", "padding");
+    const trigger = getComputedStyle(row.querySelector(".thinking-preview-trigger")!);
+    expect(trigger.position).toBe("absolute");
+    expect(Number.parseFloat(trigger.height)).toBeLessThanOrEqual(summaryHeight);
+    expect(getComputedStyle(row).minHeight).not.toMatch(/^[1-9]/);
+  } finally { row.remove(); style.remove(); }
+});
+
+it.each(["known", "generic", "v1", "skill"])("keeps %s payload shells unbounded while the inner source remains the scrolling viewport", (kind) => {
+  // style follows the production Markdown-before-tool cascade.
+  // style 遵循生产环境先 Markdown、后工具的层叠顺序。
+  const style = document.createElement("style");
+  style.textContent = desktopRules("markdown") + desktopRules("tool-presentations");
+  // source represents the common code viewer used by readable results and raw input/output alike.
+  // source 表示可读结果与原始输入输出共用的代码视图。
+  const source = '<div class="markdown-message"><div class="markdown-code-block"><div class="markdown-code-header">markdown</div><div class="markdown-code-scroll">content</div></div></div>';
+  const panel = `<div class="model-extension-payload-body"${kind === "skill" ? "" : ' role="tabpanel"'}>${kind === "known" ? `<div class="markdown-tool-block">${source}</div>` : source}</div>`;
+  const tabs = kind === "skill" ? panel : `<div class="model-extension-tool-payloads">${panel}</div>`;
+  const shell = document.createElement("div");
+  shell.className = "tool-presentation-card";
+  shell.innerHTML = `<div class="conversation-collapsible-motion open"><div class="conversation-collapsible-motion-inner">${kind === "v1" ? `<div class="v1-tool-card-detail">${tabs}</div>` : tabs}</div></div>`;
+  document.head.appendChild(style); document.body.appendChild(shell);
+  try {
+    for (const element of shell.querySelectorAll(".model-extension-tool-payloads, .model-extension-payload-body, .v1-tool-card-detail")) {
+      const computed = getComputedStyle(element);
+      expect(["", "none"]).toContain(computed.maxHeight);
+      expect(["", "visible"]).toContain(computed.overflow);
+    }
+    const block = getComputedStyle(shell.querySelector(".markdown-code-block")!);
+    expect(block.maxHeight).toBe("420px");
+    expect(block.display).toBe("flex");
+    expect(getComputedStyle(shell.querySelector(".markdown-code-scroll")!).overflow).toBe("auto");
+  } finally { shell.remove(); style.remove(); }
+});
+
 it("keeps multi-class agent toolbar overrides after generic styles when the lazy directory first loads", () => {
   // style follows production order: global rules first, deferred directory rules after navigation.
   // style 遵循生产顺序：先全局规则，导航后再载入延迟目录规则。

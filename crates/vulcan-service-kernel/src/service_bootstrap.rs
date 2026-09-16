@@ -179,6 +179,97 @@ impl Drop for PendingHostDatabaseProviderInstallation {
     }
 }
 
+#[cfg(test)]
+mod luaskills_callback_lifecycle_tests {
+    use super::*;
+    use luaskills::SkillLifecycleAction;
+    use vulcan_ai_contract::test_support::MockHostAiPort;
+
+    /// Verifies a failed startup removes both process-wide LuaSkills callback domains.
+    /// 验证失败启动会移除两个进程级 LuaSkills 回调域。
+    ///
+    /// No inputs or return value; all process-wide slots are isolated by serial execution.
+    /// 不含输入或返回值；全部进程级槽通过串行执行隔离。
+    #[test]
+    #[ignore = "mutates process-wide LuaSkills model and progress callback slots"]
+    fn pending_callbacks_roll_back_before_service_publication() {
+        crate::luaskills_model::shutdown_global();
+        crate::luaskills_install_progress::shutdown_global();
+        // runtime remains alive until callback rollback finishes.
+        // runtime 保持存活直到回调回滚结束。
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build callback lifecycle runtime");
+        let port: Arc<dyn HostAiPort> = Arc::new(MockHostAiPort::new());
+        let _owner = crate::luaskills_model::install_global(port, runtime.handle().clone());
+        crate::luaskills_install_progress::install_global();
+        let pending = PendingLuaSkillsCallbackInstallation::new();
+
+        assert!(crate::luaskills_model::sync_global_availability().installed);
+        assert!(
+            crate::luaskills_install_progress::begin_global_operation(
+                SkillLifecycleAction::Install
+            )
+            .is_some()
+        );
+
+        drop(pending);
+        assert!(!crate::luaskills_model::sync_global_availability().installed);
+        assert!(
+            crate::luaskills_install_progress::begin_global_operation(
+                SkillLifecycleAction::Install
+            )
+            .is_none()
+        );
+    }
+}
+
+/// Rolls back process-wide LuaSkills callbacks until service publication succeeds.
+/// 在服务发布成功前负责回滚进程级 LuaSkills 回调。
+struct PendingLuaSkillsCallbackInstallation {
+    /// Whether bootstrap still owns rollback responsibility.
+    /// 引导流程是否仍持有回滚责任。
+    armed: bool,
+}
+
+impl PendingLuaSkillsCallbackInstallation {
+    /// Creates an armed rollback guard after both callback owners are installed.
+    /// 在两个回调所有者都安装后创建已启用的回滚守卫。
+    ///
+    /// # Returns / 返回值
+    /// Returns a guard that clears model and progress callbacks unless committed.
+    /// 返回一个守卫；未提交时会清除模型与进度回调。
+    fn new() -> Self {
+        Self { armed: true }
+    }
+
+    /// Transfers callback lifetime to the published service process.
+    /// 将回调生命周期转移给已发布的服务进程。
+    ///
+    /// # Parameters / 参数
+    /// This method consumes the exact pending guard and has no other inputs.
+    /// 本方法消费精确的待提交守卫，不含其他输入。
+    ///
+    /// # Returns / 返回值
+    /// No value is returned after rollback responsibility is disabled.
+    /// 解除回滚责任后不返回值。
+    fn commit(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingLuaSkillsCallbackInstallation {
+    /// Clears both callback domains when startup exits before final publication.
+    /// 当启动在最终发布前退出时清理两个回调域。
+    fn drop(&mut self) {
+        if self.armed {
+            crate::luaskills_model::shutdown_global();
+            crate::luaskills_install_progress::shutdown_global();
+        }
+    }
+}
+
 /// Starts one bounded startup-stage timer and emits its explicit entry boundary.
 /// 启动一个有界的启动阶段计时器，并输出其显式进入边界。
 ///
@@ -811,6 +902,14 @@ fn run_service_bootstrap(
                 .effective_runtime_settings
                 .ai_tools
                 .enable_run_lua_session,
+            runtime_handle
+                .effective_runtime_settings
+                .vm_pool
+                .max_size,
+            runtime_handle
+                .effective_runtime_settings
+                .run_lua_pool
+                .max_size,
         ))
     });
     update_startup(
@@ -1107,6 +1206,44 @@ fn run_service_bootstrap(
         Arc::new(crate::internal_ai::ConfiguredInferenceHostAiPort::new(
             Arc::clone(&configured_inference_service),
         ));
+    // LuaSkillsModelCallbacks are process-wide upstream slots; the service owns
+    // them here, after the shared Host AI port exists and before the service is
+    // published to sessions. An unconfigured `luaskills` profile only makes the
+    // capabilities unavailable; it never fails startup.
+    // LuaSkillsModelCallbacks 是上游进程级槽；服务在此处持有它们——共享 Host AI
+    // Port 已存在、且服务尚未发布给会话。未配置 `luaskills` Profile 只会让能力不可用，
+    // 绝不导致启动失败。
+    let _luaskills_model_owner = crate::luaskills_model::install_global(
+        Arc::clone(&internal_ai_port),
+        runtime.handle().clone(),
+    );
+    // The upstream operation-progress callback is process-wide as well, so the
+    // production service owns it here and a non-production bootstrap cannot
+    // silently replace it with an unowned one.
+    // 上游操作进度回调同样是进程级的，因此由生产服务在此持有，非生产引导无法用无主回调
+    // 静默替换它。
+    crate::luaskills_install_progress::install_global_with_projection(
+        event_emitter.clone(),
+        Arc::clone(state),
+        runtime.handle().clone(),
+    );
+    // pending_luaskills_callbacks rolls both process-wide callback domains back if any
+    // later startup stage fails before ready publication.
+    // pending_luaskills_callbacks 在就绪发布前任一后续启动阶段失败时回滚两个进程级回调域。
+    let pending_luaskills_callbacks = PendingLuaSkillsCallbackInstallation::new();
+    // LuaSkills model availability must be visible at startup without blocking
+    // it: an unconfigured or expired route only degrades the two Lua model
+    // capabilities, and the settings page owns the repair entry.
+    // LuaSkills 模型可用性必须在启动时可见但不阻断启动：未配置或失效的路由只会降级
+    // 两个 Lua 模型能力，修复入口属于设置页。
+    let luaskills_model_availability = crate::luaskills_model::luaskills_model_availability();
+    if !luaskills_model_availability.llm || !luaskills_model_availability.embedding {
+        logs.push(format!(
+            "[webui-service] LuaSkills model capability unavailable (llm={}, embedding={}); \
+             configure the `luaskills` inference routes to enable it",
+            luaskills_model_availability.llm, luaskills_model_availability.embedding
+        ));
+    }
     // workspaceWatcher owns the single physical notify backend shared by Git and VCE subscribers.
     // workspaceWatcher 持有供 Git 与 VCE 订阅者共享的唯一物理 notify 后端。
     let workspace_watcher = match crate::workspace_watcher::WorkspaceWatcherCenter::new() {
@@ -1580,6 +1717,7 @@ fn run_service_bootstrap(
         guard.host_database_providers = Some(pending_host_database_providers.commit());
         guard.startup = startup.clone();
     }
+    pending_luaskills_callbacks.commit();
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
     crate::vmm::start_vmm_health_monitor(state.clone(), event_emitter.clone());

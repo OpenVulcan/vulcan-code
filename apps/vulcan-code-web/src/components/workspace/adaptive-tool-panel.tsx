@@ -64,6 +64,9 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
   // panelSize stores the measured slot size so panel content can animate between states.
   // panelSize 保存已测量的插槽尺寸，使面板内容可在状态之间动画切换。
   const [panelSize, setPanelSize] = React.useState<{ height: number; width: number } | null>(null);
+  // panelSizeRef rejects repeated observer deliveries before they can schedule another React update.
+  // panelSizeRef 在重复的观察器投递安排下一次 React 更新之前将其拒绝。
+  const panelSizeRef = React.useRef<{ height: number; width: number } | null>(null);
   // reservesContentRef exposes the newest reserve mode inside ResizeObserver callbacks.
   // reservesContentRef 在 ResizeObserver 回调中暴露最新占位模式。
   const reservesContentRef = React.useRef(reservesContent);
@@ -120,10 +123,14 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
     // updatePanelSize 让外层面板插槽持续动画到最新内容尺寸。
     const updatePanelSize = () => {
       const rect = element.getBoundingClientRect();
-      setPanelSize({
-        height: Math.ceil(rect.height),
-        width: Math.ceil(rect.width),
-      });
+      const nextHeight = Math.ceil(rect.height);
+      const nextWidth = Math.ceil(rect.width);
+      if (panelSizeRef.current?.height === nextHeight && panelSizeRef.current.width === nextWidth) {
+        return;
+      }
+      const nextPanelSize = { height: nextHeight, width: nextWidth };
+      panelSizeRef.current = nextPanelSize;
+      setPanelSize(nextPanelSize);
     };
     updatePanelSize();
     const observer = new ResizeObserver(updatePanelSize);

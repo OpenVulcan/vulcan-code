@@ -3,6 +3,7 @@ import type {
   ComposerAttachmentSummary,
   LuaSkillsCatalogSummary,
   LuaSkillsManagedRuntimeProgressSummary,
+  LuaSkillsOperationProgressSummary,
   PendingPromptSummary,
   PluginSummary,
   SubagentCatalogSummary,
@@ -556,6 +557,10 @@ export type WorkbenchDelta =
     kind: "luaSkillsManagedRuntimeProgressChanged";
     payload: LuaSkillsManagedRuntimeProgressChangedDelta;
   }
+  | {
+    kind: "luaSkillsOperationProgressChanged";
+    payload: LuaSkillsOperationProgressChangedDelta;
+  }
   | { kind: "mediaUploadProgressChanged"; payload: MediaUploadProgressChangedDelta }
   | {
     kind: "toolRequestProgressChanged";
@@ -627,6 +632,14 @@ export interface LuaSkillsManagedRuntimeProgressChangedDelta {
   // Current native runtime installation progress, or null after the operation reaches a terminal state.
   // 当前原生运行时安装进度；操作到达终态后为 null。
   progress: LuaSkillsManagedRuntimeProgressSummary | null;
+}
+
+// LuaSkillsOperationProgressChangedDelta replaces only the active install or update operation progress.
+// LuaSkillsOperationProgressChangedDelta 仅替换当前安装或更新操作进度。
+export interface LuaSkillsOperationProgressChangedDelta {
+  // Current operation progress, or null once no operation is bound.
+  // 当前操作进度；不再有操作绑定时为 null。
+  progress: LuaSkillsOperationProgressSummary | null;
 }
 
 // MediaUploadProgressChangedDelta describes ephemeral bytes transferred before dispatch or by a running media tool.

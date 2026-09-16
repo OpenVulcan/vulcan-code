@@ -1,4 +1,7 @@
 import React from "react";
+import { ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
+import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
+import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { VceProjectSurfaceProvider } from "@/components/features/code-context/vce-project-surface";
 import { VceJobObserverProvider } from "@/components/features/code-context/vce-job-observer-context";
 import {
@@ -266,8 +269,11 @@ export function WorkbenchLayout(props: {
     document.addEventListener("pointerdown", handleWorkspacePointerOwner, true);
     return () => document.removeEventListener("pointerdown", handleWorkspacePointerOwner, true);
   }, []);
-  // todolistStatusHost stores the footer node immediately following the version label.
-  // todolistStatusHost 保存紧跟版本号的底栏 Todo 节点。
+  // settingsHost moves the active composer's menu into the footer without moving state ownership.
+  // settingsHost 将当前输入区菜单显示到底栏，不迁移状态归属。
+  const [settingsHost, setSettingsHost] = React.useState<HTMLDivElement | null>(null);
+  // todolistStatusHost stores the footer node immediately following the settings entry.
+  // todolistStatusHost 保存紧跟设置入口的底栏 Todo 节点。
   const [todolistStatusHost, setTodolistStatusHost] = React.useState<HTMLDivElement | null>(null);
   // runtimeStatusHost stores the center footer node for the current API request state.
   // runtimeStatusHost 保存当前 API 请求状态使用的底栏中央节点。
@@ -1190,6 +1196,7 @@ export function WorkbenchLayout(props: {
     handleSelectWorkbenchModelSecondaryRoute,
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
+    handleSaveToolCollapseDefault,
   } = useWorkbenchConversationActions({
     translate: i18n.t,
     selectedConversation,
@@ -1978,6 +1985,16 @@ export function WorkbenchLayout(props: {
   }, [handleCompactSelectedConversationContext, handleOpenWorkspaceSkills]);
 
   return (
+    <ThinkingDisplaySystemContext.Provider value={{
+      mode: workbenchState.thinkingDisplayMode,
+      save: handleSelectWorkbenchThinkingDisplayMode,
+    }}>
+    <ToolCollapsePreferencesContext.Provider value={{
+      defaultEnabled: workbenchState.toolCollapseDefaultEnabled ?? true,
+      activeConversationId: selectedConversationId,
+      saveDefault: handleSaveToolCollapseDefault,
+    }}>
+    <ComposerSettingsHostContext.Provider value={settingsHost}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
       <VceJobObserverProvider serviceEpoch={props.serviceInstanceEpoch}>
       <VceProjectSurfaceProvider
@@ -2052,7 +2069,6 @@ export function WorkbenchLayout(props: {
             onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
             onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
-            onSelectWorkbenchThinkingDisplayMode={handleSelectWorkbenchThinkingDisplayMode}
             luaSkillActions={luaSkillActions}
             agentSkillActions={agentSkillActions}
             agentActions={agentActions}
@@ -2095,11 +2111,14 @@ export function WorkbenchLayout(props: {
             footer={(
               <footer className="statusbar workspace-statusbar">
                 <div className="workspace-statusbar-leading">
-                  <span>{formatWorkbenchTranslation(i18n.t, "workspaceShell.version", { version: props.workbench.appVersion })}</span>
+                  <div className="workspace-statusbar-settings" ref={setSettingsHost} />
                   <div className="workspace-statusbar-todolist-status" ref={setTodolistStatusHost} />
                 </div>
                 <div className="workspace-statusbar-runtime-status" ref={setRuntimeStatusHost} />
-                <RepositoryLink onOpenExternalUrl={openExternalUrl} />
+                <div className="workspace-statusbar-trailing">
+                  <RepositoryLink onOpenExternalUrl={openExternalUrl} />
+                  <span className="workspace-statusbar-version">v{props.workbench.appVersion}</span>
+                </div>
               </footer>
             )}
             runtimeStatusHost={runtimeStatusHost}
@@ -2233,6 +2252,9 @@ export function WorkbenchLayout(props: {
       </VceProjectSurfaceProvider>
       </VceJobObserverProvider>
     </ComposerMediaUploadProgressContext.Provider>
+    </ComposerSettingsHostContext.Provider>
+    </ToolCollapsePreferencesContext.Provider>
+    </ThinkingDisplaySystemContext.Provider>
   );
 }
 

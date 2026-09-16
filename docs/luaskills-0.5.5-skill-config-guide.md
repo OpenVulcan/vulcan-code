@@ -6,6 +6,40 @@
 
 本实现只支持 LuaSkills 0.5.5 正式契约，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。
 
+### 1.1 正式契约与本地源码联调契约的区别
+
+**正式契约（唯一可发布的依赖形态）。** 根 `Cargo.toml` 锁定 `luaskills = "=0.5.5"`，`Cargo.lock` 解析为 crates.io 正式发布：
+
+```text
+name = "luaskills"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eb2b996127efd03b9ad49f32f4b8dfe45b8466474c7d1670e0ebeb8f5a84bd5"
+```
+
+本文以下各节描述的均是该正式契约。
+
+**本地源码联调契约（仅限本机，不可发布）。** 把宿主绑定到本地上游源码时，用命令行 Cargo 覆盖，不修改可发布的 `Cargo.toml`：
+
+```powershell
+pwsh -File scripts/local_luaskills_build.ps1 -Cargo "check -p vulcan-service-kernel"
+make build-local-luaskills
+make br-local-luaskills
+```
+
+定向 Cargo 检查使用 `local_luaskills_build.ps1`；完整桌面构建和构建后运行分别使用两个显式 Make 目标。Make 目标默认从仓库相对路径 `../../projects/vulcan-luaskills` 解析检出，也可用 `LUASKILLS_PATH=<path>` 覆盖。三个入口都传入 `patch.crates-io.luaskills.path`，不会修改可发布的 `Cargo.toml`。测试期间解析来源会从 registry 变为本地路径；定向脚本通过 `-Restore` 恢复锁文件，完整桌面构建则在 `finally` 中按 SHA-256 自动恢复 `Cargo.lock`。两条脚本共享同一个以禁止覆盖方式原子创建的备份文件和所有权元数据，并在实际命令前用完整 `cargo metadata` 解析冻结预期本地锁摘要。恢复只接受原始基线或该预期本地摘要；出现第三种摘要时保留恢复证据并拒绝覆盖。因此并发入口会在修改锁文件前明确失败，构建期间的其他锁文件写入也不会被静默覆盖。
+
+本次联调绑定的上游提交为 `e45a2b86b213b6cc3d36e486a905ee5d5b8ed44f`，相对 `v0.5.5` 标签领先 2 个提交。**上游 `Cargo.toml` 仍声明 `0.5.5`，因此这份源码不得冒充已发布的 `0.5.5` 发行物**，也不得重新打包成同名版本。
+
+**本地形态下已知会影响宿主能力的差异：**
+
+| 差异 | 对宿主的影响 |
+| --- | --- |
+| `PreparedSkill*` 事务字段（`target_dir`、`install_record`、`backup_dir`、`previous_disabled_record`）为 `pub(crate)`，而 `pub result: SkillApplyResult` 仍公开 | 宿主可读取安装结果，但**不能**驱动分阶段安装事务；任何"先暂存、后提交"的宿主侧编排在本形态下不可用 |
+| 正式 0.5.5 已有基础模型回调槽与 `dispatch_model_*_request`，但没有动态可用性回调、按所有者条件清理和安装进度条件清理 | 当前内部模型与安装通知实现依赖本地源码新增的 `RuntimeModelAvailabilityCallback`、`clear_*_callback_if` 和 `set_model_*_availability_callback`，因此完整能力目前只能通过显式本地源码入口构建；普通 registry 0.5.5 构建会明确失败，不得把它描述为可发布形态 |
+
+**判定规则：** 如果某实现只能用本地源码构建通过、普通 registry `0.5.5` 构建失败，则必须标记为"仅本地源码构建可用"，不得声称可发布。
+
 ## 2. 宿主持久化位置
 
 Vulcan Code 为两个 LuaSkills 引擎传入同一个固定配置根：
@@ -208,3 +242,189 @@ LuaSkills 0.5.5 文件监听器会观察两个固定存储。WebUI 打开配置�
 6. 配置文件外部修改是否产生 reload error 事件。
 
 不要通过增加旧字段回退、候选路径或多格式解析来绕过声明错误。
+
+## 12. 执行目录与租约语义
+
+本节记录进程 `current_dir` 的入口审计结果，作为后续「不改进程 cwd 的租约模式」的实施前置。
+
+### 12.1 上游对进程 cwd 的依赖入口
+
+**cwd 变更点仅两处，均为「保存 → 切换 → 执行 → 还原」：**
+
+| 位置 | 行为 |
+| --- | --- |
+| `src/runtime/engine/lease.rs:2176-2190` | 保存 `original_dir`，`set_current_dir(execution_cwd)`，执行后还原 |
+| `src/runtime/engine/runlua.rs:1545-1586` | 同上，文件型 runLua 切换到 `entry_dir` |
+
+**cwd 读取点（不改进程状态，但按进程 cwd 解析相对路径）：**
+
+| 位置 | 用途 |
+| --- | --- |
+| `src/runtime/engine.rs:966` | `fs.copy` 解析相对路径 |
+| `src/runtime/engine.rs:1657` | `process.which` 相对显式路径与相对 PATH 条目 |
+| `src/runtime/engine.rs:11271` | 读取当前 cwd（`process.exec`，`process.set("exec", …)` 在 `:11329`） |
+| `src/runtime/config.rs:1580` | 读取当前 cwd |
+
+### 12.2 为什么「省略 `cwd` 字段」不是解法
+
+上游在未指定 `cwd` 时**回退到包根**，因此仍会进入 12.1 的变更点并取进程级 cwd 守卫。删除插件 `cwd` 字段只会让意图变得不明确，不会解除串行。
+
+### 12.3 Vulcan 插件桥接的 cwd 依赖审计结论
+
+审计对象（权威源，非 `output/` 生成产物）：
+
+```text
+plugin-bridge/vulcan-plugin-bridge/runtime/bridge.lua
+plugins/{context7,vulcan-debug-runtime,vulcan-rtk,vulcan-usage-statistics}/runtime/plugin.bundle.lua
+```
+
+**结论：插件桥接不依赖进程 cwd。** 依据（`crates/vulcan-plugin-runtime/src/runtime/lease.rs:96-139`）：
+
+1. 桥接模块路径经**逃逸校验** —— 必须 `starts_with(bridge_package_root)` 且为常规文件，否则拒绝；
+2. 桥接**源码由绝对路径读出后作为 source 传入**，明确绕过 `package.searchpath`，因此桥接自身的加载不经过 `package.path` 搜索；
+3. 传入 LuaSkills 的 `cwd`、`workspace_root`、`system_package.root` **全部为绝对路径**（并已去除 Windows verbatim 前缀）；
+4. 四个 `plugin.bundle.lua` 与 `bridge.lua` 中**没有**相对路径形式的 `io.open`、`loadfile`、`dofile` 或 `require("./…")`。
+
+桥接内唯一的进程入口是 `host_vulcan.process.exec(resolve_process("exec", …))`，其名称由宿主解析，不经过进程 cwd。
+
+### 12.4 当前状态与边界
+
+- **现状：** 插件租约仍传绝对 `cwd`，因此**仍取进程级 cwd 守卫**，与其他文件型 runLua 及带 `cwd` 的 System lease 串行。
+- **尚未实施：** 由上游显式授权、执行期不修改进程 cwd 的租约模式。它属于运行时架构变化，需要精确接口与回退边界，并**保留传统模式**给无法证明兼容的包使用。
+- **不得据本节声称并发已解除。** 本节只证明「该模式对插件桥接可行」，不证明它已被实现或已被验证。
+- 12.3 的审计结论只覆盖上述五个权威源文件；第三方包或未来新增的相对路径用法必须重新审计。
+
+## 13. 安装来源策略与可达路径
+
+本节记录上游来源策略与 Vulcan 消费入口的对应关系，以及由此产生的可达性结论。
+
+### 13.1 上游支持的四种来源类型
+
+`SkillInstallSourceType` 共四个变体，但**并非都可用**（`skill/manager.rs:794-810`、`:858-874`）：
+
+| 变体 | 安装 | 更新 | 说明 |
+| --- | --- | --- | --- |
+| `Github` | 可用 | 可用 | 正常可用 |
+| `OfficialHub` | 可用 | 可用 | 正常可用 |
+| `Url` | **无条件 Err** | **无条件 Err** | `public URL skill install is disabled by source policy` |
+| `PrivateUrlManifest` | 可用 | 可用 | 见 13.3 的前置条件 |
+
+`Url` 的 `Err` 分支**不带任何条件判断**，因此该来源类型在上游已经死亡。
+
+### 13.2 Vulcan 侧曾存在的三处死来源入口（均已修复）
+
+| 入口 | 位置 | 修复后行为 |
+| --- | --- | --- |
+| 安装/更新 RPC | `parse_skill_install_source_type` | 拒绝 `url`，消息点名 `github` |
+| WebUI 安装对话框 | `lua-skills-panel.tsx` 来源类型下拉 | 移除 `URL` 选项，仅保留 GitHub |
+| ROOT 引导技能配置 | `RootSkillBootstrapSourceType::into_runtime_source_type` | 返回 `Result`，拒绝并带上技能标识 |
+
+第三处刻意**保留该变体可反序列化**：直接删除变体会让既有配置在解析期变成一条不可读的 serde `unknown variant` 错误，修复原因就无从报告。
+
+`official_hub` 与 `private_url_manifest` 是**上游支持但宿主未实现**的来源类型，必须保持「未知类型」错误，**不得静默映射到 `github`**。
+
+### 13.3 `PrivateUrlManifest` 的三项前置条件
+
+`skill/manager.rs:1262-1298` 要求：
+
+1. `plane == SkillOperationPlane::System` —— **仅限宿主系统权威面**；
+2. `config.enable_private_url_skill_install == true`；
+3. **manifest URL 与 manifest 内声明的 archive URL** 都必须通过 `private_skill_source_allowlist` 校验。
+
+Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `private_skill_source_allowlist` 都已从运行时设置注入 `host_options`（`luaskills_bridge.rs`、`luaskills_runtime.rs`）。
+
+### 13.4 本地 HTTP 验收与生产来源边界
+
+Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` 来源；本地验收通过**测试专用的 GitHub API 与站点基址**把同一生产 `install_luaskill` / `update_luaskill` → Service Runtime → `LuaEngine` 路径指向回环 HTTP 服务。该做法不新增生产来源类型，也不放宽 `PrivateUrlManifest` 的 System 权威面约束。
+
+`production_install_and_update_use_local_github_routes_safely` 已从最终磁盘和请求计数验证：
+
+- 冷安装、升级与新版本目录发布；
+- 已验证缓存的热重装，以及关闭网络后的零请求缓存命中；
+- 校验和不匹配、截断响应、非法 ZIP、校验和正确但 Lua 内容无效时，旧版本和已验证缓存保持可用；
+- 上游真实文件系统测试 `dependency_install_rejects_preexisting_target_symlink` 继续覆盖预存目标符号链接拒绝；ZIP crate 不保留可构造的符号链接文件类型位，因此不使用无效的伪 ZIP 符号链接夹具冒充验收。
+
+上游下载客户端现在同时设置 10 秒建连超时和 5 分钟整次请求超时；`blocking_http_client_bounds_stalled_requests` 复用生产客户端构建器，以缩短的确定性测试时限证明服务接受连接后不返回响应也会有界失败。
+
+### 13.5 可达验收结论
+
+本地回环 HTTP 的安装、更新、缓存、离线与失败回滚验收已经完成。该结论只证明本地源码 HEAD 与 Vulcan 测试专用基址的生产路径行为；不表示生产 WebUI/RPC 已支持任意 URL，也不表示尚未发布的 LuaSkills 源码已经成为 registry `0.5.5`。
+
+## 14. 可延后项的结论与后续入口
+
+方案「本地验证矩阵」第 6 条要求可延后项**分别记录结论和后续入口**，并规定「不得在报告中称这些能力已经修复」。本节即该记录；每项给出归属、取证、结论与后续入口。
+
+### 14.1 安装分阶段接口（方案四.1）
+
+- **取证：** `install_luaskill` 在入口取 `engine.write()`；`LuaEngine::install_skill_in_root` 是同步方法，内部 `apply_skill_request_in_root` 依次完成下载、校验、解压与提交，期间无 `await`、无线程派生。写锁因此**跨越整个网络 I/O**。
+- **分阶段接口不可行：** `PreparedSkill*` 事务字段为 `pub(crate)`，宿主无法驱动「先暂存、后取锁应用」的事务。
+- **结论：** 按方案四.1 的保留分支处理——**保留写锁**，并把安装期排队**作为明确限制显示**（技能列表进度横幅在 `inFlight` 期间披露引擎独占）。**该能力未修复，只是被如实呈现。**
+- **后续入口：** 需上游先公开不可变暂存区与代次检查接口，宿主才可能分阶段。
+
+### 14.2 插件 lease 不改进程 cwd 的模式（方案四.2）
+
+- **取证：** 见 §12。cwd 变更点仅 `lease.rs:2176-2190` 与 `runlua.rs:1545-1586` 两处；插件桥接**不依赖进程 cwd**（绝对路径 + 源码级加载绕过 `package.searchpath` + 逃逸校验）。
+- **结论：** 模式对插件桥接**可行但未实施**。属运行时架构变化，需要上游显式授权接口与回退边界。当前插件租约仍传绝对 `cwd`，**仍取全局锁并串行**。
+- **后续入口：** 上游新增不修改进程 cwd 的 lease 模式时，保留传统模式给无法证明兼容的包。
+
+### 14.3 文件型 runLua 工作目录虚拟化（方案四.3）
+
+- **取证：** `runlua.rs` 依赖进程级 cwd（`set_current_dir(entry_dir)`），且 `engine.rs:966` 的 `fs.copy` 与 `:1657` 的 `process.exec` 按进程 cwd 解析相对路径。
+- **结论：** 未实施。逐 VM 工作目录解析只能在其与原行为在文件读取、模块加载、子进程 cwd、失败、取消和跨工作区隔离上**全部等价**后才可考虑；当前**保留有界串行**。
+- **后续入口：** 需先提供改前行为样本集作为等价性判据。
+
+### 14.4 插件 lease 源码与编译缓存（方案四.6）
+
+- **结论：** 未测量、未实施。磁盘读取与 `load` 编译耗时**尚未分开测量**，因此没有依据判断重复读取是否占主要成本。
+- **后续入口：** 先测量再取舍。实施时须以可信包身份与内容代次缓存不可变源码，在安装/更新/停用及代次变化时失效，且**不得跨 VM 复用绑定了沙箱环境的 Lua 闭包**；编译缓存还须上游证明同版本 VM、权限与沙箱隔离等价。
+
+### 14.5 Managed IO 外部覆盖策略（方案五.2）
+
+- **归属：** Managed IO 的发布规则由**上游**实现。Vulcan 只通过 `capabilities.enable_managed_io_compat`（默认 `true`）传递开关，见 `luaskills_bridge.rs` 与 `luaskills_runtime.rs`。
+- **结论：** Vulcan 侧**不存在**声称自动合并外部修改的产品路径，因此无需修正的冲突声明。**该行为未被验证，也未做任何改动。**
+- **后续入口：** 若上游确认采用完整权威缓冲覆盖，凡需要保留外部修改的产品路径必须**显式声明冲突或约束**。
+
+### 14.6 受管运行时缓存失效扩展测试（方案五.3）
+
+- **归属：** 计划缓存位于上游 `runtime/managed_package.rs:285-669`（`managed_runtime_plan_cache`、`managed_runtime_plan_cache_hits`、`cached_/cache_/evict_managed_runtime_plan`），**全部 `pub(crate)`**，宿主不可触及。
+- **结论：** 「相同 owner 命中、锁文件或清单改变后失效、不同 owner 隔离」是**上游内部行为**，只能在上游内验收。Vulcan 侧已验收的部分是受管运行时**安装目标与清单校验**（既有测试覆盖严格目标、清单不匹配、版本意外与平台矩阵）。
+- **后续入口：** 上游为该缓存补充命中/失效/隔离测试；Vulcan 侧不重复实现。
+
+### 14.7 共同边界
+
+以上六项均**未修复**，仅记录结论与入口。任何报告都不得据本节声称并发、离线缓存或 Managed IO 语义已改善。
+
+## 15. Agent 请求期线程入场审计（方案四.4）
+
+方案四.4 要求「对 Agent 每次请求新建 OS 线程的入口增加按调用类别区分的有界入场」。本节记录入口审计、类别差异与设计边界。
+
+### 15.1 真实入场类别与容量来源
+
+本任务约束的是 `vulcan-agent-runtime::luaskills_runtime` 在异步调用包装中为 LuaSkills 阻塞操作创建的 OS 工作线程。此前把 `agent_runtime/conversation_hooks` 的 VMM 会话钩子列为本节四个入口，是一次范围识别错误；它们不是 LuaSkills VM 池的借用入口，本次没有修改其调度语义。
+
+LuaSkills 相关工作线程按上游实际资源拆成三类：
+
+| 类别 | 宿主入场容量 | 上游对应资源 |
+| --- | --- | --- |
+| 普通技能调用 | `runtime_settings.vm_pool.max_size` | 主 VM 池 |
+| 一次性文件型/内联 runLua | `runtime_settings.run_lua_pool.max_size` | 隔离 runLua VM 池 |
+| 公开持久 runLua 会话操作 | `LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY`，当前为 8 | 公共 Runtime Session manager 的租约上限 |
+
+公开持久会话没有复用一次性 runLua 默认上限 2。已发布的 LuaSkills 0.5.5 在 manager 内部以字面值 8 执行该限制，但没有导出对应常量；待发布的本地源码导出了相同数值。Vulcan 使用集中定义的兼容镜像，使注册表 0.5.5 构建和本地源码联调构建都能使用相同容量。宿主只对公开会话入口使用该容量；System lease 与插件运行时仍由独立 manager 管理，不与公开会话的入场器混用。LuaSkills 正式发布新版本后，应改回依赖其公开常量，并删除兼容镜像。
+
+### 15.2 入场与取消语义
+
+所有三类调用都在 `std::thread::Builder::spawn` 之前异步获取其独立 `tokio::sync::Semaphore` 许可。等待许可期间只有异步任务排队，不创建 OS 线程；若调用方在排队时取消，许可 future 随任务销毁。
+
+取得许可后，许可所有权被移入工作线程，并在该线程真正退出时释放。调用方在工作已经开始后取消，只会丢弃结果等待者，不会提前释放许可，也不会允许额外线程突破上限。等待 5 秒、30 秒及之后每分钟输出一次带调用 ID、操作与阶段的诊断；这不把排队伪装成死锁。
+
+### 15.3 验收结果
+
+- `host_admission_bounds_workers_and_preserves_worker_owned_permits` 确定性验证两路入场、排队取消与工作线程持有许可；
+- `real_skill_runlua_and_system_calls_overlap_inside_host_callbacks` 使用真实普通技能、一次性 runLua 与 System lease 路径验证并行边界，并在 8/16/64 路压力下检查线程峰值有界及完成后回落；
+- 公开会话容量测试验证 8 条租约可创建，第 9 条由上游返回 `lease_limit_exceeded`；
+- 数据库 4 worker / 64 槽与 `try_send` 饱和语义保持不变，因为等待 VM 的调用尚未进入数据库回调，不能把池等待机械换算成数据库负载。
+
+### 15.4 当前限制
+
+带 `cwd` 的 System lease 和文件型 runLua 仍通过进程级 `lock_runlua_cwd_guard` 串行修改进程工作目录；本次入场只约束线程数量，不宣称消除了这条 cwd 串行。插件 bundle 的受限环境仍未暴露 `vulcan.models`，内部模型接线也没有扩大插件沙箱权限。

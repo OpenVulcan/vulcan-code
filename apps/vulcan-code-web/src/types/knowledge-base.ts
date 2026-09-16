@@ -73,6 +73,26 @@ export interface KnowledgeVectorIndexState {
   lastError?: string | null;
 }
 
+// KnowledgeDisplaySkippedDocument describes a visible source-size exclusion, not a failed request.
+// KnowledgeDisplaySkippedDocument 描述可见的来源大小忽略项，而不是失败请求。
+export interface KnowledgeDisplaySkippedDocument {
+  // Legacy records omit the reason and represent oversized documents.
+  // 旧记录缺少原因，代表超大文档。
+  reason?: KnowledgeFileDisposition;
+  // Stable raw document identity.
+  // 稳定的原始文档标识。
+  sourceDocumentId: string;
+  // Relative source path for diagnosis and editing.
+  // 用于诊断和修改的来源相对路径。
+  relativePath: string;
+  // Source-file byte size recorded during import.
+  // 导入时记录的源文件字节数。
+  byteSize: number;
+  // Inclusive allowed source-size limit.
+  // 允许的来源大小上限，包含边界值。
+  byteLimit: number;
+}
+
 // KnowledgeDisplayIndexState records AI-curated corpus lifecycle and provenance.
 // KnowledgeDisplayIndexState 记录 AI 整理内容层生命周期与来源。
 export interface KnowledgeDisplayIndexState {
@@ -86,18 +106,87 @@ export interface KnowledgeDisplayIndexState {
   indexedPromptVersion?: string | null;
   indexedModelFingerprint?: string | null;
   generatedDocumentCount: number;
+  // Complete exclusion list; absent in snapshots produced before this feature.
+  // 完整忽略列表，此功能推出之前的快照中不存在。
+  skippedDocuments?: KnowledgeDisplaySkippedDocument[];
   lastError?: string | null;
 }
 
 // KnowledgeLibrarySettings is the durable library-level policy snapshot.
 // KnowledgeLibrarySettings 是持久化的资料库级策略快照。
 export interface KnowledgeLibrarySettings {
+  // Persistent exact-path ignores; absent on libraries created before this feature.
+  // 持久化精确路径忽略项，旧版知识库可缺失。
+  ignoredFiles?: KnowledgeIgnoredFile[];
   retrievalMode: KnowledgeRetrievalMode;
   fallbackPolicy: KnowledgeFallbackPolicy;
   curation: KnowledgeCurationSettings;
   displayIndex: KnowledgeDisplayIndexState;
   embedding: KnowledgeEmbeddingSettings;
   vectorIndex: KnowledgeVectorIndexState;
+}
+
+// KnowledgeFileDisposition is the authoritative reason for checkbox eligibility.
+// KnowledgeFileDisposition 是复选框可用性的权威原因。
+export type KnowledgeFileDisposition = "ready" | "completed" | "oversized" | "ignored" | "unsupported" | "unreadable" | "not_selected";
+
+// KnowledgeIgnoredFile scopes a reversible rule to one library and canonical source directory.
+// KnowledgeIgnoredFile 将可撤销规则限定于一个知识库和规范来源目录。
+export interface KnowledgeIgnoredFile {
+  // Canonical source directory.
+  // 规范来源目录。
+  sourceRoot: string;
+  // Exact relative file path, never a wildcard.
+  // 精确相对文件路径，绝非通配符。
+  relativePath: string;
+}
+
+// KnowledgeFilePreviewEntry is one inspected selectable or disabled file.
+// KnowledgeFilePreviewEntry 是一份已检查的可选或不可选文件。
+export interface KnowledgeFilePreviewEntry extends KnowledgeIgnoredFile {
+  // Stable root/path identity used for confirmation.
+  // 确认使用的稳定根目录及路径身份。
+  key: string;
+  // Recorded source-file size.
+  // 记录的源文件大小。
+  byteSize: number;
+  // Authoritative eligibility reason.
+  // 权威可用性原因。
+  disposition: KnowledgeFileDisposition;
+  // Optional detailed read/decode failure.
+  // 可选的读取或解码失败详情。
+  detail: string | null;
+  // Existing document identity if already imported.
+  // 已导入时的现有文档身份。
+  documentId: string | null;
+  // Inspected content digest, absent for intentionally unread files.
+  // 已检查内容摘要，有意不读取的文件为空。
+  contentSha256: string | null;
+  // Existing successful output that will be retained.
+  // 将被保留的已有成功输出。
+  alreadyCompleted: boolean;
+}
+
+// KnowledgeFilePreview binds all rows to an immutable server-computed snapshot.
+// KnowledgeFilePreview 将全部记录绑定至服务端计算的不可变快照。
+export interface KnowledgeFilePreview {
+  // Exact fingerprint to confirm.
+  // 待确认的精确指纹。
+  fingerprint: string;
+  // Full list, including disabled entries.
+  // 包含不可选项的完整清单。
+  entries: KnowledgeFilePreviewEntry[];
+}
+
+// KnowledgeFileConfirmation contains only the snapshot and explicitly selected eligible keys.
+// KnowledgeFileConfirmation 仅包含快照及明确选中的可用键。
+export interface KnowledgeFileConfirmation {
+  // Confirmed preview identity.
+  // 已确认预览身份。
+  fingerprint: string;
+  // Explicitly selected file keys.
+  // 明确选中的文件键。
+  selectedKeys: string[];
 }
 
 // KnowledgeLibrarySettingsRequest is the creation/update payload derived from official model capabilities.
@@ -392,6 +481,9 @@ export interface KnowledgeOperationRequestSummary {
 // KnowledgeOperationObservability contains bounded live output and cumulative request statistics.
 // KnowledgeOperationObservability 包含有界实时输出与累计请求统计。
 export interface KnowledgeOperationObservability {
+  // Durable exclusions remain visible even if the run fails or is cancelled later.
+  // 即使任务后续失败或取消，持久化忽略项依然可见。
+  skippedDocuments?: KnowledgeDisplaySkippedDocument[];
   llmRequestCount: number;
   llmRetryCount: number;
   embeddingRequestCount: number;

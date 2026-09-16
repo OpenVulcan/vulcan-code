@@ -1,4 +1,4 @@
-import React, { type ReactNode } from "react";
+import React, { type ErrorInfo, type ReactNode } from "react";
 
 // RenderErrorBoundaryProps provides content and a caller-owned localized recovery surface.
 // RenderErrorBoundaryProps 提供正文与调用方持有的本地化恢复界面。
@@ -37,6 +37,26 @@ export class RenderErrorBoundary extends React.Component<RenderErrorBoundaryProp
   // 参数：error 由 React 提供。返回值：保留的错误状态。
   static getDerivedStateFromError(error: unknown): RenderErrorBoundaryState {
     return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  // componentDidCatch retains React's component stack inside the existing user-visible diagnostic.
+  // componentDidCatch 将 React 组件栈保留在现有的用户可见诊断中。
+  // Parameters: error is the caught render failure and info owns React's component stack. Returns nothing.
+  // 参数：error 是捕获的渲染失败，info 持有 React 组件栈。无返回值。
+  componentDidCatch(error: unknown, info: ErrorInfo): void {
+    const normalizedError = error instanceof Error ? error : new Error(String(error));
+    const componentStack = info.componentStack?.trim();
+    if (!componentStack) return;
+    this.setState((current) => {
+      const currentError = current.error ?? normalizedError;
+      if (currentError.message.includes(componentStack)) return null;
+      return {
+        error: new Error(
+          `${currentError.message}\n\nReact component stack:\n${componentStack}`,
+          { cause: currentError },
+        ),
+      };
+    });
   }
 
   // componentDidUpdate releases an old region failure after a deliberate navigation change.

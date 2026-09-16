@@ -344,6 +344,9 @@ pub enum WorkbenchDelta {
     /// Native LuaSkills managed-runtime progress replacement.
     /// LuaSkills 原生受管运行时进度替换增量。
     LuaSkillsManagedRuntimeProgressChanged(LuaSkillsManagedRuntimeProgressChangedDelta),
+    /// LuaSkills install or update progress replacement.
+    /// LuaSkills 安装或更新进度替换增量。
+    LuaSkillsOperationProgressChanged(LuaSkillsOperationProgressChangedDelta),
     /// Ephemeral media upload progress for a submission that has not been materialized yet.
     /// 尚未物化提交的临时媒体上传进度增量。
     MediaUploadProgressChanged(MediaUploadProgressChangedDelta),
@@ -501,6 +504,16 @@ pub struct LuaSkillsManagedRuntimeProgressChangedDelta {
     /// Current progress, or `None` after the operation reaches a terminal state.
     /// 当前进度；操作到达终态后为 `None`。
     pub progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
+}
+
+/// Replaces only the active LuaSkills install or update operation progress.
+/// 仅替换当前 LuaSkills 安装或更新操作进度。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsOperationProgressChangedDelta {
+    /// Current progress, or `None` once no operation is bound.
+    /// 当前进度；不再有操作绑定时为 `None`。
+    pub progress: Option<LuaSkillsOperationProgressSummary>,
 }
 
 /// Updates one conversation lifecycle phase without resending transcript rows.

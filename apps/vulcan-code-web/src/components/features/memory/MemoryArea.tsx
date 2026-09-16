@@ -479,11 +479,14 @@ export function MemoryArea(props: {
 
   if (activeSection === "resource_rules") {
     if (!nativeDeployment) return overviewPage
+    // Resource reads use the page's local interaction guard without dimming unrelated settings.
+    // 资源读取使用页面局部交互保护，不改变无关设置控件的明暗状态。
+    const resourceMutationBusy = operationBusy && controller.busyAction !== "native_resource_read"
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmNativeResourcesPage busy={operationBusy} onRunAction={runAction} />
+            <VmmNativeResourcesPage busy={resourceMutationBusy} onRunAction={runAction} />
           </main>
         </div>
       </section>

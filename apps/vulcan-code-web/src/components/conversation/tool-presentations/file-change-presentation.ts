@@ -4,6 +4,53 @@ import type { ToolExecutionConversationBlock } from "@/components/conversation/c
 import type { FileAccessAction, FileAccessItemPresentation, FileAccessLineRangePresentation, FileAccessPresentation, FileAccessPresentationKind, FileChangeDiffRow, FileChangeFilePresentation, FileChangeOperation, FileChangePresentation, FileTextFormatPresentation, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
 import { argumentsFromMetadata, arrayValue, booleanValue, compactHash, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
 import { deleteRows, fileChangeDiffFile, insertRows, modifyRows, splitTextLines } from "./file-change-diff-presentation";
+import { fixedV1ToolEvent } from "./presentation-value-readers";
+import { buildV1ChangeSetFilePresentation } from "./v1-tool-presentation";
+import type { PersistentChangeSet } from "@/service/conversation-event-window-store";
+
+/** Adapts the authoritative persisted changeset into the established interactive diff card.
+ * 将权威持久化变更集适配为既有可交互差异卡。
+ * Parameters retain source blocks, state, changeset, display options and detail identity; returns counts and rows from one source.
+ * 参数保留源块、状态、变更集、展示选项与详情身份；返回同源的统计与差异行。 */
+function buildPersistentChangeSetPresentation(blocks: ToolExecutionConversationBlock[], state: ToolPresentationDisplayState,
+  changeset: PersistentChangeSet, options: ToolPresentationResolveOptions, detailRef?: ConversationDetailRef): FileChangePresentation {
+  // Native request and completion share the same identity prefix so expansion survives the handoff.
+  // 原生请求与完成阶段共享身份前缀，确保展开状态在交接后保留。
+  const nativeId = exactNativeToolId(blocks);
+  // source follows the same exact native-tool branches as the legacy host adapter.
+  // source 遵循旧宿主适配器相同的精确原生工具分支。
+  const source = nativeId === "file_edit" ? "native_file_edit" : nativeId === "apply_patch" ? "native_apply_patch" : nativeId === "file" ? "native_file_mutation" : "host_change_set";
+  // prefix retains the established per-call expansion identity.
+  // prefix 保留既有按调用划分的展开身份。
+  const prefix = source === "native_file_edit" ? "native-file-edit" : source === "native_apply_patch" ? "native-apply-patch" : source === "native_file_mutation" ? "native-file-mutation" : "change-set";
+  // files reuse the V1 lifecycle decoder so full, truncated and omitted content have identical accounting.
+  // files 复用 V1 生命周期解码器，使完整、截断与省略正文保持相同统计规则。
+  const files = changeset.files.map((file, index) => {
+    // canonical owns exact paths, line numbers and producer-preserved line counts.
+    // canonical 持有精确路径、行号与产出方保留的行数。
+    const canonical = buildV1ChangeSetFilePresentation(file);
+    // Deleted files use the before snapshot; every surviving file uses its recorded after snapshot.
+    // 已删除文件使用变更前快照；仍存在的文件使用记录的变更后快照。
+    const format = file.change === "delete" ? file.before_text_format : file.after_text_format;
+    // rows translate presentation tags only; omitted lines remain visible diagnostics, not invented source.
+    // rows 仅转换展示标签；省略行保留为可见说明，不伪造源码。
+    const rows: FileChangeDiffRow[] = canonical.rows.map(row => ({
+      kind: row.kind === "added" ? "insert" : row.kind === "deleted" ? "delete" : row.kind === "omitted" ? "omit" : "context",
+      lineNumber: row.lineNumber, content: row.content,
+    }));
+    return buildFilePresentation({ blocks, index, options, added: canonical.additions, removed: canonical.deletions,
+      operation: canonical.change, path: canonical.path, previousPath: canonical.oldPath, resourceId: canonical.resourceId,
+      operationIds: [], rows, expandable: rows.length > 0, readOnly: false, stableId: canonical.path,
+      idOperation: source === "host_change_set" ? null : nativeId,
+      textFormat: format ? { bom: format.bom ?? null, encoding: format.encoding ?? null, finalNewline: format.final_newline ?? null, lineEnding: format.line_ending ?? format.preferred_line_ending ?? null, mixedLineEndings: format.mixed_line_endings ?? null } : null,
+      displayPathOverride: canonical.change === "rename" ? canonical.displayPath : undefined });
+  });
+  return { kind: "file_change", source, state, mode: changeset.mode, detailRef, files,
+    id: fileChangePresentationId(blocks, files, prefix), operation: summarizeOperation(files),
+    interactive: files.some(file => file.expandable), hasEffectiveChanges: files.length > 0,
+    totalAdded: sumKnown(files.map(file => file.added)), totalRemoved: sumKnown(files.map(file => file.removed)),
+    errorDetail: state === "failed" ? errorDetailFromBlocks(blocks) : null };
+}
 
 // fileChangeStatusLabel returns the compact fallback status label for a file-change card.
 // fileChangeStatusLabel 返回文件变更卡片使用的紧凑兜底状态文案。
@@ -38,6 +85,12 @@ export function resolveFileChangePresentation(
   options: ToolPresentationResolveOptions,
   detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
+  // V1 changesets belong to the event, not the legacy host_result envelope.
+  // V1 变更集属于事件本身，而非旧版 host_result 信封。
+  const canonicalEvent = fixedV1ToolEvent(blocks);
+  if (canonicalEvent?.changeset) {
+    return buildPersistentChangeSetPresentation(blocks, displayState, canonicalEvent.changeset, options, detailRef);
+  }
   const nativeToolId = exactNativeToolId(blocks);
   if (nativeToolId === "file") {
     // Read-only actions belong exclusively to FileAccessPresentation and must never fall through to "Not edited".

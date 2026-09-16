@@ -1,6 +1,6 @@
 import * as React from "react";
 import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, LoaderCircle, Maximize2, Minimize2, Search, X } from "lucide-react";
-import { toast } from "sonner";
+import { KnowledgeMessageDialog } from "./KnowledgeFeedback";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { Button } from "@/components/ui/button";
@@ -137,6 +137,9 @@ export function KnowledgeLibraryViewerDialog(props: {
   const [catalogError, setCatalogError] = React.useState("");
   const [documentError, setDocumentError] = React.useState("");
   const [searchError, setSearchError] = React.useState("");
+  // feedback retains recoverable browsing and partial-search failures in the current window.
+  // feedback 在当前窗口内保留可恢复的浏览与部分检索失败。
+  const [feedback, setFeedback] = React.useState<string | null>(null);
   // reloadCatalog is an explicit retry independent from background summary object refreshes.
   // reloadCatalog 是独立于后台摘要对象刷新的显式重试。
   const [reloadCatalog, setReloadCatalog] = React.useState(0);
@@ -216,7 +219,7 @@ export function KnowledgeLibraryViewerDialog(props: {
           error: error instanceof Error ? error.message : String(error),
         },
       }));
-      toast.error(error instanceof Error ? error.message : String(error));
+      setFeedback(error instanceof Error ? error.message : String(error));
     } finally {
       directoryRequestsInFlight.current.delete(requestKey);
     }
@@ -242,6 +245,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     setCatalogError("");
     setDocumentError("");
     setSearchError("");
+    setFeedback(null);
     searchBusy.current = false;
     setDocumentLoading(false);
     setSearchText("");
@@ -319,7 +323,7 @@ export function KnowledgeLibraryViewerDialog(props: {
       const result = await searchManagedKnowledgeLibrary(props.library.id, query, searchRetrievalMode);
       if (searchRequestSequence.current !== sequence) return;
       setSearchResult(result);
-      if (result.failures.length > 0) toast.error(result.failures.map((failure) => failure.error).join("\n"));
+      if (result.failures.length > 0) setFeedback(result.failures.map((failure) => failure.error).join("\n"));
       if (result.hits[0]) void openDocument(result.hits[0].documentId);
     } catch (error) {
       if (searchRequestSequence.current === sequence) setSearchError(error instanceof Error ? error.message : String(error));
@@ -451,6 +455,7 @@ export function KnowledgeLibraryViewerDialog(props: {
           </main>
         </div>
       </DialogContent>
+      <KnowledgeMessageDialog message={props.open ? feedback : null} onClose={() => setFeedback(null)} />
     </Dialog>
   );
 }

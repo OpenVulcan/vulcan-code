@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConversationV1ToolDomainBody, ConversationV1ToolRawDetails } from "./conversation-v1-tool-domain";
 import { ConversationV1ToolCard } from "./conversation-v1-tool-card";
+import ConversationBranchToolDomain from "./conversation-branch-tool-domain";
 import { I18nProvider } from "@/i18n";
 import type { ToolCallDisplayItem } from "@/service/conversation-event-display-projection";
 
@@ -31,6 +32,54 @@ afterEach(async () => {
 });
 
 describe("V1 tool domain readability and progressive details", () => {
+  // Both production paths must share the known-tool code blocks and keep raw payloads in peer tabs.
+  // 两条生产路径均须复用已知工具代码块，并将原始载荷放入同级标签页。
+  it.each(["direct", "branch"])("renders unknown tools as result/input/output tabs via %s", async (route) => {
+    // Nested fences and a long result must remain one complete copyable source block.
+    // 嵌套围栏与长结果必须保持为一个完整可复制的源码块。
+    const markdown = "# REPO MAP\n\n```json\n{}\n```\n" + "目录说明。".repeat(400) + "\n\n## 完整结果末尾";
+    // item carries a canonical unknown-tool result, with diagnostics that belong only to raw output.
+    // item 携带规范未知工具结果，其诊断字段仅属于原始输出。
+    const item: ToolCallDisplayItem = {
+      kind: "tool_call", seq: 91, event_revision: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 2,
+      visibility: "provider", group: { turn_id: 1, api_call_id: 1 },
+      tool_call: { kind: "tool_call", api_call_id: 1, tool_call_id: 91, tool_name: "unknown_repo_map",
+        status: "completed", request_stream_id: "generic-tabs", input: { dir: "crates", max_depth: 3 },
+        output: { model_output: markdown, host_result: { diagnostic_marker: "raw-only" }, is_error: false } },
+    };
+    // writeText records exact copied data without touching the system clipboard.
+    // writeText 记录精确复制数据，不接触系统剪贴板。
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      await act(async () => root.render(<I18nProvider initialLocale="zh-CN">{route === "direct"
+        ? <ConversationV1ToolCard item={item} defaultExpanded />
+        : <ConversationBranchToolDomain event={item.tool_call} id="generic-tabs" tabbed />}</I18nProvider>));
+      expect(Array.from(host.querySelectorAll('[role="tab"]'), (tab) => tab.textContent)).toEqual(["返回信息", "输入", "输出"]);
+      expect(host.querySelector(".markdown-code-language > span:last-child")?.textContent).toBe("markdown");
+      expect(host.querySelectorAll(".markdown-code-block")).toHaveLength(1);
+      expect(host.querySelector("pre")?.textContent).toContain("## 完整结果末尾");
+      expect(host.querySelector("h1")).toBeNull();
+      expect(host.textContent).not.toContain("原始详情");
+      expect(host.textContent).not.toContain("raw-only");
+      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="复制代码"]')!.click());
+      expect(writeText).toHaveBeenLastCalledWith(markdown);
+      await act(async () => host.querySelectorAll('[role="tab"]')[1].dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+      expect(host.querySelector(".markdown-code-language > span:last-child")?.textContent).toBe("json");
+      expect(Array.from(host.querySelectorAll(".markdown-code-line"), line => line.textContent).join("\n")).toBe(JSON.stringify(item.tool_call.input, null, 2));
+      expect(host.querySelector("h1")).toBeNull();
+      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="复制代码"]')!.click());
+      expect(writeText).toHaveBeenLastCalledWith(JSON.stringify(item.tool_call.input, null, 2));
+      await act(async () => host.querySelectorAll('[role="tab"]')[2].dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+      expect(host.querySelector(".markdown-code-language > span:last-child")?.textContent).toBe("json");
+      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="复制代码"]')!.click());
+      expect(writeText).toHaveBeenLastCalledWith(JSON.stringify(item.tool_call.output, null, 2));
+      expect(host.querySelectorAll('[role="tabpanel"]:not([hidden])')).toHaveLength(1);
+    } finally {
+      delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    }
+  });
+
   it("retains all list items while initially mounting only the first six", async () => {
     // rows deliberately exceed the first-level result bound.
     // rows 刻意超过首层结果数量上限。

@@ -49,4 +49,14 @@ describe("knowledgeDisplayBuildAction", () => {
       disabled: false,
     });
   });
+
+  // A per-run omission must remain resumable even when all selected work was published successfully.
+  // 即使已选工作全部发布成功，仅本次未选的文件仍必须支持继续补充。
+  it("offers continuation for files unchecked only for the completed run", () => {
+    expect(knowledgeDisplayBuildAction(displayIndex({
+      status: "ready",
+      activeGeneration: "active-a",
+      skippedDocuments: [{ sourceDocumentId: "later", relativePath: "later.md", byteSize: 12, byteLimit: 65536, reason: "not_selected" }],
+    }))).toEqual({ mode: "resume", label: "knowledge.experience.resume", disabled: false });
+  });
 });

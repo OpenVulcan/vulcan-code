@@ -207,6 +207,37 @@ const WAIT_AGENT_PRESENTATION: SubagentOrchestrationPresentation = {
 };
 
 describe("ToolPresentationCard file access icons", () => {
+  it("shows returned Markdown before the folded canonical input", () => {
+    // markup exercises the production card dispatcher, including propagation of the canonical input.
+    // markup 验证生产卡片派发器，包括规范输入的传递。
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ToolPresentationCard
+          detailLoadEnabled={false}
+          expanded
+          expandedToolPresentationIds={new Set()}
+          presentation={MARKDOWN_MENU_PRESENTATION}
+          v1ToolEvent={{
+            kind: "tool_call", api_call_id: 1, tool_call_id: 2, request_stream_id: "result-first",
+            tool_name: "vulcan_codekit_markdown_menu", status: "completed",
+            input: { path: "INPUT_ONLY_PATH" }, output: { model_output: MARKDOWN_MENU_PRESENTATION.markdown },
+          }}
+          requestProgress={null}
+          onExpandedChange={() => undefined}
+          onLoadToolDetail={async () => null}
+        />
+      </I18nProvider>,
+    );
+    // surface allows semantic assertions without coupling them to serialized React attributes.
+    // surface 允许进行语义断言，不将断言耦合到序列化的 React 属性。
+    const surface = document.createElement("div");
+    surface.innerHTML = markup;
+    expect(surface.querySelector('[role="tabpanel"]:not([hidden])')?.textContent).toContain("# MARKDOWN MENU");
+    expect(surface.querySelectorAll('[role="tab"]')[1]?.getAttribute("aria-selected")).toBe("false");
+    expect(surface.textContent).not.toContain("INPUT_ONLY_PATH");
+    expect(Array.from(surface.querySelectorAll('[role="tab"]'), tab => tab.textContent)).toEqual(["文档目录", "输入", "输出"]);
+  });
+
   // Goal, TODO and skill operations reuse their existing navigation icons.
   // 目标、TODO 和技能操作复用各自既有的导航图标。
   it.each([
@@ -267,8 +298,9 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).toContain("<span>json</span>");
     expect(markup).not.toContain("Hello from Vulcan");
     expect(markup).toContain("audio-1.mp3");
-    expect(markup).toContain('data-model-extension-payload="input"><button aria-expanded="false"');
-    expect(markup).toContain('data-model-extension-payload="output"><button aria-expanded="true"');
+    expect(markup).toContain('role="tablist"');
+    expect(markup).toContain('data-payload-tab="input"');
+    expect(markup).toContain('data-payload-tab="output"');
   });
 
   // Running extension cards keep the finalized input expandable before any result exists.
@@ -290,7 +322,7 @@ describe("ToolPresentationCard file access icons", () => {
 
     expect(markup).toContain('data-model-extension-payload="input"');
     expect(markup).not.toContain('data-model-extension-payload="output"');
-    expect(markup).not.toContain("Hello from Vulcan");
+    expect(markup).toContain("Hello from Vulcan");
   });
 
   // Raw invocation belongs only to expanded non-native content.
@@ -358,7 +390,7 @@ describe("ToolPresentationCard file access icons", () => {
 
   // Directory-list summaries reserve no operation or file-type icon slot.
   // 目录列表摘要不预留操作图标或文件类型图标位置。
-  it("renders directory-list summaries without an icon placeholder", () => {
+  it("renders directory-list summaries with a folder-search icon", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <ToolPresentationCard
@@ -375,7 +407,7 @@ describe("ToolPresentationCard file access icons", () => {
 
     expect(markup).toContain("查询文件列表");
     expect(markup).toContain("D:/openvulcan");
-    expect(markup).not.toContain("file-access-operation-icon");
+    expect(markup).toContain("lucide-folder-search");
     expect(markup).not.toContain("file-change-icon-stack");
     expect(markup).not.toContain("file-change-fallback-icon");
   });
@@ -439,6 +471,21 @@ describe("ToolPresentationCard file access icons", () => {
     expect(expandedMarkup).toContain("Terminal Session");
     expect(expandedMarkup).toContain("Use the persistent terminal safely.");
     expect(expandedMarkup).not.toContain("language-json");
+  });
+
+  it("renders an expanded canonical todo immediately without a loading placeholder", () => {
+    // markup uses the accepted event snapshot, without waiting for a lazy result module.
+    // markup 使用已接受的事件快照，不等待延迟结果模块。
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ToolPresentationCard
+      detailLoadEnabled={false} expanded expandedToolPresentationIds={new Set()} presentation={TODO_PRESENTATION}
+      v1ToolEvent={{ kind: "tool_call", api_call_id: 1, tool_call_id: 1, tool_name: "todolist", request_stream_id: "todo-sync", status: "completed", input: { items: [] }, output: { host_result: { kind: "todolist", payload: { items: [{ step: "已接受任务", status: "completed" }], explanation: "本轮完成" } } } }}
+      requestProgress={null} onExpandedChange={() => undefined} onLoadToolDetail={async () => null}
+    /></I18nProvider>);
+    expect(markup).toContain("tool-todo-card");
+    expect(markup).toContain("已接受任务");
+    expect(markup).toContain("本轮完成");
+    expect(markup).not.toContain("正在加载输出");
+    expect(markup).not.toContain('role="tab"');
   });
 
   // TODO and unknown tools must use the same default-folded interaction instead of leaking bodies inline.
@@ -533,7 +580,9 @@ describe("ToolPresentationCard file access icons", () => {
     );
 
     expect(markup).toContain("file-access-operation-icon");
-    expect(markup).toContain("读取文件 · README.md · 第 10-24 行");
+    expect(markup).toContain("读取");
+    expect(markup).toContain("README.md · 第 10-24 行");
+    expect(markup).toContain("file-change-fallback-icon");
     expect(markup).not.toContain("file-change-operation-icon");
     expect(markup).not.toContain("file-change-counts");
   });

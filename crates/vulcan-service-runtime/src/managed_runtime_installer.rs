@@ -264,6 +264,18 @@ impl PlatformAssets {
     }
 }
 
+/// Returns the managed-runtime download staging root beneath one runtime root.
+/// 返回某个运行时根之下的受管运行时下载暂存根。
+///
+/// Every managed component stages under a versioned child of this root and wipes only
+/// that child before installing, so the LuaSkills skill download cache at
+/// `temp/downloads` is never touched by a runtime repair.
+/// 每个受管组件都在本根之下的版本化子目录中暂存，且安装前只清空该子目录，因此
+/// `temp/downloads` 处的 LuaSkills 技能下载缓存绝不会被运行时修复触碰。
+pub(crate) fn managed_runtime_download_root(runtime_root: &Path) -> PathBuf {
+    runtime_root.join("temp").join("managed-runtimes")
+}
+
 /// Download, verify, extract, and atomically install the managed uv executable.
 /// 下载、校验、解压并原子安装受管 uv 可执行文件。
 fn install_uv_runtime<F>(
@@ -283,9 +295,7 @@ where
     );
     // download_root isolates reusable archives from final installations.
     // download_root 将可复用归档与最终安装隔离。
-    let download_root = request
-        .runtime_root
-        .join("temp/managed-runtimes")
+    let download_root = managed_runtime_download_root(request.runtime_root)
         .join(format!("uv-{}-{}", request.uv_version, request.platform));
     prepare_clean_directory(&download_root)?;
     // archive_path stores the complete verified uv archive.
@@ -550,13 +560,10 @@ where
     let asset_url = format!("{base_url}/{}", assets.node_asset);
     // download_root isolates Node.js archives from final installations.
     // download_root 将 Node.js 归档与最终安装隔离。
-    let download_root = request
-        .runtime_root
-        .join("temp/managed-runtimes")
-        .join(format!(
-            "node-{}-{}",
-            request.node_version, request.platform
-        ));
+    let download_root = managed_runtime_download_root(request.runtime_root).join(format!(
+        "node-{}-{}",
+        request.node_version, request.platform
+    ));
     prepare_clean_directory(&download_root)?;
     // archive_path stores the complete Node.js archive.
     // archive_path 保存完整 Node.js 归档。
@@ -723,9 +730,7 @@ where
         })?;
     // download_root isolates the package tarball from its final installation.
     // download_root 将包 tarball 与最终安装隔离。
-    let download_root = request
-        .runtime_root
-        .join("temp/managed-runtimes")
+    let download_root = managed_runtime_download_root(request.runtime_root)
         .join(format!("pnpm-{}", request.pnpm_version));
     prepare_clean_directory(&download_root)?;
     // tarball_path stores the exact verified pnpm package tarball.

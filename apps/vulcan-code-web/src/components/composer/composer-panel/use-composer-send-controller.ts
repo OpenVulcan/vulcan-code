@@ -266,7 +266,9 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
         if (error instanceof ComposerDraftChangedBeforeSubmissionError) {
           toast.info(t("composer.error.draftChangedBeforeSubmission"));
         } else {
-          toast.error(t("composer.error.draftPersistFailed"));
+          toast.error(t("composer.error.draftPersistFailed"), {
+            description: error instanceof Error ? error.message : String(error),
+          });
         }
         return;
       }

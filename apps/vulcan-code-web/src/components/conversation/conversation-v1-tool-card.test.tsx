@@ -2,7 +2,8 @@
 // 使用 jsdom 验证 V1 工具卡 Markdown 代码块渲染。
 
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { describe, expect, it } from "vitest";
 
 import { ConversationV1ToolCard } from "./conversation-v1-tool-card";
@@ -14,6 +15,14 @@ import {
   type ToolPayload,
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
+
+/** Matches the production tooltip boundary when verifying dedicated subagent controls and result cards.
+ * 验证专属子代理控制与结果卡时保持生产提示框边界一致。
+ * Parameter tree is the card fixture; returns its provider-complete static markup.
+ * 参数 tree 为卡片夹具；返回含完整 Provider 的静态标记。 */
+function renderToStaticMarkup(tree: React.ReactNode): string {
+  return renderMarkup(<TooltipProvider>{tree}</TooltipProvider>);
+}
 
 /** Builds one event-native card fixture.
  * 构建一个事件原生卡片夹具。 */
@@ -134,12 +143,13 @@ describe("ConversationV1ToolCard", () => {
     expect(collapsedMarkup.match(/aria-expanded="false"/g)).toHaveLength(1);
     expect(collapsedMarkup).not.toContain("A blue flame");
     expect(collapsedMarkup).not.toContain("video-task-1");
-    expect(expandedMarkup).toContain('data-model-extension-payload="input"><button aria-expanded="false"');
+    expect(expandedMarkup).toContain('role="tablist"');
+    expect(expandedMarkup).toContain('data-payload-tab="input"');
     expect(expandedMarkup).not.toContain('data-conversation-measured-collapse-id="model-extension:v1-tool:40:input"');
-    expect(expandedMarkup).toContain('data-conversation-measured-collapse-id="model-extension:v1-tool:40:output"');
+    expect(expandedMarkup).toContain('data-payload-tab="output"');
     expect(expandedMarkup).toContain("model-extension-payload-body");
-    expect(expandedMarkup).toContain("markdown-code-block");
-    expect(expandedMarkup).toContain("<span>json</span>");
+    expect(expandedMarkup).toContain("data-media-generation-result");
+    expect(expandedMarkup).not.toContain("原始详情");
     expect(expandedMarkup).not.toContain("A blue flame");
     expect(expandedMarkup).toContain("video-task-1");
   });
@@ -163,7 +173,7 @@ describe("ConversationV1ToolCard", () => {
     expect(markup).toContain("lucide-video");
   });
 
-  it("shows an independently expandable input card while a model extension is running", () => {
+  it("retains result/input/output tabs while a model extension is running", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="en-US">
         <ConversationV1ToolCard
@@ -177,14 +187,15 @@ describe("ConversationV1ToolCard", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain('data-model-extension-payload="input"');
-    expect(markup).not.toContain('data-model-extension-payload="output"');
+    expect(markup).toContain('data-payload-tab="input"');
+    expect(markup).toContain('data-payload-tab="output"');
     expect(markup).not.toContain("A pending sunrise");
   });
 
-  it("renders no placeholder icon node for directory listing", () => {
+  it("renders directory listing directly with a folder-search icon and no payload tabs", () => {
     const markup = renderToStaticMarkup(
       <ConversationV1ToolCard
+        defaultExpanded
         item={cardItem({
           toolName: "file",
           input: { action: "list", path: "D:/project" },
@@ -193,9 +204,12 @@ describe("ConversationV1ToolCard", () => {
       />,
     );
 
-    expect(markup).not.toContain("data-tool-icon=");
+    expect(markup).toContain('data-tool-icon="folder-search"');
     expect(markup).toContain("查询文件列表");
     expect(markup).toContain("D:/project");
+    expect(markup).toContain("src");
+    expect(markup).not.toContain('role="tab"');
+    expect(markup).not.toContain("原始详情");
   });
 
   it("renders -208 accounting, retained deleted lines, and stable utf-8/LF metadata", () => {

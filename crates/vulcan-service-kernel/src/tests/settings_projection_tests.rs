@@ -1,6 +1,7 @@
 use super::*;
 use vulcan_service_api::{
     LuaSkillsManagedRuntimeProgressChangedDelta, LuaSkillsManagedRuntimeProgressSummary,
+    LuaSkillsOperationProgressChangedDelta, LuaSkillsOperationProgressSummary,
     ProjectSettingsChangedDelta, ProjectSettingsDomain, ServiceEventSink,
 };
 
@@ -361,4 +362,170 @@ fn context_injection_exact_session_emitter_supports_background_sessions() {
         Some(selected_session_id.to_string().as_str())
     );
     assert!(guard.workbench.context_injection.is_none());
+}
+
+/// Verifies the operation-progress delta carries the exact service API summary.
+/// 验证操作进度增量携带精确的 service API 摘要。
+///
+/// The delta is the reconnect path for a client that did not issue the request, so
+/// it must carry the correlation id and the authoritative outcome unchanged.
+/// 该增量是从未发起请求的客户端的重连路径，因此必须原样携带关联标识与权威结果。
+#[test]
+fn operation_progress_delta_carries_the_service_api_summary() {
+    // emitter and queue capture the exact focused progress stream.
+    // emitter 与 queue 捕获准确的聚焦进度流。
+    let (emitter, mut queues) = capturing_settings_emitter(1);
+    let queue = queues.pop().expect("one client queue should exist");
+    // progress is the terminal state of one finished install.
+    // progress 是一次已完成安装的终态。
+    let progress = LuaSkillsOperationProgressSummary {
+        correlation_id: String::from("luaskills-op-0"),
+        action: String::from("install"),
+        in_flight: false,
+        outcome: Some(String::from("succeeded")),
+        phases: 2,
+        latest_phase: Some(String::from("verifying_checksum")),
+        percent: Some(100),
+        ..LuaSkillsOperationProgressSummary::default()
+    };
+
+    emit_luaskills_operation_progress_delta(&emitter, 7, Some(progress.clone()));
+
+    // captured contains exactly one focused operation-progress replacement.
+    // captured 仅包含一条聚焦的操作进度替换。
+    let captured = queue
+        .lock()
+        .expect("captured settings events should remain lockable");
+    assert_eq!(captured.len(), 1);
+    let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+        panic!("operation progress must use a focused delta");
+    };
+    assert_eq!(envelope.generation, 7);
+    assert_eq!(
+        envelope.delta,
+        WorkbenchDelta::LuaSkillsOperationProgressChanged(LuaSkillsOperationProgressChangedDelta {
+            progress: Some(progress)
+        })
+    );
+}
+
+/// Verifies lifecycle-operation progress is retained, revisioned, deduplicated, and broadcast together.
+/// 验证生命周期操作进度会被一并保留、分配版本、去重并广播。
+#[test]
+fn operation_progress_commit_keeps_snapshot_and_event_on_one_revision() {
+    // state owns the retained LuaSkills lifecycle progress projection.
+    // state 持有保留的 LuaSkills 生命周期进度投影。
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        SessionId::new_v4(),
+    )));
+    // emitter and queue capture the exact focused operation progress stream.
+    // emitter 与 queue 捕获精确的聚焦操作进度流。
+    let (emitter, mut queues) = capturing_settings_emitter(1);
+    let queue = queues.pop().expect("one client queue should exist");
+    // progress is the authoritative terminal value returned by operation finalization.
+    // progress 是操作终结返回的权威终态值。
+    let progress = LuaSkillsOperationProgressSummary {
+        correlation_id: String::from("luaskills-op-terminal"),
+        action: String::from("update"),
+        in_flight: false,
+        outcome: Some(String::from("failed")),
+        phases: 3,
+        latest_phase: Some(String::from("failed")),
+        ..LuaSkillsOperationProgressSummary::default()
+    };
+
+    let generation =
+        commit_and_emit_luaskills_operation_progress(&emitter, &state, Some(progress.clone()))
+            .expect("terminal progress should commit")
+            .expect("changed terminal progress should allocate one generation");
+    assert_eq!(
+        commit_and_emit_luaskills_operation_progress(&emitter, &state, Some(progress.clone()))
+            .expect("identical terminal progress should remain valid"),
+        None,
+        "an identical value must not allocate or emit a second revision"
+    );
+
+    let guard = state.lock().expect("service state should remain lockable");
+    assert_eq!(guard.workbench_generation, generation);
+    assert_eq!(guard.workbench.revision, generation);
+    assert_eq!(
+        guard.workbench.lua_skills.operation_progress,
+        Some(progress.clone()),
+        "reconnect snapshots must retain the exact terminal value"
+    );
+    drop(guard);
+    let captured = queue
+        .lock()
+        .expect("captured settings events should remain lockable");
+    assert_eq!(
+        captured.len(),
+        1,
+        "deduplication must suppress a duplicate event"
+    );
+    let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+        panic!("operation progress must use a focused delta");
+    };
+    assert_eq!(envelope.generation, generation);
+    assert_eq!(
+        envelope.delta,
+        WorkbenchDelta::LuaSkillsOperationProgressChanged(LuaSkillsOperationProgressChangedDelta {
+            progress: Some(progress),
+        })
+    );
+}
+
+/// Verifies the production latest-value projector publishes an in-flight operation before completion.
+/// 验证生产最新值投影器会在操作完成前发布进行中状态。
+#[test]
+#[ignore = "mutates the process-wide LuaSkills progress callback slot"]
+fn operation_progress_production_projector_exposes_live_start() {
+    crate::luaskills_install_progress::shutdown_global();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        SessionId::new_v4(),
+    )));
+    let (emitter, _queues) = capturing_settings_emitter(1);
+    // runtime executes the projection task independently of the synchronous upstream callback.
+    // runtime 独立于同步上游回调执行投影任务。
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("build live progress test runtime");
+    crate::luaskills_install_progress::install_global_with_projection(
+        emitter,
+        Arc::clone(&state),
+        runtime.handle().clone(),
+    );
+
+    let correlation_id = crate::luaskills_install_progress::begin_global_operation(
+        luaskills::SkillLifecycleAction::Install,
+    )
+    .expect("production progress owner should allocate an id");
+    runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let visible = state
+                    .lock()
+                    .expect("service state should remain lockable")
+                    .workbench
+                    .lua_skills
+                    .operation_progress
+                    .clone();
+                if visible.as_ref().map(|value| value.correlation_id.as_str())
+                    == Some(correlation_id.as_str())
+                {
+                    assert!(visible.expect("matched progress").in_flight);
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("live start should reach retained state");
+    });
+    crate::luaskills_install_progress::finish_global_operation(
+        &correlation_id,
+        crate::luaskills_install_progress::LuaSkillsOperationOutcome::Succeeded,
+    );
+    crate::luaskills_install_progress::shutdown_global();
 }

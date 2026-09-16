@@ -2,6 +2,7 @@
 //! 配置 RPC 路由。
 
 use super::*;
+use crate::workbench_model_routes::service_save_tool_collapse_default;
 
 /// Exact public RPC wire names owned by this domain router.
 /// 本领域路由持有的精确公开 RPC 线协议名称。
@@ -11,6 +12,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_list_workbench_model_secondary_routes",
     "service_select_workbench_model_secondary_route",
     "service_select_workbench_thinking_display_mode",
+    "service_save_tool_collapse_default",
     "service_select_webui_locale",
     "service_save_provider_request_trace_settings",
     "service_open_selected_provider_api_trace_directory",
@@ -141,6 +143,14 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_save_tool_collapse_default" => rpc_json_result(
+            service_save_tool_collapse_default(
+                app,
+                state,
+                rpc_required_param(params, "enabled")?,
+            )
+            .await,
+        ),
         "service_select_webui_locale" => rpc_json_result(
             service_select_webui_locale(app, state, rpc_required_param(params, "locale")?).await,
         ),
@@ -163,7 +173,9 @@ pub(super) async fn dispatch(
         "service_output_style_catalog" => {
             rpc_json_result(service_output_style_catalog(state).await)
         }
-        "service_license_catalog" => rpc_json_result(crate::licenses::service_license_catalog().await),
+        "service_license_catalog" => {
+            rpc_json_result(crate::licenses::service_license_catalog().await)
+        }
         "service_license_body" => rpc_json_result(
             crate::licenses::service_license_body(
                 rpc_required_param(params, "sectionId")?,
@@ -577,7 +589,9 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_mcp_runtime_snapshot" => rpc_json_result(service_mcp_runtime_snapshot(state)),
-        "service_mcp_server_capabilities" => rpc_json_result(service_mcp_server_capabilities(state, rpc_required_param(params, "serverId")?).await),
+        "service_mcp_server_capabilities" => rpc_json_result(
+            service_mcp_server_capabilities(state, rpc_required_param(params, "serverId")?).await,
+        ),
         "service_remove_mcp_server_configuration" => rpc_json_result(
             service_remove_mcp_server_configuration(
                 app,

@@ -1357,6 +1357,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .map(|selection| &selection.model.capabilities),
         ),
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
+        tool_collapse_default_enabled: Some(provider_configuration.tool_collapse_default_enabled.unwrap_or(true)),
         git_commit: git_commit_settings(provider_configuration),
         provider_retry: provider_retry_settings(provider_configuration),
         provider_request_trace_enabled: provider_configuration.provider_request_trace_enabled,

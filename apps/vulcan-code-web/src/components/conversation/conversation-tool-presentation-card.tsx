@@ -11,6 +11,7 @@ import {
   Code2,
   FileText,
   FolderTree,
+  FolderSearch,
   GitBranch,
   Hammer,
   ListChecks,
@@ -28,10 +29,13 @@ import type {
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { ConversationToolResultTabs } from "./conversation-tool-result-tabs";
+import { ConversationTodoResult } from "./conversation-todo-result";
+import { ConversationMediaGenerationResult, isMediaGenerationTool } from "./conversation-media-generation-result";
 import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
-import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
 import { formatTurnStatsNumber, TurnStatsMetricRow } from "@/components/conversation/conversation-turn-stats-card";
 import {
@@ -76,6 +80,21 @@ import {
 } from "@/components/conversation/tool-presentations/model-extension-tool-presentation";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
+
+// The exact event is shared with expanded bodies without rebuilding payloads from summaries.
+// 精确事件与展开正文共享，不从摘要重建载荷。
+const ToolResultEventContext = React.createContext<ToolCallEvent | undefined>(undefined);
+
+/** Wraps result-oriented bodies with canonical tabs while preserving dedicated controls and source cards.
+ * 为结果型正文包裹规范标签，同时保留专属控制与源码卡。
+ * Parameter children is the original specialized renderer; returns that renderer or its tabbed shell.
+ * 参数 children 为原专属渲染器；返回该渲染器或其标签外壳。 */
+function ToolResultBody(props: { children: React.ReactNode }) {
+  // event is absent only on the supported legacy rendering path.
+  // event 仅在受支持的旧版渲染路径缺失。
+  const event = React.useContext(ToolResultEventContext);
+  return event ? <ConversationToolResultTabs event={event}>{props.children}</ConversationToolResultTabs> : <>{props.children}</>;
+}
 
 // ToolRequestCardProgress carries request-state text without replacing the resolved presentation model.
 // ToolRequestCardProgress 在不替换已解析展示模型的前提下携带请求状态文案。
@@ -132,7 +151,9 @@ export function ToolPresentationCard(props: React.ComponentProps<typeof ToolPres
   }, [props.onLoadToolDetail, props.presentation.id, retryRevision]);
   return (
     <>
-      <ToolPresentationCardContent {...props} onLoadToolDetail={loadDetail} />
+      <ToolResultEventContext.Provider value={props.v1ToolEvent}>
+        <ToolPresentationCardContent {...props} onLoadToolDetail={loadDetail} />
+      </ToolResultEventContext.Provider>
       {failure?.owner === props.presentation.id ? (
         <div className="markdown-tool-block" role="alert">
           <details>
@@ -232,6 +253,7 @@ function ToolPresentationCardContent(props: {
   if (props.presentation.kind === "markdown_tool_output") {
     return (
       <MarkdownToolPresentationCard
+        v1ToolEvent={props.v1ToolEvent}
         expanded={expanded}
         expandedFooter={props.expandedFooter}
         presentation={props.presentation}
@@ -459,14 +481,17 @@ function ModelExtensionToolPresentationCard(props: {
         collapseId={`model-extension-tool:${props.presentation.id}`}
         expanded={props.expanded}
       >
-        <ModelExtensionToolPayloadCards
-          defaultInputExpanded={false}
-          defaultOutputExpanded
+        {props.v1ToolEvent ? <ConversationToolResultTabs event={props.v1ToolEvent}>
+          {isMediaGenerationTool(props.v1ToolEvent.tool_name)
+            ? <ConversationMediaGenerationResult event={props.v1ToolEvent} />
+            : <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} />}
+          {props.expandedFooter}
+        </ConversationToolResultTabs> : <ModelExtensionToolPayloadCards
           inputMarkdown={props.presentation.inputMarkdown ?? ""}
-          outputMarkdown={props.v1ToolEvent ? "" : outputMarkdown}
-          outputSupplement={props.v1ToolEvent?.output !== undefined ? <><BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} />{props.expandedFooter}</> : props.expandedFooter}
+          outputMarkdown={outputMarkdown}
+          outputSupplement={props.expandedFooter}
           presentationId={props.presentation.id}
-        />
+        />}
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -559,11 +584,13 @@ function NativeSemanticToolPresentationCard(props: {
         ) : null}
       </button>
       <ConversationMeasuredCollapse collapseId={`native-semantic:${props.presentation.id}`} expanded={canExpand && props.expanded}>
-        {props.expanded && props.v1ToolEvent ? <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} /> : canExpand && markdown ? (
+        <ToolResultBody>
+        {props.v1ToolEvent?.tool_name === "todolist" ? <ConversationTodoResult event={props.v1ToolEvent} /> : props.expanded && props.v1ToolEvent ? <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} /> : canExpand && markdown ? (
           <div className="markdown-tool-block native-semantic-tool-body">
             <MarkdownMessage content={markdown} eager />
           </div>
         ) : null}
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -658,7 +685,7 @@ function GenericToolMarkdownPresentationCard(props: {
         ) : null}
       </button>
       <ConversationMeasuredCollapse collapseId={`generic-tool:${props.presentation.id}`} expanded={canExpand && props.expanded}>
-        {props.expanded && props.v1ToolEvent ? <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} /> : markdown ? (
+        {props.expanded && props.v1ToolEvent ? <BranchToolDomainResult event={props.v1ToolEvent} id={props.presentation.id} tabbed /> : markdown ? (
           <div className="markdown-tool-block generic-tool-markdown-body">
             <MarkdownMessage content={markdown} eager />
           </div>
@@ -671,9 +698,9 @@ function GenericToolMarkdownPresentationCard(props: {
 
 /** Shares exact result projection between the live branch surface and the direct V1 renderer.
  * 在实际分支界面与直接 V1 渲染器之间共享精确结果投影。
- * Parameters event and id identify authoritative payload and expansion ownership; returns readable result and folded raw details.
- * 参数 event 与 id 标识权威载荷和展开归属；返回可读结果与折叠原始详情。 */
-function BranchToolDomainResult(props: { event: ToolCallEvent; id: string }) {
+ * Parameters event and id identify payload ownership; tabbed selects peer result/input/output tabs. Returns readable tool details.
+ * 参数 event 与 id 标识载荷归属；tabbed 选择平级返回信息、输入、输出标签页。返回可读工具详情。 */
+function BranchToolDomainResult(props: { event: ToolCallEvent; id: string; tabbed?: boolean }) {
   // Translation belongs to the stable card shell, including failures before the deferred module loads.
   // 翻译由稳定卡片外壳提供，包括延迟模块尚未加载时的失败。
   const { t } = useI18n();
@@ -689,7 +716,7 @@ function BranchToolDomainResult(props: { event: ToolCallEvent; id: string }) {
     <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details>
   </div>}>
     <React.Suspense fallback={<div role="status">{t("toolPresentation.output.loading")}</div>}>
-      <LazyDomain event={props.event} id={props.id} />
+      <LazyDomain event={props.event} id={props.id} tabbed={props.tabbed} />
     </React.Suspense>
   </RenderErrorBoundary>;
 }
@@ -849,12 +876,14 @@ function ProviderToolStructuredPresentationCard(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-structured:${props.presentation.id}`} expanded={props.expanded}>
+        <ToolResultBody>
         <div className="min-w-0 px-3 pb-3">
           <pre className="max-h-80 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/30 p-2 text-xs">
             {JSON.stringify(props.presentation.payload, null, 2)}
           </pre>
         </div>
         {props.expandedFooter}
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -926,6 +955,7 @@ function ProviderToolTextPresentationCard(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-text:${props.presentation.id}`} expanded={props.expanded}>
+        <ToolResultBody>
         <div className="markdown-tool-block">
           {props.presentation.text.trim() ? (
             <MarkdownMessage content={props.presentation.text} eager />
@@ -934,6 +964,7 @@ function ProviderToolTextPresentationCard(props: {
           )}
         </div>
         {props.expandedFooter}
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -994,6 +1025,7 @@ function ProviderToolExtractPresentationCard(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-extract:${props.presentation.id}`} expanded={props.expanded}>
+        <ToolResultBody>
         <div className="grid gap-2 px-3 pb-3">
           {props.presentation.results.map((result) => (
             <article className="rounded-md border p-2 text-sm" key={result.url}>
@@ -1023,6 +1055,7 @@ function ProviderToolExtractPresentationCard(props: {
           ) : null}
         </div>
         {props.expandedFooter}
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -1093,6 +1126,7 @@ function ProviderToolSearchPresentationCard(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-search:${props.presentation.id}`} expanded={props.expanded}>
+        <ToolResultBody>
         <div className="grid min-w-0 max-w-full gap-2 overflow-hidden px-3 pb-3">
           {props.presentation.results.length ? props.presentation.results.map((result) => (
             <a
@@ -1114,6 +1148,7 @@ function ProviderToolSearchPresentationCard(props: {
           )}
         </div>
         {props.expandedFooter}
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -1146,6 +1181,9 @@ const subagentOrchestrationPresentationDetailCache = new Map<string, SubagentOrc
 // MarkdownToolPresentationCard renders exact-tool Markdown output.
 // MarkdownToolPresentationCard 渲染精确工具标识对应的 Markdown 输出。
 function MarkdownToolPresentationCard(props: {
+  // Canonical input remains inspectable below the returned content without replacing it.
+  // 规范输入保留在返回内容下方供检查，不能替代返回内容。
+  v1ToolEvent?: ToolCallEvent;
   // Markdown-output presentation model.
   // Markdown 输出展示模型。
   presentation: MarkdownToolPresentation;
@@ -1233,9 +1271,14 @@ function MarkdownToolPresentationCard(props: {
         title={targetLabel ? `${title} · ${targetLabel}` : title}
         type="button"
       >
-        <MarkdownToolIcon className="markdown-tool-icon" icon={hydratedPresentation.icon} size={15} />
+        {hydratedPresentation.toolId === "vulcan_file_list" ? <FolderSearch className="markdown-tool-icon" size={15} /> : <MarkdownToolIcon className="markdown-tool-icon" icon={hydratedPresentation.icon} size={15} />}
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
-        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{title}{targetLabel ? ` · ${targetLabel}` : ""}</span></span>
+        <span className="tool-presentation-command">{hydratedPresentation.contentKind === "source" && hydratedPresentation.summaryTargets.length === 1 ? (
+          <span className="file-access-target"><span className="file-operation-label">{title}</span>
+            <FileTypeIcon icon={resolveFileTypeIcon(hydratedPresentation.summaryTargets[0].path)} />
+            <span className="tool-presentation-command-text">{targetLabel}</span>
+          </span>
+        ) : <span className="tool-presentation-command-text">{title}{targetLabel ? ` · ${targetLabel}` : ""}</span>}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
         ) : (
@@ -1243,32 +1286,34 @@ function MarkdownToolPresentationCard(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={`markdown-tool:${presentation.id}`} expanded={expanded}>
-        <div className="markdown-tool-block">
-          {hydratedPresentation.contentKind === "source" && hydratedPresentation.sourceSections.length ? (
-            <div className="file-access-detail markdown-tool-source-detail">
-              {hydratedPresentation.sourceSections.map((section) => (
-                <section className="file-access-item" key={section.id}>
-                  {hydratedPresentation.sourceSections.length > 1 ? (
-                    <div className="file-access-item-heading">{section.path}</div>
-                  ) : null}
-                  <ChangeSetDiffPreview
-                    file={section.diffFile}
-                    hunkSeparatorStyle="simple"
-                    inlineDiff={false}
-                  />
-                </section>
-              ))}
+        <ToolResultBody>
+            <div className="markdown-tool-block">
+              {hydratedPresentation.contentKind === "source" && hydratedPresentation.sourceSections.length ? (
+                <div className="file-access-detail markdown-tool-source-detail">
+                  {hydratedPresentation.sourceSections.map((section) => (
+                    <section className="file-access-item" key={section.id}>
+                      {hydratedPresentation.sourceSections.length > 1 ? (
+                        <div className="file-access-item-heading">{section.path}</div>
+                      ) : null}
+                      <ChangeSetDiffPreview
+                        file={section.diffFile}
+                        hunkSeparatorStyle="simple"
+                        inlineDiff={false}
+                      />
+                    </section>
+                  ))}
+                </div>
+              ) : markdownBlock ? (
+                <MarkdownMessage content={markdownBlock} eager />
+              ) : (
+                <div className="markdown-tool-empty">{
+                  hydratedPresentation.state === "running"
+                    ? t("toolPresentation.execution.running")
+                    : t("toolPresentation.output.empty")
+                }</div>
+              )}
             </div>
-          ) : markdownBlock ? (
-            <MarkdownMessage content={markdownBlock} eager />
-          ) : (
-            <div className="markdown-tool-empty">{
-              hydratedPresentation.state === "running"
-                ? t("toolPresentation.execution.running")
-                : t("toolPresentation.output.empty")
-            }</div>
-          )}
-        </div>
+        </ToolResultBody>
         {props.expandedFooter}
       </ConversationMeasuredCollapse>
     </div>
@@ -1378,6 +1423,7 @@ function LuaExecutionPresentationCard(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={`lua-execution:${presentation.id}`} expanded={expanded}>
+        <ToolResultBody>
         <div className="tool-presentation-detail lua-execution-detail">
           {hydratedPresentation.code ? (
             <div className="lua-execution-section">
@@ -1405,6 +1451,7 @@ function LuaExecutionPresentationCard(props: {
           </div>
           {props.expandedFooter}
         </div>
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -2913,8 +2960,9 @@ function FileAccessPresentationCard(props: {
   }, [detailCacheKey, props.onLoadToolDetail, props.presentation]);
   // canExpand remains false until complete returned rows are locally available.
   // canExpand 在完整返回行已在本地可用前始终为 false。
-  const canExpand = hydratedPresentation.interactive
-    && hydratedPresentation.items.some((item) => item.expandable);
+  const resultEvent = React.useContext(ToolResultEventContext);
+  const canExpand = (resultEvent !== undefined && hydratedPresentation.action !== "read") || (hydratedPresentation.interactive
+    && hydratedPresentation.items.some((item) => item.expandable));
   // status is limited to request formation and active execution.
   // status 仅限请求构造与正在执行阶段。
   const status = activeToolStatusLabel(
@@ -2952,7 +3000,9 @@ function FileAccessPresentationCard(props: {
         <FileAccessOperationIcon action={hydratedPresentation.action} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="tool-presentation-command">
-          <span className="tool-presentation-command-text">{title}{targetLabel ? ` · ${targetLabel}` : ""}</span>
+          <span className="file-access-target"><span className="file-operation-label">{title}</span>
+            {hydratedPresentation.action === "read" && hydratedPresentation.items.length === 1 ? <FileTypeIcon icon={hydratedPresentation.items[0].icon} /> : null}
+            <span className="tool-presentation-command-text">{targetLabel ? ` · ${targetLabel}` : ""}</span></span>
         </span>
         {canExpand ? (
           props.expanded
@@ -2961,6 +3011,7 @@ function FileAccessPresentationCard(props: {
         ) : null}
       </button>
       <ConversationMeasuredCollapse collapseId={`file-access:${hydratedPresentation.id}`} expanded={canExpand && props.expanded}>
+        <ToolResultBody>
         <div className="file-access-detail">
           {hydratedPresentation.errorDetail ? <FileChangeErrorDetail detail={hydratedPresentation.errorDetail} /> : null}
           {hydratedPresentation.items.map((item) => (
@@ -2973,6 +3024,7 @@ function FileAccessPresentationCard(props: {
             />
           ))}
         </div>
+        </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
   );
@@ -3029,7 +3081,7 @@ function FileAccessOperationIcon(props: {
   action: FileAccessPresentation["action"];
 }) {
   if (props.action === "list") {
-    return null;
+    return <FolderSearch className="file-access-operation-icon" size={15} />;
   }
   if (props.action === "search") {
     return <Search className="file-access-operation-icon" size={15} />;
@@ -3257,6 +3309,7 @@ function FileChangeSummaryButton(props: {
       {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
       {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
       <span className="file-change-path">
+        <span className="file-operation-label">{props.t(`toolPresentation.file.action.${props.file.operation}`)}</span>
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
         <FileTextFormatBadge file={props.file} t={props.t} />

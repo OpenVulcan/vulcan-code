@@ -16,7 +16,7 @@ export interface V1ToolDomainSection {
   markdown?: boolean;
   // A known configuration descriptor uses a compact package row instead of a generic field grid.
   // 已知配置声明使用紧凑技能包行，而不是通用字段网格。
-  presentation?: "configuration-package";
+  presentation?: "configuration-package" | "todo-list";
 }
 
 /** Pure first-level result model with a bounded summary and an explicit diagnostic.
@@ -140,8 +140,8 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent): V1ToolDoma
         const completed = items.filter((item) => domainObject(item)?.status === "completed").length;
         summary = `${completed}/${items.length} 项完成${accepted === null ? " · 请求内容" : ""}`;
       }
-      addSection(sections, accepted === null ? "请求任务" : "任务进度", items);
-      addSection(sections, "说明", list.explanation);
+      if (Array.isArray(items)) sections.push({ title: accepted === null ? "请求任务" : "任务进度", value: items, presentation: "todo-list" });
+      if (typeof list.explanation === "string" && list.explanation.trim()) addSection(sections, "说明", list.explanation);
       break;
     }
     case "get_goal":

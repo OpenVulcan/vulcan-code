@@ -27,6 +27,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_retry_luaskills_managed_runtimes",
     "service_install_luaskill",
     "service_update_luaskill",
+    "service_luaskill_operation_progress",
     "service_set_luaskill_enabled",
     "service_set_vulcan_plugin_enabled",
     "service_uninstall_luaskill",
@@ -219,6 +220,10 @@ pub(super) async fn dispatch(
             service_update_luaskill(app.clone(), state, rpc_required_param(params, "skillId")?)
                 .await,
         ),
+        "service_luaskill_operation_progress" => {
+            let correlation_id: String = rpc_required_param(params, "correlationId")?;
+            rpc_json_result(luaskill_operation_progress(correlation_id.as_str()))
+        }
         "service_set_luaskill_enabled" => rpc_json_result(
             service_set_luaskill_enabled(
                 app.clone(),

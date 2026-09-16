@@ -195,6 +195,12 @@ export function LuaSkillConfigDialog(props: {
   // errorMessage contains the current value-free service or editor error.
   // errorMessage 保存当前不含配置值的服务或编辑器错误。
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  // configWatchIssues retains unresolved watcher failures for this exact store and package.
+  // configWatchIssues 保留当前精确存储域与技能包尚未恢复的监听故障。
+  const [configWatchIssues, setConfigWatchIssues] = React.useState<{
+    storage: string | null;
+    skill: string | null;
+  }>({ storage: null, skill: null });
   // conflictMessage tells the user that the latest revision was reloaded without discarding drafts.
   // conflictMessage 告知用户已重新加载最新修订且未丢弃草稿。
   const [conflictMessage, setConflictMessage] = React.useState<string | null>(null);
@@ -278,6 +284,7 @@ export function LuaSkillConfigDialog(props: {
       changedKeysRef.current = [];
       setChangedKeys([]);
       setErrorMessage(null);
+      setConfigWatchIssues({ storage: null, skill: null });
       setConflictMessage(null);
       eventCursorRef.current = null;
       return;
@@ -287,6 +294,7 @@ export function LuaSkillConfigDialog(props: {
     let cancelled = false;
     setBusy(true);
     setErrorMessage(null);
+    setConfigWatchIssues({ storage: null, skill: null });
     void loadDescriptor(false)
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -325,14 +333,43 @@ export function LuaSkillConfigDialog(props: {
           return;
         }
         eventCursorRef.current = batch.nextSequence;
+        // Apply exact-store watcher transitions in event order. A local write proves
+        // storage access only; an external reload proves that this watcher recovered.
+        // 按事件顺序应用精确存储域的监听转换。本地写入只证明存储可访问；外部重载才证明
+        // 当前监听器已经恢复。
+        setConfigWatchIssues((current) => {
+          const next = { ...current };
+          for (const event of batch.events) {
+            if (event.storeScope !== descriptor.storeScope) {
+              continue;
+            }
+            if (event.error) {
+              const message = `${event.error.code}: ${event.error.message}`;
+              if (event.skillId === null) {
+                next.storage = message;
+              } else if (event.skillId === skillId) {
+                next.skill = message;
+              }
+              continue;
+            }
+            if (event.source === "external_reload") {
+              next.storage = null;
+              if (event.skillId === skillId) {
+                next.skill = null;
+              }
+            }
+          }
+          return next.storage === current.storage && next.skill === current.skill ? current : next;
+        });
         // latestSelectedEvent is the newest retained event for the open package.
         // latestSelectedEvent 是当前打开技能包的最新保留事件。
         const latestSelectedEvent = [...batch.events]
           .reverse()
-          .find((event) => event.skillId === skillId);
-        if (latestSelectedEvent?.error) {
-          setErrorMessage(`${latestSelectedEvent.error.code}: ${latestSelectedEvent.error.message}`);
-        } else if (latestSelectedEvent && latestSelectedEvent.revision !== descriptor.revision) {
+          .find((event) => (
+            event.storeScope === descriptor.storeScope && event.skillId === skillId
+          ));
+        if (latestSelectedEvent && !latestSelectedEvent.error
+          && latestSelectedEvent.revision !== descriptor.revision) {
           if (await loadDescriptor(true)) {
             setConflictMessage(t("skills.luaConfig.externalChange"));
           }
@@ -683,6 +720,12 @@ export function LuaSkillConfigDialog(props: {
             </div>
             {conflictMessage ? <p className="lua-skill-config-warning">{conflictMessage}</p> : null}
             {errorMessage ? <p className="lua-skill-config-error">{errorMessage}</p> : null}
+            {configWatchIssues.storage ? <p className="lua-skill-config-error">
+              {configWatchIssues.storage}
+            </p> : null}
+            {configWatchIssues.skill ? <p className="lua-skill-config-error">
+              {configWatchIssues.skill}
+            </p> : null}
             {validation && !validation.complete ? (
               <div className="lua-skill-config-issues">
                 {[...validation.missing, ...validation.invalid, ...validation.businessIssues].map((issue) => (

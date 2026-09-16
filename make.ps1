@@ -109,14 +109,22 @@ function Normalize-Command {
 # IsRelease 用于控制 Tauri 桌面壳是否构建 Cargo release 产物。
 function Invoke-TauriBuild {
     param(
-        [bool]$IsRelease
+        # LocalLuaSkillsPath selects the explicit unpublished checkout used only by this build.
+        # LocalLuaSkillsPath 选择仅供本次构建使用的明确未发布检出目录。
+        [bool]$IsRelease,
+        [string]$LocalLuaSkillsPath = ""
     )
 
     if (-not (Test-Path -LiteralPath $TauriBuildScriptPath)) {
         throw "Missing Tauri build script: $TauriBuildScriptPath"
     }
 
-    if ($IsRelease) {
+    if (-not [string]::IsNullOrWhiteSpace($LocalLuaSkillsPath)) {
+        # The local-source branch passes named parameters directly so Windows PowerShell cannot reinterpret them positionally.
+        # 本地源码分支直接传递命名参数，避免 Windows PowerShell 将其重新解释为位置参数。
+        & $TauriBuildScriptPath -Release:$IsRelease -LocalLuaSkillsPath $LocalLuaSkillsPath
+    }
+    elseif ($IsRelease) {
         & $TauriBuildScriptPath -Release
     }
     else {
@@ -192,10 +200,13 @@ function Invoke-TauriRun {
 # IsRelease 用于控制构建与运行两个步骤是否都面向 release 产物。
 function Invoke-TauriBuildAndRun {
     param(
-        [bool]$IsRelease
+        # LocalLuaSkillsPath selects the explicit unpublished checkout used during the build step.
+        # LocalLuaSkillsPath 选择构建步骤使用的明确未发布检出目录。
+        [bool]$IsRelease,
+        [string]$LocalLuaSkillsPath = ""
     )
 
-    Invoke-TauriBuild -IsRelease $IsRelease
+    Invoke-TauriBuild -IsRelease $IsRelease -LocalLuaSkillsPath $LocalLuaSkillsPath
     Invoke-TauriRun -IsRelease $IsRelease
 }
 
@@ -298,7 +309,9 @@ function Show-Usage {
     Write-Host "  ./make vite status # show the standalone WebUI Vite dev server status"
     Write-Host "  ./make             # Tauri/WebUI debug build"
     Write-Host "  ./make build       # Tauri/WebUI debug build"
+    Write-Host "  ./make build-local-luaskills <path> # build with an explicit local LuaSkills checkout"
     Write-Host "  ./make br          # build and run Tauri/WebUI debug; Vite is managed separately"
+    Write-Host "  ./make br-local-luaskills <path> # build and run with an explicit local LuaSkills checkout"
     Write-Host "  ./make br release  # build and run Tauri/WebUI release"
     Write-Host "  ./make release     # Tauri/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
@@ -342,6 +355,14 @@ switch ($NormalizedMode) {
             exit 1
         }
     }
+    "build-local-luaskills" {
+        if ([string]::IsNullOrWhiteSpace($CommandVariant)) {
+            Write-Error "build-local-luaskills requires the local LuaSkills checkout path."
+            Show-Usage
+            exit 1
+        }
+        Invoke-TauriBuild -IsRelease $false -LocalLuaSkillsPath $CommandVariant
+    }
     "sync" {
         if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
             Write-Error "Unsupported sync command: '$CommandVariant'"
@@ -372,6 +393,14 @@ switch ($NormalizedMode) {
             Show-Usage
             exit 1
         }
+    }
+    "br-local-luaskills" {
+        if ([string]::IsNullOrWhiteSpace($CommandVariant)) {
+            Write-Error "br-local-luaskills requires the local LuaSkills checkout path."
+            Show-Usage
+            exit 1
+        }
+        Invoke-TauriBuildAndRun -IsRelease $false -LocalLuaSkillsPath $CommandVariant
     }
     "licenses" {
         if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {

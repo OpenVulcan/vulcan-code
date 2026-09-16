@@ -6,6 +6,15 @@ import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { SkillActionProps } from "./skill-area-types";
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel";
 
+// The mounted route pickers load their own snapshot, so the service is mocked here rather
+// than left to fail: this file asserts placement, not the route behaviour another file owns.
+// 被挂载的路由选择器会自行加载快照，因此在此 mock 该服务而不是任其失败：本文件断言的是
+// 放置位置，而非由另一个文件负责的路由行为。
+vi.mock("@/service/settings-actions-service", () => ({
+  loadPublicAiSettings: () => Promise.resolve({ inferenceProfiles: {}, internalInferenceCandidates: [] }),
+  savePublicAiInferenceRoute: () => Promise.resolve({ inferenceProfiles: {}, internalInferenceCandidates: [] }),
+}));
+
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
 let root: Root;
 let host: HTMLDivElement;
@@ -60,4 +69,28 @@ it("allows a failed save to retry while serializing writes and disabling the for
   expect(host.querySelector("fieldset")!.disabled).toBe(true);
   await act(async () => complete());
   expect(host.querySelector("fieldset")!.disabled).toBe(false);
+});
+
+it("keeps the internal route pickers outside the runtime-settings form", async () => {
+  // The routes are mounted deliberately outside the runtime-settings fieldset: saving the
+  // runtime draft disables that fieldset, so mounting the pickers inside it would make a
+  // route change impossible while a save is in flight. Nothing else asserts this
+  // placement, so moving the mount inside the form would otherwise be silent.
+  // 路由刻意挂载在运行时设置 fieldset 之外：保存运行时草稿会禁用该 fieldset，因此把选择器
+  // 挂进表单会让保存进行中无法修改路由。没有其他断言守护该放置，把挂载移入表单内部否则
+  // 不会被发现。
+  const catalog = browserFallbackSnapshot().luaSkills;
+  await act(async () => root.render(
+    <LuaSkillsSettingsPanel catalog={catalog} actions={{} as SkillActionProps} />));
+  await act(async () => {});
+
+  const routes = host.querySelector(".lua-inference-routes");
+  expect(routes, "the internal route section must be mounted in the settings panel").toBeTruthy();
+  expect(routes?.classList.contains("lua-settings-section")).toBe(true);
+  expect(routes?.querySelector(":scope > h4")).not.toBeNull();
+  // A picker the operator cannot reach is the failure this placement prevents.
+  // 操作者够不到的选择器正是该放置所要防止的失败。
+  expect(host.querySelectorAll('[role="combobox"]').length).toBeGreaterThan(0);
+  const fieldset = host.querySelector("fieldset");
+  expect(fieldset?.contains(routes)).toBe(false);
 });

@@ -377,7 +377,8 @@ pub async fn set_runlua_ai_tools_enabled(
     if retired_sessions.is_empty() {
         return Ok(());
     }
-    run_luaskills_blocking_task_async("runlua-disable-close", move || {
+    let admission = Arc::clone(&handle.runlua_session_call_admission);
+    run_luaskills_blocking_task_async("runlua-disable-close", admission, move || {
         // engine serializes lease shutdown with every LuaSkills runtime mutation.
         // engine 将租约关闭与所有 LuaSkills 运行时变更串行化。
         let engine = lock_runtime_engine(&handle)?;
@@ -455,7 +456,8 @@ async fn execute_runlua_tool(
     .to_string();
     // markdown is the upstream canonical print and multi-return rendering.
     // markdown 是上游规范的打印与多返回值渲染结果。
-    let markdown = run_luaskills_blocking_task_async("runlua-tool-call", move || {
+    let admission = Arc::clone(&handle.runlua_call_admission);
+    let markdown = run_luaskills_blocking_task_async("runlua-tool-call", admission, move || {
         let engine = lock_runtime_engine(&handle)?;
         engine.execute_runlua_request_json_inline(&request_json)
     })
@@ -660,11 +662,13 @@ async fn start_owned_runlua_session(
     let invocation_handle = handle.clone();
     // response is the exact upstream create payload.
     // response 是精确的上游创建载荷。
-    let response_text = run_luaskills_blocking_task_async("runlua-session-start", move || {
-        let engine = lock_runtime_engine(&invocation_handle)?;
-        engine.create_runtime_lease_json(&request)
-    })
-    .await?;
+    let admission = Arc::clone(&invocation_handle.runlua_session_call_admission);
+    let response_text =
+        run_luaskills_blocking_task_async("runlua-session-start", admission, move || {
+            let engine = lock_runtime_engine(&invocation_handle)?;
+            engine.create_runtime_lease_json(&request)
+        })
+        .await?;
     // response is validated before publishing host ownership.
     // response 在发布宿主归属前完成校验。
     let response = parse_runtime_lease_json("start", &response_text)?;
@@ -733,11 +737,13 @@ async fn eval_owned_runlua_session(
     })
     .to_string();
     let invocation_handle = handle.clone();
-    let response_text = run_luaskills_blocking_task_async("runlua-session-eval", move || {
-        let engine = lock_runtime_engine(&invocation_handle)?;
-        engine.eval_runtime_lease_json(&request)
-    })
-    .await?;
+    let admission = Arc::clone(&invocation_handle.runlua_session_call_admission);
+    let response_text =
+        run_luaskills_blocking_task_async("runlua-session-eval", admission, move || {
+            let engine = lock_runtime_engine(&invocation_handle)?;
+            engine.eval_runtime_lease_json(&request)
+        })
+        .await?;
     let response = parse_runtime_lease_json("eval", &response_text)?;
     retire_unusable_owned_session(handle, &session.lease_id, &response)?;
     Ok(response)
@@ -800,11 +806,13 @@ async fn close_owned_runlua_session(
     let session = require_owned_session(handle, owner_session_id, args.session_id.as_deref())?;
     let request = runtime_lease_identity_request(&session).to_string();
     let invocation_handle = handle.clone();
-    let response_text = run_luaskills_blocking_task_async("runlua-session-close", move || {
-        let engine = lock_runtime_engine(&invocation_handle)?;
-        engine.close_runtime_lease_json(&request)
-    })
-    .await?;
+    let admission = Arc::clone(&invocation_handle.runlua_session_call_admission);
+    let response_text =
+        run_luaskills_blocking_task_async("runlua-session-close", admission, move || {
+            let engine = lock_runtime_engine(&invocation_handle)?;
+            engine.close_runtime_lease_json(&request)
+        })
+        .await?;
     let response = parse_runtime_lease_json("close", &response_text)?;
     if runtime_response_releases_host_ownership(&response)? {
         remove_owned_session(handle, &session.lease_id);
@@ -820,11 +828,13 @@ async fn fetch_owned_session_status(
 ) -> Result<Value, String> {
     let request = runtime_lease_identity_request(session).to_string();
     let invocation_handle = handle.clone();
-    let response_text = run_luaskills_blocking_task_async("runlua-session-status", move || {
-        let engine = lock_runtime_engine(&invocation_handle)?;
-        engine.runtime_lease_status_json(&request)
-    })
-    .await?;
+    let admission = Arc::clone(&invocation_handle.runlua_session_call_admission);
+    let response_text =
+        run_luaskills_blocking_task_async("runlua-session-status", admission, move || {
+            let engine = lock_runtime_engine(&invocation_handle)?;
+            engine.runtime_lease_status_json(&request)
+        })
+        .await?;
     parse_runtime_lease_json("status", &response_text)
 }
 
@@ -1014,11 +1024,13 @@ async fn close_unpublished_runlua_session(
 ) -> Result<(), String> {
     let request = runtime_lease_identity_request(session).to_string();
     let invocation_handle = handle.clone();
-    let response_text = run_luaskills_blocking_task_async("runlua-unpublished-close", move || {
-        let engine = lock_runtime_engine(&invocation_handle)?;
-        engine.close_runtime_lease_json(&request)
-    })
-    .await?;
+    let admission = Arc::clone(&invocation_handle.runlua_session_call_admission);
+    let response_text =
+        run_luaskills_blocking_task_async("runlua-unpublished-close", admission, move || {
+            let engine = lock_runtime_engine(&invocation_handle)?;
+            engine.close_runtime_lease_json(&request)
+        })
+        .await?;
     let response = parse_runtime_lease_json("unpublished close", &response_text)?;
     if runtime_response_releases_host_ownership(&response)? {
         Ok(())

@@ -215,3 +215,192 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
     assert!(route_record.executable);
     assert!(route_record.unavailable_reason.is_none());
 }
+
+/// Verifies clearing a never-saved LuaSkills route is skipped instead of creating a profile.
+/// 验证清除从未保存过的 LuaSkills 路由会被跳过，而不是创建一个 Profile。
+///
+/// LuaSkills is an optional consumer: its profile must exist only because the user
+/// explicitly saved a real route.
+/// LuaSkills 是可选消费者：其 Profile 必须只因为用户显式保存过真实路由而存在。
+#[test]
+fn luaskills_clear_without_profile_skips_creation() {
+    let profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
+    assert!(luaskills_clear_skips_profile_creation(
+        &profiles,
+        crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID,
+        true
+    ));
+}
+
+/// Verifies saving a LuaSkills route is never skipped, so the first save still creates the profile.
+/// 验证保存 LuaSkills 路由绝不跳过，使首次保存仍会创建 Profile。
+#[test]
+fn luaskills_route_save_is_never_skipped() {
+    let profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
+    assert!(!luaskills_clear_skips_profile_creation(
+        &profiles,
+        crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID,
+        false
+    ));
+}
+
+/// Verifies other consumers keep the existing entry-or-default behavior.
+/// 验证其他消费者保持既有 entry-or-default 行为。
+///
+/// Their empty profiles are an existing contract this change must not alter.
+/// 它们的空 Profile 是本改动不得更改的既有契约。
+#[test]
+fn other_consumers_keep_entry_or_default_behavior() {
+    let profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
+    assert!(!luaskills_clear_skips_profile_creation(
+        &profiles, "vmm", true
+    ));
+    assert!(!luaskills_clear_skips_profile_creation(
+        &profiles, "vce", true
+    ));
+}
+
+/// Verifies clearing the last LuaSkills route removes the now-empty profile.
+/// 验证清除最后一条 LuaSkills 路由会移除已空的 Profile。
+#[test]
+fn emptied_luaskills_profile_is_removed() {
+    let mut profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
+    profiles.insert(
+        String::from(crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID),
+        InferenceProfile::default(),
+    );
+    remove_emptied_luaskills_profile(
+        &mut profiles,
+        crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID,
+    );
+    assert!(
+        !profiles.contains_key(crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID),
+        "an explicitly cleared consumer must leave no empty profile behind"
+    );
+}
+
+/// Verifies a LuaSkills profile that still owns a route is retained.
+/// 验证仍持有路由的 LuaSkills Profile 会被保留。
+#[test]
+fn luaskills_profile_with_remaining_state_is_retained() {
+    let mut profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
+    // embeddingDimensions is the cheapest non-empty field and stands for any retained
+    // route state, because emptiness requires all five fields to be empty together.
+    // embeddingDimensions 是最廉价的非空字段，代表任何保留的路由状态——因为只有五个字段
+    // 同时为空才算空。
+    profiles.insert(
+        String::from(crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID),
+        InferenceProfile {
+            embedding_dimensions: Some(1_536),
+            ..InferenceProfile::default()
+        },
+    );
+    remove_emptied_luaskills_profile(
+        &mut profiles,
+        crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID,
+    );
+    assert!(profiles.contains_key(crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID));
+}
+
+/// Verifies an empty profile of another consumer is left exactly as it was.
+/// 验证其他消费者的空 Profile 保持原样。
+#[test]
+fn other_consumer_profiles_are_never_removed() {
+    let mut profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
+    profiles.insert(String::from("vce"), InferenceProfile::default());
+    remove_emptied_luaskills_profile(&mut profiles, "vce");
+    assert!(
+        profiles.contains_key("vce"),
+        "removal is scoped to LuaSkills so no other consumer semantics change"
+    );
+}
+
+/// Builds one exact route for validating the LuaSkills service-side boundary.
+/// 构造一条用于验证 LuaSkills 服务端边界的精确路由。
+///
+/// # Parameters
+/// 参数
+/// `operation` and `usage_scope` select the two route axes under test.
+/// `operation` 与 `usage_scope` 选择被测路由的两个维度。
+///
+/// # Returns
+/// 返回值
+/// Returns a stable synthetic route that does not require a live Provider registry.
+/// 返回一条不依赖实时 Provider 注册表的稳定合成路由。
+fn luaskills_test_route(
+    operation: AiOperation,
+    usage_scope: InferenceUsageScope,
+) -> InferenceRouteConfiguration {
+    InferenceRouteConfiguration {
+        provider_id: String::from("fixture-provider"),
+        service_entry_id: String::from("fixture-entry"),
+        connection_id: String::from("fixture-connection"),
+        model_id: String::from("fixture-model"),
+        binding: InferenceRouteBinding::Action {
+            action_binding_id: String::from("fixture-action"),
+        },
+        operation,
+        usage_scope,
+    }
+}
+
+/// Verifies the LuaSkills profile accepts only its two declared internal-background routes.
+/// 验证 LuaSkills Profile 只接受其声明的两条内部后台路由。
+#[test]
+fn luaskills_route_boundary_rejects_forged_purposes_operations_and_scopes() {
+    let llm = PublicAiInferenceRouteSaveRequest {
+        consumer_profile_id: String::from(crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID),
+        purpose_id: Some(String::from(
+            crate::luaskills_model::LUASKILLS_TEMPORARY_LLM_PURPOSE_ID,
+        )),
+        operation: AiOperation::ConversationRespond,
+        route: Some(luaskills_test_route(
+            AiOperation::ConversationRespond,
+            InferenceUsageScope::InternalBackground,
+        )),
+        embedding_dimensions: None,
+        vce_embedding_confirmation: None,
+        reasoning_effort: None,
+    };
+    assert!(validate_luaskills_inference_route_request(&llm).is_ok());
+
+    let embedding = PublicAiInferenceRouteSaveRequest {
+        purpose_id: None,
+        operation: AiOperation::EmbeddingCreate,
+        route: Some(luaskills_test_route(
+            AiOperation::EmbeddingCreate,
+            InferenceUsageScope::InternalBackground,
+        )),
+        ..llm.clone()
+    };
+    assert!(validate_luaskills_inference_route_request(&embedding).is_ok());
+
+    let wrong_purpose = PublicAiInferenceRouteSaveRequest {
+        purpose_id: Some(String::from("forged-purpose")),
+        ..llm.clone()
+    };
+    assert!(validate_luaskills_inference_route_request(&wrong_purpose).is_err());
+
+    let rerank = PublicAiInferenceRouteSaveRequest {
+        purpose_id: None,
+        operation: AiOperation::RerankDocuments,
+        route: None,
+        ..llm.clone()
+    };
+    assert!(validate_luaskills_inference_route_request(&rerank).is_err());
+
+    let external = PublicAiInferenceRouteSaveRequest {
+        route: Some(luaskills_test_route(
+            AiOperation::ConversationRespond,
+            InferenceUsageScope::ExternalService,
+        )),
+        ..llm.clone()
+    };
+    assert!(validate_luaskills_inference_route_request(&external).is_err());
+
+    let other_consumer = PublicAiInferenceRouteSaveRequest {
+        consumer_profile_id: String::from("other-consumer"),
+        ..external
+    };
+    assert!(validate_luaskills_inference_route_request(&other_consumer).is_ok());
+}

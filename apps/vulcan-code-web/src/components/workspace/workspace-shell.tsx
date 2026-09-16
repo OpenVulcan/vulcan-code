@@ -1388,7 +1388,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
         onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
-        onSelectWorkbenchThinkingDisplayMode={props.onSelectWorkbenchThinkingDisplayMode}
         onSlashCommand={props.onSlashCommand}
         onOpenKnowledge={props.onOpenKnowledge}
         onOpenMemorySettings={props.onOpenMemory}

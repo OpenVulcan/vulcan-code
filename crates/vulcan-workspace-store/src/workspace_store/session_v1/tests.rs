@@ -13,6 +13,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+mod fingerprints;
 mod user_prompt;
 
 use vulcan_session_core::v1::config::{MetadataDocument, PendingRequestConfig};

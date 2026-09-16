@@ -31,6 +31,9 @@ pub enum ErrorCode {
     /// segment corrupt
     /// 分片损坏
     SegmentCorrupt,
+    /// A replay checkpoint digest matches no supported fingerprint format.
+    /// 重放检查点摘要不匹配任何受支持的指纹格式。
+    ProviderSourceFingerprintMismatch,
     /// sequence discontinuity
     /// 序号不连续
     SequenceDiscontinuity,
@@ -61,6 +64,7 @@ impl ErrorCode {
             Self::MetadataCorrupt => "metadata_corrupt",
             Self::SegmentMissing => "segment_missing",
             Self::SegmentCorrupt => "segment_corrupt",
+            Self::ProviderSourceFingerprintMismatch => "provider_source_fingerprint_mismatch",
             Self::SequenceDiscontinuity => "sequence_discontinuity",
             Self::ReferenceViolation => "reference_violation",
             Self::RuntimeCorrupt => "runtime_corrupt",

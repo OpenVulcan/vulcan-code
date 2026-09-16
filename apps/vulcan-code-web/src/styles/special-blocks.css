@@ -397,8 +397,7 @@
   white-space: nowrap;
 }
 
-.conversation-tool-sequence-body,
-.conversation-tool-sequence-running {
+.conversation-tool-sequence-body {
   display: grid;
   gap: 12px;
 }
@@ -417,79 +416,6 @@
   scrollbar-gutter: stable;
 }
 
-/* The live layer owns row spacing so retiring rows can remove their gap without a final layout jump. */
-/* 实时层自行管理行间距，使退场工具行可以同步移除间距且不会在末尾产生布局跳变。 */
-.conversation-tool-sequence-running {
-  gap: 0;
-}
-
-/* Normal running and diagnostic rows preserve the same spacing as the expanded tool list. */
-/* 普通运行中记录与诊断记录保持和展开工具列表一致的间距。 */
-.conversation-tool-live-row:not(:last-child) {
-  margin-block-end: 12px;
-}
-
-/* The retirement slot collapses layout height while its child uses compositor-only horizontal motion. */
-/* 收纳槽在子元素使用合成线程水平运动时同步压缩布局高度。 */
-.conversation-tool-retirement-slot {
-  min-width: 0;
-  display: grid;
-  grid-template-rows: 1fr;
-  margin-block-end: 0;
-  transition:
-    grid-template-rows 800ms cubic-bezier(0.4, 0, 0.2, 1),
-    margin-block-end 800ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.conversation-tool-retirement-slot:not(:last-child):not(.exiting) {
-  margin-block-end: 12px;
-}
-
-/* The fixed fifty-pixel mask receives the row as it flies right without requiring theme-specific colors. */
-/* 固定五十像素遮罩承接向右飞出的工具行，无需依赖特定主题背景色。 */
-.conversation-tool-retirement-viewport {
-  min-width: 0;
-  min-height: 0;
-  width: fit-content;
-  max-width: 100%;
-  overflow: clip;
-  padding-inline-end: 50px;
-  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 50px), transparent 100%);
-  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 50px), transparent 100%);
-}
-
-/* The visible row fades early enough to feel absorbed by the right-edge mask before height reaches zero. */
-/* 可见工具行提前淡出，使其在高度归零前呈现被右侧遮罩吸收的感觉。 */
-.conversation-tool-retirement-row {
-  min-width: 0;
-  transition:
-    transform 800ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 520ms ease-out;
-}
-
-.conversation-tool-retirement-slot.exiting {
-  grid-template-rows: 0fr;
-  margin-block-end: 0;
-}
-
-.conversation-tool-retirement-slot.exiting .conversation-tool-retirement-row {
-  opacity: 0;
-  transform: translateX(50px);
-  will-change: transform, opacity;
-}
-
-/* Reduced-motion mode keeps the one-second visibility guarantee but removes spatial movement. */
-/* 减少动态效果模式保留一秒最低显示保障，但移除空间位移动画。 */
-@media (prefers-reduced-motion: reduce) {
-  .conversation-tool-retirement-slot,
-  .conversation-tool-retirement-row {
-    transition: none;
-  }
-
-  .conversation-tool-retirement-slot.exiting .conversation-tool-retirement-row {
-    transform: none;
-  }
-}
 
 .work-process-stopped-note {
   justify-self: end;
@@ -822,32 +748,42 @@
   padding-top: 1px;
 }
 
-/* Reserve prefix space only in the tool header; expanded details retain their full original width and alignment. */
-/* 仅在工具标题内预留思考入口空间；展开详情保留原有完整宽度与对齐位置。 */
+/* Keep reasoning controls in the left gutter so every reply and tool retains its original content alignment. */
+/* 将思考入口置于左侧留白，让所有回复与工具保持原有内容对齐。 */
 .assistant-flow.tool-with-thinking,
-.conversation-v1-process-item.tool-with-thinking {
+.conversation-v1-process-item.tool-with-thinking,
+.assistant-flow.assistant-with-thinking,
+.conversation-v1-process-assistant.assistant-with-thinking,
+.thinking-gutter-anchor {
   position: relative;
   display: block;
 }
-.tool-with-thinking > .thinking-preview-trigger {
+.thinking-gutter-anchor { min-height: 22px; }
+.tool-with-thinking > .thinking-preview-trigger,
+.assistant-with-thinking > .thinking-preview-trigger,
+.thinking-gutter-anchor > .thinking-preview-trigger {
   position: absolute;
   top: 0;
-  left: 0;
+  left: -32px;
   z-index: 1;
 }
-.tool-thinking-aligned > .conversation-block-content > .tool-execution-stack:first-child > .tool-presentation-card > .tool-presentation-summary,
-.conversation-v1-process-item.tool-thinking-aligned > .tool-presentation-card > .tool-presentation-summary {
-  margin-left: 32px;
-  width: calc(100% - 32px);
-  min-height: 26px;
-}
-.assistant-flow.assistant-with-thinking,
-.conversation-v1-process-assistant.assistant-with-thinking {
+
+/* Final-answer actions keep the original vertical gap when reasoning moves outside the flow. */
+/* 思考移出内容流后，最终回答操作区保留原有纵向间距。 */
+.assistant-flow.assistant-with-thinking {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  align-items: start;
-  column-gap: 6px;
+  grid-template-columns: minmax(0, 1fr);
 }
+
+/* Extend clipping surfaces into the gutter, then restore child alignment with equal padding. */
+/* 将裁切容器向左侧留白延伸，再以等量内边距保持子内容对齐。 */
+.work-process-group > .conversation-collapsible-motion,
+.conversation-tool-sequence > .conversation-collapsible-motion,
+.conversation-tool-sequence-body {
+  margin-left: -32px;
+  padding-left: 32px;
+}
+
 .conversation-block-content { min-width: 0; }
 .thinking-preview-trigger {
   display: inline-flex;
@@ -863,7 +799,11 @@
   font-size: 13px;
   cursor: pointer;
 }
-.thinking-preview-trigger.compact { width: 26px; height: 26px; padding: 5px; }
+/* Stay inside the shortest tool row: a 22px absolute marker overflowed its 21.55px owner,
+ * making rounded scrollHeight alternate by 1px throughout nested height transitions. */
+/* 保持在最短工具行内部：22px 绝对定位入口曾溢出约 21.55px 的宿主，
+ * 导致嵌套高度动画中取整后的 scrollHeight 反复多出 1px。 */
+.thinking-preview-trigger.compact { width: 20px; height: 20px; padding: 3px; }
 .thinking-preview-trigger:hover,
 .thinking-preview-trigger[aria-expanded="true"] { color: var(--foreground); background: var(--muted); }
 .thinking-preview-trigger:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

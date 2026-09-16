@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Maximize2 } from "lucide-react";
 
 import {
   FileTypeIcon,
@@ -29,6 +29,12 @@ export interface MarkdownDiagramFrameProps {
   // Optional image-load failure callback used to restore the code fallback.
   // 可选的图片加载失败回调，用于恢复代码回退展示。
   onImageError?: () => void;
+  // Opens an optional image viewer; absent callbacks keep the frame non-interactive.
+  // 打开可选的图片查看器；未提供回调时保持展示框不可交互。
+  onExpand?: () => void;
+  // Optional original source enables a local diagram/source switch without rerendering the diagram.
+  // 可选原始源码启用局部图形/源码切换，不重新生成图表。
+  source?: string;
   // Human-readable fenced format label.
   // 人类可读的围栏格式标签。
   title: string;
@@ -56,6 +62,20 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
   // copied controls the temporary success icon after the source reaches the clipboard.
   // copied 控制源码写入剪贴板后的临时成功图标。
   const [copied, setCopied] = React.useState(false);
+  // showSource changes only the visible body; the parent retains its rendered SVG and Blob ownership.
+  // showSource 只切换可见正文；父组件继续持有已渲染 SVG 与 Blob 所有权。
+  const [showSource, setShowSource] = React.useState(false);
+  // image retains the same isolated SVG and failure handler in either preview mode.
+  // image 在两种预览模式中保留相同的隔离 SVG 与失败处理器。
+  const image = props.imageUrl ? (
+    <img
+      alt={props.alt}
+      className="markdown-diagram-image"
+      draggable={false}
+      onError={props.onImageError}
+      src={props.imageUrl}
+    />
+  ) : null;
 
   React.useEffect(() => {
     if (!copied) {
@@ -69,7 +89,7 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
 
   return (
     <figure
-      aria-busy={props.loading ? "true" : undefined}
+      aria-busy={props.loading && !showSource ? "true" : undefined}
       className="markdown-diagram-block"
     >
       <figcaption className="markdown-code-header">
@@ -78,6 +98,35 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
           <span>{props.title}</span>
         </span>
         <span className="markdown-code-actions">
+          {props.source !== undefined ? (
+            <span className="markdown-diagram-modes" role="group" aria-label={t("markdown.diagramView")}>
+              <button
+                aria-pressed={!showSource}
+                onClick={() => setShowSource(false)}
+                type="button"
+              >
+                {t("markdown.diagramMode")}
+              </button>
+              <button
+                aria-pressed={showSource}
+                onClick={() => setShowSource(true)}
+                type="button"
+              >
+                {t("markdown.sourceMode")}
+              </button>
+            </span>
+          ) : null}
+          {!showSource && props.onExpand && props.imageUrl ? (
+            <button
+              aria-label={t("markdown.expandDiagram")}
+              className="markdown-code-action"
+              onClick={props.onExpand}
+              title={t("markdown.expandDiagram")}
+              type="button"
+            >
+              <Maximize2 size={14} />
+            </button>
+          ) : null}
           <button
             aria-label={copied ? t("markdown.copied") : t("markdown.copyCode")}
             className="markdown-code-action"
@@ -94,23 +143,31 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
           </button>
         </span>
       </figcaption>
-      <div
-        className={props.loading
-          ? "markdown-diagram-stage markdown-diagram-loading"
-          : "markdown-diagram-stage"}
-      >
-        {props.imageUrl ? (
-          <img
-            alt={props.alt}
-            className="markdown-diagram-image"
-            draggable={false}
-            onError={props.onImageError}
-            src={props.imageUrl}
-          />
-        ) : (
-          <div className="markdown-diagram-loading-bar" />
-        )}
-      </div>
+      {showSource && props.source !== undefined ? (
+        <pre className="markdown-diagram-source"><code>{props.source}</code></pre>
+      ) : (
+        <div
+          className={props.loading
+            ? "markdown-diagram-stage markdown-diagram-loading"
+            : "markdown-diagram-stage"}
+        >
+          {props.imageUrl ? (
+            props.onExpand ? (
+              <button
+                aria-label={t("markdown.expandDiagram")}
+                className="markdown-diagram-preview"
+                onClick={props.onExpand}
+                title={t("markdown.expandDiagram")}
+                type="button"
+              >
+                {image}
+              </button>
+            ) : image
+          ) : (
+            <div className="markdown-diagram-loading-bar" />
+          )}
+        </div>
+      )}
     </figure>
   );
 }

@@ -287,6 +287,65 @@
   padding: 14px;
 }
 
+/* The local mode control keeps source selection independent of Mermaid rendering. */
+/* 局部模式控件使源码选择独立于 Mermaid 渲染。 */
+.markdown-diagram-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 5px;
+  background: var(--muted);
+}
+
+.markdown-diagram-modes button {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+}
+
+.markdown-diagram-modes button[aria-pressed="true"] {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.markdown-diagram-modes button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* Source stays literal and selectable, with bounded scrolling for long diagrams. */
+/* 源码保持字面文本与可选择性，长图表使用有界滚动。 */
+.markdown-message pre.markdown-diagram-source {
+  margin: 0;
+  padding: 14px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  white-space: pre;
+  user-select: text;
+}
+
+/* Clickable previews retain the thumbnail layout and expose keyboard focus. */
+/* 可点击预览保留缩略图布局，并显示键盘焦点。 */
+.markdown-diagram-preview {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.markdown-diagram-preview:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .markdown-message .markdown-diagram-image {
   display: block;
   width: auto;

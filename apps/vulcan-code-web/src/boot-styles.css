@@ -1028,20 +1028,74 @@ body {
 }
 
 .knowledge-import-dialog {
-  width: min(960px, calc(100vw - 40px));
-  max-width: 960px;
-  max-height: min(700px, calc(100vh - 40px));
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-operation-dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px;
 }
 
 .knowledge-operation-progress {
   display: grid;
   gap: 10px;
   min-width: 0;
-  max-height: min(590px, calc(100vh - 180px));
-  overflow: auto;
-  padding-right: 2px;
 }
+
+.knowledge-operation-feedback {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));
+  border-radius: 8px;
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 5%, var(--background));
+}
+
+.knowledge-operation-feedback > span { flex: 1; }
+
+.knowledge-message-dialog {
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-message-details {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.knowledge-operation-output,
+.knowledge-operation-warnings {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.knowledge-operation-output > summary,
+.knowledge-operation-warnings > summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.knowledge-operation-warnings { margin-top: 12px; }
+.knowledge-operation-warnings pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; user-select: text; }
+.knowledge-operation-progress[data-outcome="failed"] .knowledge-operation-progress-bar > span { background: var(--destructive); }
+.knowledge-operation-history-status[data-status="failed"] { color: var(--destructive); }
 
 .knowledge-operation-progress-head,
 .knowledge-operation-progress-meta,
@@ -1061,6 +1115,14 @@ body {
   gap: 6px;
   min-width: 0;
 }
+
+.knowledge-operation-section-title > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-operation-request-meta { flex-wrap: wrap; }
 
 .knowledge-operation-progress-head > div {
   flex-wrap: wrap;
@@ -1146,8 +1208,7 @@ body {
 }
 
 .knowledge-operation-stream {
-  height: 220px;
-  min-height: 140px;
+  max-height: 240px;
   overflow: auto;
   padding: 0;
   user-select: text;
@@ -1202,15 +1263,6 @@ body {
 }
 
 @media (max-width: 760px) {
-  .knowledge-import-dialog {
-    width: min(100vw - 20px, 680px);
-    max-height: calc(100vh - 20px);
-  }
-
-  .knowledge-operation-progress {
-    max-height: calc(100vh - 120px);
-  }
-
   .knowledge-operation-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

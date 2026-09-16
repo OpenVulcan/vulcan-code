@@ -128,9 +128,9 @@ export async function setKnowledgeProjectBinding(libraryId: string, projectId: s
 
 // importKnowledgeDirectory starts a detached recursive Markdown import and returns its durable job.
 // importKnowledgeDirectory 启动分离式递归 Markdown 导入并返回其持久化任务。
-export async function importKnowledgeDirectory(libraryId: string, sourceRoot: string, sourceId: string | null = null): Promise<KnowledgeImportJobSummary> {
+export async function importKnowledgeDirectory(libraryId: string, sourceRoot: string, sourceId: string | null, confirmation: import("@/types").KnowledgeFileConfirmation): Promise<KnowledgeImportJobSummary> {
   return serviceClient.request<KnowledgeImportJobSummary>("service_import_knowledge_directory", {
-    request: { libraryId, sourceRoot, sourceId },
+    request: { libraryId, sourceRoot, sourceId, previewFingerprint: confirmation.fingerprint, selectedFileKeys: confirmation.selectedKeys },
   });
 }
 
@@ -226,8 +226,30 @@ export async function searchManagedKnowledgeLibrary(
 
 // buildKnowledgeDisplayIndex runs the fixed-prompt display-corpus compiler for one library.
 // buildKnowledgeDisplayIndex 为一个资料库运行固定提示词显示库编译器。
-export async function buildKnowledgeDisplayIndex(libraryId: string): Promise<KnowledgeImportJobSummary> {
-  return serviceClient.request<KnowledgeImportJobSummary>("service_build_knowledge_display_index", { libraryId });
+export async function buildKnowledgeDisplayIndex(libraryId: string, confirmation: import("@/types").KnowledgeFileConfirmation): Promise<KnowledgeImportJobSummary> {
+  return serviceClient.request<KnowledgeImportJobSummary>("service_build_knowledge_display_index", { libraryId, confirmation });
+}
+
+// previewKnowledgeImport scans without importing; returns all rows and their exact confirmation fingerprint.
+// previewKnowledgeImport 扫描但不导入，返回全部记录及精确确认指纹。
+// Parameters: libraryId owns the scan; sourceRoot/sourceId select the directory; signal cancels read-only waiting.
+// 参数：libraryId 为扫描归属，sourceRoot/sourceId 选择目录，signal 取消只读等待。
+export async function previewKnowledgeImport(libraryId: string, sourceRoot: string, sourceId: string | null, signal?: AbortSignal): Promise<import("@/types").KnowledgeFilePreview> {
+  return serviceClient.request("service_preview_knowledge_import", { libraryId, sourceRoot, sourceId }, { signal });
+}
+
+// previewKnowledgeDisplay inspects current source and generated hashes without starting a build.
+// previewKnowledgeDisplay 检查当前来源与生成哈希，不启动构建。
+// Parameters: libraryId owns the corpus; signal cancels waiting. Returns the current confirmation snapshot.
+// 参数：libraryId 为内容库归属，signal 取消等待。返回当前确认快照。
+export async function previewKnowledgeDisplay(libraryId: string, signal?: AbortSignal): Promise<import("@/types").KnowledgeFilePreview> {
+  return serviceClient.request("service_preview_knowledge_display", { libraryId }, { signal });
+}
+
+// updateKnowledgeIgnoredFiles explicitly adds/removes exact files; returns durable rules without deleting content.
+// updateKnowledgeIgnoredFiles 明确增删精确文件，返回持久规则，不删除内容。
+export async function updateKnowledgeIgnoredFiles(libraryId: string, files: import("@/types").KnowledgeIgnoredFile[], ignored: boolean): Promise<import("@/types").KnowledgeIgnoredFile[]> {
+  return serviceClient.request("service_update_knowledge_ignored_files", { libraryId, files, ignored });
 }
 
 // buildKnowledgeVectorIndex compiles vectors for the active curated display generation.

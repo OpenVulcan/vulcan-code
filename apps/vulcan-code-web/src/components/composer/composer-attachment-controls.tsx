@@ -1,4 +1,8 @@
 import React from "react";
+import { createPortal } from "react-dom";
+import { ComposerSettingsHostContext } from "./composer-settings-host";
+import { setConversationToolCollapseOverride, useToolCollapsePreference } from "@/components/conversation/tool-collapse-preferences";
+import { setConversationThinkingPopupOverride, useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { composerAttachmentMedia } from "./composer-attachment-media";
 import { VceComposerMenu } from "@/components/features/code-context/vce-project-controls";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
@@ -13,8 +17,10 @@ import {
   Palette,
   Plus,
   RotateCcw,
+  Settings,
   Target,
   Video,
+  Workflow,
   X,
 } from "lucide-react";
 
@@ -65,8 +71,8 @@ export function ComposerAttachmentMenu(props: {
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
   capabilities: ComposerAttachmentCapabilitySummary[];
-  // Thinking display mode selected by the WebUI plus menu.
-  // WebUI 加号菜单选中的思考展示模式。
+  // Thinking display mode selected by the footer settings menu.
+  // 底栏设置菜单选中的思考展示模式。
   thinkingDisplayMode: ThinkingDisplayMode;
   // Whether session Plan mode is currently enabled.
   // 当前会话计划模式是否已启用。
@@ -89,14 +95,14 @@ export function ComposerAttachmentMenu(props: {
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
-  // Updates the thinking display mode from the plus menu.
-  // 从加号菜单更新思考展示模式。
+  // Updates the thinking display mode from the footer settings menu.
+  // 从底栏设置菜单更新思考展示模式。
   onThinkingDisplayModeChange: (mode: ThinkingDisplayMode) => void;
   // Updates the session Plan mode from the plus menu.
   // 从加号菜单更新会话计划模式。
   onPlanModeChange: (enabled: boolean) => void;
-  // Updates one selected-session VMM memory policy from the plus menu.
-  // 从加号菜单更新当前会话的单个 VMM 记忆策略。
+  // Updates one selected-session VMM memory policy from the footer settings menu.
+  // 从底栏设置菜单更新当前会话的单个 VMM 记忆策略。
   onVmmPolicyChange: (policy: string, mode: string) => void;
   // Opens the session goal editor from the plus menu.
   // 从加号菜单打开会话目标编辑器。
@@ -132,8 +138,12 @@ export function ComposerAttachmentMenu(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // settingsHost is the actual footer node; the composer retains all session and draft ownership.
+  // settingsHost 是实际底栏节点；输入区继续持有全部会话与草稿状态。
+  const settingsHost = React.useContext(ComposerSettingsHostContext);
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf", "file"].includes(capability.kind));
   return (
+    <>
     <DropdownMenu>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -180,6 +190,45 @@ export function ComposerAttachmentMenu(props: {
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        <DropdownMenuCheckboxItem
+          checked={props.planModeEnabled}
+          onCheckedChange={(checked) => props.onPlanModeChange(Boolean(checked))}
+          onSelect={(event) => event.preventDefault()}
+        >
+          <ListChecks size={15} />
+          <span>{t("composer.planMode")}</span>
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuItem onSelect={props.onOpenGoal}>
+          <Target size={15} />
+          <span>{t("composer.goal")}</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+    {settingsHost ? createPortal(<ComposerSettingsMenu key={props.conversationId ?? props.projectId ?? "new"} {...props} />, settingsHost) : null}
+    </>
+  );
+}
+
+/** Renders the relocated settings menu using the original composer's controlled state and callbacks.
+ * 使用原输入区的受控状态和回调渲染迁移后的设置菜单。
+ * Parameter props carries the active conversation or draft options; returns the conversation settings menu.
+ * 参数 props 携带当前会话或草稿选项；返回会话设置菜单。
+ */
+export function ComposerSettingsMenu(props: React.ComponentProps<typeof ComposerAttachmentMenu>) {
+  // t keeps the footer entry and its options aligned with the active locale.
+  // t 使底栏入口及其选项与当前语言一致。
+  const { t } = useI18n();
+  // The provider identifies the selected draft as well as persisted conversations.
+  // Provider 同时标识当前草稿和持久化会话。
+  const toolCollapse = useToolCollapsePreference();
+  // Explicit selection stays distinct from the effective global value.
+  // 明确选择始终与实际生效的全局值区分。
+  const thinkingPreference = useThinkingDisplayPreference(toolCollapse.scope, props.thinkingDisplayMode);
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <Button aria-label={t("composer.sessionSettings")} className="workspace-settings-button" size="sm" type="button" variant="ghost"><Settings size={14} /><span>{t("composer.sessionSettings")}</span></Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="start" className="composer-settings-menu" side="top" sideOffset={8}>
         <OutputStyleSubMenu
           catalog={props.outputStyleCatalog}
           conversationId={props.conversationId}
@@ -196,30 +245,41 @@ export function ComposerAttachmentMenu(props: {
         />
         <VceComposerMenu />
         <DropdownMenuSub>
+          <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="composer-thinking-menu">
+            <DropdownMenuRadioGroup value={toolCollapse.override === undefined ? "inherit" : toolCollapse.override ? "enabled" : "disabled"}>
+              <DropdownMenuRadioItem value="disabled" disabled={toolCollapse.scope === null} onSelect={() => {
+                if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, false);
+              }}>{t("composer.collapseToolsDisabled")}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="enabled" disabled={toolCollapse.scope === null} onSelect={() => {
+                if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, true);
+              }}>{t("composer.collapseToolsEnabled")}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="inherit" disabled={toolCollapse.scope === null} onSelect={() => {
+                if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, null);
+              }}>{t("composer.inheritSystem")}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <BrainCircuit size={15} />
             <span>{t("composer.thinkingProcess")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
-            <DropdownMenuRadioGroup value={props.thinkingDisplayMode}>
+            <DropdownMenuRadioGroup value={thinkingPreference.override === undefined ? "inherit" : thinkingPreference.override ? "popup_only" : "inline_output"}>
             {THINKING_DISPLAY_MODE_OPTIONS.map((option) => (
-              <DropdownMenuRadioItem key={option.value} value={option.value} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
+              <DropdownMenuRadioItem key={option.value} value={option.value} disabled={toolCollapse.scope === null} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
                 <span className="composer-thinking-mode-label">
                   <span>{t(option.labelKey)}</span>
                 </span>
               </DropdownMenuRadioItem>
             ))}
+            <DropdownMenuRadioItem value="inherit" disabled={toolCollapse.scope === null} onSelect={() => {
+              if (toolCollapse.scope !== null) setConversationThinkingPopupOverride(toolCollapse.scope, null);
+            }}>{t("composer.inheritSystem")}</DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        <DropdownMenuCheckboxItem
-          checked={props.planModeEnabled}
-          onCheckedChange={(checked) => props.onPlanModeChange(Boolean(checked))}
-          onSelect={(event) => event.preventDefault()}
-        >
-          <ListChecks size={15} />
-          <span>{t("composer.planMode")}</span>
-        </DropdownMenuCheckboxItem>
         {props.vmmAvailable || props.onOpenMemorySettings ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
@@ -246,13 +306,8 @@ export function ComposerAttachmentMenu(props: {
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         ) : null}
-        <DropdownMenuItem onSelect={props.onOpenGoal}>
-          <Target size={15} />
-          <span>{t("composer.goal")}</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+    </DropdownMenuContent>
+  </DropdownMenu>;
 }
 
 // OutputStyleSubMenu renders the selectable prompt-style variants and their persistence cost.

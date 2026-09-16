@@ -3,6 +3,7 @@
 
 mod authorization;
 mod display;
+mod file_selection;
 mod fts;
 mod import;
 mod library;

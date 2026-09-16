@@ -8,7 +8,7 @@ use vulcan_ai_contract::{
     StructuredOutputCapability,
 };
 use vulcan_provider_adapters::{
-    ConnectionModelCatalog, InferenceRouteBinding, InferenceRouteConfiguration,
+    ConnectionModelCatalog, InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration,
     InternalModelOverrides, PersistedAiConfiguration, PublicAiRuntime,
     registered_native_action_binding_id,
 };
@@ -354,6 +354,95 @@ pub(crate) async fn service_save_public_ai_internal_model_overrides(
     Ok(snapshot)
 }
 
+/// Reports whether a LuaSkills clear must skip creating its consumer profile.
+/// 返回某次 LuaSkills 清除是否必须跳过创建其消费者 Profile。
+///
+/// LuaSkills is optional: its profile exists only because the user explicitly saved a
+/// real route. Clearing a route that was never saved must therefore be a no-op rather
+/// than leaving an empty profile in the persisted configuration. Other consumers keep
+/// the existing entry-or-default behavior and never call this.
+/// LuaSkills 是可选的：其 Profile 只因为用户显式保存过真实路由而存在。因此清除从未保存过的
+/// 路由必须是无操作，而不是在持久化配置中留下空 Profile。其他消费者保持既有
+/// entry-or-default 行为，不会调用本函数。
+fn luaskills_clear_skips_profile_creation(
+    profiles: &BTreeMap<String, InferenceProfile>,
+    consumer_profile_id: &str,
+    clears_route: bool,
+) -> bool {
+    consumer_profile_id == crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID
+        && clears_route
+        && !profiles.contains_key(consumer_profile_id)
+}
+
+/// Validates the exact route surface owned by the optional LuaSkills consumer.
+/// 验证可选 LuaSkills 消费者拥有的精确路由表面。
+///
+/// # Parameters
+/// 参数
+/// `request` is the generic internal-route mutation submitted to the service.
+/// `request` 是提交给服务的通用内部路由变更。
+///
+/// # Returns
+/// 返回值
+/// Returns success for non-LuaSkills consumers and for the two supported LuaSkills routes.
+/// 对非 LuaSkills 消费者以及两条受支持的 LuaSkills 路由返回成功。
+fn validate_luaskills_inference_route_request(
+    request: &PublicAiInferenceRouteSaveRequest,
+) -> Result<(), String> {
+    if request.consumer_profile_id != crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID {
+        return Ok(());
+    }
+    match request.operation {
+        AiOperation::ConversationRespond
+            if request.purpose_id.as_deref()
+                == Some(crate::luaskills_model::LUASKILLS_TEMPORARY_LLM_PURPOSE_ID) => {}
+        AiOperation::EmbeddingCreate if request.purpose_id.is_none() => {}
+        _ => {
+            return Err(String::from(
+                "LuaSkills accepts only `conversation_respond/temporary_llm` and `embedding_create` inference routes.",
+            ));
+        }
+    }
+    if request
+        .route
+        .as_ref()
+        .is_some_and(|route| route.usage_scope != InferenceUsageScope::InternalBackground)
+    {
+        return Err(String::from(
+            "LuaSkills inference routes must use the `internal_background` usage scope.",
+        ));
+    }
+    Ok(())
+}
+
+/// Removes an emptied LuaSkills consumer profile after one route mutation.
+/// 在一次路由变更后移除已空的 LuaSkills 消费者 Profile。
+///
+/// Clearing the last route of the optional consumer must remove the profile again, so
+/// an explicitly cleared consumer leaves nothing behind. A profile that still owns any
+/// LLM route, reasoning effort, embedding route, embedding dimensions, or rerank route
+/// is retained.
+/// 清除该可选消费者的最后一条路由后必须再次移除其 Profile，使被显式清除的消费者不留痕迹。
+/// 仍持有任一 LLM 路由、思考档位、向量路由、向量维度或重排路由的 Profile 会被保留。
+fn remove_emptied_luaskills_profile(
+    profiles: &mut BTreeMap<String, InferenceProfile>,
+    consumer_profile_id: &str,
+) {
+    if consumer_profile_id != crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID {
+        return;
+    }
+    let emptied = profiles.get(consumer_profile_id).is_some_and(|profile| {
+        profile.llm_routes.is_empty()
+            && profile.llm_reasoning_efforts.is_empty()
+            && profile.embedding.is_none()
+            && profile.embedding_dimensions.is_none()
+            && profile.rerank.is_none()
+    });
+    if emptied {
+        profiles.remove(consumer_profile_id);
+    }
+}
+
 /// Saves or clears one exact route in a consumer-isolated inference profile.
 /// 在消费者隔离推理配置档内保存或清除一条精确路由。
 ///
@@ -393,6 +482,7 @@ pub(crate) async fn service_save_public_ai_inference_route(
             ));
         }
     }
+    validate_luaskills_inference_route_request(&request)?;
     // transaction serializes validation, activation, and Workbench publication.
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;
@@ -468,53 +558,85 @@ pub(crate) async fn service_save_public_ai_inference_route(
         &current_configuration,
         "保存内部推理路由失败",
         |configuration| {
-            let profile = configuration
-                .inference_profiles
-                .entry(request.consumer_profile_id.clone())
-                .or_default();
-            match request.operation {
-                AiOperation::ConversationRespond => {
-                    let purpose_id = request.purpose_id.as_deref().ok_or_else(|| {
-                        String::from("Restricted LLM inference route requires purposeId.")
-                    })?;
-                    if let Some(route) = request.route.clone() {
-                        profile.llm_routes.insert(purpose_id.to_string(), route);
-                        if let Some(reasoning_effort) = effective_reasoning_effort {
-                            profile
-                                .llm_reasoning_efforts
-                                .insert(purpose_id.to_string(), reasoning_effort);
+            // LuaSkills is an optional consumer that only an explicit save of a real
+            // route may create. Clearing a route for a consumer that has no profile
+            // must not leave an empty profile behind, and clearing its last route must
+            // remove the profile again. Other consumers keep the existing
+            // entry-or-default behavior unchanged.
+            // LuaSkills 是可选消费者，只由一次携带真实路由的显式保存创建。对尚无 Profile 的
+            // 消费者清除路由不得留下空 Profile，清除其最后一条路由后必须再次移除该 Profile。
+            // 其他消费者保持既有 entry-or-default 行为不变。
+            let consumer_profile_id = request.consumer_profile_id.clone();
+            if luaskills_clear_skips_profile_creation(
+                &configuration.inference_profiles,
+                &consumer_profile_id,
+                request.route.is_none(),
+            ) {
+                return Ok(());
+            }
+            {
+                let profile = configuration
+                    .inference_profiles
+                    .entry(consumer_profile_id.clone())
+                    .or_default();
+                match request.operation {
+                    AiOperation::ConversationRespond => {
+                        let purpose_id = request.purpose_id.as_deref().ok_or_else(|| {
+                            String::from("Restricted LLM inference route requires purposeId.")
+                        })?;
+                        if let Some(route) = request.route.clone() {
+                            profile.llm_routes.insert(purpose_id.to_string(), route);
+                            if let Some(reasoning_effort) = effective_reasoning_effort {
+                                profile
+                                    .llm_reasoning_efforts
+                                    .insert(purpose_id.to_string(), reasoning_effort);
+                            } else {
+                                profile.llm_reasoning_efforts.remove(purpose_id);
+                            }
                         } else {
+                            profile.llm_routes.remove(purpose_id);
                             profile.llm_reasoning_efforts.remove(purpose_id);
                         }
-                    } else {
-                        profile.llm_routes.remove(purpose_id);
-                        profile.llm_reasoning_efforts.remove(purpose_id);
+                    }
+                    AiOperation::EmbeddingCreate => {
+                        profile.embedding = request.route.clone();
+                        if vce_embedding_save {
+                            profile.embedding_dimensions = request.embedding_dimensions;
+                        }
+                    }
+                    AiOperation::RerankDocuments => {
+                        profile.rerank = request.route.clone();
+                    }
+                    _ => {
+                        return Err(format!(
+                            "Operation `{}` is not configurable through the inference profile.",
+                            request.operation.as_str()
+                        ));
                     }
                 }
-                AiOperation::EmbeddingCreate => {
-                    profile.embedding = request.route.clone();
-                    if vce_embedding_save {
-                        profile.embedding_dimensions = request.embedding_dimensions;
-                    }
-                }
-                AiOperation::RerankDocuments => {
-                    profile.rerank = request.route.clone();
-                }
-                _ => {
-                    return Err(format!(
-                        "Operation `{}` is not configurable through the inference profile.",
-                        request.operation.as_str()
-                    ));
+                if let Some(policy) = vce_policy {
+                    configuration.context_engine_embedding_compatibility = policy;
                 }
             }
-            if let Some(policy) = vce_policy {
-                configuration.context_engine_embedding_compatibility = policy;
-            }
+            // A LuaSkills profile that lost its last route is removed so an explicitly
+            // cleared consumer leaves no empty profile in the persisted configuration.
+            // 失去最后一条路由的 LuaSkills Profile 会被移除，使被显式清除的消费者不会在
+            // 持久化配置中留下空 Profile。
+            remove_emptied_luaskills_profile(
+                &mut configuration.inference_profiles,
+                &consumer_profile_id,
+            );
             Ok(())
         },
         |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
     drop(transaction);
+    // The saved route changes what the LuaSkills model callbacks may execute. Refresh
+    // the cached capability snapshot before returning; upstream `has`/`status` also
+    // invokes the live availability probe on every observation.
+    // 已保存的路由会改变 LuaSkills 模型回调可执行的范围。返回前刷新缓存的能力快照；
+    // 上游 `has`/`status` 在每次观察时也会调用实时可用性探针。
+    let _ = crate::luaskills_model::sync_global_availability();
     Ok(snapshot)
 }
 

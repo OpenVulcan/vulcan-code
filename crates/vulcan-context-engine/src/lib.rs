@@ -91,9 +91,9 @@ pub use ports::{
 };
 pub use query::{QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 pub use refresh_control::{
-    VceCancelOutcome, VceRefreshControl, VceRefreshFailure, VceRefreshFailureObserver,
-    VceEmbeddingActivity, VceEmbeddingActivityStage, VceRefreshObserver, VceRefreshPhase, VceRefreshProgress, VceRefreshProviderBatchState,
-    VceRefreshUnit,
+    VceCancelOutcome, VceEmbeddingActivity, VceEmbeddingActivityStage, VceRefreshControl,
+    VceRefreshFailure, VceRefreshFailureObserver, VceRefreshObserver, VceRefreshPhase,
+    VceRefreshProgress, VceRefreshProviderBatchState, VceRefreshUnit,
 };
 pub use retrieval::{
     CoverageConfig, RankedHits, RerankCallback, RetrievalPipeline, RrfConfig,

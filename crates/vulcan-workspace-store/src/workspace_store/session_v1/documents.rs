@@ -189,6 +189,25 @@ pub fn map_domain_error(
     path: impl Into<std::path::PathBuf>,
 ) -> SessionV1Error {
     match error {
+        DomainError::ProviderSourceFingerprintMismatch {
+            seq,
+            stored,
+            expected,
+        } => SessionV1Error::from_details(
+            ErrorCode::ProviderSourceFingerprintMismatch,
+            SessionV1ErrorDetails {
+                session_id: Some(session_id.to_string()),
+                path: Some(path.into()),
+                context: Some(format!("provider_source checkpoint seq {seq}")),
+                line: None,
+                byte_offset: None,
+                expected: Some(expected),
+                actual: Some(stored),
+                detail: String::from(
+                    "No supported fingerprint format matches the persisted checkpoint; history was not rewritten. Inspect the session data before recovery.",
+                ),
+            },
+        ),
         DomainError::SequenceViolation { expected, actual } => {
             SessionV1Error::discontinuity(path, "main event stream", expected, actual)
                 .into_session(session_id)

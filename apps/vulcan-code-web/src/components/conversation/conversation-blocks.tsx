@@ -1,4 +1,4 @@
-import { ThinkingPopupContext, ThinkingPreview } from "./thinking-preview";
+import { ThinkingPreview } from "./thinking-preview";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import {
@@ -282,8 +282,8 @@ function localizedContextCompactionTrigger(
   return t("contextCompaction.trigger.manual");
 }
 
-// ThinkingBlock renders thinking content directly inside the transcript.
-// ThinkingBlock 在会话转录中直接渲染思考内容。
+// ThinkingBlock renders a gutter trigger whose popup retains the complete reasoning document.
+// ThinkingBlock 渲染左侧按钮，并在弹窗中保留完整思考文档。
 export function ThinkingBlock(props: {
   // autoExpanded keeps call-site compatibility with thinking overlay restoration.
   // autoExpanded 保持与思考浮层恢复调用点兼容。
@@ -308,13 +308,9 @@ export function ThinkingBlock(props: {
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const { locale, t } = useI18n();
-  // popupEnabled changes the reading surface, never the availability of reasoning.
-  // popupEnabled 改变阅读界面，绝不影响思考内容是否可用。
-  const popupEnabled = React.useContext(ThinkingPopupContext);
+  // content preserves the complete reasoning payload for the gutter preview.
+  // content 为左侧预览保留完整思考载荷。
   const content = props.block.body.trim() || props.block.summary || t("contextCompaction.emptyThinking");
-  const shouldAutoExpand = props.autoExpanded || (props.streaming && (props.autoExpandWhileStreaming ?? true));
-  const collapseId = `thinking:${props.block.id}`;
-  const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, shouldAutoExpand);
   // liveMarkdownIdentity binds one thinking block to its exact live Store stream and block mount.
   // liveMarkdownIdentity 将单个思考块绑定到精确的实时 Store 流和块挂载实例。
   const liveMarkdownIdentity = streamingThinkingIdentity(
@@ -339,82 +335,19 @@ export function ThinkingBlock(props: {
     props.streaming,
     streamingMarkdownIdentity,
   );
-  // thinkingViewport supplies the bounded scroll behavior for the inline thinking body.
-  // thinkingViewport 为内联思考正文提供受限滚动行为。
-  const thinkingViewport = useStreamingThinkingViewport({ enabled: useStreamingMarkdown });
-  const wasStreamingRef = React.useRef(props.streaming);
-  // wasAutoExpandedRef distinguishes a real live-mode transition from remounting retained history.
-  // wasAutoExpandedRef 区分真实的实时模式转换与保留历史的重新挂载。
-  const wasAutoExpandedRef = React.useRef(shouldAutoExpand);
-
-  React.useEffect(() => {
-    // Restored expansion already belongs to the shared memory; only lifecycle changes may override it.
-    // 已恢复的展开状态由共享记忆拥有；只有生命周期变化才允许覆盖它。
-    if (wasStreamingRef.current && !props.streaming) {
-      setExpanded(false, { manual: false });
-    } else if (wasAutoExpandedRef.current !== shouldAutoExpand) {
-      setExpanded(shouldAutoExpand, { manual: false });
-    }
-    wasStreamingRef.current = props.streaming;
-    wasAutoExpandedRef.current = shouldAutoExpand;
-  }, [props.streaming, setExpanded, shouldAutoExpand]);
-
+  // durationLabel remains available inside the preview instead of occupying a separate transcript header.
+  // durationLabel 保留在预览内部，不再占据独立转录标题。
   const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block, locale, t);
-  if (popupEnabled && props.streaming) {
-    return <section className="thinking-block thinking-popup-node"><ThinkingPreview streaming={props.streaming}>
-      {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
-        <StreamingMarkdownDocument conversationId={props.conversationId} fallbackContent={content}
-          fallbackStreaming={props.streaming} messageId={props.block.sourceMessageId} onOpenMedia={props.onOpenMedia} />
-      ) : <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />}
-    </ThinkingPreview></section>;
-  }
-
-
   return (
-    <section className={cn("thinking-block", expanded && "expanded")}>
-      <button
-        aria-expanded={expanded}
-        className="thinking-toggle"
-        onClick={() => {
-          setExpanded(!expanded);
-        }}
-        type="button"
-      >
-        <span className="thinking-toggle-label">
-          <Sparkles size={15} />
-          <strong>{t("contextCompaction.thinkingLabel")}</strong>
-          {durationLabel ? <span>{durationLabel}</span> : null}
-        </span>
-        {expanded ? (
-          <ChevronDown className="tool-presentation-toggle thinking-toggle-icon" size={15} />
-        ) : (
-          <ChevronRight className="tool-presentation-toggle thinking-toggle-icon" size={15} />
-        )}
-      </button>
-      <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
-        <div
-          className="thinking-body"
-          onPointerDown={thinkingViewport.handleBodyPointerDown}
-          onScroll={thinkingViewport.handleBodyScroll}
-          onWheel={thinkingViewport.handleBodyWheel}
-          ref={thinkingViewport.bodyRef}
-        >
-          <div className="thinking-content" ref={thinkingViewport.contentRef}>
-            {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
-              <StreamingMarkdownDocument
-                conversationId={props.conversationId}
-                fallbackContent={content}
-                fallbackStreaming={props.streaming}
-                messageId={props.block.sourceMessageId}
-                onOpenMedia={props.onOpenMedia}
-              />
-            ) : (
-              <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
-            )}
-          </div>
-        </div>
-      </ConversationMeasuredCollapse>
-    </section>
+    <div className="thinking-gutter-anchor">
+      <ThinkingPreview compact streaming={props.streaming}>
+        {durationLabel ? <p>{durationLabel}</p> : null}
+        {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
+          <StreamingMarkdownDocument conversationId={props.conversationId} fallbackContent={content}
+            fallbackStreaming={props.streaming} messageId={props.block.sourceMessageId} onOpenMedia={props.onOpenMedia} />
+        ) : <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />}
+      </ThinkingPreview>
+    </div>
   );
 }
 

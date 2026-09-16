@@ -520,7 +520,8 @@ export function applyWorkbenchDelta(
     || envelope.delta.kind === "subagentCatalogChanged"
     || envelope.delta.kind === "pluginCatalogChanged"
     || envelope.delta.kind === "projectSettingsChanged"
-    || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged";
+    || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged"
+    || envelope.delta.kind === "luaSkillsOperationProgressChanged";
   if (!ownsIndependentLifecycleDomain && envelope.generation <= (workbench.revision ?? 0)) {
     return workbench;
   }
@@ -676,6 +677,17 @@ function applyWorkbenchDeltaPayload(
         luaSkills: {
           ...workbench.luaSkills,
           managedRuntimeProgress: envelope.delta.payload.progress,
+        },
+      };
+    case "luaSkillsOperationProgressChanged":
+      // The envelope replaces only operation progress, so the remaining catalog stays
+      // exactly as the last committed snapshot left it.
+      // envelope 仅替换操作进度，因此目录其余部分保持在上一次已提交快照的状态。
+      return {
+        ...workbench,
+        luaSkills: {
+          ...workbench.luaSkills,
+          operationProgress: envelope.delta.payload.progress,
         },
       };
     case "mediaUploadProgressChanged":

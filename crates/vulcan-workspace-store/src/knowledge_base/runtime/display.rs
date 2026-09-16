@@ -213,6 +213,51 @@ impl DisplayChunkRow {
 }
 
 impl KnowledgeBaseRuntime {
+    /// Copies the active result for `source_id` into a fresh generation after exact hash validation.
+    /// 精确哈希验证后，将 `source_id` 的活动结果复制到新代次。
+    /// Returns after writing the document and all indexed chunks; never invokes a model or edits the active generation.
+    /// 写入文档及全部索引切片后返回，绝不调用模型或修改活动代次。
+    pub async fn copy_display_source_to_generation(
+        &self,
+        library_id: &str,
+        source_id: &str,
+        source_hash: &str,
+        generation: &str,
+        fts_index: &str,
+    ) -> Result<(), String> {
+        // Active metadata remains unchanged until the new generation is fully published.
+        // 新代次完整发布之前，活动元数据保持不变。
+        let mut document = self.read_display_document(library_id, source_id).await?;
+        if document.source_sha256 != source_hash {
+            return Err(String::from("已完成文档在确认后变化，请重新扫描。"));
+        }
+        // Resolve stored chunks through the existing display binding.
+        // 通过现有显示绑定解析已保存切片。
+        let (space, binding) = self.ensure_display_binding(library_id).await?;
+        // Preserve every stored chunk rather than rechunking model output during supplementation.
+        // 补充时保留全部已保存切片，不重新切分模型输出。
+        let rows: Vec<DisplayChunkRow> = self.query_library_rows(&space, &binding,
+            "SELECT id, display_document_id, ordinal, heading_path, start_line, end_line, content, embedding_text, generation FROM display_chunks WHERE display_document_id = ? ORDER BY ordinal;",
+            vec![text(&document.id)]).await?;
+        document.id = format!("display-{generation}-{source_id}");
+        document.generation = generation.to_string();
+        // New identities prevent collisions with the still-readable active generation.
+        // 新身份避免与仍可读取的活动代次冲突。
+        let chunks = rows
+            .into_iter()
+            .map(|row| {
+                // Conversion enforces the normal persisted chunk invariants.
+                // 转换执行常规持久化切片约束。
+                let mut chunk = row.into_display_chunk()?;
+                chunk.id = format!("{}:{}", document.id, chunk.ordinal);
+                chunk.display_document_id = document.id.clone();
+                chunk.generation = generation.to_string();
+                Ok(chunk)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        self.write_display_document(library_id, fts_index, &document, &chunks)
+            .await
+    }
     /// Ensures the AI-curated display database and schema are available before generation setup.
     /// 在代次初始化前确保 AI 整理显示库数据库与结构可用。
     ///
@@ -617,6 +662,9 @@ impl KnowledgeBaseRuntime {
         generation: &str,
         fts_index: &str,
         source_content_revision: i64,
+        // Allow an empty publication only when all sources were explicitly skipped.
+        // 仅当所有来源都被明确忽略时允许发布空代次。
+        all_sources_skipped: bool,
     ) -> Result<u64, String> {
         validate_generation_id(generation)?;
         let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
@@ -633,7 +681,7 @@ impl KnowledgeBaseRuntime {
             .map(|row| nonnegative_u64(row.count, "display_document_count"))
             .transpose()?
             .unwrap_or(0);
-        if document_count == 0 {
+        if document_count == 0 && !all_sources_skipped {
             return Err(String::from("显示库代次没有可发布文档"));
         }
         let source_integrity = self.inspect_index_integrity(library_id).await?;
@@ -693,6 +741,9 @@ impl KnowledgeBaseRuntime {
         source_content_revision: u64,
         curation_snapshot: KnowledgeModelSnapshot,
         document_count: u64,
+        // Persist exclusions alongside the published generation, not as an error.
+        // 将忽略项随发布代次持久化，而不是记录为错误。
+        skipped_documents: Vec<super::super::models::KnowledgeDisplaySkippedDocument>,
     ) -> Result<KnowledgeLibrarySummary, String> {
         validate_generation_id(generation)?;
         let _guard = self.library_mutation_guard(library_id).await?;
@@ -713,6 +764,7 @@ impl KnowledgeBaseRuntime {
         settings.display_index.indexed_model_fingerprint =
             settings.curation.desired_model_fingerprint.clone();
         settings.display_index.generated_document_count = document_count;
+        settings.display_index.skipped_documents = skipped_documents;
         settings.display_index.last_error = None;
         if settings.embedding.enabled {
             settings.vector_index.status = KnowledgeVectorIndexStatus::Stale;
@@ -1259,7 +1311,7 @@ impl KnowledgeBaseRuntime {
 /// 返回值
 /// Returns the generation-scoped display FTS name, or an invalid UUID error.
 /// 返回代次级显示 FTS 名称，或非法 UUID 错误。
-fn display_fts_index_name(generation: &str) -> Result<String, String> {
+pub(super) fn display_fts_index_name(generation: &str) -> Result<String, String> {
     validate_generation_id(generation)?;
     Ok(format!(
         "{}_{}",

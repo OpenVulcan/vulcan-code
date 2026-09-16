@@ -395,6 +395,12 @@ pub(crate) fn lua_skills_catalog_summary(
                 overall_percent: progress.overall_percent,
             }
         }),
+        // operation_progress comes from the process-wide progress owner rather than
+        // the retained catalog: an install or update is not a catalog field, and a
+        // reader must see it even when a refresh has not run yet.
+        // operation_progress 来自进程级进度所有者而不是保留目录：安装或更新不是目录字段，
+        // 且即使刷新尚未运行，读取方也必须能看到它。
+        operation_progress: crate::luaskills_install_progress::global_latest_operation_view(),
         system_lua_lib: normalized_workspace_path_text_from_path(&catalog.system_lua_lib_dir),
         runtime_settings_file: normalized_workspace_path_text_from_path(
             &catalog.runtime_settings_file,

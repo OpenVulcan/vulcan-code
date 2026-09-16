@@ -18,18 +18,18 @@ use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeCapabilityOptions,
     LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig,
     LuaVmPoolConfig, RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeInvocationResult,
-    RuntimeRequestContext, RuntimeSkillOperationProgressEvent, RuntimeSkillRoot,
-    SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority, SkillManager,
-    SkillManagerConfig, SkillMeta, SkillUninstallOptions, ToolCacheConfig,
-    set_skill_operation_progress_callback,
+    RuntimeRequestContext, RuntimeSkillRoot, SkillInstallRequest, SkillInstallSourceType,
+    SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta, SkillUninstallOptions,
+    ToolCacheConfig,
 };
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
 
 pub mod database_bridge;
@@ -40,6 +40,16 @@ mod runlua;
 /// Process-local sequence used to correlate all diagnostics from one LuaSkills host invocation.
 /// 用于关联同一次 LuaSkills 宿主调用全部诊断的进程内序列。
 static LUASKILLS_HOST_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// Compatibility mirror of the persistent-session lease limit enforced by LuaSkills 0.5.5.
+/// LuaSkills 0.5.5 所执行持久会话租约上限的兼容镜像。
+///
+/// The published 0.5.5 crate enforces the literal value `8` internally but does not export it;
+/// the pending local source exports the same value. Keeping the host admission limit here lets
+/// normal registry builds and local-source integration builds enforce the same bounded capacity.
+/// 已发布的 0.5.5 crate 在内部执行字面值 `8`，但未将其导出；待发布的本地源码导出了相同值。
+/// 在宿主侧集中保留该入场上限，使注册表构建和本地源码联调构建执行相同的有界容量。
+const LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY: usize = 8;
 mod schema;
 mod types;
 
@@ -58,10 +68,6 @@ pub use types::*;
 use types::{
     RootSkillBootstrapConfig, RootSkillBootstrapEntry, RunLuaOwnedSession, RunLuaSessionRegistry,
 };
-
-/// Maximum queued LuaSkills progress event count retained for host polling snapshots.
-/// 为宿主轮询快照保留的 LuaSkills 进度事件最大排队数量。
-const LUASKILLS_PROGRESS_EVENT_QUEUE_LIMIT: usize = 256;
 
 /// Bootstraps one minimal LuaSkills runtime after the in-process data plane is ready.
 /// 在进程内数据平面就绪后引导一个最小化的 LuaSkills 运行时。
@@ -141,9 +147,6 @@ fn bootstrap_luaskills_runtime_blocking() -> Result<LuaSkillsBootstrapReport, St
 
     let tool_entries = list_host_visible_luaskills_entries(&engine)?;
     let entry_count = tool_entries.len();
-    let operation_progress_events = Arc::new(Mutex::new(VecDeque::new()));
-    install_luaskills_operation_progress_callback(operation_progress_events.clone());
-
     let engine = Arc::new(RwLock::new(engine));
     Ok(LuaSkillsBootstrapReport {
         handle: LuaSkillsRuntimeHandle {
@@ -153,7 +156,15 @@ fn bootstrap_luaskills_runtime_blocking() -> Result<LuaSkillsBootstrapReport, St
             skill_roots,
             entry_count,
             tool_entries: Arc::new(Mutex::new(tool_entries)),
-            operation_progress_events,
+            skill_call_admission: Arc::new(Semaphore::new(
+                runtime_settings.vm_pool.max_size.max(1),
+            )),
+            runlua_call_admission: Arc::new(Semaphore::new(
+                runtime_settings.run_lua_pool.max_size.max(1),
+            )),
+            runlua_session_call_admission: Arc::new(Semaphore::new(
+                LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY,
+            )),
             runlua_ai_tool_enabled: Arc::new(AtomicBool::new(
                 runtime_settings.ai_tools.enable_run_lua,
             )),
@@ -163,22 +174,6 @@ fn bootstrap_luaskills_runtime_blocking() -> Result<LuaSkillsBootstrapReport, St
             runlua_sessions: Arc::new(Mutex::new(RunLuaSessionRegistry::default())),
         },
     })
-}
-
-/// Installs one process-wide LuaSkills progress callback that forwards events into the shared host queue.
-/// 安装一个进程级 LuaSkills 进度回调，并将事件转发到共享宿主队列。
-fn install_luaskills_operation_progress_callback(
-    operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
-) {
-    set_skill_operation_progress_callback(Some(Arc::new(move |event| {
-        let mut guard = operation_progress_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.push_back(event.clone());
-        while guard.len() > LUASKILLS_PROGRESS_EVENT_QUEUE_LIMIT {
-            guard.pop_front();
-        }
-    })));
 }
 
 /// Execute one LuaSkills host operation on a dedicated blocking thread and return its result.
@@ -210,6 +205,7 @@ where
 async fn run_luaskills_blocking_task_async_with_diagnostics<T, F>(
     thread_name: &str,
     operation_label: String,
+    admission: Arc<Semaphore>,
     operation: F,
 ) -> Result<T, String>
 where
@@ -219,16 +215,50 @@ where
     // stage distinguishes queueing, engine-lock contention, skill execution, and terminal delivery.
     // stage 用于区分排队、引擎锁竞争、技能执行与终态投递。
     let stage = Arc::new(AtomicU8::new(0));
-    let (sender, receiver) = oneshot::channel();
     let thread_name = thread_name.to_string();
-    let worker_stage = Arc::clone(&stage);
     // invocation_id correlates queue, lock, body, and result-delivery diagnostics for one call.
     // invocation_id 关联一次调用的排队、锁、技能体和结果投递诊断。
     let invocation_id = LUASKILLS_HOST_INVOCATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    // started_at includes admission wait so queue pressure remains observable before any OS thread exists.
+    // started_at 包含入场等待，使系统线程尚未创建时的排队压力仍可观测。
+    let started_at = Instant::now();
+    // permit_future queues only the async caller and is cancelled without creating a worker thread.
+    // permit_future 只排队异步调用方；取消时不会创建工作线程。
+    let permit_future = admission.acquire_owned();
+    tokio::pin!(permit_future);
+    // next_diagnostic_delay emits once at five seconds, again at thirty seconds, then once per minute.
+    // next_diagnostic_delay 在五秒、三十秒以及之后每分钟输出一次诊断。
+    let mut next_diagnostic_delay = Duration::from_secs(5);
+    let permit = loop {
+        tokio::select! {
+            permit = &mut permit_future => {
+                break permit.map_err(|_| format!(
+                    "LuaSkills 调用 `{operation_label}` 的宿主入场器已关闭。"
+                ))?;
+            }
+            _ = tokio::time::sleep(next_diagnostic_delay) => {
+                let elapsed_ms = started_at.elapsed().as_millis();
+                eprintln!(
+                    "[luaskills-runtime][invoke-still-running] invocation_id={invocation_id} operation={operation_label} stage=host_admission_wait elapsed_ms={elapsed_ms}"
+                );
+                next_diagnostic_delay = if elapsed_ms < 30_000 {
+                    Duration::from_secs(25)
+                } else {
+                    Duration::from_secs(60)
+                };
+            }
+        }
+    };
+
+    let (sender, receiver) = oneshot::channel();
+    let worker_stage = Arc::clone(&stage);
 
     std::thread::Builder::new()
         .name(thread_name.clone())
         .spawn(move || {
+            // permit stays owned by the worker even if the async waiter is cancelled.
+            // 即使异步等待方被取消，permit 仍由工作线程持有。
+            let _permit = permit;
             worker_stage.store(1, Ordering::Release);
             let operation_stage = Arc::clone(&worker_stage);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -250,15 +280,12 @@ where
         })
         .map_err(|error| format!("启动 LuaSkills 阻塞线程失败：{error}"))?;
 
-    // started_at is the monotonic watchdog origin for this exact host invocation.
-    // started_at 是本次精确宿主调用的单调看门狗起点。
-    let started_at = Instant::now();
     // receiver remains pinned to the same worker result while diagnostics wake independently.
     // receiver 在诊断独立唤醒期间始终绑定同一工作线程结果。
     let mut receiver = receiver;
-    // next_diagnostic_delay emits once at five seconds, again at thirty seconds, then once per minute.
-    // next_diagnostic_delay 在五秒、三十秒以及之后每分钟输出一次诊断。
-    let mut next_diagnostic_delay = Duration::from_secs(5);
+    // Reset diagnostics after admission while preserving total elapsed time in emitted measurements.
+    // 入场后重置诊断周期，同时在输出测量中保留总耗时。
+    next_diagnostic_delay = Duration::from_secs(5);
     loop {
         tokio::select! {
             result = &mut receiver => {
@@ -305,6 +332,7 @@ where
 /// 返回操作结果或精确的工作线程启动/投递失败。
 async fn run_luaskills_blocking_task_async<T, F>(
     thread_name: &str,
+    admission: Arc<Semaphore>,
     operation: F,
 ) -> Result<T, String>
 where
@@ -314,6 +342,7 @@ where
     run_luaskills_blocking_task_async_with_diagnostics(
         thread_name,
         thread_name.to_string(),
+        admission,
         move |stage, _invocation_id| {
             stage.store(4, Ordering::Release);
             operation()
@@ -347,10 +376,19 @@ fn ensure_configured_root_skills_installed(
             continue;
         }
 
+        // The source type is resolved before the install request is built, so a disabled
+        // source type fails with the skill identifier attached instead of a bare policy
+        // error, and no partially-built request reaches the engine.
+        // 来源类型在构建安装请求之前解析，因此被停用的来源类型会带着技能标识失败，而不是一条
+        // 裸的策略错误，并且不会有半成品请求到达引擎。
+        let resolved_source_type = configured_skill
+            .source_type
+            .into_runtime_source_type()
+            .map_err(|error| format!("ROOT 引导技能 `{}`：{error}", configured_skill.skill_id))?;
         let install_request = SkillInstallRequest {
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
-            source_type: configured_skill.source_type.into_runtime_source_type(),
+            source_type: resolved_source_type,
         };
         engine
             .system_install_skill_in_root(
@@ -448,18 +486,6 @@ pub async fn load_luaskills_catalog(
     })
 }
 
-/// Drains every queued LuaSkills operation progress event captured for one runtime handle.
-/// 取出某个运行时句柄当前捕获的全部已排队 LuaSkills 操作进度事件。
-pub fn drain_luaskills_operation_progress_events(
-    handle: &LuaSkillsRuntimeHandle,
-) -> Vec<RuntimeSkillOperationProgressEvent> {
-    let mut guard = handle
-        .operation_progress_events
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    guard.drain(..).collect()
-}
-
 /// Rebuild the visible LuaSkills catalog inside one blocking host thread.
 /// 在单个阻塞宿主线程内部重建可见 LuaSkills 技能目录清单。
 fn load_luaskills_catalog_blocking(
@@ -513,10 +539,15 @@ fn perform_luaskills_management_action_blocking(
             source_type,
         } => {
             let user_root = ordinary_user_root(handle)?;
+            // The source type is resolved before the install request is built, so a
+            // disabled source type fails before any partial request reaches the engine.
+            // 来源类型在构建安装请求之前解析，因此被停用的来源类型会在任何半成品请求到达
+            // 引擎之前失败。
+            let resolved_source_type = source_type.into_runtime_source_type()?;
             let request = SkillInstallRequest {
                 skill_id: normalize_optional_field(skill_id),
                 source: normalize_optional_field(Some(source)),
-                source_type: source_type.into_runtime_source_type(),
+                source_type: resolved_source_type,
             };
             let result = engine
                 .install_skill_in_root(&handle.skill_roots, &user_root, &request)
@@ -678,9 +709,11 @@ pub async fn call_luaskills_tool_entry(
     invocation_context: Option<LuaInvocationContext>,
 ) -> Result<RuntimeInvocationResult, String> {
     let operation_label = tool_name.clone();
+    let admission = Arc::clone(&handle.skill_call_admission);
     run_luaskills_blocking_task_async_with_diagnostics(
         "luaskills-tool-call",
         operation_label,
+        admission,
         move |stage, invocation_id| {
         // lock_started_at measures only host read-lock contention for the shared LuaSkills engine.
         // lock_started_at 仅测量共享 LuaSkills 引擎的宿主读锁竞争耗时。
@@ -1191,6 +1224,15 @@ fn ordinary_uninstall_target_root_for_skill(
 
 /// Build one skill-manager instance that mirrors the runtime root layout used by the embedded host.
 /// 构建一个与嵌入式宿主运行时根布局保持一致的技能管理器实例。
+///
+/// This manager serves read-only catalog metadata only: every caller uses it for
+/// `is_skill_enabled`, `disabled_record`, or `install_record`, and never for an
+/// install, update, or download. Network download is therefore disabled here rather
+/// than left at a permissive default, so the read-only property is enforced by
+/// construction instead of relying on no future caller adding a download.
+/// 本管理器只服务只读目录元数据：所有调用方都只用它做 `is_skill_enabled`、
+/// `disabled_record` 或 `install_record`，绝不用于安装、更新或下载。因此这里禁用网络下载，
+/// 而不是留下一处宽松默认值，使只读属性由构造强制，而不是依赖未来没有调用方新增下载。
 fn build_skill_manager_for_root(
     handle: &LuaSkillsRuntimeHandle,
     root_name: &str,
@@ -1211,7 +1253,10 @@ fn build_skill_manager_for_root(
         skill_root,
         lifecycle_root,
         download_cache_root: handle.runtime_root.join("temp").join("downloads"),
-        allow_network_download: true,
+        // Catalog metadata never downloads, so this manager is built without that
+        // capability instead of inheriting a permissive default.
+        // 目录元数据从不下载，因此本管理器在构建时就不具备该能力，而不是继承宽松默认值。
+        allow_network_download: false,
         github_base_url: None,
         github_api_base_url: None,
         official_skill_hub_base_url: None,

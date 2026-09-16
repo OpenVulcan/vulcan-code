@@ -3140,7 +3140,13 @@ impl VceRuntimeManager {
         // 即使准入来源是手动操作，尚无已发布检查点的首次执行仍属于初始化。
         // Preserve this distinction so Batch-capable models use the initialization transport policy.
         // 保留该区分，使支持 Batch 的模型使用初始化传输策略。
-        let initializing = runtime.committed_projection.read().await.engine.checkpoint_version.is_none();
+        let initializing = runtime
+            .committed_projection
+            .read()
+            .await
+            .engine
+            .checkpoint_version
+            .is_none();
         let reason = match &work {
             VceJobWork::Manual if initializing => RefreshReason::Initial,
             VceJobWork::Manual => RefreshReason::Manual,
@@ -4953,7 +4959,10 @@ mod tests {
     fn supervised_execution_does_not_republish_unchanged_progress() {
         // runtime keeps this isolated supervisor and its timers on one test thread.
         // runtime 将此隔离监管器及其时钟保留在一个测试线程。
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         runtime.block_on(async {
             // count and persisted establish the exact number of acknowledged progress writes.
             // count 与 persisted 确定已确认进度写入的准确次数。
@@ -4965,10 +4974,16 @@ mod tests {
             // progress is a genuine unchanged local-preparation observation.
             // progress 是实际保持不变的本地准备观察。
             let progress = VceRefreshProgress {
-                activity: None, phase: vulcan_context_engine::VceRefreshPhase::Chunking,
-                operation_id: "unchanged-progress".to_owned(), unit: vulcan_context_engine::VceRefreshUnit::Files,
-                completed: 1, total: Some(3), overall_completed: 0, overall_total: Some(3),
-                provider_batch_state: None, current_path: None,
+                activity: None,
+                phase: vulcan_context_engine::VceRefreshPhase::Chunking,
+                operation_id: "unchanged-progress".to_owned(),
+                unit: vulcan_context_engine::VceRefreshUnit::Files,
+                completed: 1,
+                total: Some(3),
+                overall_completed: 0,
+                overall_total: Some(3),
+                provider_batch_state: None,
+                current_path: None,
             };
             // sender stays alive so channel closure cannot settle the test early.
             // sender 保持存活，避免通道关闭使测试提前收敛。
@@ -4983,15 +4998,21 @@ mod tests {
             // supervisor retains worker ownership through normal completion.
             // supervisor 在正常完成前始终持有工作任务所有权。
             let supervisor = tokio::spawn(VceRuntimeManager::supervise_job_execution(
-                VceRefreshControl::default(), receiver,
-                async move { worker_release.notified().await; Ok(1) },
+                VceRefreshControl::default(),
+                receiver,
+                async move {
+                    worker_release.notified().await;
+                    Ok(1)
+                },
                 move |_| {
                     writes.fetch_add(1, Ordering::SeqCst);
                     signal.notify_one();
                     Box::pin(async { Ok(()) })
                 },
             ));
-            tokio::time::timeout(Duration::from_secs(1), persisted.notified()).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), persisted.notified())
+                .await
+                .unwrap();
             sender.send_replace(Some(progress));
             tokio::time::sleep(Duration::from_millis(600)).await;
             assert_eq!(count.load(Ordering::SeqCst), 1);

@@ -207,6 +207,56 @@ export type TranslationKey =
   | "knowledge.experience.embeddingProgress"
   | "knowledge.experience.cancelling"
   | "knowledge.experience.failed"
+  | "knowledge.feedback.title"
+  | "knowledge.feedback.description"
+  | "knowledge.feedback.operationError"
+  | "knowledge.feedback.details"
+  | "knowledge.feedback.copy"
+  | "knowledge.feedback.copied"
+  | "knowledge.feedback.copyFailed"
+  | "knowledge.feedback.warnings"
+  | "knowledge.feedback.output"
+  | "knowledge.skipped.summary"
+  | "knowledge.skipped.details"
+  | "knowledge.skipped.size"
+  | "knowledge.skipped.hint"
+  | "knowledge.skipped.policy"
+  | "knowledge.skipped.counts"
+  | "knowledge.files.ready"
+  | "knowledge.files.completed"
+  | "knowledge.files.oversized"
+  | "knowledge.files.ignored"
+  | "knowledge.files.unsupported"
+  | "knowledge.files.unreadable"
+  | "knowledge.files.notSelected"
+  | "knowledge.files.manage"
+  | "knowledge.files.title"
+  | "knowledge.files.description"
+  | "knowledge.files.policy"
+  | "knowledge.files.all"
+  | "knowledge.files.rescan"
+  | "knowledge.files.filter"
+  | "knowledge.files.loading"
+  | "knowledge.files.scanTimeout"
+  | "knowledge.files.savingRules"
+  | "knowledge.files.counts"
+  | "knowledge.files.selectAll"
+  | "knowledge.files.selectNone"
+  | "knowledge.files.ignoreSelected"
+  | "knowledge.files.file"
+  | "knowledge.files.size"
+  | "knowledge.files.state"
+  | "knowledge.files.actions"
+  | "knowledge.files.unignore"
+  | "knowledge.files.ignore"
+  | "knowledge.files.selectAllIgnored"
+  | "knowledge.files.unignoreSelected"
+  | "knowledge.files.empty"
+  | "knowledge.files.previous"
+  | "knowledge.files.next"
+  | "knowledge.files.cancel"
+  | "knowledge.files.confirmImport"
+  | "knowledge.files.confirmBuild"
   | "knowledge.experience.cancelled"
   | "knowledge.experience.completed"
   | "knowledge.experience.running"
@@ -929,6 +979,11 @@ export type TranslationKey =
   | "composer.thinkingProcess"
   | "composer.planMode"
   | "composer.vmmMemory"
+  | "composer.collapseTools"
+  | "composer.sessionSettings"
+  | "composer.inheritSystem"
+  | "composer.collapseToolsDisabled"
+  | "composer.collapseToolsEnabled"
   | "composer.vmm.precheckInjection"
   | "composer.vmm.memoryWriteback"
   | "composer.vmm.mode.inheritProject"
@@ -1632,6 +1687,11 @@ export type TranslationKey =
   | "toolPresentation.markdownOutput.completed"
   | "toolPresentation.fileList.title"
   | "toolPresentation.fileRead.title"
+  | "toolPresentation.file.action.create"
+  | "toolPresentation.file.action.modify"
+  | "toolPresentation.file.action.delete"
+  | "toolPresentation.file.action.rename"
+  | "toolPresentation.file.action.mixed"
   | "toolPresentation.fileRead.rangeFrom"
   | "toolPresentation.fileRead.range"
   | "toolPresentation.fileSearch.title"
@@ -1649,6 +1709,12 @@ export type TranslationKey =
   | "conversation.control.detailFailed"
   | "conversation.control.retry"
   | "markdown.copied"
+  | "markdown.mermaidFailed"
+  | "markdown.diagramImageFailed"
+  | "markdown.expandDiagram"
+  | "markdown.diagramView"
+  | "markdown.diagramMode"
+  | "markdown.sourceMode"
   | "mediaPlayer.maximize"
   | "mediaPlayer.restore"
   | "mediaPlayer.close"
@@ -3941,6 +4007,56 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "knowledge.experience.embeddingProgress": "正在生成向量 {done} / {total}（{percent}%）",
     "knowledge.experience.cancelling": "正在请求取消",
     "knowledge.experience.failed": "操作失败",
+    "knowledge.feedback.title": "知识库操作提示",
+    "knowledge.feedback.description": "以下为完整诊断信息，可选择或复制。",
+    "knowledge.feedback.operationError": "操作遇到问题，请查看详细原因。",
+    "knowledge.feedback.details": "查看详情",
+    "knowledge.feedback.copy": "复制详情",
+    "knowledge.feedback.copied": "已复制",
+    "knowledge.feedback.copyFailed": "复制失败，请选择文本手动复制。",
+    "knowledge.feedback.warnings": "查看 {count} 条提醒",
+    "knowledge.feedback.output": "查看模型输出",
+    "knowledge.skipped.summary": "本次跳过 {count} 份文档，不阻塞其余文档建库",
+    "knowledge.skipped.details": "查看忽略清单",
+    "knowledge.skipped.size": "原因：超过整理大小上限（{size} 字节 > {limit} 字节）",
+    "knowledge.skipped.hint": "原始文件仍保留。超大文件可缩小或拆分后同步目录；持久忽略可从“已忽略”中取消；本次未选文件可通过继续生成补充。此列表为最近一次生成记录。",
+    "knowledge.skipped.policy": "整理规则：源文件超过 64 KiB 的文档默认忽略，并单独列出；不会删除原文，也不会阻止其他文档完成建库。已成功整理的文档在同一次续跑中保留。",
+    "knowledge.skipped.counts": "已生成 {generated} · 已忽略 {skipped}",
+    "knowledge.files.ready": "可选",
+    "knowledge.files.completed": "已完成，无需重复处理",
+    "knowledge.files.oversized": "不可选：超过 64 KiB",
+    "knowledge.files.ignored": "已忽略",
+    "knowledge.files.unsupported": "不可选：非 Markdown 或文件链接",
+    "knowledge.files.unreadable": "不可选：无法读取或解码",
+    "knowledge.files.notSelected": "仅本次未选择",
+    "knowledge.files.manage": "管理已忽略文件",
+    "knowledge.files.title": "确认文件清单",
+    "knowledge.files.description": "扫描不会启动导入或生成。检查清单后确认执行，取消不会处理任何文件。",
+    "knowledge.files.policy": "超过 64 KiB、不支持或无法读取的文件不可选。取消勾选仅影响本次；加入忽略会持续生效，直到从“已忽略”中取消。已有内容不会因未选或忽略而删除。",
+    "knowledge.files.all": "文件清单",
+    "knowledge.files.rescan": "重新扫描",
+    "knowledge.files.filter": "筛选文件或来源目录",
+    "knowledge.files.loading": "正在检查文件清单…",
+    "knowledge.files.scanTimeout": "文件清单检查超过 30 秒，已停止等待。没有启动导入或生成，请重新扫描或关闭后重试。",
+    "knowledge.files.savingRules": "正在保存忽略规则…",
+    "knowledge.files.counts": "已选 {selected} / 可选 {ready} · 不可选 {blocked}",
+    "knowledge.files.selectAll": "全选可用文件",
+    "knowledge.files.selectNone": "本次全部不选",
+    "knowledge.files.ignoreSelected": "选中文件加入忽略",
+    "knowledge.files.file": "文件 / 来源目录",
+    "knowledge.files.size": "大小",
+    "knowledge.files.state": "状态 / 原因",
+    "knowledge.files.actions": "操作",
+    "knowledge.files.unignore": "取消忽略",
+    "knowledge.files.ignore": "加入忽略",
+    "knowledge.files.selectAllIgnored": "选中当前筛选的忽略项",
+    "knowledge.files.unignoreSelected": "批量取消忽略",
+    "knowledge.files.empty": "没有匹配文件",
+    "knowledge.files.previous": "上一页",
+    "knowledge.files.next": "下一页",
+    "knowledge.files.cancel": "关闭，不执行",
+    "knowledge.files.confirmImport": "确认清单并导入",
+    "knowledge.files.confirmBuild": "确认清单并生成",
     "knowledge.experience.cancelled": "操作已取消",
     "knowledge.experience.completed": "操作完成",
     "knowledge.experience.running": "正在执行",
@@ -4639,7 +4755,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.kind.file": "文件",
     "composer.thinkingProcess": "思考弹窗",
     "composer.planMode": "计划模式",
-    "composer.vmmMemory": "VMM 记忆",
+    "composer.vmmMemory": "记忆选项",
+    "composer.collapseTools": "工具折叠",
+    "composer.sessionSettings": "会话设置",
+    "composer.inheritSystem": "继承系统",
+    "composer.collapseToolsDisabled": "关闭折叠",
+    "composer.collapseToolsEnabled": "开启折叠",
     "composer.vmm.precheckInjection": "前置记忆注入",
     "composer.vmm.memoryWriteback": "后置记忆提交",
     "composer.vmm.mode.inheritProject": "跟随项目",
@@ -4682,7 +4803,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.error.stopCurrentFailed": "停止当前会话失败。",
     "composer.error.promptEmpty": "请输入任务指令。",
     "composer.error.draftLoadFailed": "会话草稿加载失败，发送已暂停。",
-    "composer.error.draftPersistFailed": "会话草稿保存失败，请重试。",
+    "composer.error.draftPersistFailed": "会话草稿保存失败，请查看错误详情。",
     "composer.error.draftChangedBeforeSubmission": "草稿已变化，本次未发送，内容已保留。",
     "composer.modelPicker.tooltipTitle": "点击选择模型",
     "composer.modelPicker.currentModel": "当前模型：{model}",
@@ -5342,7 +5463,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.markdownOutput.stopped": "已停止",
     "toolPresentation.markdownOutput.completed": "已查询",
     "toolPresentation.fileList.title": "查询文件列表",
-    "toolPresentation.fileRead.title": "读取文件",
+    "toolPresentation.fileRead.title": "读取",
+    "toolPresentation.file.action.create": "创建",
+    "toolPresentation.file.action.modify": "编辑",
+    "toolPresentation.file.action.delete": "删除",
+    "toolPresentation.file.action.rename": "改名",
+    "toolPresentation.file.action.mixed": "变更",
     "toolPresentation.fileRead.rangeFrom": "从第 {start} 行开始",
     "toolPresentation.fileRead.range": "第 {start}-{end} 行",
     "toolPresentation.fileSearch.title": "搜索文件",
@@ -5360,6 +5486,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.control.detailFailed": "详情读取失败",
     "conversation.control.retry": "重新读取",
     "markdown.copied": "已复制",
+    "markdown.mermaidFailed": "Mermaid 图表渲染失败，已保留源码（展开查看原因）",
+    "markdown.diagramImageFailed": "浏览器无法加载生成的图表图片。",
+    "markdown.expandDiagram": "展开图表",
+    "markdown.diagramView": "图表显示模式",
+    "markdown.diagramMode": "图形",
+    "markdown.sourceMode": "源码",
     "mediaPlayer.maximize": "最大化播放器",
     "mediaPlayer.restore": "还原播放器",
     "mediaPlayer.close": "关闭播放器",
@@ -7672,6 +7804,56 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "knowledge.experience.embeddingProgress": "Building vectors {done} / {total} ({percent}%)",
     "knowledge.experience.cancelling": "Requesting cancellation",
     "knowledge.experience.failed": "Operation failed",
+    "knowledge.feedback.title": "Knowledge operation notice",
+    "knowledge.feedback.description": "Full diagnostic details. Select or copy the text below.",
+    "knowledge.feedback.operationError": "The operation encountered a problem. Review the details.",
+    "knowledge.feedback.details": "View details",
+    "knowledge.feedback.copy": "Copy details",
+    "knowledge.feedback.copied": "Copied",
+    "knowledge.feedback.copyFailed": "Copy failed. Select the text and copy it manually.",
+    "knowledge.feedback.warnings": "View {count} notices",
+    "knowledge.feedback.output": "View model output",
+    "knowledge.skipped.summary": "Skipped {count} documents; other documents can still complete",
+    "knowledge.skipped.details": "View skipped files",
+    "knowledge.skipped.size": "Reason: source exceeds the curation limit ({size} bytes > {limit} bytes)",
+    "knowledge.skipped.hint": "Raw files are retained. Shorten or split oversized files and sync their source; remove persistent rules from Ignored files; continue generation to include files not selected for this run. This list records the latest build.",
+    "knowledge.skipped.policy": "Curation policy: sources larger than 64 KiB are skipped and listed separately. Raw content is retained and other documents can complete. Successful documents are retained when resuming the same build.",
+    "knowledge.skipped.counts": "Generated {generated} · Skipped {skipped}",
+    "knowledge.files.ready": "Selectable",
+    "knowledge.files.completed": "Completed; no repeat needed",
+    "knowledge.files.oversized": "Unavailable: exceeds 64 KiB",
+    "knowledge.files.ignored": "Ignored files",
+    "knowledge.files.unsupported": "Unavailable: not Markdown or a filesystem link",
+    "knowledge.files.unreadable": "Unavailable: cannot read or decode",
+    "knowledge.files.notSelected": "Not selected for this run",
+    "knowledge.files.manage": "Manage ignored files",
+    "knowledge.files.title": "Confirm file list",
+    "knowledge.files.description": "Scanning starts no import or generation. Review and confirm the list to execute; closing processes no files.",
+    "knowledge.files.policy": "Files over 64 KiB, unsupported files and unreadable files cannot be selected. Unchecking affects this run only; explicit ignores persist until removed. Existing content is never deleted by either action.",
+    "knowledge.files.all": "File list",
+    "knowledge.files.rescan": "Rescan",
+    "knowledge.files.filter": "Filter files or source directories",
+    "knowledge.files.loading": "Inspecting files…",
+    "knowledge.files.scanTimeout": "File inspection exceeded 30 seconds; waiting has stopped. No import or generation was started. Rescan or close and try again.",
+    "knowledge.files.savingRules": "Saving ignore rules…",
+    "knowledge.files.counts": "Selected {selected} / Eligible {ready} · Unavailable {blocked}",
+    "knowledge.files.selectAll": "Select all eligible files",
+    "knowledge.files.selectNone": "Select none for this run",
+    "knowledge.files.ignoreSelected": "Ignore selected files",
+    "knowledge.files.file": "File / Source directory",
+    "knowledge.files.size": "Size",
+    "knowledge.files.state": "Status / Reason",
+    "knowledge.files.actions": "Actions",
+    "knowledge.files.unignore": "Stop ignoring",
+    "knowledge.files.ignore": "Ignore file",
+    "knowledge.files.selectAllIgnored": "Select filtered ignored files",
+    "knowledge.files.unignoreSelected": "Stop ignoring selected files",
+    "knowledge.files.empty": "No matching files",
+    "knowledge.files.previous": "Previous",
+    "knowledge.files.next": "Next",
+    "knowledge.files.cancel": "Close without executing",
+    "knowledge.files.confirmImport": "Confirm and import",
+    "knowledge.files.confirmBuild": "Confirm and generate",
     "knowledge.experience.cancelled": "Operation cancelled",
     "knowledge.experience.completed": "Operation completed",
     "knowledge.experience.running": "Running",
@@ -8370,7 +8552,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.kind.file": "File",
     "composer.thinkingProcess": "Thinking popup",
     "composer.planMode": "Plan mode",
-    "composer.vmmMemory": "VMM memory",
+    "composer.vmmMemory": "Memory options",
+    "composer.collapseTools": "Tool folding",
+    "composer.sessionSettings": "Session settings",
+    "composer.inheritSystem": "Inherit system",
+    "composer.collapseToolsDisabled": "Disable folding",
+    "composer.collapseToolsEnabled": "Enable folding",
     "composer.vmm.precheckInjection": "Precheck memory injection",
     "composer.vmm.memoryWriteback": "Post-turn memory writeback",
     "composer.vmm.mode.inheritProject": "Follow project",
@@ -8413,7 +8600,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.error.stopCurrentFailed": "Failed to stop the current conversation.",
     "composer.error.promptEmpty": "Enter a task instruction.",
     "composer.error.draftLoadFailed": "Failed to load the conversation draft. Sending is paused.",
-    "composer.error.draftPersistFailed": "Failed to save the conversation draft. Try again.",
+    "composer.error.draftPersistFailed": "Failed to save the conversation draft. Check the error details.",
     "composer.error.draftChangedBeforeSubmission": "The draft changed. Nothing was sent and your content was kept.",
     "composer.modelPicker.tooltipTitle": "Select model",
     "composer.modelPicker.currentModel": "Current model: {model}",
@@ -9073,7 +9260,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.markdownOutput.stopped": "Stopped",
     "toolPresentation.markdownOutput.completed": "Queried",
     "toolPresentation.fileList.title": "List files",
-    "toolPresentation.fileRead.title": "Read file",
+    "toolPresentation.fileRead.title": "Read",
+    "toolPresentation.file.action.create": "Create",
+    "toolPresentation.file.action.modify": "Edit",
+    "toolPresentation.file.action.delete": "Delete",
+    "toolPresentation.file.action.rename": "Rename",
+    "toolPresentation.file.action.mixed": "Change",
     "toolPresentation.fileRead.rangeFrom": "From line {start}",
     "toolPresentation.fileRead.range": "Lines {start}-{end}",
     "toolPresentation.fileSearch.title": "Search files",
@@ -9091,6 +9283,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.control.detailFailed": "Could not load details",
     "conversation.control.retry": "Load again",
     "markdown.copied": "Copied",
+    "markdown.mermaidFailed": "Mermaid rendering failed; source preserved (expand for details)",
+    "markdown.diagramImageFailed": "The browser could not load the generated diagram image.",
+    "markdown.expandDiagram": "Expand diagram",
+    "markdown.diagramView": "Diagram display mode",
+    "markdown.diagramMode": "Diagram",
+    "markdown.sourceMode": "Source",
     "mediaPlayer.maximize": "Maximize player",
     "mediaPlayer.restore": "Restore player",
     "mediaPlayer.close": "Close player",

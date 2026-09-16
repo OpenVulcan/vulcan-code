@@ -440,6 +440,9 @@ function fileReadHeaderRanges(
 // visibleMarkdownToolOutput 返回可见块中已经存在的内联输出。
 function visibleMarkdownToolOutput(blocks: ToolExecutionConversationBlock[]): string {
   return blocks
+    // Request bodies contain arguments; only result blocks own returned content, including empty results.
+    // 请求正文包含参数；只有结果块拥有返回内容，包括空返回。
+    .filter((block) => block.kind === "tool-result")
     .map((block) => block.body.trim())
     .find(Boolean)
     ?? "";

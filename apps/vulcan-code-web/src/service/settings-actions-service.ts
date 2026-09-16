@@ -822,6 +822,12 @@ export async function selectWorkbenchThinkingDisplayMode(mode: string): Promise<
   return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_thinking_display_mode", { mode });
 }
 
+// Saves the explicit system default; enabled controls folding, and the returned snapshot is authoritative.
+// 保存明确的系统默认值；enabled 控制折叠，返回的快照具有权威性。
+export async function saveToolCollapseDefault(enabled: boolean): Promise<WorkbenchSnapshot> {
+  return serviceClient.request<WorkbenchSnapshot>("service_save_tool_collapse_default", { enabled });
+}
+
 // selectWebuiLocale persists one WebUI locale through the desktop service router.
 // selectWebuiLocale 通过桌面服务路由持久化单个 WebUI 语言。
 export async function selectWebuiLocale(locale: string): Promise<WorkbenchSnapshot | null> {

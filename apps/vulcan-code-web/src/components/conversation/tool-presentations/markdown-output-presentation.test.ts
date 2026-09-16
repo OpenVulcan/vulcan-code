@@ -28,6 +28,24 @@ function markdownToolBlock(
 }
 
 describe("recognized Markdown-output tool mapping", () => {
+  it.each(["vulcan_file_list", "vulcan_file_read", "vulcan_codekit_rg", "vulcan_codekit_ast_tree"])(
+    "shows %s results instead of the preceding invocation arguments",
+    (toolName) => {
+      // result mirrors the terminal block emitted after the request in the production V1 projection.
+      // result 模拟生产 V1 投影中紧随请求生成的终态结果块。
+      const result = markdownToolBlock(toolName, "# Returned content\nactual result", { path: "src" })[0]!;
+      // request intentionally carries nonempty JSON, matching the reported directory-list card.
+      // request 特意携带非空 JSON，与报告中的目录查询卡片一致。
+      const request: ToolExecutionConversationBlock = {
+        ...result, id: "request", kind: "tool-call", body: '{"path":"src","limit":50}',
+      };
+      expect(resolveMarkdownToolPresentation([request, result], "completed")?.markdown).toBe(result.body);
+      expect(resolveMarkdownToolPresentation([request], "running")?.markdown).toBe("");
+      expect(resolveMarkdownToolPresentation([request, { ...result, body: "" }], "completed")?.markdown).toBe("");
+      expect(resolveMarkdownToolPresentation([request, { ...result, body: "permission denied" }], "failed")?.markdown).toBe("permission denied");
+    },
+  );
+
   it("keeps a file-read path and ranges in the collapsed model and parses source rows", () => {
     // presentation maps the documented vulcan-file-read request and text envelope.
     // presentation 映射已声明的 vulcan-file-read 请求与文本封套。

@@ -203,7 +203,13 @@ fn bounded_vce_batch_error_message(message: &str) -> String {
     message
         .chars()
         .take(1_024)
-        .map(|character| if character.is_control() { ' ' } else { character })
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
         .collect()
 }
 

@@ -22,6 +22,8 @@ import { ProviderManagementArea } from "@/components/features/settings/provider-
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
 import { ProviderToolSelectionSettingsArea } from "@/components/features/settings/provider-tool-selection-settings";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
+import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
+import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
@@ -120,7 +122,11 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
         actions={props.actions}
         retrySettings={props.workbench.providerRetry}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
-        outputStyleSettings={<OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />}
+        outputStyleSettings={<>
+          <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
+          <ToolCollapseSettingsSection />
+          <ThinkingPopupSettingsSection />
+        </>}
       />
     );
   }

@@ -311,22 +311,38 @@ async fn verify_publication_remote_task_roundtrip(manager: &VceRuntimeManager, s
     use vulcan_context_engine::*;
     // runtime owns only the temporary test database and has an existing published source plan.
     // runtime 仅持有临时测试数据库，并具有已发布的源码计划。
-    let runtime = manager.require_project("nonempty-project").await.expect("test runtime");
+    let runtime = manager
+        .require_project("nonempty-project")
+        .await
+        .expect("test runtime");
     // view follows the same wrapper path used by production indexing jobs.
     // view 使用生产索引作业所经过的相同包装路径。
     let view = super::super::publication_index::VcePublicationIndex::new(
-        Arc::clone(&runtime), Arc::new(|_| Ok(())), "remote-roundtrip-owner",
+        Arc::clone(&runtime),
+        Arc::new(|_| Ok(())),
+        "remote-roundtrip-owner",
     );
-    assert!(view.load_embedding_remote_batch_records(
-        "missing-run".to_owned(), VceAiPurpose::CodeDocumentEmbedding,
-    ).await.is_err(), "missing-run storage errors must not become an empty success");
+    assert!(
+        view.load_embedding_remote_batch_records(
+            "missing-run".to_owned(),
+            VceAiPurpose::CodeDocumentEmbedding,
+        )
+        .await
+        .is_err(),
+        "missing-run storage errors must not become an empty success"
+    );
     // manifest reuses valid fixture source metadata under a separate unpublished test run.
     // manifest 在独立未发布测试运行下复用有效夹具源码元数据。
-    let mut manifest = view.load_embedding_manifest(source_run.to_owned()).await
-        .expect("load fixture plan").expect("durable source plan");
+    let mut manifest = view
+        .load_embedding_manifest(source_run.to_owned())
+        .await
+        .expect("load fixture plan")
+        .expect("durable source plan");
     manifest.run_id = "publication-remote-roundtrip".to_owned();
     manifest.state = VceEmbeddingRunState::Running;
-    view.persist_embedding_manifest(manifest.clone()).await.expect("persist test plan");
+    view.persist_embedding_manifest(manifest.clone())
+        .await
+        .expect("persist test plan");
     // record describes a local synthetic task; this test never uploads or submits a provider request.
     // record 描述本地模拟任务；测试绝不上传或提交供应商请求。
     let record = VceEmbeddingRemoteBatchRecord {
@@ -365,33 +381,72 @@ async fn verify_publication_remote_task_roundtrip(manager: &VceRuntimeManager, s
                 deletes_input_file_after_ingestion: false,
             },
             tasks: vec![VceEmbeddingBatchTaskPlan {
-                task_id: "task-one".to_owned(), first_input_index: 0, input_count: 1,
-                encoded_payload_bytes: 64, payload_sha256: "a".repeat(64),
+                task_id: "task-one".to_owned(),
+                first_input_index: 0,
+                input_count: 1,
+                encoded_payload_bytes: 64,
+                payload_sha256: "a".repeat(64),
             }],
         },
         state: VceEmbeddingRemoteBatchState::Planned,
-        uploaded_input: None, submission: None, snapshot: None,
-        poll_attempt: 0, next_poll_not_before_unix_ms: None,
-        error: None, cleanup_warning: None, updated_at_unix_ms: manifest.updated_at_unix_ms,
+        uploaded_input: None,
+        submission: None,
+        snapshot: None,
+        poll_attempt: 0,
+        next_poll_not_before_unix_ms: None,
+        error: None,
+        cleanup_warning: None,
+        updated_at_unix_ms: manifest.updated_at_unix_ms,
     };
     view.persist_embedding_remote_batch_record(manifest.run_id.clone(), record.clone())
-        .await.expect("persist through publication wrapper");
-    assert_eq!(runtime.index.load_embedding_remote_batch_records(
-        manifest.run_id.clone(), VceAiPurpose::CodeDocumentEmbedding,
-    ).await.expect("read actual durable storage"), vec![record.clone()]);
+        .await
+        .expect("persist through publication wrapper");
+    assert_eq!(
+        runtime
+            .index
+            .load_embedding_remote_batch_records(
+                manifest.run_id.clone(),
+                VceAiPurpose::CodeDocumentEmbedding,
+            )
+            .await
+            .expect("read actual durable storage"),
+        vec![record.clone()]
+    );
     // reopened contains no local record cache and must recover the same durable task.
     // reopened 不包含本地记录缓存，必须恢复同一持久任务。
     let reopened = super::super::publication_index::VcePublicationIndex::new(
-        runtime, Arc::new(|_| Ok(())), "remote-roundtrip-reopened",
+        runtime,
+        Arc::new(|_| Ok(())),
+        "remote-roundtrip-reopened",
     );
-    assert_eq!(reopened.load_embedding_remote_batch_records(
-        manifest.run_id.clone(), VceAiPurpose::CodeDocumentEmbedding,
-    ).await.expect("reload through fresh publication wrapper"), vec![record]);
-    assert!(reopened.load_embedding_remote_batch_records(
-        manifest.run_id.clone(), VceAiPurpose::CodePathEmbedding,
-    ).await.expect("other purpose has no records").is_empty());
-    reopened.persist_embedding_run_state(manifest.run_id, VceEmbeddingRunState::Cancelled,
-        manifest.updated_at_unix_ms + 1).await.expect("settle isolated roundtrip run");
+    assert_eq!(
+        reopened
+            .load_embedding_remote_batch_records(
+                manifest.run_id.clone(),
+                VceAiPurpose::CodeDocumentEmbedding,
+            )
+            .await
+            .expect("reload through fresh publication wrapper"),
+        vec![record]
+    );
+    assert!(
+        reopened
+            .load_embedding_remote_batch_records(
+                manifest.run_id.clone(),
+                VceAiPurpose::CodePathEmbedding,
+            )
+            .await
+            .expect("other purpose has no records")
+            .is_empty()
+    );
+    reopened
+        .persist_embedding_run_state(
+            manifest.run_id,
+            VceEmbeddingRunState::Cancelled,
+            manifest.updated_at_unix_ms + 1,
+        )
+        .await
+        .expect("settle isolated roundtrip run");
 }
 
 /// Verify nonempty initialization and overlapping old/new queries on `factory` within isolated `project_root`.

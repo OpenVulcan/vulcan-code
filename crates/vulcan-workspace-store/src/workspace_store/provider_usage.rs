@@ -466,7 +466,10 @@ async fn ensure_provider_usage_schema_at(
 ) -> Result<(), String> {
     // Prevent concurrent initialization from racing the nullable column upgrade.
     // 防止并发初始化竞争可空字段升级。
-    let _schema_guard = PROVIDER_USAGE_SCHEMA_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+    let _schema_guard = PROVIDER_USAGE_SCHEMA_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     local_sql::execute_script_async(
         &host_runtime.local,
         logical,
@@ -595,14 +598,27 @@ VALUES ('health_status', 'ready', 0);
     .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
     // Existing revision-seven databases retain every row with unknown first-token timing.
     // 已有第七版数据库保留全部记录，其首 Token 时间保持未知。
-    let columns = local_sql::query_json_async(&host_runtime.local, logical,
-        "PRAGMA table_info(provider_usage_attempts_v3);", vec![]).await
-        .map_err(|error| format!("读取供应商用量字段失败：{error}"))?;
+    let columns = local_sql::query_json_async(
+        &host_runtime.local,
+        logical,
+        "PRAGMA table_info(provider_usage_attempts_v3);",
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("读取供应商用量字段失败：{error}"))?;
     let columns = decode_query_rows::<serde_json::Value>(&columns.json_data)?;
-    if !columns.iter().any(|column| column["name"].as_str() == Some("first_token_at_ms")) {
-        local_sql::execute_script_async(&host_runtime.local, logical,
-            "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN first_token_at_ms INTEGER;", vec![]).await
-            .map_err(|error| format!("升级供应商首 Token 时间字段失败：{error}"))?;
+    if !columns
+        .iter()
+        .any(|column| column["name"].as_str() == Some("first_token_at_ms"))
+    {
+        local_sql::execute_script_async(
+            &host_runtime.local,
+            logical,
+            "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN first_token_at_ms INTEGER;",
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("升级供应商首 Token 时间字段失败：{error}"))?;
     }
     write_provider_usage_schema_revision(host_runtime, logical).await?;
     Ok(())

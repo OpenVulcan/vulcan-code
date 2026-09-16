@@ -180,6 +180,7 @@ fn golden_assistant_text_with_provider_source() {
             text: "hello".to_string(),
             status: AssistantSemanticStatus::Completed,
             provider_source: Some(ProviderSource {
+                fingerprint_version: None,
                 provider: "openai".to_string(),
                 profile: Some("responses".to_string()),
                 model: "gpt-5".to_string(),
@@ -760,6 +761,7 @@ fn tool_call_with_provider_source_round_trips() {
             external_refs: Vec::new(),
             generated_resources: Vec::new(),
             provider_source: Some(ProviderSource {
+                fingerprint_version: None,
                 provider: "openai".to_string(),
                 profile: None,
                 model: "gpt-5".to_string(),

@@ -2,6 +2,8 @@ import React from "react";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
+import { moveConversationToolCollapseOverride } from "@/components/conversation/tool-collapse-preferences";
+import { moveConversationThinkingPopupOverride } from "@/components/conversation/thinking-display-preferences";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import { materializeAcknowledgedDraftSubmission } from "@/components/workspace/draft-submission-state";
 import {
@@ -28,6 +30,7 @@ import {
   selectWorkbenchModelSecondaryRoute,
   selectWorkbenchReasoningEffort,
   selectWorkbenchThinkingDisplayMode,
+  saveToolCollapseDefault,
 } from "@/service/settings-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
@@ -208,6 +211,8 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       // A successful draft submit creates the persisted id before its ordered sidebar delta is rendered.
       // 草稿提交成功后，持久化标识会先于有序侧栏增量完成渲染。
       if (selectedDraftConversation?.id === submittedSelectionId) {
+        moveConversationToolCollapseOverride(submittedSelectionId, nextConversationId);
+        moveConversationThinkingPopupOverride(submittedSelectionId, nextConversationId);
         // materializedConversationAlreadyVisible closes the transition immediately when the delta won the race.
         // materializedConversationAlreadyVisible 在增量先到达时立即结束转正过渡。
         const materializedConversationAlreadyVisible = workbenchStateRef.current.conversations
@@ -763,9 +768,8 @@ const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: st
 const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: ThinkingDisplayMode): Promise<boolean> => {
   try {
     const snapshot = await selectWorkbenchThinkingDisplayMode(mode);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
+    if (!snapshot) return false;
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     return true;
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -774,7 +778,17 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
 }, [mergeWorkbenchWithLocalCaches, setWorkbenchState]);
 
 
+  // Saves the system default and merges the authoritative snapshot; failures remain visible to the settings form.
+  // 保存系统默认值并合并权威快照；失败交由设置表单明确展示。
+  // Parameter enabled selects the default; resolves only after persistence succeeds.
+  // 参数 enabled 选择默认值；仅在持久化成功后完成。
+  const handleSaveToolCollapseDefault = React.useCallback(async (enabled: boolean): Promise<void> => {
+    const snapshot = await saveToolCollapseDefault(enabled);
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+  }, [mergeWorkbenchWithLocalCaches, setWorkbenchState]);
+
   return {
+    handleSaveToolCollapseDefault,
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
     handleStopConversationRun,

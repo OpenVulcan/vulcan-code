@@ -4,6 +4,7 @@
 use super::*;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::Semaphore;
 
 /// Compile-time proof that one shared Lua engine may be reached through a read/write lock.
 /// 共享 Lua 引擎可通过读写锁并发访问的编译期证明。
@@ -84,9 +85,15 @@ pub struct LuaSkillsRuntimeHandle {
     /// Cached runtime entries currently visible to provider-facing tool preparation.
     /// 当前对 Provider 工具准备链可见的运行时入口缓存。
     pub tool_entries: Arc<Mutex<Vec<RuntimeEntryDescriptor>>>,
-    /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for host polling.
-    /// 保存细粒度 LuaSkills 操作进度事件并供宿主轮询的共享 FIFO 队列。
-    pub operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
+    /// Host admission matching the configured ordinary Skill VM-pool capacity.
+    /// 与普通 Skill VM 池配置容量一致的宿主入场器。
+    pub(super) skill_call_admission: Arc<Semaphore>,
+    /// Host admission bounding RunLua operation workers with the configured isolated-pool capacity.
+    /// 以隔离 RunLua 池配置容量约束 RunLua 操作工作线程的宿主入场器。
+    pub(super) runlua_call_admission: Arc<Semaphore>,
+    /// Host admission matching LuaSkills' independent persistent-session lease capacity.
+    /// 与 LuaSkills 独立持久会话租约容量一致的宿主入场器。
+    pub(super) runlua_session_call_admission: Arc<Semaphore>,
     /// Live host-only switch controlling AI visibility of isolated RunLua execution.
     /// 控制隔离 RunLua 执行 AI 可见性的实时宿主开关。
     pub(super) runlua_ai_tool_enabled: Arc<AtomicBool>,
@@ -117,14 +124,6 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
                     .len(),
             )
             .field(
-                "operation_progress_event_count",
-                &self
-                    .operation_progress_events
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .len(),
-            )
-            .field(
                 "runlua_ai_tool_enabled",
                 &self.runlua_ai_tool_enabled.load(Ordering::Acquire),
             )
@@ -148,6 +147,16 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
 impl LuaSkillsRuntimeHandle {
     /// Creates an agent-facing handle from one already initialized shared LuaSkills engine.
     /// 根据一个已初始化的共享 LuaSkills 引擎创建面向 Agent 的句柄。
+    ///
+    /// `engine` and the runtime/catalog arguments retain the exact production engine projection;
+    /// `skill_call_capacity` mirrors the ordinary pool and `runlua_call_capacity` mirrors only the
+    /// isolated one-shot pool. Persistent sessions use the host's release-compatible mirror of the
+    /// engine-wide fixed lease limit.
+    /// `engine` 与运行时/目录参数保留精确生产引擎投影；`skill_call_capacity` 镜像普通池，
+    /// `runlua_call_capacity` 仅镜像隔离的一次性池；持久会话使用宿主对引擎级固定租约上限的发布版兼容镜像。
+    ///
+    /// Returns one cloneable handle whose async callers queue before creating blocking workers.
+    /// 返回一个可克隆句柄，使异步调用方在创建阻塞工作线程之前排队。
     pub fn from_shared_engine(
         engine: Arc<RwLock<LuaEngine>>,
         runtime_root: PathBuf,
@@ -156,6 +165,8 @@ impl LuaSkillsRuntimeHandle {
         tool_entries: Vec<RuntimeEntryDescriptor>,
         runlua_ai_tool_enabled: bool,
         runlua_session_ai_tool_enabled: bool,
+        skill_call_capacity: usize,
+        runlua_call_capacity: usize,
     ) -> Self {
         // system_lua_lib_dir is derived from the single verified runtime root contract.
         // system_lua_lib_dir 根据唯一且已验证的运行时根目录契约派生。
@@ -167,7 +178,11 @@ impl LuaSkillsRuntimeHandle {
             skill_roots,
             entry_count,
             tool_entries: Arc::new(Mutex::new(tool_entries)),
-            operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
+            skill_call_admission: Arc::new(Semaphore::new(skill_call_capacity.max(1))),
+            runlua_call_admission: Arc::new(Semaphore::new(runlua_call_capacity.max(1))),
+            runlua_session_call_admission: Arc::new(Semaphore::new(
+                LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY,
+            )),
             runlua_ai_tool_enabled: Arc::new(AtomicBool::new(runlua_ai_tool_enabled)),
             runlua_session_ai_tool_enabled: Arc::new(AtomicBool::new(
                 runlua_session_ai_tool_enabled,
@@ -301,10 +316,21 @@ impl LuaSkillsInstallSourceChoice {
 
     /// Convert the panel-side install source choice into the upstream LuaSkills source enum.
     /// 将面板侧安装来源选项转换成上游 LuaSkills 来源枚举。
-    pub fn into_runtime_source_type(self) -> SkillInstallSourceType {
+    ///
+    /// `Url` is refused rather than converted: upstream rejects
+    /// `SkillInstallSourceType::Url` unconditionally by source policy, so a choice whose
+    /// own label advertises a package URL would fail on every attempt. This type has no
+    /// caller today, which is exactly why the refusal lives here rather than in a caller
+    /// that could be written later without noticing.
+    /// `Url` 被拒绝而不是被转换：上游按来源策略无条件拒绝 `SkillInstallSourceType::Url`，
+    /// 因此一个自身标签就在宣传包地址的选项会在每次尝试时失败。该类型当前没有任何调用方，
+    /// 这正是把拒绝放在这里、而不是留给日后可能在不察觉的情况下写出的调用方的原因。
+    pub fn into_runtime_source_type(self) -> Result<SkillInstallSourceType, String> {
         match self {
-            Self::Github => SkillInstallSourceType::Github,
-            Self::Url => SkillInstallSourceType::Url,
+            Self::Github => Ok(SkillInstallSourceType::Github),
+            Self::Url => Err(String::from(
+                "来源类型 `url` 已被上游来源策略停用，无法使用；请将安装来源改为 GitHub。",
+            )),
         }
     }
 }
@@ -430,10 +456,63 @@ pub(super) enum RootSkillBootstrapSourceType {
 impl RootSkillBootstrapSourceType {
     /// Converts the declarative bootstrap source type into the upstream LuaSkills source enum.
     /// 将声明式引导来源类型转换为上游 LuaSkills 来源枚举。
-    pub(super) fn into_runtime_source_type(self) -> SkillInstallSourceType {
+    ///
+    /// `Url` is refused rather than converted: upstream rejects
+    /// `SkillInstallSourceType::Url` unconditionally by source policy, so a ROOT bootstrap
+    /// declaring it would fail on every start with an upstream policy string. Refusing it
+    /// here reports the reason once, in the host's own words.
+    /// `Url` 被拒绝而不是被转换：上游按来源策略无条件拒绝 `SkillInstallSourceType::Url`，
+    /// 因此声明它的 ROOT 引导会在每次启动时以上游策略文案失败。在此拒绝它可以用宿主自己的措辞
+    /// 一次性说明原因。
+    pub(super) fn into_runtime_source_type(self) -> Result<SkillInstallSourceType, String> {
         match self {
-            Self::Github => SkillInstallSourceType::Github,
-            Self::Url => SkillInstallSourceType::Url,
+            Self::Github => Ok(SkillInstallSourceType::Github),
+            Self::Url => Err(String::from(
+                "来源类型 `url` 已被上游来源策略停用，无法使用；请将该技能的来源类型改为 `github`。",
+            )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LuaSkillsInstallSourceChoice;
+    use luaskills::SkillInstallSourceType;
+
+    /// Verifies every host-side source choice refuses the disabled `url` source type.
+    /// 验证每个宿主侧来源选项都拒绝已停用的 `url` 来源类型。
+    ///
+    /// Upstream rejects `SkillInstallSourceType::Url` unconditionally by source policy, so
+    /// a choice whose own label advertises a package URL would fail on every attempt. The
+    /// refusal therefore lives on the type rather than on one of its callers, which is what
+    /// keeps a future caller from inheriting the dead path unnoticed.
+    /// 上游按来源策略无条件拒绝 `SkillInstallSourceType::Url`，因此一个自身标签就在宣传包地址
+    /// 的选项会在每次尝试时失败。拒绝因此落在类型上而不是它的某个调用方上，这正是使未来新增
+    /// 调用方不会在无人察觉的情况下继承这条死路的原因。
+    #[test]
+    fn install_source_choice_refuses_the_disabled_url_kind() {
+        assert!(matches!(
+            LuaSkillsInstallSourceChoice::Github.into_runtime_source_type(),
+            Ok(SkillInstallSourceType::Github)
+        ));
+        let error = LuaSkillsInstallSourceChoice::Url
+            .into_runtime_source_type()
+            .expect_err("upstream rejects the url source type unconditionally");
+        // The message names both the rejected kind and its replacement.
+        // 消息同时点名被拒绝的类型与其替代者。
+        assert!(error.contains("url"), "{error}");
+        assert!(error.contains("GitHub"), "{error}");
+    }
+
+    /// Verifies the user-facing label still describes both kinds truthfully.
+    /// 验证用户可见标签仍如实描述两种类型。
+    ///
+    /// The label is independent of the refusal: the choice remains displayable so an
+    /// existing value can be read back, while converting it to a request is what fails.
+    /// 标签与拒绝相互独立：该选项仍可显示，以便已有的值能被读出，失败的是把它转成请求。
+    #[test]
+    fn install_source_choice_labels_stay_truthful() {
+        assert_eq!(LuaSkillsInstallSourceChoice::Github.label(), "GitHub");
+        assert_eq!(LuaSkillsInstallSourceChoice::Url.label(), "包地址");
     }
 }

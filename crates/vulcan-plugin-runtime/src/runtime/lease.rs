@@ -325,9 +325,9 @@ where
     T: Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
-        let engine = engine
-            .read()
-            .map_err(|_| VulcanPluginRuntimeError::new("LuaSkills engine read lock is poisoned."))?;
+        let engine = engine.read().map_err(|_| {
+            VulcanPluginRuntimeError::new("LuaSkills engine read lock is poisoned.")
+        })?;
         operation(&engine)
     })
     .await

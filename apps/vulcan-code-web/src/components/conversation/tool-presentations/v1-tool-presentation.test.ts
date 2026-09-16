@@ -218,7 +218,7 @@ describe("V1 event-native tool presentation", () => {
     expect(file.deletions).toBe(24);
   });
 
-  it("hides the icon slot for exact directory-list tools", () => {
+  it("uses folder-search icons for exact directory-list tools", () => {
     const nativeList = resolveV1ToolPresentation(toolItem({
       toolName: "file",
       input: { action: "list", path: "D:/project" },
@@ -230,8 +230,8 @@ describe("V1 event-native tool presentation", () => {
       output: { markdown: "- src" },
     }));
 
-    expect(nativeList).toMatchObject({ kind: "file_access", action: "list", icon: null });
-    expect(legacyList).toMatchObject({ kind: "file_access", action: "list", icon: null });
+    expect(nativeList).toMatchObject({ kind: "file_access", action: "list", icon: "folder-search" });
+    expect(legacyList).toMatchObject({ kind: "file_access", action: "list", icon: "folder-search" });
   });
 
   it("keeps failed and successful tools in caller-supplied seq and API grouping", () => {

@@ -87,7 +87,7 @@ export function ChatArea(props: ChatAreaProps) {
     selectMode: handleThinkingDisplayModeChange,
   } = useThinkingDisplayMode({
     authoritativeMode: props.workbench.thinkingDisplayMode,
-    onSelectMode: props.onSelectWorkbenchThinkingDisplayMode,
+    conversationId: props.selectedConversationId,
   });
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   // eventWindowSnapshot is the sole durable authority for Continue eligibility and consumption.

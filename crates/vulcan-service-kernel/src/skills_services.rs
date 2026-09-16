@@ -61,6 +61,43 @@ async fn lock_luaskills_management_mutation() -> tokio::sync::MutexGuard<'static
     LUASKILLS_MANAGEMENT_MUTATION_LOCK.lock().await
 }
 
+/// Runs one LuaSkills management transaction in a service-owned asynchronous task.
+/// 在服务自有的异步任务中运行一次 LuaSkills 管理事务。
+///
+/// # Parameters
+/// 参数
+/// `label` identifies join failures and `operation` owns the complete mutation, persistence,
+/// projection, and progress-finalization span.
+/// `label` 标识联接失败，`operation` 拥有完整的变更、持久化、投影与进度终结区间。
+///
+/// # Returns
+/// 返回值
+/// Returns the transaction result after the service-owned task completes.
+/// 在服务自有任务完成后返回事务结果。
+///
+/// Dropping an RPC waiter detaches a Tokio join handle but must not release the management
+/// lock while a nested `spawn_blocking` mutation is still running. The inner task therefore
+/// owns both the lock guard and the whole post-mutation projection. Runtime shutdown remains
+/// the sole boundary allowed to cancel that ownership.
+/// 丢弃 RPC 等待者会分离 Tokio 联接句柄，但不得在嵌套的 `spawn_blocking` 变更仍运行时释放
+/// 管理锁。因此内部任务同时拥有锁守卫与完整后置投影。仅运行时关闭边界允许取消该所有权。
+async fn run_luaskills_management_owned<T, F, Fut>(
+    label: &'static str,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, String>> + Send + 'static,
+{
+    spawn_service_task(async move {
+        let _management_guard = lock_luaskills_management_mutation().await;
+        operation().await
+    })
+    .await
+    .map_err(|error| format!("LuaSkills 管理事务 `{label}` 任务异常结束：{error}"))?
+}
+
 /// Acquires the complete Agent Skills catalog transaction guard.
 /// 获取完整 Agent Skills 目录事务守卫。
 pub(crate) async fn lock_agent_skills_catalog_mutation() -> tokio::sync::MutexGuard<'static, ()> {
@@ -215,39 +252,43 @@ pub(crate) async fn service_refresh_luaskills_catalog(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    // Keep the runtime refresh and its returned catalog projection in one ordered transaction.
-    // 将运行时刷新及其返回的目录投影保持在同一个有序事务中。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let provider_configuration = provider_configuration_from_state(&state)?;
-    let vulcan_plugin_runtime = service_vulcan_plugin_runtime(&state)?;
-    let preview_catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
-        vulcan_plugin_runtime.vulcan_plugin_root(),
-        Some(vulcan_plugin_runtime.user_plugin_root()),
-        &provider_configuration.luaskills.disabled_vulcan_plugins,
-        &provider_configuration.luaskills.enabled_vulcan_plugins,
-        0,
-    );
-    let preview_hooks = preview_catalog
-        .enabled_hooks
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
-    validate_service_vulcan_plugin_hooks(&state, &preview_hooks)
-        .map_err(|error| format!("Vulcan Plugin hook 刷新预检失败：{error}"))?;
-    let catalog = run_extension_management_blocking("refresh catalog", move || {
-        vulcan_service_runtime::luaskills_bridge::refresh_luaskills_catalog(&handle)
-    })
-    .await?;
-    store_luaskills_catalog(&state, catalog)?;
-    let vulcan_plugin_catalog = vulcan_plugin_runtime
-        .refresh_catalog(
+    run_luaskills_management_owned("refresh catalog", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let provider_configuration = provider_configuration_from_state(&state)?;
+        let vulcan_plugin_runtime = service_vulcan_plugin_runtime(&state)?;
+        let preview_catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
+            vulcan_plugin_runtime.vulcan_plugin_root(),
+            Some(vulcan_plugin_runtime.user_plugin_root()),
             &provider_configuration.luaskills.disabled_vulcan_plugins,
             &provider_configuration.luaskills.enabled_vulcan_plugins,
-        )
-        .map_err(|error| error.to_string())?;
-    synchronize_service_vulcan_plugin_hooks(&state, vulcan_plugin_runtime, &vulcan_plugin_catalog)?;
-    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+            0,
+        );
+        let preview_hooks = preview_catalog
+            .enabled_hooks
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        validate_service_vulcan_plugin_hooks(&state, &preview_hooks)
+            .map_err(|error| format!("Vulcan Plugin hook 刷新预检失败：{error}"))?;
+        let catalog = run_extension_management_blocking("refresh catalog", move || {
+            vulcan_service_runtime::luaskills_bridge::refresh_luaskills_catalog(&handle)
+        })
+        .await?;
+        store_luaskills_catalog(&state, catalog)?;
+        let vulcan_plugin_catalog = vulcan_plugin_runtime
+            .refresh_catalog(
+                &provider_configuration.luaskills.disabled_vulcan_plugins,
+                &provider_configuration.luaskills.enabled_vulcan_plugins,
+            )
+            .map_err(|error| error.to_string())?;
+        synchronize_service_vulcan_plugin_hooks(
+            &state,
+            vulcan_plugin_runtime,
+            &vulcan_plugin_catalog,
+        )?;
+        refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+    })
+    .await
 }
 
 /// Loads one host-safe LuaSkills package configuration descriptor for the WebUI.
@@ -319,21 +360,24 @@ pub(crate) async fn service_set_luaskill_config(
         .into_iter()
         .map(|(key, value)| project_luaskill_config_input(value).map(|projected| (key, projected)))
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let skill_id = request.skill_id;
-    let expected_revision = request.expected_revision;
-    let (result, descriptor) = run_extension_management_blocking("set package config", move || {
-        vulcan_service_runtime::luaskills_bridge::set_luaskill_package_config(
-            &handle,
-            &skill_id,
-            values,
-            &expected_revision,
-        )
+    run_luaskills_management_owned("set package config", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let skill_id = request.skill_id;
+        let expected_revision = request.expected_revision;
+        let (result, descriptor) =
+            run_extension_management_blocking("set package config", move || {
+                vulcan_service_runtime::luaskills_bridge::set_luaskill_package_config(
+                    &handle,
+                    &skill_id,
+                    values,
+                    &expected_revision,
+                )
+            })
+            .await?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await?;
+        project_luaskill_config_set_result(result, descriptor)
     })
-    .await?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await?;
-    project_luaskill_config_set_result(result, descriptor)
+    .await
 }
 
 /// Projects one upstream write result while removing canonical values for sensitive declarations.
@@ -394,23 +438,25 @@ pub(crate) async fn service_delete_luaskill_config(
     state: SharedServiceBridgeState,
     request: LuaSkillConfigDeleteRequest,
 ) -> Result<LuaSkillConfigDeleteResult, String> {
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let skill_id = request.skill_id;
-    let key = request.key;
-    let expected_revision = request.expected_revision;
-    let (result, descriptor) =
-        run_extension_management_blocking("delete package config", move || {
-            vulcan_service_runtime::luaskills_bridge::delete_luaskill_package_config_value(
-                &handle,
-                &skill_id,
-                &key,
-                &expected_revision,
-            )
-        })
-        .await?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await?;
-    project_luaskill_config_delete_result(result, descriptor)
+    run_luaskills_management_owned("delete package config", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let skill_id = request.skill_id;
+        let key = request.key;
+        let expected_revision = request.expected_revision;
+        let (result, descriptor) =
+            run_extension_management_blocking("delete package config", move || {
+                vulcan_service_runtime::luaskills_bridge::delete_luaskill_package_config_value(
+                    &handle,
+                    &skill_id,
+                    &key,
+                    &expected_revision,
+                )
+            })
+            .await?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await?;
+        project_luaskill_config_delete_result(result, descriptor)
+    })
+    .await
 }
 
 /// Projects one upstream deletion result together with its matching host-safe snapshot.
@@ -446,26 +492,28 @@ pub(crate) async fn service_refresh_luaskill_config(
     state: SharedServiceBridgeState,
     request: LuaSkillConfigRefreshRequest,
 ) -> Result<Vec<LuaSkillConfigStoreRefresh>, String> {
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let refreshes = run_extension_management_blocking("refresh package config", move || {
-        vulcan_service_runtime::luaskills_bridge::refresh_luaskill_package_config(
-            &handle,
-            request.store_scope.as_deref(),
-        )
-    })
-    .await?;
-    if refreshes.iter().any(|refresh| refresh.changed) {
-        refresh_luaskills_local_state_and_emit(&app, &state).await?;
-    }
-    Ok(refreshes
-        .into_iter()
-        .map(|refresh| LuaSkillConfigStoreRefresh {
-            store_scope: refresh.store_scope,
-            revision: refresh.revision,
-            changed: refresh.changed,
+    run_luaskills_management_owned("refresh package config", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let refreshes = run_extension_management_blocking("refresh package config", move || {
+            vulcan_service_runtime::luaskills_bridge::refresh_luaskill_package_config(
+                &handle,
+                request.store_scope.as_deref(),
+            )
         })
-        .collect())
+        .await?;
+        if refreshes.iter().any(|refresh| refresh.changed) {
+            refresh_luaskills_local_state_and_emit(&app, &state).await?;
+        }
+        Ok(refreshes
+            .into_iter()
+            .map(|refresh| LuaSkillConfigStoreRefresh {
+                store_scope: refresh.store_scope,
+                revision: refresh.revision,
+                changed: refresh.changed,
+            })
+            .collect())
+    })
+    .await
 }
 
 /// Polls ordered LuaSkills configuration events and synchronizes catalog state after observed changes.
@@ -488,6 +536,9 @@ pub(crate) async fn service_poll_luaskill_config_events(
         })
         .await?;
     if cursor_recovered || !batch.events.is_empty() {
+        // The projection owns its narrower configuration/state ordering. A read-only,
+        // three-second UI poll must not enter the package-management mutation queue.
+        // 投影自身拥有更窄的配置及状态顺序。三秒一次的只读 UI 轮询不得进入技能包管理变更队列。
         refresh_luaskills_local_state_and_emit(&app, &state).await?;
     }
     Ok(project_luaskill_config_event_batch(batch))
@@ -848,57 +899,60 @@ async fn mutate_plugin_mcp_secret(
     if plugin_id.is_empty() || server_id.is_empty() || secret_key.is_empty() {
         return Err(String::from("插件、MCP Server 与 Secret 键均不能为空。"));
     }
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let runtime = service_vulcan_plugin_runtime(&state)?;
-    let catalog = runtime.snapshot();
-    let plugin = catalog
-        .plugins
-        .get(&plugin_id)
-        .ok_or_else(|| format!("插件 `{plugin_id}` 未安装。"))?;
-    let server = plugin
-        .mcp_servers
-        .iter()
-        .find(|server| server.id == server_id)
-        .ok_or_else(|| format!("插件 `{plugin_id}` 未声明 MCP Server `{server_id}`。"))?;
-    if !server.manifest.declared_secret_keys().contains(&secret_key) {
-        return Err(format!(
-            "插件 MCP Server `{plugin_id}:{server_id}` 未声明 Secret 键 `{secret_key}`。"
-        ));
-    }
-    let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-    let previous_value = secret_store.read_optional_secret(&plugin_id, &server_id, &secret_key)?;
-    match next_value.as_deref() {
-        Some(value) => secret_store.write_secret(&plugin_id, &server_id, &secret_key, value)?,
-        None => secret_store.delete_secret(&plugin_id, &server_id, &secret_key)?,
-    }
-    let refresh_result =
-        if plugin.runtime_state == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled {
-            refresh_enabled_plugin_mcp_after_secret_change(
-                &state,
-                &runtime,
-                Arc::clone(&catalog),
-                plugin,
-            )
-            .await
-        } else {
-            Ok(())
-        };
-    if let Err(error) = refresh_result {
-        let rollback_result = restore_plugin_mcp_secret(
-            &secret_store,
-            &plugin_id,
-            &server_id,
-            &secret_key,
-            previous_value.as_deref(),
-        );
-        return Err(match rollback_result {
-            Ok(()) => format!("插件 MCP Secret 变更未通过就绪检查：{error}"),
-            Err(rollback_error) => format!(
-                "插件 MCP Secret 变更未通过就绪检查：{error}；Secret 回滚失败：{rollback_error}"
-            ),
-        });
-    }
-    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+    run_luaskills_management_owned("mutate plugin MCP secret", move || async move {
+        let runtime = service_vulcan_plugin_runtime(&state)?;
+        let catalog = runtime.snapshot();
+        let plugin = catalog
+            .plugins
+            .get(&plugin_id)
+            .ok_or_else(|| format!("插件 `{plugin_id}` 未安装。"))?;
+        let server = plugin
+            .mcp_servers
+            .iter()
+            .find(|server| server.id == server_id)
+            .ok_or_else(|| format!("插件 `{plugin_id}` 未声明 MCP Server `{server_id}`。"))?;
+        if !server.manifest.declared_secret_keys().contains(&secret_key) {
+            return Err(format!(
+                "插件 MCP Server `{plugin_id}:{server_id}` 未声明 Secret 键 `{secret_key}`。"
+            ));
+        }
+        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+        let previous_value =
+            secret_store.read_optional_secret(&plugin_id, &server_id, &secret_key)?;
+        match next_value.as_deref() {
+            Some(value) => secret_store.write_secret(&plugin_id, &server_id, &secret_key, value)?,
+            None => secret_store.delete_secret(&plugin_id, &server_id, &secret_key)?,
+        }
+        let refresh_result =
+            if plugin.runtime_state == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled {
+                refresh_enabled_plugin_mcp_after_secret_change(
+                    &state,
+                    &runtime,
+                    Arc::clone(&catalog),
+                    plugin,
+                )
+                .await
+            } else {
+                Ok(())
+            };
+        if let Err(error) = refresh_result {
+            let rollback_result = restore_plugin_mcp_secret(
+                &secret_store,
+                &plugin_id,
+                &server_id,
+                &secret_key,
+                previous_value.as_deref(),
+            );
+            return Err(match rollback_result {
+                Ok(()) => format!("插件 MCP Secret 变更未通过就绪检查：{error}"),
+                Err(rollback_error) => format!(
+                    "插件 MCP Secret 变更未通过就绪检查：{error}；Secret 回滚失败：{rollback_error}"
+                ),
+            });
+        }
+        refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+    })
+    .await
 }
 
 /// Rebuilds only the enabled target plugin MCP partition and publishes it with the unchanged exact catalog.
@@ -1272,115 +1326,139 @@ pub(crate) async fn service_install_local_plugin(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // management_guard makes package publication, state persistence, lifecycle, and projection one transaction.
     // management_guard 使插件包发布、状态持久化、生命周期与投影成为同一事务。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let runtime = service_vulcan_plugin_runtime(&state)?;
-    let install_runtime = runtime.clone();
-    let source_path = PathBuf::from(source_path);
-    let installation = run_extension_management_blocking("install local plugin", move || {
-        install_runtime
-            .install_local_user_plugin(
-                &source_path,
-                &expected_content_fingerprint,
-                approved_permissions,
-                allow_registry_dependencies,
-            )
-            .map_err(|error| error.to_string())
-    })
-    .await?;
-    let plugin_id = installation.plugin_id.clone();
-    // configuration is read before credential mutation so a state-lock failure needs only package rollback.
-    // configuration 在凭据变更前读取，使状态锁失败时只需回滚插件包。
-    let configuration = match provider_configuration_from_state(&state) {
-        Ok(configuration) => configuration,
-        Err(error) => {
-            return match runtime.uninstall_user_plugin(&plugin_id) {
-                Ok(()) => Err(error),
-                Err(rollback_error) => Err(format!(
-                    "{error}；回滚用户插件 `{plugin_id}` 失败：{rollback_error}"
-                )),
-            };
-        }
-    };
-    // had_disabled_override preserves exact pre-install policy membership for rollback.
-    // had_disabled_override 为回滚保留安装前精确的停用策略成员关系。
-    let had_disabled_override = configuration
-        .luaskills
-        .disabled_vulcan_plugins
-        .contains(&plugin_id);
-    // had_enabled_override preserves exact pre-install policy membership for rollback.
-    // had_enabled_override 为回滚保留安装前精确的启用策略成员关系。
-    let had_enabled_override = configuration
-        .luaskills
-        .enabled_vulcan_plugins
-        .contains(&plugin_id);
-    // initial_secret_values must match the host-derived local MCP requirement set exactly.
-    // initial_secret_values 必须与宿主派生的本地 MCP 要求集合完全一致。
-    let initial_secret_values = match validate_initial_plugin_mcp_secrets(
-        &installation.permission_preview,
-        initial_secrets,
-    ) {
-        Ok(values) => values,
-        Err(error) => {
-            return match runtime.uninstall_user_plugin(&plugin_id) {
-                Ok(()) => Err(error),
-                Err(rollback_error) => Err(format!(
-                    "{error}；回滚用户插件 `{plugin_id}` 失败：{rollback_error}"
-                )),
-            };
-        }
-    };
-    // secret_store is the sole persistence boundary for installation credentials.
-    // secret_store 是安装凭据的唯一持久化边界。
-    let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-    // previous_secret_values records only mutations that completed and therefore require rollback.
-    // previous_secret_values 仅记录已完成且因此需要回滚的变更。
-    let mut previous_secret_values = Vec::new();
-    for ((server_id, secret_key), value) in &initial_secret_values {
-        let previous_value =
-            match secret_store.read_optional_secret(&plugin_id, server_id, secret_key) {
-                Ok(value) => value,
-                Err(error) => {
-                    let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                        &secret_store,
-                        &plugin_id,
-                        &previous_secret_values,
-                    );
-                    if let Err(rollback_error) = runtime.uninstall_user_plugin(&plugin_id) {
-                        rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
-                    }
-                    return if rollback_failures.is_empty() {
-                        Err(error)
-                    } else {
-                        Err(format!("{error}；{}", rollback_failures.join("；")))
-                    };
-                }
-            };
-        if let Err(error) = secret_store.write_secret(&plugin_id, server_id, secret_key, value) {
-            let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                &secret_store,
-                &plugin_id,
-                &previous_secret_values,
-            );
-            if let Err(rollback_error) = runtime.uninstall_user_plugin(&plugin_id) {
-                rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
+    run_luaskills_management_owned("install local plugin", move || async move {
+        let runtime = service_vulcan_plugin_runtime(&state)?;
+        let install_runtime = runtime.clone();
+        let source_path = PathBuf::from(source_path);
+        let installation = run_extension_management_blocking("install local plugin", move || {
+            install_runtime
+                .install_local_user_plugin(
+                    &source_path,
+                    &expected_content_fingerprint,
+                    approved_permissions,
+                    allow_registry_dependencies,
+                )
+                .map_err(|error| error.to_string())
+        })
+        .await?;
+        let plugin_id = installation.plugin_id.clone();
+        // configuration is read before credential mutation so a state-lock failure needs only package rollback.
+        // configuration 在凭据变更前读取，使状态锁失败时只需回滚插件包。
+        let configuration = match provider_configuration_from_state(&state) {
+            Ok(configuration) => configuration,
+            Err(error) => {
+                return match runtime.uninstall_user_plugin(&plugin_id) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(format!(
+                        "{error}；回滚用户插件 `{plugin_id}` 失败：{rollback_error}"
+                    )),
+                };
             }
-            return if rollback_failures.is_empty() {
-                Err(error)
-            } else {
-                Err(format!("{error}；{}", rollback_failures.join("；")))
-            };
+        };
+        // had_disabled_override preserves exact pre-install policy membership for rollback.
+        // had_disabled_override 为回滚保留安装前精确的停用策略成员关系。
+        let had_disabled_override = configuration
+            .luaskills
+            .disabled_vulcan_plugins
+            .contains(&plugin_id);
+        // had_enabled_override preserves exact pre-install policy membership for rollback.
+        // had_enabled_override 为回滚保留安装前精确的启用策略成员关系。
+        let had_enabled_override = configuration
+            .luaskills
+            .enabled_vulcan_plugins
+            .contains(&plugin_id);
+        // initial_secret_values must match the host-derived local MCP requirement set exactly.
+        // initial_secret_values 必须与宿主派生的本地 MCP 要求集合完全一致。
+        let initial_secret_values = match validate_initial_plugin_mcp_secrets(
+            &installation.permission_preview,
+            initial_secrets,
+        ) {
+            Ok(values) => values,
+            Err(error) => {
+                return match runtime.uninstall_user_plugin(&plugin_id) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(format!(
+                        "{error}；回滚用户插件 `{plugin_id}` 失败：{rollback_error}"
+                    )),
+                };
+            }
+        };
+        // secret_store is the sole persistence boundary for installation credentials.
+        // secret_store 是安装凭据的唯一持久化边界。
+        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+        // previous_secret_values records only mutations that completed and therefore require rollback.
+        // previous_secret_values 仅记录已完成且因此需要回滚的变更。
+        let mut previous_secret_values = Vec::new();
+        for ((server_id, secret_key), value) in &initial_secret_values {
+            let previous_value =
+                match secret_store.read_optional_secret(&plugin_id, server_id, secret_key) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
+                            &secret_store,
+                            &plugin_id,
+                            &previous_secret_values,
+                        );
+                        if let Err(rollback_error) = runtime.uninstall_user_plugin(&plugin_id) {
+                            rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
+                        }
+                        return if rollback_failures.is_empty() {
+                            Err(error)
+                        } else {
+                            Err(format!("{error}；{}", rollback_failures.join("；")))
+                        };
+                    }
+                };
+            if let Err(error) = secret_store.write_secret(&plugin_id, server_id, secret_key, value)
+            {
+                let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
+                    &secret_store,
+                    &plugin_id,
+                    &previous_secret_values,
+                );
+                if let Err(rollback_error) = runtime.uninstall_user_plugin(&plugin_id) {
+                    rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
+                }
+                return if rollback_failures.is_empty() {
+                    Err(error)
+                } else {
+                    Err(format!("{error}；{}", rollback_failures.join("；")))
+                };
+            }
+            previous_secret_values.push(((server_id.clone(), secret_key.clone()), previous_value));
         }
-        previous_secret_values.push(((server_id.clone(), secret_key.clone()), previous_value));
-    }
-    let mut disabled_plugins = configuration.luaskills.disabled_vulcan_plugins.clone();
-    disabled_plugins.insert(plugin_id.clone());
-    let preview_catalog = match runtime.refresh_catalog(
-        &disabled_plugins,
-        &configuration.luaskills.enabled_vulcan_plugins,
-    ) {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            let error = error.to_string();
+        let mut disabled_plugins = configuration.luaskills.disabled_vulcan_plugins.clone();
+        disabled_plugins.insert(plugin_id.clone());
+        let preview_catalog = match runtime.refresh_catalog(
+            &disabled_plugins,
+            &configuration.luaskills.enabled_vulcan_plugins,
+        ) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                let error = error.to_string();
+                let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
+                    &secret_store,
+                    &installation.plugin_id,
+                    &previous_secret_values,
+                );
+                if let Err(rollback_error) = runtime.uninstall_user_plugin(&installation.plugin_id)
+                {
+                    rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
+                }
+                return if rollback_failures.is_empty() {
+                    Err(error)
+                } else {
+                    Err(format!("{error}；{}", rollback_failures.join("；")))
+                };
+            }
+        };
+        let plugin_default_enabled = preview_catalog
+            .plugins
+            .get(&plugin_id)
+            .and_then(|plugin| plugin.manifest.as_ref())
+            .map(|manifest| manifest.default_enabled);
+        let Some(plugin_default_enabled) = plugin_default_enabled else {
+            let error = format!("新安装插件 `{plugin_id}` 未进入有效目录。");
             let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
                 &secret_store,
                 &installation.plugin_id,
@@ -1394,78 +1472,61 @@ pub(crate) async fn service_install_local_plugin(
             } else {
                 Err(format!("{error}；{}", rollback_failures.join("；")))
             };
-        }
-    };
-    let plugin_default_enabled = preview_catalog
-        .plugins
-        .get(&plugin_id)
-        .and_then(|plugin| plugin.manifest.as_ref())
-        .map(|manifest| manifest.default_enabled);
-    let Some(plugin_default_enabled) = plugin_default_enabled else {
-        let error = format!("新安装插件 `{plugin_id}` 未进入有效目录。");
-        let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-            &secret_store,
-            &installation.plugin_id,
-            &previous_secret_values,
-        );
-        if let Err(rollback_error) = runtime.uninstall_user_plugin(&installation.plugin_id) {
-            rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
-        }
-        return if rollback_failures.is_empty() {
-            Err(error)
-        } else {
-            Err(format!("{error}；{}", rollback_failures.join("；")))
         };
-    };
-    let persistence_result = mutate_provider_configuration(
-        &state,
-        "保存用户插件初始停用状态失败",
-        |provider_configuration| {
-            provider_configuration
-                .luaskills
-                .set_vulcan_plugin_enabled_with_default(&plugin_id, false, plugin_default_enabled);
-            Ok(())
-        },
-        |_, _| (),
-    )
-    .await;
-    if let Err(error) = persistence_result {
-        // rollbackResult must be surfaced because a failed removal leaves an installed package.
-        // rollbackResult 必须显式上报，因为删除失败会留下已安装插件包。
-        let rollback_result = runtime.uninstall_user_plugin(&installation.plugin_id);
-        let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-            &secret_store,
-            &installation.plugin_id,
-            &previous_secret_values,
-        );
-        if let Err(rollback_error) = rollback_result {
-            rollback_failures.push(format!(
-                "回滚用户插件 `{}` 失败：{rollback_error}",
-                installation.plugin_id
-            ));
+        let persistence_result = mutate_provider_configuration(
+            &state,
+            "保存用户插件初始停用状态失败",
+            |provider_configuration| {
+                provider_configuration
+                    .luaskills
+                    .set_vulcan_plugin_enabled_with_default(
+                        &plugin_id,
+                        false,
+                        plugin_default_enabled,
+                    );
+                Ok(())
+            },
+            |_, _| (),
+        )
+        .await;
+        if let Err(error) = persistence_result {
+            // rollbackResult must be surfaced because a failed removal leaves an installed package.
+            // rollbackResult 必须显式上报，因为删除失败会留下已安装插件包。
+            let rollback_result = runtime.uninstall_user_plugin(&installation.plugin_id);
+            let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
+                &secret_store,
+                &installation.plugin_id,
+                &previous_secret_values,
+            );
+            if let Err(rollback_error) = rollback_result {
+                rollback_failures.push(format!(
+                    "回滚用户插件 `{}` 失败：{rollback_error}",
+                    installation.plugin_id
+                ));
+            }
+            return if rollback_failures.is_empty() {
+                Err(error)
+            } else {
+                Err(format!("{error}；{}", rollback_failures.join("；")))
+            };
         }
-        return if rollback_failures.is_empty() {
-            Err(error)
-        } else {
-            Err(format!("{error}；{}", rollback_failures.join("；")))
-        };
-    }
-    let prepare_runtime = runtime.clone();
-    let prepare_plugin_id = installation.plugin_id.clone();
-    let preparation_result = run_extension_management_blocking("prepare local plugin", move || {
-        prepare_runtime
-            .prepare_plugin_environment(&prepare_plugin_id)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    })
-    .await;
-    // local_mcp_identity captures the exact disabled catalog candidate without including remote servers.
-    // local_mcp_identity 捕获精确的停用目录候选，且不包含远程服务器。
-    let local_mcp_identity = preview_catalog
-        .plugins
-        .get(&installation.plugin_id)
-        .map(|plugin| {
-            (
+        let prepare_runtime = runtime.clone();
+        let prepare_plugin_id = installation.plugin_id.clone();
+        let preparation_result =
+            run_extension_management_blocking("prepare local plugin", move || {
+                prepare_runtime
+                    .prepare_plugin_environment(&prepare_plugin_id)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await;
+        // local_mcp_identity captures the exact disabled catalog candidate without including remote servers.
+        // local_mcp_identity 捕获精确的停用目录候选，且不包含远程服务器。
+        let local_mcp_identity = preview_catalog
+            .plugins
+            .get(&installation.plugin_id)
+            .map(|plugin| {
+                (
                 plugin.generation,
                 plugin
                     .mcp_servers
@@ -1479,90 +1540,114 @@ pub(crate) async fn service_install_local_plugin(
                     .cloned()
                     .collect::<Vec<_>>(),
             )
-        })
-        .ok_or_else(|| format!("新安装插件 `{}` 未进入候选目录。", installation.plugin_id));
-    // candidate_preparation_result includes isolated local MCP startup and confirmed teardown.
-    // candidate_preparation_result 包含隔离的本地 MCP 启动与经确认的拆除。
-    let candidate_preparation_result = match (preparation_result, local_mcp_identity) {
-        (Ok(()), Ok((generation, local_mcp_descriptors))) => {
-            match plugin_mcp_server_configs_for_descriptors(
-                &runtime,
-                &local_mcp_descriptors,
-                &secret_store,
-            ) {
-                Ok(servers) => {
-                    validate_plugin_mcp_runtime_partition(
-                        &installation.plugin_id,
-                        generation,
-                        servers,
-                    )
-                    .await
+            })
+            .ok_or_else(|| format!("新安装插件 `{}` 未进入候选目录。", installation.plugin_id));
+        // candidate_preparation_result includes isolated local MCP startup and confirmed teardown.
+        // candidate_preparation_result 包含隔离的本地 MCP 启动与经确认的拆除。
+        let candidate_preparation_result = match (preparation_result, local_mcp_identity) {
+            (Ok(()), Ok((generation, local_mcp_descriptors))) => {
+                match plugin_mcp_server_configs_for_descriptors(
+                    &runtime,
+                    &local_mcp_descriptors,
+                    &secret_store,
+                ) {
+                    Ok(servers) => {
+                        validate_plugin_mcp_runtime_partition(
+                            &installation.plugin_id,
+                            generation,
+                            servers,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
             }
-        }
-        (Err(error), _) | (_, Err(error)) => Err(error),
-    };
-    // installCallbackStarted distinguishes dependency preparation failure from partial lifecycle work.
-    // installCallbackStarted 区分依赖准备失败与已经开始的部分生命周期工作。
-    let install_callback_started = candidate_preparation_result.is_ok();
-    // lifecycleResult retains the exact preparation or install callback failure.
-    // lifecycleResult 保留精确的准备或安装回调失败。
-    let lifecycle_result = match candidate_preparation_result {
-        Ok(()) => runtime
-            .invoke_lifecycle(
-                &installation.plugin_id,
-                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Install,
-            )
-            .await
-            .map_err(|error| error.to_string()),
-        Err(error) => Err(error),
-    };
-    if let Err(error) = lifecycle_result {
-        let rollback_failures = rollback_local_plugin_install(
-            &state,
-            &runtime,
-            &installation.plugin_id,
-            &secret_store,
-            &previous_secret_values,
-            had_disabled_override,
-            had_enabled_override,
-            install_callback_started,
-        )
-        .await;
-        let base_error = format!(
-            "用户插件 `{}` 安装生命周期失败：{error}",
-            installation.plugin_id
-        );
-        return if rollback_failures.is_empty() {
-            Err(base_error)
-        } else {
-            Err(format!("{base_error}；{}", rollback_failures.join("；")))
+            (Err(error), _) | (_, Err(error)) => Err(error),
         };
-    }
-    // publication_candidate completes every fallible preparation before the atomic pointer swap.
-    // publication_candidate 在原子指针切换前完成全部可能失败的准备。
-    let publication_candidate = (|| -> Result<_, String> {
-        let effective_configuration = provider_configuration_from_state(&state)?;
-        let catalog = runtime
-            .refresh_catalog(
-                &effective_configuration.luaskills.disabled_vulcan_plugins,
-                &effective_configuration.luaskills.enabled_vulcan_plugins,
+        // installCallbackStarted distinguishes dependency preparation failure from partial lifecycle work.
+        // installCallbackStarted 区分依赖准备失败与已经开始的部分生命周期工作。
+        let install_callback_started = candidate_preparation_result.is_ok();
+        // lifecycleResult retains the exact preparation or install callback failure.
+        // lifecycleResult 保留精确的准备或安装回调失败。
+        let lifecycle_result = match candidate_preparation_result {
+            Ok(()) => runtime
+                .invoke_lifecycle(
+                    &installation.plugin_id,
+                    vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Install,
+                )
+                .await
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = lifecycle_result {
+            let rollback_failures = rollback_local_plugin_install(
+                &state,
+                &runtime,
+                &installation.plugin_id,
+                &secret_store,
+                &previous_secret_values,
+                had_disabled_override,
+                had_enabled_override,
+                install_callback_started,
             )
-            .map_err(|error| error.to_string())?;
-        synchronize_service_vulcan_plugin_hooks(&state, runtime.clone(), &catalog)?;
-        let current_mcp_runtime = state
-            .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?
-            .agent_runtime
-            .as_ref()
-            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-        Ok((catalog, current_mcp_runtime))
-    })();
-    let (catalog, current_mcp_runtime) = match publication_candidate {
-        Ok(candidate) => candidate,
-        Err(error) => {
+            .await;
+            let base_error = format!(
+                "用户插件 `{}` 安装生命周期失败：{error}",
+                installation.plugin_id
+            );
+            return if rollback_failures.is_empty() {
+                Err(base_error)
+            } else {
+                Err(format!("{base_error}；{}", rollback_failures.join("；")))
+            };
+        }
+        // publication_candidate completes every fallible preparation before the atomic pointer swap.
+        // publication_candidate 在原子指针切换前完成全部可能失败的准备。
+        let publication_candidate = (|| -> Result<_, String> {
+            let effective_configuration = provider_configuration_from_state(&state)?;
+            let catalog = runtime
+                .refresh_catalog(
+                    &effective_configuration.luaskills.disabled_vulcan_plugins,
+                    &effective_configuration.luaskills.enabled_vulcan_plugins,
+                )
+                .map_err(|error| error.to_string())?;
+            synchronize_service_vulcan_plugin_hooks(&state, runtime.clone(), &catalog)?;
+            let current_mcp_runtime = state
+                .lock()
+                .map_err(|error| format!("锁定服务状态失败：{error}"))?
+                .agent_runtime
+                .as_ref()
+                .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+                .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+            Ok((catalog, current_mcp_runtime))
+        })();
+        let (catalog, current_mcp_runtime) = match publication_candidate {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                let rollback_failures = rollback_local_plugin_install(
+                    &state,
+                    &runtime,
+                    &installation.plugin_id,
+                    &secret_store,
+                    &previous_secret_values,
+                    had_disabled_override,
+                    had_enabled_override,
+                    true,
+                )
+                .await;
+                return if rollback_failures.is_empty() {
+                    Err(error)
+                } else {
+                    Err(format!("{error}；{}", rollback_failures.join("；")))
+                };
+            }
+        };
+        if let Err(error) = vulcan_plugin_lifecycle::publish_extension_generation(
+            &state,
+            &installation.plugin_id,
+            Arc::clone(&catalog),
+            current_mcp_runtime,
+        ) {
             let rollback_failures = rollback_local_plugin_install(
                 &state,
                 &runtime,
@@ -1580,31 +1665,9 @@ pub(crate) async fn service_install_local_plugin(
                 Err(format!("{error}；{}", rollback_failures.join("；")))
             };
         }
-    };
-    if let Err(error) = vulcan_plugin_lifecycle::publish_extension_generation(
-        &state,
-        &installation.plugin_id,
-        Arc::clone(&catalog),
-        current_mcp_runtime,
-    ) {
-        let rollback_failures = rollback_local_plugin_install(
-            &state,
-            &runtime,
-            &installation.plugin_id,
-            &secret_store,
-            &previous_secret_values,
-            had_disabled_override,
-            had_enabled_override,
-            true,
-        )
-        .await;
-        return if rollback_failures.is_empty() {
-            Err(error)
-        } else {
-            Err(format!("{error}；{}", rollback_failures.join("；")))
-        };
-    }
-    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+        refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+    })
+    .await
 }
 
 /// Updates one disabled user plugin through candidate validation and one atomic generation publication.
@@ -1632,8 +1695,8 @@ pub(crate) async fn service_update_local_plugin(
     allow_registry_dependencies: bool,
     initial_secrets: Vec<VulcanPluginInitialSecretInput>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let runtime = service_vulcan_plugin_runtime(&state)?;
+    run_luaskills_management_owned("update local plugin", move || async move {
+        let runtime = service_vulcan_plugin_runtime(&state)?;
     let source_path = PathBuf::from(source_path);
     // inspected_preview validates credential inputs before any package swap occurs.
     // inspected_preview 在任何插件包替换前校验凭据输入。
@@ -1928,14 +1991,16 @@ pub(crate) async fn service_update_local_plugin(
         cleanup_failures.push(format!("旧插件包或环境清理失败：{error}"));
     }
     let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
-    if cleanup_failures.is_empty() {
+        if cleanup_failures.is_empty() {
         Ok(update)
     } else {
         Err(format!(
             "用户插件 `{plugin_id}` 已更新，但提交后清理存在问题：{}",
             cleanup_failures.join("；")
         ))
-    }
+        }
+    })
+    .await
 }
 
 /// Uninstalls one disabled user plugin after its declared lifecycle callback completes.
@@ -1945,171 +2010,174 @@ pub(crate) async fn service_uninstall_user_plugin(
     state: SharedServiceBridgeState,
     plugin_id: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let runtime = service_vulcan_plugin_runtime(&state)?;
-    let snapshot = runtime.snapshot();
-    let plugin = snapshot
-        .plugins
-        .get(&plugin_id)
-        .ok_or_else(|| format!("用户插件 `{plugin_id}` 未安装。"))?;
-    if plugin.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled {
-        return Err(format!("内建插件 `{plugin_id}` 不允许卸载。"));
-    }
-    if plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
-        || plugin.active_session_count != 0
-    {
-        return Err(format!("用户插件 `{plugin_id}` 必须先停用并完全排空。"));
-    }
-    // declared_secret_keys captures the complete credential namespace before package removal.
-    // declared_secret_keys 在插件包删除前捕获完整凭据命名空间。
-    let declared_secret_keys = plugin
-        .mcp_servers
-        .iter()
-        .flat_map(|server| {
-            server
-                .manifest
-                .declared_secret_keys()
-                .into_iter()
-                .map(|secret_key| (server.id.clone(), secret_key))
-        })
-        .collect::<Vec<_>>();
-    let mcp_runtime = state
-        .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
-        .agent_runtime
-        .as_ref()
-        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    if mcp_runtime.has_usable_retired_plugin_partitions(&plugin_id) {
-        return Err(format!(
-            "用户插件 `{plugin_id}` 的旧 MCP generation 仍在排空，暂时不能卸载。"
-        ));
-    }
-    runtime
-        .invoke_lifecycle(
-            &plugin_id,
-            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Uninstall,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    // previousConfiguration preserves exact override membership for uninstall rollback.
-    // previousConfiguration 保留精确覆盖成员关系，用于卸载回滚。
-    let previous_configuration = provider_configuration_from_state(&state)?;
-    // hadDisabledOverride records whether the plugin id was explicitly disabled before cleanup.
-    // hadDisabledOverride 记录清理前插件标识是否被显式停用。
-    let had_disabled_override = previous_configuration
-        .luaskills
-        .disabled_vulcan_plugins
-        .contains(&plugin_id);
-    // hadEnabledOverride records whether the plugin id was explicitly enabled before cleanup.
-    // hadEnabledOverride 记录清理前插件标识是否被显式启用。
-    let had_enabled_override = previous_configuration
-        .luaskills
-        .enabled_vulcan_plugins
-        .contains(&plugin_id);
-    mutate_provider_configuration(
-        &state,
-        "清理用户插件状态覆盖失败",
-        |provider_configuration| {
-            provider_configuration
-                .luaskills
-                .disabled_vulcan_plugins
-                .remove(&plugin_id);
-            provider_configuration
-                .luaskills
-                .enabled_vulcan_plugins
-                .remove(&plugin_id);
-            Ok(())
-        },
-        |_, _| (),
-    )
-    .await?;
-    // rollbackPluginId remains available to the persistence rollback closure if removal fails.
-    // rollbackPluginId 在删除失败时供持久化回滚闭包使用。
-    let rollback_plugin_id = plugin_id.clone();
-    let uninstall_runtime = runtime.clone();
-    let uninstall_plugin_id = plugin_id.clone();
-    // uninstallResult is handled explicitly so provider overrides can be restored transactionally.
-    // uninstallResult 被显式处理，以便事务化恢复 Provider 覆盖。
-    let uninstall_result = run_extension_management_blocking("uninstall user plugin", move || {
-        uninstall_runtime
-            .uninstall_user_plugin(&uninstall_plugin_id)
-            .map_err(|error| error.to_string())
-    })
-    .await;
-    if let Err(uninstall_error) = uninstall_result {
-        // restoreResult republishes the exact prior override membership after package rollback.
-        // restoreResult 在插件包回滚后重新发布精确的先前覆盖成员关系。
-        let restore_result = mutate_provider_configuration(
+    run_luaskills_management_owned("uninstall local plugin", move || async move {
+        let runtime = service_vulcan_plugin_runtime(&state)?;
+        let snapshot = runtime.snapshot();
+        let plugin = snapshot
+            .plugins
+            .get(&plugin_id)
+            .ok_or_else(|| format!("用户插件 `{plugin_id}` 未安装。"))?;
+        if plugin.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled {
+            return Err(format!("内建插件 `{plugin_id}` 不允许卸载。"));
+        }
+        if plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
+            || plugin.active_session_count != 0
+        {
+            return Err(format!("用户插件 `{plugin_id}` 必须先停用并完全排空。"));
+        }
+        // declared_secret_keys captures the complete credential namespace before package removal.
+        // declared_secret_keys 在插件包删除前捕获完整凭据命名空间。
+        let declared_secret_keys = plugin
+            .mcp_servers
+            .iter()
+            .flat_map(|server| {
+                server
+                    .manifest
+                    .declared_secret_keys()
+                    .into_iter()
+                    .map(|secret_key| (server.id.clone(), secret_key))
+            })
+            .collect::<Vec<_>>();
+        let mcp_runtime = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        if mcp_runtime.has_usable_retired_plugin_partitions(&plugin_id) {
+            return Err(format!(
+                "用户插件 `{plugin_id}` 的旧 MCP generation 仍在排空，暂时不能卸载。"
+            ));
+        }
+        runtime
+            .invoke_lifecycle(
+                &plugin_id,
+                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Uninstall,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        // previousConfiguration preserves exact override membership for uninstall rollback.
+        // previousConfiguration 保留精确覆盖成员关系，用于卸载回滚。
+        let previous_configuration = provider_configuration_from_state(&state)?;
+        // hadDisabledOverride records whether the plugin id was explicitly disabled before cleanup.
+        // hadDisabledOverride 记录清理前插件标识是否被显式停用。
+        let had_disabled_override = previous_configuration
+            .luaskills
+            .disabled_vulcan_plugins
+            .contains(&plugin_id);
+        // hadEnabledOverride records whether the plugin id was explicitly enabled before cleanup.
+        // hadEnabledOverride 记录清理前插件标识是否被显式启用。
+        let had_enabled_override = previous_configuration
+            .luaskills
+            .enabled_vulcan_plugins
+            .contains(&plugin_id);
+        mutate_provider_configuration(
             &state,
-            "恢复用户插件状态覆盖失败",
-            move |provider_configuration| {
-                if had_disabled_override {
-                    provider_configuration
-                        .luaskills
-                        .disabled_vulcan_plugins
-                        .insert(rollback_plugin_id.clone());
-                }
-                if had_enabled_override {
-                    provider_configuration
-                        .luaskills
-                        .enabled_vulcan_plugins
-                        .insert(rollback_plugin_id.clone());
-                }
+            "清理用户插件状态覆盖失败",
+            |provider_configuration| {
+                provider_configuration
+                    .luaskills
+                    .disabled_vulcan_plugins
+                    .remove(&plugin_id);
+                provider_configuration
+                    .luaskills
+                    .enabled_vulcan_plugins
+                    .remove(&plugin_id);
                 Ok(())
             },
             |_, _| (),
         )
-        .await;
-        return match restore_result {
-            Ok(()) => Err(uninstall_error),
-            Err(restore_error) => Err(format!(
-                "{uninstall_error}；恢复用户插件状态覆盖失败：{restore_error}"
-            )),
-        };
-    }
-    // secret_cleanup_failures remain independently reportable after the package transaction commits.
-    // secret_cleanup_failures 在插件包事务提交后仍可独立上报。
-    let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-    let secret_cleanup_failures = declared_secret_keys
-        .iter()
-        .filter_map(|(server_id, secret_key)| {
-            secret_store
-                .delete_secret(&plugin_id, server_id, secret_key)
-                .err()
-                .map(|error| format!("{server_id}:{secret_key}：{error}"))
-        })
-        .collect::<Vec<_>>();
-    let configuration = provider_configuration_from_state(&state)?;
-    let catalog = runtime
-        .refresh_catalog(
-            &configuration.luaskills.disabled_vulcan_plugins,
-            &configuration.luaskills.enabled_vulcan_plugins,
-        )
-        .map_err(|error| error.to_string())?;
-    let current_mcp_runtime = state
-        .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
-        .agent_runtime
-        .as_ref()
-        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    vulcan_plugin_lifecycle::publish_extension_generation(
-        &state,
-        &plugin_id,
-        Arc::clone(&catalog),
-        current_mcp_runtime,
-    )?;
-    synchronize_service_vulcan_plugin_hooks(&state, runtime, &catalog)?;
-    let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
-    if secret_cleanup_failures.is_empty() {
-        Ok(update)
-    } else {
-        Err(format!(
-            "用户插件 `{plugin_id}` 已卸载，但 Secret 清理失败：{}",
-            secret_cleanup_failures.join("；")
-        ))
-    }
+        .await?;
+        // rollbackPluginId remains available to the persistence rollback closure if removal fails.
+        // rollbackPluginId 在删除失败时供持久化回滚闭包使用。
+        let rollback_plugin_id = plugin_id.clone();
+        let uninstall_runtime = runtime.clone();
+        let uninstall_plugin_id = plugin_id.clone();
+        // uninstallResult is handled explicitly so provider overrides can be restored transactionally.
+        // uninstallResult 被显式处理，以便事务化恢复 Provider 覆盖。
+        let uninstall_result =
+            run_extension_management_blocking("uninstall user plugin", move || {
+                uninstall_runtime
+                    .uninstall_user_plugin(&uninstall_plugin_id)
+                    .map_err(|error| error.to_string())
+            })
+            .await;
+        if let Err(uninstall_error) = uninstall_result {
+            // restoreResult republishes the exact prior override membership after package rollback.
+            // restoreResult 在插件包回滚后重新发布精确的先前覆盖成员关系。
+            let restore_result = mutate_provider_configuration(
+                &state,
+                "恢复用户插件状态覆盖失败",
+                move |provider_configuration| {
+                    if had_disabled_override {
+                        provider_configuration
+                            .luaskills
+                            .disabled_vulcan_plugins
+                            .insert(rollback_plugin_id.clone());
+                    }
+                    if had_enabled_override {
+                        provider_configuration
+                            .luaskills
+                            .enabled_vulcan_plugins
+                            .insert(rollback_plugin_id.clone());
+                    }
+                    Ok(())
+                },
+                |_, _| (),
+            )
+            .await;
+            return match restore_result {
+                Ok(()) => Err(uninstall_error),
+                Err(restore_error) => Err(format!(
+                    "{uninstall_error}；恢复用户插件状态覆盖失败：{restore_error}"
+                )),
+            };
+        }
+        // secret_cleanup_failures remain independently reportable after the package transaction commits.
+        // secret_cleanup_failures 在插件包事务提交后仍可独立上报。
+        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+        let secret_cleanup_failures = declared_secret_keys
+            .iter()
+            .filter_map(|(server_id, secret_key)| {
+                secret_store
+                    .delete_secret(&plugin_id, server_id, secret_key)
+                    .err()
+                    .map(|error| format!("{server_id}:{secret_key}：{error}"))
+            })
+            .collect::<Vec<_>>();
+        let configuration = provider_configuration_from_state(&state)?;
+        let catalog = runtime
+            .refresh_catalog(
+                &configuration.luaskills.disabled_vulcan_plugins,
+                &configuration.luaskills.enabled_vulcan_plugins,
+            )
+            .map_err(|error| error.to_string())?;
+        let current_mcp_runtime = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        vulcan_plugin_lifecycle::publish_extension_generation(
+            &state,
+            &plugin_id,
+            Arc::clone(&catalog),
+            current_mcp_runtime,
+        )?;
+        synchronize_service_vulcan_plugin_hooks(&state, runtime, &catalog)?;
+        let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
+        if secret_cleanup_failures.is_empty() {
+            Ok(update)
+        } else {
+            Err(format!(
+                "用户插件 `{plugin_id}` 已卸载，但 Secret 清理失败：{}",
+                secret_cleanup_failures.join("；")
+            ))
+        }
+    })
+    .await
 }
 
 /// Saves Vulcan-owned LuaSkills startup settings and refreshes the WebUI projection.
@@ -2131,39 +2199,41 @@ pub(crate) async fn service_save_luaskills_runtime_settings(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // Serialize package settings writes with every LuaSkills lifecycle mutation.
     // 将包设置写入与所有 LuaSkills 生命周期变更串行化。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    // AI tool switches are copied before the complete settings document moves into the blocking save.
-    // AI 工具开关在完整设置文档移入阻塞保存前完成复制。
-    let runlua_enabled = settings.ai_tools.enable_run_lua;
-    let runlua_session_enabled = settings.ai_tools.enable_run_lua_session;
-    let catalog = run_extension_management_blocking("save runtime settings", move || {
-        vulcan_service_runtime::luaskills_bridge::save_luaskills_runtime_settings(
-            &handle, &settings,
-        )
-    })
-    .await?;
-    // agent_luaskills_runtime is cloned without holding service state across asynchronous lease cleanup.
-    // agent_luaskills_runtime 在异步租约清理期间不持有服务状态锁的前提下完成克隆。
-    let agent_luaskills_runtime = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard
-            .agent_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.luaskills_runtime.clone())
-    };
-    if let Some(agent_luaskills_runtime) = agent_luaskills_runtime {
-        vulcan_agent_runtime::luaskills_runtime::set_runlua_ai_tools_enabled(
-            agent_luaskills_runtime,
-            runlua_enabled,
-            runlua_session_enabled,
-        )
+    run_luaskills_management_owned("save runtime settings", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        // AI tool switches are copied before the complete settings document moves into the blocking save.
+        // AI 工具开关在完整设置文档移入阻塞保存前完成复制。
+        let runlua_enabled = settings.ai_tools.enable_run_lua;
+        let runlua_session_enabled = settings.ai_tools.enable_run_lua_session;
+        let catalog = run_extension_management_blocking("save runtime settings", move || {
+            vulcan_service_runtime::luaskills_bridge::save_luaskills_runtime_settings(
+                &handle, &settings,
+            )
+        })
         .await?;
-    }
-    store_luaskills_catalog(&state, catalog)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+        // agent_luaskills_runtime is cloned without holding service state across asynchronous lease cleanup.
+        // agent_luaskills_runtime 在异步租约清理期间不持有服务状态锁的前提下完成克隆。
+        let agent_luaskills_runtime = {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            guard
+                .agent_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.luaskills_runtime.clone())
+        };
+        if let Some(agent_luaskills_runtime) = agent_luaskills_runtime {
+            vulcan_agent_runtime::luaskills_runtime::set_runlua_ai_tools_enabled(
+                agent_luaskills_runtime,
+                runlua_enabled,
+                runlua_session_enabled,
+            )
+            .await?;
+        }
+        store_luaskills_catalog(&state, catalog)?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await
+    })
+    .await
 }
 
 /// Retries the packaged managed Python and Node bootstrap and reprojects its exact outcome.
@@ -2187,74 +2257,76 @@ pub(crate) async fn service_retry_luaskills_managed_runtimes(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // Serialize downloads with every LuaSkills lifecycle mutation so one shared root has one writer.
     // 将下载与所有 LuaSkills 生命周期变更串行化，使共享根始终只有一个写入者。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    // handle preserves the startup-resolved roots and the shared bootstrap report.
-    // handle 保留启动时解析的目录与共享初始化报告。
-    let handle = service_luaskills_handle(&state)?;
-    // install_target rejects unknown wire values before any filesystem mutation begins.
-    // install_target 在任何文件系统变更开始前拒绝未知传输值。
-    let install_target =
+    run_luaskills_management_owned("retry managed runtimes", move || async move {
+        // handle preserves the startup-resolved roots and the shared bootstrap report.
+        // handle 保留启动时解析的目录与共享初始化报告。
+        let handle = service_luaskills_handle(&state)?;
+        // install_target rejects unknown wire values before any filesystem mutation begins.
+        // install_target 在任何文件系统变更开始前拒绝未知传输值。
+        let install_target =
         vulcan_service_runtime::managed_runtime_bootstrap::ManagedRuntimeInstallTarget::from_key(
             &target,
         )?;
-    // progress_state and progress_app publish native byte progress without waiting for the blocking install to finish.
-    // progress_state 与 progress_app 会立即发布原生字节进度，无需等待阻塞安装结束。
-    let progress_state = state.clone();
-    let progress_app = app.clone();
-    // catalog contains the committed result even when the optional runtimes remain unavailable.
-    // catalog 即使在可选运行时仍不可用时也包含已提交结果。
-    let catalog = match run_extension_management_blocking("retry managed runtimes", move || {
-        vulcan_service_runtime::luaskills_bridge::retry_managed_runtimes(
-            &handle,
-            install_target,
-            |progress| {
-                // progress_summary is the exact focused domain value compared before revision allocation.
-                // progress_summary 是分配版本前用于比较的精确聚焦领域值。
-                let progress_summary = LuaSkillsManagedRuntimeProgressSummary {
-                    phase: progress.phase.clone(),
-                    component: progress.component.clone(),
-                    message: progress.message.clone(),
-                    completed_bytes: progress.completed_bytes,
-                    total_bytes: progress.total_bytes,
-                    overall_percent: progress.overall_percent,
-                };
-                // progress_commit deliberately ignores callback-only diagnostics because terminal error handling clears retained UI state.
-                // progress_commit 有意忽略仅回调诊断，因为终态错误处理会清理保留的界面状态。
-                let _progress_commit = commit_and_emit_luaskills_managed_runtime_progress(
-                    &progress_app,
-                    &progress_state,
-                    Some(progress_summary),
-                );
-            },
-        )
-    })
-    .await
-    {
-        Ok(catalog) => catalog,
-        Err(error) => {
+        // progress_state and progress_app publish native byte progress without waiting for the blocking install to finish.
+        // progress_state 与 progress_app 会立即发布原生字节进度，无需等待阻塞安装结束。
+        let progress_state = state.clone();
+        let progress_app = app.clone();
+        // catalog contains the committed result even when the optional runtimes remain unavailable.
+        // catalog 即使在可选运行时仍不可用时也包含已提交结果。
+        let catalog = match run_extension_management_blocking("retry managed runtimes", move || {
+            vulcan_service_runtime::luaskills_bridge::retry_managed_runtimes(
+                &handle,
+                install_target,
+                |progress| {
+                    // progress_summary is the exact focused domain value compared before revision allocation.
+                    // progress_summary 是分配版本前用于比较的精确聚焦领域值。
+                    let progress_summary = LuaSkillsManagedRuntimeProgressSummary {
+                        phase: progress.phase.clone(),
+                        component: progress.component.clone(),
+                        message: progress.message.clone(),
+                        completed_bytes: progress.completed_bytes,
+                        total_bytes: progress.total_bytes,
+                        overall_percent: progress.overall_percent,
+                    };
+                    // progress_commit deliberately ignores callback-only diagnostics because terminal error handling clears retained UI state.
+                    // progress_commit 有意忽略仅回调诊断，因为终态错误处理会清理保留的界面状态。
+                    let _progress_commit = commit_and_emit_luaskills_managed_runtime_progress(
+                        &progress_app,
+                        &progress_state,
+                        Some(progress_summary),
+                    );
+                },
+            )
+        })
+        .await
+        {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                return Err(luaskills_retry_error_after_progress_clear(
+                    &app, &state, error,
+                ));
+            }
+        };
+        // message persists the exact retry outcome after transient UI progress is gone.
+        // message 在临时界面进度消失后持久记录精确重试结果。
+        let message = format!(
+            "managed runtime retry completed: status={} diagnostic={}",
+            catalog.managed_runtime_report.status.as_key(),
+            catalog.managed_runtime_report.diagnostic,
+        );
+        if let Err(error) = store_luaskills_catalog_with_log(&state, catalog, message) {
             return Err(luaskills_retry_error_after_progress_clear(
                 &app, &state, error,
             ));
         }
-    };
-    // message persists the exact retry outcome after transient UI progress is gone.
-    // message 在临时界面进度消失后持久记录精确重试结果。
-    let message = format!(
-        "managed runtime retry completed: status={} diagnostic={}",
-        catalog.managed_runtime_report.status.as_key(),
-        catalog.managed_runtime_report.diagnostic,
-    );
-    if let Err(error) = store_luaskills_catalog_with_log(&state, catalog, message) {
-        return Err(luaskills_retry_error_after_progress_clear(
-            &app, &state, error,
-        ));
-    }
-    match refresh_luaskills_local_state_and_emit(&app, &state).await {
-        Ok(update) => Ok(update),
-        Err(error) => Err(luaskills_retry_error_after_progress_clear(
-            &app, &state, error,
-        )),
-    }
+        match refresh_luaskills_local_state_and_emit(&app, &state).await {
+            Ok(update) => Ok(update),
+            Err(error) => Err(luaskills_retry_error_after_progress_clear(
+                &app, &state, error,
+            )),
+        }
+    })
+    .await
 }
 
 /// Clears transient LuaSkills progress after a retry failure while preserving the primary error.
@@ -2286,6 +2358,125 @@ fn luaskills_retry_error_after_progress_clear(
     }
 }
 
+/// Returns the retained LuaSkills operation progress for one correlation id.
+/// 返回某个关联标识保留的 LuaSkills 操作进度。
+///
+/// This is the production service entry for querying one exact retained operation by
+/// the stable id its caller already holds, instead of re-deriving state from catalog
+/// contents or timestamps. The returned summary is the same service API type the
+/// catalog and the delta carry, so all three expose one contract.
+/// 这是按调用方已持有的稳定标识查询某个精确保留操作的生产服务入口，而不是从目录内容或
+/// 时间戳重新推断状态。返回的摘要是目录与增量所携带的同一个 service API 类型，因此三者只
+/// 暴露一份契约。
+///
+/// No WebUI caller exists today: a client that reconnects reads the latest operation from
+/// the catalog snapshot, which already carries it. This entry stays reachable for any
+/// client that holds a specific id, including one whose operation is no longer the latest.
+/// 当前没有 WebUI 调用方：重连的客户端从目录快照读取最新操作，而该快照本就携带它。本入口
+/// 对任何持有一个具体标识的调用方保持可达，包括其操作已不是最新一次的情形。
+pub(crate) fn luaskill_operation_progress(
+    correlation_id: &str,
+) -> Result<vulcan_service_api::LuaSkillsOperationProgressSummary, String> {
+    crate::luaskills_install_progress::global_operation_progress_view(correlation_id).ok_or_else(
+        || {
+            format!(
+                "No retained LuaSkills operation progress for correlation id `{correlation_id}`."
+            )
+        },
+    )
+}
+
+/// Finalizes one LuaSkills management operation, publishes it, and diagnoses it.
+/// 结束一次 LuaSkills 管理操作、发布它并输出诊断。
+///
+/// The request result is authoritative for the outcome; the upstream event stream
+/// only supplies phase progress. The diagnostic is deliberately aggregate: it
+/// reports counts and the latest phase instead of raw event payloads, so no
+/// source locator or local directory can reach a log line.
+/// 请求结果是结果的权威；上游事件流只提供阶段进度。诊断刻意保持聚合：只报告计数与最新
+/// 阶段，而不是原始事件载荷，因此任何来源定位值或本地目录都不会进入日志。
+fn finalize_luaskills_operation_progress(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    correlation_id: Option<&str>,
+    mut result: Result<LuaSkillsCatalogUpdate, String>,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    use crate::luaskills_install_progress::{
+        LuaSkillsOperationOutcome, finish_global_operation, global_foreign_event_count,
+        global_operation_progress, global_orphaned_event_count,
+    };
+
+    let Some(correlation_id) = correlation_id else {
+        return result;
+    };
+    let outcome = if result.is_ok() {
+        LuaSkillsOperationOutcome::Succeeded
+    } else {
+        LuaSkillsOperationOutcome::Failed
+    };
+    finish_global_operation(correlation_id, outcome);
+    // terminal_progress is read by exact identity so a later operation can never replace
+    // this request's result between finalization and retained-state publication.
+    // terminal_progress 按精确身份读取，确保后续操作不会在终结与保留状态发布之间替换本请求结果。
+    let terminal_progress =
+        crate::luaskills_install_progress::global_operation_progress_view(correlation_id);
+    // terminal_generation commits the terminal value before the RPC response returns.
+    // This prevents a reconnect snapshot or the complete RPC payload from regressing a
+    // newer focused terminal event back to the pre-finalization in-flight value.
+    // terminal_generation 在 RPC 返回前提交终态值，防止重连快照或完整 RPC 载荷把较新的聚焦
+    // 终态事件回退为终结前的进行中值。
+    match crate::settings_runtime_projection::commit_and_emit_luaskills_operation_progress(
+        app,
+        state,
+        terminal_progress.clone(),
+    ) {
+        Ok(Some(generation)) => {
+            if let Ok(update) = result.as_mut() {
+                update.revision = generation;
+                update.lua_skills.operation_progress = terminal_progress;
+            }
+        }
+        Ok(None) => {
+            if let Ok(update) = result.as_mut() {
+                update.lua_skills.operation_progress = terminal_progress;
+            }
+        }
+        Err(publication_error) => {
+            result = Err(match result {
+                Ok(_) => format!(
+                    "LuaSkills operation completed but terminal progress publication failed: {publication_error}"
+                ),
+                Err(primary_error) => format!(
+                    "{primary_error}; additionally failed to publish terminal LuaSkills progress: {publication_error}"
+                ),
+            });
+        }
+    }
+    let Some(progress) = global_operation_progress(correlation_id) else {
+        return result;
+    };
+    // `foreign` is a defect signal, not routine noise: a non-zero value means an
+    // upstream event source exists that the management lock did not serialize.
+    // `foreign` 是缺陷信号而非日常噪声：非零值说明存在管理锁未能串行化的上游事件来源。
+    eprintln!(
+        "[webui-service] luaskills {} {} outcome={:?} phases={} latest={} upstream_terminal={} \
+         overflowed={} orphaned={} foreign={}",
+        crate::luaskills_install_progress::action_label(progress.action),
+        correlation_id,
+        outcome,
+        progress.events.len(),
+        progress
+            .latest()
+            .map(|event| event.phase.as_str())
+            .unwrap_or("none"),
+        progress.saw_upstream_terminal,
+        progress.overflowed,
+        global_orphaned_event_count(),
+        global_foreign_event_count(),
+    );
+    result
+}
+
 /// Installs one LuaSkill package into the USER layer and refreshes the WebUI snapshot.
 /// 将单个 LuaSkill 包安装到 USER 层并刷新 WebUI 快照。
 pub(crate) async fn service_install_luaskill(
@@ -2295,21 +2486,32 @@ pub(crate) async fn service_install_luaskill(
     source: String,
     source_type: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    // Keep installation and its returned catalog projection in one ordered transaction.
-    // 将安装及其返回的目录投影保持在同一个有序事务中。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_extension_management_blocking("install skill", move || {
-        vulcan_service_runtime::luaskills_bridge::install_luaskill(
-            &handle,
-            skill_id,
-            source,
-            source_type,
-        )
+    run_luaskills_management_owned("install skill", move || async move {
+        // The correlation id is generated only after the service-owned task acquires
+        // the lock, so no queued or cancelled waiter can become the active binding.
+        // 关联标识只在服务自有任务取得锁之后生成，因此排队或取消的等待者不会成为活动绑定。
+        let correlation_id = crate::luaskills_install_progress::begin_global_operation(
+            luaskills::SkillLifecycleAction::Install,
+        );
+        let outcome = async {
+            let handle = service_luaskills_handle(&state)?;
+            let (message, catalog) =
+                run_extension_management_blocking("install skill", move || {
+                    vulcan_service_runtime::luaskills_bridge::install_luaskill(
+                        &handle,
+                        skill_id,
+                        source,
+                        source_type,
+                    )
+                })
+                .await?;
+            store_luaskills_catalog_with_log(&state, catalog, message)?;
+            refresh_luaskills_local_state_and_emit(&app, &state).await
+        }
+        .await;
+        finalize_luaskills_operation_progress(&app, &state, correlation_id.as_deref(), outcome)
     })
-    .await?;
-    store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    .await
 }
 
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
@@ -2319,16 +2521,23 @@ pub(crate) async fn service_update_luaskill(
     state: SharedServiceBridgeState,
     skill_id: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    // Keep update and its returned catalog projection in one ordered transaction.
-    // 将更新及其返回的目录投影保持在同一个有序事务中。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_extension_management_blocking("update skill", move || {
-        vulcan_service_runtime::luaskills_bridge::update_luaskill(&handle, skill_id)
+    run_luaskills_management_owned("update skill", move || async move {
+        let correlation_id = crate::luaskills_install_progress::begin_global_operation(
+            luaskills::SkillLifecycleAction::Update,
+        );
+        let outcome = async {
+            let handle = service_luaskills_handle(&state)?;
+            let (message, catalog) = run_extension_management_blocking("update skill", move || {
+                vulcan_service_runtime::luaskills_bridge::update_luaskill(&handle, skill_id)
+            })
+            .await?;
+            store_luaskills_catalog_with_log(&state, catalog, message)?;
+            refresh_luaskills_local_state_and_emit(&app, &state).await
+        }
+        .await;
+        finalize_luaskills_operation_progress(&app, &state, correlation_id.as_deref(), outcome)
     })
-    .await?;
-    store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    .await
 }
 
 /// Enables or disables one LuaSkill package and refreshes the WebUI snapshot.
@@ -2341,14 +2550,19 @@ pub(crate) async fn service_set_luaskill_enabled(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // Keep lifecycle state mutation and its returned catalog projection in one ordered transaction.
     // 将生命周期状态变更及其返回的目录投影保持在同一个有序事务中。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_extension_management_blocking("set skill enabled", move || {
-        vulcan_service_runtime::luaskills_bridge::set_luaskill_enabled(&handle, skill_id, enabled)
+    run_luaskills_management_owned("set skill enabled", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let (message, catalog) =
+            run_extension_management_blocking("set skill enabled", move || {
+                vulcan_service_runtime::luaskills_bridge::set_luaskill_enabled(
+                    &handle, skill_id, enabled,
+                )
+            })
+            .await?;
+        store_luaskills_catalog_with_log(&state, catalog, message)?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await
     })
-    .await?;
-    store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    .await
 }
 
 /// Enables or disables one known host-owned Vulcan Plugin.
@@ -2369,12 +2583,15 @@ pub(crate) async fn service_set_vulcan_plugin_enabled(
     plugin_id: String,
     enabled: bool,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    // update is emitted here so the lifecycle module remains a pure transaction without a second publisher.
-    // update 在此发送，使生命周期模块保持为不包含第二发布出口的纯事务。
-    let update =
-        vulcan_plugin_lifecycle::set_vulcan_plugin_enabled(state, plugin_id, enabled).await?;
-    emit_plugin_catalog_delta(&app, &update);
-    Ok(update.lua_skills_update())
+    run_luaskills_management_owned("set plugin enabled", move || async move {
+        // update is emitted here so the lifecycle module remains a pure transaction without a second publisher.
+        // update 在此发送，使生命周期模块保持为不包含第二发布出口的纯事务。
+        let update =
+            vulcan_plugin_lifecycle::set_vulcan_plugin_enabled(state, plugin_id, enabled).await?;
+        emit_plugin_catalog_delta(&app, &update);
+        Ok(update.lua_skills_update())
+    })
+    .await
 }
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
 /// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
@@ -2385,14 +2602,16 @@ pub(crate) async fn service_uninstall_luaskill(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // Keep uninstall and its returned catalog projection in one ordered transaction.
     // 将卸载及其返回的目录投影保持在同一个有序事务中。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_extension_management_blocking("uninstall skill", move || {
-        vulcan_service_runtime::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
+    run_luaskills_management_owned("uninstall skill", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let (message, catalog) = run_extension_management_blocking("uninstall skill", move || {
+            vulcan_service_runtime::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
+        })
+        .await?;
+        store_luaskills_catalog_with_log(&state, catalog, message)?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await
     })
-    .await?;
-    store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    .await
 }
 
 /// Persists one LuaSkill tool registration state and refreshes the WebUI snapshot.
@@ -2406,21 +2625,25 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // Keep tool registration ordered with lifecycle catalog mutations so every response projects one coherent domain.
     // 使工具注册与生命周期目录变更保持有序，让每个响应都投影同一个一致领域。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
-    mutate_provider_configuration(
-        &state,
-        "保存 LuaSkills 工具注册失败",
-        |configuration| {
-            configuration
-                .luaskills
-                .set_tool_registration_state(&skill_id, &local_name, next_state);
-            Ok(())
-        },
-        |_guard, _configuration| (),
-    )
-    .await?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    run_luaskills_management_owned("set skill tool registration", move || async move {
+        let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
+        mutate_provider_configuration(
+            &state,
+            "保存 LuaSkills 工具注册失败",
+            |configuration| {
+                configuration.luaskills.set_tool_registration_state(
+                    &skill_id,
+                    &local_name,
+                    next_state,
+                );
+                Ok(())
+            },
+            |_guard, _configuration| (),
+        )
+        .await?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await
+    })
+    .await
 }
 
 /// Refreshes only the Agent Skills domain and returns its committed revision.
@@ -4191,6 +4414,90 @@ fn remove_user_subagent_file_if_safe(path: &Path, retained_file: &Path) -> Resul
 mod tests {
     use super::*;
 
+    /// Verifies finalization commits terminal state and returns the same newer revision.
+    /// 验证终结会提交终态，并返回相同的较新版本。
+    #[test]
+    #[ignore = "mutates the process-wide LuaSkills progress callback slot"]
+    fn operation_finalization_cannot_return_or_retain_in_flight_state() {
+        crate::luaskills_install_progress::shutdown_global();
+        crate::luaskills_install_progress::install_global();
+        // state is the authoritative reconnect snapshot modified by finalization.
+        // state 是终结过程改写的权威重连快照。
+        let state = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tests::test_support::test_service_state_with_parent_session(
+                crate::SessionId::new_v4(),
+            ),
+        ));
+        let app = ServiceEventEmitter::new(Vec::new());
+
+        let succeeded_id = crate::luaskills_install_progress::begin_global_operation(
+            luaskills::SkillLifecycleAction::Install,
+        )
+        .expect("installed progress owner should allocate an id");
+        let in_flight =
+            crate::luaskills_install_progress::global_operation_progress_view(&succeeded_id)
+                .expect("in-flight progress");
+        let original_revision = {
+            let mut guard = state.lock().expect("service state should remain lockable");
+            guard.workbench_generation = 7;
+            guard.workbench.revision = 7;
+            guard.workbench.lua_skills.operation_progress = Some(in_flight.clone());
+            7
+        };
+        let returned = finalize_luaskills_operation_progress(
+            &app,
+            &state,
+            Some(&succeeded_id),
+            Ok(LuaSkillsCatalogUpdate {
+                revision: original_revision,
+                lua_skills: vulcan_service_api::LuaSkillsCatalogSummary {
+                    operation_progress: Some(in_flight),
+                    ..vulcan_service_api::LuaSkillsCatalogSummary::default()
+                },
+                plugins: Vec::new(),
+            }),
+        )
+        .expect("successful operation should remain successful");
+        let retained = state
+            .lock()
+            .expect("service state should remain lockable")
+            .workbench
+            .lua_skills
+            .operation_progress
+            .clone()
+            .expect("terminal progress should be retained");
+        assert!(!retained.in_flight);
+        assert_eq!(retained.outcome.as_deref(), Some("succeeded"));
+        assert_eq!(returned.lua_skills.operation_progress, Some(retained));
+        assert!(returned.revision > original_revision);
+
+        let failed_id = crate::luaskills_install_progress::begin_global_operation(
+            luaskills::SkillLifecycleAction::Update,
+        )
+        .expect("second operation should allocate an id");
+        let primary_error = String::from("fixture update failure");
+        let returned_error = finalize_luaskills_operation_progress(
+            &app,
+            &state,
+            Some(&failed_id),
+            Err(primary_error.clone()),
+        )
+        .expect_err("failed operation should preserve its primary error");
+        assert_eq!(returned_error, primary_error);
+        let failed = state
+            .lock()
+            .expect("service state should remain lockable")
+            .workbench
+            .lua_skills
+            .operation_progress
+            .clone()
+            .expect("failed terminal progress should be retained");
+        assert_eq!(failed.correlation_id, failed_id);
+        assert!(!failed.in_flight);
+        assert_eq!(failed.outcome.as_deref(), Some("failed"));
+        crate::luaskills_install_progress::shutdown_global();
+    }
+
     /// Builds one permission preview containing two exact local MCP Secret requirements.
     /// 构建一份包含两个精确本地 MCP Secret 要求的权限预览。
     ///
@@ -4702,5 +5009,84 @@ mod tests {
         );
         assert!(!projected.values.contains_key("api_token"));
         assert_eq!(projected.restart_required_keys, vec!["api_token"]);
+    }
+
+    /// Verifies an aborted RPC waiter cannot release a live management transaction.
+    /// 验证被中止的 RPC 等待者无法释放仍在运行的管理事务。
+    ///
+    /// The first caller is aborted only after its service-owned child has acquired the
+    /// global lock. A second transaction must remain queued until the first child exits,
+    /// proving that `spawn_blocking` work and post-mutation projection cannot overlap a
+    /// successor merely because the transport stopped waiting.
+    /// 第一个调用方只在其服务自有子任务取得全局锁后被中止。第二个事务必须持续排队，直到第一
+    /// 个子任务退出，从而证明传输层停止等待不会让 `spawn_blocking` 工作及后置投影与后继事务重叠。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborted_waiter_does_not_release_management_ownership() {
+        let (first_started_sender, first_started_receiver) = tokio::sync::oneshot::channel();
+        let first_release = Arc::new(tokio::sync::Notify::new());
+        let first_release_for_task = Arc::clone(&first_release);
+        let (first_done_sender, first_done_receiver) = tokio::sync::oneshot::channel();
+
+        let first_waiter = tokio::spawn(run_luaskills_management_owned(
+            "first cancellation fixture",
+            move || async move {
+                first_started_sender
+                    .send(())
+                    .map_err(|_| String::from("first start receiver closed"))?;
+                first_release_for_task.notified().await;
+                first_done_sender
+                    .send(())
+                    .map_err(|_| String::from("first completion receiver closed"))?;
+                Ok(())
+            },
+        ));
+        first_started_receiver
+            .await
+            .expect("first transaction must acquire the lock");
+        first_waiter.abort();
+        assert!(
+            first_waiter
+                .await
+                .expect_err("waiter must be aborted")
+                .is_cancelled(),
+            "the outer waiter cancellation is the condition under test"
+        );
+
+        let (second_started_sender, mut second_started_receiver) = tokio::sync::oneshot::channel();
+        let second_waiter = tokio::spawn(run_luaskills_management_owned(
+            "second cancellation fixture",
+            move || async move {
+                second_started_sender
+                    .send(())
+                    .map_err(|_| String::from("second start receiver closed"))?;
+                Ok(())
+            },
+        ));
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                &mut second_started_receiver,
+            )
+            .await
+            .is_err(),
+            "the second transaction must remain queued behind the detached first owner"
+        );
+
+        first_release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), first_done_receiver)
+            .await
+            .expect("first transaction must finish after release")
+            .expect("first transaction completion channel");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            &mut second_started_receiver,
+        )
+        .await
+        .expect("second transaction must acquire after first exits")
+        .expect("second transaction start channel");
+        second_waiter
+            .await
+            .expect("join second waiter")
+            .expect("second transaction result");
     }
 }

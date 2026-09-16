@@ -13,7 +13,7 @@ use luaskills::{RuntimeHostToolAction, set_host_tool_callback};
 use std::path::Path;
 use std::sync::Barrier;
 use std::sync::Condvar;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -71,7 +71,35 @@ fn test_handle(engine: Arc<RwLock<LuaEngine>>, runtime_root: PathBuf) -> LuaSkil
         Vec::new(),
         true,
         true,
+        8,
+        2,
     )
+}
+
+/// Verifies each host admission class mirrors only its owning upstream capacity.
+/// 验证每个宿主入场类别只镜像其所属的上游容量。
+#[test]
+fn runtime_handle_separates_skill_runlua_and_session_admission() {
+    // runtime_root owns every path derived by the test handle.
+    // runtime_root 持有测试句柄派生的全部路径。
+    let runtime_root = tempfile::tempdir().expect("create admission runtime root");
+    // handle uses the production constructor with 8 Skill workers and 2 one-shot RunLua workers.
+    // handle 使用生产构造器配置 8 路 Skill 与 2 路一次性 RunLua 工作线程。
+    let handle = test_handle(
+        Arc::new(RwLock::new(test_engine(runtime_root.path(), 8, None))),
+        runtime_root.path().to_path_buf(),
+    );
+
+    assert_eq!(handle.skill_call_admission.available_permits(), 8);
+    assert_eq!(handle.runlua_call_admission.available_permits(), 2);
+    assert_eq!(
+        handle.runlua_session_call_admission.available_permits(),
+        LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY
+    );
+    assert!(!Arc::ptr_eq(
+        &handle.runlua_call_admission,
+        &handle.runlua_session_call_admission
+    ));
 }
 
 /// Count threads in this exact Windows test process for isolated host-pressure diagnostics.
@@ -92,6 +120,139 @@ fn process_thread_count() -> usize {
         .trim()
         .parse()
         .expect("parse thread count")
+}
+
+/// Verifies host admission queues before spawning workers and survives async waiter cancellation.
+/// 验证宿主入场会在线程创建前排队，并在异步等待方取消后继续约束工作线程。
+#[tokio::test]
+async fn host_admission_bounds_workers_and_preserves_worker_owned_permits() {
+    // admission matches a two-VM execution class and therefore allows exactly two worker bodies.
+    // admission 对应两 VM 执行类别，因此只允许两个工作线程体进入。
+    let admission = Arc::new(tokio::sync::Semaphore::new(2));
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let active_workers = Arc::new(AtomicUsize::new(0));
+    let peak_workers = Arc::new(AtomicUsize::new(0));
+    let (entered_sender, mut entered_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+    // spawn_call schedules one async waiter while the production helper alone owns OS-thread creation.
+    // spawn_call 调度一个异步等待方，系统线程只由生产辅助函数创建。
+    let spawn_call = |call_id: usize| {
+        let call_admission = Arc::clone(&admission);
+        let call_release = Arc::clone(&release);
+        let call_active_workers = Arc::clone(&active_workers);
+        let call_peak_workers = Arc::clone(&peak_workers);
+        let call_entered_sender = entered_sender.clone();
+        tokio::spawn(async move {
+            run_luaskills_blocking_task_async_with_diagnostics(
+                "luaskills-admission-test",
+                format!("admission-{call_id}"),
+                call_admission,
+                move |_stage, _invocation_id| {
+                    let active = call_active_workers.fetch_add(1, Ordering::AcqRel) + 1;
+                    call_peak_workers.fetch_max(active, Ordering::AcqRel);
+                    call_entered_sender
+                        .send(call_id)
+                        .map_err(|error| error.to_string())?;
+                    let (lock, wake) = &*call_release;
+                    let held = lock.lock().map_err(|error| error.to_string())?;
+                    let (released, wait) = wake
+                        .wait_timeout_while(held, OBSERVATION_TIMEOUT, |released| !*released)
+                        .map_err(|error| error.to_string())?;
+                    call_active_workers.fetch_sub(1, Ordering::AcqRel);
+                    if wait.timed_out() && !*released {
+                        return Err(String::from("admission test release timed out"));
+                    }
+                    Ok(call_id)
+                },
+            )
+            .await
+        })
+    };
+
+    let first = spawn_call(1);
+    let second = spawn_call(2);
+    let first_entered = tokio::time::timeout(OBSERVATION_TIMEOUT, entered_receiver.recv())
+        .await
+        .expect("first admitted worker must enter")
+        .expect("first admitted worker identity");
+    let second_entered = tokio::time::timeout(OBSERVATION_TIMEOUT, entered_receiver.recv())
+        .await
+        .expect("second admitted worker must enter")
+        .expect("second admitted worker identity");
+    assert_ne!(first_entered, second_entered);
+    assert_eq!(active_workers.load(Ordering::Acquire), 2);
+    assert_eq!(admission.available_permits(), 0);
+
+    let cancelled_while_queued = spawn_call(3);
+    assert!(
+        tokio::time::timeout(WRITER_EXCLUSION_WINDOW, entered_receiver.recv())
+            .await
+            .is_err(),
+        "a queued request must not create or enter an OS worker"
+    );
+    cancelled_while_queued.abort();
+    assert!(
+        cancelled_while_queued
+            .await
+            .expect_err("queued request must be cancelled")
+            .is_cancelled()
+    );
+
+    let (lock, wake) = &*release;
+    *lock.lock().expect("release admitted workers") = true;
+    wake.notify_all();
+    assert_eq!(first.await.expect("join first async waiter").unwrap(), 1);
+    assert_eq!(second.await.expect("join second async waiter").unwrap(), 2);
+    assert_eq!(peak_workers.load(Ordering::Acquire), 2);
+    assert_eq!(active_workers.load(Ordering::Acquire), 0);
+    assert_eq!(admission.available_permits(), 2);
+
+    // A cancelled receiver cannot release one permit still owned by its running worker.
+    // 已取消的接收方不能释放仍由运行中工作线程持有的许可。
+    *lock.lock().expect("reset worker gate") = false;
+    let admitted_then_cancelled = spawn_call(4);
+    assert_eq!(
+        tokio::time::timeout(OBSERVATION_TIMEOUT, entered_receiver.recv())
+            .await
+            .expect("admitted worker must enter")
+            .expect("admitted worker identity"),
+        4
+    );
+    admitted_then_cancelled.abort();
+    assert!(
+        admitted_then_cancelled
+            .await
+            .expect_err("admitted waiter must be cancelled")
+            .is_cancelled()
+    );
+    let follower = spawn_call(5);
+    let concurrent_follower = spawn_call(6);
+    let first_follower_id = tokio::time::timeout(OBSERVATION_TIMEOUT, entered_receiver.recv())
+        .await
+        .expect("one remaining permit admits a follower")
+        .expect("follower identity");
+    assert!([5, 6].contains(&first_follower_id));
+    assert!(
+        tokio::time::timeout(WRITER_EXCLUSION_WINDOW, entered_receiver.recv())
+            .await
+            .is_err(),
+        "cancelled async waiter must not release the running worker permit"
+    );
+    *lock.lock().expect("release cancelled worker and follower") = true;
+    wake.notify_all();
+    let second_follower_id = tokio::time::timeout(OBSERVATION_TIMEOUT, entered_receiver.recv())
+        .await
+        .expect("queued follower must enter after worker completion")
+        .expect("queued follower identity");
+    assert_ne!(first_follower_id, second_follower_id);
+    assert!([5, 6].contains(&second_follower_id));
+    assert_eq!(follower.await.expect("join follower").unwrap(), 5);
+    assert_eq!(
+        concurrent_follower.await.expect("join follower").unwrap(),
+        6
+    );
+    assert_eq!(active_workers.load(Ordering::Acquire), 0);
+    assert_eq!(admission.available_permits(), 2);
 }
 
 /// Verify that independent host read guards overlap on one shared engine.
@@ -322,6 +483,8 @@ fn real_skill_runlua_and_system_calls_overlap_inside_host_callbacks() {
         Vec::new(),
         true,
         true,
+        8,
+        2,
     );
     let runlua_source = temp.path().join("concurrent-runlua.lua");
     fs::write(
@@ -594,8 +757,8 @@ fn real_skill_runlua_and_system_calls_overlap_inside_host_callbacks() {
 
     #[cfg(windows)]
     {
-        // Each caller uses the real Agent entry, which creates one dedicated host OS thread.
-        // 每个调用都经过真实 Agent 入口，并创建一个专用宿主 OS 线程。
+        // Harness callers remain OS threads, while the real Agent entry admits at most eight workers.
+        // 测试调用方仍是系统线程，而真实 Agent 入口最多只准入八个工作线程。
         let baseline_threads = process_thread_count();
         for caller_count in [8usize, 16, 64] {
             *lock.lock().expect("reset skill pressure gate") = false;
@@ -651,10 +814,14 @@ fn real_skill_runlua_and_system_calls_overlap_inside_host_callbacks() {
                 std::thread::sleep(Duration::from_millis(100));
             };
             eprintln!(
-                "[luaskills-runtime][host-thread-pressure-test] callers={caller_count} baseline={baseline_threads} peak={peak_threads} settled={settled_threads} main_pool_waiters={} ",
+                "[luaskills-runtime][host-thread-pressure-test] harness_callers={caller_count} admitted_workers=8 baseline={baseline_threads} peak={peak_threads} settled={settled_threads} queued_async_waiters={} ",
                 caller_count.saturating_sub(8)
             );
             assert!(peak_threads >= baseline_threads + caller_count);
+            assert!(
+                peak_threads <= baseline_threads + caller_count + 12,
+                "production workers must remain bounded independently of harness callers"
+            );
             assert!(settled_threads <= baseline_threads + 8);
         }
     }

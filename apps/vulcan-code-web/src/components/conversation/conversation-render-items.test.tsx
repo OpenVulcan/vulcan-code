@@ -25,6 +25,22 @@ function toolRenderItem(id: string, status: "completed" | "failed" | "stopped"):
 }
 
 describe("groupVisibleProcessBodyEntries", () => {
+  it("keeps the live tail open even after every tool completes, until a following assistant establishes the boundary", () => {
+    // assistant marks the exact visible boundary after the first tool batch.
+    // assistant 标记第一批工具之后的精确可见边界。
+    const assistant: ConversationRenderItem = { id: "reply", role: "assistant", sourceMessages: [], blocks: [
+      { id: "reply-block", kind: "markdown", title: "", body: "Next step", summary: "" },
+    ] };
+    // tail remains active without relying on elapsed time or individual tool outcomes.
+    // tail 保持活动，不依赖经过时间或单个工具结果。
+    const tail = groupVisibleProcessBodyEntries("p", [toolRenderItem("first", "completed")], true);
+    expect(tail[0]).toMatchObject({ kind: "tool-sequence", active: true });
+    const next = groupVisibleProcessBodyEntries("p", [toolRenderItem("first", "completed"), assistant, toolRenderItem("next", "completed")], true);
+    expect(next[0]).toMatchObject({ kind: "tool-sequence", active: false });
+    expect(next[2]).toMatchObject({ kind: "tool-sequence", active: true });
+    const terminal = groupVisibleProcessBodyEntries("p", [toolRenderItem("first", "completed")], true, false);
+    expect(terminal[0]).toMatchObject({ kind: "tool-sequence", active: false });
+  });
   // Failed and stopped terminal rows belong to the same fold as successful rows after reload.
   // 重载后，失败与已停止的终态记录应和成功记录归入同一个折叠组。
   it("groups every terminal outcome without keeping failures outside", () => {

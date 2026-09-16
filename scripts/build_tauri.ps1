@@ -1,4 +1,4 @@
-# build_tauri.ps1 builds the new Tauri/WebUI main application.
+﻿# build_tauri.ps1 builds the new Tauri/WebUI main application.
 # build_tauri.ps1 用于构建新的 Tauri/WebUI 主应用。
 # Usage:
 # 用法：
@@ -6,7 +6,10 @@
 #   .\build_tauri.ps1 -Release  # release build
 
 param(
-    [switch]$Release
+    # LocalLuaSkillsPath selects an explicit unpublished LuaSkills checkout for integration builds.
+    # LocalLuaSkillsPath 为联调构建选择一个明确的未发布 LuaSkills 检出目录。
+    [switch]$Release,
+    [string]$LocalLuaSkillsPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +26,9 @@ if ($PSVersionTable.PSEdition -ne "Core") {
         $ForwardedArguments = @()
         if ($Release) {
             $ForwardedArguments += "-Release"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($LocalLuaSkillsPath)) {
+            $ForwardedArguments += @("-LocalLuaSkillsPath", $LocalLuaSkillsPath)
         }
         & $PowerShellCore.Source -NoProfile -ExecutionPolicy Bypass -File $CurrentScriptPath @ForwardedArguments
         exit $LASTEXITCODE
@@ -44,6 +50,47 @@ $WebAppDir = Join-Path $ProjectDir "apps\vulcan-code-web"
 # TauriAppDir points at the Tauri desktop shell crate.
 # TauriAppDir 指向 Tauri 桌面壳 crate。
 $TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-tauri"
+
+# CargoConfigArguments carries only the explicit local LuaSkills source override into Cargo.
+# CargoConfigArguments 仅把明确指定的本地 LuaSkills 源码覆盖传入 Cargo。
+$CargoConfigArguments = @()
+# CargoLockPath identifies the workspace lock restored after local integration builds.
+# CargoLockPath 标识本地联调构建后需要恢复的工作区锁文件。
+$CargoLockPath = Join-Path $ProjectDir "Cargo.lock"
+# CargoLockBackupPath is shared by every local-source build entry so only one may own Cargo.lock.
+# CargoLockBackupPath 由所有本地源码构建入口共享，确保同一时刻只有一个入口持有 Cargo.lock。
+$CargoLockBackupPath = Join-Path $ProjectDir "Cargo.lock.local-luaskills-backup"
+# CargoLockMetadataPath records the shared backup owner and baseline digest for safe recovery.
+# CargoLockMetadataPath 记录共享备份的所有者与基线摘要，供安全恢复使用。
+$CargoLockMetadataPath = Join-Path $ProjectDir "Cargo.lock.local-luaskills-backup.json"
+# CargoLockBaselineSha256 retains the authoritative digest used to verify restoration.
+# CargoLockBaselineSha256 保留用于验证恢复结果的权威摘要。
+$CargoLockBaselineSha256 = ""
+
+if (-not [string]::IsNullOrWhiteSpace($LocalLuaSkillsPath)) {
+    # RequestedLuaSkillsPath anchors relative input to the repository instead of the caller's current directory.
+    # RequestedLuaSkillsPath 将相对输入锚定到仓库，而不是调用方的当前目录。
+    $RequestedLuaSkillsPath = $LocalLuaSkillsPath
+    if (-not [System.IO.Path]::IsPathRooted($LocalLuaSkillsPath)) {
+        $RequestedLuaSkillsPath = Join-Path $ProjectDir $LocalLuaSkillsPath
+    }
+    # CanonicalLuaSkillsPath proves the requested checkout exists before Cargo receives it.
+    # CanonicalLuaSkillsPath 在 Cargo 接收路径前证明请求的检出目录存在。
+    $CanonicalLuaSkillsPath = (Resolve-Path -LiteralPath $RequestedLuaSkillsPath -ErrorAction Stop).Path
+    # LuaSkillsManifestPath is the exact package manifest required by the patch source.
+    # LuaSkillsManifestPath 是 patch 源必须包含的精确包清单。
+    $LuaSkillsManifestPath = Join-Path $CanonicalLuaSkillsPath "Cargo.toml"
+    if (-not (Test-Path -LiteralPath $LuaSkillsManifestPath -PathType Leaf)) {
+        throw "Local LuaSkills checkout is missing Cargo.toml: $CanonicalLuaSkillsPath"
+    }
+    # CargoLuaSkillsPath uses forward slashes so the inline TOML string needs no platform-specific escaping.
+    # CargoLuaSkillsPath 使用正斜杠，使内联 TOML 字符串不需要平台相关转义。
+    $CargoLuaSkillsPath = $CanonicalLuaSkillsPath.Replace('\', '/')
+    # CargoPatchConfig is the exact Cargo configuration entry for this one build process.
+    # CargoPatchConfig 是仅供本次构建进程使用的精确 Cargo 配置项。
+    $CargoPatchConfig = 'patch.crates-io.luaskills.path="{0}"' -f $CargoLuaSkillsPath
+    $CargoConfigArguments = @('--config', $CargoPatchConfig)
+}
 
 # IsWindowsPlatform records whether the current build target is the Windows host platform.
 # IsWindowsPlatform 记录当前构建目标是否为 Windows 宿主平台。
@@ -120,14 +167,85 @@ if ($Release) {
         exit $LASTEXITCODE
     }
 
-    Write-Host "==> Building Tauri shell release..."
-    # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
-    # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
-    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host', '--release', '--features', 'custom-protocol')
+    # CargoBuildArguments selects the release shell, terminal host, and optional local-source patch.
+    # CargoBuildArguments 选择 release 桌面壳、终端宿主以及可选的本地源码 patch。
+    $CargoBuildArguments = @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host', '--release', '--features', 'custom-protocol') + $CargoConfigArguments
 }
 else {
-    Write-Host "==> Building Tauri shell debug..."
-    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host')
+    # CargoBuildArguments selects the debug shell, terminal host, and optional local-source patch.
+    # CargoBuildArguments 选择 debug 桌面壳、终端宿主以及可选的本地源码 patch。
+    $CargoBuildArguments = @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host') + $CargoConfigArguments
+}
+
+if ($CargoConfigArguments.Count -gt 0) {
+    if ((Test-Path -LiteralPath $CargoLockBackupPath) -or (Test-Path -LiteralPath $CargoLockMetadataPath)) {
+        throw "Another local LuaSkills source operation owns Cargo.lock. Finish or restore it before retrying: $CargoLockBackupPath"
+    }
+    # File.Copy with overwrite disabled is the atomic ownership claim shared with the focused build entry.
+    # 禁止覆盖的 File.Copy 是与定向构建入口共享的原子所有权声明。
+    [System.IO.File]::Copy($CargoLockPath, $CargoLockBackupPath, $false)
+    $CargoLockBaselineSha256 = (Get-FileHash -LiteralPath $CargoLockBackupPath -Algorithm SHA256).Hash
+    # CargoLockMetadata persists enough identity for the recovery command to reject unsafe overwrites.
+    # CargoLockMetadata 持久化恢复命令拒绝不安全覆盖所需的身份信息。
+    $CargoLockMetadata = [ordered]@{
+        owner = "tauri-build"
+        baselineSha256 = $CargoLockBaselineSha256
+        localSha256 = $null
+    }
+    $CargoLockMetadata | ConvertTo-Json | Set-Content -LiteralPath $CargoLockMetadataPath -Encoding utf8NoBOM
+    # Resolve the patch before the build and freeze the only non-baseline lock digest
+    # this owner may restore over. A later third digest proves concurrent modification.
+    # 在构建前解析 patch，并冻结本所有者唯一可恢复覆盖的非基线锁摘要。之后出现第三种摘要
+    # 即证明发生了并发修改。
+    & cargo metadata --format-version 1 @CargoConfigArguments *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cargo failed to prepare the local LuaSkills lock resolution. Recovery evidence remains at $CargoLockBackupPath"
+    }
+    $CargoLockMetadata.localSha256 = (Get-FileHash -LiteralPath $CargoLockPath -Algorithm SHA256).Hash
+    $CargoLockMetadata | ConvertTo-Json | Set-Content -LiteralPath $CargoLockMetadataPath -Encoding utf8NoBOM
+    Write-Host "==> Building with local LuaSkills source: $CanonicalLuaSkillsPath"
+}
+else {
+    Write-Host "==> Building with registry LuaSkills dependency."
+}
+
+# BuildProfileName names the selected artifact profile in diagnostics.
+# BuildProfileName 在诊断中标识所选制品 profile。
+$BuildProfileName = if ($Release) { 'release' } else { 'debug' }
+Write-Host "==> Building Tauri shell $BuildProfileName..."
+try {
+    # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
+    # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
+    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments
+}
+finally {
+    if ($CargoConfigArguments.Count -gt 0 -and (Test-Path -LiteralPath $CargoLockBackupPath)) {
+        # CurrentLockSha256 decides whether this owner may restore without overwriting
+        # another process: only the frozen baseline and prepared local resolution are owned.
+        # CurrentLockSha256 判断本所有者能否在不覆盖其他进程的情况下恢复：只有已冻结的基线与
+        # 预备本地解析形态属于本所有者。
+        $CurrentLockSha256 = (Get-FileHash -LiteralPath $CargoLockPath -Algorithm SHA256).Hash
+        if ($CurrentLockSha256 -eq $CargoLockBaselineSha256) {
+            Remove-Item -LiteralPath $CargoLockBackupPath -Force
+            Remove-Item -LiteralPath $CargoLockMetadataPath -Force -ErrorAction SilentlyContinue
+            Write-Host "==> Cargo.lock already matches the registry baseline."
+        }
+        elseif ($CargoLockMetadata.localSha256 -and $CurrentLockSha256 -eq $CargoLockMetadata.localSha256) {
+            Copy-Item -LiteralPath $CargoLockBackupPath -Destination $CargoLockPath -Force
+            # RestoredLockSha256 proves the ordinary registry lock returned byte-for-byte.
+            # RestoredLockSha256 证明普通注册表锁文件已逐字节恢复。
+            $RestoredLockSha256 = (Get-FileHash -LiteralPath $CargoLockPath -Algorithm SHA256).Hash
+            if ($RestoredLockSha256 -ne $CargoLockBaselineSha256) {
+                throw "Cargo.lock restoration digest mismatch after local LuaSkills build. Backup retained at $CargoLockBackupPath"
+            }
+            Remove-Item -LiteralPath $CargoLockBackupPath -Force
+            Remove-Item -LiteralPath $CargoLockMetadataPath -Force -ErrorAction SilentlyContinue
+            Write-Host "==> Restored Cargo.lock after local LuaSkills source resolution."
+        }
+        else {
+            throw "Cargo.lock changed during the local LuaSkills build; refusing to overwrite concurrent work. Recovery evidence remains at $CargoLockBackupPath"
+        }
+    }
 }
 if ($CargoBuildResult.ExitCode -ne 0) {
     exit $CargoBuildResult.ExitCode

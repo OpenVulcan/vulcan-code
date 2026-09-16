@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import {
   fileChangeStatusLabel,
@@ -28,6 +29,28 @@ function toolBlock(
 }
 
 describe("native file presentation mapping", () => {
+  // V1 no longer needs a duplicated host-result envelope to restore mutation rows and counts.
+  // V1 不再需要重复的宿主结果信封即可恢复变更行与统计。
+  it.each([
+    [{ change: "create", path: "new.py", hunks: [], lifecycle_content: { mode: "full", content: "one\ntwo\n", total_line_count: 2 } }, 2, 0],
+    [{ change: "modify", path: "edit.py", hunks: [{ before: "", after: "", deleted: [{ line: 1, content: "old" }], inserted: [{ line: 1, content: "new" }] }] }, 1, 1],
+    [{ change: "delete", path: "gone.py", hunks: [], lifecycle_content: { mode: "truncated", head: "first", tail: "last", total_line_count: 200 } }, 0, 200],
+  ] satisfies [PersistentChangeSetFile, number, number][])("restores canonical changeset %j", (file, added, removed) => {
+    // blocks carry the same event metadata authored by the production branch projector.
+    // blocks 携带生产分支投影器产出的相同事件元数据。
+    const blocks = toolBlock("file_edit", "done", { v1_event: true, v1_tool_event: {
+      kind: "tool_call", api_call_id: 1, tool_call_id: 1, tool_name: "file_edit", input: { path: file.path },
+      request_stream_id: "canonical-edit", status: "completed", changeset: { mode: "applied", files: [file] },
+    } });
+    // presentation reads only retained data and never reconstructs changes from the input.
+    // presentation 仅读取保留数据，不从输入重建变更。
+    const presentation = resolveFileChangePresentation(blocks, "completed", {});
+    expect(presentation).toMatchObject({ interactive: true, totalAdded: added, totalRemoved: removed });
+    expect(presentation?.files[0]).toMatchObject({ expandable: true, operation: file.change });
+    expect(presentation?.files[0].diffFile).not.toBeNull();
+    if (file.change === "delete") expect(presentation?.files[0].rows).toContainEqual({ kind: "omit", lineNumber: null, content: "省略 198 行" });
+  });
+
   it("reports execution and effective-change axes independently", () => {
     // stoppedPresentation has no host ChangeSet and therefore represents a truthful stopped, unedited result.
     // stoppedPresentation 没有宿主 ChangeSet，因此表示真实的已停止且未编辑结果。

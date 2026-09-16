@@ -421,7 +421,9 @@ export function useComposerSessionDraft(
           snapshot.sessionId,
           snapshot.input,
           snapshot.attachments,
-        ).catch(() => toast.error(t("composer.error.draftPersistFailed")));
+        ).catch((reason: unknown) => toast.error(t("composer.error.draftPersistFailed"), {
+          description: reason instanceof Error ? reason.message : String(reason),
+        }));
         return;
       }
       const inactiveDraft = readComposerSessionMemoryDraft(snapshot.draftSlotKey);
@@ -510,7 +512,9 @@ export function useComposerSessionDraft(
       const targetSessionId = materializedSessionIdFromDraftSlotKey(targetDraftSlotKey);
       if (targetSessionId) {
         void restoreInactiveMaterializedDraft(targetSessionId, input, [])
-          .catch(() => toast.error(t("composer.error.draftPersistFailed")));
+          .catch((reason: unknown) => toast.error(t("composer.error.draftPersistFailed"), {
+            description: reason instanceof Error ? reason.message : String(reason),
+          }));
         return;
       }
       const inactiveDraft = readComposerSessionMemoryDraft(targetDraftSlotKey);

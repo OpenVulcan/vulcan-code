@@ -244,6 +244,19 @@ pub enum DomainError {
         /// 不可变字段名。
         field: &'static str,
     },
+    /// No supported persisted fingerprint contract matches this checkpoint.
+    /// 没有受支持的持久化指纹契约匹配此检查点。
+    ProviderSourceFingerprintMismatch {
+        /// Checkpoint hosting sequence.
+        /// 检查点承载事件序号。
+        seq: u64,
+        /// Digest read from storage.
+        /// 从存储读取的摘要。
+        stored: String,
+        /// Digest under the stable immutable projection contract.
+        /// 稳定不可变投影契约下的摘要。
+        expected: String,
+    },
     /// An update targeted an event belonging to another API group.
     /// 某次更新指向了属于其他 API 组的既有事件。
     CrossApiGroupUpdate {
@@ -644,6 +657,14 @@ impl fmt::Display for DomainError {
             Self::ImmutableFieldMutation { entity, field } => {
                 write!(formatter, "{entity}.{field} is immutable")
             }
+            Self::ProviderSourceFingerprintMismatch {
+                seq,
+                stored,
+                expected,
+            } => write!(
+                formatter,
+                "provider_source fingerprint mismatch at seq {seq}: stored={stored}, immutable_projection_v1={expected}; no supported fingerprint format matched; automatic rewriting refused"
+            ),
             Self::CrossApiGroupUpdate {
                 event_seq,
                 api_call_id,

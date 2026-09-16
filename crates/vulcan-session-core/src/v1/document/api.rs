@@ -1550,7 +1550,7 @@ impl SessionDocument {
                     self.resident_start_seq,
                     last_provider_seq,
                 )?;
-                ensure_provider_source_matches(&expected_source, &actual_source)?;
+                ensure_provider_source_matches(&expected_source, &actual_source, &self.events)?;
                 None
             } else {
                 Some((last_provider_seq, expected_source))

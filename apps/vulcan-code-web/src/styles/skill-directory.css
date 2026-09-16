@@ -561,6 +561,24 @@
   font-weight: 700;
 }
 
+.lua-inference-routes {
+  margin: 0 14px 18px;
+}
+
+.lua-inference-route-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.lua-inference-route-row > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .lua-settings-grid {
   min-width: 0;
   display: grid;

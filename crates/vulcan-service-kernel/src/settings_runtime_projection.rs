@@ -4,7 +4,8 @@
 use super::*;
 use vulcan_service_api::{
     LuaSkillsCatalogChangedDelta, LuaSkillsManagedRuntimeProgressChangedDelta,
-    LuaSkillsManagedRuntimeProgressSummary, PluginCatalogChangedDelta, ProjectSettingsChangedDelta,
+    LuaSkillsManagedRuntimeProgressSummary, LuaSkillsOperationProgressChangedDelta,
+    LuaSkillsOperationProgressSummary, PluginCatalogChangedDelta, ProjectSettingsChangedDelta,
     ProjectSettingsDomain, SubagentCatalogChangedDelta,
 };
 
@@ -303,6 +304,86 @@ pub(crate) fn emit_luaskills_managed_runtime_progress_delta(
     );
 }
 
+/// Emits one revisioned LuaSkills install or update progress delta.
+/// 发出一个带修订号的 LuaSkills 安装或更新进度增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the focused progress event.
+/// `app` 广播聚焦的进度事件。
+/// `generation` is the workbench revision committed with this progress value.
+/// `generation` 是与此进度值一同提交的工作台修订号。
+/// `progress` is the current install or update progress, or terminal absence.
+/// `progress` 是当前安装或更新进度，或终态空值。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and emits one focused progress event per sink.
+/// 此函数无返回值，并向每个接收端发送一条聚焦进度事件。
+pub(crate) fn emit_luaskills_operation_progress_delta(
+    app: &ServiceEventEmitter,
+    generation: u64,
+    progress: Option<LuaSkillsOperationProgressSummary>,
+) {
+    // The envelope replaces only operation progress and leaves the remaining
+    // LuaSkills catalog untouched.
+    // envelope 仅替换操作进度，并保持 LuaSkills 目录其余内容不变。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation,
+        delta: WorkbenchDelta::LuaSkillsOperationProgressChanged(
+            LuaSkillsOperationProgressChangedDelta { progress },
+        ),
+    };
+    emit_service_event_with_trace(
+        app,
+        "luaskills_operation_progress_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
+/// Commits and broadcasts one changed LuaSkills lifecycle-operation progress value.
+/// 提交并广播一条发生变化的 LuaSkills 生命周期操作进度值。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the focused progress event.
+/// `app` 广播聚焦的进度事件。
+/// `state` owns the retained workbench projection and monotonic generation.
+/// `state` 持有保留的工作台投影与单调版本。
+/// `progress` is the current retained lifecycle-operation value.
+/// `progress` 是当前保留的生命周期操作进度值。
+///
+/// # Returns
+/// 返回值
+/// The newly committed generation, or `None` when the retained value was identical.
+/// 返回新提交的版本；保留值相同时返回 `None`。
+pub(crate) fn commit_and_emit_luaskills_operation_progress(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    progress: Option<LuaSkillsOperationProgressSummary>,
+) -> Result<Option<u64>, String> {
+    // committed_generation remains absent when the retained progress already equals the requested value.
+    // committed_generation 在保留进度已等于请求值时保持为空。
+    let committed_generation = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.workbench.lua_skills.operation_progress == progress {
+            None
+        } else {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            guard.workbench.revision = guard.workbench_generation;
+            guard.workbench.lua_skills.operation_progress = progress.clone();
+            Some(guard.workbench_generation)
+        }
+    };
+    let Some(generation) = committed_generation else {
+        return Ok(None);
+    };
+    emit_luaskills_operation_progress_delta(app, generation, progress);
+    Ok(Some(generation))
+}
+
 /// Commits and broadcasts a changed LuaSkills managed-runtime progress value.
 /// 提交并广播发生变化的 LuaSkills 受管运行时进度值。
 ///
@@ -413,6 +494,7 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.mcp_tools = mcp_tools(&cached_mcp_catalog_from_state(guard));
     guard.workbench.thinking_display_mode = workbench_thinking_display_mode(provider_configuration);
+    guard.workbench.tool_collapse_default_enabled = Some(provider_configuration.tool_collapse_default_enabled.unwrap_or(true));
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.provider_request_trace_enabled =

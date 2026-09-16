@@ -13,6 +13,7 @@ use super::{
     PreparedKnowledgeOperation, int, metadata_is_link_or_reparse, nonnegative_u64,
     queued_operation_summary, require_operation_not_cancelled, text, truncate_chars,
 };
+use crate::knowledge_base::KnowledgeFileConfirmation;
 use crate::local_sql;
 use crate::runtime_assets;
 use serde::Deserialize;
@@ -174,8 +175,13 @@ impl KnowledgeBaseRuntime {
                 Some(&canonical_root),
             )
             .await?;
-        self.execute_prepared_import(operation, canonical_root, source_id.map(str::to_string))
-            .await
+        self.execute_prepared_import(
+            operation,
+            canonical_root,
+            source_id.map(str::to_string),
+            None,
+        )
+        .await
     }
 
     /// Starts one detached Markdown import whose lifetime is independent from the browser request.
@@ -200,10 +206,41 @@ impl KnowledgeBaseRuntime {
         source_id: Option<&str>,
         source_root: &Path,
     ) -> Result<KnowledgeImportJobSummary, String> {
+        self.start_import_with_confirmation(library_id, source_id, source_root, None)
+            .await
+    }
+
+    /// Starts only the eligible files explicitly confirmed in `confirmation`; returns a durable job.
+    /// 仅启动 `confirmation` 明确确认的可用文件，返回持久化任务。
+    pub async fn start_confirmed_knowledge_import(
+        &self,
+        library_id: &str,
+        source_id: Option<&str>,
+        source_root: &Path,
+        confirmation: KnowledgeFileConfirmation,
+    ) -> Result<KnowledgeImportJobSummary, String> {
+        self.start_import_with_confirmation(library_id, source_id, source_root, Some(confirmation))
+            .await
+    }
+
+    /// Reserves an import after optional preflight validation; legacy internal callers retain full-sync semantics.
+    /// 可选执行前验证后预留导入，旧内部调用方保留完整同步语义。
+    async fn start_import_with_confirmation(
+        &self,
+        library_id: &str,
+        source_id: Option<&str>,
+        source_root: &Path,
+        confirmation: Option<KnowledgeFileConfirmation>,
+    ) -> Result<KnowledgeImportJobSummary, String> {
         // CanonicalRoot resolves an existing directory before reserving work; traversal filters reparse entries.
         // CanonicalRoot 在预留工作前解析现有目录；遍历时过滤重解析项。
         let canonical_root = canonical_import_root(source_root)?;
         self.require_active_library(library_id).await?;
+        if let Some(confirmation) = &confirmation {
+            self.preview_knowledge_import(library_id, &canonical_root, source_id)
+                .await?
+                .confirmed_entries(confirmation)?;
+        }
         // Operation is persisted and registered before the HTTP caller receives success.
         // Operation 在 HTTP 调用方收到成功前完成持久化与注册。
         let operation = self
@@ -224,7 +261,7 @@ impl KnowledgeBaseRuntime {
         let source_id = source_id.map(str::to_string);
         tokio::spawn(async move {
             if let Err(error) = runtime
-                .execute_prepared_import(operation, canonical_root, source_id)
+                .execute_prepared_import(operation, canonical_root, source_id, confirmation)
                 .await
             {
                 eprintln!("[knowledge-base] detached import failed: {error}");
@@ -254,6 +291,9 @@ impl KnowledgeBaseRuntime {
         operation: PreparedKnowledgeOperation,
         canonical_root: PathBuf,
         source_id: Option<String>,
+        // Confirmed scope is revalidated after acquiring the library mutation lock.
+        // 获得知识库变更锁后重新验证已确认范围。
+        confirmation: Option<KnowledgeFileConfirmation>,
     ) -> Result<KnowledgeImportReport, String> {
         // Result includes lock acquisition and binding activation so every failure reaches finalization.
         // Result 包含锁获取与绑定激活，使每个失败都进入终态处理。
@@ -277,6 +317,7 @@ impl KnowledgeBaseRuntime {
                 source_id.as_deref(),
                 &operation.cancellation,
                 operation.created_at_ms,
+                confirmation.as_ref(),
             )
             .await
         }
@@ -337,6 +378,9 @@ impl KnowledgeBaseRuntime {
         requested_source_id: Option<&str>,
         cancellation: &Arc<AtomicBool>,
         now: i64,
+        // None retains legacy internal full-directory synchronization; user-facing imports always confirm.
+        // None 保留旧内部完整目录同步，面向用户的导入始终需要确认。
+        confirmation: Option<&KnowledgeFileConfirmation>,
     ) -> Result<KnowledgeImportReport, String> {
         let source_root_text = runtime_assets::native_host_path_text_from_path(canonical_root);
         let root_key = path_key(canonical_root);
@@ -348,9 +392,49 @@ impl KnowledgeBaseRuntime {
         let source_id = self
             .resolve_source_id(space_id, binding_id, &root_key, requested_source_id)
             .await?;
-        let candidates = self
-            .scan_markdown_files_with_progress(job_id, canonical_root, cancellation)
-            .await?;
+        // Validate the exact snapshot while serialized with all library mutations.
+        // 与全部知识库变更串行时验证精确快照。
+        let preview = if confirmation.is_some() {
+            Some(
+                self.preview_knowledge_import(library_id, canonical_root, requested_source_id)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        // Expected hashes stop files changed after confirmation from entering the staging transaction.
+        // 预期哈希阻止确认后变化的文件进入暂存事务。
+        let mut confirmed_hashes = BTreeMap::new();
+        let candidates = if let (Some(preview), Some(confirmation)) = (&preview, confirmation) {
+            preview
+                .confirmed_entries(confirmation)?
+                .into_iter()
+                .map(|entry| {
+                    // Selectable rows always carry a successfully inspected byte digest.
+                    // 可选记录始终携带成功检查的字节摘要。
+                    let hash = entry
+                        .content_sha256
+                        .clone()
+                        .ok_or_else(|| String::from("已确认文件缺少内容摘要。"))?;
+                    confirmed_hashes.insert(entry.relative_path.to_lowercase(), hash);
+                    Ok(ScannedMarkdownFile {
+                        relative_path: entry.relative_path.clone(),
+                        relative_path_key: entry.relative_path.to_lowercase(),
+                        folder_path: Path::new(&entry.relative_path)
+                            .parent()
+                            .map(slash_path)
+                            .transpose()?
+                            .unwrap_or_default(),
+                        source_path: canonical_root.join(&entry.relative_path),
+                        byte_size: entry.byte_size,
+                        modified_at_ms: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        } else {
+            self.scan_markdown_files_with_progress(job_id, canonical_root, cancellation)
+                .await?
+        };
         self.prepare_import_processing(job_id, candidates.len() as u64)
             .await?;
 
@@ -387,6 +471,16 @@ impl KnowledgeBaseRuntime {
 
         let mut warnings = Vec::new();
         let mut staged_paths = Vec::with_capacity(candidates.len());
+        // Selection is not deletion: preserve every existing source path, including currently missing files.
+        // 选择不等于删除，保留全部已有来源路径，包括当前缺失文件。
+        if confirmation.is_some() {
+            staged_paths.extend(
+                existing_documents
+                    .iter()
+                    .filter(|document| !confirmed_hashes.contains_key(&document.relative_path_key))
+                    .map(|document| vec![text(&document.relative_path_key)]),
+            );
+        }
         let mut staged_documents = Vec::new();
         let mut staged_chunks = Vec::new();
         let mut changed_document_ids = BTreeSet::new();
@@ -413,9 +507,12 @@ impl KnowledgeBaseRuntime {
                 last_processing_progress_at = Instant::now();
             }
             staged_paths.push(vec![text(&candidate.relative_path_key)]);
-            let bytes = match fs::read(&candidate.source_path) {
+            let bytes = match if confirmation.is_some() {
+                super::file_selection::read_preview_bytes(&candidate.source_path)
+            } else { fs::read(&candidate.source_path) } {
                 Ok(bytes) => bytes,
                 Err(error) => {
+                    if confirmation.is_some() { return Err(format!("已确认文件 {} 无法读取：{error}，请重新扫描。", candidate.relative_path)); }
                     skipped_files += 1;
                     push_warning(
                         &mut warnings,
@@ -426,6 +523,14 @@ impl KnowledgeBaseRuntime {
             };
             processed_bytes = processed_bytes.saturating_add(bytes.len() as u64);
             let digest = sha256_hex(&bytes);
+            if let Some(expected) = confirmed_hashes.get(&candidate.relative_path_key)
+                && expected != &digest
+            {
+                return Err(format!(
+                    "{} 在确认后发生变化，请重新扫描。",
+                    candidate.relative_path
+                ));
+            }
             if existing_by_path
                 .get(&candidate.relative_path_key)
                 .is_some_and(|existing| existing.source_sha256 == digest)
@@ -523,7 +628,9 @@ impl KnowledgeBaseRuntime {
             .collect();
         let deleted_document_ids: BTreeSet<String> = existing_documents
             .iter()
-            .filter(|document| !scanned_path_keys.contains(&document.relative_path_key))
+            .filter(|document| {
+                confirmation.is_none() && !scanned_path_keys.contains(&document.relative_path_key)
+            })
             .map(|document| document.id.clone())
             .collect();
         let mut stale_chunk_ids = Vec::new();
@@ -1159,7 +1266,7 @@ fn import_progress_path(root: &Path, path: &Path) -> String {
 /// 返回值
 /// Returns the existing canonical directory, or a path validation error.
 /// 返回现有规范目录，或路径校验错误。
-fn canonical_import_root(root: &Path) -> Result<PathBuf, String> {
+pub(super) fn canonical_import_root(root: &Path) -> Result<PathBuf, String> {
     let canonical = fs::canonicalize(root)
         .map_err(|error| format!("规范化导入目录失败（{}）：{error}", root.display()))?;
     if !canonical.is_dir() {
@@ -1180,7 +1287,7 @@ fn canonical_import_root(root: &Path) -> Result<PathBuf, String> {
 /// 返回值
 /// Returns the exact validated source identity or normalized relative path, or an error.
 /// 返回精确校验后的来源身份或规范相对路径，或错误。
-fn slash_path(path: &Path) -> Result<String, String> {
+pub(super) fn slash_path(path: &Path) -> Result<String, String> {
     let parts: Result<Vec<&str>, String> = path
         .components()
         .map(|component| match component {
@@ -1205,7 +1312,7 @@ fn slash_path(path: &Path) -> Result<String, String> {
 /// 返回值
 /// Returns the deterministic path representation for the documented purpose.
 /// 返回用于所述用途的确定性路径表示。
-fn path_key(path: &Path) -> String {
+pub(super) fn path_key(path: &Path) -> String {
     let value = runtime_assets::native_host_path_text_from_path(path);
     #[cfg(windows)]
     {

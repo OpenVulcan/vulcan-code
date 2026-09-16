@@ -5,10 +5,8 @@ import { runConversationControlAction } from "./conversation-control-feedback";
 import { ModelSwitchNotice, modelSwitchRouteLabel } from "./conversation-model-switch";
 import type { ProviderSummary } from "@/types";
 import {
-  Sparkles,
   Check,
   ChevronDown,
-  ChevronRight,
   Copy,
   Pencil,
   Split,
@@ -398,8 +396,8 @@ function ConversationV1ProcessGroup(
   props: ConversationV1TranscriptNodeViewProps & { node: ConversationProcessTranscriptNode },
 ) {
   const { t } = useI18n();
-  // hasOperationalItems keeps a reasoning-only Turn in the established independent thinking-card form.
-  // hasOperationalItems 让只有思考的 Turn 保持既有独立思考卡形态。
+  // hasOperationalItems avoids a work-group header while reasoning is still waiting for its first content owner.
+  // hasOperationalItems 在思考等待首个内容归属时避免显示工作分组标题。
   const hasOperationalItems = props.node.items.some((item) => item.kind !== "assistant_reasoning");
   // Process text is intermediate; the canonical projection emits final answers outside this group.
   // 过程正文属于中间输出；规范投影将最终回答放在本组之外。
@@ -545,66 +543,24 @@ function ConversationV1ThinkingCard(props: {
    * 打开一条由思考 Markdown 引用的附件。 */
   onOpenMarkdownMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  // t resolves the established thinking-card labels.
-  // t 解析既有思考卡文案。
-  const { t } = useI18n();
-  // streaming determines the historical auto-expand and completion-collapse behavior.
-  // streaming 决定历史行为中的流式自动展开与完成后折叠。
+  // streaming leaves the existing live overlay as the sole automatic popup owner.
+  // streaming 保持既有实时浮层为唯一自动弹窗所有者。
   const streaming = props.item.reasoning.status === "streaming";
-  // popupEnabled chooses a compact entry without filtering the event.
-  // popupEnabled 选择紧凑入口，不过滤事件。
-  const popupEnabled = React.useContext(ThinkingPopupContext);
-  // expanded is local presentation state and never becomes a second transcript authority.
-  // expanded 是本地展示状态，不会成为第二转录权威。
-  const [expanded, setExpanded] = React.useState(streaming);
-  // wasStreaming distinguishes initial completed history from one live stream that just terminated.
-  // wasStreaming 区分初始已完成历史与刚刚终止的实时流。
-  const wasStreaming = React.useRef(streaming);
-  React.useEffect(() => {
-    if (streaming) {
-      setExpanded(true);
-    } else if (wasStreaming.current) {
-      setExpanded(false);
-    }
-    wasStreaming.current = streaming;
-  }, [streaming]);
-  if (popupEnabled && streaming) return <section className="thinking-block thinking-popup-node" data-event-kind="assistant_reasoning" data-seq={props.item.seq}>
-    <ThinkingPreview streaming={streaming}><MarkdownMessage content={props.item.reasoning.text} eager streaming={streaming} onOpenMedia={props.onOpenMarkdownMedia} /></ThinkingPreview>
-  </section>;
   return (
-    <section
-      className={`thinking-block${expanded ? " expanded" : ""}`}
+    <div
+      className="thinking-gutter-anchor"
       data-event-kind="assistant_reasoning"
       data-seq={props.item.seq}
     >
-      <button
-        aria-expanded={expanded}
-        className="thinking-toggle"
-        onClick={() => setExpanded((current) => !current)}
-        type="button"
-      >
-        <span className="thinking-toggle-label">
-          <Sparkles aria-hidden="true" size={15} />
-          <strong>{t("contextCompaction.thinkingLabel")}</strong>
-          {streaming ? <span>{t("contextCompaction.thinkingActive")}</span> : null}
-        </span>
-        {expanded ? (
-          <ChevronDown aria-hidden="true" className="tool-presentation-toggle thinking-toggle-icon" size={15} />
-        ) : (
-          <ChevronRight aria-hidden="true" className="tool-presentation-toggle thinking-toggle-icon" size={15} />
-        )}
-      </button>
-      <div className="thinking-body" hidden={!expanded}>
-        <div className="thinking-content">
+      <ThinkingPreview compact streaming={streaming}>
           <MarkdownMessage
             content={props.item.reasoning.text}
             eager
             onOpenMedia={props.onOpenMarkdownMedia}
             streaming={streaming}
           />
-        </div>
-      </div>
-    </section>
+      </ThinkingPreview>
+    </div>
   );
 }
 
@@ -633,7 +589,10 @@ function ConversationV1AssistantView(
       data-event-kind="assistant_text"
       data-seq={props.node.seq}
     >
-      <div className="assistant-flow">
+      <div className={`assistant-flow${props.node.leading_reasoning.length > 0 ? " assistant-with-thinking" : ""}`}>
+        {props.node.leading_reasoning.length > 0 ? <ThinkingPreview compact>
+          {props.node.leading_reasoning.map((item) => <MarkdownMessage key={item.seq} content={item.reasoning.text} eager onOpenMedia={props.onOpenMarkdownMedia} />)}
+        </ThinkingPreview> : null}
         <MarkdownMessage
           content={props.node.item.markdown}
           eager

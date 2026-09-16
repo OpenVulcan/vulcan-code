@@ -1,7 +1,10 @@
 import * as React from "react";
 import type { Mermaid } from "mermaid";
+import { useI18n } from "@/i18n";
+import { serializeMermaidSvg } from "./conversation-mermaid-svg";
 
 import { MarkdownDiagramFrame } from "@/components/conversation/conversation-diagram-frame";
+import { GeneratedMediaPlayerWindow } from "@/components/media/generated-media-player";
 import { useDiffShikiTheme } from "@/diff/diff-highlight";
 import {
   DIFF_SHIKI_DARK_THEME,
@@ -27,7 +30,7 @@ interface MermaidDiagramProps {
 type MermaidDiagramState =
   | { status: "loading" }
   | { status: "ready"; imageUrl: string }
-  | { status: "failed" };
+  | { status: "failed"; message: string | null };
 
 // mermaidRuntimePromise caches the lazily imported Mermaid runtime outside the initial WebUI bundle.
 // mermaidRuntimePromise 缓存按需导入的 Mermaid 运行时，避免进入 WebUI 初始包。
@@ -50,6 +53,9 @@ let mermaidRenderQueue: Promise<void> = Promise.resolve();
 // A loading frame, rendered SVG image, or the supplied source fallback.
 // 加载框、渲染后的 SVG 图片或传入的源码回退内容。
 export function MermaidDiagram(props: MermaidDiagramProps) {
+  // t labels rendering failures without discarding the original source.
+  // t 为渲染失败提供文案，同时保留原始源码。
+  const { t } = useI18n();
   // shikiTheme reuses the live WebUI theme subscription already shared by code renderers.
   // shikiTheme 复用代码渲染器共享的实时 WebUI 主题订阅。
   const shikiTheme = useDiffShikiTheme();
@@ -62,6 +68,9 @@ export function MermaidDiagram(props: MermaidDiagramProps) {
   // state tracks whether the asynchronous render is loading, ready, or rejected.
   // state 跟踪异步渲染处于加载、完成还是拒绝状态。
   const [state, setState] = React.useState<MermaidDiagramState>({ status: "loading" });
+  // expanded opens the shared image viewer while this component continues owning its Blob URL.
+  // expanded 打开共享图片查看器，Blob URL 仍由当前组件持有。
+  const [expanded, setExpanded] = React.useState(false);
 
   React.useEffect(() => {
     // disposed prevents obsolete asynchronous work from committing after unmount or source changes.
@@ -87,9 +96,9 @@ export function MermaidDiagram(props: MermaidDiagramProps) {
         imageUrl = nextImageUrl;
         setState({ status: "ready", imageUrl: nextImageUrl });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!disposed) {
-          setState({ status: "failed" });
+          setState({ status: "failed", message: String(error) });
         }
       });
 
@@ -102,18 +111,36 @@ export function MermaidDiagram(props: MermaidDiagramProps) {
   }, [props.source, renderId, shikiTheme]);
 
   if (state.status === "failed") {
-    return props.fallback;
+    return (
+      <>
+        <details className="text-sm text-destructive">
+          <summary>{t("markdown.mermaidFailed")}</summary>
+          <pre className="whitespace-pre-wrap">{state.message ?? t("markdown.diagramImageFailed")}</pre>
+        </details>
+        {props.fallback}
+      </>
+    );
   }
   return (
-    <MarkdownDiagramFrame
-      alt={props.source}
-      copySource={props.copySource}
-      iconPath="diagram.mermaid"
-      imageUrl={state.status === "ready" ? state.imageUrl : null}
-      loading={state.status === "loading"}
-      onImageError={() => setState({ status: "failed" })}
-      title="Mermaid"
-    />
+    <>
+      <MarkdownDiagramFrame
+        alt={props.source}
+        copySource={props.copySource}
+        iconPath="diagram.mermaid"
+        imageUrl={state.status === "ready" ? state.imageUrl : null}
+        loading={state.status === "loading"}
+        onImageError={() => setState({ status: "failed", message: null })}
+        onExpand={state.status === "ready" ? () => setExpanded(true) : undefined}
+        source={props.source}
+        title="Mermaid"
+      />
+      {expanded && state.status === "ready" ? (
+        <GeneratedMediaPlayerWindow
+          attachment={{ kind: "image", localPath: state.imageUrl, fileName: "Mermaid.svg", mimeType: "image/svg+xml" }}
+          onClose={() => setExpanded(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -167,7 +194,7 @@ function renderMermaidSvg(
     // result contains the generated SVG and optional interaction bindings disabled by strict mode.
     // result 包含生成的 SVG，以及严格模式下禁用的可选交互绑定。
     const result = await mermaid.render(renderId, source);
-    return result.svg;
+    return serializeMermaidSvg(result.svg);
   });
   mermaidRenderQueue = renderTask.then(
     () => undefined,

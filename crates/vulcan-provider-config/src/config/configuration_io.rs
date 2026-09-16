@@ -86,6 +86,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub workbench_thinking_display_mode: Option<WorkbenchThinkingDisplayMode>,
+    /// Default tool-group folding preference; absence preserves the existing enabled default.
+    /// 工具分组默认折叠偏好；缺省时保留原有的默认开启行为。
+    #[serde(
+        default,
+        rename = "toolCollapseDefaultEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_collapse_default_enabled: Option<bool>,
     /// Remembered WebUI locale identifier selected by the user.
     /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]

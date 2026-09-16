@@ -1,4 +1,5 @@
 import React from "react";
+import { useToolCollapsePreference } from "./tool-collapse-preferences";
 import { ThinkingPreview } from "./thinking-preview";
 import { MarkdownMessage } from "./conversation-markdown";
 import { runConversationControlAction } from "./conversation-control-feedback";
@@ -56,21 +57,6 @@ import { cn } from "@/lib/utils";
 // USER_PROMPT_COLLAPSE_LINE_LIMIT 限制用户手动展开前长用户气泡的显示行数。
 const USER_PROMPT_COLLAPSE_LINE_LIMIT = 20;
 
-// TOOL_RETIREMENT_MIN_VISIBLE_MS guarantees that a newly grouped tool remains perceptible before automatic storage.
-// TOOL_RETIREMENT_MIN_VISIBLE_MS 保证新进入工具组的工具在自动收纳前具有可感知的最低显示时间。
-const TOOL_RETIREMENT_MIN_VISIBLE_MS = 1_000;
-
-// TOOL_RETIREMENT_SETTLE_MS leaves a short completion acknowledgement before the exit motion starts.
-// TOOL_RETIREMENT_SETTLE_MS 在退场动画开始前保留短暂的完成确认停留。
-const TOOL_RETIREMENT_SETTLE_MS = 200;
-
-// TOOL_RETIREMENT_EXIT_MS matches the visual row-flight and height-collapse duration.
-// TOOL_RETIREMENT_EXIT_MS 对齐工具行飞出与高度收拢动画时长。
-const TOOL_RETIREMENT_EXIT_MS = 800;
-
-// TOOL_RETIREMENT_DOM_SETTLE_MS lets the browser paint the final zero-height frame before the row is removed from React output.
-// TOOL_RETIREMENT_DOM_SETTLE_MS 允许浏览器在工具行退出 React 输出前绘制最终的零高度帧。
-const TOOL_RETIREMENT_DOM_SETTLE_MS = 48;
 
 // conversationPresentationMessageIsStreaming reads the explicit V1 adapter lifecycle marker.
 // conversationPresentationMessageIsStreaming 读取 V1 适配层显式写入的生命周期标记。
@@ -85,23 +71,6 @@ function conversationPresentationMessageIsStreaming(message?: ConversationMessag
   return (message.metadata as Record<string, unknown>).stream_state === "active";
 }
 
-// ToolRetirementPhase describes the pure frontend lifecycle of one terminal grouped tool.
-// ToolRetirementPhase 描述单个已终结且已成组工具的纯前端收纳生命周期。
-type ToolRetirementPhase = "holding" | "exiting" | "folded";
-
-// ToolRetirementEntry stores compositor-animation deadlines for one grouped tool row.
-// ToolRetirementEntry 保存单个工具组行的合成动画截止时间。
-interface ToolRetirementEntry {
-  // Current frontend retirement phase.
-  // 当前前端收纳阶段。
-  phase: ToolRetirementPhase;
-  // Monotonic time when the exit animation may start.
-  // 允许开始退场动画的单调时间。
-  exitAt: number;
-  // Monotonic time when the row can move into the hidden fold.
-  // 工具行可以进入隐藏折叠区的单调时间。
-  foldAt: number;
-}
 
 // ConversationProcessBodyEntry describes one visible process row or one consecutive tool sequence.
 // ConversationProcessBodyEntry 描述单条可见过程行或一组连续工具调用。
@@ -121,28 +90,34 @@ type ConversationProcessBodyEntry =
     // Stable collapse identity derived from the first tool row.
     // 从首条工具记录派生的稳定折叠标识。
     collapseId: string;
-    // Original consecutive tool order used by the visible transition layer.
-    // 可见过渡层使用的原始连续工具顺序。
+    // The live tail or a still-running earlier group stays open by default.
+    // 实时末组或仍在执行的前组默认保持展开。
+    active: boolean;
+    // Original consecutive tool order inside the single persistent group body.
+    // 单一稳定分组正文内的原始连续工具顺序。
     items: ConversationRenderItem[];
     // Terminal tool rows, regardless of outcome, that belong inside the measured fold.
     // 不区分执行结果且属于可测量折叠区的终态工具记录。
     completedItems: ConversationRenderItem[];
-    // Running tool rows that must remain visible below the fold summary.
-    // 必须保持显示在折叠摘要下方的运行中工具记录。
+    // Running tool rows used to keep the group active without splitting its body.
+    // 用于保持分组活动的运行中记录，不拆分正文。
     runningItems: ConversationRenderItem[];
   };
 
 // groupVisibleProcessBodyEntries folds only consecutive visible tool rows.
 // groupVisibleProcessBodyEntries 仅折叠显示层面连续出现的工具记录。
 // Parameters: processId identifies the owning turn, items contains already display-filtered rows,
-// and sessionRunning resolves tool calls without an explicit terminal result.
-// 参数：processId 标识所属回合，items 包含已经过显示策略过滤的记录，sessionRunning 用于判定尚无明确终态结果的工具调用。
+// sessionRunning resolves tool calls without explicit results, and processRunning determines whether the tail can grow.
+// 参数：processId 标识所属回合，items 包含显示过滤后的记录，sessionRunning 判定无明确结果的调用，processRunning 决定末组是否仍可增长。
 // Returns: ordered single rows and tool-sequence groups without moving assistant content.
 // 返回值：保持顺序的单条记录与工具序列组，且不会移动 Assistant 内容。
 export function groupVisibleProcessBodyEntries(
   processId: string,
   items: ConversationRenderItem[],
   sessionRunning: boolean,
+  // The owning process, unlike the session, may already be terminal.
+  // 所属过程与会话不同，可能已经终结。
+  processRunning = sessionRunning,
 ): ConversationProcessBodyEntry[] {
   // entries stores the final display order of single rows and folded tool sequences.
   // entries 保存单条记录与折叠工具序列的最终显示顺序。
@@ -150,10 +125,10 @@ export function groupVisibleProcessBodyEntries(
   // pendingToolItems accumulates the current uninterrupted visible tool run.
   // pendingToolItems 累积当前未被打断的可见工具序列。
   let pendingToolItems: ConversationRenderItem[] = [];
-  // flushPendingTools emits one fold only when at least two visible tool rows are consecutive.
-  // flushPendingTools 仅在至少两条可见工具记录连续时生成折叠组。
-  const flushPendingTools = () => {
-    if (pendingToolItems.length > 1) {
+  // Start with the first tool so appending another never moves a live card into a different container.
+  // 从首个工具开始成组，避免追加工具时把实时卡片移到不同容器。
+  const flushPendingTools = (isTail = false) => {
+    if (pendingToolItems.length > 0) {
       // firstItem provides a stable identity even while a running sequence gains more tools.
       // firstItem 在运行中序列继续增加工具时仍提供稳定标识。
       const firstItem = pendingToolItems[0];
@@ -179,12 +154,11 @@ export function groupVisibleProcessBodyEntries(
       entries.push({
         kind: "tool-sequence",
         collapseId: `tool-sequence:${processId}:${firstItem.renderKey ?? firstItem.id}`,
+        active: processRunning && (isTail || runningItems.length > 0),
         completedItems,
         items: pendingToolItems,
         runningItems,
       });
-    } else if (pendingToolItems.length === 1) {
-      entries.push({ kind: "item", item: pendingToolItems[0] });
     }
     pendingToolItems = [];
   };
@@ -197,298 +171,75 @@ export function groupVisibleProcessBodyEntries(
     flushPendingTools();
     entries.push({ kind: "item", item });
   }
-  flushPendingTools();
+  flushPendingTools(true);
   return entries;
 }
 
 // ConversationToolSequenceGroup renders one pure display-only fold for consecutive tool rows.
 // ConversationToolSequenceGroup 渲染一个仅用于显示的连续工具记录折叠组。
 // Parameters: collapseId preserves expansion memory, item arrays preserve execution state and order,
-// renderItem renders the original row, and animateRetirement gates live-only automatic storage.
-// 参数：collapseId 保留展开记忆，各工具数组保留执行状态与顺序，renderItem 渲染原始记录，animateRetirement 限制仅实时调用自动收纳。
-// Returns: one compact summary, a measured completed-tool fold, and an ordered live retirement layer.
-// 返回值：一个紧凑摘要、一个可测量已完成工具折叠区，以及保持顺序的实时收纳层。
-function ConversationToolSequenceGroup(props: {
-  // Whether newly grouped live tools may enter the automatic retirement lifecycle.
-  // 新成组的实时工具是否允许进入自动收纳生命周期。
-  animateRetirement: boolean;
-  // Stable collapse identity for remount-safe expansion memory.
-  // 用于可安全重新挂载展开记忆的稳定折叠标识。
+// renderItem renders the original row; active and collapseEnabled determine the lifecycle default.
+// 参数：collapseId 保留展开记忆，各工具数组保留执行状态与顺序，renderItem 渲染原始记录；active 和 collapseEnabled 决定生命周期默认值。
+// Returns one summary and one stable ordered body, without a separate retirement layer.
+// 返回一个摘要及一个稳定有序正文，不再有独立退场层。
+export function ConversationToolSequenceGroup(props: {
+  // Whether the owning live process can still append tools to this group.
+  // 所属实时过程是否仍可向此分组追加工具。
+  active: boolean;
+  // Whether automatic tool folding is enabled for this conversation.
+  // 当前会话是否启用工具自动折叠。
+  collapseEnabled: boolean;
+  // Stable identity retained from the very first tool.
+  // 从首个工具开始保持不变的标识。
   collapseId: string;
-  // Terminal tool rows owned by the fold regardless of outcome.
-  // 折叠区包含的所有终态工具记录，不区分执行结果。
+  // Terminal rows used only to calculate the summary.
+  // 仅用于计算摘要的终态记录。
   completedItems: ConversationRenderItem[];
-  // Original consecutive tool order used by the visible transition layer.
-  // 可见过渡层使用的原始连续工具顺序。
+  // All tools remain in this one ordered body, including running tools.
+  // 所有工具（包括运行中工具）始终留在此有序正文内。
   items: ConversationRenderItem[];
-  // Renders one original tool row without changing its conversation semantics.
-  // 渲染单条原始工具记录且不改变其会话语义。
+  // Original row renderer; returns one tool card without changing its identity.
+  // 原始记录渲染器；返回工具卡且不改变其标识。
   renderItem: (item: ConversationRenderItem) => React.ReactNode;
-  // Active tool rows that remain visible until completion.
-  // 完成前始终保持可见的活动工具记录。
+  // Running rows used only to calculate the summary.
+  // 仅用于计算摘要的运行中记录。
   runningItems: ConversationRenderItem[];
 }) {
-  // t resolves the localized sequence summary.
-  // t 解析本地化工具序列摘要。
+  // t resolves the count labels.
+  // t 解析数量标签。
   const { t } = useI18n();
-  // expanded stores remount-safe manual expansion state for this tool sequence.
-  // expanded 保存当前工具序列可安全重新挂载的手动展开状态。
-  const [expanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, false);
-  // firstVisibleAtRef stores client-observed visibility times without triggering renders.
-  // firstVisibleAtRef 保存前端观察到的首次显示时间且不触发渲染。
-  const firstVisibleAtRef = React.useRef<Map<string, number>>(new Map());
-  // liveObservedIdsRef prevents a process-terminal snapshot from skipping retirement for tools previously seen live.
-  // liveObservedIdsRef 防止过程终态快照跳过此前已实时显示工具的收纳动画。
-  const liveObservedIdsRef = React.useRef<Set<string>>(new Set());
-  // retirementById stores transient phases for every terminal grouped tool.
-  // retirementById 保存所有终态成组工具的临时收纳阶段。
-  const [retirementById, setRetirementById] = React.useState<Record<string, ToolRetirementEntry>>({});
-  // retirementTimerRevision forces deadline recalculation even when a timer fires just before its target and changes no phase.
-  // retirementTimerRevision 强制重新计算截止时间，即使计时器在目标前极短触发且没有改变任何阶段。
-  const [retirementTimerRevision, setRetirementTimerRevision] = React.useState(0);
-
-  React.useEffect(() => {
-    // now is a monotonic frontend timestamp shared by this reconciliation pass.
-    // now 是本次协调过程共享的前端单调时间戳。
-    const now = performance.now();
-    for (const item of props.items) {
-      // itemId is the stable projected identity for one tool row.
-      // itemId 是单条工具记录的稳定投影标识。
-      const itemId = item.renderKey ?? item.id;
-      if (!firstVisibleAtRef.current.has(itemId)) {
-        firstVisibleAtRef.current.set(itemId, now);
-      }
-      if (props.animateRetirement) {
-        liveObservedIdsRef.current.add(itemId);
-      }
-    }
-
-    setRetirementById((current) => {
-      // completedIds limits retained lifecycle entries to current terminal tools.
-      // completedIds 将保留的生命周期记录限制为当前终态工具。
-      const completedIds = new Set(props.completedItems.map((item) => item.renderKey ?? item.id));
-      // next is a copy-on-write retirement map for this reconciliation.
-      // next 是本次协调使用的写时复制收纳映射。
-      const next = { ...current };
-      // changed prevents no-op state updates from causing additional renders.
-      // changed 防止无变化的状态更新触发额外渲染。
-      let changed = false;
-
-      for (const itemId of Object.keys(next)) {
-        if (!completedIds.has(itemId)) {
-          delete next[itemId];
-          changed = true;
-        }
-      }
-
-      for (const item of props.completedItems) {
-        // itemId is the stable projected identity for the terminal tool row.
-        // itemId 是终态工具记录的稳定投影标识。
-        const itemId = item.renderKey ?? item.id;
-        // existing preserves an already scheduled exit across process terminal updates.
-        // existing 在过程终态更新期间保留已经调度的退场。
-        const existing = next[itemId];
-        if (expanded) {
-          if (!existing || existing.phase !== "folded") {
-            next[itemId] = {
-              phase: "folded",
-              exitAt: existing?.exitAt ?? now,
-              foldAt: existing?.foldAt ?? now,
-            };
-            changed = true;
-          }
-          continue;
-        }
-        if (existing) {
-          continue;
-        }
-        // shouldAnimate requires a live frontend observation and a currently collapsed group.
-        // shouldAnimate 要求工具曾被前端实时观察且工具组当前处于折叠状态。
-        const shouldAnimate = props.animateRetirement || liveObservedIdsRef.current.has(itemId);
-        if (!shouldAnimate) {
-          next[itemId] = { phase: "folded", exitAt: now, foldAt: now };
-          changed = true;
-          continue;
-        }
-        // firstVisibleAt anchors the one-second minimum to frontend visibility rather than backend execution time.
-        // firstVisibleAt 将一秒最低显示时间锚定到前端可见时刻而非后端执行时间。
-        const firstVisibleAt = firstVisibleAtRef.current.get(itemId) ?? now;
-        // exitAt honors both minimum visibility and a short completion acknowledgement.
-        // exitAt 同时满足最低显示时间与短暂完成确认停留。
-        const exitAt = Math.max(
-          firstVisibleAt + TOOL_RETIREMENT_MIN_VISIBLE_MS,
-          now + TOOL_RETIREMENT_SETTLE_MS,
-        );
-        next[itemId] = {
-          phase: "holding",
-          exitAt,
-          foldAt: exitAt + TOOL_RETIREMENT_EXIT_MS + TOOL_RETIREMENT_DOM_SETTLE_MS,
-        };
-        changed = true;
-      }
-      return changed ? next : current;
-    });
-  }, [expanded, props.animateRetirement, props.completedItems, props.items]);
-
-  React.useEffect(() => {
-    if (expanded) {
-      return;
-    }
-    // now is the current monotonic time used to select the nearest lifecycle deadline.
-    // now 是用于选择最近生命周期截止点的当前单调时间。
-    const now = performance.now();
-    // nextDeadline stores the nearest holding or exiting transition time.
-    // nextDeadline 保存最近的等待或退场阶段转换时间。
-    let nextDeadline: number | null = null;
-    for (const entry of Object.values(retirementById)) {
-      if (entry.phase === "folded") {
-        continue;
-      }
-      // deadline selects the next boundary for the current entry phase.
-      // deadline 选择当前记录阶段的下一边界。
-      const deadline = entry.phase === "holding" ? entry.exitAt : entry.foldAt;
-      nextDeadline = nextDeadline === null ? deadline : Math.min(nextDeadline, deadline);
-    }
-    if (nextDeadline === null) {
-      return;
-    }
-    // timer advances every due entry using one timeout for the whole tool sequence.
-    // timer 使用工具组共享的单个计时器推进所有到期记录。
-    const timer = window.setTimeout(() => {
-      // transitionNow is sampled once so simultaneous rows advance consistently.
-      // transitionNow 仅采样一次，使同时到期的工具行一致推进。
-      const transitionNow = performance.now();
-      setRetirementById((current) => {
-        // next is the updated retirement map for the due transition batch.
-        // next 是本批到期转换使用的更新后收纳映射。
-        const next = { ...current };
-        // changed avoids replacing state when the timer fires before any deadline.
-        // changed 避免计时器早于截止点触发时替换状态。
-        let changed = false;
-        for (const [itemId, entry] of Object.entries(next)) {
-          if (entry.phase === "folded") {
-            continue;
-          }
-          if (transitionNow >= entry.foldAt) {
-            next[itemId] = { ...entry, phase: "folded" };
-            changed = true;
-          } else if (entry.phase === "holding" && transitionNow >= entry.exitAt) {
-            next[itemId] = { ...entry, phase: "exiting" };
-            changed = true;
-          }
-        }
-        return changed ? next : current;
-      });
-      // Every consumed timer invalidates the schedule so an early callback cannot strand a holding or exiting row.
-      // 每次计时器消费后都使调度失效，避免提前回调让等待或退场工具行永久滞留。
-      setRetirementTimerRevision((current) => current + 1);
-    }, Math.max(1, Math.ceil(nextDeadline - now)));
-    return () => window.clearTimeout(timer);
-  }, [expanded, retirementById, retirementTimerRevision]);
-
-  // hasFoldableItems keeps every grouped sequence expandable while it owns visible tool rows.
-  // hasFoldableItems 让包含可见工具记录的每个工具组都可以展开。
-  const hasFoldableItems = props.items.length > 0;
-  // terminalCount reports every non-running tool without separating success and failure.
-  // terminalCount 报告所有非运行中工具，不区分成功与失败。
-  const terminalCount = props.completedItems.length;
-  // transientCompletedIds identifies completed rows that have not entered the hidden fold yet.
-  // transientCompletedIds 标识尚未进入隐藏折叠区的已完成工具行。
-  const transientCompletedIds = new Set(
-    expanded
-      ? []
-      : props.completedItems
-        .filter((item) => {
-          // itemId is the stable identity used to read the current retirement phase.
-          // itemId 是读取当前收纳阶段使用的稳定标识。
-          const itemId = item.renderKey ?? item.id;
-          // phase defaults to holding during the first render before effect reconciliation.
-          // phase 在 effect 首次协调前的初始渲染中默认处于等待阶段。
-          const phase = retirementById[itemId]?.phase
-            ?? (props.animateRetirement || liveObservedIdsRef.current.has(itemId) ? "holding" : "folded");
-          return phase !== "folded";
-        })
-        .map((item) => item.renderKey ?? item.id),
-  );
-  // runningIds identifies active rows inside the original sequence order.
-  // runningIds 标识原始序列顺序中的活动工具行。
-  const runningIds = new Set(props.runningItems.map((item) => item.renderKey ?? item.id));
-  // foldableItems remains mounted through the closing animation and unmounts only with the measured shell.
-  // foldableItems 在收起动画期间持续挂载，仅随测量外壳在动画完成后卸载。
-  const foldableItems = props.items;
-  // visibleItems preserves collapsed live rows without duplicating the expanded body.
-  // visibleItems 保留折叠状态的实时工具行，并避免与展开正文重复。
-  const visibleItems = expanded
-    ? []
-    : props.items.filter((item) => {
-      // itemId is the stable projected identity for sequence filtering.
-      // itemId 是序列过滤使用的稳定投影标识。
-      const itemId = item.renderKey ?? item.id;
-      return transientCompletedIds.has(itemId) || runningIds.has(itemId);
-    });
-  // summary reports terminal and active counts without exposing hidden thinking rows.
-  // summary 报告终态与活动数量，不暴露被隐藏的思考记录。
+  // Only deliberate clicks enter expansion memory; lifecycle defaults remain derived.
+  // 仅主动点击进入展开记忆；生命周期默认值始终由当前事实推导。
+  const [rememberedExpanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, props.active);
+  // Disabling folding takes precedence over any remembered collapsed state.
+  // 关闭折叠优先于任何已记忆的收起状态。
+  const expanded = !props.collapseEnabled || rememberedExpanded;
+  // summary counts terminal and running tools without splitting their rendering.
+  // summary 统计终态与运行中工具，但不拆分它们的渲染位置。
   const summary = props.runningItems.length > 0
     ? t("conversation.toolSequence.runningSummary")
-      .replace("{completed}", String(terminalCount))
+      .replace("{completed}", String(props.completedItems.length))
       .replace("{running}", String(props.runningItems.length))
-    : t("conversation.toolSequence.summary").replace("{count}", String(terminalCount));
+    : t("conversation.toolSequence.summary").replace("{count}", String(props.completedItems.length));
 
   return (
     <section className="conversation-tool-sequence" data-expanded={expanded ? "true" : "false"}>
       <button
-        aria-expanded={hasFoldableItems ? expanded : false}
+        aria-expanded={expanded}
         className="conversation-tool-sequence-toggle"
-        disabled={!hasFoldableItems}
-        onClick={() => {
-          if (hasFoldableItems) {
-            setExpanded(!expanded);
-          }
-        }}
+        disabled={!props.collapseEnabled}
+        onClick={() => setExpanded(!expanded)}
         type="button"
       >
         <Workflow size={14} />
         <span className={cn(props.runningItems.length > 0 && "shimmer")}>{summary}</span>
-        {hasFoldableItems ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+        {props.collapseEnabled ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
       </button>
-      {hasFoldableItems ? (
-        <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
-          <div className="conversation-tool-sequence-body">
-            {foldableItems.map(props.renderItem)}
-          </div>
-        </ConversationMeasuredCollapse>
-      ) : null}
-      {visibleItems.length > 0 ? (
-        <div className="conversation-tool-sequence-running">
-          {visibleItems.map((item) => {
-            // itemId is the stable identity used by React and retirement state.
-            // itemId 是 React 与收纳状态共同使用的稳定标识。
-            const itemId = item.renderKey ?? item.id;
-            // retirementPhase is present only for a terminal row still transitioning into the fold.
-            // retirementPhase 仅存在于仍在过渡进入折叠区的终态工具行。
-            const retirementPhase = transientCompletedIds.has(itemId)
-              ? retirementById[itemId]?.phase ?? "holding"
-              : null;
-            return retirementPhase ? (
-              <div
-                className={cn("conversation-tool-retirement-slot", retirementPhase === "exiting" && "exiting")}
-                data-retirement-phase={retirementPhase}
-                key={itemId}
-              >
-                <div className="conversation-tool-retirement-viewport">
-                  <div className="conversation-tool-retirement-row">
-                    {props.renderItem(item)}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="conversation-tool-live-row" key={itemId}>
-                {props.renderItem(item)}
-              </div>
-            );
-          })}
+      <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
+        <div className="conversation-tool-sequence-body">
+          {props.items.map(props.renderItem)}
         </div>
-      ) : null}
+      </ConversationMeasuredCollapse>
     </section>
   );
 }
@@ -589,24 +340,19 @@ export function ConversationProcessGroup(props: {
   React.useEffect(() => {
     fallbackStartedAtMsRef.current = Date.now();
   }, [props.process.id]);
-  const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
+  // Disabling tool folding also prevents the enclosing process from hiding its tools.
+  // 关闭工具折叠时，也禁止外层过程隐藏工具。
+  const { enabled: toolCollapseEnabled } = useToolCollapsePreference(props.parentConversationId);
+  const collapsed = toolCollapseEnabled && (props.collapsedOverride ?? props.process.defaultCollapsed);
   const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
   const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
-  // previousProcessRunningRef provides one committed-render grace period for a final tool result arriving with the process terminal snapshot.
-  // previousProcessRunningRef 为随过程终态快照一同到达的最终工具结果提供一次已提交渲染的宽限期。
-  const previousProcessRunningRef = React.useRef(props.process.running);
-  // animateToolRetirement enables pure frontend retirement only for the live process and its immediate terminal render.
-  // animateToolRetirement 仅为实时过程及其紧邻的终态渲染启用纯前端收纳动画。
-  const animateToolRetirement = props.process.running || previousProcessRunningRef.current;
-  React.useEffect(() => {
-    previousProcessRunningRef.current = props.process.running;
-  }, [props.process.running]);
   // visibleProcessBodyEntries groups only after thinking-display filtering establishes the visible sequence.
   // visibleProcessBodyEntries 仅在思考显示过滤确定可见序列后执行组合。
   const visibleProcessBodyEntries = groupVisibleProcessBodyEntries(
     props.process.id,
     visibleProcessItems,
     props.sessionRunning,
+    props.process.running,
   );
   const visibleCollapsedProcessUserItems = collapsed ? visibleProcessItems.filter(isTurnProcessUserRenderItem) : [];
   // streamingProcessItemIds comes only from explicit backend lifecycle metadata, never row position or run phase.
@@ -680,9 +426,9 @@ export function ConversationProcessGroup(props: {
       <button
         aria-expanded={bodyVisible}
         className="work-process-toggle"
-        disabled={!props.process.collapsible}
+        disabled={!props.process.collapsible || !toolCollapseEnabled}
         onClick={() => {
-          if (!props.process.collapsible) {
+          if (!props.process.collapsible || !toolCollapseEnabled) {
             return;
           }
           dispatchConversationManualViewportInteraction();
@@ -692,7 +438,7 @@ export function ConversationProcessGroup(props: {
       >
         <Clock3 className="work-process-icon" size={14} />
         <span>{headerText}</span>
-        {props.process.collapsible ? (collapsed ? <ChevronRight className="work-process-toggle-icon" size={13} /> : <ChevronDown className="work-process-toggle-icon" size={13} />) : null}
+        {props.process.collapsible && toolCollapseEnabled ? (collapsed ? <ChevronRight className="work-process-toggle-icon" size={13} /> : <ChevronDown className="work-process-toggle-icon" size={13} />) : null}
       </button>
       <div className="work-process-guidance">
         {visibleGuidanceItems.map((item) => (
@@ -769,7 +515,8 @@ export function ConversationProcessGroup(props: {
               ? renderProcessBodyItem(entry.item)
               : (
                 <ConversationToolSequenceGroup
-                  animateRetirement={animateToolRetirement}
+                  active={entry.active}
+                  collapseEnabled={toolCollapseEnabled}
                   collapseId={entry.collapseId}
                   completedItems={entry.completedItems}
                   items={entry.items}

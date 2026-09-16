@@ -36,9 +36,8 @@ use crate::ports::{
 };
 use crate::query::{QueryError, QueryIntent, QueryPlan, QueryPlanner, QueryPlannerConfig};
 use crate::refresh_control::{
-    VceEmbeddingActivity, VceEmbeddingActivityStage,
-    VceRefreshControl, VceRefreshFailure, VceRefreshPhase, VceRefreshProgress,
-    VceRefreshProviderBatchState, VceRefreshUnit,
+    VceEmbeddingActivity, VceEmbeddingActivityStage, VceRefreshControl, VceRefreshFailure,
+    VceRefreshPhase, VceRefreshProgress, VceRefreshProviderBatchState, VceRefreshUnit,
 };
 use crate::retrieval::{
     RankedHits, RerankCallback, RetrievalPipeline, merge_semantic_and_exact, reciprocal_rank_fusion,
@@ -2418,15 +2417,25 @@ impl VceEngine {
             let mut pending_blobs = Vec::new();
             for record in &records {
                 context.control.check()?;
-                observe_prepared_files(context.control, context.refresh_id, prepared_files,
-                    preparation_total, staged.len() as u64);
+                observe_prepared_files(
+                    context.control,
+                    context.refresh_id,
+                    prepared_files,
+                    preparation_total,
+                    staged.len() as u64,
+                );
                 if record.size > self.config.indexing.max_file_bytes {
                     blob_slots.push(PreparedBlobSlot::Ready(Box::new(
                         self.prepare_over_limit_blob(record, context.generation)?,
                     )));
                     prepared_files += 1;
-                    observe_prepared_files(context.control, context.refresh_id, prepared_files,
-                        preparation_total, staged.len() as u64);
+                    observe_prepared_files(
+                        context.control,
+                        context.refresh_id,
+                        prepared_files,
+                        preparation_total,
+                        staged.len() as u64,
+                    );
                     context.control.check()?;
                     continue;
                 }
@@ -2470,8 +2479,13 @@ impl VceEngine {
                     Err(error) => return Err(error),
                 }
                 prepared_files += 1;
-                observe_prepared_files(context.control, context.refresh_id, prepared_files,
-                    preparation_total, staged.len() as u64);
+                observe_prepared_files(
+                    context.control,
+                    context.refresh_id,
+                    prepared_files,
+                    preparation_total,
+                    staged.len() as u64,
+                );
                 context.control.check()?;
             }
 
@@ -2874,8 +2888,13 @@ impl VceEngine {
             let mut pending_blobs = Vec::new();
             for record in &records {
                 context.control.check()?;
-                observe_prepared_files(context.control, context.refresh_id, prepared_files,
-                    preparation_total, 0);
+                observe_prepared_files(
+                    context.control,
+                    context.refresh_id,
+                    prepared_files,
+                    preparation_total,
+                    0,
+                );
                 if record.size > self.config.indexing.max_file_bytes {
                     let blob_name = record.blob_name.as_deref().ok_or_else(|| {
                         VceError::InvalidRequest(format!(
@@ -2899,8 +2918,13 @@ impl VceEngine {
                         None => self.prepare_over_limit_blob(record, context.generation)?,
                     })));
                     prepared_files += 1;
-                    observe_prepared_files(context.control, context.refresh_id, prepared_files,
-                        preparation_total, 0);
+                    observe_prepared_files(
+                        context.control,
+                        context.refresh_id,
+                        prepared_files,
+                        preparation_total,
+                        0,
+                    );
                     context.control.check()?;
                     continue;
                 }
@@ -2978,8 +3002,13 @@ impl VceEngine {
                     Err(error) => return Err(error),
                 }
                 prepared_files += 1;
-                observe_prepared_files(context.control, context.refresh_id, prepared_files,
-                    preparation_total, 0);
+                observe_prepared_files(
+                    context.control,
+                    context.refresh_id,
+                    prepared_files,
+                    preparation_total,
+                    0,
+                );
                 context.control.check()?;
             }
             prepared_batches.push(PreparedStageBatch {
@@ -2991,8 +3020,15 @@ impl VceEngine {
 
         // Leave the last filename before potentially expensive global planning and manifest persistence.
         // 在可能耗时的全局规划与清单持久化之前离开最后一个文件名状态。
-        observe_embedding_activity(context.control, context.refresh_id, VceEmbeddingActivityStage::Preparing,
-            Some((0, blob_names.len() as u64)), 0, None, None);
+        observe_embedding_activity(
+            context.control,
+            context.refresh_id,
+            VceEmbeddingActivityStage::Preparing,
+            Some((0, blob_names.len() as u64)),
+            0,
+            None,
+            None,
+        );
         let configured_max_inputs = self.config.indexing.embedding_max_inputs;
         let provider_max_inputs = context.ai.embedding_max_inputs();
         let effective_max_inputs = provider_max_inputs.map_or(configured_max_inputs, |limit| {
@@ -3032,8 +3068,15 @@ impl VceEngine {
                 }
             }
         }
-        observe_embedding_activity(context.control, context.refresh_id, VceEmbeddingActivityStage::Planning,
-            Some((0, blob_names.len() as u64)), 0, None, None);
+        observe_embedding_activity(
+            context.control,
+            context.refresh_id,
+            VceEmbeddingActivityStage::Planning,
+            Some((0, blob_names.len() as u64)),
+            0,
+            None,
+            None,
+        );
         context.control.check()?;
         let content_plan = (!content_inputs.is_empty())
             .then(|| build_plan(content_inputs))
@@ -3239,14 +3282,28 @@ impl VceEngine {
             created_at_unix_ms: now,
             updated_at_unix_ms: now,
         };
-        observe_embedding_activity(context.control, context.refresh_id, VceEmbeddingActivityStage::Validating,
-            Some((0, blob_names.len() as u64)), 0, None, None);
+        observe_embedding_activity(
+            context.control,
+            context.refresh_id,
+            VceEmbeddingActivityStage::Validating,
+            Some((0, blob_names.len() as u64)),
+            0,
+            None,
+            None,
+        );
         context.control.check()?;
         planned_manifest
             .validate()
             .map_err(VceError::InvalidRequest)?;
-        observe_embedding_activity(context.control, context.refresh_id, VceEmbeddingActivityStage::Persisting,
-            Some((0, blob_names.len() as u64)), 0, None, None);
+        observe_embedding_activity(
+            context.control,
+            context.refresh_id,
+            VceEmbeddingActivityStage::Persisting,
+            Some((0, blob_names.len() as u64)),
+            0,
+            None,
+            None,
+        );
         context.control.check()?;
         let mut manifest = match persisted_manifest {
             Some(existing) => {
@@ -3279,8 +3336,15 @@ impl VceEngine {
         let use_remote_embedding_batch = context.use_remote_embedding_batch
             && context.ai.embedding_batch_capabilities().is_some();
         if use_remote_embedding_batch {
-            observe_embedding_activity(context.control, context.refresh_id, VceEmbeddingActivityStage::PlanningTasks,
-                Some((0, blob_names.len() as u64)), 0, None, None);
+            observe_embedding_activity(
+                context.control,
+                context.refresh_id,
+                VceEmbeddingActivityStage::PlanningTasks,
+                Some((0, blob_names.len() as u64)),
+                0,
+                None,
+                None,
+            );
             if let Some(plan) = &content_plan {
                 self.ensure_embedding_remote_batch_records(
                     plan,
@@ -3984,8 +4048,15 @@ impl VceEngine {
         overall: Option<(u64, u64)>,
     ) -> Result<(), VceError> {
         control.check()?;
-        observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::PlanningTasks,
-            overall, 0, Some(plan.batches.len() as u64), None);
+        observe_embedding_activity(
+            control,
+            request_id,
+            VceEmbeddingActivityStage::PlanningTasks,
+            overall,
+            0,
+            Some(plan.batches.len() as u64),
+            None,
+        );
         plan.validate()?;
         let mut records = index
             .load_embedding_remote_batch_records(manifest.run_id.clone(), purpose)
@@ -4051,8 +4122,15 @@ impl VceEngine {
                 .validate(grouped.segments.len())
                 .map_err(VceError::InvalidRequest)?;
             first_logical_batch = end;
-            observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::PlanningTasks,
-                overall, first_logical_batch as u64, Some(plan.batches.len() as u64), None);
+            observe_embedding_activity(
+                control,
+                request_id,
+                VceEmbeddingActivityStage::PlanningTasks,
+                overall,
+                first_logical_batch as u64,
+                Some(plan.batches.len() as u64),
+                None,
+            );
         }
 
         while first_logical_batch < plan.batches.len() {
@@ -4200,8 +4278,15 @@ impl VceEngine {
                 .map_err(VceError::Port)?;
             records.push(record);
             first_logical_batch = end;
-            observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::PlanningTasks,
-                overall, first_logical_batch as u64, Some(plan.batches.len() as u64), None);
+            observe_embedding_activity(
+                control,
+                request_id,
+                VceEmbeddingActivityStage::PlanningTasks,
+                overall,
+                first_logical_batch as u64,
+                Some(plan.batches.len() as u64),
+                None,
+            );
         }
         if first_logical_batch != plan.batches.len() {
             return Err(VceError::InvalidRequest(String::from(
@@ -4225,8 +4310,10 @@ impl VceEngine {
         let purpose = context.purpose;
         let ai = context.ai;
         let overall = context.overall;
-        self.ensure_embedding_remote_batch_records(plan, request_id, purpose, ai, index, manifest, control, overall)
-            .await?;
+        self.ensure_embedding_remote_batch_records(
+            plan, request_id, purpose, ai, index, manifest, control, overall,
+        )
+        .await?;
         let mut records = index
             .load_embedding_remote_batch_records(manifest.run_id.clone(), purpose)
             .await
@@ -4245,8 +4332,15 @@ impl VceEngine {
         }
         // Admit every unfinished logical batch before remote I/O so success can never skip Running.
         // 在远端调用前准入每个未完成逻辑批次，确保成功状态绝不会跳过 Running。
-        observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Admitting,
-            overall, 0, Some(manifest_positions.len() as u64), None);
+        observe_embedding_activity(
+            control,
+            request_id,
+            VceEmbeddingActivityStage::Admitting,
+            overall,
+            0,
+            Some(manifest_positions.len() as u64),
+            None,
+        );
         for (admitted, position) in manifest_positions.iter().enumerate() {
             control.check()?;
             if matches!(
@@ -4261,8 +4355,15 @@ impl VceEngine {
             }
             // Advance only after the durable state write and its storage read-back have succeeded.
             // 仅在持久状态写入及存储回读成功之后推进计数。
-            observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Admitting,
-                overall, (admitted + 1) as u64, Some(manifest_positions.len() as u64), None);
+            observe_embedding_activity(
+                control,
+                request_id,
+                VceEmbeddingActivityStage::Admitting,
+                overall,
+                (admitted + 1) as u64,
+                Some(manifest_positions.len() as u64),
+                None,
+            );
         }
         let first_capabilities = &records
             .first()
@@ -5423,8 +5524,15 @@ impl VceEngine {
                     .map_err(VceError::InvalidRequest)?;
                 manifest.updated_at_unix_ms = current_unix_epoch_millis();
                 persist_manifest_batch_record(index, manifest, manifest_position).await?;
-                observe_embedding_activity(control, request_id, VceEmbeddingActivityStage::Requesting,
-                    overall, completed_batches, Some(plan.batches.len() as u64), None);
+                observe_embedding_activity(
+                    control,
+                    request_id,
+                    VceEmbeddingActivityStage::Requesting,
+                    overall,
+                    completed_batches,
+                    Some(plan.batches.len() as u64),
+                    None,
+                );
                 let response = match ai
                     .embed(VceEmbeddingRequest {
                         context: VceAiRequestContext::new(
@@ -6149,7 +6257,13 @@ fn latest_remote_submission_unix_ms(records: &[VceEmbeddingRemoteBatchRecord]) -
 /// 使用稳定操作及冻结文件分母报告已完成源码准备。
 /// The control receives confirmed completed/total files and staged writes for refresh_id; returns nothing.
 /// control 接收 refresh_id 下已确认完成／总文件数及已暂存写入数；无返回值。
-fn observe_prepared_files(control: &VceRefreshControl, refresh_id: &str, completed: u64, total: u64, staged: u64) {
+fn observe_prepared_files(
+    control: &VceRefreshControl,
+    refresh_id: &str,
+    completed: u64,
+    total: u64,
+    staged: u64,
+) {
     control.observe(VceRefreshProgress {
         activity: None,
         phase: VceRefreshPhase::Chunking,
@@ -6180,14 +6294,20 @@ fn observe_embedding_activity(
     control.observe(VceRefreshProgress {
         activity: Some(VceEmbeddingActivity {
             stage,
-            provider_batch_id: record.and_then(|record| record.submission.as_ref()).map(|submission| submission.provider_batch_id.clone()),
+            provider_batch_id: record
+                .and_then(|record| record.submission.as_ref())
+                .map(|submission| submission.provider_batch_id.clone()),
             next_poll_at_unix_ms: record.and_then(|record| record.next_poll_not_before_unix_ms),
         }),
         phase: VceRefreshPhase::Embedding,
         operation_id: request_id.to_owned(),
-        unit: if total.is_none() { VceRefreshUnit::None }
-            else if stage == VceEmbeddingActivityStage::Uploading { VceRefreshUnit::Files }
-            else { VceRefreshUnit::Batches },
+        unit: if total.is_none() {
+            VceRefreshUnit::None
+        } else if stage == VceEmbeddingActivityStage::Uploading {
+            VceRefreshUnit::Files
+        } else {
+            VceRefreshUnit::Batches
+        },
         completed,
         total,
         overall_completed: overall.map_or(0, |(completed, _)| completed),
@@ -8400,7 +8520,10 @@ mod tests {
         assert_eq!(observed[0].unit, VceRefreshUnit::Requests);
         assert_eq!(observed[0].completed, 12);
         assert_eq!(observed[0].overall_completed, 6);
-        assert_eq!(observed[0].activity.as_ref().unwrap().next_poll_at_unix_ms, Some(123_456));
+        assert_eq!(
+            observed[0].activity.as_ref().unwrap().next_poll_at_unix_ms,
+            Some(123_456)
+        );
         assert_eq!(
             observed[0].provider_batch_state,
             Some(VceRefreshProviderBatchState::Finalizing)
@@ -8759,24 +8882,62 @@ mod tests {
             sink.lock().unwrap().push(progress);
         }));
         block_on(engine.refresh_observed(
-            RefreshRequest::full("prepare-files", RefreshReason::Initial,
+            RefreshRequest::full(
+                "prepare-files",
+                RefreshReason::Initial,
                 vec![
-                    FileObservation::present("src/a.rs", "fn alpha() {}", Some(1), crate::FileSource::Filesystem),
-                    FileObservation::present("src/empty.rs", "", Some(1), crate::FileSource::Filesystem),
-                    FileObservation::present("src/large.rs", &"x".repeat(65), Some(1), crate::FileSource::Filesystem),
-                ], None),
-            &index, &ai, &source, &control,
-        )).expect("complete isolated refresh");
+                    FileObservation::present(
+                        "src/a.rs",
+                        "fn alpha() {}",
+                        Some(1),
+                        crate::FileSource::Filesystem,
+                    ),
+                    FileObservation::present(
+                        "src/empty.rs",
+                        "",
+                        Some(1),
+                        crate::FileSource::Filesystem,
+                    ),
+                    FileObservation::present(
+                        "src/large.rs",
+                        &"x".repeat(65),
+                        Some(1),
+                        crate::FileSource::Filesystem,
+                    ),
+                ],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+            &control,
+        ))
+        .expect("complete isolated refresh");
         // observed excludes embedding and publication, which use different explicit counting units.
         // observed 排除向量计算与发布，它们使用不同的明确计数单位。
         let observed = events.lock().unwrap();
         // preparation retains only the cumulative source-file stage in emission order.
         // preparation 仅按发出顺序保留累计源码文件阶段。
-        let preparation = observed.iter().filter(|progress| progress.phase == VceRefreshPhase::Chunking).collect::<Vec<_>>();
-        assert_eq!(preparation.iter().map(|progress| progress.completed).collect::<Vec<_>>(), vec![0, 1, 1, 2, 2, 3]);
+        let preparation = observed
+            .iter()
+            .filter(|progress| progress.phase == VceRefreshPhase::Chunking)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            preparation
+                .iter()
+                .map(|progress| progress.completed)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 1, 2, 2, 3]
+        );
         assert!(preparation.iter().all(|progress| progress.total == Some(3)
-            && progress.operation_id == "prepare-files:prepare" && progress.current_path.is_none()));
-        assert!(observed.iter().any(|progress| progress.activity.as_ref().is_some_and(|activity| activity.stage == VceEmbeddingActivityStage::Persisting)));
+            && progress.operation_id == "prepare-files:prepare"
+            && progress.current_path.is_none()));
+        assert!(observed.iter().any(|progress| {
+            progress
+                .activity
+                .as_ref()
+                .is_some_and(|activity| activity.stage == VceEmbeddingActivityStage::Persisting)
+        }));
     }
 
     /// Verify cancellation at both chunking boundaries prevents embedding, staging, and publication.
@@ -9434,14 +9595,32 @@ mod tests {
         assert!(synchronous_sizes.lock().unwrap().is_empty());
         // Initial Batch work must expose upload, submission, polling and collection without claiming a direct call.
         // 首次 Batch 工作必须展示上传、提交、轮询与取回，不能声称是同步调用。
-        let activities = progress_events.lock().unwrap().iter().filter_map(|progress| progress.activity.clone()).collect::<Vec<_>>();
-        for stage in [VceEmbeddingActivityStage::Preparing, VceEmbeddingActivityStage::PlanningTasks,
-            VceEmbeddingActivityStage::Admitting, VceEmbeddingActivityStage::Uploading,
-            VceEmbeddingActivityStage::Submitting, VceEmbeddingActivityStage::Waiting,
-            VceEmbeddingActivityStage::Polling, VceEmbeddingActivityStage::Collecting] {
-            assert!(activities.iter().any(|activity| activity.stage == stage), "missing activity {stage:?}");
+        let activities = progress_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|progress| progress.activity.clone())
+            .collect::<Vec<_>>();
+        for stage in [
+            VceEmbeddingActivityStage::Preparing,
+            VceEmbeddingActivityStage::PlanningTasks,
+            VceEmbeddingActivityStage::Admitting,
+            VceEmbeddingActivityStage::Uploading,
+            VceEmbeddingActivityStage::Submitting,
+            VceEmbeddingActivityStage::Waiting,
+            VceEmbeddingActivityStage::Polling,
+            VceEmbeddingActivityStage::Collecting,
+        ] {
+            assert!(
+                activities.iter().any(|activity| activity.stage == stage),
+                "missing activity {stage:?}"
+            );
         }
-        assert!(!activities.iter().any(|activity| activity.stage == VceEmbeddingActivityStage::Requesting));
+        assert!(
+            !activities
+                .iter()
+                .any(|activity| activity.stage == VceEmbeddingActivityStage::Requesting)
+        );
         // Provider polling cannot claim any completed logical batch before durable results exist.
         // 持久结果尚不存在时，供应商状态查询不得宣称逻辑批次已完成。
         for purpose in ["content", "path"] {
@@ -9453,8 +9632,14 @@ mod tests {
             let progress = progress_events.lock().unwrap();
             // The first provider query precedes any result collection in this isolated lifecycle.
             // 本隔离生命周期中的首次供应商查询早于任何结果收集。
-            let first_poll = progress.iter().find(|event| event.operation_id == operation
-                && event.activity.as_ref().is_some_and(|activity| activity.stage == VceEmbeddingActivityStage::Polling))
+            let first_poll = progress
+                .iter()
+                .find(|event| {
+                    event.operation_id == operation
+                        && event.activity.as_ref().is_some_and(|activity| {
+                            activity.stage == VceEmbeddingActivityStage::Polling
+                        })
+                })
                 .expect("provider status query must be observed");
             assert_eq!(first_poll.completed, 0);
             assert!(first_poll.total.is_some_and(|total| total > 0));
@@ -9470,16 +9655,35 @@ mod tests {
             let progress = progress_events.lock().unwrap();
             // Locate the first upload without accepting a later purpose's admission.
             // 定位首次上传，不能接受其他用途后续产生的准入事件。
-            let upload = progress.iter().position(|event| event.operation_id == operation
-                && event.activity.as_ref().is_some_and(|activity| activity.stage == VceEmbeddingActivityStage::Uploading)).unwrap();
+            let upload = progress
+                .iter()
+                .position(|event| {
+                    event.operation_id == operation
+                        && event.activity.as_ref().is_some_and(|activity| {
+                            activity.stage == VceEmbeddingActivityStage::Uploading
+                        })
+                })
+                .unwrap();
             // Every durable admission reports a frozen denominator and confirmed completion.
             // 每次持久准入报告冻结分母及已确认完成数。
-            let counts = progress[..upload].iter().filter(|event| event.operation_id == operation
-                && event.activity.as_ref().is_some_and(|activity| activity.stage == VceEmbeddingActivityStage::Admitting))
-                .map(|event| (event.completed, event.total)).collect::<Vec<_>>();
+            let counts = progress[..upload]
+                .iter()
+                .filter(|event| {
+                    event.operation_id == operation
+                        && event.activity.as_ref().is_some_and(|activity| {
+                            activity.stage == VceEmbeddingActivityStage::Admitting
+                        })
+                })
+                .map(|event| (event.completed, event.total))
+                .collect::<Vec<_>>();
             assert_eq!(counts, vec![(0, Some(1)), (1, Some(1))]);
         }
-        assert!(activities.iter().filter(|activity| activity.stage == VceEmbeddingActivityStage::Waiting).all(|activity| activity.provider_batch_id.is_some()));
+        assert!(
+            activities
+                .iter()
+                .filter(|activity| activity.stage == VceEmbeddingActivityStage::Waiting)
+                .all(|activity| activity.provider_batch_id.is_some())
+        );
         let events = events.lock().unwrap().clone();
         assert!(!events.is_empty());
         assert_eq!(

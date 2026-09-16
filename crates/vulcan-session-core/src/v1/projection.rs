@@ -369,6 +369,36 @@ pub fn project_provider_items_with_sources(
     retained_from_seq: Option<Seq>,
     backfill_system: &[ActiveSystemState],
 ) -> Result<Vec<SourcedProjectedItem>, DomainError> {
+    project_items_with_policy(
+        events,
+        retained_from_seq,
+        backfill_system,
+        PartialAssistantPolicy::Omit,
+    )
+}
+
+/// Controls only partial assistant inclusion; fingerprint callers select their frozen contract explicitly.
+/// 仅控制部分 assistant 的纳入；指纹调用方显式选择冻结契约。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PartialAssistantPolicy {
+    /// Preserve immutable facts for the original and versioned fingerprint format.
+    /// 为原始及带版本指纹格式保留不可变事实。
+    Preserve,
+    /// Omit partial content for outbound requests and the known intermediate legacy format.
+    /// 为出站请求及已知过渡历史格式排除部分内容。
+    Omit,
+}
+
+/// Projects events within the given retention boundary using an explicit partial-content policy.
+/// 以显式部分内容策略投影给定保留边界内的事件。
+/// Returns ordered sourced items or a violated event invariant; fingerprint policies are wire contracts.
+/// 返回有序来源项或事件不变量错误；指纹策略属于持久化契约。
+fn project_items_with_policy(
+    events: &[ConversationEvent],
+    retained_from_seq: Option<Seq>,
+    backfill_system: &[ActiveSystemState],
+    partial_policy: PartialAssistantPolicy,
+) -> Result<Vec<SourcedProjectedItem>, DomainError> {
     let boundary = retained_from_seq.map(Seq::value).unwrap_or(0);
     let mut active_system = BTreeMap::new();
     for state in backfill_system {
@@ -447,7 +477,13 @@ pub fn project_provider_items_with_sources(
         // 过滤前 flush，确保后续 Provider 可见的 system/user/subagent 事实绝不
         // 越过已完成组。
         if let EventBody::ApiStats(stats) = &event.event {
-            flush_group(&mut items, &mut pending, stats.api_call_id)?;
+            flush_group(
+                &mut items,
+                &mut pending,
+                stats.api_call_id,
+                stats.status,
+                partial_policy,
+            )?;
             continue;
         }
         if !event.is_provider_visible() {
@@ -651,15 +687,31 @@ fn pending_group(
     group
 }
 
-/// Flushes the current group if it belongs to `api_call_id`.
-/// 当当前组属于 `api_call_id` 时把它 flush 掉。
+/// Finalizes the current group according to its authoritative API terminal status.
+/// 根据权威 API 终态完成当前组的投影。
+///
+/// Completed groups become Provider history. Failed, cancelled or interrupted groups keep partial
+/// reasoning and text only in the durable ledger, while terminal tool facts remain projected with
+/// their declaring calls so later requests retain a valid tool-call/result pair.
+/// 成功组进入 Provider 历史。失败、取消或中断组的部分推理与正文只保留在可靠账本中；终态工具事实
+/// 仍与声明它们的调用一同投影，使后续请求保持合法的工具调用/结果配对。
 fn flush_group(
     items: &mut Vec<SourcedProjectedItem>,
     pending: &mut Vec<(ApiCallId, PendingGroup)>,
     api_call_id: ApiCallId,
+    status: ApiCallStatus,
+    partial_policy: PartialAssistantPolicy,
 ) -> Result<(), DomainError> {
     if let Some(index) = pending.iter().position(|(id, _)| *id == api_call_id) {
-        let (_, group) = pending.remove(index);
+        let (_, mut group) = pending.remove(index);
+        if partial_policy == PartialAssistantPolicy::Omit && status != ApiCallStatus::Completed {
+            group.text.clear();
+            group.reasoning = None;
+            group.provider_source = None;
+            if group.tool_calls.is_empty() && group.results.is_empty() {
+                return Ok(());
+            }
+        }
         emit_group(items, group)?;
     }
     Ok(())
@@ -729,12 +781,64 @@ fn role_hint(hint: Option<SystemRoleHint>) -> ProjectedSystemRole {
 ///
 /// The hash covers the projected items only; `provider_source` objects and
 /// host-later tool fields (output, changeset, terminal status, timing) never
-/// enter it.
+/// enter it. Partial assistant facts remain hashed even when request policy excludes them.
 /// 哈希只覆盖投影项；`provider_source` 对象与宿主后写的工具字段(output、
-/// changeset、终态、时间)绝不进入指纹。
+/// changeset、终态、时间)绝不进入指纹。即使请求策略排除部分 assistant 事实，它们仍参与哈希。
 pub fn provider_visible_fingerprint(
     events: &[ConversationEvent],
     coverage_until_seq: Seq,
+) -> Result<String, DomainError> {
+    fingerprint_with_policy(events, coverage_until_seq, PartialAssistantPolicy::Preserve)
+}
+
+/// Verifies a checkpoint without rewriting it; only unversioned records admit the two historical formats.
+/// 校验检查点而不重写它；仅无版本记录接受两种历史格式。
+/// `events` is the resident ledger and `source` supplies coverage, version and digest; mismatches are errors.
+/// `events` 为常驻账本，`source` 提供覆盖、版本及摘要；不匹配时返回错误。
+pub(crate) fn validate_provider_fingerprint(
+    events: &[ConversationEvent],
+    source: &ProviderSource,
+) -> Result<(), DomainError> {
+    // Exhaustive dispatch forces any future format to define its verification behavior.
+    // 穷尽分派强制未来格式定义自身的校验行为。
+    let accepts_legacy = match source.fingerprint_version {
+        None => true,
+        Some(ProviderFingerprintVersion::ImmutableProjectionV1) => false,
+    };
+    // This stable contract must not change when request eligibility changes.
+    // 请求资格变化时，不得改变此稳定契约。
+    let expected = provider_visible_fingerprint(events, source.covered_until_seq)?;
+    if source.fingerprint_sha256 == expected {
+        return Ok(());
+    }
+    // A previous unversioned writer used terminal filtering. Admit exactly that known format,
+    // never a best-effort rehash or a fallback for explicitly versioned checkpoints.
+    // 曾有无版本写入者使用终态过滤。只接受该已知格式，绝不尽力重算或为显式版本检查点兜底。
+    if accepts_legacy
+        && source.fingerprint_sha256
+            == fingerprint_with_policy(
+                events,
+                source.covered_until_seq,
+                PartialAssistantPolicy::Omit,
+            )?
+    {
+        return Ok(());
+    }
+    Err(DomainError::ProviderSourceFingerprintMismatch {
+        seq: source.covered_until_seq.value(),
+        stored: source.fingerprint_sha256.clone(),
+        expected,
+    })
+}
+
+/// Hashes the covered event prefix with a frozen partial-content policy and no late host fields.
+/// 使用冻结的部分内容策略哈希覆盖事件前缀，排除宿主后写字段。
+/// Returns the SHA-256 digest or a projection/serialization error; source envelopes never hash themselves.
+/// 返回 SHA-256 摘要或投影、序列化错误；来源封套不参与自身哈希。
+fn fingerprint_with_policy(
+    events: &[ConversationEvent],
+    coverage_until_seq: Seq,
+    partial_policy: PartialAssistantPolicy,
 ) -> Result<String, DomainError> {
     let coverage = coverage_until_seq.value();
     let mut stripped: Vec<ConversationEvent> = events
@@ -758,7 +862,11 @@ pub fn provider_visible_fingerprint(
             _ => {}
         }
     }
-    let mut items = project_provider_items(&stripped, None, &[])?;
+    let mut items: Vec<ProjectedItem> =
+        project_items_with_policy(&stripped, None, &[], partial_policy)?
+            .into_iter()
+            .map(|sourced| sourced.item)
+            .collect();
     // Tool results are new Provider inputs after the replay checkpoint and
     // must never enter the checkpoint fingerprint (plan 5.5.10); the tool call
     // itself (provider id/name/args) stays part of the immutable projection.
@@ -791,6 +899,10 @@ pub fn project_document(
 ) -> Result<Vec<ProjectedItem>, DomainError> {
     project_provider_items(document.events(), retained_from_seq, backfill_system)
 }
+
+#[cfg(test)]
+#[path = "projection/fingerprint_tests.rs"]
+mod fingerprint_tests;
 
 #[cfg(test)]
 mod tests_projection {
@@ -943,6 +1055,63 @@ mod tests_projection {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// An interrupted partial assistant stays visible in the ledger but is absent from the next
+    /// Provider request when same-turn guidance follows immediately.
+    /// 被中断的部分 assistant 仍在账本中可见，但同回合指令紧随其后时不会进入下一次 Provider 请求。
+    #[test]
+    fn projection_excludes_interrupted_partial_assistant_before_same_turn_guidance()
+    -> Result<(), DomainError> {
+        let mut document = SessionDocument::new("interrupted", "project", "title", 1);
+        let turn_id = document.submit_root_input_fixture("inspect tools", Vec::new(), 1)?;
+        let api_call_id = document.start_api(
+            ApiPurposeKind::MainGeneration,
+            ApiRequestSnapshot::new("deepseek", "deepseek-flash"),
+            2,
+        )?;
+
+        // Cover the stricter boundary where reasoning was sealed before the physical API was stopped.
+        // 覆盖推理先封口、随后物理 API 才被停止的更严格边界。
+        document.append_reasoning(
+            api_call_id,
+            "partial reasoning",
+            AssistantSemanticStatus::Completed,
+            3,
+        )?;
+        document.append_assistant_text(
+            api_call_id,
+            "partial answer",
+            AssistantSemanticStatus::Streaming,
+            4,
+        )?;
+        document.interrupt_active_api(5)?;
+        document.append_in_turn_guidance_before_api(
+            crate::v1::ids::ClientActionId::try_new("inspect-only-guidance")?,
+            String::from("Do not modify files. Inspect only."),
+            6,
+        )?;
+
+        let items = project_document(&document, None, &[])?;
+        assert_eq!(
+            document.active_turn().map(|turn| turn.turn_id),
+            Some(turn_id)
+        );
+        assert_eq!(kinds(&items), vec!["user", "user"]);
+        assert!(matches!(
+            &items[0],
+            ProjectedItem::UserInput { text, .. } if text == "inspect tools"
+        ));
+        assert!(matches!(
+            &items[1],
+            ProjectedItem::UserInput { text, .. } if text == "Do not modify files. Inspect only."
+        ));
+        assert!(document.events().iter().any(|event| matches!(
+            &event.event,
+            EventBody::AssistantReasoning(reasoning)
+                if reasoning.api_call_id == api_call_id && reasoning.text == "partial reasoning"
+        )));
+        Ok(())
     }
 
     /// Provider projection preserves the exact replay source selected by the document.

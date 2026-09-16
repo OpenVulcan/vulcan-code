@@ -1,23 +1,16 @@
 import * as React from "react";
-import { ChevronDown, ChevronRight, LogIn, LogOut } from "lucide-react";
+import { LogIn, LogOut } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
-import {
-  ConversationMeasuredCollapse,
-  useConversationMeasuredExpansion,
-} from "@/components/conversation/conversation-measured-collapse";
-import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useI18n } from "@/i18n";
 
-// ModelExtensionToolPayloadKind names the two independently expandable extension payload cards.
-// ModelExtensionToolPayloadKind 命名两个可独立展开的扩展载荷卡片。
-type ModelExtensionToolPayloadKind = "input" | "output";
-
-// ModelExtensionToolPayloadCardsProps describes the authoritative input and output retained for one extension call.
-// ModelExtensionToolPayloadCardsProps 描述单次扩展调用保留的权威输入与返回。
+// ModelExtensionToolPayloadCardsProps describes the authoritative input and output retained for one tool call.
+// ModelExtensionToolPayloadCardsProps 描述单次工具调用保留的权威输入与输出。
 export interface ModelExtensionToolPayloadCardsProps {
-  // Stable parent presentation identity used to isolate both expansion memories.
-  // 用于隔离两个展开记忆的稳定父展示标识。
+  // Stable presentation identity scopes the remembered input-tab selection.
+  // 稳定展示标识限定输入标签选择记忆的范围。
   presentationId: string;
   // Persisted request payload formatted as Markdown.
   // 格式化为 Markdown 的持久化请求载荷。
@@ -28,118 +21,53 @@ export interface ModelExtensionToolPayloadCardsProps {
   // Optional result-owned controls or generated resources.
   // 可选的返回侧控件或生成资源。
   outputSupplement?: React.ReactNode;
-  // Initial input expansion; omitted means folded.
-  // 输入初始展开状态；省略时为折叠。
-  defaultInputExpanded?: boolean;
-  // Initial output expansion; omitted means expanded once output exists.
-  // 输出初始展开状态；省略时在返回存在后展开。
-  defaultOutputExpanded?: boolean;
 }
 
-// ModelExtensionToolPayloadCardProps describes one independently controlled payload card.
-// ModelExtensionToolPayloadCardProps 描述一个独立控制的载荷卡片。
-interface ModelExtensionToolPayloadCardProps {
-  // Stable parent presentation identity.
-  // 稳定父展示标识。
-  presentationId: string;
-  // Input or output discriminator.
-  // 输入或返回判别字段。
-  kind: ModelExtensionToolPayloadKind;
-  // Localized card title key.
-  // 本地化卡片标题键。
-  titleKey: TranslationKey;
-  // Markdown payload rendered inside the bounded body.
-  // 在受限高正文中渲染的 Markdown 载荷。
-  markdown: string;
-  // Optional content owned by this payload.
-  // 当前载荷持有的可选内容。
-  supplement?: React.ReactNode;
-  // Initial expansion when no surface memory exists.
-  // 界面记忆不存在时的初始展开状态。
-  defaultExpanded: boolean;
-}
-
-// ModelExtensionToolPayloadCards renders request and result as separate folded cards.
-// ModelExtensionToolPayloadCards 将请求与返回渲染成两个独立折叠卡片。
-// Parameters: props contains the stable call identity and exact persisted payloads.
-// 参数：props 包含稳定调用身份与精确持久化载荷。
-// Returns: the available input card and, after a result exists, the output card.
-// 返回值：可用的输入卡，以及返回存在后显示的返回卡。
+// ModelExtensionToolPayloadCards renders available payloads as mutually exclusive, keyboard-accessible tabs.
+// ModelExtensionToolPayloadCards 将可用载荷渲染为互斥且支持键盘操作的标签页。
+// Parameters: props supplies exact payloads, result-owned resources, and their stable call identity.
+// 参数：props 提供精确载荷、返回侧资源及其稳定调用身份。
+// Returns: output-first tabs, or only input while output is unavailable; empty payloads render nothing.
+// 返回值：输出优先的标签页，输出不可用时仅显示输入；所有载荷均为空时不渲染。
 export function ModelExtensionToolPayloadCards(props: ModelExtensionToolPayloadCardsProps) {
-  return (
-    <div className="model-extension-tool-payloads">
-      <ModelExtensionToolPayloadCard
-        defaultExpanded={props.defaultInputExpanded ?? false}
-        kind="input"
-        markdown={props.inputMarkdown}
-        presentationId={props.presentationId}
-        titleKey="toolPresentation.payload.input"
-      />
-      <ModelExtensionToolPayloadCard
-        defaultExpanded={props.defaultOutputExpanded ?? true}
-        kind="output"
-        markdown={props.outputMarkdown}
-        presentationId={props.presentationId}
-        supplement={props.outputSupplement}
-        titleKey="toolPresentation.payload.output"
-      />
-    </div>
-  );
-}
-
-// ModelExtensionToolPayloadCard renders one payload with its own remembered expansion state.
-// ModelExtensionToolPayloadCard 使用自身记忆的展开状态渲染一个载荷。
-// Parameters: props identifies the payload, its localized title and retained content.
-// 参数：props 标识载荷、本地化标题及其保留内容。
-// Returns: null for an unavailable payload, otherwise one independently expandable card.
-// 返回值：载荷不可用时返回 null，否则返回一个可独立展开的卡片。
-function ModelExtensionToolPayloadCard(props: ModelExtensionToolPayloadCardProps) {
-  // hasSupplement distinguishes a real result-owned node from an absent output.
-  // hasSupplement 区分真实的返回侧节点与不存在的输出。
-  const hasSupplement = props.supplement !== null && props.supplement !== undefined;
-  // hasContent prevents an empty output card from appearing while the tool is still running.
-  // hasContent 防止工具仍在运行时出现空返回卡。
-  const hasContent = Boolean(props.markdown) || hasSupplement;
-  // collapseId gives input and output independent persisted expansion identities.
-  // collapseId 为输入与返回提供相互独立的持久化展开身份。
-  const collapseId = `model-extension:${props.presentationId}:${props.kind}`;
-  // expanded is scoped to the exact payload rather than the whole tool call.
-  // expanded 仅属于精确载荷，而不是整个工具调用。
-  const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, props.defaultExpanded);
-  // t resolves the input or output label without exposing raw tool ids.
-  // t 解析输入或返回标签，且不暴露原始工具标识。
+  // t resolves the existing localized input and output names.
+  // t 解析既有的输入与输出本地化名称。
   const { t } = useI18n();
-  if (!hasContent) {
-    return null;
-  }
-  // PayloadIcon gives request and result rows distinct in/out semantics instead of a generic JSON glyph.
-  // PayloadIcon 为请求行与返回行提供明确的输入/输出语义，而不是通用 JSON 图标。
-  const PayloadIcon = props.kind === "input" ? LogIn : LogOut;
+  // hasInput and hasOutput admit only payloads supplied by the tool's presentation model.
+  // hasInput 与 hasOutput 仅接纳工具展示模型提供的载荷。
+  const hasInput = Boolean(props.inputMarkdown);
+  const hasOutput = Boolean(props.outputMarkdown)
+    || (props.outputSupplement !== null && props.outputSupplement !== undefined);
+  // inputSelected preserves an explicit user choice across collapse/remount and later output arrival.
+  // inputSelected 在折叠重挂载及后续输出到达时保留用户显式选择。
+  const [inputSelected, setInputSelected] = useConversationMeasuredExpansion(
+    `model-extension:${props.presentationId}:input-tab`, false,
+  );
+  // selectedTab defaults to output once available without interrupting an explicitly selected input.
+  // selectedTab 在输出可用后默认选中输出，但不打断显式选择的输入。
+  const selectedTab = hasInput && inputSelected ? "input" : hasOutput ? "output" : "input";
+  if (!hasInput && !hasOutput) return null;
+
   return (
-    <section
-      className={cn("tool-presentation-card", "markdown-tool", "model-extension-payload-card", expanded && "expanded")}
-      data-model-extension-payload={props.kind}
-    >
-      <button
-        aria-expanded={expanded}
-        className="tool-presentation-summary model-extension-payload-summary"
-        onClick={() => setExpanded(!expanded)}
-        type="button"
-      >
-        <PayloadIcon className="markdown-tool-icon" size={14} />
-        <span className="tool-presentation-command">
-          <span className="tool-presentation-command-text">{t(props.titleKey)}</span>
-        </span>
-        {expanded
-          ? <ChevronDown className="tool-presentation-toggle" size={14} />
-          : <ChevronRight className="tool-presentation-toggle" size={14} />}
-      </button>
-      <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
-        <div className="markdown-tool-block model-extension-payload-body">
-          {props.markdown ? <MarkdownMessage content={props.markdown} eager /> : null}
-          {props.supplement}
-        </div>
-      </ConversationMeasuredCollapse>
-    </section>
+    <Tabs className="model-extension-tool-payloads" value={selectedTab}
+      onValueChange={(value) => setInputSelected(value === "input")}>
+      <TabsList variant="line" aria-label={`${t("toolPresentation.payload.output")} / ${t("toolPresentation.payload.input")}`}>
+        {hasOutput ? <TabsTrigger value="output" data-payload-tab="output">
+          <LogOut size={14} />{t("toolPresentation.payload.output")}
+        </TabsTrigger> : null}
+        {hasInput ? <TabsTrigger value="input" data-payload-tab="input"
+          onMouseDown={(event) => { if (event.button === 0 && !event.ctrlKey) setInputSelected(true); }}
+          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setInputSelected(true); }}>
+          <LogIn size={14} />{t("toolPresentation.payload.input")}
+        </TabsTrigger> : null}
+      </TabsList>
+      {hasOutput ? <TabsContent value="output" data-model-extension-payload="output" className="model-extension-payload-body">
+        {props.outputMarkdown ? <MarkdownMessage content={props.outputMarkdown} eager /> : null}
+        {props.outputSupplement}
+      </TabsContent> : null}
+      {hasInput ? <TabsContent value="input" data-model-extension-payload="input" className="model-extension-payload-body">
+        <MarkdownMessage content={props.inputMarkdown} eager />
+      </TabsContent> : null}
+    </Tabs>
   );
 }

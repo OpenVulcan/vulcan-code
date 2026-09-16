@@ -3,7 +3,9 @@
 }
 
 .conversation-panel .work-process-group {
-  contain: layout paint style;
+  /* Reasoning controls extend into the left gutter, outside this process box. */
+  /* 思考入口延伸至过程容器外的左侧留白，不能在此裁切绘制。 */
+  contain: layout style;
 }
 
 .conversation-panel .markdown-message {

@@ -54,14 +54,14 @@ export function projectConversationTimelineItems(
     const terminal = Boolean(currentTurn.statsItem);
     const running = forceRunning && !terminal;
     const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems);
-    const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
-    const finalItem = !running && !stopped ? popTrailingFinalAssistantItem(bodyItems) : null;
-    // Final output is already excluded; only process content may own preceding reasoning.
-    // 最终输出已经排除，只有过程内容可以承接前置思考。
+    // Associate reasoning before extracting final output so the final answer keeps its own gutter entry.
+    // 在提取最终输出之前关联思考，让最终回答保留属于自己的左侧入口。
     const processItems = integrateProcessThinking(
-      bodyItems.filter((item) => !isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item)),
+      currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item)
+        && (!isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item))),
       isAssistantMarkdownRenderItem,
     );
+    const finalItem = !running && !stopped ? popTrailingFinalAssistantItem(processItems) : null;
     const turnUserItem = currentTurn.userItem;
     const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
     const startedAtMs = conversationMessageUnixMillis(currentTurn.anchorItem.sourceMessage ?? currentTurn.anchorItem.userMessage);

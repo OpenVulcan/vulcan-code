@@ -65,6 +65,77 @@ pub struct LuaSkillsManagedRuntimeProgressSummary {
     pub overall_percent: Option<u8>,
 }
 
+/// WebUI-visible progress of one LuaSkills install or update operation.
+/// WebUI 可见的单次 LuaSkills 安装或更新操作进度。
+///
+/// The service generates the correlation id before issuing the request, so a WebUI
+/// refresh or reconnect resumes the operation by that stable id instead of
+/// re-deriving state from catalog contents or timestamps.
+/// 服务在发起请求前生成关联标识，因此 WebUI 刷新或重连用该稳定标识恢复操作，而不是从目录
+/// 内容或时间戳重新推断状态。
+///
+/// Free-form upstream text is replaced by a finite host-owned vocabulary when the event
+/// is retained, and `source_locator` is deliberately absent: either can carry a private
+/// source URL, a local absolute directory, or an embedded token.
+/// 事件保留时会把上游自由文本替换为有限的宿主自有词表，且刻意不含 `source_locator`：
+/// 二者都可能携带私有来源 URL、本地绝对目录或内嵌令牌。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsOperationProgressSummary {
+    /// Service-generated correlation identity for this exact request.
+    /// 为本次精确请求生成的服务关联身份。
+    pub correlation_id: String,
+    /// Stable lifecycle action label: install, update, reload, uninstall, enable, or disable.
+    /// 稳定生命周期动作标签：install、update、reload、uninstall、enable 或 disable。
+    pub action: String,
+    /// Whether the operation is still inside its bound span.
+    /// 该操作是否仍在其绑定区间内。
+    pub in_flight: bool,
+    /// Authoritative request outcome: succeeded or failed, once the request returned.
+    /// 请求返回后的权威请求结果：succeeded 或 failed。
+    pub outcome: Option<String>,
+    /// Whether the retained event queue overflowed and dropped events.
+    /// 保留事件队列是否溢出并丢弃过事件。
+    pub overflowed: bool,
+    /// Whether an upstream terminal event was observed.
+    /// 是否观察到上游终态事件。
+    pub saw_upstream_terminal: bool,
+    /// Number of retained events.
+    /// 保留的事件数。
+    pub phases: usize,
+    /// Most recent machine-readable phase name.
+    /// 最近的机器可读阶段名称。
+    pub latest_phase: Option<String>,
+    /// Most recent machine-readable status.
+    /// 最近的机器可读状态。
+    pub latest_status: Option<String>,
+    /// Target skill package identifier when the event carries one.
+    /// 事件携带时的目标技能包标识。
+    pub skill_id: Option<String>,
+    /// Target named skill root when the event carries one.
+    /// 事件携带时的目标命名技能根。
+    pub root_name: Option<String>,
+    /// Completed byte count for download phases.
+    /// 下载阶段的已完成字节数。
+    pub bytes_done: Option<u64>,
+    /// Total byte count for download phases.
+    /// 下载阶段的总字节数。
+    pub bytes_total: Option<u64>,
+    /// Whole-number completion percentage for download phases.
+    /// 下载阶段的整数完成百分比。
+    pub percent: Option<u8>,
+    /// Sanitized human-readable progress message.
+    /// 脱敏后的人类可读进度消息。
+    pub message: Option<String>,
+    /// Upstream operation identity bound by the first observed event.
+    /// 由首个观察到的事件绑定的上游操作身份。
+    ///
+    /// Exposed so a caller can detect an operation whose events came from a source
+    /// the management lock did not serialize.
+    /// 暴露该值，使调用方能够察觉事件来自管理锁未能串行化的来源的操作。
+    pub upstream_operation_id: Option<String>,
+}
+
 /// Full WebUI summary for the embedded Lua Skills catalog.
 /// 嵌入式 Lua Skills 目录的完整 WebUI 摘要。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -91,6 +162,10 @@ pub struct LuaSkillsCatalogSummary {
     /// Current native managed-runtime installation progress when active.
     /// 活动时的当前原生受管运行时安装进度。
     pub managed_runtime_progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
+    /// Current LuaSkills install or update progress when active.
+    /// 活动时的当前 LuaSkills 安装或更新进度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_progress: Option<LuaSkillsOperationProgressSummary>,
     /// System Lua library directory used by Lua Skills.
     /// Lua Skills 使用的系统 Lua 库目录。
     pub system_lua_lib: String,

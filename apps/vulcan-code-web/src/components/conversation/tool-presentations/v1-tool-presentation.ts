@@ -18,7 +18,7 @@ export type V1ToolPresentationState = ToolCallEvent["status"];
 
 /** Icon identity understood by the V1 card renderer; null intentionally reserves no slot.
  * V1 卡片渲染器识别的图标身份；null 表示明确不保留图标槽。 */
-export type V1ToolPresentationIcon = "file" | "markdown" | "shell" | "tool" | null;
+export type V1ToolPresentationIcon = "file" | "folder-search" | "markdown" | "shell" | "tool" | null;
 
 /** Shared immutable fields carried by every V1 tool presentation.
  * 每个 V1 工具展示模型携带的共享不可变字段。 */
@@ -320,7 +320,8 @@ function resolveV1FileChangePresentation(
   return {
     ...base,
     kind: "file_change",
-    title: changeset.mode === "preview" ? "预览编辑" : "已编辑",
+    title: files.length > 0 && files.every(file => file.change === files[0].change)
+      ? ({ create: "创建", modify: "编辑", delete: "删除", rename: "改名" } as const)[files[0].change] : "变更",
     icon: "file",
     mode: changeset.mode,
     summary: changeset.summary ?? null,
@@ -366,14 +367,14 @@ function resolveV1FileAccessPresentation(
 ): V1FileAccessPresentation {
   // title is fixed by the explicit action rather than inferred from result text.
   // title 由显式 action 固定，而不是从结果文本推断。
-  const title = action === "list" ? "查询文件列表" : action === "read" ? "读取文件" : "查询文件信息";
+  const title = action === "list" ? "查询文件列表" : action === "read" ? "读取" : "查询文件信息";
   return {
     ...base,
     kind: "file_access",
     title,
-    // Directory queries intentionally render no placeholder icon.
-    // 目录查询明确不渲染空图标占位。
-    icon: action === "list" ? null : "file",
+    // Directory queries carry their folder-search affordance like the branch renderer.
+    // 目录查询与分支渲染器一致使用文件夹搜索图标。
+    icon: action === "list" ? "folder-search" : "file",
     action,
     targets: fileAccessTargets(base.toolName, input),
     markdown: payloadMarkdown(output, action === "list" ? "markdown" : "text"),
