@@ -50,6 +50,7 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
       revision: project.vceSettingsRevision ?? 1,
       migratedFromCodebaseMemory: false,
       maxFileBytes: 1_048_576,
+      defaultIgnorePatterns: [],
       extraIgnorePatterns: [],
       allowQueryRewrite: false,
       allowRerank: true,

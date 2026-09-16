@@ -4,7 +4,7 @@ import type { ToolExecutionConversationBlock } from "@/components/conversation/c
 import type { FileAccessAction, FileAccessItemPresentation, FileAccessLineRangePresentation, FileAccessPresentation, FileAccessPresentationKind, FileChangeDiffRow, FileChangeFilePresentation, FileChangeOperation, FileChangePresentation, FileTextFormatPresentation, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
 import { argumentsFromMetadata, arrayValue, booleanValue, compactHash, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
 import { deleteRows, fileChangeDiffFile, insertRows, modifyRows, splitTextLines } from "./file-change-diff-presentation";
-import { fixedV1ToolEvent } from "./presentation-value-readers";
+import { fixedHostPayload, fixedV1ToolEvent } from "./presentation-value-readers";
 import { buildV1ChangeSetFilePresentation } from "./v1-tool-presentation";
 import type { PersistentChangeSet } from "@/service/conversation-event-window-store";
 
@@ -23,6 +23,11 @@ function buildPersistentChangeSetPresentation(blocks: ToolExecutionConversationB
   // prefix retains the established per-call expansion identity.
   // prefix 保留既有按调用划分的展开身份。
   const prefix = source === "native_file_edit" ? "native-file-edit" : source === "native_apply_patch" ? "native-apply-patch" : source === "native_file_mutation" ? "native-file-mutation" : "change-set";
+  // An empty failed changeset describes no committed changes, not the absence of a requested file.
+  // 失败的空变更集表示没有提交变更，而不是没有请求目标文件。
+  if (state === "failed" && changeset.files.length === 0) {
+    return buildNoEffectiveChangePresentation(blocks, state, source, options, detailRef);
+  }
   // files reuse the V1 lifecycle decoder so full, truncated and omitted content have identical accounting.
   // files 复用 V1 生命周期解码器，使完整、截断与省略正文保持相同统计规则。
   const files = changeset.files.map((file, index) => {
@@ -85,6 +90,29 @@ export function resolveFileChangePresentation(
   options: ToolPresentationResolveOptions,
   detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
+  // Resolve file facts first; attach only the exact producer error code, never infer it from prose.
+  // 先解析文件事实；仅附加产出方的精确错误码，不从描述文本推测。
+  const presentation = resolveFileChangeContent(blocks, displayState, options, detailRef);
+  if (!presentation || displayState !== "failed") return presentation;
+  // V1 retains the original envelope even when its changeset shadows legacy host metadata.
+  // 即使变更集覆盖旧式宿主元数据，V1 仍保留原始输出信封。
+  const event = fixedV1ToolEvent(blocks);
+  // Legacy records use the established host payload adapter; V1 uses its authoritative envelope.
+  // 旧记录使用既有宿主载荷适配器；V1 使用自身权威信封。
+  const payload = event
+    ? metadataValue(event.output, ["host_result.payload"])
+    : fixedHostPayload(blocks);
+  return { ...presentation, errorCode: metadataString(payload, ["details.code"]) };
+}
+
+/** Resolves file rows from blocks, state, display options and optional detail identity; returns null for unrelated tools.
+ * 根据源块、状态、展示选项与可选详情身份解析文件行；无关工具返回 null。 */
+function resolveFileChangeContent(
+  blocks: ToolExecutionConversationBlock[],
+  displayState: ToolPresentationDisplayState,
+  options: ToolPresentationResolveOptions,
+  detailRef?: ConversationDetailRef,
+): FileChangePresentation | null {
   // V1 changesets belong to the event, not the legacy host_result envelope.
   // V1 变更集属于事件本身，而非旧版 host_result 信封。
   const canonicalEvent = fixedV1ToolEvent(blocks);
@@ -119,7 +147,7 @@ export function resolveFileChangePresentation(
         "native_file_mutation",
         detailRef,
       )
-      : buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", detailRef);
+      : buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef);
   }
   if (nativeToolId === "file_edit") {
     const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
@@ -143,9 +171,9 @@ export function resolveFileChangePresentation(
         return buildNativeEditPreviewPresentation(blocks, displayState, argumentPreview, options, "native_file_edit", detailRef);
       }
       return buildNativeVulcanFilePresentation(blocks, displayState, "modify", options, "native_file_edit", detailRef)
-        ?? buildNoEffectiveChangePresentation(blocks, displayState, "native_file_edit", detailRef);
+        ?? buildNoEffectiveChangePresentation(blocks, displayState, "native_file_edit", options, detailRef);
     }
-    return buildNoEffectiveChangePresentation(blocks, displayState, "native_file_edit", detailRef);
+    return buildNoEffectiveChangePresentation(blocks, displayState, "native_file_edit", options, detailRef);
   }
   if (nativeToolId === "apply_patch") {
     const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
@@ -187,7 +215,7 @@ export function resolveFileChangePresentation(
         );
       }
     }
-    return buildNoEffectiveChangePresentation(blocks, displayState, "native_apply_patch", detailRef);
+    return buildNoEffectiveChangePresentation(blocks, displayState, "native_apply_patch", options, detailRef);
   }
   const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
   if (hostPayload) {
@@ -315,7 +343,7 @@ function buildHostChangeSetPresentation(
     .map((file, index) => buildHostChangeSetFile(file, index, blocks, options, correlation, source))
     .filter((file): file is FileChangeFilePresentation => Boolean(file));
   if (!files.length) {
-    return buildNoEffectiveChangePresentation(blocks, displayState, source, detailRef);
+    return buildNoEffectiveChangePresentation(blocks, displayState, source, options, detailRef);
   }
   const mode = changeSetMode(payload.mode);
   const operation = summarizeOperation(files);
@@ -509,15 +537,32 @@ function buildNoEffectiveChangePresentation(
   blocks: ToolExecutionConversationBlock[],
   displayState: ToolPresentationDisplayState,
   source: "host_change_set" | "native_file_mutation" | "native_file_edit" | "native_apply_patch",
+  options: ToolPresentationResolveOptions,
   detailRef?: ConversationDetailRef,
 ): FileChangePresentation {
+  // Request targets remain visible after failure, but request previews must never become applied diffs.
+  // 失败后保留请求目标，但请求预览绝不能变成已应用差异。
+  const targets = displayState !== "failed" ? [] : source === "native_apply_patch"
+    ? (nativeApplyPatchArgumentsPreview(blocks) ?? []).map(file => ({ path: file.path, operation: file.operation }))
+    : nativeFilePaths(blocks).map(path => ({ path, operation: nativeFileMutationOperation(blocks) ?? "modify" as const }));
+  // Empty rows and unknown counts preserve the distinction between attempted and committed changes.
+  // 空差异行与未知计数保留尝试编辑和已提交变更之间的区别。
+  const files = targets.map((target, index) => buildFilePresentation({
+    blocks, index, options, path: target.path, operation: target.operation,
+    added: null, removed: null, rows: [], expandable: false, readOnly: false,
+    resourceId: null, operationIds: [], previousPath: null, stableId: target.path,
+    idOperation: exactNativeToolId(blocks),
+  }));
+  // Full diagnostics are expandable even when no host changeset was produced.
+  // 即使没有产出宿主变更集，完整诊断仍可展开。
+  const errorDetail = displayState === "failed" ? errorDetailFromBlocks(blocks) : null;
   return {
     detailRef,
-    errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
-    files: [],
+    errorDetail,
+    files,
     hasEffectiveChanges: displayState === "running" ? null : false,
-    id: fileChangePresentationId(blocks, [], `no-effective-change:${source}`),
-    interactive: false,
+    id: fileChangePresentationId(blocks, files, `no-effective-change:${source}`),
+    interactive: Boolean(errorDetail),
     kind: "file_change",
     mode: "unknown",
     operation: "modify",
@@ -1605,6 +1650,21 @@ function errorRowsFromBlocks(blocks: ToolExecutionConversationBlock[]): FileChan
 // errorDetailFromBlocks extracts compact error text without opening the generic tool modal.
 // errorDetailFromBlocks 提取紧凑错误文本，避免打开通用工具弹窗。
 function errorDetailFromBlocks(blocks: ToolExecutionConversationBlock[]): string | null {
+  // Read V1 native diagnostics from the original envelope before a changeset can shadow host metadata.
+  // 在变更集可能覆盖宿主元数据之前，从原始信封读取 V1 原生诊断。
+  const event = fixedV1ToolEvent(blocks);
+  if (event) {
+    // Native errors preserve both the compact message and structured details in host_result.payload.
+    // 原生错误在 host_result.payload 中同时保留紧凑消息与结构化详情。
+    const payload = metadataValue(event.output, ["host_result.payload"]);
+    // Keep both producer messages when present; absent envelopes continue through existing body handling.
+    // 若存在则同时保留两份产出方消息；缺少信封时继续使用既有正文处理。
+    const detail = compactJoinedText([
+      metadataString(payload, ["error"]) ?? "",
+      metadataString(payload, ["details.message"]) ?? "",
+    ]);
+    if (detail) return detail;
+  }
   const candidates: string[] = [];
   for (const block of blocks) {
     for (const path of [
@@ -1643,7 +1703,14 @@ function compactJoinedText(values: string[]): string | null {
   if (!unique.length) {
     return null;
   }
-  return unique.join("\n").slice(0, 6000);
+  // FileToolError::fmt adds "[code] " to the same message retained in details.message.
+  // FileToolError::fmt 给 details.message 保留的同一消息添加“[code] ”前缀。
+  // Remove only exact unprefixed duplicates; retain distinct context and differently coded errors.
+  // 仅移除完全相同的无前缀重复消息；保留不同的补充内容和不同错误码的错误。
+  const distinct = unique.filter(value => !unique.some(other =>
+    other !== value && other.replace(/^\[[^\]\r\n]+\] /, "") === value,
+  ));
+  return distinct.join("\n").slice(0, 6000);
 }
 
 // displayPathForFile returns workspace-relative paths when possible.

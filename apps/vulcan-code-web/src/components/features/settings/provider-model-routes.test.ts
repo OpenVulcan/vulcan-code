@@ -4,6 +4,7 @@ import {
   buildProviderModelInventoryGroups,
   buildProviderModelGroups,
   compactServiceEntryName,
+  filterProviderModelInventoryGroupsWithAvailableAccounts,
 } from "@/components/features/settings/provider-model-routes"
 import type {
   PublicAiConnection,
@@ -327,6 +328,24 @@ describe("buildProviderModelInventoryGroups", () => {
     expect(groups[0]!.models.get("vector-model")).toMatchObject({ availableAccountCount: 1, protocolRoutes: [] })
     expect(groups[0]!.models.get("image-model")).toMatchObject({ availableAccountCount: 1, extensionCapabilities: ["image_generate"] })
     expect(groups[0]!.models.get("video-model")).toMatchObject({ availableAccountCount: 0, extensionCapabilities: ["video_generate"] })
+    expect([...filterProviderModelInventoryGroupsWithAvailableAccounts(groups)[0]!.models.keys()]).toEqual(["vector-model", "image-model"])
+    expect(groups[0]!.models.has("video-model")).toBe(true)
+  })
+
+  it("hides a provider when none of its models is enabled in any account", () => {
+    const connection = connectionFixture("disabled-account", "default-api")
+    const groups = buildProviderModelInventoryGroups({
+      providers: [providerFixture],
+      connections: [connection],
+      catalogs: { [connection.id]: { ...catalogFixture(connection.id), models: [] } },
+      modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
+      modelRouteRecords: [],
+      providerToolTemplateModels: [],
+      providerToolTargets: [],
+    })
+
+    expect(groups[0]!.models.get("model-1")?.availableAccountCount).toBe(0)
+    expect(filterProviderModelInventoryGroupsWithAvailableAccounts(groups)).toEqual([])
   })
 })
 

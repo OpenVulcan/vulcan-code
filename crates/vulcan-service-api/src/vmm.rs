@@ -2526,6 +2526,12 @@ pub enum VmmMemoryActionResponse {
     /// Context-injection suppression details are diagnostic-only.
     /// 上下文注入抑制详情仅用于诊断。
     ContextInjection(serde_json::Value),
+    /// Read-only active profile for the selected conversation's memory panel.
+    /// 当前选中会话记忆侧栏使用的只读有效画像。
+    StaticProfile(Option<super::VmmStaticProfileSummary>),
+    /// Read-only persisted VMM lease cards for the selected conversation's dynamic panel.
+    /// 当前选中会话动态侧栏使用的只读持久 VMM 租约卡片。
+    DynamicMemoryCards(Vec<super::ContextInjectionCardSummary>),
     /// VMM health status.
     /// VMM 健康状态。
     Healthz {
@@ -2754,6 +2760,35 @@ pub struct VmmConfigSaveRequest {
     /// 针对所选后端的每个当前未绑定项目作出的明确决定。
     #[serde(default)]
     pub binding_plan: Vec<VmmProjectBindingPlanEntry>,
+}
+
+#[cfg(test)]
+mod static_profile_action_tests {
+    use super::*;
+
+    /// Verifies an empty static profile remains an explicit null value for WebUI readers.
+    /// 验证空静态画像仍以显式 null 值传给 WebUI 读取方。
+    #[test]
+    fn empty_static_profile_serializes_with_value() {
+        let payload = serde_json::to_value(VmmMemoryActionResponse::StaticProfile(None))
+            .expect("static profile response should serialize");
+        assert_eq!(
+            payload,
+            serde_json::json!({ "kind": "static_profile", "value": null })
+        );
+    }
+
+    /// Verifies an empty durable dynamic read keeps an explicit array payload.
+    /// 验证空的持久动态读取仍保留明确数组载荷。
+    #[test]
+    fn empty_dynamic_memory_cards_serialize_with_value() {
+        let payload = serde_json::to_value(VmmMemoryActionResponse::DynamicMemoryCards(Vec::new()))
+            .expect("dynamic memory response should serialize");
+        assert_eq!(
+            payload,
+            serde_json::json!({ "kind": "dynamic_memory_cards", "value": [] })
+        );
+    }
 }
 
 /// One explicit binding decision submitted while the selected VMM backend is being enabled.

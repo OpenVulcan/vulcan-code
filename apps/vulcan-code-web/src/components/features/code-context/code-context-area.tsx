@@ -1,11 +1,13 @@
 import * as React from "react";
 import {
+  ChevronDown,
   Database,
   FileCode2,
   LoaderCircle,
   RefreshCw,
   Save,
   SearchCheck,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -737,11 +739,19 @@ export function CodeContextArea(props: {
       !overview.configuration.ready &&
       checkpoint === null &&
       plannedCheckpoint !== null;
+    // Model replacement hides the predecessor checkpoint in the overview while its rebuild
+    // plan retains that exact stored checkpoint; the host validates it at job admission.
+    // 模型替换会在概览中隐藏前驱检查点，而重建计划保留精确的已存检查点；宿主在作业准入时校验。
+    const storedRebuildAuthority =
+      maintenancePlan.mode === "rebuild" &&
+      overview.status.lifecycle === "rebuild_required" &&
+      checkpoint === null &&
+      plannedCheckpoint !== null;
     const planStillCurrent =
       confirmation.projectId === projectId &&
       confirmation.settingsRevision === overview.settings.revision &&
       confirmation.checkpointVersion === plannedCheckpoint &&
-      (storedCompactionAuthority || plannedCheckpoint === checkpoint) &&
+      (storedCompactionAuthority || storedRebuildAuthority || plannedCheckpoint === checkpoint) &&
       confirmation.mode === maintenancePlan.mode &&
       confirmation.embeddingFingerprint ===
         maintenancePlan.embeddingFingerprint &&
@@ -892,6 +902,7 @@ export function CodeContextArea(props: {
         ) : null}
         {indexing.job ? (
           <VceJobProgress
+            presentation="settings"
             chinese={locale === "zh-CN"}
             job={indexing.job}
             onCancel={() => void indexing.cancel()}
@@ -936,9 +947,24 @@ export function CodeContextArea(props: {
     managementOverview.settings.revision === props.overview.settings.revision
       ? managementOverview.counts
       : null;
+  // lifecycleLabels translates the declared host states without deriving health from counters.
+  // lifecycleLabels 翻译宿主已声明状态，不根据计数推断健康程度。
+  const lifecycleLabels: Record<VceProjectOverviewResponse["status"]["lifecycle"], string> = {
+    uninitialized: copy("尚未创建", "Not created"),
+    disabled: copy("未启用", "Disabled"),
+    starting: copy("启动中", "Starting"),
+    restoring: copy("恢复中", "Restoring"),
+    indexing: copy("更新中", "Indexing"),
+    ready: copy("可用", "Ready"),
+    degraded_optional_ai: copy("部分功能受限", "Limited features"),
+    blocked_configuration: copy("等待模型配置", "Models required"),
+    rebuild_required: copy("需要重建", "Rebuild required"),
+    failed: copy("异常", "Failed"),
+    stopping: copy("停止中", "Stopping"),
+  };
   return (
-    <div className="project-settings-section">
-      <header className="project-settings-heading project-settings-heading-with-action">
+    <div className="project-settings-section vce-project-settings">
+      <header className="project-settings-heading project-settings-heading-with-action vce-settings-heading">
         <Database size={18} />
         <div>
           <strong>{copy("代码语义索引", "Code semantic index")}</strong>
@@ -950,16 +976,19 @@ export function CodeContextArea(props: {
           </span>
         </div>
         <div className="project-settings-heading-actions">
-          {indexingStatusVisible ? (
-            <div
-              className="project-settings-heading-status"
-              role="status"
-              aria-live="polite"
-            >
-              <LoaderCircle className="animate-spin" size={14} />
-              {activeJobStatusLabel ?? t("projectSettings.codeContext.generating")}
-            </div>
-          ) : null}
+          <label className="vce-settings-enabled">
+            <span>{draft.enabled ? copy("已启用", "Enabled") : copy("未启用", "Disabled")}</span>
+            <Switch
+              aria-label={copy("启用代码语义索引", "Enable code semantic index")}
+              checked={draft.enabled}
+              disabled={props.busy}
+              onCheckedChange={(enabled) => {
+                const next = { ...draft, enabled };
+                setDraft(next);
+                void saveDraft(next);
+              }}
+            />
+          </label>
           <Button
             aria-label={copy("刷新状态", "Refresh status")}
             disabled={props.busy}
@@ -1066,32 +1095,9 @@ export function CodeContextArea(props: {
         </div>
       ) : null}
 
-      <div className="project-settings-toggle-row">
-        <Switch
-          aria-label={copy("启用代码语义索引", "Enable code semantic index")}
-          checked={draft.enabled}
-          disabled={props.busy}
-          onCheckedChange={(enabled) => {
-            const next = { ...draft, enabled };
-            setDraft(next);
-            void saveDraft(next);
-          }}
-        />
-        <span>
-          <strong>
-            {copy("启用代码语义索引", "Enable code semantic index")}
-          </strong>
-          <small>
-            {copy(
-              "开启只授权此项目使用语义引擎；索引需要单独创建，默认手动更新。",
-              "Enabling only authorizes this project to use the engine; create its index separately. Updates are manual by default.",
-            )}
-          </small>
-        </span>
-      </div>
-
       {indexing.job ? (
         <VceJobProgress
+          presentation="settings"
           job={indexing.job}
           chinese={locale === "zh-CN"}
           onCancel={() => void indexing.cancel()}
@@ -1106,7 +1112,10 @@ export function CodeContextArea(props: {
               : undefined
           }
         />
-      ) : null}
+      ) : indexingStatusVisible ? <p className="vce-job-rehydrating" role="status">
+        <LoaderCircle size={16} className="motion-safe:animate-spin" />
+        {copy("正在读取索引任务进度…", "Loading index task progress…")}
+      </p> : null}
       {indexing.error ? (
         <p role="alert" className="text-sm text-destructive">
           {copy("索引状态暂不可用：", "Index status unavailable: ")}
@@ -1114,9 +1123,36 @@ export function CodeContextArea(props: {
         </p>
       ) : null}
 
+      <div className="vce-index-statistics" aria-label={copy("索引概况", "Index overview")}>
+        <div data-lifecycle={status.lifecycle}>
+          <strong>{copy("索引状态", "Index status")}</strong>
+          <p>{indexingStatusVisible ? activeJobStatusLabel ?? copy("更新中", "Indexing") : lifecycleLabels[status.lifecycle]}</p>
+        </div>
+        <div>
+          <strong>{copy("检查点", "Checkpoint")}</strong>
+          <p>{status.checkpointVersion ?? "—"}</p>
+        </div>
+        <div>
+          <strong>{copy("文件数", "Files")}</strong>
+          <p>{counts?.searchableFiles ?? status.presentFiles}</p>
+        </div>
+        <div>
+          <strong>{copy("代码块", "Chunks")}</strong>
+          <p>{counts?.chunks ?? "—"}</p>
+        </div>
+        <div>
+          <strong>{copy("向量", "Vectors")}</strong>
+          <p>{counts?.vectors ?? "—"}</p>
+        </div>
+        <div>
+          <strong>{copy("精确符号", "Exact symbols")}</strong>
+          <p>{counts?.symbols ?? "—"}</p>
+        </div>
+      </div>
+
       {draft.enabled ? (
-        <section className="space-y-3 rounded-lg border p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <section className="vce-index-controls">
+          {!indexingStatusVisible && !rebuildRecoveryRequired ? <div className="vce-index-primary-action">
             <div>
               <strong>
                 {status.checkpointVersion == null
@@ -1152,8 +1188,13 @@ export function CodeContextArea(props: {
                 ? copy("创建语义索引", "Create semantic index")
                 : synchronization.label}
             </Button>
-          </div>
-          {rebuildRecoveryRequired ? (
+          </div> : null}
+          {indexingStatusVisible && indexing.job?.kind === "synchronize" ? <div className="flex justify-end">
+            <Button type="button" size="sm" variant="outline"
+              disabled={props.busy || synchronization.disabled || !props.overview.configuration.ready || !props.overview.settings.enabled || rebuildRecoveryRequired}
+              onClick={() => void refreshIndex()}>{synchronization.label}</Button>
+          </div> : null}
+          {rebuildRecoveryRequired && !indexingStatusVisible ? (
             <section className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1211,99 +1252,83 @@ export function CodeContextArea(props: {
               ) : null}
             </section>
           ) : null}
-          <fieldset className="space-y-2" disabled={props.busy}>
-            <legend className="text-sm font-medium">
-              {copy("索引更新模式", "Index update mode")}
-            </legend>
-            <div className="flex flex-wrap gap-4 text-sm">
-              {(["manual", "automatic"] as const).map((mode) => (
-                <label key={mode} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`vce-update-mode-${props.projectId}`}
-                    checked={draft.updateMode === mode}
-                    onChange={() => {
-                      const next = { ...draft, updateMode: mode };
-                      setDraft(next);
-                      void saveDraft(next);
-                    }}
-                  />
-                  {mode === "manual"
-                    ? copy("手动更新", "Manual updates")
-                    : copy("自动更新", "Automatic updates")}
-                </label>
-              ))}
+          <details className="vce-settings-disclosure">
+            <summary>
+              <RefreshCw size={16} aria-hidden="true" />
+              <span><strong>{copy("更新策略", "Update policy")}</strong>
+                <small>{draft.updateMode === "manual" ? copy("手动更新，由您决定何时同步", "Manual updates, on your schedule") : copy("自动跟随项目文件变化", "Follow project file changes automatically")}</small>
+              </span>
+              <ChevronDown size={16} aria-hidden="true" />
+            </summary>
+            <div className="vce-settings-disclosure-body">
+              <fieldset className="space-y-2" disabled={props.busy}>
+                <legend className="text-sm font-medium">
+                  {copy("索引更新模式", "Index update mode")}
+                </legend>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  {(["manual", "automatic"] as const).map((mode) => (
+                    <label key={mode} className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name={`vce-update-mode-${props.projectId}`}
+                        checked={draft.updateMode === mode}
+                        onChange={() => {
+                          const next = { ...draft, updateMode: mode };
+                          setDraft(next);
+                          void saveDraft(next);
+                        }}
+                      />
+                      {mode === "manual"
+                        ? copy("手动更新", "Manual updates")
+                        : copy("自动更新", "Automatic updates")}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {copy(
+                    "此设置属于项目，所有会话共享。自动更新仅在首次初始化成功后跟随文件变化。",
+                    "This project setting is shared across conversations. Automatic file-change updates start only after initialization succeeds.",
+                  )}
+                </p>
+              </fieldset>
+              <label className="flex flex-wrap items-center gap-3 text-sm">
+                {copy(
+                  "自动更新最低间隔（秒）",
+                  "Minimum automatic interval (seconds)",
+                )}
+                <Input
+                  className="w-28"
+                  type="number"
+                  min={60}
+                  max={86400}
+                  disabled={props.busy}
+                  value={draft.autoUpdateMinIntervalSeconds}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      autoUpdateMinIntervalSeconds: Number(event.target.value),
+                    })
+                  }
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    props.busy ||
+                    !Number.isInteger(draft.autoUpdateMinIntervalSeconds) ||
+                    draft.autoUpdateMinIntervalSeconds < 60 ||
+                    draft.autoUpdateMinIntervalSeconds > 86400
+                  }
+                  onClick={() => void saveDraft(draft)}
+                >
+                  {copy("保存间隔", "Save interval")}
+                </Button>
+              </label>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {copy(
-                "此设置属于项目，所有会话共享。自动更新仅在首次初始化成功后跟随文件变化。",
-                "This project setting is shared across conversations. Automatic file-change updates start only after initialization succeeds.",
-              )}
-            </p>
-          </fieldset>
-          <label className="flex items-center gap-3 text-sm">
-            {copy(
-              "自动更新最低间隔（秒）",
-              "Minimum automatic interval (seconds)",
-            )}
-            <Input
-              className="w-28"
-              type="number"
-              min={60}
-              max={86400}
-              disabled={props.busy}
-              value={draft.autoUpdateMinIntervalSeconds}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  autoUpdateMinIntervalSeconds: Number(event.target.value),
-                })
-              }
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={
-                props.busy ||
-                !Number.isInteger(draft.autoUpdateMinIntervalSeconds) ||
-                draft.autoUpdateMinIntervalSeconds < 60 ||
-                draft.autoUpdateMinIntervalSeconds > 86400
-              }
-              onClick={() => void saveDraft(draft)}
-            >
-              {copy("保存间隔", "Save interval")}
-            </Button>
-          </label>
+          </details>
         </section>
       ) : null}
-
-      <div className="project-settings-grid">
-        <div className="project-settings-panel">
-          <strong>{copy("生命周期", "Lifecycle")}</strong>
-          <p>{status.lifecycle}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{copy("检查点", "Checkpoint")}</strong>
-          <p>{status.checkpointVersion ?? "—"}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{copy("文件", "Files")}</strong>
-          <p>{counts?.searchableFiles ?? status.presentFiles}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{copy("代码块", "Chunks")}</strong>
-          <p>{counts?.chunks ?? "—"}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{copy("向量", "Vectors")}</strong>
-          <p>{counts?.vectors ?? "—"}</p>
-        </div>
-        <div className="project-settings-panel">
-          <strong>{copy("精确符号", "Exact symbols")}</strong>
-          <p>{counts?.symbols ?? "—"}</p>
-        </div>
-      </div>
 
       {status.lastError && !indexingStatusVisible && status.lastError !== indexing.job?.error ? (
         <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -1311,85 +1336,108 @@ export function CodeContextArea(props: {
         </p>
       ) : null}
 
-      <section className="project-settings-panel space-y-3">
-        <strong>{copy("高级设置", "Advanced settings")}</strong>
-        <label className="grid gap-1 text-sm">
-          {copy(
-            "附加忽略规则（每行一条）",
-            "Additional ignore rules (one per line)",
-          )}
-          <Textarea
+      <details className="vce-settings-disclosure vce-advanced-settings">
+        <summary>
+          <SlidersHorizontal size={16} aria-hidden="true" />
+          <span><strong>{copy("检索与过滤设置", "Retrieval and file filters")}</strong>
+            <small>{copy("忽略规则、结果数量与高级设置", "Ignore rules, result limits and advanced settings")}</small>
+          </span>
+          <ChevronDown size={16} aria-hidden="true" />
+        </summary>
+        <div className="vce-settings-disclosure-body">
+          <details className="rounded-lg border p-3 text-sm">
+            <summary className="cursor-pointer font-medium">
+              {copy("默认过滤规则", "Default filter rules")} ({props.overview.settings.defaultIgnorePatterns.length})
+            </summary>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {copy(
+                "这些规则始终生效；TOML 未列入默认排除规则。可在下方继续添加项目规则。",
+                "These rules always apply. TOML is not excluded by default. Add project rules below.",
+              )}
+            </p>
+            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-xs">
+              {props.overview.settings.defaultIgnorePatterns.join("\n")}
+            </pre>
+          </details>
+          <label className="grid gap-1 text-sm">
+            {copy(
+              "自定义忽略规则（每行一条）",
+              "Custom ignore rules (one per line)",
+            )}
+            <Textarea
+              disabled={props.busy}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  extraIgnorePatterns: event.target.value.split(/\r?\n/),
+                })
+              }
+              value={draft.extraIgnorePatterns.join("\n")}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <NumericSetting
+              disabled={props.busy}
+              label={copy("最大文件字节数", "Maximum file bytes")}
+              value={draft.maxFileBytes}
+              onChange={(value) => setDraft({ ...draft, maxFileBytes: value })}
+            />
+            <NumericSetting
+              disabled={props.busy}
+              label={copy("最大结果数", "Maximum results")}
+              value={draft.maxResults}
+              onChange={(value) => setDraft({ ...draft, maxResults: value })}
+            />
+            <NumericSetting
+              disabled={props.busy}
+              label={copy("上下文字符预算", "Context character budget")}
+              value={draft.maxContextChars}
+              onChange={(value) => setDraft({ ...draft, maxContextChars: value })}
+            />
+            <NumericSetting
+              disabled={props.busy}
+              label={copy("向量并发", "Embedding concurrency")}
+              value={draft.embeddingMaxConcurrency}
+              onChange={(value) =>
+                setDraft({ ...draft, embeddingMaxConcurrency: value })
+              }
+            />
+            <NumericSetting
+              disabled={props.busy}
+              label={copy("查询并发", "Query concurrency")}
+              value={draft.queryMaxConcurrency}
+              onChange={(value) =>
+                setDraft({ ...draft, queryMaxConcurrency: value })
+              }
+            />
+          </div>
+          <ToggleSetting
+            checked={draft.allowQueryRewrite}
             disabled={props.busy}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                extraIgnorePatterns: event.target.value.split(/\r?\n/),
-              })
-            }
-            value={draft.extraIgnorePatterns.join("\n")}
+            label={copy("允许 LLM 查询改写", "Allow LLM query rewriting")}
+            onChange={(value) => setDraft({ ...draft, allowQueryRewrite: value })}
           />
-        </label>
-        <div className="grid grid-cols-2 gap-3">
-          <NumericSetting
+          <ToggleSetting
+            checked={draft.allowRerank}
             disabled={props.busy}
-            label={copy("最大文件字节数", "Maximum file bytes")}
-            value={draft.maxFileBytes}
-            onChange={(value) => setDraft({ ...draft, maxFileBytes: value })}
+            label={copy("允许候选重排", "Allow candidate reranking")}
+            onChange={(value) => setDraft({ ...draft, allowRerank: value })}
           />
-          <NumericSetting
+          <Button
             disabled={props.busy}
-            label={copy("最大结果数", "Maximum results")}
-            value={draft.maxResults}
-            onChange={(value) => setDraft({ ...draft, maxResults: value })}
-          />
-          <NumericSetting
-            disabled={props.busy}
-            label={copy("上下文字符预算", "Context character budget")}
-            value={draft.maxContextChars}
-            onChange={(value) => setDraft({ ...draft, maxContextChars: value })}
-          />
-          <NumericSetting
-            disabled={props.busy}
-            label={copy("向量并发", "Embedding concurrency")}
-            value={draft.embeddingMaxConcurrency}
-            onChange={(value) =>
-              setDraft({ ...draft, embeddingMaxConcurrency: value })
-            }
-          />
-          <NumericSetting
-            disabled={props.busy}
-            label={copy("查询并发", "Query concurrency")}
-            value={draft.queryMaxConcurrency}
-            onChange={(value) =>
-              setDraft({ ...draft, queryMaxConcurrency: value })
-            }
-          />
+            onClick={() => void saveDraft(draft)}
+            type="button"
+          >
+            <Save size={15} /> {copy("保存设置", "Save settings")}
+          </Button>
         </div>
-        <ToggleSetting
-          checked={draft.allowQueryRewrite}
-          disabled={props.busy}
-          label={copy("允许 LLM 查询改写", "Allow LLM query rewriting")}
-          onChange={(value) => setDraft({ ...draft, allowQueryRewrite: value })}
-        />
-        <ToggleSetting
-          checked={draft.allowRerank}
-          disabled={props.busy}
-          label={copy("允许候选重排", "Allow candidate reranking")}
-          onChange={(value) => setDraft({ ...draft, allowRerank: value })}
-        />
-        <Button
-          disabled={props.busy}
-          onClick={() => void saveDraft(draft)}
-          type="button"
-        >
-          <Save size={15} /> {copy("保存设置", "Save settings")}
-        </Button>
-      </section>
+      </details>
 
       {draft.enabled && status.checkpointVersion != null ? (
         <Button
           type="button"
           variant="outline"
+          className="vce-index-details-toggle"
           aria-expanded={managementExpanded}
           onClick={() => setManagementExpanded(!managementExpanded)}
         >

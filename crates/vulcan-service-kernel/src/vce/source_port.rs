@@ -27,6 +27,102 @@ use crate::workspace_files::{
 /// 单个完整项目清单允许表示的默认文件数量上限。
 const DEFAULT_MANIFEST_FILE_LIMIT: usize = 200_000;
 
+/// Built-in directory exclusions shared by source admission and the settings preview.
+/// 源码准入与设置预览共用的内置目录排除规则。
+const DEFAULT_IGNORED_DIRECTORIES: &[&str] = &[
+    ".cache",
+    ".eggs",
+    ".git",
+    ".gradle",
+    ".hg",
+    ".idea",
+    ".mypy_cache",
+    ".next",
+    ".nuxt",
+    ".oce-client",
+    ".output",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".svn",
+    ".tox",
+    ".turbo",
+    ".venv",
+    ".vscode",
+    "bower_components",
+    "build",
+    "coverage",
+    "dist",
+    "generated",
+    "node_modules",
+    "site-packages",
+    "target",
+    "vendor",
+    "venv",
+    "__pycache__",
+];
+
+/// Directory suffixes used for generated package metadata and retrieval evaluations.
+/// 生成的包元数据及检索评测目录所使用的目录后缀。
+const DEFAULT_IGNORED_DIRECTORY_SUFFIXES: &[&str] = &[".egg-info", "-retrieval-eval"];
+
+/// Built-in artifact suffixes; text configuration formats such as TOML stay eligible.
+/// 内置产物后缀；TOML 等文本配置格式仍可进入索引。
+const DEFAULT_IGNORED_FILE_SUFFIXES: &[&str] = &[
+    ".min.js", ".min.css", ".map", ".lock", ".log", ".tmp", ".bak", ".swp", ".jsonl", ".csv",
+    ".tsv", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".icns", ".webp", ".tiff", ".svg",
+    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".flac", ".ogg", ".webm", ".mkv", ".woff", ".woff2",
+    ".ttf", ".otf", ".eot", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
+    ".tar", ".gz", ".tgz", ".rar", ".7z", ".bz2", ".xz", ".pyc", ".pyo", ".class", ".o", ".obj",
+    ".a", ".so", ".dll", ".dylib", ".exe", ".bin", ".wasm", ".sqlite", ".sqlite3", ".db", ".jar",
+    ".key", ".lockb", ".pem",
+];
+
+/// Existing secret-bearing file names remain mandatory exclusions.
+/// 原有可能包含密钥的文件名继续作为强制排除项。
+const DEFAULT_IGNORED_FILE_NAMES: &[&str] = &[
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+    "credentials",
+    "credentials.json",
+];
+
+/// Existing secret-bearing file prefixes remain mandatory exclusions.
+/// 原有可能包含密钥的文件名前缀继续作为强制排除项。
+const DEFAULT_IGNORED_FILE_PREFIXES: &[&str] = &[".env."];
+
+/// List the active built-in exclusions as readable gitignore-style patterns.
+/// 以易读的 gitignore 风格模式列出实际生效的内置排除规则。
+/// Takes no parameters; returns only defaults, leaving project additions independently editable.
+/// 无参数；仅返回默认规则，项目附加规则仍独立可编辑。
+pub(super) fn default_ignore_patterns() -> Vec<String> {
+    DEFAULT_IGNORED_DIRECTORIES
+        .iter()
+        .map(|name| format!("{name}/"))
+        .chain(
+            DEFAULT_IGNORED_DIRECTORY_SUFFIXES
+                .iter()
+                .map(|suffix| format!("*{suffix}/")),
+        )
+        .chain(
+            DEFAULT_IGNORED_FILE_SUFFIXES
+                .iter()
+                .map(|suffix| format!("*{suffix}")),
+        )
+        .chain(
+            DEFAULT_IGNORED_FILE_NAMES
+                .iter()
+                .map(|name| (*name).to_owned()),
+        )
+        .chain(
+            DEFAULT_IGNORED_FILE_PREFIXES
+                .iter()
+                .map(|prefix| format!("{prefix}*")),
+        )
+        .collect()
+}
+
 /// Host-owned limits that protect VCE manifest and deferred source reads.
 /// 保护 VCE 清单与延迟源码读取的宿主持有限制。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1107,85 +1203,27 @@ fn is_hard_ignored_relative_path(path: &str) -> bool {
     let mut components = path.split('/');
     let file_name = path.rsplit('/').next().unwrap_or(path);
     if components.any(|component| {
-        matches!(
-            component.to_ascii_lowercase().as_str(),
-            ".git"
-                | ".hg"
-                | ".svn"
-                | ".idea"
-                | ".vscode"
-                | ".cache"
-                | ".next"
-                | ".nuxt"
-                | ".turbo"
-                | "node_modules"
-                | "target"
-                | "dist"
-                | "build"
-                | "coverage"
-                | "vendor"
-                | "__pycache__"
-        )
+        // Directory names and generated-evaluation suffixes follow the same case-folded admission rule.
+        // 目录名与生成评测目录后缀使用同一不区分大小写的准入规则。
+        let lower = component.to_ascii_lowercase();
+        DEFAULT_IGNORED_DIRECTORIES.contains(&lower.as_str())
+            || DEFAULT_IGNORED_DIRECTORY_SUFFIXES
+                .iter()
+                .any(|suffix| lower.ends_with(suffix))
     }) {
         return true;
     }
     let lower_name = file_name.to_ascii_lowercase();
-    if lower_name == ".env"
-        || lower_name.starts_with(".env.")
-        || matches!(
-            lower_name.as_str(),
-            "id_rsa" | "id_ed25519" | "credentials" | "credentials.json"
-        )
+    if DEFAULT_IGNORED_FILE_NAMES.contains(&lower_name.as_str())
+        || DEFAULT_IGNORED_FILE_PREFIXES
+            .iter()
+            .any(|prefix| lower_name.starts_with(prefix))
     {
         return true;
     }
-    matches!(
-        Path::new(&lower_name)
-            .extension()
-            .and_then(|value| value.to_str()),
-        Some(
-            "7z" | "a"
-                | "avi"
-                | "bin"
-                | "bmp"
-                | "class"
-                | "db"
-                | "dll"
-                | "dylib"
-                | "exe"
-                | "gif"
-                | "gz"
-                | "ico"
-                | "jar"
-                | "jpeg"
-                | "jpg"
-                | "key"
-                | "lockb"
-                | "mov"
-                | "mp3"
-                | "mp4"
-                | "o"
-                | "obj"
-                | "otf"
-                | "pdf"
-                | "pem"
-                | "png"
-                | "pyc"
-                | "rar"
-                | "so"
-                | "sqlite"
-                | "sqlite3"
-                | "tar"
-                | "ttf"
-                | "wav"
-                | "webm"
-                | "webp"
-                | "woff"
-                | "woff2"
-                | "xz"
-                | "zip"
-        )
-    )
+    DEFAULT_IGNORED_FILE_SUFFIXES
+        .iter()
+        .any(|suffix| lower_name.ends_with(suffix))
 }
 
 /// Return whether a watcher path changes hierarchical ignore semantics.
@@ -1309,8 +1347,14 @@ mod tests {
         .expect("write project ignored fixture");
         fs::write(root.join("target/attempt.rs"), "pub fn excluded() {}\n")
             .expect("write hard ignored fixture");
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"synthetic\"\n")
+            .expect("write user-excludable configuration fixture");
 
-        let patterns = vec![String::from("src/generated/**"), String::from("!target/**")];
+        let patterns = vec![
+            String::from("src/generated/**"),
+            String::from("*.toml"),
+            String::from("!target/**"),
+        ];
         let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &patterns)
             .expect("activate source adapter with project ignore rules");
         let manifest = adapter.scan_full().await.expect("scan source manifest");
@@ -1318,6 +1362,71 @@ mod tests {
         assert_eq!(manifest.admitted_files, 1);
         assert_eq!(manifest.observations.len(), 1);
         assert_eq!(manifest.observations[0].path, "src/lib.rs");
+        fs::remove_dir_all(root).expect("remove source fixture");
+    }
+
+    /// Verify OCE-derived default artifacts are excluded from both full and changed-path scans.
+    /// 验证参照 OCE 的默认产物排除规则同时作用于全量扫描与变更路径扫描。
+    #[tokio::test]
+    async fn default_artifact_rules_keep_text_configuration_sources() {
+        // The fixture includes a lockfile, generated files, tabular data, and useful configuration.
+        // 夹具同时包含锁文件、生成文件、表格数据与有用的配置文件。
+        let root = temp_project("default-artifact-rules");
+        fs::create_dir_all(root.join("generated")).expect("create generated directory");
+        fs::create_dir_all(root.join("data")).expect("create data directory");
+        for (path, content) in [
+            ("Cargo.lock", "[[package]]\nname = \"synthetic\"\n"),
+            ("YARN.LOCK", "synthetic lock\n"),
+            ("Cargo.toml", "[package]\nname = \"synthetic\"\n"),
+            ("package-lock.json", "{\"name\":\"synthetic\"}\n"),
+            ("generated/bindings.rs", "pub fn generated() {}\n"),
+            ("data/events.csv", "event,count\nopen,1\n"),
+            ("src.min.js", "function generated() {}\n"),
+            ("main.rs", "pub fn retained() {}\n"),
+        ] {
+            fs::write(root.join(path), content).expect("write source fixture");
+        }
+        // The adapter must apply its own defaults even when no project additions exist.
+        // 即使没有项目附加规则，适配器也必须应用自身默认规则。
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
+            .expect("activate default source adapter");
+        let full = adapter
+            .scan_full()
+            .await
+            .expect("scan full source manifest");
+        let changed = BTreeSet::from([
+            String::from("Cargo.lock"),
+            String::from("YARN.LOCK"),
+            String::from("Cargo.toml"),
+            String::from("package-lock.json"),
+            String::from("generated/bindings.rs"),
+            String::from("data/events.csv"),
+            String::from("src.min.js"),
+            String::from("main.rs"),
+        ]);
+        let delta = adapter
+            .scan_paths(changed)
+            .await
+            .expect("scan changed sources");
+        let admitted = ["Cargo.toml", "main.rs", "package-lock.json"];
+        assert_eq!(
+            full.observations
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            admitted
+        );
+        assert_eq!(
+            delta
+                .observations
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            admitted
+        );
+        assert_eq!(delta.removed_paths.len(), 5);
+        assert!(default_ignore_patterns().contains(&String::from("*.lock")));
+        assert!(!default_ignore_patterns().contains(&String::from("*.toml")));
         fs::remove_dir_all(root).expect("remove source fixture");
     }
 

@@ -1,3 +1,5 @@
+import type { ContextInjectionCardSummary, VmmStaticProfileSummary } from "./runtime-context";
+
 export interface MemorySummary {
   // Stable memory identifier.
   // 稳定记忆标识。
@@ -1592,6 +1594,8 @@ export interface VmmNativeRecycleBinSummary {
 export type VmmMemoryActionResponse =
   | { kind: "empty" }
   | { kind: "context_injection"; value: Record<string, unknown> }
+  | { kind: "static_profile"; value: VmmStaticProfileSummary | null }
+  | { kind: "dynamic_memory_cards"; value: ContextInjectionCardSummary[] }
   | { kind: "healthz"; value: { status: string } }
   | {
       kind: "users_projects";

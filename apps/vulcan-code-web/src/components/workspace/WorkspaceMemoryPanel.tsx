@@ -66,9 +66,81 @@ export function WorkspaceMemoryPanel(props: {
   const [pendingDelete, setPendingDelete] = React.useState<ContextInjectionDeleteTarget | null>(null);
   const [lookupDialog, setLookupDialog] = React.useState<ContextInjectionLookupDialogState | null>(null);
   const [deleteNotice, setDeleteNotice] = React.useState<string | null>(null);
-  const dynamicCards = props.snapshot?.dynamicCards ?? [];
+  // activeTab loads durable profile data only when the static memory surface is opened.
+  // activeTab 仅在静态记忆页面打开时加载长期画像数据。
+  const [activeTab, setActiveTab] = React.useState<"dynamic" | "static">("dynamic");
+  // profileRead retains only a read-only sidebar result for its exact selected route.
+  // profileRead 仅为准确选中路由保留只读侧栏结果。
+  const [profileRead, setProfileRead] = React.useState<{ routeKey: string; profile: VmmStaticProfileSummary | null; error: string | null } | null>(null);
+  // requestedProfileRoute prevents repeated reads when a workbench snapshot rerenders unchanged.
+  // requestedProfileRoute 防止工作台快照未变化但重复渲染时反复读取。
+  const requestedProfileRoute = React.useRef<string | null>(null);
+  // dynamicRead holds only authoritative VMM leases; transient prompt injections remain in the live snapshot.
+  // dynamicRead 仅保存权威 VMM 租约；临时提示词注入仍由实时快照提供。
+  const [dynamicRead, setDynamicRead] = React.useState<{ routeKey: string; snapshot: ContextInjectionSnapshot | null; cards: ContextInjectionCardSummary[]; error: string | null } | null>(null);
+  // requestedDynamicRoute deduplicates the initial read for each selected conversation.
+  // requestedDynamicRoute 去重每个选中会话的首次读取。
+  const requestedDynamicRoute = React.useRef<{ routeKey: string; snapshot: ContextInjectionSnapshot | null } | null>(null);
+  const liveDynamicCards = props.snapshot?.dynamicCards ?? [];
+  const dynamicCards = dynamicRead?.routeKey === routeKey && dynamicRead.snapshot === props.snapshot
+    ? [...liveDynamicCards, ...dynamicRead.cards.filter((card) => !liveDynamicCards.some((live) => live.tag === card.tag))]
+    : liveDynamicCards;
   const staticCards = props.snapshot?.staticCards ?? [];
-  const staticProfile = props.snapshot?.staticProfile ?? null;
+  const staticProfile = props.snapshot?.staticProfile ?? (profileRead?.routeKey === routeKey ? profileRead.profile : null);
+
+  React.useEffect(() => {
+    if (activeTab !== "dynamic" || !props.selectedConversationId || !props.onRunVmmAction || (props.snapshot?.dynamicCards.length ?? 0) > 0 || (requestedDynamicRoute.current?.routeKey === routeKey && requestedDynamicRoute.current.snapshot === props.snapshot)) {
+      return;
+    }
+    requestedDynamicRoute.current = { routeKey, snapshot: props.snapshot };
+    let cancelled = false;
+    void props.onRunVmmAction({
+      action: "load_dynamic_memory_for_panel",
+      commandId: crypto.randomUUID(),
+      scope: selectedProjectId ? "project" : "global",
+      projectId: selectedProjectId,
+      conversationId: props.selectedConversationId,
+      payload: {},
+    }).then((result) => {
+      if (cancelled) return;
+      if (result.data.kind !== "dynamic_memory_cards") {
+        setDynamicRead({ routeKey, snapshot: props.snapshot, cards: [], error: "Unexpected dynamic memory response." });
+        return;
+      }
+      setDynamicRead({ routeKey, snapshot: props.snapshot, cards: result.data.value, error: null });
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      setDynamicRead({ routeKey, snapshot: props.snapshot, cards: [], error: error instanceof Error ? error.message : String(error) });
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, props.onRunVmmAction, props.selectedConversationId, props.snapshot, routeKey, selectedProjectId]);
+
+  React.useEffect(() => {
+    if (activeTab !== "static" || !props.selectedConversationId || !props.onRunVmmAction || props.snapshot?.staticProfile || requestedProfileRoute.current === routeKey) {
+      return;
+    }
+    requestedProfileRoute.current = routeKey;
+    let cancelled = false;
+    void props.onRunVmmAction({
+      action: "load_static_profile_for_panel",
+      commandId: crypto.randomUUID(),
+      scope: selectedProjectId ? "project" : "global",
+      projectId: selectedProjectId,
+      conversationId: props.selectedConversationId,
+      payload: {},
+    }).then((result) => {
+      if (cancelled) return;
+      if (result.data.kind !== "static_profile") {
+        setProfileRead({ routeKey, profile: null, error: "Unexpected static profile response." });
+        return;
+      }
+      setProfileRead({ routeKey, profile: result.data.value, error: null });
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      setProfileRead({ routeKey, profile: null, error: error instanceof Error ? error.message : String(error) });
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, props.onRunVmmAction, props.selectedConversationId, props.snapshot?.staticProfile, routeKey, selectedProjectId]);
 
   // requestDelete starts a fresh confirmation without carrying another item's previous feedback.
   // requestDelete 开始新的确认，不携带其他条目的历史反馈。
@@ -247,7 +319,21 @@ export function WorkspaceMemoryPanel(props: {
   }, [requestOwnership]);
 
   return (
-    <Tabs className="context-injection-tabs" defaultValue="dynamic">
+    <Tabs className="context-injection-tabs" value={activeTab} onValueChange={(value) => {
+      if (value === "dynamic" && activeTab !== "dynamic") {
+        // Reopening dynamic memory refreshes the persisted lease view after later turns or lifecycle changes.
+        // 重新打开动态记忆时刷新持久租约视图，反映后续回合或生命周期变化。
+        requestedDynamicRoute.current = null;
+        setDynamicRead(null);
+      }
+      if (value === "static" && activeTab !== "static") {
+        // Reopening the static tab explicitly refreshes its read-only view after failures or changes.
+        // 重新打开静态页会在失败或内容变化后明确刷新其只读视图。
+        requestedProfileRoute.current = null;
+        setProfileRead(null);
+      }
+      setActiveTab(value === "static" ? "static" : "dynamic");
+    }}>
       <TabsList className="context-injection-tabs-list">
         <TabsTrigger value="dynamic">
           <BrainCircuit className="context-injection-tab-icon left-brain" size={13} />
@@ -286,6 +372,8 @@ export function WorkspaceMemoryPanel(props: {
           onLookupTurn={props.onRunVmmAction ? handleLookupTurn : undefined}
           onRequestDelete={props.onRunVmmAction ? requestDelete : undefined}
         />
+        {dynamicRead?.routeKey === routeKey && dynamicRead.snapshot === props.snapshot && dynamicRead.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", dynamicRead.error)}</p> : null}
+        {profileRead?.routeKey === routeKey && profileRead.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", profileRead.error)}</p> : null}
         {deleteNotice ? <p className="context-injection-delete-notice">{deleteNotice}</p> : null}
       </TabsContent>
       {pendingDelete ? (

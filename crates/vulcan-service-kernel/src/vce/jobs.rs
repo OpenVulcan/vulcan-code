@@ -3860,6 +3860,9 @@ fn job_index_contract_fingerprint(
         &config.checkpoint_chain_id,
         &config.embedding_space,
         settings.max_file_bytes,
+        // Built-in source exclusions are part of the durable job's indexing contract.
+        // 内置源码排除规则属于持久作业的索引契约。
+        crate::vce::source_port::default_ignore_patterns(),
         &settings.extra_ignore_patterns,
         (
             config.indexing.chunker.max_chars,

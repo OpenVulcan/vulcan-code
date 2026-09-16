@@ -388,13 +388,14 @@ pub(super) fn build_public_ai_model_route_records(
             continue;
         };
         for model in &catalog.models {
-            // A malformed discovered limit remains visible as a blocked management record,
-            // even when the model has no conversation operation (for example video output).
-            // 发现限制异常的模型保留为受阻管理记录，即使它没有会话操作（例如视频输出）。
+            // Only applicable text-token limits can block a management record; explicit
+            // media-only output does not inherit conversation window requirements.
+            // 只有适用的文本令牌限制才能阻止管理记录；明确的纯媒体输出不继承会话窗口要求。
             let limit_issue = vulcan_provider_adapters::model_capability_limit_issue(
                 connection_id,
                 model.id.as_str(),
                 &model.capabilities,
+                &model.capability_evidence,
             );
             // Conversation route records are intentionally narrower than the provider's full
             // system-model inventory. Generation-only system models belong to provider extensions;

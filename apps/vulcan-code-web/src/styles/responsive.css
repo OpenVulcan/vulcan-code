@@ -382,16 +382,36 @@
   }
 
   .project-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
   }
 
   .project-settings-nav {
     height: auto;
-    max-height: 180px;
+    display: flex;
+    overflow-x: auto;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .project-settings-nav-button {
+    width: auto;
+    min-height: 36px;
+    flex: 0 0 auto;
+  }
+
+  .project-settings-nav-button small {
+    display: none;
   }
 
   .project-settings-content {
     max-height: none;
+    padding: 16px;
+  }
+
+  .project-settings-dialog-header {
+    padding: 16px 44px 14px 16px;
   }
 
   .model-picker-scroll {

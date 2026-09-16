@@ -185,6 +185,19 @@ export function buildProviderModelInventoryGroups(
   }).filter((group) => group.models.size > 0)
 }
 
+// filterProviderModelInventoryGroupsWithAvailableAccounts limits the global list to models enabled by at least one account.
+// filterProviderModelInventoryGroupsWithAvailableAccounts 将全局列表限定为至少被一个账号启用的模型。
+// Parameters: groups is the complete management inventory; returns display-only groups without changing account catalogs.
+// 参数：groups 是完整的管理目录；返回仅用于显示的分组，不改变账号目录。
+export function filterProviderModelInventoryGroupsWithAvailableAccounts(
+  groups: PublicProviderModelInventory[],
+): PublicProviderModelInventory[] {
+  return groups.map((group) => ({
+    ...group,
+    models: new Map(Array.from(group.models).filter(([, model]) => model.availableAccountCount > 0)),
+  })).filter((group) => group.models.size > 0)
+}
+
 // compactServiceEntryName shortens common geographic and account-scope words for route tabs.
 // compactServiceEntryName 为路由页签缩短常见地域与账号范围词。
 export function compactServiceEntryName(displayName: string): string {

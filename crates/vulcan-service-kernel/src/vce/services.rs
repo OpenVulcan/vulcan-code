@@ -1789,6 +1789,7 @@ fn vce_settings_summary(settings: &ProjectVceSettings) -> api::VceProjectSetting
         revision: settings.revision,
         migrated_from_codebase_memory: settings.migrated_from_codebase_memory,
         max_file_bytes: settings.max_file_bytes,
+        default_ignore_patterns: super::source_port::default_ignore_patterns(),
         extra_ignore_patterns: settings.extra_ignore_patterns.clone(),
         allow_query_rewrite: settings.allow_query_rewrite,
         allow_rerank: settings.allow_rerank,
@@ -2584,6 +2585,20 @@ mod tests {
             vulcan_workbench_model::ProjectVceUpdateMode::Automatic
         );
         assert_eq!(settings.auto_update_min_interval_seconds, 600);
+        // The host projects active defaults without persisting them as user additions.
+        // 宿主展示实际生效的默认规则，但不会将其写成用户附加规则。
+        let summary = vce_settings_summary(&settings);
+        assert!(
+            summary
+                .default_ignore_patterns
+                .contains(&String::from("*.lock"))
+        );
+        assert!(
+            !summary
+                .default_ignore_patterns
+                .contains(&String::from("*.toml"))
+        );
+        assert!(summary.extra_ignore_patterns.is_empty());
     }
 
     /// Verifies stale reconciliation completions cannot claim a different runtime contract.

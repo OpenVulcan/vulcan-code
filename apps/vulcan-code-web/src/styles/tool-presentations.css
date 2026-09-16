@@ -866,13 +866,15 @@
   color: var(--diff-addition-base);
 }
 
-.file-change-removed,
-.file-change-error-badge {
+.file-change-removed {
   color: var(--diff-deletion-base);
 }
 
+/* Keep error labels subdued without changing actual diff deletion colors. */
+/* 弱化错误标签，不改变实际差异删除行的颜色。 */
 .file-change-error-badge {
-  font-weight: 700;
+  color: color-mix(in srgb, var(--destructive) 20%, var(--muted-foreground));
+  font-weight: 400;
   letter-spacing: 0;
 }
 
@@ -921,9 +923,10 @@
   margin: 0;
   overflow: auto;
   padding: 12px 14px;
-  color: var(--destructive);
+  color: color-mix(in srgb, var(--destructive) 20%, var(--muted-foreground));
   font-family: var(--font-mono);
   font-size: 13px;
+  font-weight: 400;
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

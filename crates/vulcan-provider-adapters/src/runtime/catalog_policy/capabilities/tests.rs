@@ -5,6 +5,106 @@ use super::super::test_support::apply_model_catalog_overlays;
 use super::*;
 use crate::runtime::test_support::catalog;
 
+/// Verifies zero token metadata is irrelevant only to explicitly media-only output.
+/// 验证零令牌元数据仅对明确的纯媒体输出无关。
+#[test]
+fn zero_token_limits_only_exempt_media_output() {
+    for resource in [
+        vulcan_ai_contract::ResourceKind::Image,
+        vulcan_ai_contract::ResourceKind::Audio,
+        vulcan_ai_contract::ResourceKind::Video,
+    ] {
+        // evidence records the upstream's explicit absence of text output.
+        // evidence 记录上游明确不输出文本的事实。
+        let evidence = ModelCapabilityEvidence {
+            supports_text_output: Some(false),
+            ..ModelCapabilityEvidence::default()
+        };
+        let mut capabilities = ModelCapabilities {
+            context_limit: Some(0),
+            output_limit: Some(0),
+            output_resources: vec![resource],
+            ..ModelCapabilities::default()
+        };
+        assert!(
+            validate_resolved_model_capability_limits("one", "media", &capabilities, &evidence)
+                .is_ok()
+        );
+        clamp_output_limit_to_context_window(&mut capabilities, &evidence);
+        assert_eq!(capabilities.output_limit, Some(0));
+        capabilities
+            .operations
+            .push(AiOperation::ConversationRespond);
+        assert!(
+            validate_resolved_model_capability_limits("one", "mixed", &capabilities, &evidence)
+                .is_err()
+        );
+    }
+
+    let unresolved = ModelCapabilities {
+        context_limit: Some(0),
+        ..ModelCapabilities::default()
+    };
+    assert!(
+        validate_resolved_model_capability_limits(
+            "one",
+            "unknown",
+            &unresolved,
+            &ModelCapabilityEvidence::default(),
+        )
+        .is_err()
+    );
+    let text = ModelCapabilities {
+        operations: vec![AiOperation::ConversationRespond],
+        output_limit: Some(0),
+        ..ModelCapabilities::default()
+    };
+    assert!(
+        validate_resolved_model_capability_limits(
+            "one",
+            "text",
+            &text,
+            &ModelCapabilityEvidence::default(),
+        )
+        .is_err()
+    );
+
+    let mixed_output = ModelCapabilities {
+        context_limit: Some(0),
+        output_resources: vec![vulcan_ai_contract::ResourceKind::Image],
+        ..ModelCapabilities::default()
+    };
+    let mixed_evidence = ModelCapabilityEvidence {
+        supports_text_output: Some(true),
+        ..ModelCapabilityEvidence::default()
+    };
+    assert!(
+        validate_resolved_model_capability_limits(
+            "one",
+            "mixed-output",
+            &mixed_output,
+            &mixed_evidence,
+        )
+        .is_err()
+    );
+
+    let declared_media = ModelCapabilities {
+        operations: vec![AiOperation::VideoGenerate],
+        context_limit: Some(0),
+        output_resources: vec![vulcan_ai_contract::ResourceKind::Video],
+        ..ModelCapabilities::default()
+    };
+    assert!(
+        validate_resolved_model_capability_limits(
+            "one",
+            "declared-media",
+            &declared_media,
+            &ModelCapabilityEvidence::default(),
+        )
+        .is_ok()
+    );
+}
+
 /// Verifies unknown text models use the host's enabled reasoning default in public capability views.
 /// 验证未知文本模型在公共能力视图中使用宿主默认的开启思考策略。
 #[test]

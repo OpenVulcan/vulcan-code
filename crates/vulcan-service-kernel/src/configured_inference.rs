@@ -4230,6 +4230,7 @@ impl ConfiguredInferenceService {
                     &request.structured_output,
                     output_text.as_str(),
                     &mut structured_output,
+                    request.consumer_profile_id == VMM_CONSUMER_PROFILE_ID,
                 )?;
                 Ok(termination_reason)
             })
@@ -4734,9 +4735,11 @@ fn validate_restricted_structured_output_policy(
 /// # Parameters
 /// 参数
 /// `policy` is the accepted request constraint, `output_text` is the accumulated provider text,
-/// and `structured_output` is the optional provider-native structured value.
+/// `structured_output` is the optional provider-native value, and `ignore_additional_properties`
+/// enables VMM-only removal of unknown object keys before validation.
 /// `policy` 是已接受的请求约束，`output_text` 是累计供应商文本，
-/// `structured_output` 是可选的供应商原生结构化值。
+/// `structured_output` 是可选的供应商原生结构化值，`ignore_additional_properties`
+/// 仅为 VMM 开启校验前的未知对象键移除。
 ///
 /// # Returns
 /// 返回值
@@ -4746,6 +4749,7 @@ fn finalize_restricted_structured_output(
     policy: &StructuredOutputPolicy,
     output_text: &str,
     structured_output: &mut Option<serde_json::Value>,
+    ignore_additional_properties: bool,
 ) -> Result<(), ConfiguredInferenceError> {
     match policy {
         StructuredOutputPolicy::None => {
@@ -4775,6 +4779,13 @@ fn finalize_restricted_structured_output(
                     "Restricted LLM structured-output schema could not be compiled.",
                 )
             })?;
+            // VMM accepts provider-added object keys only after removing them from the result
+            // that its deny-unknown-fields decoder will consume. All other Schema rules remain active.
+            // VMM 仅在从交给拒绝未知字段的解码器的结果中移除模型附加键后接纳它们；
+            // 其他 Schema 规则继续生效。
+            if ignore_additional_properties {
+                discard_additional_object_fields(schema, value);
+            }
             if let Err(error) = validator.validate(value) {
                 return Err(ConfiguredInferenceError::new(
                     ConfiguredInferenceErrorCategory::Execution,
@@ -4786,6 +4797,55 @@ fn finalize_restricted_structured_output(
                 ));
             }
             Ok(())
+        }
+    }
+}
+
+/// Removes only unknown object keys from a VMM result according to its projected Core schema.
+/// 仅按 Core 投影的 Schema 移除 VMM 结果中的未知对象键。
+/// `schema` is the authoritative object/array/nullable projection; `value` is the parsed result.
+/// `schema` 是权威对象、数组与可空投影；`value` 是已解析结果。
+fn discard_additional_object_fields(schema: &serde_json::Value, value: &mut serde_json::Value) {
+    // Core projects Nullable as exactly a value branch and a null branch.
+    // Core 将 Nullable 精确投影为值分支与 null 分支。
+    if let Some(branches) = schema.get("anyOf").and_then(serde_json::Value::as_array)
+        && branches.len() == 2
+        && branches
+            .iter()
+            .any(|branch| branch.get("type").and_then(serde_json::Value::as_str) == Some("null"))
+        && !value.is_null()
+    {
+        if let Some(branch) = branches
+            .iter()
+            .find(|branch| branch.get("type").and_then(serde_json::Value::as_str) != Some("null"))
+        {
+            discard_additional_object_fields(branch, value);
+        }
+        return;
+    }
+    if let Some(object) = value.as_object_mut() {
+        // Only producer-declared properties may survive a closed-object projection.
+        // 封闭对象投影仅允许保留产出方声明的属性。
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false))
+            && let Some(properties) = properties
+        {
+            object.retain(|name, _| properties.contains_key(name));
+        }
+        if let Some(properties) = properties {
+            for (name, child) in object {
+                if let Some(child_schema) = properties.get(name) {
+                    discard_additional_object_fields(child_schema, child);
+                }
+            }
+        }
+    } else if let Some(items) = schema.get("items")
+        && let Some(array) = value.as_array_mut()
+    {
+        for child in array {
+            discard_additional_object_fields(items, child);
         }
     }
 }
@@ -4802,12 +4862,12 @@ fn finalize_restricted_structured_output(
 ///
 /// # Returns
 /// 返回值
-/// A borrowed verified JSON value or a controlled execution error.
-/// 返回借用的已验证 JSON 值或受控执行错误。
+/// A mutable borrowed parsed JSON value or a controlled execution error.
+/// 返回可变借用的已解析 JSON 值或受控执行错误。
 fn materialize_restricted_structured_output<'a>(
     output_text: &str,
     structured_output: &'a mut Option<serde_json::Value>,
-) -> Result<&'a serde_json::Value, ConfiguredInferenceError> {
+) -> Result<&'a mut serde_json::Value, ConfiguredInferenceError> {
     if structured_output.is_none() {
         let value = parse_restricted_json_text(output_text).ok_or_else(|| {
             ConfiguredInferenceError::new(
@@ -4817,7 +4877,7 @@ fn materialize_restricted_structured_output<'a>(
         })?;
         *structured_output = Some(value);
     }
-    structured_output.as_ref().ok_or_else(|| {
+    structured_output.as_mut().ok_or_else(|| {
         ConfiguredInferenceError::new(
             ConfiguredInferenceErrorCategory::Execution,
             "Restricted LLM response did not contain structured output.",
@@ -8502,6 +8562,7 @@ mod tests {
             &StructuredOutputPolicy::JsonObject,
             r#"{"accepted":true}"#,
             &mut structured_output,
+            false,
         )
         .expect("valid JSON object should materialize");
 
@@ -8549,6 +8610,7 @@ mod tests {
             &StructuredOutputPolicy::JsonObject,
             &output_text,
             &mut structured_output,
+            false,
         )
         .expect("response JSON should materialize without reasoning text");
 
@@ -8570,6 +8632,7 @@ mod tests {
             &StructuredOutputPolicy::JsonObject,
             "```json\n{\"accepted\":true}\n```",
             &mut structured_output,
+            false,
         )
         .expect("a complete JSON code fence should materialize");
 
@@ -8587,6 +8650,7 @@ mod tests {
             &StructuredOutputPolicy::JsonObject,
             "not-json",
             &mut None,
+            false,
         )
         .expect_err("malformed JSON must fail");
 
@@ -8603,6 +8667,7 @@ mod tests {
             &StructuredOutputPolicy::JsonObject,
             "Here is the result: {\"accepted\":true}.",
             &mut structured_output,
+            false,
         )
         .expect("one unique embedded JSON object should materialize");
         assert_eq!(
@@ -8619,9 +8684,80 @@ mod tests {
             &StructuredOutputPolicy::JsonObject,
             "first {\"accepted\":true}; second {\"accepted\":false}",
             &mut None,
+            false,
         )
         .expect_err("multiple embedded JSON objects must fail");
         assert!(error.message.contains("not valid JSON"));
+    }
+
+    /// Verifies VMM ignores extra output keys while preserving all other schema checks.
+    /// 验证 VMM 忽略多余输出键，同时保留其他全部 Schema 校验。
+    #[test]
+    fn vmm_schema_ignores_only_additional_output_fields() {
+        // This closed schema exercises VMM's object, array, and nullable-object projections.
+        // 此封闭 Schema 覆盖 VMM 的对象、数组及可空对象投影。
+        let policy = StructuredOutputPolicy::JsonSchema {
+            name: String::from("vmm_output"),
+            description: None,
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["statement"] },
+                    "nodes": { "type": "array", "items": {
+                        "type": "object",
+                        "properties": { "content": { "type": "string" } },
+                        "required": ["content"],
+                        "additionalProperties": false
+                    } },
+                    "context": { "anyOf": [
+                        { "type": "object", "properties": { "source": { "type": "string" } },
+                          "required": ["source"], "additionalProperties": false },
+                        { "type": "null" }
+                    ] }
+                },
+                "required": ["kind", "nodes"],
+                "additionalProperties": false
+            }),
+            strict: true,
+        };
+        // The provider output carries extra root, nested-array, and nullable-object keys.
+        // 模型输出在顶层、嵌套数组及可空对象中都附加了多余键。
+        let output = r#"{"kind":"statement","nodes":[{"content":"fact","type":"extra"}],"context":{"source":"user","confidence":1},"type":"extra"}"#;
+        // Accepted output is the exact sanitized value passed to VMM's decoder.
+        // 接纳的输出是交给 VMM 解码器的准确净化值。
+        let mut accepted = None;
+        finalize_restricted_structured_output(&policy, output, &mut accepted, true)
+            .expect("VMM may discard additional properties");
+        assert_eq!(
+            accepted,
+            Some(serde_json::json!({
+                "kind": "statement", "nodes": [{ "content": "fact" }],
+                "context": { "source": "user" }
+            }))
+        );
+        // Native provider JSON uses the same sanitizer and produces the same terminal value.
+        // 供应商原生 JSON 使用相同的清理逻辑，并产出相同的终态值。
+        let mut native = Some(serde_json::from_str(output).expect("fixture JSON"));
+        finalize_restricted_structured_output(&policy, "", &mut native, true)
+            .expect("native structured output may discard additional properties");
+        assert_eq!(native, accepted);
+        finalize_restricted_structured_output(&policy, output, &mut None, false)
+            .expect_err("other consumers still reject additional properties");
+
+        // Missing required fields and invalid values must still fail after normalization.
+        // 规范化后，缺少必填字段或字段值无效仍必须失败。
+        for invalid in [
+            r#"{"nodes":[],"type":"extra"}"#,
+            r#"{"kind":"other","nodes":[],"type":"extra"}"#,
+            r#"{"kind":"statement","nodes":[{"content":2,"type":"extra"}],"type":"extra"}"#,
+            r#"{"kind":"statement","nodes":[{"type":"extra"}],"type":"extra"}"#,
+        ] {
+            // Every invalid fixture must still produce a structured execution error.
+            // 每个无效样本仍必须产生结构化执行错误。
+            let error = finalize_restricted_structured_output(&policy, invalid, &mut None, true)
+                .expect_err("normalization must preserve the remaining schema checks");
+            assert!(error.message.contains("JSON Schema"));
+        }
     }
 
     /// Verifies JSON Schema output is independently checked after provider completion.
@@ -8643,9 +8779,13 @@ mod tests {
         };
         validate_restricted_structured_output_policy(&policy)
             .expect("fixture schema should compile");
-        let error =
-            finalize_restricted_structured_output(&policy, r#"{"accepted":"yes"}"#, &mut None)
-                .expect_err("schema-invalid JSON must fail");
+        let error = finalize_restricted_structured_output(
+            &policy,
+            r#"{"accepted":"yes"}"#,
+            &mut None,
+            false,
+        )
+        .expect_err("schema-invalid JSON must fail");
 
         assert_eq!(error.category, ConfiguredInferenceErrorCategory::Execution);
         assert!(error.message.contains("JSON Schema"));

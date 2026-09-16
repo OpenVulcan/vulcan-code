@@ -14,6 +14,7 @@ import { providerExtensionOutputModalities, providerModelModalities } from "@/co
 import { providerPriority } from "@/components/features/settings/provider-ordering"
 import {
   buildProviderModelInventoryGroups,
+  filterProviderModelInventoryGroupsWithAvailableAccounts,
   type PublicProviderModelInventoryEntry,
   type PublicModelProtocolRoute,
 } from "@/components/features/settings/provider-model-routes"
@@ -194,7 +195,9 @@ export function ModelListSettingsArea() {
     }
     // indexedGroups preserves current registry order when priorities are equal.
     // indexedGroups 在优先级相同时保留当前注册表顺序。
-    const indexedGroups = buildProviderModelInventoryGroups(snapshot)
+    const indexedGroups = filterProviderModelInventoryGroupsWithAvailableAccounts(
+      buildProviderModelInventoryGroups(snapshot),
+    )
       .map((group, index) => ({ group, index }))
     return indexedGroups
       .sort((left, right) => (

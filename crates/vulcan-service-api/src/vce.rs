@@ -462,6 +462,9 @@ pub struct VceProjectSettingsSummary {
     /// Maximum source file size admitted for indexing.
     /// 索引允许接收的最大源码文件字节数。
     pub max_file_bytes: u64,
+    /// Host-owned default exclusions, displayed separately from editable project rules.
+    /// 宿主持有的默认排除规则，与可编辑的项目规则分开展示。
+    pub default_ignore_patterns: Vec<String>,
     /// Additional project-relative gitignore-style rules.
     /// 附加的项目相对 gitignore 风格规则。
     pub extra_ignore_patterns: Vec<String>,

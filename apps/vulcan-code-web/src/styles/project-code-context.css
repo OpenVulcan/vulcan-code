@@ -1,0 +1,212 @@
+/* Present current work first; supporting project settings remain available on demand. */
+/* 优先呈现当前任务，辅助项目设置按需展开。 */
+.vce-project-settings {
+  gap: 14px;
+}
+
+.vce-settings-heading {
+  align-items: center;
+  padding-bottom: 4px;
+}
+
+.vce-settings-enabled {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+}
+
+.vce-settings-heading .vce-settings-enabled > span {
+  margin: 0;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.vce-job-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 3%, var(--card));
+}
+
+.vce-job-card > [role="progressbar"] {
+  height: 6px;
+}
+
+.vce-job-meta {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.vce-job-details {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.vce-job-details[open] {
+  grid-column: 1 / -1;
+}
+
+.vce-job-details > summary {
+  cursor: pointer;
+  text-align: right;
+}
+
+.vce-job-details > div {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.vce-job-rehydrating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 13px;
+}
+
+/* Aggregate measurements share one strip instead of six competing cards. */
+/* 汇总测量值共用一行摘要，避免六张卡片争夺注意力。 */
+.vce-index-statistics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  padding: 12px 0;
+  border-block: 1px solid var(--border);
+}
+
+.vce-index-statistics > div {
+  min-width: 0;
+  padding-inline: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.vce-index-statistics > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.vce-index-statistics strong {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.vce-index-statistics p {
+  margin: 5px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.vce-index-controls {
+  display: grid;
+  gap: 14px;
+}
+
+.vce-index-primary-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--muted);
+}
+
+/* Disclosure summaries are full-width click targets and expose their current policy. */
+/* 折叠分组标题整行可点击，并显示当前策略摘要。 */
+.vce-settings-disclosure {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+}
+
+.vce-settings-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.vce-settings-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.vce-settings-disclosure > summary > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.vce-settings-disclosure > summary strong,
+.vce-settings-disclosure > summary small {
+  display: block;
+}
+
+.vce-settings-disclosure > summary strong {
+  font-size: 13px;
+}
+
+.vce-settings-disclosure > summary small {
+  margin-top: 3px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.vce-settings-disclosure > summary > svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.vce-settings-disclosure[open] > summary > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.vce-settings-disclosure-body {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.vce-index-details-toggle {
+  width: 100%;
+  min-height: 40px;
+}
+
+/* Narrow project dialogs preserve readable summaries and reachable controls. */
+/* 窄屏项目弹窗保留可读摘要与可操作控件。 */
+@media (max-width: 720px) {
+  .vce-settings-heading {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .vce-settings-heading .project-settings-heading-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .vce-index-statistics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 14px;
+  }
+
+  .vce-index-statistics > div:nth-child(4) {
+    padding-left: 0;
+    border-left: 0;
+  }
+}

@@ -3,7 +3,10 @@
 
 use super::*;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 use vulcan_service_runtime::vmm_management::VmmWorkbenchAction;
 use vulcan_vmm::{ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget};
 use vulcan_workbench_model::{SessionId, SessionState, SessionSummary};
@@ -20,6 +23,101 @@ fn test_vmm_action_request(action: &str, payload: Value) -> VmmMemoryActionReque
         conversation_id: None,
         payload,
     }
+}
+
+/// Verifies a static panel read never creates prompt-sync state when VMM is disabled.
+/// 验证 VMM 关闭时静态侧栏读取绝不创建提示词同步状态。
+#[tokio::test]
+async fn static_profile_panel_read_is_read_only_when_disabled() {
+    let session_id = SessionId::new_v4();
+    let mut service =
+        crate::tests::test_support::test_service_state_with_parent_session(session_id);
+    service.agent_runtime = Some(crate::tests::test_support::test_agent_runtime_bridge());
+    let state = Arc::new(Mutex::new(service));
+    let mut request = test_vmm_action_request("load_static_profile_for_panel", json!({}));
+    request.conversation_id = Some(session_id.to_string());
+
+    let result =
+        super::memory_actions::service_load_static_profile_for_panel(state.clone(), request)
+            .await
+            .expect("disabled profile read should succeed");
+    assert!(matches!(
+        result.data,
+        vulcan_service_api::VmmMemoryActionResponse::StaticProfile(None)
+    ));
+    assert!(
+        state
+            .lock()
+            .expect("service state")
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace")
+            .session_runtime_state
+            .is_empty()
+    );
+}
+
+/// Verifies an indexed session can restore durable dynamic leases without prompt hydration.
+/// 验证索引会话可在不水合提示词运行态的情况下恢复持久动态租约。
+#[tokio::test]
+async fn dynamic_memory_panel_read_restores_persisted_lease_after_restart() {
+    let session_id = SessionId::new_v4();
+    let root = crate::tests::test_support::TestHostRuntimeRoot::new(session_id);
+    let host_runtime = root.attached_host_runtime_handle().await;
+    let locator = vulcan_workspace_store::workspace_store::locate_session_v1_storage(
+        &host_runtime,
+        &session_id.to_string(),
+    )
+    .await
+    .expect("indexed locator");
+    let mut memory = vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "1")
+        .expect("session memory");
+    memory
+        .apply_recall_batch(
+            &session_id.to_string(),
+            "user-anchor",
+            &vulcan_vmm::VmmRecallBatch {
+                ttl_turns: 2,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Relevant memories."),
+                items: vec![vulcan_vmm::ContextItem {
+                    text: String::from("restored dynamic memory"),
+                    memory_id: 901,
+                    ..vulcan_vmm::ContextItem::default()
+                }],
+            },
+            "1",
+        )
+        .expect("resident lease");
+    vulcan_workspace_store::workspace_store::persist_session_vmm_state(&locator, &memory)
+        .expect("persist VMM state before restart");
+
+    let mut service =
+        crate::tests::test_support::test_service_state_with_parent_session(session_id);
+    service.controller_runtime = Some(host_runtime);
+    let state = Arc::new(Mutex::new(service));
+    let mut request = test_vmm_action_request("load_dynamic_memory_for_panel", json!({}));
+    request.conversation_id = Some(session_id.to_string());
+    let result =
+        super::memory_actions::service_load_dynamic_memory_for_panel(state.clone(), request)
+            .await
+            .expect("persisted dynamic memory read");
+    let vulcan_service_api::VmmMemoryActionResponse::DynamicMemoryCards(cards) = result.data else {
+        panic!("dynamic memory cards response expected");
+    };
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].tag, "VMM_MEMORY");
+    assert_eq!(cards[0].items.len(), 1);
+    assert!(
+        state
+            .lock()
+            .expect("service state")
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace")
+            .session_runtime_state
+            .is_empty()
+    );
 }
 
 /// Verifies write-memory action parsing keeps the WebUI payload mapping stable.

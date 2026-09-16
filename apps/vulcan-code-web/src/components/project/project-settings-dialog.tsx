@@ -747,8 +747,8 @@ export function ProjectSettingsDialog(props: {
 
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
-      <DialogContent className="project-settings-dialog">
-        <DialogHeader>
+      <DialogContent size="viewer" layout="document" scrollMode="content-scroll" className="project-settings-dialog">
+        <DialogHeader className="project-settings-dialog-header">
           <DialogTitle>{t("projectSettings.dialogTitle").replace("{project}", project.name)}</DialogTitle>
           <DialogDescription>{t("projectSettings.dialogDescription")}</DialogDescription>
         </DialogHeader>
@@ -757,6 +757,7 @@ export function ProjectSettingsDialog(props: {
             {sections.map((section) => (
               <button
                 className={cn("project-settings-nav-button", activeSection === section.id && "active")}
+                aria-current={activeSection === section.id ? "page" : undefined}
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}
                 type="button"

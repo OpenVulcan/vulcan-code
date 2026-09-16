@@ -3210,7 +3210,7 @@ function FileChangePresentationCard(props: {
               ? t("toolPresentation.file.notEdited")
               : formatTranslation(t, "toolPresentation.file.count", { count: String(displayPresentation.files.length) })
           }</span>
-          <FileChangeCounts added={displayPresentation.totalAdded} failed={displayPresentation.state === "failed"} removed={displayPresentation.totalRemoved} />
+          <FileChangeCounts added={displayPresentation.totalAdded} presentation={displayPresentation} removed={displayPresentation.totalRemoved} t={t} />
         </span>
         {displayPresentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
       </button>
@@ -3313,7 +3313,7 @@ function FileChangeSummaryButton(props: {
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
         <FileTextFormatBadge file={props.file} t={props.t} />
-        <FileChangeCounts added={props.file.added} failed={props.presentation.state === "failed"} removed={props.file.removed} />
+        <FileChangeCounts added={props.file.added} presentation={props.presentation} removed={props.file.removed} t={props.t} />
       </span>
       {props.interactive ? (props.expanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
     </button>
@@ -3368,9 +3368,12 @@ function FileChangeCounts(props: {
   // Added line count.
   // 新增行数。
   added: number | null;
-  // Whether an error badge should be displayed.
-  // 是否展示错误徽标。
-  failed: boolean;
+  // Authoritative status and diagnostic details for the failure badge.
+  // 失败徽标使用的权威状态与诊断详情。
+  presentation: FileChangePresentation;
+  // Translates compact error labels.
+  // 翻译紧凑错误标签。
+  t: (key: TranslationKey) => string;
   // Removed line count.
   // 删除行数。
   removed: number | null;
@@ -3379,9 +3382,36 @@ function FileChangeCounts(props: {
     <span className="file-change-counts">
       {typeof props.added === "number" && props.added > 0 ? <span className="file-change-added">+{props.added}</span> : null}
       {typeof props.removed === "number" && props.removed > 0 ? <span className="file-change-removed">-{props.removed}</span> : null}
-      {props.failed ? <span className="file-change-error-badge">ERR</span> : null}
+      {props.presentation.state === "failed" ? <span className="file-change-error-badge" title={props.presentation.errorDetail ?? undefined}>{props.t(fileChangeErrorLabelKey(props.presentation.errorCode))}</span> : null}
     </span>
   );
+}
+
+/** Maps the host FileToolError code to a compact UI label; absent or unknown codes remain generic failures.
+ * 将宿主 FileToolError 错误码映射为紧凑界面标签；缺失或未知错误码保留为通用失败。
+ * Parameter code is producer-owned; returns a translation key without guessing from error prose.
+ * 参数 code 由产出方定义；返回翻译键，不从错误描述推测原因。 */
+function fileChangeErrorLabelKey(code: string | null | undefined): TranslationKey {
+  switch (code) {
+    case "match_not_found":
+    case "expected_lines_not_found":
+    case "anchor_chain_not_found":
+    case "patch_context_not_found": return "toolPresentation.file.error.notMatched";
+    case "ambiguous_match":
+    case "target_not_unique": return "toolPresentation.file.error.ambiguous";
+    case "path_not_found": return "toolPresentation.file.error.pathMissing";
+    case "path_already_exists": return "toolPresentation.file.error.pathExists";
+    case "stale_version":
+    case "stale_file": return "toolPresentation.file.error.stale";
+    case "invalid_arguments": return "toolPresentation.file.error.invalidArguments";
+    case "patch_syntax_error": return "toolPresentation.file.error.invalidPatch";
+    case "write_failed": return "toolPresentation.file.error.writeFailed";
+    case "transaction_failed": return "toolPresentation.file.error.rolledBack";
+    case "unsupported_file_type": return "toolPresentation.file.error.unsupported";
+    case "encoding_ambiguous":
+    case "encoding_unrepresentable": return "toolPresentation.file.error.encoding";
+    default: return "toolPresentation.file.error.failed";
+  }
 }
 
 // fileChangeStatusLabel returns the localized file-change lifecycle label.

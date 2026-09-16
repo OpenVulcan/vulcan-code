@@ -1,7 +1,7 @@
 //! Model capability defaults, explicit evidence precedence, and effective limit validation.
 //! 模型能力默认、显式证据优先级与生效限制校验。
 
-use crate::{ConnectionModelCatalog, PersistedAiConfiguration};
+use crate::{ConnectionModelCatalog, ModelCapabilityEvidence, PersistedAiConfiguration};
 use vulcan_ai_contract::{AiOperation, CapabilitySupport, ModelCapabilities, ReasoningControlMode};
 
 /// Identifies the host-owned default reasoning policy applied to unknown text models.
@@ -130,13 +130,64 @@ pub(super) fn custom_provider_system_baseline_for_protocol(
 /// Discovery metadata is retained separately, while executable capability projections must use
 /// a request-safe output ceiling when an upstream reports an inconsistent pair of limits.
 /// 发现元数据仍然单独保留；当上游报告不一致的限制组合时，可执行能力投影必须使用安全的输出上限。
-pub(super) fn clamp_output_limit_to_context_window(capabilities: &mut ModelCapabilities) {
+pub(super) fn clamp_output_limit_to_context_window(
+    capabilities: &mut ModelCapabilities,
+    evidence: &ModelCapabilityEvidence,
+) {
+    if !requires_text_token_limits(capabilities, evidence) {
+        return;
+    }
     if let (Some(context_limit), Some(output_limit)) =
         (capabilities.context_limit, capabilities.output_limit)
         && output_limit > context_limit
     {
         capabilities.output_limit = Some(context_limit);
     }
+}
+
+/// Reports whether token-window limits apply to text output or an unresolved output contract.
+/// 判断文本输出或尚未明确输出类型的契约是否需要令牌窗口限制。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` and `evidence` are the resolved contract and explicit output-modality facts.
+/// `capabilities` 与 `evidence` 是最终契约和明确的输出模态事实。
+///
+/// # Returns
+/// 返回值
+/// `false` only for models explicitly limited to non-text output resources.
+/// 仅对明确只输出非文本资源的模型返回 `false`。
+fn requires_text_token_limits(
+    capabilities: &ModelCapabilities,
+    evidence: &ModelCapabilityEvidence,
+) -> bool {
+    if model_supports_text_conversation(capabilities) || evidence.supports_text_output == Some(true)
+    {
+        return true;
+    }
+    if evidence.supports_text_output == Some(false) {
+        return false;
+    }
+    // Without upstream output evidence, only explicit media-generation operations establish
+    // non-text output. An empty or mixed operation contract remains token-limited.
+    // 没有上游输出证据时，只有明确的媒体生成操作才能证明非文本输出；空操作或混合操作仍受令牌限制。
+    capabilities.output_resources.is_empty()
+        || capabilities.operations.is_empty()
+        || !capabilities.operations.iter().all(|operation| {
+            matches!(
+                operation,
+                AiOperation::ImageGenerate
+                    | AiOperation::ImageEdit
+                    | AiOperation::VideoGenerate
+                    | AiOperation::VideoEdit
+                    | AiOperation::VideoExtend
+                    | AiOperation::SpeechSynthesize
+                    | AiOperation::VoiceClone
+                    | AiOperation::VoiceDesign
+                    | AiOperation::MusicGenerate
+                    | AiOperation::MusicCover
+            )
+        })
 }
 
 /// Clamps every effective model and protocol variant in one projected catalog.
@@ -147,9 +198,16 @@ pub(super) fn clamp_output_limit_to_context_window(capabilities: &mut ModelCapab
 /// 原始目录保持不变以保留供应商报告的元数据供诊断使用；仅收窄应用策略后的可执行投影。
 pub(super) fn clamp_catalog_output_limits_to_context_window(catalog: &mut ConnectionModelCatalog) {
     for model in &mut catalog.models {
-        clamp_output_limit_to_context_window(&mut model.capabilities);
+        clamp_output_limit_to_context_window(&mut model.capabilities, &model.capability_evidence);
         for variant in model.protocol_variants.values_mut() {
-            clamp_output_limit_to_context_window(&mut variant.capabilities);
+            // A protocol variant may omit output evidence while inheriting the model's
+            // discovered output modalities; an explicit variant fact remains authoritative.
+            // 协议变体可能省略输出证据而继承模型的发现模态；明确的变体事实仍具有优先级。
+            let mut evidence = variant.capability_evidence.clone();
+            if evidence.supports_text_output.is_none() {
+                evidence.supports_text_output = model.capability_evidence.supports_text_output;
+            }
+            clamp_output_limit_to_context_window(&mut variant.capabilities, &evidence);
         }
     }
 }
@@ -159,20 +217,26 @@ pub(super) fn clamp_catalog_output_limits_to_context_window(catalog: &mut Connec
 ///
 /// # Parameters
 /// 参数
-/// `connection_id` and `model_id` identify the exact projection, while `capabilities` contains
-/// the fully resolved provider evidence, template/default values, and user differences.
-/// `connection_id` 与 `model_id` 标识精确投影，`capabilities` 包含完整解析后的供应商证据、
-/// 模板或默认值以及用户差异。
+/// `connection_id` and `model_id` identify the exact projection; `capabilities` and `evidence`
+/// carry the resolved contract and upstream output facts.
+/// `connection_id` 与 `model_id` 标识精确投影；`capabilities` 与 `evidence` 携带最终契约和上游输出事实。
 ///
 /// # Returns
 /// 返回值
-/// Success when every present limit is positive; inconsistent pairs are normalized before use.
-/// 当所有已存在限制均为正数时返回成功；不一致组合会在使用前收窄。
+/// Success when text-output limits are positive or the model explicitly outputs only media.
+/// 文本输出限制均为正数，或模型明确仅输出媒体时返回成功。
 pub(in crate::runtime) fn validate_resolved_model_capability_limits(
     connection_id: &str,
     model_id: &str,
     capabilities: &ModelCapabilities,
+    evidence: &ModelCapabilityEvidence,
 ) -> Result<(), String> {
+    // Media-only output does not consume a text completion window; upstream zero token metadata
+    // must not remove an otherwise usable image, audio, or video generator from account catalogs.
+    // 纯媒体输出不消耗文本补全窗口；上游的零令牌元数据不能移除可用的图片、音频或视频生成模型。
+    if !requires_text_token_limits(capabilities, evidence) {
+        return Ok(());
+    }
     if capabilities.context_limit == Some(0) {
         return Err(format!(
             "Model `{model_id}` on connection `{connection_id}` has an effective context limit of zero."
@@ -191,19 +255,20 @@ pub(in crate::runtime) fn validate_resolved_model_capability_limits(
 ///
 /// # Parameters
 /// 参数
-/// `connection_id`, `model_id`, and `capabilities` identify one resolved account model.
-/// `connection_id`、`model_id` 与 `capabilities` 标识一个已解析账号模型。
+/// `connection_id`, `model_id`, `capabilities`, and `evidence` identify one resolved account model.
+/// `connection_id`、`model_id`、`capabilities` 与 `evidence` 标识一个已解析账号模型。
 ///
 /// # Returns
 /// 返回值
-/// The blocked reason, or `None` when both present token limits are positive.
-/// 返回阻止原因；已存在的令牌限制均为正数时返回 `None`。
+/// The blocked reason, or `None` when applicable token limits are positive.
+/// 返回阻止原因；适用的令牌限制均为正数时返回 `None`。
 pub fn model_capability_limit_issue(
     connection_id: &str,
     model_id: &str,
     capabilities: &ModelCapabilities,
+    evidence: &ModelCapabilityEvidence,
 ) -> Option<String> {
-    validate_resolved_model_capability_limits(connection_id, model_id, capabilities).err()
+    validate_resolved_model_capability_limits(connection_id, model_id, capabilities, evidence).err()
 }
 
 /// Keeps malformed model limits out of executable catalogs without changing discovery evidence.
@@ -220,6 +285,7 @@ pub(in crate::runtime) fn retain_models_with_valid_limits(catalog: &mut Connecti
             connection_id,
             model.id.as_str(),
             &model.capabilities,
+            &model.capability_evidence,
         )
         .is_ok()
     });
@@ -260,8 +326,8 @@ pub(in crate::runtime) fn validate_catalog_model_count(
 ///
 /// # Returns
 /// 返回值
-/// Success only when every model has positive declared limits.
-/// 仅当每个模型声明的限制均为正数时返回成功。
+/// Success only when every model has valid limits for its declared output contract.
+/// 仅当每个模型的限制对其声明的输出契约有效时返回成功。
 pub(in crate::runtime) fn validate_resolved_catalog_limits(
     catalog: &ConnectionModelCatalog,
 ) -> Result<(), String> {
@@ -271,6 +337,7 @@ pub(in crate::runtime) fn validate_resolved_catalog_limits(
             catalog.connection_id.as_str(),
             model.id.as_str(),
             &model.capabilities,
+            &model.capability_evidence,
         )?;
     }
     Ok(())

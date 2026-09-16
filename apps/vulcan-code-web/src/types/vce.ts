@@ -262,6 +262,9 @@ export interface VceProjectSettingsSummary {
   revision: number;
   migratedFromCodebaseMemory: boolean;
   maxFileBytes: number;
+  // Host-owned built-in exclusions that the project editor displays without persisting them.
+  // 宿主持有的内置排除规则，仅供项目编辑器展示，不参与持久化。
+  defaultIgnorePatterns: string[];
   extraIgnorePatterns: string[];
   allowQueryRewrite: boolean;
   allowRerank: boolean;

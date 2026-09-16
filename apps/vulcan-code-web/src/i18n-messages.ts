@@ -1678,6 +1678,18 @@ export type TranslationKey =
   | "toolPresentation.file.mixed.completed"
   | "toolPresentation.file.edited"
   | "toolPresentation.file.notEdited"
+  | "toolPresentation.file.error.notMatched"
+  | "toolPresentation.file.error.ambiguous"
+  | "toolPresentation.file.error.pathMissing"
+  | "toolPresentation.file.error.pathExists"
+  | "toolPresentation.file.error.stale"
+  | "toolPresentation.file.error.invalidArguments"
+  | "toolPresentation.file.error.invalidPatch"
+  | "toolPresentation.file.error.writeFailed"
+  | "toolPresentation.file.error.rolledBack"
+  | "toolPresentation.file.error.unsupported"
+  | "toolPresentation.file.error.encoding"
+  | "toolPresentation.file.error.failed"
   | "toolPresentation.file.executionFailed"
   | "toolPresentation.file.executionStopped"
   | "toolPresentation.file.executionCompleted"
@@ -5455,6 +5467,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.mixed.completed": "已变更",
     "toolPresentation.file.edited": "已编辑",
     "toolPresentation.file.notEdited": "未修改",
+    "toolPresentation.file.error.notMatched": "未命中",
+    "toolPresentation.file.error.ambiguous": "匹配不唯一",
+    "toolPresentation.file.error.pathMissing": "文件不存在",
+    "toolPresentation.file.error.pathExists": "文件已存在",
+    "toolPresentation.file.error.stale": "文件已变化",
+    "toolPresentation.file.error.invalidArguments": "参数错误",
+    "toolPresentation.file.error.invalidPatch": "补丁格式错误",
+    "toolPresentation.file.error.writeFailed": "写入失败",
+    "toolPresentation.file.error.rolledBack": "已回滚",
+    "toolPresentation.file.error.unsupported": "文件类型不支持",
+    "toolPresentation.file.error.encoding": "编码错误",
+    "toolPresentation.file.error.failed": "失败",
     "toolPresentation.file.executionFailed": "执行失败",
     "toolPresentation.file.executionStopped": "已停止",
     "toolPresentation.file.executionCompleted": "执行完成",
@@ -9252,6 +9276,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.mixed.completed": "Changed",
     "toolPresentation.file.edited": "Edited",
     "toolPresentation.file.notEdited": "Not edited",
+    "toolPresentation.file.error.notMatched": "No match",
+    "toolPresentation.file.error.ambiguous": "Ambiguous match",
+    "toolPresentation.file.error.pathMissing": "File not found",
+    "toolPresentation.file.error.pathExists": "File already exists",
+    "toolPresentation.file.error.stale": "File changed",
+    "toolPresentation.file.error.invalidArguments": "Invalid arguments",
+    "toolPresentation.file.error.invalidPatch": "Invalid patch",
+    "toolPresentation.file.error.writeFailed": "Write failed",
+    "toolPresentation.file.error.rolledBack": "Rolled back",
+    "toolPresentation.file.error.unsupported": "Unsupported file type",
+    "toolPresentation.file.error.encoding": "Encoding error",
+    "toolPresentation.file.error.failed": "Failed",
     "toolPresentation.file.executionFailed": "Execution failed",
     "toolPresentation.file.executionStopped": "Stopped",
     "toolPresentation.file.executionCompleted": "Completed",

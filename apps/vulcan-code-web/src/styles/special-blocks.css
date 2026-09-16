@@ -402,9 +402,9 @@
   gap: 12px;
 }
 
-/* A grouped tool sequence receives two ordinary height units before its own viewport scrolls. */
-/* 聚合工具序列在自身视口滚动前可使用两个普通高度单位。 */
-.conversation-tool-sequence > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .conversation-tool-sequence-body {
+/* Only foldable multi-tool groups receive an extra bounded viewport; plain rows retain their own scrolling. */
+/* 仅可折叠的多工具组具有额外限高视口；普通记录保留自身滚动行为。 */
+.conversation-tool-sequence[data-grouped="true"] > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .conversation-tool-sequence-body {
   max-height: min(
     calc(var(--tool-presentation-expanded-height-unit) + var(--tool-presentation-expanded-height-unit)),
     78vh

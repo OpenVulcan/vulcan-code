@@ -178,8 +178,8 @@ pub(super) async fn service_select_workbench_model_secondary_route(
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
 }
 
-/// Resolves and validates the exact active public model targeted by secondary routing.
-/// 解析并校验二级路由所针对的精确当前公共模型。
+/// Resolves the exact workbench-selected public model targeted by secondary routing.
+/// 解析二级路由所针对的工作台精确选中公共模型。
 fn exact_public_secondary_route_target(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
@@ -187,41 +187,22 @@ fn exact_public_secondary_route_target(
     provider_id: &str,
     model_id: &str,
 ) -> Result<String, String> {
-    if let Some(runtime_state) = runtime_state
-        && let Some((session_provider_id, session_model_id)) = runtime_state
-            .active_provider_id
-            .as_deref()
-            .zip(runtime_state.active_model_id.as_deref())
-    {
-        if session_provider_id != provider_id || session_model_id != model_id {
-            return Err(format!(
-                "Secondary route target `{provider_id}/{model_id}` is not the active session model."
-            ));
-        }
-        if let Some(connection_id) = runtime_state.active_connection_id.as_deref()
-            && let Ok(selection) = runtime.resolve_connection_model_selection(
-                configuration,
-                connection_id,
-                provider_id,
-                model_id,
-            )
-        {
-            return Ok(selection.route.connection.id);
-        }
-        return runtime
-            .resolve_model_selection(configuration, provider_id, model_id)
-            .map(|selection| selection.route.connection.id);
-    }
-    let active = configuration
-        .active
-        .clone()
-        .ok_or_else(|| String::from("No active public AI model is configured."))?;
-    if active.provider_id != provider_id || active.model_id != model_id {
+    // Use the same pending-first selection as the visible workbench; the current turn's frozen
+    // route is not the user's selected target for a secondary route applied to the next request.
+    // 与可见工作台共用待生效优先的选择；当前回合冻结路由并非下一次请求要应用的二级路由目标。
+    let selected = super::settings_provider_projection::public_ai_workbench_selection(
+        configuration,
+        runtime,
+        None,
+        runtime_state,
+    )?
+    .ok_or_else(|| String::from("No executable public AI model is selected."))?;
+    if selected.route.provider.id != provider_id || selected.model.id != model_id {
         return Err(format!(
-            "Secondary route target `{provider_id}/{model_id}` is not the active public AI model."
+            "Secondary route target `{provider_id}/{model_id}` is not the selected workbench model."
         ));
     }
-    Ok(active.connection_id)
+    Ok(selected.route.connection.id)
 }
 
 /// Projects one public secondary-route option into the existing workbench contract.
@@ -444,5 +425,112 @@ fn parse_webui_locale(value: &str) -> Option<String> {
     match value {
         "zh-CN" | "en-US" => Some(value.to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, sync::Arc};
+
+    use vulcan_provider_adapters::{
+        ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
+        ProtocolModelVariant, PublicAiRuntime, UnavailableCredentialSecretResolver,
+        parse_openrouter_model_catalog,
+    };
+    use vulcan_workbench_model::{SessionPendingModelSelection, SessionRuntimeStateEntry};
+
+    use super::exact_public_secondary_route_target;
+
+    /// Verifies a pending next-turn model owns secondary routes before the old active model.
+    /// 验证下一轮待生效模型优先于旧的当前模型持有二级路由。
+    #[test]
+    fn secondary_route_uses_pending_workbench_model() {
+        let runtime = PublicAiRuntime::first_batch(Arc::new(UnavailableCredentialSecretResolver))
+            .expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime.providers().expect("providers should resolve"),
+                CredentialConnection {
+                    id: String::from("openrouter-account"),
+                    provider_id: String::from("openrouter"),
+                    service_entry_id: String::from("public-api"),
+                    credential_profile_id: String::from("api-key"),
+                    credential_mode: CredentialMode::Token,
+                    credential_id: String::from("credential-openrouter"),
+                    display_name: String::from("OpenRouter account"),
+                    secret_reference: String::from("secret-openrouter"),
+                    management_secret_reference: None,
+                    service_origin_override: None,
+                    prompt_cache_by_protocol: BTreeMap::new(),
+                },
+            )
+            .expect("account should register");
+        configuration.set_model_enabled("openrouter", "openai/gpt-5.6-terra", true);
+        configuration.set_model_enabled("openrouter", "openai/gpt-5.6-sol", true);
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-terra"),
+            connection_id: String::from("openrouter-account"),
+        });
+        let mut catalog = parse_openrouter_model_catalog(
+            "openrouter-account",
+            1,
+            r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Terra","context_length":8192,"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},{"id":"openai/gpt-5.6-sol","name":"Sol","context_length":8192,"architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}"#,
+        )
+        .expect("catalog should parse");
+        for model in &mut catalog.models {
+            model.protocol_variants.insert(
+                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
+                ProtocolModelVariant {
+                    capabilities: model.capabilities.clone(),
+                    capability_evidence: Default::default(),
+                    discovery_signature: String::from("secondary-route-test"),
+                    catalog_generation: catalog.generation,
+                },
+            );
+        }
+        runtime
+            .stage_source_catalog_for_testing(catalog)
+            .expect("catalog should stage");
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("configuration should install");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("catalog should activate");
+
+        let state = SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("openrouter")),
+            active_connection_id: Some(String::from("openrouter-account")),
+            active_model_id: Some(String::from("openai/gpt-5.6-terra")),
+            pending_model_selection: Some(SessionPendingModelSelection {
+                provider_id: String::from("openrouter"),
+                connection_id: String::from("openrouter-account"),
+                model_id: String::from("openai/gpt-5.6-sol"),
+            }),
+            ..SessionRuntimeStateEntry::default()
+        };
+        assert_eq!(
+            exact_public_secondary_route_target(
+                &runtime,
+                &configuration,
+                Some(&state),
+                "openrouter",
+                "openai/gpt-5.6-sol",
+            ),
+            Ok(String::from("openrouter-account"))
+        );
+        assert!(
+            exact_public_secondary_route_target(
+                &runtime,
+                &configuration,
+                Some(&state),
+                "openrouter",
+                "openai/gpt-5.6-terra",
+            )
+            .is_err()
+        );
     }
 }

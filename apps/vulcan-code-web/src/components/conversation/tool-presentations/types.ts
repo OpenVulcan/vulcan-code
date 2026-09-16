@@ -141,6 +141,9 @@ export interface FileChangePresentation {
   // Error details shown for failed native vulcan-file calls.
   // 原生 vulcan-file 调用失败时展示的错误详情。
   errorDetail: string | null;
+  // Producer-owned error code used for a precise localized failure badge.
+  // 用于精确本地化失败徽标的产出方错误码。
+  errorCode?: string | null;
   // Whether the card should be interactive in its current state.
   // 当前状态下卡片是否允许交互。
   interactive: boolean;

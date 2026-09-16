@@ -30,7 +30,7 @@ afterEach(async () => {
 /** Creates one exact tool row; id is stable and status controls its execution summary.
  * 创建一条精确工具记录；id 保持稳定，status 控制执行摘要。
  */
-function row(id: string, status: "running" | "completed" = "completed"): ConversationRenderItem {
+function row(id: string, status: "running" | "completed" | "failed" | "stopped" = "completed"): ConversationRenderItem {
   return { id, role: "assistant", sourceMessages: [], blocks: [{
     id: id + "-block", kind: "tool-call", title: id, body: "", summary: "", status,
     toolCallId: id, toolEvidence: true, toolName: "shell_command",
@@ -53,12 +53,36 @@ async function render(items: ConversationRenderItem[], active = true, enabled = 
   </I18nProvider>));
 }
 
+it.each([
+  ["running", true],
+  ["completed", true],
+  ["completed", false],
+  ["failed", false],
+  ["stopped", false],
+] as const)("shows a single %s tool without a group toggle (active=%s)", async (status, active) => {
+  await render([row("one", status)], active);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
+  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("true");
+  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
+});
+
+it("keeps a single tool visible even when its group previously remembered a manual collapse", async () => {
+  await render([row("one"), row("two")]);
+  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
+  await render([row("one")], false);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
+});
+
 it("keeps the first tool in the same body through append, completion, and a long idle gap", async () => {
   await render([row("one", "running")]);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
   // first preserves the DOM identity rather than remounting into a retirement layer.
   // first 保留 DOM 标识，而不是重新挂载到退场层。
   const first = host.querySelector('[data-tool="one"]');
   await render([row("one"), row("two", "running")]);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).not.toBeNull();
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
   await render([row("one"), row("two")]);
   await act(async () => vi.advanceTimersByTime(60_000));
@@ -84,5 +108,25 @@ it("keeps every row open with folding disabled, including a previously manually 
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
   await render([row("one"), row("two")], false, false);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
-  expect(host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.disabled).toBe(true);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.textContent).not.toContain("已执行");
+  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
+});
+
+it("hides running and completed summaries while folding is disabled without remounting tool rows", async () => {
+  await render([row("one"), row("two", "running")], true, false);
+  // first verifies changing the setting does not reset the tool card's own state.
+  // first 验证切换设置不会重置工具卡片自身的状态。
+  const first = host.querySelector('[data-tool="one"]');
+  expect(first).not.toBeNull();
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.textContent).not.toContain("已执行");
+  await render([row("one"), row("two")], true, true);
+  expect(host.querySelector('[data-tool="one"]')).toBe(first);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")?.textContent).toContain("已执行 2 次工具调用");
+  await render([row("one"), row("two")], false, false);
+  expect(host.querySelector('[data-tool="one"]')).toBe(first);
+  expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
+  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.textContent).not.toContain("已执行");
 });

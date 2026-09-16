@@ -211,9 +211,12 @@ export function ConversationToolSequenceGroup(props: {
   // Only deliberate clicks enter expansion memory; lifecycle defaults remain derived.
   // 仅主动点击进入展开记忆；生命周期默认值始终由当前事实推导。
   const [rememberedExpanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, props.active);
-  // Disabling folding takes precedence over any remembered collapsed state.
-  // 关闭折叠优先于任何已记忆的收起状态。
-  const expanded = !props.collapseEnabled || rememberedExpanded;
+  // Only multiple tools with folding enabled need a summary; keep their body stable as tools arrive.
+  // 仅开启折叠的多工具序列需要汇总栏；工具陆续到达时保持正文容器稳定。
+  const grouped = props.collapseEnabled && props.items.length > 1;
+  // Single tools and disabled folding override any remembered collapsed state.
+  // 单工具与关闭折叠均优先于任何已记忆的收起状态。
+  const expanded = !grouped || rememberedExpanded;
   // summary counts terminal and running tools without splitting their rendering.
   // summary 统计终态与运行中工具，但不拆分它们的渲染位置。
   const summary = props.runningItems.length > 0
@@ -223,18 +226,17 @@ export function ConversationToolSequenceGroup(props: {
     : t("conversation.toolSequence.summary").replace("{count}", String(props.completedItems.length));
 
   return (
-    <section className="conversation-tool-sequence" data-expanded={expanded ? "true" : "false"}>
-      <button
+    <section className="conversation-tool-sequence" data-expanded={expanded ? "true" : "false"} data-grouped={grouped ? "true" : "false"}>
+      {grouped ? <button
         aria-expanded={expanded}
         className="conversation-tool-sequence-toggle"
-        disabled={!props.collapseEnabled}
         onClick={() => setExpanded(!expanded)}
         type="button"
       >
         <Workflow size={14} />
         <span className={cn(props.runningItems.length > 0 && "shimmer")}>{summary}</span>
-        {props.collapseEnabled ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
-      </button>
+        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button> : null}
       <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
         <div className="conversation-tool-sequence-body">
           {props.items.map(props.renderItem)}

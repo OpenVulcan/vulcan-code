@@ -1447,6 +1447,7 @@ impl PublicAiRuntime {
                 connection.id.as_str(),
                 model.id.as_str(),
                 &model.capabilities,
+                &model.capability_evidence,
             )?;
             if let Some(overrides) = overrides
                 && let Some(projection) = overrides.request_projection.as_ref()
@@ -1476,6 +1477,7 @@ impl PublicAiRuntime {
                     "provider-settings-validation",
                     model.id.as_str(),
                     &model.capabilities,
+                    &model.capability_evidence,
                 )?;
                 if let Some(overrides) = overrides
                     && let Some(projection) = overrides.request_projection.as_ref()

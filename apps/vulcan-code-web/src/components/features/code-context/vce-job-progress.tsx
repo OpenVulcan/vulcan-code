@@ -1,4 +1,5 @@
 import * as React from "react";
+import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import type { VceJobSummary } from "@/types";
@@ -67,6 +68,9 @@ export function VceJobProgress(props: {
   // Explicit retry creates a new guarded host job; unavailable for successful or active receipts.
   // 明确重试创建新的受保护宿主作业；成功或活动回执不可重试。
   onRetry?: () => void;
+  // presentation keeps project settings focused while other surfaces retain expanded progress evidence.
+  // presentation 使项目设置聚焦当前进度，其他界面保留展开的进度证据。
+  presentation?: "settings";
 }) {
   // copy selects bilingual display labels without exposing machine state names.
   // copy 选择双语展示标签，不暴露机器状态名。
@@ -204,20 +208,43 @@ export function VceJobProgress(props: {
     && progress.overallTotal !== undefined
     && progress.overallTotal !== null
     && progress.overallTotal > 0;
+  // settingsPresentation puts supporting counters and remote identifiers behind a user-controlled disclosure.
+  // settingsPresentation 将辅助计数与远端标识放入由用户展开的详情区。
+  const settingsPresentation = props.presentation === "settings";
+  // progressDetails preserves the measurements and diagnostics outside the main reading path.
+  // progressDetails 在主要阅读内容之外保留测量值与诊断。
+  const progressDetails = <div className="space-y-2">
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>{!compact && progress && ["chunking", "embedding", "writing"].includes(progress.phase) ? copy("整体进度（已写入文件）", "Overall progress (files written)") : copy("整体进度", "Overall progress")}</span>
+        <span>{overallMeasured ? `${progress.overallCompleted ?? 0} / ${progress.overallTotal}` : copy("正在确定范围", "Determining scope")}</span>
+      </div>
+      <Progress className="h-1.5 w-full" aria-label={copy("整体进度", "Overall progress")} value={overallMeasured ? progress.overallCompleted ?? 0 : null} max={overallMeasured ? progress.overallTotal! : undefined} />
+    </div>
+    {progress?.providerBatchState ? <p className="text-xs text-muted-foreground" role="status">{providerBatchStateLabels[progress.providerBatchState]}</p> : null}
+    {activity?.providerBatchId ? <p className="break-all text-xs text-muted-foreground">{copy("批量任务", "Batch task")}: {activity.providerBatchId}</p> : null}
+    <p className="text-xs text-muted-foreground">{copy("距最近进度更新", "Since last progress update")}: {quietSeconds} {copy("秒", "s")}</p>
+    {compact && job.compaction ? <div className="space-y-1 rounded-md border bg-background/60 p-2">{job.compaction.tables.map((table) => (
+      <p className="text-xs text-muted-foreground" key={table.role}>{table.role === "content" ? copy("内容向量表", "Content vector table") : copy("路径向量表", "Path vector table")} · {copy("片段", "fragments")} {table.plannedFragmentCount} → {table.currentFragmentCount} · {copy("轮次", "round")} {table.round} · {compactionTableStateLabels[table.state]}</p>
+    ))}</div> : null}
+  </div>;
   return (
-    <section className="min-w-0 w-full space-y-2 overflow-hidden rounded-lg border bg-muted/20 p-3" aria-label={compact ? copy("物理索引整理进度", "Physical index compaction progress") : copy("语义索引进度", "Semantic index progress")}>
+    <section className={settingsPresentation ? "vce-job-card" : "min-w-0 w-full space-y-2 overflow-hidden rounded-lg border bg-muted/20 p-3"} aria-label={compact ? copy("物理索引整理进度", "Physical index compaction progress") : copy("语义索引进度", "Semantic index progress")}>
       <div className="flex items-center justify-between gap-3">
-        <strong className="text-sm">{stateLabels[job.state]}</strong>
+        <div className="flex min-w-0 items-center gap-2">
+          {settingsPresentation ? active ? <LoaderCircle size={18} className="shrink-0 text-primary motion-safe:animate-spin" aria-hidden="true" />
+            : job.state === "succeeded" ? <CircleCheck size={18} className="shrink-0 text-primary" aria-hidden="true" />
+              : <CircleAlert size={18} className="shrink-0 text-destructive" aria-hidden="true" /> : null}
+          <strong className="text-sm" role="status" aria-live="polite">{stateLabels[job.state]}</strong>
+        </div>
         {active && props.onCancel ? <Button type="button" size="sm" variant="ghost" disabled={props.cancelPending || (!recoveryRequired && (job.state === "cancelling" || progress?.phase === "committing" || (progress?.phase === "complete" && !job.followupRequested)))} onClick={props.onCancel}>{recoveryRequired ? copy("恢复并取消", "Recover and cancel") : compact ? copy("取消整理", "Cancel compaction") : job.followupRequested ? copy("取消更新及后续同步", "Cancel update and follow-up") : copy("取消更新", "Cancel update")}</Button> : null}
       </div>
       {active ? (
         <>
           {job.followupRequested ? <p className="text-xs text-primary" role="status">{copy("已合并一次后续手动同步；本次结束后核对文件，不受自动间隔限制。", "One manual follow-up is scheduled to reconcile files after this update, without the automatic cooldown.")}</p> : null}
           <p className="text-xs font-medium">{activity ? activityTitles[activity.stage] : progress ? phaseLabels[progress.phase] : compact ? copy("整理作业尚未开始，不会调用模型", "Compaction has not started and will not call a model") : copy("当前批次尚未开始扫描或调用模型", "This batch has not started file scans or model calls")}</p>
-          {progress?.providerBatchState ? <p className="text-xs text-muted-foreground" role="status">{providerBatchStateLabels[progress.providerBatchState]}</p> : null}
           {activity ? <div className="space-y-1 text-xs text-muted-foreground" role="status">
             <p>{activityLabels[activity.stage]}</p>
-            {activity.providerBatchId ? <p className="truncate" title={activity.providerBatchId}>{copy("批量任务", "Batch task")}: {activity.providerBatchId}</p> : null}
             {pollCountdownSeconds !== null ? <p>{batchStillProcessing
               ? pollCountdownSeconds > 0
                 ? copy(`批量任务尚未完成，${pollCountdownSeconds} 秒后继续查询`, `Batch still processing; checking again in ${pollCountdownSeconds} s`)
@@ -226,26 +253,21 @@ export function VceJobProgress(props: {
                 ? copy(`${pollCountdownSeconds} 秒后查询批量任务状态`, `Checking Batch status in ${pollCountdownSeconds} s`)
                 : copy("即将查询批量任务状态", "Checking Batch status shortly")}</p> : null}
           </div> : null}
-          {(
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{!compact && progress && ["chunking", "embedding", "writing"].includes(progress.phase) ? copy("整体进度（已写入文件）", "Overall progress (files written)") : copy("整体进度", "Overall progress")}</span>
-                <span>{overallMeasured ? `${progress.overallCompleted ?? 0} / ${progress.overallTotal}` : copy("正在确定范围", "Determining scope")}</span>
-              </div>
-              <Progress className="h-1.5 w-full" aria-label={copy("整体进度", "Overall progress")} value={overallMeasured ? progress.overallCompleted ?? 0 : null} max={overallMeasured ? progress.overallTotal! : undefined} />
-            </div>
-          )}
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>{copy("当前阶段进度", "Current phase progress")}</span>
             <span>{measured ? `${progress.completed} / ${progress.total} ${unitLabels[progress.unit]}` : copy("处理中，总量待确定", "Processing; total not yet known")}</span>
           </div>
           {measured ? <Progress className="h-1.5 w-full" aria-label={copy("当前阶段进度", "Current phase progress")} value={progress.completed} max={progress.total!} />
             : <div role="progressbar" aria-label={copy("当前阶段进度", "Current phase progress")} className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary/40 motion-reduce:animate-none" /></div>}
-          <p className="text-xs text-muted-foreground">{copy("已用时", "Elapsed")}: {elapsedSeconds} {copy("秒", "s")} · {copy("距最近进度更新", "Since last progress update")}: {quietSeconds} {copy("秒", "s")}</p>
+          <div className="vce-job-meta">
+            <p className="text-xs text-muted-foreground">{copy("已用时", "Elapsed")}: {elapsedSeconds} {copy("秒", "s")}</p>
+            {settingsPresentation ? <details className="vce-job-details">
+              <summary>{copy("任务详情", "Task details")}</summary>
+              {progressDetails}
+            </details> : null}
+          </div>
+          {!settingsPresentation ? progressDetails : null}
           {quietSeconds >= 30 && activity?.stage !== "waiting" ? <p className="text-xs text-amber-700 dark:text-amber-400" role="status">{copy("当前步骤尚未返回新的完成回执，最后确认的处理阶段如上。", "The current step has not returned another completion receipt; its last confirmed stage is shown above.")}</p> : null}
-          {compact && job.compaction ? <div className="space-y-1 rounded-md border bg-background/60 p-2">{job.compaction.tables.map((table) => (
-            <p className="text-xs text-muted-foreground" key={table.role}>{table.role === "content" ? copy("内容向量表", "Content vector table") : copy("路径向量表", "Path vector table")} · {copy("片段", "fragments")} {table.plannedFragmentCount} → {table.currentFragmentCount} · {copy("轮次", "round")} {table.round} · {compactionTableStateLabels[table.state]}</p>
-          ))}</div> : null}
           <p className="text-xs text-muted-foreground">{compact
             ? copy("整理复用现有向量；会话和已发布索引查询仍可继续使用。", "Compaction reuses existing vectors; conversations and published-index queries remain available.")
             : props.queryAvailable === false

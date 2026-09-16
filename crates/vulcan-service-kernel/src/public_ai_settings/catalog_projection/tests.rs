@@ -77,10 +77,10 @@ fn openrouter_account_projection_uses_signed_initial_checks() {
     assert!(explicit[0].model_enabled_overrides.is_empty());
 }
 
-/// Verifies a malformed video model appears as a blocked diagnostic instead of a callable route.
-/// 验证异常视频模型显示为受阻诊断，而不进入可调用路由。
+/// Verifies a media-only model avoids text-limit diagnostics and conversation-only routes.
+/// 验证纯媒体模型不触发文本限制诊断，也不进入仅供会话使用的路由。
 #[test]
-fn zero_limit_media_model_has_a_blocked_management_record() {
+fn zero_limit_media_model_has_no_conversation_route() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let providers = runtime.providers().expect("providers should resolve");
     let mut configuration = PersistedAiConfiguration::default();
@@ -110,7 +110,10 @@ fn zero_limit_media_model_has_a_blocked_management_record() {
             output_resources: vec![vulcan_ai_contract::ResourceKind::Video],
             ..ModelCapabilities::default()
         },
-        capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
+        capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence {
+            supports_text_output: Some(false),
+            ..vulcan_provider_adapters::ModelCapabilityEvidence::default()
+        },
         protocol_variants: BTreeMap::new(),
         resolved_protocol_binding: None,
     };
@@ -131,14 +134,7 @@ fn zero_limit_media_model_has_a_blocked_management_record() {
         &catalogs,
         &BTreeMap::new(),
     );
-    assert_eq!(records.len(), 1);
-    assert!(!records[0].executable);
-    assert!(
-        records[0]
-            .unavailable_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("effective context limit of zero"))
-    );
+    assert!(records.is_empty());
 }
 
 /// Verifies blocked custom models remain visible with an exact backend-owned reason.

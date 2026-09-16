@@ -26,6 +26,7 @@ function overviewFixture(enabled: boolean): VceProjectOverviewResponse {
       revision: 4,
       migratedFromCodebaseMemory: true,
       maxFileBytes: 1_048_576,
+      defaultIgnorePatterns: ["*.lock", "*.map", "generated/"],
       extraIgnorePatterns: [],
       allowQueryRewrite: false,
       allowRerank: true,
@@ -142,7 +143,7 @@ describe("CodeContextArea", () => {
     expect(markup).toContain("索引需要重建");
     expect(markup).toContain("生成重建计划");
     const createButton = markup.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find((button) => button.includes("创建语义索引"));
-    expect(createButton).toContain('disabled=""');
+    expect(createButton).toBeUndefined();
     expect(markup).not.toContain("文件与 Blob");
   });
 
@@ -192,6 +193,9 @@ describe("CodeContextArea", () => {
     const markup = renderArea(overviewFixture(true));
 
     expect(markup).toContain("代码语义索引");
+    expect(markup).toContain("默认过滤规则");
+    expect(markup).toContain("*.lock");
+    expect(markup).toContain("自定义忽略规则");
     expect(markup).toContain("ready");
     expect(markup).toContain("代码块");
     expect(markup).toContain(">18<");

@@ -18,6 +18,7 @@ import {
   LuaSkillToolsDialog,
 } from "@/components/features/skills/lua-skill-card";
 import { LuaSkillConfigDialog } from "@/components/features/skills/lua-skill-config-dialog";
+import { LuaSkillUpdateProgressDialog, type LuaSkillUpdateRequest } from "./lua-skill-update-progress-dialog";
 import { useI18n } from "@/i18n";
 import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
@@ -92,6 +93,24 @@ export function LuaSkillsPanel(props: {
   // actionRunningRef closes the synchronous repeat-click window before React commits busy state.
   // actionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
   const actionRunningRef = React.useRef(false);
+  // updateRequest opens progress immediately, before the first service event arrives.
+  // updateRequest 在首个服务事件到达前立即打开进度弹窗。
+  const [updateRequest, setUpdateRequest] = React.useState<LuaSkillUpdateRequest | null>(null);
+  // dismissedUpdateId prevents a retained terminal record from reopening after dismissal or page entry.
+  // dismissedUpdateId 防止保留的终态记录在关闭后或进入页面时再次弹出。
+  const [dismissedUpdateId, setDismissedUpdateId] = React.useState<string | null>(
+    operationProgress !== null && !operationProgress.inFlight ? operationProgress.correlationId : null,
+  );
+  // updateProgress excludes the previous operation and events that explicitly identify another package.
+  // updateProgress 排除上一次操作以及明确标识其他技能包的事件。
+  const updateProgress = operationProgress?.action === "update"
+    && operationProgress.correlationId !== updateRequest?.previousCorrelationId
+    && (updateRequest === null || operationProgress.skillId == null || operationProgress.skillId === updateRequest.skillId)
+    ? operationProgress : null;
+  // updateDialogOpen follows the local request or a newly observed service update.
+  // updateDialogOpen 跟随本地请求或新观察到的服务更新。
+  const updateDialogOpen = updateRequest !== null
+    || (updateProgress !== null && updateProgress.correlationId !== dismissedUpdateId);
   // detailSkillId stores the Lua Skill selected for the details dialog.
   // detailSkillId 保存当前打开详情弹窗的 Lua Skill 标识。
   const [detailSkillId, setDetailSkillId] = React.useState<string | null>(null);
@@ -140,26 +159,39 @@ export function LuaSkillsPanel(props: {
   // runAction executes one page-exclusive LuaSkills mutation.
   // runAction 执行单个页面互斥的 LuaSkills 变更。
   //
-  // Parameters: label identifies the busy indicator and action performs the service mutation.
-  // 参数：label 标识忙碌提示，action 执行服务变更。
+  // Parameters: label identifies the action, action performs it, and skillId identifies the clicked package.
+  // 参数：label 标识动作，action 执行动作，skillId 标识已点击的技能包。
   // Returns: a promise that settles after the accepted action releases the synchronous guard.
   // 返回值：在已接受动作释放同步守卫后结束的 Promise。
-  const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
+  const runAction = React.useCallback(async (label: string, action: () => Promise<void>, skillId: string) => {
     if (actionRunningRef.current) {
       return;
     }
     actionRunningRef.current = true;
     setBusyAction(label);
     setActionError("");
+    if (label === "update") {
+      setUpdateRequest({ skillId, previousCorrelationId: operationProgress?.correlationId ?? null, outcome: null, error: null });
+    }
     try {
       await action();
+      if (label === "update") {
+        setUpdateRequest((current) => current === null ? null : { ...current, outcome: "succeeded" });
+      }
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      // message belongs to the request error, not an inferred progress event.
+      // message 属于请求错误，不是推测出来的进度事件。
+      const message = error instanceof Error ? error.message : String(error);
+      if (label === "update") {
+        setUpdateRequest((current) => current === null ? null : { ...current, outcome: "failed", error: message });
+      } else {
+        setActionError(message);
+      }
     } finally {
       actionRunningRef.current = false;
       setBusyAction(null);
     }
-  }, []);
+  }, [operationProgress?.correlationId]);
   // configWatchIssues retains unresolved configuration-watch or reload failures by
   // their exact store and optional package identity.
   // configWatchIssues 按精确存储域与可选技能包身份保留尚未恢复的配置监听或重载失败。
@@ -252,7 +284,7 @@ export function LuaSkillsPanel(props: {
         <p>{locale.startsWith("zh") ? "技能操作失败，请重试。" : "Skill action failed. Try again."}</p>
         <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{actionError}</pre></details>
       </div> : null}
-      {operationProgress ? <div
+      {operationProgress && operationProgress.action !== "update" ? <div
         className={operationProgress.outcome === "failed" ? "skill-empty-state warning" : "skill-empty-state"}
         role={operationProgress.outcome === "failed" ? "alert" : "status"}
       >
@@ -346,17 +378,26 @@ export function LuaSkillsPanel(props: {
         ) : visibleSkills.map((skill) => (
           <LuaSkillCard
             actions={props.actions}
-            busy={busyAction !== null}
+            busy={busyAction !== null || operationProgress?.inFlight === true}
             key={skill.skillId}
             onOpenDetail={(selectedSkill) => setDetailSkillId(selectedSkill.skillId)}
             onOpenConfig={(selectedSkill) => setConfigSkillId(selectedSkill.skillId)}
             onOpenTools={(selectedSkill) => setToolsSkillId(selectedSkill.skillId)}
             onRequestUninstall={(selectedSkill) => { setActionError(""); setPendingUninstall(selectedSkill); }}
-            onRunAction={runAction}
+            onRunAction={(label, action) => runAction(label, action, skill.skillId)}
             skill={skill}
           />
         ))}
       </div>
+      <LuaSkillUpdateProgressDialog
+        open={updateDialogOpen}
+        progress={updateProgress}
+        request={updateRequest}
+        onClose={() => {
+          setDismissedUpdateId(operationProgress?.correlationId ?? null);
+          setUpdateRequest(null);
+        }}
+      />
       <LuaSkillDetailDialog
         open={detailSkillId !== null && detailSkill !== null}
         skill={detailSkill}
@@ -380,7 +421,7 @@ export function LuaSkillsPanel(props: {
               if (pendingUninstall) void runAction("uninstall", async () => {
                 await props.actions.onUninstallLuaSkill(pendingUninstall.skillId);
                 setPendingUninstall(null);
-              });
+              }, pendingUninstall.skillId);
             }}>{busyAction !== null ? (locale.startsWith("zh") ? "处理中…" : "Working…") : t("skills.action.delete")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

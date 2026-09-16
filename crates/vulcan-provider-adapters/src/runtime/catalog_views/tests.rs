@@ -281,12 +281,15 @@ fn openrouter_account_starts_with_signed_models_and_can_select_discovery() {
     );
 }
 
-/// Verifies one zero-limit media model cannot block healthy models or disappear from management.
-/// 验证一个零限制媒体模型既不能阻断健康模型，也不能从管理目录消失。
+/// Verifies zero token metadata does not quarantine a media-only model or alter source evidence.
+/// 验证零令牌元数据不会隔离纯媒体模型，也不会改写来源证据。
 #[test]
-fn zero_limit_openrouter_media_model_is_quarantined_per_model() {
-    let (runtime, configuration) = two_account_runtime();
-    let discovered = with_protocol_variants(
+fn zero_limit_openrouter_media_model_remains_available() {
+    let (runtime, mut configuration) = two_account_runtime();
+    // OpenRouter's closed account default requires one explicit account enablement.
+    // OpenRouter 的账号默认关闭策略要求明确启用一个账号的该模型。
+    configuration.set_connection_model_enabled("one", "google/veo-3.1", true);
+    let mut discovered = with_protocol_variants(
         parse_openrouter_model_catalog(
             "one",
             2,
@@ -299,14 +302,21 @@ fn zero_limit_openrouter_media_model_is_quarantined_per_model() {
             OPENAI_RESPONSES_PROFILE_ID,
         ],
     );
+    // Production route discovery copies each model's observed output evidence into its variant.
+    // 生产路由发现会把模型观测到的输出证据复制到各协议变体。
+    for model in &mut discovered.models {
+        for variant in model.protocol_variants.values_mut() {
+            variant.capability_evidence = model.capability_evidence.clone();
+        }
+    }
     install_source_catalog(&runtime, discovered);
 
     runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect("one malformed media model must not abort the connection projection");
+        .expect("media token metadata must not abort the connection projection");
     let settings = runtime
         .settings_catalog_snapshot(&configuration)
-        .expect("management projection should retain the malformed model");
+        .expect("management projection should retain the media model");
     let effective = settings
         .catalogs
         .get("one")
@@ -317,21 +327,26 @@ fn zero_limit_openrouter_media_model_is_quarantined_per_model() {
             .iter()
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["openai/gpt-5.6-sol"],
+        vec!["google/veo-3.1", "openai/gpt-5.6-sol"],
     );
     let support = settings
         .model_support_catalogs
         .get("one")
         .expect("account management catalog should exist");
-    let blocked = support
+    let media = support
         .models
         .iter()
         .find(|model| model.id == "google/veo-3.1")
-        .expect("blocked video model should remain visible");
-    assert_eq!(blocked.capabilities.context_limit, Some(0));
+        .expect("video model should remain visible");
+    assert_eq!(media.capabilities.context_limit, Some(0));
     assert!(
-        crate::model_capability_limit_issue("one", blocked.id.as_str(), &blocked.capabilities)
-            .is_some()
+        crate::model_capability_limit_issue(
+            "one",
+            media.id.as_str(),
+            &media.capabilities,
+            &media.capability_evidence,
+        )
+        .is_none()
     );
     assert!(
         settings
@@ -343,13 +358,13 @@ fn zero_limit_openrouter_media_model_is_quarantined_per_model() {
             .any(|model| model.id == "google/veo-3.1")
     );
 
-    // An explicit account denial keeps the source diagnostic without blocking healthy models.
-    // 显式账号拒绝保留来源诊断，且不会阻断健康模型。
+    // An explicit account denial removes only that account's effective media access.
+    // 显式账号拒绝仅移除该账号的媒体模型有效访问。
     let mut disabled = configuration.clone();
     disabled.set_connection_model_enabled("one", "google/veo-3.1", false);
     runtime
         .reapply_model_catalog_overlays(&disabled)
-        .expect("an unselected invalid model must not block publication");
+        .expect("a disabled media model must not block publication");
     let disabled_settings = runtime
         .settings_catalog_snapshot(&disabled)
         .expect("management snapshot should still resolve");
@@ -362,9 +377,18 @@ fn zero_limit_openrouter_media_model_is_quarantined_per_model() {
             .iter()
             .any(|model| model.id == "google/veo-3.1")
     );
+    assert!(
+        !disabled_settings
+            .catalogs
+            .get("one")
+            .expect("effective catalog should remain present")
+            .models
+            .iter()
+            .any(|model| model.id == "google/veo-3.1")
+    );
 
-    // A deliberate user override repairs the observed zero without changing its source evidence.
-    // 用户显式覆盖可修复观测到的零值，且不会改写来源证据。
+    // A deliberate user override still changes only the effective capability projection.
+    // 用户显式覆盖仍然只改变有效能力投影。
     let mut repaired = configuration.clone();
     repaired.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("openrouter", "google/veo-3.1"),

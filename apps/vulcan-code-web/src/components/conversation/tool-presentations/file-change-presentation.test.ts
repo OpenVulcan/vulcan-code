@@ -971,7 +971,92 @@ describe("native file presentation mapping", () => {
       state: "failed",
       hasEffectiveChanges: false,
       errorDetail: "old_string was not found\nThe current file no longer contains the requested text.",
-      files: [],
+      errorCode: "match_not_found",
+      interactive: true,
+      files: [{ path: "src/failing.ts", displayPath: "src/failing.ts", operation: "modify", added: null, removed: null, rows: [] }],
+    });
+  });
+
+  // V1 failures retain the envelope diagnostic even when an empty changeset shadows legacy host metadata.
+  // 即使空变更集覆盖旧式宿主元数据，V1 失败仍保留信封中的诊断。
+  it.each([false, true])("retains failed V1 targets with empty changeset=%s", (emptyChangeset) => {
+    // input is the original exact-text request, not a successful changeset.
+    // input 是原始精确文本请求，不是成功变更集。
+    const input = { path: "src/failing.ts", old_string: "old", new_string: "new" };
+    // hostResult matches the native FileToolError result envelope.
+    // hostResult 对应原生 FileToolError 结果信封。
+    const hostResult = { kind: "tool_error_detail", payload: { status: "failed", error: "Exact text not found", details: { code: "match_not_found" } } };
+    // changeset deliberately contains no committed files.
+    // changeset 特意不包含已提交文件。
+    const changeset = { mode: "applied", files: [] };
+    // presentation uses the same duplicate argument projection as production toolMetadata.
+    // presentation 使用与生产 toolMetadata 相同的参数投影。
+    const presentation = resolveFileChangePresentation(toolBlock("file_edit", "", {
+      arguments: input, v1_event: true,
+      host_result: emptyChangeset ? { kind: "change_set", payload: changeset } : hostResult,
+      v1_tool_event: {
+        kind: "tool_call", api_call_id: 1, tool_call_id: 1, tool_name: "file_edit", input,
+        request_stream_id: "failed-v1-edit", status: "failed",
+        output: { model_output: hostResult.payload, host_result: hostResult, is_error: true },
+        ...(emptyChangeset ? { changeset } : {}),
+      },
+    }), "failed", {});
+    expect(presentation).toMatchObject({
+      errorCode: "match_not_found", errorDetail: "Exact text not found", interactive: true,
+      hasEffectiveChanges: false, totalAdded: 0, totalRemoved: 0,
+      files: [{ path: "src/failing.ts", rows: [], added: null, removed: null }],
+    });
+  });
+
+  // Native error envelopes contain both Display-prefixed text and the original structured message.
+  // 原生错误信封同时包含 Display 添加前缀后的文本和原始结构化消息。
+  it.each([false, true])("deduplicates formatted native errors for V1=%s without dropping context", (v1) => {
+    // input and message reproduce the invalid new_text field reported in the UI.
+    // input 与 message 复现界面报告的无效 new_text 字段。
+    const input = { path: "tui_tests/README.md", new_text: "replacement" };
+    const message = "Unknown field new_text in file_edit request.";
+    // Each details message tests an exact duplicate, genuinely additional context, or another coded error.
+    // 每份详情消息分别验证完全重复、真正的补充内容及另一种错误码的错误。
+    for (const detailMessage of [message, "Use new_string instead.", `[another_code] ${message}`]) {
+      // hostResult follows from_tool_error_details and FileToolError::fmt exactly.
+      // hostResult 精确遵循 from_tool_error_details 与 FileToolError::fmt。
+      const hostResult = { kind: "tool_error_detail", payload: {
+        error: `[invalid_arguments] ${message}`, details: { code: "invalid_arguments", message: detailMessage },
+      } };
+      // metadata covers both historical records and the event-native envelope.
+      // metadata 同时覆盖历史记录与事件原生信封。
+      const metadata = {
+        arguments: input, host_result: hostResult,
+        ...(v1 ? { v1_event: true, v1_tool_event: {
+          kind: "tool_call", api_call_id: 1, tool_call_id: 1, tool_name: "file_edit", input,
+          request_stream_id: "duplicate-error", status: "failed",
+          output: { model_output: hostResult.payload, host_result: hostResult, is_error: true },
+        } } : {}),
+      };
+      // presentation must keep a single authoritative message unless details add different information.
+      // 仅当详情增加不同信息时，presentation 才保留第二条消息。
+      const presentation = resolveFileChangePresentation(toolBlock("file_edit", "", metadata), "failed", {});
+      expect(presentation?.errorDetail).toBe(detailMessage === message
+        ? `[invalid_arguments] ${message}`
+        : `[invalid_arguments] ${message}\n${detailMessage}`);
+    }
+  });
+
+  // Multi-file patch failure exposes attempted resources, never the unapplied preview rows.
+  // 多文件补丁失败展示尝试操作的资源，绝不展示未应用的预览差异行。
+  it("retains target names and operations when a multi-file patch fails", () => {
+    // presentation contains a patch with both edit and create operations.
+    // presentation 包含同时具有编辑和创建操作的补丁。
+    const presentation = resolveFileChangePresentation(toolBlock("apply_patch", "", {
+      arguments: { patch: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** Add File: src/b.ts\n+created\n*** End Patch" },
+      host_result: { kind: "tool_error_detail", payload: { error: "Patch context did not match", details: { code: "patch_context_not_found" } } },
+    }), "failed", {});
+    expect(presentation).toMatchObject({
+      errorCode: "patch_context_not_found", interactive: true, hasEffectiveChanges: false,
+      files: [
+        { path: "src/a.ts", operation: "modify", rows: [], added: null, removed: null },
+        { path: "src/b.ts", operation: "create", rows: [], added: null, removed: null },
+      ],
     });
   });
 

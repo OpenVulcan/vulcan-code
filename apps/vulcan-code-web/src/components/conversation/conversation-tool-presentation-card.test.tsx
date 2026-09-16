@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { I18nProvider } from "@/i18n";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { ToolRawInvocationButton } from "./conversation-tool-execution";
+import { resolveFileChangePresentation } from "./tool-presentations/file-change-presentation";
 
 // LIST_PRESENTATION represents one directory-list result whose target has no file extension.
 // LIST_PRESENTATION 表示目标没有文件扩展名的目录列表结果。
@@ -611,6 +612,46 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).not.toContain("执行成功");
     expect(markup).not.toContain("已编辑");
     expect(markup).not.toContain("已执行");
+  });
+
+  // Failed edits retain their real filename and icon while using exact host codes rather than ERR or guessed causes.
+  // 失败编辑保留真实文件名与图标，使用精确宿主错误码而不是 ERR 或推测的原因。
+  it.each([
+    ["match_not_found", "未命中"],
+    ["ambiguous_match", "匹配不唯一"],
+    ["path_not_found", "文件不存在"],
+    ["stale_file", "文件已变化"],
+    ["write_failed", "写入失败"],
+    ["unknown_error", "失败"],
+    [null, "失败"],
+  ])("renders the failed file target and diagnostic %s", (code, label) => {
+    // The retained envelope follows from_tool_error_details, including its full English diagnostic.
+    // 保留信封遵循 from_tool_error_details，包括完整英文诊断。
+    const presentation = resolveFileChangePresentation([{
+      body: "", id: "failed-edit", kind: "tool-result", title: "file_edit", summary: "",
+      toolCallId: "failed-edit-call", toolName: "file_edit", status: "failed",
+      rawMetadata: {
+        arguments: { path: "tui_tests/README.md", old_string: "old", new_string: "new" },
+        host_result: { kind: "tool_error_detail", payload: { status: "failed", error: "Read the current file and retry.", details: { code } } },
+      },
+    }], "failed", {});
+    expect(presentation).not.toBeNull();
+    // Rendering the resolved model checks the filename, icon, action and diagnostic in the production summary.
+    // 渲染解析模型，核对生产摘要中的文件名、图标、动作与诊断。
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ToolPresentationCard
+      detailLoadEnabled={false} expanded={false} expandedToolPresentationIds={new Set()}
+      presentation={presentation!} requestProgress={null}
+      onExpandedChange={() => undefined} onLoadToolDetail={async () => null}
+    /></I18nProvider>);
+    expect(markup).toContain("tui_tests/README.md");
+    expect(markup).toContain("file-change-icon-stack");
+    expect(markup).toContain("编辑");
+    expect(markup).toContain(`>${label}</span>`);
+    expect(markup).toContain("Read the current file and retry.");
+    expect(markup).toContain("file-change-error-text");
+    expect(markup).not.toContain(">ERR<");
+    expect(markup).not.toContain("file-change-added");
+    expect(markup).not.toContain("file-change-removed");
   });
 
   // Completed shell cards retain the command itself without a generic terminal-status prefix.

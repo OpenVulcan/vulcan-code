@@ -47,6 +47,12 @@ pub(crate) async fn service_run_vmm_memory_action(
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
     normalize_vmm_memory_action_command_id(&request.command_id)?;
+    if request.action.trim() == "load_static_profile_for_panel" {
+        return service_load_static_profile_for_panel(state, request).await;
+    }
+    if request.action.trim() == "load_dynamic_memory_for_panel" {
+        return service_load_dynamic_memory_for_panel(state, request).await;
+    }
     if request.action.trim() == "suppress_context_injection_item" {
         return service_suppress_context_injection_item(app, state, request).await;
     }
@@ -220,6 +226,157 @@ pub(crate) async fn service_run_vmm_memory_action(
         refresh_vmm_health_workbench(&app, &state).await;
     }
     Ok(result)
+}
+
+/// Loads current VMM profile nodes for one existing conversation without changing prompt state.
+/// 为一个现有会话加载当前 VMM 画像节点，不改变提示词状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current workspace and VMM runtime; `request` identifies the exact session.
+/// `state` 持有当前工作区与 VMM 运行时；`request` 标识精确会话。
+///
+/// # Returns
+/// 返回值
+/// A read-only profile result, or an explicit ownership/read error.
+/// 返回只读画像结果，或明确的归属及读取错误。
+pub(super) async fn service_load_static_profile_for_panel(
+    state: SharedServiceBridgeState,
+    request: VmmMemoryActionRequest,
+) -> Result<VmmMemoryActionResult, String> {
+    let session_id = request
+        .conversation_id
+        .as_deref()
+        .ok_or_else(|| "Static profile read requires a conversation ID.".to_owned())?
+        .parse::<crate::SessionId>()
+        .map_err(|error| format!("Invalid static profile conversation ID: {error}"))?;
+    let (hook_runtime, workspace_path, host_project_id) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock static profile workspace: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| "Static profile workspace is not ready.".to_owned())?;
+        if !workspace
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id)
+        {
+            return Err("Static profile conversation is not in the current workspace.".to_owned());
+        }
+        let runtime = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| "Static profile runtime is not ready.".to_owned())?;
+        (
+            runtime.vmm_hook_runtime.clone(),
+            crate::workspace_path_for_session(workspace, session_id),
+            crate::owning_project_id_for_session(workspace, session_id).unwrap_or_default(),
+        )
+    };
+    let nodes = hook_runtime
+        .read_static_profile_for_panel(session_id, &workspace_path, &host_project_id)
+        .await?;
+    let profile = nodes.and_then(|nodes| {
+        let sections = static_vmm_profile_sections(&nodes);
+        (!sections.is_empty()).then(|| VmmStaticProfileSummary {
+            updated_at: Some(current_unix_millis_text()),
+            sections,
+        })
+    });
+    // profile_node_count reports actual grouped nodes without fabricating any absent profile.
+    // profile_node_count 只统计实际分组节点，不虚构缺失画像。
+    let profile_node_count = profile.as_ref().map_or(0, |profile| {
+        profile
+            .sections
+            .iter()
+            .flat_map(|section| &section.dates)
+            .map(|date| date.nodes.len())
+            .sum::<usize>()
+    });
+    Ok(VmmMemoryActionResult {
+        action: request.action,
+        summary: format!("已读取 {profile_node_count} 条当前有效静态画像。"),
+        kind: String::from("static_profile"),
+        request: json!({ "conversationId": session_id.to_string() }),
+        response: json!(profile),
+        data: VmmMemoryActionResponse::StaticProfile(profile),
+    })
+}
+
+/// Reads the exact session's durable VMM leases without hydrating its prompt runtime.
+/// 不水合提示词运行态，读取准确会话的长期 VMM 租约。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the indexed V1 locator and controller registry.
+/// `state` 持有索引化 V1 定位器与控制器注册表。
+/// `request` identifies the selected conversation.
+/// `request` 指定当前选中会话。
+///
+/// # Returns
+/// 返回值
+/// Active and explicitly expired resident cards from the authoritative controller.
+/// 返回权威控制器中的有效租约卡片和明确标记的过期驻留卡片。
+pub(super) async fn service_load_dynamic_memory_for_panel(
+    state: SharedServiceBridgeState,
+    request: VmmMemoryActionRequest,
+) -> Result<VmmMemoryActionResult, String> {
+    let session_id = request
+        .conversation_id
+        .as_deref()
+        .ok_or_else(|| "Dynamic memory read requires a conversation ID.".to_owned())?
+        .parse::<crate::SessionId>()
+        .map_err(|error| format!("Invalid dynamic memory conversation ID: {error}"))?;
+    let (host_runtime, registry) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock dynamic memory workspace: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| "Dynamic memory workspace is not ready.".to_owned())?;
+        if !workspace
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id)
+        {
+            return Err("Dynamic memory conversation is not in the current workspace.".to_owned());
+        }
+        (
+            guard
+                .controller_runtime
+                .clone()
+                .ok_or_else(|| "Dynamic memory session storage is not ready.".to_owned())?,
+            guard.vmm_controller_registry.clone(),
+        )
+    };
+    let locator = vulcan_workspace_store::workspace_store::locate_session_v1_storage(
+        &host_runtime,
+        &session_id.to_string(),
+    )
+    .await
+    .map_err(|error| format!("Failed to locate dynamic memory session: {error}"))?;
+    let controller = registry
+        .get_or_open(locator, session_id, &current_unix_millis_text())
+        .map_err(String::from)?;
+    let snapshot = controller.snapshot()?;
+    let cards = crate::workbench_session_panels::context_injection_cards_to_summary(
+        snapshot
+            .active_panel_card()
+            .into_iter()
+            .chain(snapshot.expired_panel_card())
+            .collect(),
+    );
+    Ok(VmmMemoryActionResult {
+        action: request.action,
+        summary: format!("已读取 {} 张当前会话 VMM 驻留记忆卡片。", cards.len()),
+        kind: String::from("dynamic_memory_cards"),
+        request: json!({ "conversationId": session_id.to_string() }),
+        response: json!(cards),
+        data: VmmMemoryActionResponse::DynamicMemoryCards(cards),
+    })
 }
 
 /// Runs one host-owned native VMM project maintenance action.

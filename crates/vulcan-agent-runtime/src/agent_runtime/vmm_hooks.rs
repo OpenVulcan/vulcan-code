@@ -185,6 +185,48 @@ impl VmmHookRuntimeHandle {
             snapshot.sessions.get(&session_id.to_string()),
         ))
     }
+
+    /// Reads the active profile for a memory panel without publishing a prompt baseline.
+    /// 为记忆侧栏读取当前有效画像，但不发布提示词基线。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` and `workspace_path` select the exact effective VMM policy; `host_project_id`
+    /// identifies the current host project for visibility binding.
+    /// `session_id` 与 `workspace_path` 选择精确的 VMM 生效策略；`host_project_id` 标识当前宿主项目以约束可见范围。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The current active nodes, `None` when VMM is disabled, or an explicit read error.
+    /// 返回当前有效节点；VMM 关闭时返回 `None`，读取失败时返回明确错误。
+    pub async fn read_static_profile_for_panel(
+        &self,
+        session_id: SessionId,
+        workspace_path: &str,
+        host_project_id: &str,
+    ) -> Result<Option<BTreeMap<u64, ProfileNodeEntry>>, String> {
+        let config = self.resolve_publication_config(session_id, workspace_path)?;
+        if !config.enabled {
+            return Ok(None);
+        }
+        ensure_vmm_ready(&config).map_err(|error| error.to_string())?;
+        let client = resolve_vmm_client(self, &config)
+            .await
+            .map_err(|error| error.to_string())?;
+        let source = client
+            .memory_read_source(
+                host_project_id,
+                config.user_id.unwrap_or_default(),
+                config.project_id.unwrap_or_default(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let nodes = fetch_all_profile_nodes(client.as_ref(), &config, host_project_id, &source)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.with_current_profile_publication(session_id, workspace_path, &source, || ())?;
+        Ok(Some(nodes))
+    }
     /// Builds a shared VMM hook runtime handle.
     /// 构建共享 VMM hook 运行时句柄。
     ///
@@ -1990,6 +2032,20 @@ fn invocation_vmm_runtime_ready(invocation: &HookInvocation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies a disabled VMM panel read does not require a client or seed prompt state.
+    /// 验证 VMM 关闭时侧栏读取无需客户端，也不会预置提示词状态。
+    #[tokio::test]
+    async fn disabled_static_profile_panel_read_returns_none() {
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        assert!(
+            runtime
+                .read_static_profile_for_panel(SessionId::nil(), "", "")
+                .await
+                .expect("disabled read should succeed")
+                .is_none()
+        );
+    }
 
     /// Verifies request-local suppression removes every VMM profile block and only its persistent deltas.
     /// 验证请求级屏蔽移除全部记忆画像块及其持久增量，不影响其他来源。

@@ -324,13 +324,14 @@ describe("project semantic settings editor", () => {
     rpc.jobs.mockResolvedValue(null);
     await renderEditor(activity);
 
-    const button = Array.from(host.querySelectorAll("button")).find(
-      (candidate) => candidate.textContent?.trim() === "索引任务进行中",
+    // Admission actions stay out of view until the authoritative running task is hydrated.
+    // 权威运行任务加载完成前，不展示重复准入操作。
+    const admissionButtons = Array.from(host.querySelectorAll("button")).filter(
+      (candidate) => ["创建语义索引", "手动更新索引", "索引任务进行中"].includes(candidate.textContent?.trim() ?? ""),
     );
-    expect(button).toBeDefined();
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(admissionButtons).toHaveLength(0);
     expect(host.querySelector('[role="status"]')?.textContent).toContain(
-      "projectSettings.codeContext.generating",
+      "正在读取索引任务进度",
     );
   });
 
@@ -816,6 +817,51 @@ describe("project semantic settings editor", () => {
     );
   });
 
+  // A model change hides the old checkpoint from the overview, while the stored rebuild plan
+  // must pass that predecessor checkpoint to the host's exact replacement admission.
+  // 模型变更会在概览中隐藏旧检查点，而已存重建计划必须将前驱检查点交给宿主精确替换准入。
+  it("admits a model-change rebuild with the stored predecessor checkpoint", async () => {
+    // The management-safe status deliberately withholds the old query checkpoint.
+    // 管理安全状态会有意隐藏旧查询检查点。
+    const overview = createVceActivityFixture();
+    overview.status.checkpointVersion = null;
+    overview.status.lifecycle = "rebuild_required";
+    rpc.plan.mockResolvedValue({
+      mode: "rebuild",
+      affectedBlobCount: 2,
+      embeddingDimension: 1536,
+      embeddingFingerprint: "replacement-model",
+      checkpointVersion: 2,
+      physicalTables: [],
+      actions: [{
+        actionId: "replace-old-index",
+        description: "rebuild with the current embedding model",
+        blobNames: ["old-a", "old-b"],
+        destructive: true,
+      }],
+    } satisfies VceMaintenancePlanResponse);
+    rpc.execute.mockResolvedValue({
+      kind: "job",
+      job: {
+        projectId: "project-a", jobId: "replacement-job", kind: "rebuild", state: "queued",
+        sequence: 1, createdAtUnixMs: 1_000, updatedAtUnixMs: 1_000,
+        sourceCheckpointVersion: 2, resultCheckpointVersion: null,
+        progress: null, followupRequested: false, error: null,
+      } satisfies VceJobSummary,
+    });
+
+    await renderEditor(overview);
+    await click("生成重建计划");
+    await click("确认并执行");
+    await clickDialog("确认并执行");
+
+    expect(rpc.execute).toHaveBeenCalledExactlyOnceWith(
+      "project-a", "rebuild", 4, 2, ["replace-old-index"],
+      expect.any(String), "replacement-model",
+    );
+    expect(host.textContent).not.toContain("维护计划已失效");
+  });
+
   // A failed confirmation keeps the exact recovery entry visible and exposes the failure in the dialog.
   // 确认执行失败后保留精确恢复入口，并在弹窗内显示失败原因。
   it("keeps the rebuild confirmation recoverable after execution failure", async () => {
@@ -884,9 +930,11 @@ describe("project semantic settings editor", () => {
     const rebuildButton = Array.from(host.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "生成重建计划",
     );
-    expect(rebuildButton).toBeDefined();
-    expect(rebuildButton?.hasAttribute("disabled")).toBe(true);
-    expect(host.textContent).toContain("请先取消遗留任务");
+    expect(rebuildButton).toBeUndefined();
+    expect(host.textContent).not.toContain("索引需要重建");
+    expect(host.textContent).not.toContain("请先取消遗留任务");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("正在创建语义索引");
+    expect(Array.from(host.querySelectorAll("button")).some((button) => button.textContent?.trim() === "取消更新")).toBe(true);
     expect(rpc.plan).not.toHaveBeenCalled();
     const cancelReceipt = {
       projectId: "project-a",

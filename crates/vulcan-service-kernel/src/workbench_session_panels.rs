@@ -885,29 +885,35 @@ pub(crate) fn context_injection_snapshot_from_runtime_state(
     runtime_state: Option<&SessionRuntimeStateEntry>,
     vmm_session_memory: Option<&vulcan_vmm::VmmSessionMemoryState>,
 ) -> Option<ContextInjectionSnapshot> {
-    let runtime_state = runtime_state?;
+    if runtime_state.is_none() && vmm_session_memory.is_none() {
+        return None;
+    }
     let mut dynamic_panel_cards = vmm_session_memory
         .and_then(|state| state.active_panel_card())
         .into_iter()
         .collect::<Vec<_>>();
-    dynamic_panel_cards.extend(context_injection_panel_cards_for_kind(
-        &runtime_state.context_injection_state,
-        Some(InjectionKind::Transient),
-    ));
+    if let Some(runtime_state) = runtime_state {
+        dynamic_panel_cards.extend(context_injection_panel_cards_for_kind(
+            &runtime_state.context_injection_state,
+            Some(InjectionKind::Transient),
+        ));
+    }
     // Expired VMM residents are appended last so the WebUI presents them in a dedicated bottom region.
     // 过期 VMM 驻留项最后追加，使 WebUI 将其展示在独立的底部区域。
     if let Some(vmm_session_memory) = vmm_session_memory {
         dynamic_panel_cards.extend(vmm_session_memory.expired_panel_card());
     }
     let dynamic_cards = context_injection_cards_to_summary(dynamic_panel_cards);
-    let static_profile = static_vmm_profile_snapshot(runtime_state);
+    let static_profile = runtime_state.and_then(static_vmm_profile_snapshot);
     let mut static_cards = Vec::new();
-    static_cards.extend(context_injection_cards_to_summary(
-        context_injection_panel_cards_for_kind(
-            &runtime_state.context_injection_state,
-            Some(InjectionKind::Persistent),
-        ),
-    ));
+    if let Some(runtime_state) = runtime_state {
+        static_cards.extend(context_injection_cards_to_summary(
+            context_injection_panel_cards_for_kind(
+                &runtime_state.context_injection_state,
+                Some(InjectionKind::Persistent),
+            ),
+        ));
+    }
 
     Some(ContextInjectionSnapshot {
         dynamic_cards,
@@ -1636,5 +1642,12 @@ mod tests {
         assert_eq!(tags, vec!["VMM_MEMORY", "VMM_MEMORY_EXPIRED"]);
         assert_eq!(snapshot.dynamic_cards[0].items[0].ttl_label, "剩余 3 回合");
         assert_eq!(snapshot.dynamic_cards[1].items[0].ttl_label, "已过期");
+        // A restored controller remains projectable even before prompt runtime hydration.
+        // 恢复的控制器即使尚未水合提示词运行态也必须可投影。
+        let restored =
+            context_injection_snapshot_from_runtime_state(None, Some(&vmm_session_memory))
+                .expect("durable VMM state should project independently");
+        assert_eq!(restored.dynamic_cards, snapshot.dynamic_cards);
+        assert!(restored.static_profile.is_none());
     }
 }

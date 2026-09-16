@@ -82,14 +82,21 @@
   width: min(460px, calc(100vw - 32px));
 }
 
+/* Keep project settings in a stable two-pane workbench with a fixed title bar. */
+/* 项目设置使用稳定的双栏工作区，并固定标题栏。 */
 .project-settings-dialog {
-  width: min(1050px, calc(100vw - 40px));
-  height: min(600px, calc(100vh - 32px));
-  max-width: min(1050px, calc(100vw - 40px)) !important;
-  max-height: min(600px, calc(100vh - 32px));
+  width: min(1120px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 32px));
+  max-width: min(1120px, calc(100vw - 32px)) !important;
+  max-height: calc(100dvh - 32px);
   grid-template-rows: auto minmax(0, 1fr);
   align-content: stretch;
   overflow: hidden;
+}
+
+.project-settings-dialog-header {
+  padding: 18px 48px 16px 24px;
+  border-bottom: 1px solid var(--border);
 }
 
 .project-settings-dialog [data-slot="dialog-description"] {
@@ -100,8 +107,8 @@
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 0;
 }
 
 .project-settings-nav {
@@ -109,17 +116,16 @@
   height: 100%;
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: 4px;
   overflow: auto;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--muted) 42%, transparent);
+  padding: 12px 10px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
 }
 
 .project-settings-nav-button {
   width: 100%;
-  min-height: 58px;
+  min-height: 52px;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 9px;
@@ -133,10 +139,14 @@
   cursor: pointer;
 }
 
-.project-settings-nav-button:hover,
+.project-settings-nav-button:hover {
+  background: var(--muted);
+}
+
 .project-settings-nav-button.active {
-  border-color: var(--border);
-  background: var(--background);
+  border-color: color-mix(in srgb, var(--primary) 14%, transparent);
+  background: color-mix(in srgb, var(--primary) 8%, var(--background));
+  color: var(--primary);
 }
 
 .project-settings-nav-button svg {
@@ -168,10 +178,12 @@
 }
 
 .project-settings-content {
+  min-width: 0;
   min-height: 0;
   height: 100%;
   overflow: auto;
-  padding-right: 4px;
+  padding: 20px 24px 24px;
+  scrollbar-gutter: stable;
 }
 
 .project-settings-section {

@@ -227,8 +227,13 @@ fn set_connection_models_enabled_respecting_provider_access(
     for model in &support_catalog.models {
         // Enable All never grants access to a model quarantined by its resolved limits.
         // “全部启用”绝不授予最终限制异常模型的访问资格。
-        if model_capability_limit_issue(connection_id, model.id.as_str(), &model.capabilities)
-            .is_some()
+        if model_capability_limit_issue(
+            connection_id,
+            model.id.as_str(),
+            &model.capabilities,
+            &model.capability_evidence,
+        )
+        .is_some()
             || !runtime.model_is_enabled_for_connection(
                 configuration,
                 connection_id,
@@ -289,6 +294,7 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
             request.connection_id.as_str(),
             request.model_id.as_str(),
             &management_model.capabilities,
+            &management_model.capability_evidence,
         ) {
             return Err(format!(
                 "Model `{}` cannot be enabled until its configuration is repaired: {issue}",
