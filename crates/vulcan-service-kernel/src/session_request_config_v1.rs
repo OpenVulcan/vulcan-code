@@ -1170,6 +1170,18 @@ mod tests {
             assert_eq!(mirror.active_provider_id.as_deref(), Some(previous.0));
             assert_eq!(mirror.active_connection_id.as_deref(), Some(previous.1));
             assert_eq!(mirror.active_model_id.as_deref(), Some(previous.2));
+            // Reproduce the picker projection retained by submission before V1 root admission.
+            // 复现 V1 根输入准入前，提交过程保留的选择器投影。
+            handle
+                .read(|document| {
+                    crate::session_model_projection_v1::apply_request_model_projection_v1(
+                        &mut mirror,
+                        &document.metadata.config.active_request,
+                        document.metadata.config.pending_request.as_ref(),
+                    );
+                })
+                .unwrap();
+            assert!(mirror.pending_model_selection.is_some());
             // A detached document runs the production user-bound activation and API admission
             // without any network or user-file writes.
             // 分离文档运行生产用户边界激活与 API 准入，不发网络请求、不写用户文件。
@@ -1191,6 +1203,34 @@ mod tests {
                     3,
                 )
                 .unwrap();
+            // The real submission boundary receives no picker echo for an established session,
+            // even though its detached workspace still has the pre-admission pending selection.
+            // 真实提交边界不会收到既有会话的选择器回显，尽管分离工作区仍保留准入前待生效选择。
+            let mut workspace = vulcan_workspace_store::workspace_store::WorkspaceSnapshot {
+                task_projects: vec![],
+                archived_task_projects: vec![],
+                sessions: vec![],
+                archived_sessions: vec![],
+                session_runtime_state: [(session_id, mirror)].into_iter().collect(),
+                archived_session_runtime_state: Default::default(),
+                session_run_phases: Default::default(),
+                expanded_task_projects: Default::default(),
+                selected_session: session_id,
+                hydrated_session_ids: Default::default(),
+            };
+            crate::conversation_submission::apply_submission_model_selection(
+                &runtime,
+                &mut workspace,
+                session_id,
+                crate::PromptSessionMaterializationKind::Existing,
+                None,
+            )
+            .expect("V1-owned model switch must not require a legacy picker echo");
+            // Only V1 dispatch synchronization may update the retained mirror, not the picker guard.
+            // 只有 V1 分发同步可以更新保留镜像，而不是选择器校验。
+            let mut mirror = workspace.session_runtime_state.remove(&session_id).unwrap();
+            assert_eq!(mirror.active_model_id.as_deref(), Some(previous.2));
+            assert!(mirror.pending_model_selection.is_some());
             synchronize_v1_dispatch_model_selection(&handle, &runtime, &mut mirror).unwrap();
             assert_eq!(mirror.active_provider_id.as_deref(), Some(selected.0));
             assert_eq!(mirror.active_connection_id.as_deref(), Some(selected.1));

@@ -2830,6 +2830,187 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
         .expect("replacement turn should start after durable terminal settlement");
 }
 
+/// Verifies pre-Hook submission errors become durable without consuming or merging user inputs.
+/// 验证 Hook 前提交错误可靠落盘，同时不消费或合并用户输入。
+/// No external resources are used; assertions cover stopped state, exact errors and consecutive Provider user messages.
+/// 不使用外部资源；断言覆盖停止状态、原始错误及连续的 Provider 用户消息。
+#[tokio::test]
+async fn admitted_submission_failure_preserves_consecutive_user_prompts() {
+    use vulcan_session_core::v1::projection::{ProjectedItem, project_document};
+    use vulcan_session_core::v1::{ClientActionId, ClientInputSubmission, EventVisibility};
+    // The root is durable before any Hook, kernel or physical API has started.
+    // 根输入已可靠接纳，但 Hook、kernel 和物理 API 均尚未启动。
+    let session_id = SessionId::new_v4();
+    let mut document = SessionDocument::new(session_id.to_string(), "project-a", "Submission", 1);
+    document
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("first-input").unwrap(),
+                "first prompt",
+                vec![],
+            ),
+            2,
+        )
+        .unwrap();
+    let turn_id = document.active_turn().unwrap().turn_id;
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let handle = register_test_session_v1_document(&mut service_state, session_id, document);
+    let state = Arc::new(Mutex::new(service_state));
+    let app = ServiceEventEmitter::new(Vec::new());
+    crate::conversation_submission::settle_admitted_submission_failure(
+        &app,
+        &state,
+        session_id,
+        turn_id,
+        "exact submission error",
+    )
+    .await
+    .unwrap();
+    // Exact repeated settlement must not create a second error or alter the original user message.
+    // 精确重复结算不得创建第二条错误或修改原用户消息。
+    let settled_revision = handle.read(SessionDocument::memory_revision).unwrap();
+    crate::conversation_submission::settle_admitted_submission_failure(
+        &app,
+        &state,
+        session_id,
+        turn_id,
+        "exact submission error",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        handle.read(SessionDocument::memory_revision).unwrap(),
+        settled_revision
+    );
+    handle
+        .read(|document| {
+            assert_eq!(document.memory_revision(), document.durable_revision());
+            assert!(document.active_turn().unwrap().closed);
+            assert_eq!(document.events().iter().filter(|event| matches!(&event.event,
+            EventBody::DisplayNote(note) if note.reason_code == "submission_preparation_failed"
+                && note.redacted_detail.as_deref() == Some("exact submission error")
+                && event.visibility == EventVisibility::UiOnly
+        )).count(), 1);
+            assert!(!document.events().iter().any(|event| matches!(
+                event.event,
+                EventBody::ApiStarted(_) | EventBody::ApiStats(_)
+            )));
+        })
+        .unwrap();
+    handle
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("second-input").unwrap(),
+                "second prompt",
+                vec![],
+            ),
+            crate::current_v1_unix_millis().unwrap(),
+        )
+        .unwrap();
+    handle
+        .read(|document| {
+            assert_eq!(
+                project_document(document, None, &[]).unwrap(),
+                vec![
+                    ProjectedItem::UserInput {
+                        text: "first prompt".into(),
+                        resource_ids: vec![]
+                    },
+                    ProjectedItem::UserInput {
+                        text: "second prompt".into(),
+                        resource_ids: vec![]
+                    },
+                ]
+            );
+        })
+        .unwrap();
+    // A late error for the previous turn must neither close the new input nor retain a terminal lock.
+    // 前一回合的迟到错误既不能闭合新输入，也不能遗留终态锁。
+    let current_revision = handle.read(SessionDocument::memory_revision).unwrap();
+    let stale_error = crate::conversation_submission::settle_admitted_submission_failure(
+        &app,
+        &state,
+        session_id,
+        turn_id,
+        "late error",
+    )
+    .await
+    .unwrap_err();
+    assert!(stale_error.contains("no longer owns"));
+    assert_eq!(
+        handle.read(SessionDocument::memory_revision).unwrap(),
+        current_revision
+    );
+    assert!(
+        !handle
+            .read(|document| document.active_turn().unwrap().closed)
+            .unwrap()
+    );
+    let guard = state.lock().unwrap();
+    assert!(
+        !guard
+            .session_terminal_persistence_owners
+            .contains_key(&session_id)
+    );
+    assert_eq!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .unwrap()
+            .session_run_phases[&session_id],
+        SessionRunPhase::Stopped
+    );
+}
+
+/// Verifies submission cleanup never ends another running execution or writes a guessed error.
+/// 验证提交清理绝不结束另一个正在运行的执行，也不写入推测错误。
+/// Uses an in-memory active kernel; returns after proving its ownership and V1 events remain unchanged.
+/// 使用内存中的活动 kernel；确认所有权和 V1 事件不变后返回。
+#[tokio::test]
+async fn admitted_submission_failure_rejects_running_execution() {
+    // The same admitted document is owned by a live kernel and must use normal queue admission.
+    // 同一已接纳文档由存活 kernel 持有，必须使用正常队列准入。
+    let session_id = SessionId::new_v4();
+    let mut document = SessionDocument::new(session_id.to_string(), "project-a", "Running", 1);
+    document
+        .submit_root_input(
+            vulcan_session_core::v1::ClientInputSubmission::new(
+                vulcan_session_core::v1::ClientActionId::try_new("running-input").unwrap(),
+                "running prompt",
+                vec![],
+            ),
+            2,
+        )
+        .unwrap();
+    let turn_id = document.active_turn().unwrap().turn_id;
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let handle = register_test_session_v1_document(&mut service_state, session_id, document);
+    start_webui_session_kernel_user_turn(&mut service_state, session_id, "running-hook").unwrap();
+    let revision = handle.read(SessionDocument::memory_revision).unwrap();
+    let state = Arc::new(Mutex::new(service_state));
+    let error = crate::conversation_submission::settle_admitted_submission_failure(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        session_id,
+        turn_id,
+        "must not be recorded",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("running execution"));
+    assert_eq!(
+        handle.read(SessionDocument::memory_revision).unwrap(),
+        revision
+    );
+    let guard = state.lock().unwrap();
+    assert!(webui_session_kernel_has_active_turn(&guard, session_id));
+    assert!(
+        !guard
+            .session_terminal_persistence_owners
+            .contains_key(&session_id)
+    );
+}
+
 /// Verifies a host failure after successful API persistence adds an error without rewriting the API terminal.
 /// 验证成功 API 持久化后的宿主失败会追加错误，且不会改写 API 终态。
 #[tokio::test]

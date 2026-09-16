@@ -312,6 +312,57 @@ fn execution_boundary_failure_closes_turn_and_forbids_continue() -> Result<(), D
     Ok(())
 }
 
+/// A pre-API error remains visible while both original and subsequent user prompts reach Provider projection.
+/// API 前错误保持可见，同时原始与后续用户提示词都进入 Provider 投影。
+/// No external resources are used; returns any domain error instead of erasing the accepted input.
+/// 不使用外部资源；直接返回领域错误，不删除已接纳输入。
+#[test]
+fn pre_api_error_preserves_two_consecutive_provider_user_prompts() -> Result<(), DomainError> {
+    use crate::v1::projection::{ProjectedItem, project_document};
+    // No ApiStarted event exists when preparation rejects the first admitted input.
+    // 准备阶段拒绝首次已接纳输入时，尚不存在 ApiStarted 事件。
+    let mut document = new_document();
+    document.submit_root_input_fixture("first prompt", Vec::new(), T0)?;
+    document.fail_execution_boundary_and_close_turn(
+        "submission_preparation_failed",
+        Some("exact preparation error"),
+        T0 + 1,
+    )?;
+    assert!(document.active_turn().unwrap().closed);
+    assert!(!document.events().iter().any(|event| matches!(
+        event.event,
+        EventBody::ApiStarted(_) | EventBody::ApiStats(_)
+    )));
+    assert_eq!(
+        document
+            .events()
+            .iter()
+            .filter(|event| matches!(&event.event,
+                EventBody::DisplayNote(note) if note.reason_code == "submission_preparation_failed"
+                    && note.redacted_detail.as_deref() == Some("exact preparation error")
+                    && event.visibility == EventVisibility::UiOnly
+            ))
+            .count(),
+        1
+    );
+    document.rebuild_derived_state()?;
+    document.submit_root_input_fixture("second prompt", Vec::new(), T0 + 2)?;
+    assert_eq!(
+        project_document(&document, None, &[])?,
+        vec![
+            ProjectedItem::UserInput {
+                text: "first prompt".into(),
+                resource_ids: vec![]
+            },
+            ProjectedItem::UserInput {
+                text: "second prompt".into(),
+                resource_ids: vec![]
+            },
+        ]
+    );
+    Ok(())
+}
+
 /// A host failure after successful API persistence preserves that terminal and closes the Turn separately.
 /// 成功 API 已持久化后的宿主失败会保留该终态，并单独闭合逻辑回合。
 #[test]

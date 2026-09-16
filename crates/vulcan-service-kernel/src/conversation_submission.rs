@@ -69,11 +69,13 @@ mod activation;
 mod preflight;
 mod queue;
 mod runtime_options;
+mod submission_failure;
 
 pub(crate) use activation::*;
 pub(crate) use preflight::*;
 pub(crate) use queue::*;
 pub(crate) use runtime_options::*;
+pub(crate) use submission_failure::settle_admitted_submission_failure;
 
 /// Defines how an existing session obtains dialogue context before prompt submission.
 /// 定义已有会话在提交提示词前如何取得对话上下文。
@@ -686,8 +688,10 @@ fn resolve_enabled_submission_model_selection(
 /// `workspace_snapshot` 包含待更新的已物化会话运行态。
 /// `session_id` identifies the exact submitted session.
 /// `session_id` 标识本次提交对应的精确会话。
-/// `selection` is absent only when the composer has no available model.
-/// `selection` 仅在输入区没有可用模型时缺失。
+/// `materialization_kind` distinguishes draft selection from existing V1-owned request configuration.
+/// `materialization_kind` 区分草稿选择与既有 V1 持有的请求配置。
+/// `selection` is the draft picker echo; existing sessions intentionally omit it.
+/// `selection` 是草稿选择器回显；已有会话会有意省略它。
 ///
 /// # Returns
 /// 返回值
@@ -697,8 +701,17 @@ pub(crate) fn apply_submission_model_selection(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
+    materialization_kind: PromptSessionMaterializationKind,
     selection: Option<&SubmissionModelSelection>,
 ) -> Result<(), String> {
+    // Existing roots have already activated their immutable V1-bound request. Their intentionally
+    // absent picker echo must not be validated against the stale process-local pending mirror.
+    // 既有根输入已经激活不可变的 V1 绑定请求，不能用有意省略的选择器回显校验旧进程待生效镜像。
+    // synchronize_v1_dispatch_model_selection later projects that admitted request before dispatch.
+    // 后续 synchronize_v1_dispatch_model_selection 会在分发前投影该已接纳请求。
+    if materialization_kind == PromptSessionMaterializationKind::Existing {
+        return Ok(());
+    }
     // pendingSelection is the exact user choice accepted while the previous turn retained its
     // immutable route. Submission may promote only this tuple and must never silently replace it.
     // pendingSelection 是上一回合保持不可变路由时接受的用户精确选择。提交只能提升该三元组，绝不能静默替换。
@@ -1042,6 +1055,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("submitted selection should apply");
@@ -1138,6 +1152,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&stale_selection),
         )
         .expect_err("stale composer selection must not replace pending authority");
@@ -1168,6 +1183,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("the selected new model is accepted");
@@ -1290,6 +1306,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("initial selection should apply");
@@ -1324,6 +1341,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("unchanged submission snapshot should apply");
@@ -1420,6 +1438,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("the unchanged leased selection must survive current catalog removal");
@@ -1473,6 +1492,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&replacement),
         )
         .expect("changed submission target should apply");
@@ -1531,6 +1551,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("initial selection should apply");
@@ -1596,6 +1617,7 @@ mod submission_model_selection_tests {
             &runtime,
             &mut workspace_snapshot,
             session_id,
+            PromptSessionMaterializationKind::Created,
             Some(&selection),
         )
         .expect("ordinary submission should adopt the revised installed route");
@@ -2765,213 +2787,276 @@ async fn service_start_conversation_execution(
         i64::try_from(materialize_started_at).unwrap_or(i64::MAX),
     )
     .await?;
-    if let Some(authority) = existing_submission_v1_authority.as_ref() {
-        crate::session_request_config_v1::persist_missing_reasoning_reconciliation_after_user_admission_v1(
-            authority.handle.as_ref(),
-            agent_runtime.public_ai_runtime.as_ref(),
-            crate::current_v1_unix_millis()?,
-        )?;
-    }
-    webui_submit_trace(
-        "submit_prompt_materialize_ready",
-        format!(
-            "session={} title_chars={} workspace_path_chars={} elapsed_ms={}",
-            materialized_session.session_id,
-            materialized_session.session_title.chars().count(),
-            materialized_session.workspace_path.chars().count(),
-            current_unix_millis_value().saturating_sub(materialize_started_at)
-        ),
-    );
-    // kernel_reservation_id binds an existing materialization to the exact admission owner captured before loading.
-    // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
-    let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
-    prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)?;
-    if submission_mode.is_continuation() {
-        validate_recovery_submission_model_selection(
-            agent_runtime.public_ai_runtime.as_ref(),
-            &workspace_snapshot,
-            materialized_session.session_id,
-            model_selection.as_ref(),
-        )?;
-    } else {
-        apply_submission_model_selection(
-            agent_runtime.public_ai_runtime.as_ref(),
-            &mut workspace_snapshot,
-            materialized_session.session_id,
-            model_selection.as_ref(),
-        )?;
-        // A submitted picker choice must reach the same durable pending configuration as the explicit picker RPC.
-        // 提交携带的模型选择必须进入与显式选择 RPC 相同的可靠待生效配置，不能只修改内存。
-        if let Some(selection) = model_selection.as_ref() {
-            let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
-                &state,
-                materialized_session.session_id,
-            )?;
-            let runtime_state = workspace_snapshot
-                .session_runtime_state
-                .get(&materialized_session.session_id)
-                .ok_or_else(|| {
-                    format!(
-                        "Session `{}` has no admitted runtime state.",
-                        materialized_session.session_id
-                    )
-                })?;
-            crate::session_request_config_v1::set_pending_model_request_v1(
-                handle.as_ref(),
-                selection.provider_id.clone(),
-                selection.connection_id.clone(),
-                selection.model_id.clone(),
-                None,
-                crate::session_request_config_v1::SessionRequestFallback::from_runtime_state(
-                    runtime_state,
-                ),
+    // These identities remain owned by the live admission guards until preparation or failure settlement completes.
+    // 这些身份在准备成功或失败结算完成前始终由存活的准入守卫持有。
+    let session_id = materialized_session.session_id;
+    let session_title = materialized_session.session_title.as_str();
+    let workspace_path = materialized_session.workspace_path.as_str();
+    // Pin the admitted logical turn, never a later replacement inferred from a failed request.
+    // 固定已准入逻辑回合，绝不根据失败请求推测后续替代回合。
+    let admitted_handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(&state, session_id)?;
+    let admitted_turn_id = admitted_handle
+        .read(|document| document.active_turn().map(|turn| turn.turn_id))
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| String::from("Admitted submission has no V1 turn."))?;
+    // Every fallible pre-Hook step is settled before the submission reservation can be released.
+    // 每个可能失败的 Hook 前步骤都会在提交预留释放前完成结算。
+    let preparation_result = async {
+        if let Some(authority) = existing_submission_v1_authority.as_ref() {
+            crate::session_request_config_v1::persist_missing_reasoning_reconciliation_after_user_admission_v1(
+                authority.handle.as_ref(),
+                agent_runtime.public_ai_runtime.as_ref(),
                 crate::current_v1_unix_millis()?,
             )?;
         }
-    }
-    if session_settings.is_some()
-        && materialized_session.kind != PromptSessionMaterializationKind::Created
-    {
-        return Err(String::from("草稿会话设置只能随新会话的首次提交应用。"));
-    }
-    apply_submission_session_settings(
-        &state,
-        agent_runtime.public_ai_runtime.as_ref(),
-        &mut workspace_snapshot,
-        materialized_session.session_id,
-        execution_mode.as_deref(),
-        session_settings.as_ref(),
-        materialized_session.kind == PromptSessionMaterializationKind::Created,
-    )
-    .await?;
-    // session_id is copied from the authoritative materialization result after activation consumes its classification.
-    // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
-    let session_id = materialized_session.session_id;
-    // session_title borrows the authoritative title through the final activation commit.
-    // session_title 借用权威标题直到最终激活提交完成。
-    let session_title = materialized_session.session_title.as_str();
-    // workspace_path borrows the owning project path through precheck dispatch preparation.
-    // workspace_path 借用所属项目路径直到 precheck 分发准备完成。
-    let workspace_path = materialized_session.workspace_path.as_str();
-    webui_submit_trace(
-        "submit_prompt_starting_run",
-        format!(
-            "session={session_id} title_chars={}",
-            session_title.chars().count()
-        ),
-    );
-    let submit_run_prepare_started_at = current_unix_millis_value();
-    let runtime_options = prepare_submission_runtime_options(
-        &state,
-        &mut workspace_snapshot,
-        session_id,
-        SubmissionRuntimeOptionsInput {
-            execution_mode,
-            reasoning_effort,
-        },
-    )
-    .await?;
-    let handle =
-        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(&state, session_id)?;
-    if materialized_session.kind == PromptSessionMaterializationKind::Created {
-        // A newly created session stages its first route after root materialization, so that exact
-        // root boundary must activate it. Existing inputs already activated their immutable bound
-        // config inside Core; consuming a newer picker intent here would rewrite the running node.
-        // 新建会话在根输入物化后才暂存首个路由，因此必须由该精确根边界激活。既有输入已经在 Core
-        // 内激活其不可变绑定配置；若在此消费更新的选择器意图，就会改写正在运行的节点。
-        handle
-            .activate_pending_request_for_new_session_root(crate::current_v1_unix_millis()?)
-            .map_err(|error| format!("激活新建会话根边界的 V1 请求配置失败：{error}"))?;
-    }
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-        .ok_or_else(|| format!("Session `{session_id}` has no admitted runtime state."))?;
-    crate::session_request_config_v1::synchronize_v1_dispatch_model_selection(
-        handle.as_ref(),
-        agent_runtime.public_ai_runtime.as_ref(),
-        runtime_state,
-    )?;
-    // The admitted V1 root owns the Provider user identity before Hook preparation begins.
-    // 已接纳的 V1 根输入在 Hook 准备开始前持有 Provider 用户身份。
-    let direct_canonical_user_message_id = if append_user_records {
-        let root_input_seq = handle
-            .read(|document| document.active_turn().map(|turn| turn.start_seq))
-            .map_err(|error| format!("读取直接提交的 V1 根回合失败：{error}"))?
-            .ok_or_else(|| String::from("直接提交的 V1 根回合不存在。"))?;
-        let root_authority =
-            user_root_dispatch_authority_from_v1_handle(handle.as_ref(), root_input_seq)?;
-        if root_authority.client_action_id != accepted_action_id {
-            return Err(format!(
-                "直接提交的 V1 根输入身份不匹配：期望 `{}`，实际 `{}`。",
-                accepted_action_id.as_str(),
-                root_authority.client_action_id.as_str()
-            ));
+        webui_submit_trace(
+            "submit_prompt_materialize_ready",
+            format!(
+                "session={} title_chars={} workspace_path_chars={} elapsed_ms={}",
+                materialized_session.session_id,
+                materialized_session.session_title.chars().count(),
+                materialized_session.workspace_path.chars().count(),
+                current_unix_millis_value().saturating_sub(materialize_started_at)
+            ),
+        );
+        // kernel_reservation_id binds an existing materialization to the exact admission owner captured before loading.
+        // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
+        let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
+        prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)?;
+        if submission_mode.is_continuation() {
+            validate_recovery_submission_model_selection(
+                agent_runtime.public_ai_runtime.as_ref(),
+                &workspace_snapshot,
+                materialized_session.session_id,
+                model_selection.as_ref(),
+            )?;
+        } else {
+            apply_submission_model_selection(
+                agent_runtime.public_ai_runtime.as_ref(),
+                &mut workspace_snapshot,
+                materialized_session.session_id,
+                materialized_session.kind,
+                model_selection.as_ref(),
+            )?;
+            // A submitted picker choice must reach the same durable pending configuration as the explicit picker RPC.
+            // 提交携带的模型选择必须进入与显式选择 RPC 相同的可靠待生效配置，不能只修改内存。
+            if materialized_session.kind == PromptSessionMaterializationKind::Created
+                && let Some(selection) = model_selection.as_ref()
+            {
+                let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+                    &state,
+                    materialized_session.session_id,
+                )?;
+                let runtime_state = workspace_snapshot
+                    .session_runtime_state
+                    .get(&materialized_session.session_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Session `{}` has no admitted runtime state.",
+                            materialized_session.session_id
+                        )
+                    })?;
+                crate::session_request_config_v1::set_pending_model_request_v1(
+                    handle.as_ref(),
+                    selection.provider_id.clone(),
+                    selection.connection_id.clone(),
+                    selection.model_id.clone(),
+                    None,
+                    crate::session_request_config_v1::SessionRequestFallback::from_runtime_state(
+                        runtime_state,
+                    ),
+                    crate::current_v1_unix_millis()?,
+                )?;
+            }
         }
-        let projection = handle
-            .capture_controller_projection_snapshot()
-            .map_err(|error| format!("捕获直接提交的 V1 投影失败：{error}"))?;
-        let canonical_user_message_id =
-            crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
-                &projection,
-                root_input_seq,
-            )?;
-        let mut projected_state =
-            crate::agent_stream::provider_v1_sink::provider_projection_controller_state(
-                &projection,
-            )?;
-        // Visible transcript rows remain a separate workspace projection; V1 replaces only logical messages.
-        // 可见转录记录仍属独立工作区投影；V1 只替换逻辑消息。
-        projected_state.records = std::mem::take(&mut runtime_state.conversation_state.records);
-        runtime_state.conversation_state = projected_state;
-        Some(canonical_user_message_id)
-    } else {
-        None
-    };
-    webui_submit_trace(
-        "submit_prompt_runtime_options_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
-        ),
-    );
-    // vmmReadiness is captured before Hook turn admission and remains immutable for this request.
-    // vmmReadiness 在 Hook 回合准入前捕获，并在本次请求期间保持不可变。
-    let vmm_readiness = webui_vmm_runtime_readiness(&state)?;
-    let turn_begin_started_at = current_unix_millis_value();
-    let mut precheck_start = {
-        let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        begin_shared_prompt_turn(
+        if session_settings.is_some()
+            && materialized_session.kind != PromptSessionMaterializationKind::Created
+        {
+            return Err(String::from("草稿会话设置只能随新会话的首次提交应用。"));
+        }
+        apply_submission_session_settings(
+            &state,
+            agent_runtime.public_ai_runtime.as_ref(),
             &mut workspace_snapshot,
-            &mut hook_runtime,
-            SharedPromptTurnBeginInput {
-                session_id,
-                session_title,
-                workspace_path,
-                prompt_entry_id: format!(
-                    "webui-prompt-{session_id}-{}",
-                    current_unix_millis_text()
-                ),
-                continuation_action_id: continuation_action_id.clone(),
-                prompt: &prompt,
-                hidden_model_guidance: hidden_model_guidance.as_deref(),
-                provider_visible_agent_messages: Vec::new(),
-                attachments,
-                provider_attachments: Some(provider_attachments),
-                existing_canonical_user_message_id: direct_canonical_user_message_id,
-                append_canonical_user_message: false,
-                append_visible_user_prompt_record: append_user_records,
-                source: prompt_source,
-                vmm_runtime_ready: vmm_readiness.service_ready,
-                vmm_precheck_ready: vmm_readiness.precheck_ready,
-                execution_mode: runtime_options.execution_mode,
-                reasoning_effort: runtime_options.reasoning_effort,
+            materialized_session.session_id,
+            execution_mode.as_deref(),
+            session_settings.as_ref(),
+            materialized_session.kind == PromptSessionMaterializationKind::Created,
+        )
+        .await?;
+        webui_submit_trace(
+            "submit_prompt_starting_run",
+            format!(
+                "session={session_id} title_chars={}",
+                session_title.chars().count()
+            ),
+        );
+        let submit_run_prepare_started_at = current_unix_millis_value();
+        let runtime_options = prepare_submission_runtime_options(
+            &state,
+            &mut workspace_snapshot,
+            session_id,
+            SubmissionRuntimeOptionsInput {
+                execution_mode,
+                reasoning_effort,
             },
-        )?
-    };
+        )
+        .await?;
+        let handle =
+            crate::session_goal_lifecycle::registered_session_v1_handle_from_state(&state, session_id)?;
+        if materialized_session.kind == PromptSessionMaterializationKind::Created {
+            // A newly created session stages its first route after root materialization, so that exact
+            // root boundary must activate it. Existing inputs already activated their immutable bound
+            // config inside Core; consuming a newer picker intent here would rewrite the running node.
+            // 新建会话在根输入物化后才暂存首个路由，因此必须由该精确根边界激活。既有输入已经在 Core
+            // 内激活其不可变绑定配置；若在此消费更新的选择器意图，就会改写正在运行的节点。
+            handle
+                .activate_pending_request_for_new_session_root(crate::current_v1_unix_millis()?)
+                .map_err(|error| format!("激活新建会话根边界的 V1 请求配置失败：{error}"))?;
+        }
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("Session `{session_id}` has no admitted runtime state."))?;
+        crate::session_request_config_v1::synchronize_v1_dispatch_model_selection(
+            handle.as_ref(),
+            agent_runtime.public_ai_runtime.as_ref(),
+            runtime_state,
+        )?;
+        // The admitted V1 root owns the Provider user identity before Hook preparation begins.
+        // 已接纳的 V1 根输入在 Hook 准备开始前持有 Provider 用户身份。
+        let direct_canonical_user_message_id = if append_user_records {
+            let root_input_seq = handle
+                .read(|document| document.active_turn().map(|turn| turn.start_seq))
+                .map_err(|error| format!("读取直接提交的 V1 根回合失败：{error}"))?
+                .ok_or_else(|| String::from("直接提交的 V1 根回合不存在。"))?;
+            let root_authority =
+                user_root_dispatch_authority_from_v1_handle(handle.as_ref(), root_input_seq)?;
+            if root_authority.client_action_id != accepted_action_id {
+                return Err(format!(
+                    "直接提交的 V1 根输入身份不匹配：期望 `{}`，实际 `{}`。",
+                    accepted_action_id.as_str(),
+                    root_authority.client_action_id.as_str()
+                ));
+            }
+            let projection = handle
+                .capture_controller_projection_snapshot()
+                .map_err(|error| format!("捕获直接提交的 V1 投影失败：{error}"))?;
+            let canonical_user_message_id =
+                crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
+                    &projection,
+                    root_input_seq,
+                )?;
+            let mut projected_state =
+                crate::agent_stream::provider_v1_sink::provider_projection_controller_state(
+                    &projection,
+                )?;
+            // Visible transcript rows remain a separate workspace projection; V1 replaces only logical messages.
+            // 可见转录记录仍属独立工作区投影；V1 只替换逻辑消息。
+            projected_state.records = std::mem::take(&mut runtime_state.conversation_state.records);
+            runtime_state.conversation_state = projected_state;
+            Some(canonical_user_message_id)
+        } else {
+            None
+        };
+        webui_submit_trace(
+            "submit_prompt_runtime_options_ready",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
+            ),
+        );
+        // vmmReadiness is captured before Hook turn admission and remains immutable for this request.
+        // vmmReadiness 在 Hook 回合准入前捕获，并在本次请求期间保持不可变。
+        let vmm_readiness = webui_vmm_runtime_readiness(&state)?;
+        let turn_begin_started_at = current_unix_millis_value();
+        let precheck_start = {
+            let mut hook_runtime = agent_runtime
+                .conversation_hook_runtime
+                .lock()
+                .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+            begin_shared_prompt_turn(
+                &mut workspace_snapshot,
+                &mut hook_runtime,
+                SharedPromptTurnBeginInput {
+                    session_id,
+                    session_title,
+                    workspace_path,
+                    prompt_entry_id: format!(
+                        "webui-prompt-{session_id}-{}",
+                        current_unix_millis_text()
+                    ),
+                    continuation_action_id: continuation_action_id.clone(),
+                    prompt: &prompt,
+                    hidden_model_guidance: hidden_model_guidance.as_deref(),
+                    provider_visible_agent_messages: Vec::new(),
+                    attachments,
+                    provider_attachments: Some(provider_attachments),
+                    existing_canonical_user_message_id: direct_canonical_user_message_id,
+                    append_canonical_user_message: false,
+                    append_visible_user_prompt_record: append_user_records,
+                    source: prompt_source,
+                    vmm_runtime_ready: vmm_readiness.service_ready,
+                    vmm_precheck_ready: vmm_readiness.precheck_ready,
+                    execution_mode: runtime_options.execution_mode,
+                    reasoning_effort: runtime_options.reasoning_effort,
+                },
+            )?
+        };
+        Ok::<_, String>((kernel_reservation_id, precheck_start, turn_begin_started_at))
+    }.await;
+    let (kernel_reservation_id, mut precheck_start, turn_begin_started_at) =
+        match preparation_result {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // A failed first submission still owns a durable user message; publish its session rather than discard it.
+                // 首次提交失败仍持有可靠用户消息；发布其会话，而不是丢弃它。
+                let publication_result =
+                    if materialized_session.kind == PromptSessionMaterializationKind::Created {
+                        workspace_snapshot
+                            .session_run_phases
+                            .insert(session_id, SessionRunPhase::Stopped);
+                        for session in &mut workspace_snapshot.sessions {
+                            if session.id == session_id {
+                                session.status = vulcan_workbench_model::SessionState::Blocked;
+                            }
+                        }
+                        commit_created_submission_workspace_slice(
+                            &state,
+                            &workspace_snapshot,
+                            &materialized_session,
+                        )
+                        .and_then(|()| {
+                            commit_materialized_submission_activation(
+                                &app,
+                                &state,
+                                &workspace_snapshot,
+                                &materialized_session,
+                            )
+                            .map(|_| ())
+                        })
+                    } else {
+                        Ok(())
+                    };
+                // Settlement is attempted even if the UI publication failed; the canonical error must not disappear.
+                // 即使界面发布失败也必须尝试结算，不能丢失规范错误事实。
+                let settlement_result = settle_admitted_submission_failure(
+                    &app,
+                    &state,
+                    session_id,
+                    admitted_turn_id,
+                    &error,
+                )
+                .await;
+                return Err(match (publication_result, settlement_result) {
+                    (Ok(()), Ok(())) => error,
+                    (publication, settlement) => format!(
+                        "{error}; submission failure publication: {publication:?}; submission failure settlement: {settlement:?}"
+                    ),
+                });
+            }
+        };
     // Restored transitional preparation cannot own V1 continuation identity; the durable admission does.
     // 恢复的过渡准备态不能拥有 V1 Continue 身份；该身份由可靠准入事实拥有。
     precheck_start.continuation_action_id = continuation_action_id.clone();
