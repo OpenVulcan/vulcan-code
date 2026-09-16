@@ -1722,8 +1722,8 @@ mod tests {
     /// 验证声明默认值使用与 LuaSkills 返回值一致的规范字符串。
     #[test]
     fn package_config_defaults_use_canonical_runtime_strings() {
-        // descriptor is deserialized through the public upstream contract to keep the fixture aligned with 0.5.5.
-        // descriptor 通过公开上游契约反序列化，使测试夹具与 0.5.5 保持一致。
+        // descriptor is deserialized through the public upstream contract to keep the fixture aligned with 0.5.7.
+        // descriptor 通过公开上游契约反序列化，使测试夹具与 0.5.7 保持一致。
         let descriptor: RuntimeSkillPackageConfigDescriptor = serde_json::from_value(json!({
             "skill_id": "fixture",
             "skill_version": "1.0.0",

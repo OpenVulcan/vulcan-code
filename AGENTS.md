@@ -33,7 +33,7 @@
 | 新增、迁移或维护系统供应商、模型协议、Provider Tool、媒体扩展 | [`新增系统供应商流程.md`](docs/新增系统供应商流程.md) 与 [`Provider Manifest 作者手册`](docs/provider-manifest-authoring.md) |
 | 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | [`工具与终端运行时约定.md`](docs/工具与终端运行时约定.md) |
 | 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | [`Ask 与 Markdown 交互约定.md`](docs/Ask与Markdown交互约定.md) |
-| 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 先读根 [`Cargo.toml`](Cargo.toml) 与 [`Cargo.lock`](Cargo.lock)，再读 [`LuaSkills 0.5.5 技能包配置接入指南`](docs/luaskills-0.5.5-skill-config-guide.md)；实现以 [`luaskills_runtime`](crates/vulcan-agent-runtime/src/luaskills_runtime/) 和 [`tooling/bridge`](crates/vulcan-agent-runtime/src/tooling/bridge/) 当前源码为准 |
+| 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 先读根 [`Cargo.toml`](Cargo.toml) 与 [`Cargo.lock`](Cargo.lock)，再读 [`LuaSkills 技能包配置接入指南`](docs/luaskills-skill-config-guide.md)；实现以 [`luaskills_runtime`](crates/vulcan-agent-runtime/src/luaskills_runtime/) 和 [`tooling/bridge`](crates/vulcan-agent-runtime/src/tooling/bridge/) 当前源码为准 |
 
 ## 三、文档维护规则
 

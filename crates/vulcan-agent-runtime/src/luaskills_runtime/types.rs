@@ -181,7 +181,7 @@ impl LuaSkillsRuntimeHandle {
             skill_call_admission: Arc::new(Semaphore::new(skill_call_capacity.max(1))),
             runlua_call_admission: Arc::new(Semaphore::new(runlua_call_capacity.max(1))),
             runlua_session_call_admission: Arc::new(Semaphore::new(
-                LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY,
+                luaskills::MAX_RUNTIME_SESSION_LEASES_PER_MANAGER,
             )),
             runlua_ai_tool_enabled: Arc::new(AtomicBool::new(runlua_ai_tool_enabled)),
             runlua_session_ai_tool_enabled: Arc::new(AtomicBool::new(

@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
+    path::PathBuf,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -45,9 +46,10 @@ use vulcan_ai_protocols::{
 use vulcan_hooks::{HookContext, HookScope};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_provider_adapters::{
-    InferenceRouteConfiguration, InternalModelOverrides, PersistedAiConfiguration,
-    ProviderExecutionFailure, ProviderWireRequestCapture, PublicAiRuntime,
-    ResolvedPublicAiSelection, registered_native_embedding_batch_capabilities,
+    EmbeddingBatchArtifactKind, EmbeddingBatchArtifactSink, InferenceRouteConfiguration,
+    InternalModelOverrides, PersistedAiConfiguration, ProviderExecutionFailure,
+    ProviderWireRequestCapture, PublicAiRuntime, ResolvedPublicAiSelection,
+    registered_native_embedding_batch_capabilities,
 };
 use vulcan_provider_config::config::PersistedProviderRetryConfiguration;
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
@@ -68,6 +70,66 @@ const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
 /// VCE 原生向量请求诊断使用的版本化磁盘契约。
 const VCE_EMBEDDING_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
     "vulcan.vce-embedding-provider-request-trace.v1";
+
+/// Owns opt-in VCE Batch artifacts for one host-authenticated project.
+/// 持有一个经宿主认证项目的自愿开启的 VCE Batch 产物。
+struct VceEmbeddingBatchArtifactSink {
+    /// Existing application data root whose `vce` directory is the artifact sibling.
+    /// 现有应用数据根目录，其 `vce` 目录与产物目录同级。
+    data_root: PathBuf,
+    /// Exact project identity supplied by the VCE capability registration.
+    /// 由 VCE 能力注册提供的精确项目身份。
+    project_id: String,
+}
+
+#[async_trait::async_trait]
+impl EmbeddingBatchArtifactSink for VceEmbeddingBatchArtifactSink {
+    /// Writes exact request or response bytes off the async executor.
+    /// 在异步执行器之外写入精确请求或返回字节。
+    ///
+    /// `task_id` identifies one immutable Batch task, `kind` chooses its file, and `bytes` stay exact.
+    /// `task_id` 标识一个不可变 Batch 任务，`kind` 选择文件，`bytes` 保持精确。
+    ///
+    /// Returns a storage error without changing the Provider operation.
+    /// 返回存储错误而不改变供应商操作。
+    async fn persist(
+        &self,
+        task_id: &str,
+        kind: EmbeddingBatchArtifactKind,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        // Map the typed artifact to its fixed diagnostic file name.
+        // 将强类型产物映射为固定诊断文件名。
+        let file_name = match kind {
+            EmbeddingBatchArtifactKind::RequestJsonl => String::from("request.jsonl"),
+            EmbeddingBatchArtifactKind::RequestJson => String::from("request.json"),
+            EmbeddingBatchArtifactKind::OutputJsonl => String::from("output.jsonl"),
+            EmbeddingBatchArtifactKind::OutputJson => String::from("output.json"),
+            EmbeddingBatchArtifactKind::ErrorJsonl => String::from("error.jsonl"),
+            EmbeddingBatchArtifactKind::TerminalStatusJson => {
+                format!("status-{}.json", hex::encode(Sha256::digest(bytes)))
+            }
+        };
+        // Move only owned values into the blocking filesystem worker.
+        // 仅将拥有所有权的值移入阻塞式文件系统工作线程。
+        let data_root = self.data_root.clone();
+        let project_id = self.project_id.clone();
+        let task_id = task_id.to_owned();
+        let bytes = bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            vulcan_workspace_store::workspace_store::persist_vce_batch_artifact(
+                &data_root,
+                project_id.as_str(),
+                task_id.as_str(),
+                file_name.as_str(),
+                &bytes,
+            )
+        })
+        .await
+        .map_err(|error| format!("VCE Batch artifact writer failed: {error}"))??;
+        Ok(())
+    }
+}
 /// Process-local tie breaker for configured-inference traces captured in one millisecond.
 /// 同一毫秒内捕获的已配置推理追踪使用的进程内消歧序号。
 static CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2386,6 +2448,9 @@ impl ConfiguredInferenceService {
         let (selection, request, route_snapshot) =
             self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
         validate_embedding_batch_task(&task)?;
+        // Freeze the enabled switch for this upload operation.
+        // 为本次上传操作冻结开关状态。
+        let artifact_sink = self.vce_batch_artifact_sink(caller);
         let _permit = self.acquire_caller_permit(caller, 1).await?;
         self.execute_embedding_batch_provider_operation(
             caller,
@@ -2395,8 +2460,14 @@ impl ConfiguredInferenceService {
             "internal_embedding_batch_upload",
             Some(u64::from(task.input_count)),
             EmbeddingBatchDeadlineDispatchPolicy::NonIdempotent,
-            self.runtime
-                .upload_internal_embedding_batch_input(&selection, &request, &task),
+            self.runtime.upload_internal_embedding_batch_input(
+                &selection,
+                &request,
+                &task,
+                artifact_sink
+                    .as_ref()
+                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
+            ),
             |_| (RequestUsage::default(), None),
         )
         .await
@@ -2415,6 +2486,9 @@ impl ConfiguredInferenceService {
         let (selection, request, route_snapshot) =
             self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
         validate_embedding_batch_task(&task)?;
+        // Freeze the enabled switch for this submission operation.
+        // 为本次提交操作冻结开关状态。
+        let artifact_sink = self.vce_batch_artifact_sink(caller);
         let _permit = self.acquire_caller_permit(caller, 1).await?;
         self.execute_embedding_batch_provider_operation(
             caller,
@@ -2429,6 +2503,9 @@ impl ConfiguredInferenceService {
                 &request,
                 &task,
                 uploaded_input.as_ref(),
+                artifact_sink
+                    .as_ref()
+                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
             ),
             |_| (RequestUsage::default(), None),
         )
@@ -2479,6 +2556,9 @@ impl ConfiguredInferenceService {
         let (selection, request, route_snapshot) =
             self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
         validate_embedding_batch_submission(&submission)?;
+        // Freeze the enabled switch for this status observation.
+        // 为本次状态观测冻结开关状态。
+        let artifact_sink = self.vce_batch_artifact_sink(caller);
         let _permit = self.acquire_caller_permit(caller, 1).await?;
         self.execute_embedding_batch_provider_operation(
             caller,
@@ -2488,8 +2568,13 @@ impl ConfiguredInferenceService {
             "internal_embedding_batch_status",
             None,
             EmbeddingBatchDeadlineDispatchPolicy::Repeatable,
-            self.runtime
-                .internal_embedding_batch_status(&selection, &submission),
+            self.runtime.internal_embedding_batch_status(
+                &selection,
+                &submission,
+                artifact_sink
+                    .as_ref()
+                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
+            ),
             |snapshot| {
                 (
                     RequestUsage::default(),
@@ -2523,6 +2608,9 @@ impl ConfiguredInferenceService {
         snapshot.validate().map_err(|message| {
             ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
         })?;
+        // Freeze the enabled switch for this result collection.
+        // 为本次结果收集冻结开关状态。
+        let artifact_sink = self.vce_batch_artifact_sink(caller);
         let _permit = self.acquire_caller_permit(caller, 1).await?;
         self.execute_embedding_batch_provider_operation(
             caller,
@@ -2538,6 +2626,9 @@ impl ConfiguredInferenceService {
                 &task,
                 &snapshot,
                 caller.usage_scope,
+                artifact_sink
+                    .as_ref()
+                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
             ),
             |collected| {
                 (
@@ -2617,6 +2708,30 @@ impl ConfiguredInferenceService {
 
     /// Resolves one authorized asynchronous embedding Batch call to immutable route facts.
     /// 将一次已授权异步向量 Batch 调用解析为不可变路由事实。
+    /// Selects VCE file capture only for the authenticated VCE caller and enabled global switch.
+    /// 仅为经认证的 VCE 调用方且全局开关已开启时选择 VCE 文件捕获。
+    ///
+    /// `caller` is the host-issued inference identity; the result is absent when capture is disabled.
+    /// `caller` 是宿主签发的推理身份；捕获关闭时返回空值。
+    fn vce_batch_artifact_sink(
+        &self,
+        caller: &InferenceCallerContext,
+    ) -> Option<VceEmbeddingBatchArtifactSink> {
+        if !self.provider_request_trace_enabled.load(Ordering::Acquire) {
+            return None;
+        }
+        // The host VCE registration owns this exact project-scoped caller prefix.
+        // 宿主 VCE 注册持有这一精确的项目调用方前缀。
+        let project_id = caller.caller_id.strip_prefix("vulcan-code-vce:")?;
+        if project_id.is_empty() {
+            return None;
+        }
+        Some(VceEmbeddingBatchArtifactSink {
+            data_root: vulcan_workspace_store::data_plane::application_data_root(),
+            project_id: project_id.to_owned(),
+        })
+    }
+
     fn resolve_embedding_batch_call(
         &self,
         caller: &InferenceCallerContext,
@@ -7157,6 +7272,26 @@ mod tests {
             .expect("opted-in VMM execution should allocate one capture channel");
         drop(capture);
         tokio::task::yield_now().await;
+    }
+
+    /// Verifies Batch file capture follows the existing switch and the exact VCE caller identity.
+    /// 验证 Batch 文件捕获遵循现有开关及精确 VCE 调用方身份。
+    #[test]
+    fn vce_batch_artifact_capture_is_opt_in_and_project_scoped() {
+        let runtime = Arc::new(PublicAiRuntime::unavailable().expect("test public AI runtime"));
+        let mut caller = test_caller();
+        caller.caller_id = String::from("vulcan-code-vce:project-A");
+        let disabled = ConfiguredInferenceService::new(Arc::clone(&runtime));
+        assert!(disabled.vce_batch_artifact_sink(&caller).is_none());
+
+        let enabled =
+            ConfiguredInferenceService::new(runtime).with_provider_request_trace_enabled(true);
+        let sink = enabled
+            .vce_batch_artifact_sink(&caller)
+            .expect("VCE capture enabled");
+        assert_eq!(sink.project_id, "project-A");
+        caller.caller_id = String::from("vulcan-code-vmm:project-A");
+        assert!(enabled.vce_batch_artifact_sink(&caller).is_none());
     }
 
     /// Verifies cache identities are caller-isolated, bounded, and never contain untrusted key text.

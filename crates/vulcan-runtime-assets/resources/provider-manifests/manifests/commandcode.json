@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-"revision": 9,
-  "published_at": "2026-08-18T00:00:00Z",
+  "revision": 10,
+  "published_at": "2026-09-16T08:56:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -61,6 +61,7 @@
                 ],
                 "blocked_model_ids": [
                   "claude-fable-5",
+                  "claude-fable-5-1",
                   "claude-opus-5",
                   "claude-opus-4-8",
                   "claude-opus-4-7",
@@ -76,6 +77,7 @@
                 ],
                 "blocked_model_ids": [
                   "claude-fable-5",
+                  "claude-fable-5-1",
                   "claude-opus-5",
                   "claude-opus-4-8",
                   "claude-opus-4-7",
@@ -175,6 +177,7 @@
                 ],
                 "blocked_model_ids": [
                   "claude-fable-5",
+                  "claude-fable-5-1",
                   "claude-opus-5",
                   "claude-opus-4-8",
                   "claude-opus-4-7",
@@ -190,6 +193,7 @@
                 ],
                 "blocked_model_ids": [
                   "claude-fable-5",
+                  "claude-fable-5-1",
                   "claude-opus-5",
                   "claude-opus-4-8",
                   "claude-opus-4-7",
@@ -680,8 +684,8 @@
           "high",
           "xhigh"
         ],
-        "context_limit": 200000,
-        "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
+        "context_limit": 400000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
         "premium"
@@ -2196,6 +2200,486 @@
       "response_profile_refs": [
         "commandcode.chat.reasoning-summary.v1"
       ]
+    },
+    {
+      "rule_id": "commandcode-56-claude-fable-5-1",
+      "display_name": "Claude Fable 5.1",
+      "matcher": {
+        "kind": "exact",
+        "value": "claude-fable-5-1"
+      },
+      "supported_protocols": [
+        "anthropic-messages.v1"
+      ],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "premium"
+      ]
+    },
+    {
+      "rule_id": "commandcode-57-deepseek-deepseek-v4-flash-vision-exp",
+      "display_name": "DeepSeek V4 Flash Vision (exp)",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek/deepseek-v4-flash-vision-exp"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "high",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-58-deepseek-deepseek-v4-flash-fast",
+      "display_name": "DeepSeek V4 Flash Fast",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek/deepseek-v4-flash-fast"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-59-deepseek-deepseek-v4-1-flash",
+      "display_name": "DeepSeek V4.1 Flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek/deepseek-v4.1-flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-60-z-ai-glm-5-3-flash",
+      "display_name": "GLM 5.3 Flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "z-ai/glm-5.3-flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "context_limit": 1048576,
+        "output_limit": 131072,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-61-qwen-qwen3-8-max-0902",
+      "display_name": "Qwen 3.8 Max 0902",
+      "matcher": {
+        "kind": "exact",
+        "value": "Qwen/Qwen3.8-Max-0902"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-62-qwen-qwen3-8-27b",
+      "display_name": "Qwen 3.8 27B",
+      "matcher": {
+        "kind": "exact",
+        "value": "Qwen/Qwen3.8-27B"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ],
+        "context_limit": 262144,
+        "output_limit": 32768,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-63-qwen-qwen3-8-flash",
+      "display_name": "Qwen 3.8 Flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "Qwen/Qwen3.8-Flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-64-meituan-longcat-2-0-free",
+      "display_name": "LongCat 2.0",
+      "matcher": {
+        "kind": "exact",
+        "value": "meituan/LongCat-2.0:free"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048576,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-65-tencent-hy4-preview",
+      "display_name": "HY4 Preview",
+      "matcher": {
+        "kind": "exact",
+        "value": "tencent/hy4-preview"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "context_limit": 1048576,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-66-google-gemini-3-8-flash",
+      "display_name": "Gemini 3.8 Flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "google/gemini-3.8-flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "context_limit": 1000000,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ],
+      "tool_schema_projection": "strict"
+    },
+    {
+      "rule_id": "commandcode-67-inclusionai-ling-3-0-flash-sante-free",
+      "display_name": "Ling 3.0 Flash Sante",
+      "matcher": {
+        "kind": "exact",
+        "value": "inclusionai/ling-3.0-flash-sante:free"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 262144,
+        "output_limit": 32768,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-68-meta-muse-spark-1-3",
+      "display_name": "Muse Spark 1.3",
+      "matcher": {
+        "kind": "exact",
+        "value": "meta/muse-spark-1.3"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048576,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
+    },
+    {
+      "rule_id": "commandcode-69-meta-muse-spark-1-3-contributor",
+      "display_name": "Muse Spark 1.3 Contributor",
+      "matcher": {
+        "kind": "exact",
+        "value": "meta/muse-spark-1.3-contributor"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "context_limit": 1048576,
+        "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
+      },
+      "account_access_groups": [
+        "opensource"
+      ]
     }
   ],
   "usage_profiles": [],
@@ -2240,8 +2724,20 @@
       {
         "url": "https://www.npmjs.com/package/command-code/v/1.26.0",
         "note": "CommandCode CLI 1.26.0 model identities, contexts, vision declarations, reasoning efforts, and account-usage workflow."
+      },
+      {
+        "url": "https://www.npmjs.com/package/command-code/v/1.54.1",
+        "note": "CommandCode CLI 1.54.1 model registry for added model contexts, vision declarations, reasoning efforts, and explicit output limits."
+      },
+      {
+        "url": "https://api.commandcode.ai/provider/v1/models",
+        "note": "Live Provider API model identities, intersected with exact local manifest rules; no CLI-only model is automatically admitted."
+      },
+      {
+        "url": "https://commandcode.ai/models/claude-fable-5-1",
+        "note": "Claude Fable 5.1 is available on Max and higher plans."
       }
     ],
-    "verified_at": "2026-08-17T00:00:00Z"
+    "verified_at": "2026-09-16T08:56:22Z"
   }
 }

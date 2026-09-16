@@ -422,6 +422,7 @@ impl PublicAiRuntime {
         selection: &ResolvedPublicAiSelection,
         request: &EmbeddingRequest,
         task: &EmbeddingBatchTaskPlan,
+        artifact_sink: Option<&dyn crate::EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchUploadedInput, ProviderExecutionFailure> {
         let secret = self
             .resolve_fresh_execution_secret(
@@ -437,6 +438,7 @@ impl PublicAiRuntime {
                 request,
                 task,
                 &secret,
+                artifact_sink,
             )
             .await
     }
@@ -449,6 +451,7 @@ impl PublicAiRuntime {
         request: &EmbeddingRequest,
         task: &EmbeddingBatchTaskPlan,
         uploaded_input: Option<&EmbeddingBatchUploadedInput>,
+        artifact_sink: Option<&dyn crate::EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchSubmission, ProviderExecutionFailure> {
         let secret = self
             .resolve_fresh_execution_secret(
@@ -465,6 +468,7 @@ impl PublicAiRuntime {
                 task,
                 uploaded_input,
                 &secret,
+                artifact_sink,
             )
             .await
     }
@@ -501,6 +505,7 @@ impl PublicAiRuntime {
         &self,
         selection: &ResolvedPublicAiSelection,
         submission: &EmbeddingBatchSubmission,
+        artifact_sink: Option<&dyn crate::EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchSnapshot, ProviderExecutionFailure> {
         let secret = self
             .resolve_fresh_execution_secret(
@@ -510,7 +515,13 @@ impl PublicAiRuntime {
             .await
             .map_err(crate::execution::pre_dispatch_failure)?;
         self.execution_client
-            .embedding_batch_status(&selection.route, &selection.model, submission, &secret)
+            .embedding_batch_status(
+                &selection.route,
+                &selection.model,
+                submission,
+                &secret,
+                artifact_sink,
+            )
             .await
     }
 
@@ -523,6 +534,7 @@ impl PublicAiRuntime {
         task: &EmbeddingBatchTaskPlan,
         snapshot: &EmbeddingBatchSnapshot,
         usage_scope: InferenceUsageScope,
+        artifact_sink: Option<&dyn crate::EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchCollectedResult, ProviderExecutionFailure> {
         let secret = self
             .resolve_fresh_execution_secret(
@@ -546,6 +558,7 @@ impl PublicAiRuntime {
                     },
                 },
                 &secret,
+                artifact_sink,
             )
             .await
     }

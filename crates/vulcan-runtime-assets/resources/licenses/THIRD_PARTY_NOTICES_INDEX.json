@@ -2,7 +2,7 @@
   "schema_version": 2,
   "scope": "rust-desktop-dependencies",
   "source_file": "THIRD_PARTY_NOTICES.md",
-  "source_sha256": "eda37e9f04a19f0118829384c27d657de778908401bdc93f94a38f08e9262f0c",
+  "source_sha256": "8a0422676f40094a0774e3af466b78ea370effb6d43582cca7a5795122c20ad0",
   "licenses": [
     {
       "id": "rust-license-1",
@@ -5018,7 +5018,7 @@
           "dependencies": [
             {
               "name": "luaskills",
-              "version": "0.5.5",
+              "version": "0.5.7",
               "source": "https://github.com/LuaSkills/luaskills"
             }
           ],

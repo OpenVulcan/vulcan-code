@@ -42,7 +42,7 @@ fn packaged_runlua_skill_requires_native_skill_lookup() {
     assert!(content.contains("{\"name\":\"runlua\"}"));
     assert!(content.contains("The tool id is `skill`, singular."));
     assert!(content.contains("Do not call `luaskill`"));
-    assert!(content.contains("LuaSkills: `0.5.5`"));
+    assert!(content.contains("LuaSkills: `0.5.7`"));
 }
 
 /// Verifies the packaged terminal skill states the complete current input, wait, and exit-code contract.

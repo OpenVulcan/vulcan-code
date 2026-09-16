@@ -1,44 +1,25 @@
-# LuaSkills 0.5.5 技能包配置接入指南
+# LuaSkills 技能包配置接入指南
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 对 LuaSkills 0.5.5 技能包配置契约的正式支持方式，面向技能包作者、宿主维护者和桌面端使用者。
+本文说明 Vulcan Code 对 LuaSkills 0.5.7 技能包配置契约的正式支持方式，面向技能包作者、宿主维护者和桌面端使用者。
 
-本实现只支持 LuaSkills 0.5.5 正式契约，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。
+本实现只支持 LuaSkills 0.5.7 正式契约，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。
 
-### 1.1 正式契约与本地源码联调契约的区别
+### 1.1 正式依赖与构建入口
 
-**正式契约（唯一可发布的依赖形态）。** 根 `Cargo.toml` 锁定 `luaskills = "=0.5.5"`，`Cargo.lock` 解析为 crates.io 正式发布：
+根目录 `Cargo.toml` 精确锁定 `luaskills = "=0.5.7"`；`Cargo.lock` 必须从 crates.io 注册表解析该版本及其校验和。应用构建只使用普通的 `make build`、`make br` 和对应 release 入口，不再通过 Make 目标或脚本覆盖本地 LuaSkills 检出。
+
+本次锁文件中的依赖身份为：
 
 ```text
 name = "luaskills"
-version = "0.5.5"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eb2b996127efd03b9ad49f32f4b8dfe45b8466474c7d1670e0ebeb8f5a84bd5"
+checksum = "a32b5ca94e4f0cb7c1f33db54f0e5ac69a83c41cf07d150c382ea59845fd8d65"
 ```
 
-本文以下各节描述的均是该正式契约。
-
-**本地源码联调契约（仅限本机，不可发布）。** 把宿主绑定到本地上游源码时，用命令行 Cargo 覆盖，不修改可发布的 `Cargo.toml`：
-
-```powershell
-pwsh -File scripts/local_luaskills_build.ps1 -Cargo "check -p vulcan-service-kernel"
-make build-local-luaskills
-make br-local-luaskills
-```
-
-定向 Cargo 检查使用 `local_luaskills_build.ps1`；完整桌面构建和构建后运行分别使用两个显式 Make 目标。Make 目标默认从仓库相对路径 `../../projects/vulcan-luaskills` 解析检出，也可用 `LUASKILLS_PATH=<path>` 覆盖。三个入口都传入 `patch.crates-io.luaskills.path`，不会修改可发布的 `Cargo.toml`。测试期间解析来源会从 registry 变为本地路径；定向脚本通过 `-Restore` 恢复锁文件，完整桌面构建则在 `finally` 中按 SHA-256 自动恢复 `Cargo.lock`。两条脚本共享同一个以禁止覆盖方式原子创建的备份文件和所有权元数据，并在实际命令前用完整 `cargo metadata` 解析冻结预期本地锁摘要。恢复只接受原始基线或该预期本地摘要；出现第三种摘要时保留恢复证据并拒绝覆盖。因此并发入口会在修改锁文件前明确失败，构建期间的其他锁文件写入也不会被静默覆盖。
-
-本次联调绑定的上游提交为 `e45a2b86b213b6cc3d36e486a905ee5d5b8ed44f`，相对 `v0.5.5` 标签领先 2 个提交。**上游 `Cargo.toml` 仍声明 `0.5.5`，因此这份源码不得冒充已发布的 `0.5.5` 发行物**，也不得重新打包成同名版本。
-
-**本地形态下已知会影响宿主能力的差异：**
-
-| 差异 | 对宿主的影响 |
-| --- | --- |
-| `PreparedSkill*` 事务字段（`target_dir`、`install_record`、`backup_dir`、`previous_disabled_record`）为 `pub(crate)`，而 `pub result: SkillApplyResult` 仍公开 | 宿主可读取安装结果，但**不能**驱动分阶段安装事务；任何"先暂存、后提交"的宿主侧编排在本形态下不可用 |
-| 正式 0.5.5 已有基础模型回调槽与 `dispatch_model_*_request`，但没有动态可用性回调、按所有者条件清理和安装进度条件清理 | 当前内部模型与安装通知实现依赖本地源码新增的 `RuntimeModelAvailabilityCallback`、`clear_*_callback_if` 和 `set_model_*_availability_callback`，因此完整能力目前只能通过显式本地源码入口构建；普通 registry 0.5.5 构建会明确失败，不得把它描述为可发布形态 |
-
-**判定规则：** 如果某实现只能用本地源码构建通过、普通 registry `0.5.5` 构建失败，则必须标记为"仅本地源码构建可用"，不得声称可发布。
+`MAX_RUNTIME_SESSION_LEASES_PER_MANAGER` 等所需接口由正式 0.5.7 公开。宿主的会话入场容量直接引用上游常量，不再维护兼容镜像。本指南后文保留的本地上游路径与测试取证仅解释历史行为和待改进边界，不是构建来源。
 
 ## 2. 宿主持久化位置
 
@@ -115,11 +96,11 @@ config:
     restart_required: true
 ```
 
-正式类型只有 `integer`、`string`、`float`、`enum` 和 `boolean`。技能包应直接遵守 0.5.5 的字段、类型、约束和安全整数规则，不应依赖宿主修正错误声明。
+正式类型只有 `integer`、`string`、`float`、`enum` 和 `boolean`。技能包应直接遵守 0.5.7 的字段、类型、约束和安全整数规则，不应依赖宿主修正错误声明。
 
 ## 4. 技能包内读取配置
 
-Lua 代码只能访问当前技能包自己的配置命名空间。使用 LuaSkills 0.5.5 提供的正式接口：
+Lua 代码只能访问当前技能包自己的配置命名空间。使用 LuaSkills 0.5.7 提供的正式接口：
 
 ```lua
 local token = vulcan.config.get("api_token")
@@ -199,7 +180,7 @@ LuaSkills 宿主会在调用等待 5 秒、30 秒以及之后每 60 秒输出一
 宿主引擎使用读写锁：普通技能调用、一次性 runLua、持久 runLua 会话与插件 System lease 只取读锁，
 因此宿主锁不再阻断独立调用并发进入 LuaSkills。普通技能与一次性 runLua 分别使用主池和 runLua 池；
 插件 System lease 使用每租约专用 VM，不占用这两个池。池的 `maxSize` 限制 VM 租约数，但不单独决定实际执行并发：
-LuaSkills 0.5.5 的文件型 runLua 在执行期间为切换进程工作目录持有 `lock_runlua_cwd_guard`，
+LuaSkills 0.5.7 的文件型 runLua 在执行期间为切换进程工作目录持有 `lock_runlua_cwd_guard`，
 System lease 指定工作目录时也持有同一把锁。这两类调用会在上游工作目录锁处相互等待，
 即使宿主读锁和各自 VM 资源均可用。普通技能调用与这两类调用分别可以重叠。
 技能安装、更新、
@@ -210,7 +191,7 @@ System lease 指定工作目录时也持有同一把锁。这两类调用会在�
 
 ## 9. 外部修改、显式刷新与事件
 
-LuaSkills 0.5.5 文件监听器会观察两个固定存储。WebUI 打开配置弹窗时轮询有序配置事件：
+LuaSkills 0.5.7 文件监听器会观察两个固定存储。WebUI 打开配置弹窗时轮询有序配置事件：
 
 - 发现当前技能包发生本地写入或外部重载后，重新加载描述与校验状态；
 - 保留用户尚未提交的草稿；
@@ -234,7 +215,7 @@ LuaSkills 0.5.5 文件监听器会观察两个固定存储。WebUI 打开配置�
 
 遇到配置问题时按以下顺序检查：
 
-1. 根 `Cargo.toml` 与 `Cargo.lock` 是否均锁定 `luaskills 0.5.5`；
+1. 根 `Cargo.toml` 与 `Cargo.lock` 是否均锁定 `luaskills 0.5.7`，且来源为注册表；
 2. `skill.yaml` 的 `config` 是否位于顶层且符合正式 schema；
 3. 生效技能来自 ROOT 还是 USER，以确认对应存储作用域；
 4. `runtime-config validate` 或 WebUI 校验结果中的稳定错误码；
@@ -348,7 +329,7 @@ Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` �
 
 ### 13.5 可达验收结论
 
-本地回环 HTTP 的安装、更新、缓存、离线与失败回滚验收已经完成。该结论只证明本地源码 HEAD 与 Vulcan 测试专用基址的生产路径行为；不表示生产 WebUI/RPC 已支持任意 URL，也不表示尚未发布的 LuaSkills 源码已经成为 registry `0.5.5`。
+本地回环 HTTP 的安装、更新、缓存、离线与失败回滚验收针对当时的本地源码 HEAD 完成。该历史结论不表示生产 WebUI/RPC 已支持任意 URL；当前构建来源与版本以第 1 节的正式 0.5.7 注册表依赖为准。
 
 ## 14. 可延后项的结论与后续入口
 
@@ -410,7 +391,7 @@ LuaSkills 相关工作线程按上游实际资源拆成三类：
 | 一次性文件型/内联 runLua | `runtime_settings.run_lua_pool.max_size` | 隔离 runLua VM 池 |
 | 公开持久 runLua 会话操作 | `LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY`，当前为 8 | 公共 Runtime Session manager 的租约上限 |
 
-公开持久会话没有复用一次性 runLua 默认上限 2。已发布的 LuaSkills 0.5.5 在 manager 内部以字面值 8 执行该限制，但没有导出对应常量；待发布的本地源码导出了相同数值。Vulcan 使用集中定义的兼容镜像，使注册表 0.5.5 构建和本地源码联调构建都能使用相同容量。宿主只对公开会话入口使用该容量；System lease 与插件运行时仍由独立 manager 管理，不与公开会话的入场器混用。LuaSkills 正式发布新版本后，应改回依赖其公开常量，并删除兼容镜像。
+公开持久会话没有复用一次性 runLua 默认上限 2。LuaSkills 0.5.7 对 manager 的持久会话租约上限公开 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER`；Vulcan 的会话入场器直接引用该常量，保持与上游容量一致。宿主只对公开会话入口使用该容量；System lease 与插件运行时仍由独立 manager 管理，不与公开会话的入场器混用。
 
 ### 15.2 入场与取消语义
 

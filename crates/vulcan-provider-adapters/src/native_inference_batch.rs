@@ -15,6 +15,7 @@ use crate::{
         ExecutionRevisionRefs, normalize_embedding_batch_bodies, select_native_batch_binding,
     },
 };
+use async_trait::async_trait;
 use reqwest::{Method, RequestBuilder, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,6 +31,65 @@ use vulcan_ai_contract::{
     EmbeddingBatchUploadedInput, EmbeddingEncoding, EmbeddingInputContent, EmbeddingRequest,
     InferenceBatchResultDelivery, InferenceBatchTransport, InferenceUsageScope,
 };
+
+/// Names the exact Batch artifact retained when Provider request tracing is enabled.
+/// 标识开启 Provider 请求追踪时保留的精确 Batch 产物。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingBatchArtifactKind {
+    /// Exact uploaded JSONL request bytes.
+    /// 精确上传的 JSONL 请求字节。
+    RequestJsonl,
+    /// Exact inline JSON request bytes.
+    /// 精确内联 JSON 请求字节。
+    RequestJson,
+    /// Complete provider output JSONL before parsing.
+    /// 解析前完整的供应商输出 JSONL。
+    OutputJsonl,
+    /// Complete inline provider result JSON before parsing.
+    /// 解析前完整的内联供应商结果 JSON。
+    OutputJson,
+    /// Complete provider error JSONL before selecting a diagnostic example.
+    /// 提取诊断示例前完整的供应商错误 JSONL。
+    ErrorJsonl,
+    /// Exact terminal Batch status response before normalization.
+    /// 归一化前精确的 Batch 终态响应。
+    TerminalStatusJson,
+}
+
+/// Persists exact Batch bytes without coupling the Provider adapter to VCE storage.
+/// 持久化精确 Batch 字节，同时避免供应商适配器依赖 VCE 存储。
+#[async_trait]
+pub trait EmbeddingBatchArtifactSink: Send + Sync {
+    /// Writes one complete artifact for a deterministic task.
+    /// 为确定性任务写入一份完整产物。
+    ///
+    /// `task_id` identifies the provider task, `kind` names the artifact, and `bytes` are unmodified.
+    /// `task_id` 标识供应商任务，`kind` 标识产物，`bytes` 保持原样。
+    ///
+    /// Returns a storage error while leaving Provider execution to the caller.
+    /// 返回存储错误，供应商执行是否继续由调用方决定。
+    async fn persist(
+        &self,
+        task_id: &str,
+        kind: EmbeddingBatchArtifactKind,
+        bytes: &[u8],
+    ) -> Result<(), String>;
+}
+
+/// Records a tracing failure without changing the Provider operation outcome.
+/// 记录追踪失败，同时不改变供应商操作结果。
+async fn persist_batch_artifact(
+    sink: Option<&dyn EmbeddingBatchArtifactSink>,
+    task_id: &str,
+    kind: EmbeddingBatchArtifactKind,
+    bytes: &[u8],
+) {
+    if let Some(sink) = sink
+        && let Err(error) = sink.persist(task_id, kind, bytes).await
+    {
+        eprintln!("[vce-batch-artifact] task_id={task_id} kind={kind:?} persist_failed={error}");
+    }
+}
 
 /// Streams deterministic serialized request bytes directly into SHA-256 without a second full buffer.
 /// 将确定性序列化请求字节直接流入 SHA-256，避免第二份完整缓冲区。
@@ -371,6 +431,7 @@ impl ProviderExecutionClient {
         request: &EmbeddingRequest,
         task: &EmbeddingBatchTaskPlan,
         secret: &CredentialExecutionSecret,
+        artifact_sink: Option<&dyn EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchUploadedInput, ProviderExecutionFailure> {
         let binding = embedding_batch_binding(route, model.id.as_str())?;
         if binding.capabilities.transport != InferenceBatchTransport::JsonlFile {
@@ -387,6 +448,13 @@ impl ProviderExecutionClient {
             })?;
         let file_name = format!("{}.jsonl", task.task_id);
         let payload = prepared.payload;
+        persist_batch_artifact(
+            artifact_sink,
+            task.task_id.as_str(),
+            EmbeddingBatchArtifactKind::RequestJsonl,
+            &payload,
+        )
+        .await;
         let upload_body = self
             .send_batch_request(
                 BatchHttpRequest {
@@ -438,6 +506,7 @@ impl ProviderExecutionClient {
         task: &EmbeddingBatchTaskPlan,
         uploaded_input: Option<&EmbeddingBatchUploadedInput>,
         secret: &CredentialExecutionSecret,
+        artifact_sink: Option<&dyn EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchSubmission, ProviderExecutionFailure> {
         let binding = embedding_batch_binding(route, model.id.as_str())?;
         let prepared = prepare_exact_embedding_batch_task(model, request, binding, task)?;
@@ -449,6 +518,13 @@ impl ProviderExecutionClient {
                     ));
                 }
                 let payload = prepared.payload;
+                persist_batch_artifact(
+                    artifact_sink,
+                    task.task_id.as_str(),
+                    EmbeddingBatchArtifactKind::RequestJson,
+                    &payload,
+                )
+                .await;
                 let body = self
                     .send_batch_request(
                         BatchHttpRequest {
@@ -626,6 +702,7 @@ impl ProviderExecutionClient {
         model: &ConnectionModel,
         submission: &EmbeddingBatchSubmission,
         secret: &CredentialExecutionSecret,
+        artifact_sink: Option<&dyn EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchSnapshot, ProviderExecutionFailure> {
         submission.validate().map_err(pre_dispatch_failure)?;
         let binding = embedding_batch_binding(route, model.id.as_str())?;
@@ -652,7 +729,98 @@ impl ProviderExecutionClient {
         if binding.capabilities.transport == InferenceBatchTransport::JsonlFile {
             validate_alibaba_submission_ownership(&batch, submission)?;
         }
-        batch_snapshot(submission, batch)
+        // Keep the validated provider observation alongside any optional raw terminal status.
+        // 将已校验的供应商观测与可选的原始终态状态一并保留。
+        let snapshot = batch_snapshot(submission, batch)?;
+        if matches!(
+            snapshot.state,
+            EmbeddingBatchProviderState::Completed
+                | EmbeddingBatchProviderState::Failed
+                | EmbeddingBatchProviderState::Expired
+                | EmbeddingBatchProviderState::Cancelled
+        ) {
+            persist_batch_artifact(
+                artifact_sink,
+                submission.task_id.as_str(),
+                EmbeddingBatchArtifactKind::TerminalStatusJson,
+                body.as_bytes(),
+            )
+            .await;
+        }
+        // A failed provider task never reaches result collection, so retain every offered file here.
+        // 失败的供应商任务不会进入结果收集，因此在此处保留其提供的全部文件。
+        if matches!(
+            snapshot.state,
+            EmbeddingBatchProviderState::Failed | EmbeddingBatchProviderState::Expired
+        ) && let Some(sink) = artifact_sink
+        {
+            // Provider output and error files may coexist even in a failed terminal state.
+            // 供应商输出文件与错误文件可能在失败终态同时存在。
+            let files = [
+                (
+                    snapshot.output_file_id.as_deref(),
+                    EmbeddingBatchArtifactKind::OutputJsonl,
+                ),
+                (
+                    snapshot.error_file_id.as_deref(),
+                    EmbeddingBatchArtifactKind::ErrorJsonl,
+                ),
+            ];
+            for (file_id, kind) in files {
+                let Some(file_id) = file_id else {
+                    continue;
+                };
+                let Some(template) = binding.file_content_endpoint_path_template.as_deref() else {
+                    eprintln!(
+                        "[vce-batch-artifact] task_id={} kind={kind:?} file_endpoint_absent",
+                        submission.task_id
+                    );
+                    continue;
+                };
+                let endpoint = match expand_endpoint_template(template, "{file_id}", file_id) {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        eprintln!(
+                            "[vce-batch-artifact] task_id={} kind={kind:?} file_endpoint_failed={error}",
+                            submission.task_id
+                        );
+                        continue;
+                    }
+                };
+                match self
+                    .send_batch_request(
+                        BatchHttpRequest {
+                            route,
+                            binding,
+                            method: Method::GET,
+                            endpoint: endpoint.as_str(),
+                            secret,
+                            maximum_response_bytes: binding
+                                .capabilities
+                                .host_policy_maximum_result_bytes,
+                            require_json: false,
+                        },
+                        |builder| builder,
+                    )
+                    .await
+                {
+                    Ok(body) => {
+                        persist_batch_artifact(
+                            Some(sink),
+                            submission.task_id.as_str(),
+                            kind,
+                            body.as_bytes(),
+                        )
+                        .await;
+                    }
+                    Err(error) => eprintln!(
+                        "[vce-batch-artifact] task_id={} kind={kind:?} file_download_failed={error}",
+                        submission.task_id
+                    ),
+                }
+            }
+        }
+        Ok(snapshot)
     }
 
     /// Collects one completed remote Batch and normalizes every single-input vector.
@@ -663,6 +831,7 @@ impl ProviderExecutionClient {
         model: &ConnectionModel,
         collection: EmbeddingBatchCollectionContext<'_>,
         secret: &CredentialExecutionSecret,
+        artifact_sink: Option<&dyn EmbeddingBatchArtifactSink>,
     ) -> Result<EmbeddingBatchCollectedResult, ProviderExecutionFailure> {
         let EmbeddingBatchCollectionContext {
             request,
@@ -707,6 +876,13 @@ impl ProviderExecutionClient {
                         |builder| builder,
                     )
                     .await?;
+                persist_batch_artifact(
+                    artifact_sink,
+                    task.task_id.as_str(),
+                    EmbeddingBatchArtifactKind::OutputJson,
+                    body.as_bytes(),
+                )
+                .await;
                 parse_inline_batch_result_items(&snapshot.submission, body.as_str())?
             }
             InferenceBatchResultDelivery::JsonlFiles => {
@@ -718,6 +894,60 @@ impl ProviderExecutionClient {
                         snapshot.total_requests,
                     );
                     let mut error_example = None;
+                    // A partially successful Batch can expose both files; retain both before failing collection.
+                    // 部分成功的 Batch 可能同时提供两份文件；在收集失败前一并保留。
+                    if let (Some(sink), Some(output_file_id)) =
+                        (artifact_sink, snapshot.output_file_id.as_deref())
+                    {
+                        // Use the declared file-content endpoint for the partial success file.
+                        // 使用已声明的文件内容端点读取部分成功文件。
+                        let endpoint_template = binding
+                            .file_content_endpoint_path_template
+                            .as_deref()
+                            .ok_or_else(|| {
+                                pre_dispatch_failure(
+                                    "Embedding Batch file-content endpoint is absent.",
+                                )
+                            })?;
+                        let endpoint = expand_endpoint_template(
+                            endpoint_template,
+                            "{file_id}",
+                            output_file_id,
+                        )?;
+                        match self
+                            .send_batch_request(
+                                BatchHttpRequest {
+                                    route,
+                                    binding,
+                                    method: Method::GET,
+                                    endpoint: endpoint.as_str(),
+                                    secret,
+                                    maximum_response_bytes: binding
+                                        .capabilities
+                                        .host_policy_maximum_result_bytes,
+                                    require_json: false,
+                                },
+                                |builder| builder,
+                            )
+                            .await
+                        {
+                            Ok(body) => {
+                                persist_batch_artifact(
+                                    Some(sink),
+                                    task.task_id.as_str(),
+                                    EmbeddingBatchArtifactKind::OutputJsonl,
+                                    body.as_bytes(),
+                                )
+                                .await;
+                            }
+                            Err(error) => {
+                                diagnostic.push_str(" Provider output file retrieval failed: ");
+                                diagnostic.push_str(
+                                    bounded_batch_error_text(error.to_string().as_str()).as_str(),
+                                );
+                            }
+                        }
+                    }
                     if let Some(error_file_id) = snapshot.error_file_id.as_deref() {
                         let endpoint_template = binding
                             .file_content_endpoint_path_template
@@ -742,24 +972,32 @@ impl ProviderExecutionClient {
                                     secret,
                                     maximum_response_bytes: binding
                                         .capabilities
-                                        .host_policy_maximum_result_bytes
-                                        .min(16 * 1024 * 1024),
+                                        .host_policy_maximum_result_bytes,
                                     require_json: false,
                                 },
                                 |builder| builder,
                             )
                             .await
                         {
-                            Ok(body) => match first_batch_error_file_diagnostic(body.as_str()) {
-                                Some(example) => {
-                                    diagnostic.push_str(" Provider error example: ");
-                                    diagnostic.push_str(example.display().as_str());
-                                    error_example = Some(example);
+                            Ok(body) => {
+                                persist_batch_artifact(
+                                    artifact_sink,
+                                    task.task_id.as_str(),
+                                    EmbeddingBatchArtifactKind::ErrorJsonl,
+                                    body.as_bytes(),
+                                )
+                                .await;
+                                match first_batch_error_file_diagnostic(body.as_str()) {
+                                    Some(example) => {
+                                        diagnostic.push_str(" Provider error example: ");
+                                        diagnostic.push_str(example.display().as_str());
+                                        error_example = Some(example);
+                                    }
+                                    None => diagnostic.push_str(
+                                        " Provider error file contains no parseable item error.",
+                                    ),
                                 }
-                                None => diagnostic.push_str(
-                                    " Provider error file contains no parseable item error.",
-                                ),
-                            },
+                            }
                             Err(error) => {
                                 diagnostic.push_str(" Provider error file retrieval failed: ");
                                 diagnostic.push_str(
@@ -802,6 +1040,13 @@ impl ProviderExecutionClient {
                         |builder| builder,
                     )
                     .await?;
+                persist_batch_artifact(
+                    artifact_sink,
+                    task.task_id.as_str(),
+                    EmbeddingBatchArtifactKind::OutputJsonl,
+                    body.as_bytes(),
+                )
+                .await;
                 parse_jsonl_result_items(body.as_str())?
             }
         };

@@ -134,12 +134,13 @@ const TOKEN_RHYTHM_MODELS: &[&str] = &[
     "wan2.7-image",
 ];
 
-/// Every CommandCode model declared by CLI 1.26.0 and currently returned by the Provider API.
-/// CommandCode CLI 1.26.0 声明且当前 Provider API 返回的全部模型。
+/// Every CommandCode model declared by CLI 1.54.1 and returned by the Provider API on 2026-09-16.
+/// CommandCode CLI 1.54.1 声明且 2026-09-16 Provider API 返回的全部模型。
 const COMMANDCODE_MODELS: &[&str] = &[
     "claude-sonnet-5",
     "claude-sonnet-4-6",
     "claude-fable-5",
+    "claude-fable-5-1",
     "claude-opus-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -153,6 +154,9 @@ const COMMANDCODE_MODELS: &[&str] = &[
     "gpt-5.4-mini",
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-flash-vision-exp",
+    "deepseek/deepseek-v4-flash-fast",
+    "deepseek/deepseek-v4.1-flash",
     "moonshotai/Kimi-K3",
     "moonshotai/Kimi-K2.7-Code",
     "moonshotai/Kimi-K2.7-Code-Highspeed",
@@ -163,12 +167,16 @@ const COMMANDCODE_MODELS: &[&str] = &[
     "zai-org/GLM-5.2-Fast",
     "zai-org/GLM-5.1",
     "zai-org/GLM-5",
+    "z-ai/glm-5.3-flash",
     "MiniMaxAI/MiniMax-M3",
     "MiniMaxAI/MiniMax-M2.7",
     "MiniMaxAI/MiniMax-M2.5",
     "xiaomi/mimo-v2.5-pro",
     "xiaomi/mimo-v2.5",
     "Qwen/Qwen3.8-Max",
+    "Qwen/Qwen3.8-Max-0902",
+    "Qwen/Qwen3.8-27B",
+    "Qwen/Qwen3.8-Flash",
     "Qwen/Qwen3.7-Max",
     "Qwen/Qwen3.7-Plus",
     "Qwen/Qwen3.7-Flash",
@@ -177,7 +185,9 @@ const COMMANDCODE_MODELS: &[&str] = &[
     "stepfun/Step-3.7-Flash",
     "stepfun/Step-3.5-Flash",
     "tencent/hy3-paid",
+    "tencent/hy4-preview",
     "google/gemini-3.7-flash",
+    "google/gemini-3.8-flash",
     "google/gemini-3.6-flash",
     "google/gemini-3.5-flash",
     "google/gemini-3.5-flash-lite",
@@ -190,6 +200,10 @@ const COMMANDCODE_MODELS: &[&str] = &[
     "meta/muse-spark-1.1",
     "meta/muse-spark-1.2",
     "meta/muse-spark-1.2-contributor",
+    "meta/muse-spark-1.3",
+    "meta/muse-spark-1.3-contributor",
+    "meituan/LongCat-2.0:free",
+    "inclusionai/ling-3.0-flash-sante:free",
     "xai/grok-4.5",
     "xai/grok-4.6",
 ];
@@ -1645,7 +1659,7 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
     assert_eq!(
         document.pointer("/services/0/credential_profiles/0/key_prefix"),
         None,
-        "CommandCode 1.26.0 validates API keys remotely instead of enforcing a local prefix"
+        "CommandCode validates API keys remotely instead of enforcing a local prefix"
     );
     assert_eq!(
         document.pointer("/services/0/credential_profiles/1/key_prefix"),
@@ -1787,11 +1801,12 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
         "a CLI-only model absent from the Provider API must remain unavailable"
     );
 
-    // textOnlyModels is the exact current-online subset of the CLI 1.26.0 text-only registry.
-    // textOnlyModels 是 CLI 1.26.0 纯文本注册表中当前在线的精确子集。
+    // textOnlyModels is the exact online subset of the CLI 1.54.1 text-only registry.
+    // textOnlyModels 是 CLI 1.54.1 纯文本注册表中的在线精确子集。
     let text_only_models = BTreeSet::from([
         "deepseek/deepseek-v4-pro",
         "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash-fast",
         "zai-org/GLM-5.3",
         "zai-org/GLM-5.2",
         "zai-org/GLM-5.2-Fast",
@@ -1804,6 +1819,9 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
         "Qwen/Qwen3.7-Max",
         "stepfun/Step-3.5-Flash",
         "tencent/hy3-paid",
+        "tencent/hy4-preview",
+        "meituan/LongCat-2.0:free",
+        "inclusionai/ling-3.0-flash-sante:free",
         "nvidia/nemotron-3-ultra-550b-a55b",
         "poolside/laguna-s-2.1-free",
         "xai/grok-4.6",
@@ -1826,6 +1844,8 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
                 vulcan_ai_contract::ReasoningEffort::XHigh,
             ],
             "gpt-5.4-mini"
+            | "tencent/hy4-preview"
+            | "google/gemini-3.8-flash"
             | "google/gemini-3.7-flash"
             | "google/gemini-3.6-flash"
             | "google/gemini-3.5-flash"
@@ -1836,16 +1856,25 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
                 vulcan_ai_contract::ReasoningEffort::Medium,
                 vulcan_ai_contract::ReasoningEffort::High,
             ],
-            "deepseek/deepseek-v4-pro" | "deepseek/deepseek-v4-flash" | "zai-org/GLM-5.2" => vec![
+            "deepseek/deepseek-v4-pro"
+            | "deepseek/deepseek-v4-flash"
+            | "deepseek/deepseek-v4-flash-vision-exp"
+            | "zai-org/GLM-5.2" => vec![
                 vulcan_ai_contract::ReasoningEffort::High,
                 vulcan_ai_contract::ReasoningEffort::Max,
             ],
-            "zai-org/GLM-5.3" => vec![
+            "zai-org/GLM-5.3"
+            | "z-ai/glm-5.3-flash"
+            | "deepseek/deepseek-v4-flash-fast"
+            | "deepseek/deepseek-v4.1-flash" => vec![
                 vulcan_ai_contract::ReasoningEffort::Low,
                 vulcan_ai_contract::ReasoningEffort::High,
                 vulcan_ai_contract::ReasoningEffort::Max,
             ],
-            "Qwen/Qwen3.8-Max" => vec![
+            "Qwen/Qwen3.8-Max"
+            | "Qwen/Qwen3.8-Max-0902"
+            | "Qwen/Qwen3.8-27B"
+            | "Qwen/Qwen3.8-Flash" => vec![
                 vulcan_ai_contract::ReasoningEffort::Low,
                 vulcan_ai_contract::ReasoningEffort::Medium,
                 vulcan_ai_contract::ReasoningEffort::XHigh,
@@ -1854,7 +1883,7 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
                 vulcan_ai_contract::ReasoningEffort::High,
                 vulcan_ai_contract::ReasoningEffort::XHigh,
             ],
-            "xai/grok-4.6" => vec![
+            "xai/grok-4.6" | "meta/muse-spark-1.3-contributor" => vec![
                 vulcan_ai_contract::ReasoningEffort::Low,
                 vulcan_ai_contract::ReasoningEffort::Medium,
                 vulcan_ai_contract::ReasoningEffort::High,
@@ -1930,6 +1959,58 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
             vec![String::from(expected_protocol)],
             "CommandCode must never expose a cross-family fallback for `{model_id}`"
         );
+    }
+    // verifiedLimits pin the newly admitted API models and the corrected GPT-5.5 context.
+    // verifiedLimits 固定新纳入 API 模型的限制以及修正后的 GPT-5.5 上下文。
+    let verified_limits = [
+        ("claude-fable-5-1", 1_000_000, None),
+        ("deepseek/deepseek-v4-flash-vision-exp", 1_000_000, None),
+        ("deepseek/deepseek-v4-flash-fast", 1_000_000, None),
+        ("deepseek/deepseek-v4.1-flash", 1_000_000, None),
+        ("z-ai/glm-5.3-flash", 1_048_576, Some(131_072)),
+        ("Qwen/Qwen3.8-Max-0902", 1_000_000, None),
+        ("Qwen/Qwen3.8-27B", 262_144, Some(32_768)),
+        ("Qwen/Qwen3.8-Flash", 1_000_000, None),
+        ("meituan/LongCat-2.0:free", 1_048_576, None),
+        ("tencent/hy4-preview", 1_048_576, None),
+        ("google/gemini-3.8-flash", 1_000_000, None),
+        (
+            "inclusionai/ling-3.0-flash-sante:free",
+            262_144,
+            Some(32_768),
+        ),
+        ("meta/muse-spark-1.3", 1_048_576, None),
+        ("meta/muse-spark-1.3-contributor", 1_048_576, None),
+        ("gpt-5.5", 400_000, None),
+    ];
+    for (model_id, context_limit, output_limit) in verified_limits {
+        let capabilities = compiled
+            .rule_for_model("provider-api", None, model_id)
+            .and_then(|rule| rule.capabilities.as_ref())
+            .unwrap_or_else(|| panic!("missing CommandCode capabilities `{model_id}`"));
+        assert_eq!(
+            capabilities.context_limit,
+            Some(context_limit),
+            "{model_id}"
+        );
+        assert_eq!(capabilities.output_limit, output_limit, "{model_id}");
+    }
+    // fableRestrictions retain the official Max-and-above access rule for both credential paths.
+    // fableRestrictions 为两种凭证路径保留官方 Max 及以上计划限制。
+    for credential_profile in document["services"][0]["credential_profiles"]
+        .as_array()
+        .expect("CommandCode credential profiles")
+    {
+        for plan_id in ["individual-pro", "individual-pro-v1"] {
+            assert!(
+                credential_profile["account_model_access"]["plan_rules"][plan_id]
+                    ["blocked_model_ids"]
+                    .as_array()
+                    .expect("CommandCode plan block list")
+                    .contains(&Value::String(String::from("claude-fable-5-1"))),
+                "Claude Fable 5.1 must be unavailable on {plan_id}"
+            );
+        }
     }
     let deepseek = compiled
         .rule_for_model("provider-api", None, "deepseek/deepseek-v4-flash")

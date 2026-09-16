@@ -41,15 +41,6 @@ mod runlua;
 /// 用于关联同一次 LuaSkills 宿主调用全部诊断的进程内序列。
 static LUASKILLS_HOST_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Compatibility mirror of the persistent-session lease limit enforced by LuaSkills 0.5.5.
-/// LuaSkills 0.5.5 所执行持久会话租约上限的兼容镜像。
-///
-/// The published 0.5.5 crate enforces the literal value `8` internally but does not export it;
-/// the pending local source exports the same value. Keeping the host admission limit here lets
-/// normal registry builds and local-source integration builds enforce the same bounded capacity.
-/// 已发布的 0.5.5 crate 在内部执行字面值 `8`，但未将其导出；待发布的本地源码导出了相同值。
-/// 在宿主侧集中保留该入场上限，使注册表构建和本地源码联调构建执行相同的有界容量。
-const LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY: usize = 8;
 mod schema;
 mod types;
 
@@ -163,7 +154,7 @@ fn bootstrap_luaskills_runtime_blocking() -> Result<LuaSkillsBootstrapReport, St
                 runtime_settings.run_lua_pool.max_size.max(1),
             )),
             runlua_session_call_admission: Arc::new(Semaphore::new(
-                LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY,
+                luaskills::MAX_RUNTIME_SESSION_LEASES_PER_MANAGER,
             )),
             runlua_ai_tool_enabled: Arc::new(AtomicBool::new(
                 runtime_settings.ai_tools.enable_run_lua,

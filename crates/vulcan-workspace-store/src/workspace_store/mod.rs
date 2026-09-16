@@ -29,6 +29,7 @@ mod session_index_v1;
 mod session_v1;
 mod session_v1_store;
 mod session_vmm_v1;
+mod vce_batch_artifacts;
 
 use self::session_v1::atomic_io::write_file_atomic;
 pub use ai_credentials::{
@@ -76,6 +77,7 @@ pub use session_v1_store::{
     project_session_lifecycle_v1, publish_edit_session_v1, set_session_unread_v1,
 };
 pub use session_vmm_v1::{load_session_vmm_state, persist_session_vmm_state};
+pub use vce_batch_artifacts::persist_vce_batch_artifact;
 
 pub use provider_usage::{
     PROVIDER_USAGE_SCHEMA_REVISION, ProviderAccountUsageSnapshotRecord,

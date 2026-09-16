@@ -94,7 +94,7 @@ fn runtime_handle_separates_skill_runlua_and_session_admission() {
     assert_eq!(handle.runlua_call_admission.available_permits(), 2);
     assert_eq!(
         handle.runlua_session_call_admission.available_permits(),
-        LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY
+        luaskills::MAX_RUNTIME_SESSION_LEASES_PER_MANAGER
     );
     assert!(!Arc::ptr_eq(
         &handle.runlua_call_admission,
