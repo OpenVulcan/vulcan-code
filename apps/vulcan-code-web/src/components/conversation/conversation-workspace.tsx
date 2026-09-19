@@ -49,6 +49,8 @@ import type {
   ConversationSummary,
 } from "@/types";
 import { useI18n } from "@/i18n";
+import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
+import { isElectronRuntime } from "@/shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
 import {
   ConversationTimelineProjectionStore,
@@ -162,6 +164,9 @@ export function ConversationWorkspace(props: {
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
 }) {
   const { locale, t } = useI18n();
+  // timelineRef limits right-click text selection to this conversation's visible transcript.
+  // timelineRef 将右键文本选择限定为当前会话的可见转录。
+  const timelineRef = React.useRef<HTMLDivElement | null>(null);
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
   const [detail, setDetail] = React.useState<ConversationDetail | null>(null);
@@ -574,6 +579,7 @@ export function ConversationWorkspace(props: {
         scopeId={surfaceRestoreId}
         onMemoryChange={handleMeasuredCollapseMemoryChange}
       >
+        <ConversationTextContextMenu enabled={isElectronRuntime()} timelineRef={timelineRef} onCopyText={props.onCopyText}>
         <section
           className="conversation-panel"
           data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
@@ -581,7 +587,7 @@ export function ConversationWorkspace(props: {
           ref={props.scrollRef}
         >
           <div className="conversation-scroll-content">
-            <div className="timeline">
+            <div className="timeline" ref={timelineRef}>
               {props.error ? (
                 <article className="message-card system error-message">
                   <span>system</span>
@@ -645,6 +651,7 @@ export function ConversationWorkspace(props: {
             <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
           ) : null}
         </section>
+        </ConversationTextContextMenu>
       </ConversationMeasuredCollapseProvider>
     </MarkdownImageWorkspacePathProvider>
   );

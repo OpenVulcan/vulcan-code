@@ -6,11 +6,12 @@
 // GUI 只拥有窗口与原生集成。它启动或复用独立 Core 服务、等待真实业务就绪，并且在关闭窗口时
 // 绝不停止该服务。
 
-import { BrowserWindow, Notification, app, ipcMain, shell } from 'electron';
+import { BrowserWindow, Notification, app, clipboard, ipcMain, shell } from 'electron';
 import path from 'node:path';
 
 import {
   SERVICE_CHANNELS,
+  CLIPBOARD_CHANNELS,
   LOCAL_BROWSER_CHANNELS,
   NOTIFICATION_CHANNELS,
   NOTIFICATION_EVENT_CHANNELS,
@@ -276,6 +277,10 @@ let maximizeQueue: Promise<void> = Promise.resolve();
 
 /** Registers every main-process handler for one window. */
 function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, discoveryPath: string, serviceBaseUrl: string): void {
+  // blockedBrowserOrigins grows with confirmed Core generations so a restarted Core cannot be
+  // opened as an untrusted temporary page when it binds a different port.
+  // blockedBrowserOrigins 随已确认的 Core 代次增长，避免重启后换端口的 Core 被临时页面打开。
+  const blockedBrowserOrigins = new Set([new URL(webUiUrl).origin, new URL(serviceBaseUrl).origin]);
   // Every bridge handler accepts only the selected workbench main frame, including after navigation.
   // 每个桥处理器仅接受选定工作台主框架，导航后同样核对。
   const handle = <Args extends unknown[]>(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: Args) => unknown): void => {
@@ -287,6 +292,14 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
       return listener(event, ...args as Args);
     });
   };
+  // The owner-checked IPC boundary lets the renderer edit text without unrestricted native access.
+  // 已核对所有者的 IPC 边界让渲染端编辑文本，同时不开放无限制的原生访问。
+  handle(CLIPBOARD_CHANNELS.readText, () => clipboard.readText());
+  handle(CLIPBOARD_CHANNELS.writeText, (_event, value: string) => {
+    if (typeof value !== 'string') throw new TypeError('Clipboard text must be a string.');
+    clipboard.writeText(value);
+  });
+  handle(CLIPBOARD_CHANNELS.paste, () => window.webContents.paste());
   handle(SERVICE_CHANNELS.connection, async () => {
     // Re-read the authoritative discovery path on reconnect; never search another user namespace.
     // 重连时重读权威发现路径，绝不搜索另一个用户命名空间。
@@ -294,6 +307,7 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     if (!instance || instance.status !== 'ready') {
       throw new Error('The selected Core service is not ready.');
     }
+    blockedBrowserOrigins.add(new URL(instance.baseUrl).origin);
     guiState.instance = instance;
     return instance;
   });
@@ -301,7 +315,7 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
   // 临时浏览页面运行在独立的内存分区中，不带工作台预加载桥。
   const localBrowser = new LocalBrowserManager(
     window,
-    new Set([new URL(webUiUrl).origin, new URL(serviceBaseUrl).origin]),
+    blockedBrowserOrigins,
     (snapshot) => window.webContents.send(LOCAL_BROWSER_CHANNELS.changed, snapshot),
   );
   window.on('close', () => localBrowser.dispose());
@@ -312,6 +326,14 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
   handle(LOCAL_BROWSER_CHANNELS.close, (_event, id: string) => localBrowser.close(id));
   handle(LOCAL_BROWSER_CHANNELS.viewport, (_event, viewport: LocalBrowserViewport | null) =>
     localBrowser.setViewport(viewport));
+  // The shared handler guard limits DevTools activation to this workbench's trusted main frame.
+  // 共用处理器校验将开发者工具的打开权限限定于此工作台的可信主框架。
+  handle(WINDOW_COMMAND_CHANNELS.openDeveloperTools, () => {
+    if (window.isDestroyed()) {
+      throw new Error('The workbench window is no longer available.');
+    }
+    window.webContents.openDevTools({ mode: 'right', activate: true });
+  });
   handle(WINDOW_COMMAND_CHANNELS.minimize, () => {
     window.minimize();
   });

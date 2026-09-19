@@ -9,7 +9,7 @@ use vulcan_service_api::{
 };
 use vulcan_session_core::v1::document::{EditGenerationInput, RootInputReplacement};
 use vulcan_session_core::v1::event::{EventBody, UserInputSource};
-use vulcan_session_core::v1::ids::Seq;
+use vulcan_session_core::v1::ids::{ClientActionId, Seq};
 use vulcan_workbench_model::SessionId;
 
 use crate::runtime_workspace_helpers::runtime_parts_from_state;
@@ -49,6 +49,10 @@ pub(crate) async fn service_edit_conversation_generation_v1(
         .await
         .map_err(|error| error.to_string())?;
     let ordered_resource_ids = root_input_resource_ids(handle.as_ref(), target_seq)?;
+    // clientActionId preserves the exact editing client as the rewritten generation owner.
+    // clientActionId 将精确的编辑客户端保留为重写 generation 的所有者。
+    let client_action_id =
+        ClientActionId::try_new(request.client_action_id).map_err(|error| error.to_string())?;
     let receipt = handle
         .publish_edit_generation(
             request.expected_window_generation,
@@ -57,7 +61,8 @@ pub(crate) async fn service_edit_conversation_generation_v1(
                 replacement: RootInputReplacement::new(
                     request.replacement_text,
                     ordered_resource_ids,
-                ),
+                )
+                .with_client_action_id(client_action_id),
                 now_ms: current_v1_goal_unix_millis()?,
             },
         )

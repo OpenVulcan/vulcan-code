@@ -1,4 +1,4 @@
-# make.ps1 provides the PowerShell-native task entry for local build and run workflows.
+﻿# make.ps1 provides the PowerShell-native task entry for local build and run workflows.
 # make.ps1 用于提供本地构建与运行工作流的 PowerShell 原生入口。
 # CommandMode selects the top-level command such as sync, vite, build, run, release, or deps.
 # CommandMode 用于选择顶层命令，例如 sync、vite、build、run、release 或 deps。
@@ -58,6 +58,10 @@ $ViteDevServerScriptPath = Join-Path $ScriptDir "scripts\vite_dev_server.ps1"
 # TauriRunScriptPath points at the new Tauri/WebUI run script.
 # TauriRunScriptPath 用于指向新版 Tauri/WebUI 运行脚本。
 $TauriRunScriptPath = Join-Path $ScriptDir "scripts\run_tauri.ps1"
+
+# CoreDebugCycleScriptPath points at the Core-only Debug build and restart workflow.
+# CoreDebugCycleScriptPath 指向仅构建与重启 Debug Core 的工作流。
+$CoreDebugCycleScriptPath = Join-Path $ScriptDir "scripts\core_debug_cycle.ps1"
 
 # HostDepsScriptPath points at the dedicated PowerShell host-dependency bootstrap script.
 # HostDepsScriptPath 用于指向专用的 PowerShell 宿主依赖初始化脚本。
@@ -199,6 +203,26 @@ function Invoke-TauriBuildAndRun {
     Invoke-TauriRun -IsRelease $IsRelease
 }
 
+# Invoke-CoreDebugCycle keeps the Electron shell and Vite process alive while building or restarting Core.
+# Invoke-CoreDebugCycle 在构建或重启 Core 时保留 Electron 壳与 Vite 进程。
+# Action selects build-only or the guarded, service-owned restart workflow; the function returns no value.
+# Action 选择仅构建或受服务归属约束的重启流程；函数无返回值。
+function Invoke-CoreDebugCycle {
+    param(
+        [ValidateSet("build", "restart")]
+        [string]$Action
+    )
+
+    if (-not (Test-Path -LiteralPath $CoreDebugCycleScriptPath -PathType Leaf)) {
+        throw "Missing Core Debug cycle script: $CoreDebugCycleScriptPath"
+    }
+
+    & $CoreDebugCycleScriptPath -Action $Action
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 # Invoke-DependencyInstall delegates dependency bootstrapping to the dedicated PowerShell scripts.
 # Invoke-DependencyInstall 用于把依赖初始化委托给专用的 PowerShell 脚本。
 # DependencyKind selects which dependency domain should be initialized.
@@ -306,6 +330,8 @@ function Show-Usage {
     Write-Host "  ./make run         # run Electron desktop; start Vite when needed"
     Write-Host "  ./make run release # run Core/Electron/WebUI release build"
     Write-Host "  ./make service     # start the tray/background Core only"
+    Write-Host "  ./make core-build  # Windows: compile Debug Core only; keep GUI running"
+    Write-Host "  ./make core-restart # Windows: compile and restart Debug Core; keep GUI running"
     Write-Host "  ./make deps        # install host, bundled tools, and LuaSkills dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
@@ -409,6 +435,18 @@ switch ($NormalizedMode) {
         $ServiceProfile = if ($NormalizedVariant -eq "release") { "release" } else { "debug" }
         & node (Join-Path $ScriptDir 'scripts/desktop-runtime.mjs') service $ServiceProfile
         exit $LASTEXITCODE
+    }
+    "core-build" {
+        if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
+            throw "Unsupported core-build variant: $CommandVariant"
+        }
+        Invoke-CoreDebugCycle -Action "build"
+    }
+    "core-restart" {
+        if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
+            throw "Unsupported core-restart variant: $CommandVariant"
+        }
+        Invoke-CoreDebugCycle -Action "restart"
     }
     "init-system" {
         Invoke-SystemInitialization -Variant $NormalizedVariant

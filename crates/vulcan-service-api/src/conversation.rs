@@ -37,6 +37,10 @@ pub struct ConversationRunSettledEvent {
     /// Unix-millisecond timestamp text captured when settlement was emitted.
     /// 发出终态事件时捕获的 Unix 毫秒时间戳文本。
     pub occurred_at: String,
+    /// Exact WebUI client instance allowed to present this local notification.
+    /// 获准展示本地通知的精确 WebUI 客户端实例。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_client_id: Option<String>,
 }
 
 /// Summarizes one conversation in the WebUI sidebar.

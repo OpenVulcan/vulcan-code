@@ -18,6 +18,18 @@ export interface ElectronDesktopBridge {
   // Reports whether this exact executable has an isolated native notification identity.
   // 表示当前可执行文件是否拥有隔离的原生通知身份。
   nativeNotificationsAvailable: boolean;
+  // Opens developer tools for the current workbench window when the host provides this capability.
+  // 宿主提供此能力时打开当前工作台窗口的开发者工具。
+  openDeveloperTools?: () => Promise<void>;
+  // Reads plain text from the desktop clipboard when the current host supports it.
+  // 当前宿主支持时读取桌面剪贴板纯文本。
+  readClipboardText?: () => Promise<string>;
+  // Writes plain text to the desktop clipboard when the current host supports it.
+  // 当前宿主支持时写入桌面剪贴板纯文本。
+  writeClipboardText?: (value: string) => Promise<void>;
+  // Dispatches native Paste to the focused workbench input when the host supports it.
+  // 宿主支持时向聚焦的工作台输入框派发原生粘贴。
+  pasteClipboard?: () => Promise<void>;
   // Minimizes the current desktop window.
   // 最小化当前桌面窗口。
   minimizeWindow: () => Promise<void>;

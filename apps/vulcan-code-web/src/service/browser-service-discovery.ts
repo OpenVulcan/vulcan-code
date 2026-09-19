@@ -1,4 +1,5 @@
 import { readElectronServiceConnection } from "@/shell/electronBridge";
+import { notificationClientInstanceId } from "@/notifications/client-identity";
 
 // BrowserServiceDiscoverySnapshot describes the service endpoint advertised by /health or dev discovery.
 // BrowserServiceDiscoverySnapshot 描述 /health 或开发发现端点公布的服务端点。
@@ -69,10 +70,6 @@ const BROWSER_SERVICE_DISCOVERY_PATH = "/vulcan-service-discovery.json";
 // BROWSER_SERVICE_CONNECTION_EVENT is emitted whenever the local service connection changes.
 // BROWSER_SERVICE_CONNECTION_EVENT 会在本地服务连接状态变化时发出。
 export const BROWSER_SERVICE_CONNECTION_EVENT = "vulcan:browser-service-connection";
-
-// browserServiceClientId identifies this exact browser/WebView lifetime to the event socket.
-// browserServiceClientId 向事件套接字标识当前精确浏览器或 WebView 生命周期。
-let browserServiceClientId: string | null = null;
 
 // BrowserServiceConnectionStatus is the frontend-visible local service connection state.
 // BrowserServiceConnectionStatus 是前端可见的本地服务连接状态。
@@ -149,11 +146,10 @@ export function resolveBrowserServiceAccessToken(): string | null {
   return token;
 }
 
-// resolveBrowserServiceClientId returns the identity shared by terminal attach RPCs and the event socket.
-// resolveBrowserServiceClientId 返回由终端挂接 RPC 与事件套接字共享的标识。
+// resolveBrowserServiceClientId returns the identity shared by notifications, terminal attaches, and the event socket.
+// resolveBrowserServiceClientId 返回由通知、终端挂接与事件套接字共享的标识。
 export function resolveBrowserServiceClientId(): string {
-  browserServiceClientId ??= globalThis.crypto.randomUUID();
-  return browserServiceClientId;
+  return notificationClientInstanceId;
 }
 
 // BrowserServiceCandidatePlan separates an explicit selection from fallback discovery candidates.

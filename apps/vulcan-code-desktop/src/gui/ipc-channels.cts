@@ -38,6 +38,9 @@ export const LOCAL_BROWSER_CHANNELS = {
 /** Renderer-to-main window command channels. */
 /** 渲染进程到主进程的窗口命令通道。 */
 export const WINDOW_COMMAND_CHANNELS = {
+  /** Opens the workbench window's developer tools. */
+  /** 打开工作台窗口的开发者工具。 */
+  openDeveloperTools: 'vulcan:window:open-developer-tools',
   /** Minimizes the current window. */
   /** 最小化当前窗口。 */
   minimize: 'vulcan:window:minimize',
@@ -59,6 +62,20 @@ export const WINDOW_COMMAND_CHANNELS = {
   /** Closes the current window without stopping Core. */
   /** 关闭当前窗口，不停止 Core。 */
   close: 'vulcan:window:close',
+} as const;
+
+// Clipboard channels expose only plain text to the owning workbench frame.
+// 剪贴板通道仅向所属工作台框架开放纯文本。
+export const CLIPBOARD_CHANNELS = {
+  // Reads the current plain-text clipboard contents.
+  // 读取当前剪贴板纯文本内容。
+  readText: 'vulcan:clipboard:read-text',
+  // Writes plain text provided by the current workbench.
+  // 写入当前工作台提供的纯文本。
+  writeText: 'vulcan:clipboard:write-text',
+  // Dispatches the native Paste command into the focused workbench input.
+  // 向当前聚焦的工作台输入框派发原生粘贴命令。
+  paste: 'vulcan:clipboard:paste',
 } as const;
 
 /** Main-to-renderer window event channels. */

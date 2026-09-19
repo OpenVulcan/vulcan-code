@@ -28,6 +28,8 @@ import {
   Minimize2,
   MinusIcon,
   Moon,
+  PanelRightOpen,
+  RefreshCw,
   SquareIcon,
   Sun,
   X,
@@ -185,6 +187,12 @@ export function GlobalActions(props: {
   // t translates global action labels.
   // t 翻译全局操作标签。
   const { t } = useI18n();
+  // openDeveloperTools is present only in a desktop host that exposes the native action.
+  // openDeveloperTools 仅在桌面宿主提供原生操作时存在。
+  const openDeveloperTools = shellClient.openDeveloperTools;
+  // reloadWorkbench refreshes this client document like F5 without restarting Core.
+  // reloadWorkbench 像 F5 一样刷新当前客户端页面，不重启 Core。
+  const reloadWorkbench = React.useCallback(() => window.location.reload(), []);
   // isPreviewMode detects fallback browser data instead of a live service bridge.
   // isPreviewMode 检测当前是否为浏览器回退预览数据而非真实服务桥接。
   const isPreviewMode = props.startup.phase === "browser-preview";
@@ -297,6 +305,25 @@ export function GlobalActions(props: {
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        <DropdownMenuItem className="app-chrome-menu-row" onSelect={reloadWorkbench}>
+          <RefreshCw size={15} />
+          <span>{t("appChrome.reload")}</span>
+        </DropdownMenuItem>
+        {openDeveloperTools ? (
+          <DropdownMenuItem
+            className="app-chrome-menu-row"
+            onSelect={() => {
+              void openDeveloperTools().catch((error) => {
+                toast.error(t("appChrome.developerToolsFailed"), {
+                  description: error instanceof Error ? error.message : String(error),
+                });
+              });
+            }}
+          >
+            <PanelRightOpen size={15} />
+            <span>{t("appChrome.developerTools")}</span>
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -35,6 +35,21 @@ use super::{SharedServiceBridgeState, current_unix_millis_text};
 /// Maximum Core browser sessions owned by one service process.
 /// 单个服务进程拥有的最大 Core 浏览器会话数。
 const BROWSER_MAX_SESSIONS: usize = 16;
+/// Allows two simultaneous blocking calls per live session while bounding retained-session work.
+/// 每个活动会话最多允许两个并行阻塞调用，同时限制保留会话带来的工作总量。
+const BROWSER_MAX_BLOCKING_CALLS: usize = BROWSER_MAX_SESSIONS * 2;
+/// Keeps one delayed host from filling the blocking pool with queued requests from one session.
+/// 防止单个缓慢宿主的排队请求占满阻塞工作线程池。
+const BROWSER_MAX_BLOCKING_CALLS_PER_SESSION: usize = 2;
+/// An admitted host write has not yet entered its blocking worker.
+/// 已准入的宿主写入尚未进入阻塞工作线程。
+const BROWSER_WRITE_PENDING: u8 = 0;
+/// A blocking worker began the host write and may have changed the page.
+/// 阻塞工作线程已开始宿主写入，页面可能已经变化。
+const BROWSER_WRITE_STARTED: u8 = 1;
+/// The caller disappeared before the write result could be acknowledged.
+/// 调用方在写入结果得到确认前已经消失。
+const BROWSER_WRITE_CANCELLED: u8 = 2;
 
 /// Maximum explicitly closed browser records retained for bounded in-process history.
 /// 为限制进程内历史增长而保留的显式已关闭浏览器记录上限。
@@ -418,6 +433,9 @@ struct BrowserSessionRecord {
     /// Serializes authorization, host delivery, and control handoff for this session only.
     /// 仅为本会话串行化授权、宿主交付及控制交接。
     dispatch_gate: Arc<Mutex<()>>,
+    /// Limits blocking host calls admitted for this session before they occupy worker threads.
+    /// 限制本会话占用阻塞工作线程之前获准进入的宿主调用数。
+    blocking_gate: Arc<tokio::sync::Semaphore>,
     /// Keeps a retained download readable until any history-eviction cleanup finishes.
     /// 在历史驱逐清理结束前保护已保留下载的读取。
     download_gate: Arc<Mutex<()>>,
@@ -542,6 +560,9 @@ pub struct BrowserManager {
     /// Interior-shared manager state.
     /// 内部共享的管理器状态。
     inner: Arc<Mutex<BrowserManagerState>>,
+    /// Bounds blocking browser work across all sessions owned by this manager.
+    /// 限制此管理器全部会话同时执行的阻塞浏览器工作。
+    blocking_gate: Arc<tokio::sync::Semaphore>,
     /// Live host handles keyed by session, each serialized on its own dispatch point.
     /// 按会话索引的活动宿主句柄，各自在自己的调度点上串行化。
     hosts: Arc<Mutex<BTreeMap<String, Arc<Mutex<BrowserHostOwnership>>>>>,
@@ -584,7 +605,154 @@ pub struct BrowserHostOwnership {
     pub connection: BrowserHostConnection,
 }
 
+/// Tracks whether a detached blocking host write lost its caller before acknowledgement.
+/// 跟踪独立阻塞宿主写入是否在结果确认前失去调用方。
+struct BrowserHostWriteCancellation {
+    /// The manager that can block a lease when a write result is uncertain.
+    /// 写入结果不确定时可阻塞租约的管理器。
+    manager: BrowserManager,
+    /// Stable Core session receiving the host write.
+    /// 接收宿主写入的稳定 Core 会话。
+    session_id: String,
+    /// Exact write kind recorded as unconfirmed on cancellation.
+    /// 取消时记录为未确认的精确写入类别。
+    operation_name: &'static str,
+    /// Atomic pending, started, or cancelled state shared with the worker.
+    /// 与工作线程共享的原子待执行、已开始或已取消状态。
+    progress: Arc<std::sync::atomic::AtomicU8>,
+    /// Whether the waiting caller received the worker result.
+    /// 等待中的调用方是否已收到工作线程结果。
+    acknowledged: bool,
+}
+
+impl Drop for BrowserHostWriteCancellation {
+    /// Blocks later controllers only when the worker may already have changed browser state.
+    /// 仅当工作线程可能已改变浏览器状态时阻塞后续控制者。
+    fn drop(&mut self) {
+        if self.acknowledged {
+            return;
+        }
+        let previous = self
+            .progress
+            .swap(BROWSER_WRITE_CANCELLED, std::sync::atomic::Ordering::AcqRel);
+        if previous == BROWSER_WRITE_STARTED {
+            let _ = self
+                .manager
+                .mark_operation_unconfirmed(&self.session_id, self.operation_name);
+        }
+    }
+}
+
 impl BrowserManager {
+    /// Runs synchronous host or filesystem work without occupying a Tokio worker thread.
+    /// 在不占用 Tokio 工作线程的前提下执行同步宿主或文件系统工作。
+    ///
+    /// `session_id` selects a two-call per-session admission gate, and `operation` receives this
+    /// manager on a blocking worker. Returns the operation result or an explicit worker failure.
+    /// `session_id` 选择每会话最多两个调用的准入门；`operation` 在阻塞工作线程接收此管理器。
+    /// 返回操作结果，或明确的工作线程故障。
+    pub(crate) async fn run_blocking<T, F>(
+        &self,
+        session_id: &str,
+        operation: F,
+    ) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce(BrowserManager) -> Result<T, String> + Send + 'static,
+    {
+        self.run_blocking_inner(session_id, None, operation).await
+    }
+
+    /// Blocks later controllers when a cancelled caller cannot receive a host write result.
+    /// 当取消的调用方无法收到宿主写入结果时阻止后续控制者接管。
+    ///
+    /// `operation_name` identifies the uncertain host write; the result is delivered exactly as
+    /// with `run_blocking` while a live caller remains to acknowledge it.
+    /// `operation_name` 标识结果未确认的宿主写入；调用方存活时结果与 `run_blocking` 一样交付。
+    pub(crate) async fn run_blocking_host_write<T, F>(
+        &self,
+        session_id: &str,
+        operation_name: &'static str,
+        operation: F,
+    ) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce(BrowserManager) -> Result<T, String> + Send + 'static,
+    {
+        self.run_blocking_inner(session_id, Some(operation_name), operation)
+            .await
+    }
+
+    /// Admits blocking work and tracks whether a host write began before caller cancellation.
+    /// 准入阻塞工作，并跟踪调用方取消前宿主写入是否已经开始。
+    async fn run_blocking_inner<T, F>(
+        &self,
+        session_id: &str,
+        operation_name: Option<&'static str>,
+        operation: F,
+    ) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce(BrowserManager) -> Result<T, String> + Send + 'static,
+    {
+        // Admission is asynchronous, so a slow host cannot occupy an extra worker merely while
+        // waiting behind another request to the same browser.
+        // 准入等待是异步的，因此慢宿主不会仅因同一浏览器的前序请求而额外占用工作线程。
+        let session_gate = self
+            .inner
+            .lock()
+            .map_err(|error| format!("failed to lock browser manager: {error}"))?
+            .sessions
+            .get(session_id)
+            .map(|session| Arc::clone(&session.blocking_gate))
+            .ok_or_else(|| String::from(BROWSER_ERROR_UNKNOWN_SESSION))?;
+        let session_permit = session_gate
+            .acquire_owned()
+            .await
+            .map_err(|_| String::from(BROWSER_ERROR_SERVICE_STOPPING))?;
+        let manager_permit = Arc::clone(&self.blocking_gate)
+            .acquire_owned()
+            .await
+            .map_err(|_| String::from(BROWSER_ERROR_SERVICE_STOPPING))?;
+        let manager = self.clone();
+        let progress = operation_name
+            .map(|_| Arc::new(std::sync::atomic::AtomicU8::new(BROWSER_WRITE_PENDING)));
+        let worker_progress = progress.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            let _session_permit = session_permit;
+            let _manager_permit = manager_permit;
+            if let Some(progress) = worker_progress
+                && progress
+                    .compare_exchange(
+                        BROWSER_WRITE_PENDING,
+                        BROWSER_WRITE_STARTED,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire,
+                    )
+                    .is_err()
+            {
+                return Err(String::from("browser host write cancelled before dispatch"));
+            }
+            operation(manager)
+        });
+        let mut cancellation = operation_name
+            .zip(progress)
+            .map(|(operation_name, progress)| BrowserHostWriteCancellation {
+                manager: self.clone(),
+                session_id: session_id.to_owned(),
+                operation_name,
+                progress,
+                acknowledged: false,
+            });
+        let result = worker
+            .await
+            .map_err(|error| format!("browser blocking worker failed: {error}"))?;
+        if let Some(cancellation) = cancellation.as_mut() {
+            cancellation.acknowledged = true;
+        }
+        result
+    }
+
     /// Returns a session gate without holding the global state lock during host I/O.
     /// 返回会话调度锁，不在宿主输入输出期间持有全局状态锁。
     /// The stable session ID selects the gate; unknown sessions fail before any dispatch.
@@ -740,6 +908,7 @@ impl BrowserManager {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(BrowserManagerState::default())),
+            blocking_gate: Arc::new(tokio::sync::Semaphore::new(BROWSER_MAX_BLOCKING_CALLS)),
             hosts: Arc::new(Mutex::new(BTreeMap::new())),
             host_config: Arc::new(Mutex::new(None)),
             ai_connections: Arc::new(Mutex::new(BTreeMap::new())),
@@ -754,6 +923,7 @@ impl BrowserManager {
     pub fn with_host_spawner(host_spawner: Arc<dyn BrowserHostSpawner>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(BrowserManagerState::default())),
+            blocking_gate: Arc::new(tokio::sync::Semaphore::new(BROWSER_MAX_BLOCKING_CALLS)),
             hosts: Arc::new(Mutex::new(BTreeMap::new())),
             host_config: Arc::new(Mutex::new(None)),
             ai_connections: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1006,11 +1176,27 @@ impl BrowserManager {
         operation: &str,
         params: serde_json::Value,
     ) -> Result<BrowserHostRequestOutcome, String> {
-        let ownership = self.owned_host(session_id)?;
         let timeout = self
             .host_runtime_config()?
             .map(|config| config.request_timeout)
             .unwrap_or_else(|| Duration::from_secs(10));
+        self.request_host_with_timeout(session_id, operation, params, timeout)
+    }
+
+    /// Sends one host request with an explicit deadline for non-mutating control work.
+    /// 为不改变页面状态的控制任务按明确期限发送一条宿主请求。
+    /// `session_id` selects the owned host; `operation` and `params` form its command; `timeout` bounds its acknowledgement.
+    /// `session_id` 选定归属宿主；`operation` 与 `params` 组成命令；`timeout` 限制应答等待。
+    /// Returns the correlated host outcome or an ownership diagnostic.
+    /// 返回关联的宿主结果或归属诊断。
+    fn request_host_with_timeout(
+        &self,
+        session_id: &str,
+        operation: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<BrowserHostRequestOutcome, String> {
+        let ownership = self.owned_host(session_id)?;
         // The per-session mutex is the single dispatch point: writes of one session serialize
         // while other sessions and the global state lock stay free.
         // 每会话互斥锁是唯一调度点：同一会话的写入串行化，而其他会话与全局状态锁保持空闲。
@@ -1270,6 +1456,9 @@ impl BrowserManager {
             session_id,
             BrowserSessionRecord {
                 dispatch_gate: Arc::new(Mutex::new(())),
+                blocking_gate: Arc::new(tokio::sync::Semaphore::new(
+                    BROWSER_MAX_BLOCKING_CALLS_PER_SESSION,
+                )),
                 download_gate: Arc::new(Mutex::new(())),
                 needs_input_release: false,
                 projection: projection.clone(),
@@ -1618,6 +1807,105 @@ impl BrowserManager {
                     session.projection.page_generation.wrapping_add(1);
                 session.queued_inputs.clear();
                 Ok(true)
+            }
+            // A deferred screenshot is published only for the page and viewport generations
+            // captured when Core scheduled it; a late image cannot overwrite a newer page.
+            // 异步截图仅在 Core 调度时的页面与视口代次仍有效时发布；迟到画面不能覆盖新页面。
+            "pageCaptured" => {
+                use base64::Engine as _;
+
+                if target_id.is_empty() {
+                    return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
+                }
+                let page_generation = event
+                    .payload
+                    .get("pageGeneration")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                let viewport_generation = event
+                    .payload
+                    .get("viewportGeneration")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                let projection = self.session_projection(session_id)?;
+                if page_generation != projection.page_generation
+                    || viewport_generation != projection.viewport_generation
+                {
+                    return Ok(false);
+                }
+                let Some(page_id) = self.page_id_for_target(session_id, target_id)? else {
+                    return Ok(false);
+                };
+                let width = event
+                    .payload
+                    .get("width")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                let height = event
+                    .payload
+                    .get("height")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                if projection
+                    .viewport_size
+                    .as_ref()
+                    .is_some_and(|viewport| viewport.width != width || viewport.height != height)
+                {
+                    return Ok(false);
+                }
+                if event
+                    .payload
+                    .get("mimeType")
+                    .and_then(|value| value.as_str())
+                    != Some("image/jpeg")
+                {
+                    return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
+                }
+                let captured_at = event
+                    .payload
+                    .get("capturedAt")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                let encoded = event
+                    .payload
+                    .get("dataBase64")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|_| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                if event
+                    .payload
+                    .get("byteLength")
+                    .and_then(|value| value.as_u64())
+                    != Some(data.len() as u64)
+                {
+                    return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
+                }
+                match self.publish_page_frame(
+                    session_id,
+                    &page_id,
+                    page_generation,
+                    viewport_generation,
+                    width,
+                    height,
+                    captured_at,
+                    "image/jpeg",
+                    data,
+                ) {
+                    Ok(_) => Ok(false),
+                    Err(error)
+                        if error == BROWSER_ERROR_STALE_GENERATION
+                            || error == BROWSER_ERROR_STALE_VIEWPORT =>
+                    {
+                        Ok(false)
+                    }
+                    Err(error) => Err(error),
+                }
             }
             "downloadStarted" => {
                 let download_id = event
@@ -4180,27 +4468,48 @@ pub async fn service_browser_session_create(
     owner_session_id: String,
 ) -> Result<BrowserSessionProjection, String> {
     let manager = browser_manager_from_state(&state)?;
-    let session = manager.create_owned_session(
-        &owner_session_id,
-        request
-            .profile_mode
-            .unwrap_or(BrowserProfileMode::Ephemeral),
-    )?;
-    if manager.host_runtime_config()?.is_none() {
-        // Without a host runtime there is no background browser to own the session, so Core must
-        // say so instead of handing out a session that can never display or drive a page.
-        // 没有宿主运行时就没有拥有该会话的后台浏览器，Core 必须如实报告，而不是交付一个永远无法
-        // 显示或驱动页面的会话。
-        let _ = manager.close_session(&session.session_id);
-        return Err(String::from(BROWSER_ERROR_CAPABILITY_UNSUPPORTED));
-    }
-    match manager.start_host(&session.session_id) {
-        Ok(running) => Ok(running),
-        Err(error) => {
-            let _ = manager.close_session(&session.session_id);
-            Err(error)
+    // Reserve a worker before creating the session. A cancelled caller awaiting admission must
+    // not leave a session record with no browser ID delivered to any client.
+    // 创建会话前先预留工作线程。等待准入时调用方若取消，不能留下未交付浏览器 ID 的会话记录。
+    let permit = Arc::clone(&manager.blocking_gate)
+        .acquire_owned()
+        .await
+        .map_err(|_| String::from(BROWSER_ERROR_SERVICE_STOPPING))?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if sender.is_closed() {
+            return;
         }
-    }
+        // The worker retains ownership after the RPC future is cancelled, so a late host startup
+        // is closed instead of becoming an unclaimed Core browser.
+        // RPC Future 取消后工作线程仍持有归属，因此迟到的宿主启动会被关闭，不会成为无人认领的浏览器。
+        let mut created_id = None;
+        let result = (|| {
+            let session = manager.create_owned_session(
+                &owner_session_id,
+                request
+                    .profile_mode
+                    .unwrap_or(BrowserProfileMode::Ephemeral),
+            )?;
+            created_id = Some(session.session_id.clone());
+            if manager.host_runtime_config()?.is_none() {
+                return Err(String::from(BROWSER_ERROR_CAPABILITY_UNSUPPORTED));
+            }
+            manager.start_host(&session.session_id)
+        })();
+        if result.is_err() {
+            if let Some(session_id) = created_id {
+                let _ = manager.close_session(&session_id);
+            }
+        }
+        if let Err(Ok(running)) = sender.send(result) {
+            let _ = manager.close_session(&running.session_id);
+        }
+    });
+    receiver
+        .await
+        .map_err(|_| String::from("browser creation worker ended before acknowledgement"))?
 }
 
 /// Returns the shared Core browser manager owned by one service state.
@@ -4247,7 +4556,11 @@ pub async fn service_browser_session_close(
     request: BrowserSessionCloseRequest,
 ) -> Result<BrowserSessionProjection, String> {
     let manager = browser_manager_from_state(&state)?;
-    manager.close_session_with_lease(&request.session_id, &request.lease_secret)
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            manager.close_session_with_lease(&request.session_id, &request.lease_secret)
+        })
+        .await
 }
 
 /// Navigates one Core browser session from shared service state.
@@ -4257,12 +4570,20 @@ pub async fn service_browser_session_navigate(
     request: BrowserSessionNavigateRequest,
 ) -> Result<BrowserSessionProjection, String> {
     let manager = browser_manager_from_state(&state)?;
-    manager.navigate_page_on_host(
-        &request.session_id,
-        &request.page_id,
-        &request.url,
-        &request.lease_secret,
-    )
+    manager
+        .run_blocking_host_write(
+            &request.session_id.clone(),
+            "page.navigate",
+            move |manager| {
+                manager.navigate_page_on_host(
+                    &request.session_id,
+                    &request.page_id,
+                    &request.url,
+                    &request.lease_secret,
+                )
+            },
+        )
+        .await
 }
 
 /// Reads one Core browser session projection from shared service state.
@@ -4282,16 +4603,20 @@ pub async fn service_browser_lease_acquire(
     request: BrowserLeaseAcquireRequest,
 ) -> Result<BrowserLeaseAcquireResponse, String> {
     let manager = browser_manager_from_state(&state)?;
-    let (session, lease_secret) =
-        manager.acquire_lease(&request.session_id, &request.holder, None)?;
-    Ok(BrowserLeaseAcquireResponse {
-        session,
-        lease_secret,
-        heartbeat_interval_ms: browser_user_lease_heartbeat_interval_ms(),
-        control_epoch: manager
-            .session_projection(&request.session_id)?
-            .control_epoch,
-    })
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            let (session, lease_secret) =
+                manager.acquire_lease(&request.session_id, &request.holder, None)?;
+            Ok(BrowserLeaseAcquireResponse {
+                session,
+                lease_secret,
+                heartbeat_interval_ms: browser_user_lease_heartbeat_interval_ms(),
+                control_epoch: manager
+                    .session_projection(&request.session_id)?
+                    .control_epoch,
+            })
+        })
+        .await
 }
 
 /// Releases one Core browser control lease from shared service state.
@@ -4301,7 +4626,11 @@ pub async fn service_browser_lease_release(
     request: BrowserLeaseReleaseRequest,
 ) -> Result<BrowserSessionProjection, String> {
     let manager = browser_manager_from_state(&state)?;
-    manager.release_lease(&request.session_id, &request.lease_secret)
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            manager.release_lease(&request.session_id, &request.lease_secret)
+        })
+        .await
 }
 
 /// Heartbeats one Core browser control lease from shared service state.
@@ -4388,9 +4717,13 @@ pub async fn service_browser_pages_list(
     request: BrowserPagesListRequest,
 ) -> Result<serde_json::Value, String> {
     let manager = browser_manager_from_state(&state)?;
-    let pages = manager.list_pages(&request.session_id)?;
-    serde_json::to_value(pages)
-        .map_err(|error| format!("failed to serialize browser pages: {error}"))
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            let pages = manager.list_pages(&request.session_id)?;
+            serde_json::to_value(pages)
+                .map_err(|error| format!("failed to serialize browser pages: {error}"))
+        })
+        .await
 }
 
 /// Creates one new page inside a Core browser session through its host.
@@ -4406,32 +4739,35 @@ pub async fn service_browser_page_create(
 ) -> Result<serde_json::Value, String> {
     let manager = browser_manager_from_state(&state)?;
     validate_browser_url(&request.url)?;
-    let gate = manager.dispatch_gate(&request.session_id)?;
-    let _dispatch = gate
-        .lock()
-        .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
-    manager.authorize_host_write(&request.session_id, &request.lease_secret)?;
-    let outcome = manager.request_host(
-        &request.session_id,
-        "page.create",
-        serde_json::json!({ "url": request.url }),
-    )?;
-    match outcome {
-        BrowserHostRequestOutcome::Completed(_) => {}
-        BrowserHostRequestOutcome::Failed { code, message } => {
-            return Err(format!("{code}: {message}"));
-        }
-        BrowserHostRequestOutcome::Unknown { reason } => {
-            // The page may exist even though the answer was lost, so the outcome is reported as
-            // unknown instead of being retried.
-            // 即使应答丢失该页面也可能已存在，因此结果以未知报告，而不是重试。
-            manager.mark_operation_unconfirmed(&request.session_id, "page.create")?;
-            return Err(format!("{BROWSER_ERROR_LEASE_BLOCKED}: {reason}"));
-        }
-    }
-    let pages = manager.list_pages(&request.session_id)?;
-    serde_json::to_value(pages)
-        .map_err(|error| format!("failed to serialize browser pages: {error}"))
+    manager
+        .run_blocking_host_write(&request.session_id.clone(), "page.create", move |manager| {
+            let gate = manager.dispatch_gate(&request.session_id)?;
+            let _dispatch = gate
+                .lock()
+                .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+            manager.authorize_host_write(&request.session_id, &request.lease_secret)?;
+            let outcome = manager.request_host(
+                &request.session_id,
+                "page.create",
+                serde_json::json!({ "url": request.url }),
+            )?;
+            match outcome {
+                BrowserHostRequestOutcome::Completed(_) => {}
+                BrowserHostRequestOutcome::Failed { code, message } => {
+                    return Err(format!("{code}: {message}"));
+                }
+                BrowserHostRequestOutcome::Unknown { reason } => {
+                    // A lost answer may still have created a page; never retry it blindly.
+                    // 应答丢失时页面仍可能已创建；绝不盲目重试。
+                    manager.mark_operation_unconfirmed(&request.session_id, "page.create")?;
+                    return Err(format!("{BROWSER_ERROR_LEASE_BLOCKED}: {reason}"));
+                }
+            }
+            let pages = manager.list_pages(&request.session_id)?;
+            serde_json::to_value(pages)
+                .map_err(|error| format!("failed to serialize browser pages: {error}"))
+        })
+        .await
 }
 
 /// Hides the local host windows of one Core browser session without ending the session.
@@ -4446,21 +4782,25 @@ pub async fn service_browser_hide_windows(
     request: BrowserSessionHideWindowsRequest,
 ) -> Result<BrowserSessionProjection, String> {
     let manager = browser_manager_from_state(&state)?;
-    let gate = manager.dispatch_gate(&request.session_id)?;
-    let _dispatch = gate
-        .lock()
-        .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
-    manager.authorize_host_write(&request.session_id, &request.lease_secret)?;
-    match manager.request_host(&request.session_id, "window.hide", serde_json::json!({}))? {
-        BrowserHostRequestOutcome::Completed(_) => {}
-        BrowserHostRequestOutcome::Failed { code, message } => {
-            return Err(format!("{code}: {message}"));
-        }
-        BrowserHostRequestOutcome::Unknown { reason } => {
-            return Err(format!("{BROWSER_ERROR_INVALID_REQUEST}: {reason}"));
-        }
-    }
-    manager.session_projection(&request.session_id)
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            let gate = manager.dispatch_gate(&request.session_id)?;
+            let _dispatch = gate
+                .lock()
+                .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+            manager.authorize_host_write(&request.session_id, &request.lease_secret)?;
+            match manager.request_host(&request.session_id, "window.hide", serde_json::json!({}))? {
+                BrowserHostRequestOutcome::Completed(_) => {}
+                BrowserHostRequestOutcome::Failed { code, message } => {
+                    return Err(format!("{code}: {message}"));
+                }
+                BrowserHostRequestOutcome::Unknown { reason } => {
+                    return Err(format!("{BROWSER_ERROR_INVALID_REQUEST}: {reason}"));
+                }
+            }
+            manager.session_projection(&request.session_id)
+        })
+        .await
 }
 
 /// Reports the supervised host state of one Core browser session.
@@ -4480,25 +4820,33 @@ pub async fn service_browser_input_dispatch(
     request: BrowserInputDispatchRequest,
 ) -> Result<BrowserInputDispatchResponse, String> {
     let manager = browser_manager_from_state(&state)?;
-    let event = BrowserInputEvent {
-        sequence: request.sequence.clone(),
-        kind: request.kind.clone(),
-        payload: request.payload.clone(),
-    };
-    let outcome = manager.dispatch_host_input(
-        &request.session_id,
-        &request.page_id,
-        &request.lease_secret,
-        request.page_generation,
-        request.viewport_generation,
-        event,
-    )?;
-    Ok(BrowserInputDispatchResponse {
-        outcome: outcome.outcome,
-        accepted_sequence: outcome.sequence.map(|sequence| sequence.to_string()),
-        reason: outcome.reason,
-        detail: outcome.detail,
-    })
+    manager
+        .run_blocking_host_write(
+            &request.session_id.clone(),
+            "input.dispatch",
+            move |manager| {
+                let event = BrowserInputEvent {
+                    sequence: request.sequence.clone(),
+                    kind: request.kind.clone(),
+                    payload: request.payload.clone(),
+                };
+                let outcome = manager.dispatch_host_input(
+                    &request.session_id,
+                    &request.page_id,
+                    &request.lease_secret,
+                    request.page_generation,
+                    request.viewport_generation,
+                    event,
+                )?;
+                Ok(BrowserInputDispatchResponse {
+                    outcome: outcome.outcome,
+                    accepted_sequence: outcome.sequence.map(|sequence| sequence.to_string()),
+                    reason: outcome.reason,
+                    detail: outcome.detail,
+                })
+            },
+        )
+        .await
 }
 
 /// Request object for issuing one single-use browser stream ticket.
@@ -4829,22 +5177,26 @@ pub async fn service_browser_upload_stage(
     state: SharedServiceBridgeState,
     request: BrowserUploadStageRequest,
 ) -> Result<BrowserUploadPublicRecord, String> {
-    use base64::Engine as _;
-
     let manager = browser_manager_from_state(&state)?;
-    let gate = manager.dispatch_gate(&request.session_id)?;
-    let _dispatch = gate
-        .lock()
-        .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
-    manager.authorize_host_write(&request.session_id, &request.lease_secret)?;
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(&request.data_base64)
-        .map_err(|error| {
-            format!("{BROWSER_ERROR_INVALID_REQUEST}: invalid upload encoding: {error}")
-        })?;
     manager
-        .stage_upload(&request.session_id, &request.name, data)
-        .map(public_upload_record)
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            use base64::Engine as _;
+
+            let gate = manager.dispatch_gate(&request.session_id)?;
+            let _dispatch = gate
+                .lock()
+                .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+            manager.authorize_host_write(&request.session_id, &request.lease_secret)?;
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(&request.data_base64)
+                .map_err(|error| {
+                    format!("{BROWSER_ERROR_INVALID_REQUEST}: invalid upload encoding: {error}")
+                })?;
+            manager
+                .stage_upload(&request.session_id, &request.name, data)
+                .map(public_upload_record)
+        })
+        .await
 }
 
 /// Places one staged upload into a page's file input.
@@ -4854,31 +5206,38 @@ pub async fn service_browser_upload_attach(
     request: BrowserUploadAttachRequest,
 ) -> Result<serde_json::Value, String> {
     let manager = browser_manager_from_state(&state)?;
-    let gate = manager.dispatch_gate(&request.session_id)?;
-    let _dispatch = gate
-        .lock()
-        .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
-    manager.sync_host_events(&request.session_id)?;
-    let target_id = manager.authorized_page_target(
-        &request.session_id,
-        &request.page_id,
-        &request.lease_secret,
-    )?;
-    if let Some(chooser_id) = request.chooser_id.as_deref() {
-        let matches = manager
-            .file_choosers(&request.session_id)?
-            .into_iter()
-            .any(|chooser| chooser.chooser_id == chooser_id && chooser.page_id == request.page_id);
-        if !matches {
-            return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
-        }
-    }
-    manager.attach_upload_to_page(
-        &request.session_id,
-        &request.upload_id,
-        &target_id,
-        request.chooser_id.as_deref(),
-    )
+    manager
+        .run_blocking_host_write(&request.session_id.clone(), "page.upload", move |manager| {
+            let gate = manager.dispatch_gate(&request.session_id)?;
+            let _dispatch = gate
+                .lock()
+                .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+            manager.sync_host_events(&request.session_id)?;
+            let target_id = manager.authorized_page_target(
+                &request.session_id,
+                &request.page_id,
+                &request.lease_secret,
+            )?;
+            if let Some(chooser_id) = request.chooser_id.as_deref() {
+                let matches =
+                    manager
+                        .file_choosers(&request.session_id)?
+                        .into_iter()
+                        .any(|chooser| {
+                            chooser.chooser_id == chooser_id && chooser.page_id == request.page_id
+                        });
+                if !matches {
+                    return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
+                }
+            }
+            manager.attach_upload_to_page(
+                &request.session_id,
+                &request.upload_id,
+                &target_id,
+                request.chooser_id.as_deref(),
+            )
+        })
+        .await
 }
 
 /// Lists the staged uploads of one Core browser session.
@@ -4899,7 +5258,12 @@ pub async fn service_browser_file_chooser_list(
     state: SharedServiceBridgeState,
     request: BrowserHostStatusRequest,
 ) -> Result<Vec<BrowserFileChooserPublicRecord>, String> {
-    browser_manager_from_state(&state)?.file_choosers(&request.session_id)
+    let manager = browser_manager_from_state(&state)?;
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            manager.file_choosers(&request.session_id)
+        })
+        .await
 }
 
 /// Lists one session's download lifecycle without exposing host file paths.
@@ -4908,7 +5272,12 @@ pub async fn service_browser_download_list(
     state: SharedServiceBridgeState,
     request: BrowserHostStatusRequest,
 ) -> Result<Vec<BrowserDownloadPublicRecord>, String> {
-    browser_manager_from_state(&state)?.downloads(&request.session_id)
+    let manager = browser_manager_from_state(&state)?;
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            manager.downloads(&request.session_id)
+        })
+        .await
 }
 
 /// Lists pending dialogs so observers can see them without receiving answer authority.
@@ -4917,7 +5286,12 @@ pub async fn service_browser_dialog_list(
     state: SharedServiceBridgeState,
     request: BrowserHostStatusRequest,
 ) -> Result<Vec<BrowserDialogPublicRecord>, String> {
-    browser_manager_from_state(&state)?.dialogs(&request.session_id)
+    let manager = browser_manager_from_state(&state)?;
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            manager.dialogs(&request.session_id)
+        })
+        .await
 }
 
 /// Sends a dialog answer from the current controller to the exact owning host page.
@@ -4926,14 +5300,23 @@ pub async fn service_browser_dialog_respond(
     state: SharedServiceBridgeState,
     request: BrowserDialogRespondRequest,
 ) -> Result<serde_json::Value, String> {
-    browser_manager_from_state(&state)?.respond_dialog(
-        &request.session_id,
-        &request.page_id,
-        &request.dialog_id,
-        &request.lease_secret,
-        request.accept,
-        request.prompt_text.as_deref(),
-    )
+    let manager = browser_manager_from_state(&state)?;
+    manager
+        .run_blocking_host_write(
+            &request.session_id.clone(),
+            "dialog.respond",
+            move |manager| {
+                manager.respond_dialog(
+                    &request.session_id,
+                    &request.page_id,
+                    &request.dialog_id,
+                    &request.lease_secret,
+                    request.accept,
+                    request.prompt_text.as_deref(),
+                )
+            },
+        )
+        .await
 }
 
 /// Request object for staging one uploaded file.
@@ -4998,91 +5381,164 @@ pub async fn service_browser_page_capture(
     use base64::Engine as _;
 
     let manager = browser_manager_from_state(&state)?;
-    let gate = manager.dispatch_gate(&request.session_id)?;
-    let _dispatch = gate
-        .lock()
-        .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
-    let projection = manager.session_projection(&request.session_id)?;
-    let page_generation = projection.page_generation;
-    let page = manager
-        .list_pages(&request.session_id)?
-        .into_iter()
-        .find(|page| page.page_id == request.page_id)
-        .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
-    if page.host_generation != projection.host_generation {
-        return Err(String::from(BROWSER_ERROR_STALE_GENERATION));
-    }
-    let outcome = manager.request_host(
-        &request.session_id,
-        "page.capture",
-        serde_json::json!({ "targetId": page.target_id }),
-    )?;
-    let result = match outcome {
-        BrowserHostRequestOutcome::Completed(value) => value,
-        BrowserHostRequestOutcome::Failed { code, message } => {
-            return Err(format!("{code}: {message}"));
-        }
-        BrowserHostRequestOutcome::Unknown { reason } => {
-            return Err(format!("{BROWSER_ERROR_INVALID_REQUEST}: {reason}"));
-        }
-    };
-    let encoded = result
-        .get("dataBase64")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
-    if result.get("targetId").and_then(|value| value.as_str()) != Some(page.target_id.as_str()) {
-        return Err(String::from(BROWSER_ERROR_STALE_GENERATION));
-    }
-    let mime_type = result
-        .get("mimeType")
-        .and_then(|value| value.as_str())
-        .unwrap_or("image/png");
-    let width = result
-        .get("width")
-        .and_then(|value| value.as_u64())
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
-    let height = result
-        .get("height")
-        .and_then(|value| value.as_u64())
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
-    let captured_at = result
-        .get("capturedAt")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
-    if let Some(viewport) = &projection.viewport_size
-        && (viewport.width != width || viewport.height != height)
-    {
-        return Err(String::from(BROWSER_ERROR_STALE_VIEWPORT));
-    }
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|error| {
-            format!("{BROWSER_ERROR_INVALID_REQUEST}: invalid frame encoding: {error}")
-        })?;
-    let sequence = manager.publish_page_frame(
-        &request.session_id,
-        &page.page_id,
-        page_generation,
-        projection.viewport_generation,
-        width,
-        height,
-        captured_at,
-        mime_type,
-        data,
-    )?;
-    Ok(serde_json::json!({
-        "sequence": sequence.to_string(),
-        "pageId": page.page_id,
-        "pageGeneration": page_generation.to_string(),
-        "viewportGeneration": projection.viewport_generation.to_string(),
-        "width": width,
-        "height": height,
-        "targetId": result.get("targetId").cloned().unwrap_or(serde_json::Value::Null),
-        "url": result.get("url").cloned().unwrap_or(serde_json::Value::Null),
-        "mimeType": mime_type,
-    }))
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            let gate = manager.dispatch_gate(&request.session_id)?;
+            let _dispatch = gate
+                .lock()
+                .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+            let projection = manager.session_projection(&request.session_id)?;
+            let page_generation = projection.page_generation;
+            let page = manager
+                .list_pages(&request.session_id)?
+                .into_iter()
+                .find(|page| page.page_id == request.page_id)
+                .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+            if page.host_generation != projection.host_generation {
+                return Err(String::from(BROWSER_ERROR_STALE_GENERATION));
+            }
+            let outcome = manager.request_host(
+                &request.session_id,
+                "page.capture",
+                serde_json::json!({ "targetId": page.target_id }),
+            )?;
+            let result = match outcome {
+                BrowserHostRequestOutcome::Completed(value) => value,
+                BrowserHostRequestOutcome::Failed { code, message } => {
+                    return Err(format!("{code}: {message}"));
+                }
+                BrowserHostRequestOutcome::Unknown { reason } => {
+                    return Err(format!("{BROWSER_ERROR_INVALID_REQUEST}: {reason}"));
+                }
+            };
+            let encoded = result
+                .get("dataBase64")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+            if result.get("targetId").and_then(|value| value.as_str())
+                != Some(page.target_id.as_str())
+            {
+                return Err(String::from(BROWSER_ERROR_STALE_GENERATION));
+            }
+            let mime_type = result
+                .get("mimeType")
+                .and_then(|value| value.as_str())
+                .unwrap_or("image/png");
+            let width = result
+                .get("width")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+            let height = result
+                .get("height")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+            let captured_at = result
+                .get("capturedAt")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+            if let Some(viewport) = &projection.viewport_size
+                && (viewport.width != width || viewport.height != height)
+            {
+                return Err(String::from(BROWSER_ERROR_STALE_VIEWPORT));
+            }
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|error| {
+                    format!("{BROWSER_ERROR_INVALID_REQUEST}: invalid frame encoding: {error}")
+                })?;
+            let sequence = manager.publish_page_frame(
+                &request.session_id,
+                &page.page_id,
+                page_generation,
+                projection.viewport_generation,
+                width,
+                height,
+                captured_at,
+                mime_type,
+                data,
+            )?;
+            Ok(serde_json::json!({
+                "sequence": sequence.to_string(),
+                "pageId": page.page_id,
+                "pageGeneration": page_generation.to_string(),
+                "viewportGeneration": projection.viewport_generation.to_string(),
+                "width": width,
+                "height": height,
+                "targetId": result.get("targetId").cloned().unwrap_or(serde_json::Value::Null),
+                "url": result.get("url").cloned().unwrap_or(serde_json::Value::Null),
+                "mimeType": mime_type,
+            }))
+        })
+        .await
+}
+
+/// Schedules a projection frame without holding the shared host control channel during screenshot work.
+/// 调度一帧投影画面，截图进行期间不占用共享宿主控制通道。
+///
+/// # Parameters / 参数
+/// `state` owns the browser manager; `request` fixes the exact session and page to observe.
+/// `state` 持有浏览器管理器；`request` 指定要观察的精确会话和页面。
+///
+/// # Returns / 返回值
+/// Success after the host acknowledges scheduling; the resulting frame arrives as a host event.
+/// 宿主确认调度后返回成功；生成的画面随后通过宿主事件到达。
+pub(crate) async fn service_browser_page_capture_deferred(
+    state: SharedServiceBridgeState,
+    request: BrowserPageCaptureRequest,
+) -> Result<(), String> {
+    let manager = browser_manager_from_state(&state)?;
+    manager
+        .run_blocking(&request.session_id.clone(), move |manager| {
+            let gate = manager.dispatch_gate(&request.session_id)?;
+            let _dispatch = gate
+                .lock()
+                .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+            // The prior screenshot event is applied before another one is scheduled. This also
+            // bounds unconsumed frame events to one in-flight capture per observed page.
+            // 再次调度前先处理上一帧事件，同时把每个观察页面限制为最多一项在途截图。
+            manager.sync_host_events(&request.session_id)?;
+            let projection = manager.session_projection(&request.session_id)?;
+            let page = manager
+                .list_pages(&request.session_id)?
+                .into_iter()
+                .find(|page| page.page_id == request.page_id)
+                .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+            if page.host_generation != projection.host_generation {
+                return Err(String::from(BROWSER_ERROR_STALE_GENERATION));
+            }
+            match manager.request_host_with_timeout(
+                &request.session_id,
+                "page.capture",
+                serde_json::json!({
+                    "targetId": page.target_id,
+                    "deferred": true,
+                    "pageGeneration": projection.page_generation.to_string(),
+                    "viewportGeneration": projection.viewport_generation.to_string(),
+                }),
+                Duration::from_millis(500),
+            )? {
+                BrowserHostRequestOutcome::Completed(result)
+                    if result
+                        .get("scheduled")
+                        .and_then(|value| value.as_bool())
+                        .is_some() =>
+                {
+                    Ok(())
+                }
+                BrowserHostRequestOutcome::Completed(_) => {
+                    Err(String::from(BROWSER_ERROR_INVALID_REQUEST))
+                }
+                BrowserHostRequestOutcome::Failed { code, message } => {
+                    Err(format!("{code}: {message}"))
+                }
+                BrowserHostRequestOutcome::Unknown { reason } => {
+                    Err(format!("{BROWSER_ERROR_INVALID_REQUEST}: {reason}"))
+                }
+            }
+        })
+        .await
 }
 
 /// Request object for capturing one page of a Core browser session.
@@ -5105,12 +5561,20 @@ pub async fn service_browser_viewport_set(
     request: BrowserViewportSetRequest,
 ) -> Result<BrowserSessionProjection, String> {
     let manager = browser_manager_from_state(&state)?;
-    manager.set_host_viewport(
-        &request.session_id,
-        request.width,
-        request.height,
-        &request.lease_secret,
-    )
+    manager
+        .run_blocking_host_write(
+            &request.session_id.clone(),
+            "viewport.set",
+            move |manager| {
+                manager.set_host_viewport(
+                    &request.session_id,
+                    request.width,
+                    request.height,
+                    &request.lease_secret,
+                )
+            },
+        )
+        .await
 }
 
 /// Attaches one automation connection from shared service state.
@@ -7697,6 +8161,79 @@ mod tests {
         );
     }
 
+    /// Verifies deferred host frames respect exact page generations and declared byte lengths.
+    /// 验证异步宿主画面严格遵守页面代次与声明的字节长度。
+    #[test]
+    fn deferred_host_frames_reject_stale_or_malformed_results() {
+        use base64::Engine as _;
+
+        let manager = BrowserManager::new();
+        let session = manager
+            .create_session(BrowserProfileMode::Ephemeral)
+            .expect("create session");
+        manager
+            .record_host_running(&session.session_id, 4242)
+            .expect("record host");
+        let page = manager
+            .adopt_page(&session.session_id, "target-frame", "about:blank", None)
+            .expect("adopt page");
+        manager
+            .bind_stream_page(&session.session_id, &page.page_id, "frame-stream")
+            .expect("bind observer");
+        let projection = manager
+            .session_projection(&session.session_id)
+            .expect("projection");
+        let image = [0xff, 0xd8, 0xff, 0xd9];
+        let event = BrowserHostEvent {
+            event_sequence: String::from("1"),
+            kind: String::from("pageCaptured"),
+            payload: serde_json::json!({
+                "targetId": "target-frame",
+                "pageGeneration": projection.page_generation.to_string(),
+                "viewportGeneration": projection.viewport_generation.to_string(),
+                "width": 1280,
+                "height": 800,
+                "mimeType": "image/jpeg",
+                "byteLength": image.len(),
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(image),
+                "capturedAt": "1",
+            }),
+        };
+        assert!(
+            !manager
+                .apply_host_event(&session.session_id, &event)
+                .expect("publish frame")
+        );
+        assert_eq!(
+            manager
+                .retained_frame_count(&session.session_id, "frame-stream")
+                .expect("retained frames"),
+            1
+        );
+        let mut stale = event.clone();
+        stale.payload["pageGeneration"] =
+            serde_json::json!((projection.page_generation + 1).to_string());
+        assert!(
+            !manager
+                .apply_host_event(&session.session_id, &stale)
+                .expect("discard stale frame")
+        );
+        let mut malformed = event;
+        malformed.payload["byteLength"] = serde_json::json!(image.len() + 1);
+        assert_eq!(
+            manager
+                .apply_host_event(&session.session_id, &malformed)
+                .unwrap_err(),
+            BROWSER_ERROR_INVALID_REQUEST
+        );
+        assert_eq!(
+            manager
+                .retained_frame_count(&session.session_id, "frame-stream")
+                .expect("retained frames"),
+            1
+        );
+    }
+
     /// Verifies a client with no cursor must resynchronise from a snapshot.
     /// 验证没有游标的客户端必须从快照重新同步。
     #[test]
@@ -9134,6 +9671,225 @@ mod tests {
             listed
                 .iter()
                 .any(|session| session.session_id == created.session_id)
+        );
+    }
+
+    /// Verifies a slow host handshake does not stop an unrelated Core timer on one Tokio worker.
+    /// 验证宿主握手变慢时，单线程 Tokio 上不相关的 Core 定时器仍能按时运行。
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_session_create_does_not_block_async_reactor() {
+        let state = browser_test_state();
+        let alive = Arc::new(AtomicBool::new(true));
+        let host = FakeBrowserHost::start(Duration::from_millis(350), Arc::clone(&alive));
+        let profiles_root =
+            std::env::temp_dir().join(format!("vulcan-browser-nonblocking-{}", Uuid::new_v4()));
+        {
+            let mut guard = state.lock().expect("lock test state");
+            guard.browser_manager =
+                BrowserManager::with_host_spawner(Arc::new(FakeBrowserHostSpawner {
+                    address: host.address,
+                    alive,
+                    poll_error: Arc::new(AtomicBool::new(false)),
+                }));
+            guard
+                .browser_manager
+                .configure_host_runtime(BrowserHostRuntimeConfig {
+                    executable: std::path::PathBuf::from("fake-electron.exe"),
+                    entry: std::path::PathBuf::from("fake-host.js"),
+                    chromium_executable: std::path::PathBuf::from("fake-chromium.exe"),
+                    profiles_root: profiles_root.clone(),
+                    staging_root: profiles_root.join("staging"),
+                    discovery_timeout: Duration::from_secs(10),
+                    request_timeout: Duration::from_secs(5),
+                })
+                .expect("configure fake runtime");
+        }
+        let create = service_browser_session_create(
+            state.clone(),
+            BrowserSessionCreateRequest { profile_mode: None },
+            String::from("conversation-a"),
+        );
+        tokio::pin!(create);
+        let started = Instant::now();
+        tokio::select! {
+            biased;
+            result = &mut create => panic!("slow host completed before timer: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "host startup blocked the single Tokio worker"
+        );
+        let created = create.await.expect("host eventually starts");
+        assert_eq!(created.host_state, BrowserHostSupervisionState::Running);
+        let manager = browser_manager_from_state(&state).expect("read browser manager");
+        manager
+            .close_session(&created.session_id)
+            .expect("close fake browser");
+        if profiles_root.exists() {
+            std::fs::remove_dir_all(&profiles_root).expect("remove isolated profiles");
+        }
+    }
+
+    /// Verifies a cancelled create request cannot leave an unclaimed running Core browser.
+    /// 验证创建请求被取消后不会留下客户端无法认领的运行中 Core 浏览器。
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_session_create_cancellation_closes_unclaimed_host() {
+        let state = browser_test_state();
+        let alive = Arc::new(AtomicBool::new(true));
+        let host = FakeBrowserHost::start(Duration::from_millis(350), Arc::clone(&alive));
+        let profiles_root =
+            std::env::temp_dir().join(format!("vulcan-browser-cancel-{}", Uuid::new_v4()));
+        let manager = BrowserManager::with_host_spawner(Arc::new(FakeBrowserHostSpawner {
+            address: host.address,
+            alive,
+            poll_error: Arc::new(AtomicBool::new(false)),
+        }));
+        manager
+            .configure_host_runtime(BrowserHostRuntimeConfig {
+                executable: std::path::PathBuf::from("fake-electron.exe"),
+                entry: std::path::PathBuf::from("fake-host.js"),
+                chromium_executable: std::path::PathBuf::from("fake-chromium.exe"),
+                profiles_root: profiles_root.clone(),
+                staging_root: profiles_root.join("staging"),
+                discovery_timeout: Duration::from_secs(10),
+                request_timeout: Duration::from_secs(5),
+            })
+            .expect("configure fake runtime");
+        state.lock().expect("lock test state").browser_manager = manager.clone();
+        let owner = String::from("cancelled-conversation");
+        let create = tokio::spawn(service_browser_session_create(
+            state,
+            BrowserSessionCreateRequest { profile_mode: None },
+            owner.clone(),
+        ));
+        let browser_id = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(session) = manager
+                    .list_owned_sessions(&owner)
+                    .expect("list test sessions")
+                    .first()
+                {
+                    break session.session_id.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("creation reservation appears");
+        create.abort();
+        assert!(
+            create
+                .await
+                .expect_err("create task was cancelled")
+                .is_cancelled()
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let settled = loop {
+            let session = manager
+                .session_projection(&browser_id)
+                .expect("read cancelled browser");
+            if session.status == BrowserSessionStatus::Closed || Instant::now() >= deadline {
+                break session;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        if settled.status != BrowserSessionStatus::Closed {
+            manager
+                .close_session(&browser_id)
+                .expect("clean up leaked host");
+        }
+        if profiles_root.exists() {
+            std::fs::remove_dir_all(&profiles_root).expect("remove isolated profiles");
+        }
+        assert_eq!(settled.status, BrowserSessionStatus::Closed);
+    }
+
+    /// Verifies cancellation of an in-flight host write blocks another controller's takeover.
+    /// 验证在途宿主写入取消后会阻止另一控制者接管。
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_blocking_host_write_blocks_the_session() {
+        let manager = BrowserManager::new();
+        let session = manager
+            .create_session(BrowserProfileMode::Ephemeral)
+            .expect("create session");
+        manager
+            .acquire_lease(&session.session_id, "first", None)
+            .expect("acquire lease");
+        let session_id = session.session_id.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let manager_for_task = manager.clone();
+        let task = tokio::spawn(async move {
+            manager_for_task
+                .run_blocking_host_write(&session_id, "test.write", move |_| {
+                    started_tx.send(()).expect("report started work");
+                    release_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .expect("release blocked work");
+                    Ok(())
+                })
+                .await
+        });
+        started_rx.await.expect("worker began write");
+        task.abort();
+        assert!(task.await.expect_err("cancel task").is_cancelled());
+        assert_eq!(
+            manager
+                .unconfirmed_operations(&session.session_id)
+                .expect("read uncertain work"),
+            vec![String::from("test.write")]
+        );
+        assert_eq!(
+            manager
+                .session_projection(&session.session_id)
+                .expect("read projection")
+                .lease_state,
+            BrowserLeaseState::Blocked
+        );
+        assert!(
+            manager
+                .takeover_lease(&session.session_id, "second", None)
+                .is_err()
+        );
+        release_tx.send(()).expect("finish worker");
+    }
+
+    /// Verifies cancellation while waiting for admission never dispatches or blocks a host write.
+    /// 验证等待准入期间取消不会派发或阻塞宿主写入。
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_queued_host_write_does_not_block_the_session() {
+        let manager = BrowserManager::new();
+        let session = manager
+            .create_session(BrowserProfileMode::Ephemeral)
+            .expect("create session");
+        let held_permits = Arc::clone(&manager.blocking_gate)
+            .acquire_many_owned(BROWSER_MAX_BLOCKING_CALLS as u32)
+            .await
+            .expect("reserve all worker permits");
+        let session_id = session.session_id.clone();
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let dispatched_in_worker = Arc::clone(&dispatched);
+        let manager_for_task = manager.clone();
+        let task = tokio::spawn(async move {
+            manager_for_task
+                .run_blocking_host_write(&session_id, "test.queued", move |_| {
+                    dispatched_in_worker.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+                .await
+        });
+        tokio::task::yield_now().await;
+        task.abort();
+        assert!(task.await.expect_err("cancel task").is_cancelled());
+        drop(held_permits);
+        tokio::task::yield_now().await;
+        assert!(!dispatched.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            manager
+                .unconfirmed_operations(&session.session_id)
+                .expect("read uncertain work")
+                .is_empty()
         );
     }
 

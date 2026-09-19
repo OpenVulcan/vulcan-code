@@ -1,4 +1,5 @@
 import React from "react";
+import { createClientOwnedActionId } from "@/notifications/client-identity";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
@@ -148,7 +149,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     : selectedConversation?.id ?? null;
   // clientSubmissionId correlates the optimistic first message with the authoritative service acknowledgement.
   // clientSubmissionId 将乐观首条消息与权威服务确认关联起来。
-  const clientSubmissionId = crypto.randomUUID();
+  const clientSubmissionId = createClientOwnedActionId();
   // pendingStageTimer advances the bounded user-facing status when acknowledgement is not immediate.
   // pendingStageTimer 在确认未即时返回时推进有界的用户可见状态。
   const pendingStageTimer = selectedDraftConversation
@@ -417,6 +418,7 @@ const handleEditConversationGeneration = React.useCallback(async (
       expectedWindowGeneration,
       targetSeq,
       replacementText,
+      clientActionId: createClientOwnedActionId(),
     });
     if (!response) {
       toast.info(translate("conversationActions.previewCannotSend"));

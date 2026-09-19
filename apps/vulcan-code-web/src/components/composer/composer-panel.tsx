@@ -26,9 +26,11 @@ import {
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
+import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
+import { isElectronRuntime } from "@/shell";
 import { cn } from "@/lib/utils";
 import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
 import type {
@@ -893,16 +895,25 @@ export function ComposerPanel(props: {
             onHighlight={setSlashHighlightedIndex}
           />
         ) : null}
-        <Textarea
-          aria-label={t("composer.aria.input")}
+        <ComposerTextContextMenu
           disabled={isPendingPromptEditing}
-          onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
-          onKeyDown={handleComposerKeyDown}
-          onPaste={isPendingPromptEditing ? undefined : handleComposerPaste}
-          placeholder={placeholder}
-          ref={composerTextareaRef}
+          enabled={isElectronRuntime()}
+          onChange={handleDraftInputChange}
+          ownerKey={draftSlotKey}
+          textareaRef={composerTextareaRef}
           value={draftInput}
-        />
+        >
+          <Textarea
+            aria-label={t("composer.aria.input")}
+            disabled={isPendingPromptEditing}
+            onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
+            onKeyDown={handleComposerKeyDown}
+            onPaste={isPendingPromptEditing ? undefined : handleComposerPaste}
+            placeholder={placeholder}
+            ref={composerTextareaRef}
+            value={draftInput}
+          />
+        </ComposerTextContextMenu>
         {pendingAttachmentCount > 0 ? <p role="status" aria-busy="true" className="px-3 text-xs text-muted-foreground">
           {t("composer.attachment.stagingPending")} ({pendingAttachmentCount})
         </p> : null}

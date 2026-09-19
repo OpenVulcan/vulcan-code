@@ -5,6 +5,10 @@ use super::super::provider_v1_sink::ProviderV1FinishedDurability;
 use super::*;
 use crate::session_goal_lifecycle::registered_session_v1_handle_from_state;
 
+/// Version prefix carried by WebUI-owned durable client action identifiers.
+/// WebUI 所属可靠客户端动作标识携带的版本前缀。
+const NOTIFICATION_CLIENT_ACTION_PREFIX: &str = "vcn1";
+
 /// Outcome of handling one finished stream report.
 /// 单个流终态报告的处理结果。
 pub(super) enum FinishedStreamEventOutcome {
@@ -348,6 +352,16 @@ pub(super) async fn handle_finished_stream_event(
         ),
     );
 
+    // notificationClientId is derived only from durable V1 client actions at or before this Turn boundary.
+    // notificationClientId 仅从当前回合边界之前或边界上的可靠 V1 客户端动作派生。
+    let notification_client_id = turn_completion_receipt.as_ref().and_then(|receipt| {
+        notification_client_id_for_completed_turn(
+            task_state,
+            finished_session_id,
+            receipt.value.completed_turn_final_seq,
+        )
+    });
+
     // The durable V1 Turn receipt alone selects and authorizes a successor; legacy persistence cannot veto it.
     // 可靠 V1 回合回执独自选择并授权后继；旧持久化不得否决该事实。
     // Re-read only after releasing terminal admission: a child can finish after the sink snapshot.
@@ -433,6 +447,7 @@ pub(super) async fn handle_finished_stream_event(
             apply.conversation_run_outcome,
             started_next_prompt,
             current_unix_millis_text(),
+            notification_client_id,
         )
     {
         app.emit(ServiceEvent::ConversationRunSettled(Box::new(event)));
@@ -498,6 +513,7 @@ fn conversation_run_settled_event_from_terminal_facts(
     outcome: Option<vulcan_service_api::ConversationRunOutcome>,
     started_next_prompt: bool,
     occurred_at: String,
+    notification_client_id: Option<String>,
 ) -> Option<ConversationRunSettledEvent> {
     if started_next_prompt {
         return None;
@@ -515,7 +531,118 @@ fn conversation_run_settled_event_from_terminal_facts(
         run_id,
         outcome,
         occurred_at,
+        notification_client_id,
     })
+}
+
+/// Resolves the latest durable client action within the exact completed logical turn.
+/// 解析属于已完成逻辑回合的最近可靠客户端动作。
+///
+/// # Parameters / 参数
+/// `state` owns the registered V1 session, `session_id` selects it, and `completed_turn_final_seq`
+/// identifies the exact terminal TurnStats and excludes actions from other logical turns.
+/// `state` 持有已登记的 V1 会话，`session_id` 选择该会话，`completed_turn_final_seq`
+/// 标识精确的终态 TurnStats，并排除其他逻辑回合的动作。
+///
+/// # Returns / 返回值
+/// Returns the exact WebUI client UUID encoded by the latest eligible action, or `None`.
+/// 返回最近符合条件动作编码的精确 WebUI 客户端 UUID；不存在时返回 `None`。
+fn notification_client_id_for_completed_turn(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    completed_turn_final_seq: vulcan_session_core::v1::ids::Seq,
+) -> Option<String> {
+    let handle = registered_session_v1_handle_from_state(state, session_id).ok()?;
+    handle
+        .read(|document| {
+            notification_client_id_in_completed_turn(document, completed_turn_final_seq)
+        })
+        .ok()
+        .flatten()
+}
+
+/// Reads only the action that belongs to the exact completed logical turn.
+/// 仅读取属于精确已完成逻辑回合的客户端动作。
+///
+/// # Parameters / 参数
+/// `document` is the authoritative V1 event stream and `final_seq` is its completed TurnStats seq.
+/// `document` 是权威 V1 事件流，`final_seq` 是其已完成 TurnStats 的 seq。
+///
+/// # Returns / 返回值
+/// Returns this turn's last external client owner, or `None` when ownership is absent or invalid.
+/// 返回本回合最后一个外部客户端所有者；归属缺失或无效时返回 `None`。
+fn notification_client_id_in_completed_turn(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+    final_seq: vulcan_session_core::v1::ids::Seq,
+) -> Option<String> {
+    use vulcan_session_core::v1::event::EventBody;
+
+    // The completion receipt points to this exact TurnStats, not merely an upper seq bound.
+    // 完成回执指向此精确 TurnStats，而不是单纯的 seq 上界。
+    let final_event = document
+        .events()
+        .iter()
+        .find(|event| event.seq == final_seq)?;
+    let EventBody::TurnStats(stats) = &final_event.event else {
+        return None;
+    };
+    if stats.end_seq != final_seq {
+        return None;
+    }
+    let turn_id = final_event.turn_id?;
+    // Select the latest external action first; an invalid newer action cannot fall back to an
+    // older client's ID, and system-only controls without an action ID do not claim ownership.
+    // 先选最近的外部动作；较新的无效动作不能回退到旧客户端标识，且无动作 ID 的
+    // 系统控制不声明客户端归属。
+    let action_id = document
+        .events()
+        .iter()
+        .rev()
+        .filter(|event| {
+            event.seq >= stats.start_seq && event.seq <= final_seq && event.turn_id == Some(turn_id)
+        })
+        .find_map(|event| match &event.event {
+            EventBody::UserInput(input) => Some(input.client_action_id.as_str()),
+            EventBody::ExecutionControl(control) => {
+                control.client_action_id.as_ref().map(|id| id.as_str())
+            }
+            _ => None,
+        })?;
+    notification_client_id_from_action(action_id)
+}
+
+/// Parses one versioned client action and returns its exact notification-client UUID.
+/// 解析一条版本化客户端动作并返回其精确通知客户端 UUID。
+///
+/// # Parameters / 参数
+/// `action_id` must be `vcn1:<client UUID>:<action UUID>` with canonical UUID text.
+/// `action_id` 必须是使用规范 UUID 文本的 `vcn1:<client UUID>:<action UUID>`。
+///
+/// # Returns / 返回值
+/// Returns the canonical client UUID only when the complete action identity is valid.
+/// 仅当完整动作身份有效时返回规范客户端 UUID。
+fn notification_client_id_from_action(action_id: &str) -> Option<String> {
+    // parts must contain exactly the version, client UUID, and action UUID.
+    // parts 必须精确包含版本、客户端 UUID 与动作 UUID。
+    let mut parts = action_id.split(':');
+    if parts.next()? != NOTIFICATION_CLIENT_ACTION_PREFIX {
+        return None;
+    }
+    // clientText and actionText remain borrowed until exact canonical validation succeeds.
+    // clientText 与 actionText 在精确规范校验成功前保持借用。
+    let client_text = parts.next()?;
+    let action_text = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    // clientUuid and actionUuid reject malformed or noncanonical external ownership identities.
+    // clientUuid 与 actionUuid 拒绝格式错误或非规范的外部所有权身份。
+    let client_uuid = Uuid::parse_str(client_text).ok()?;
+    let action_uuid = Uuid::parse_str(action_text).ok()?;
+    if client_uuid.to_string() != client_text || action_uuid.to_string() != action_text {
+        return None;
+    }
+    Some(client_uuid.to_string())
 }
 
 /// Maps report error presence to the session-kernel terminal status.
@@ -617,6 +744,7 @@ mod tests {
             Some(vulcan_service_api::ConversationRunOutcome::Completed),
             false,
             String::from("1000"),
+            Some(String::from("11111111-1111-4111-8111-111111111111")),
         )
         .expect("final successful run should settle");
         // failed is the event derived from the same exact run identity with a failure result.
@@ -628,12 +756,17 @@ mod tests {
             Some(vulcan_service_api::ConversationRunOutcome::Failed),
             false,
             String::from("1000"),
+            Some(String::from("11111111-1111-4111-8111-111111111111")),
         )
         .expect("final failed run should settle");
         assert_eq!(completed.event_id, failed.event_id);
         assert_eq!(completed.run_id, run_id.to_string());
         assert_eq!(completed.conversation_id, conversation_id.to_string());
         assert_eq!(completed.project_id.as_deref(), Some("project-a"));
+        assert_eq!(
+            completed.notification_client_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
         assert_eq!(
             completed.outcome,
             vulcan_service_api::ConversationRunOutcome::Completed
@@ -672,6 +805,7 @@ mod tests {
                 None,
                 false,
                 String::from("1000"),
+                None,
             )
             .is_none()
         );
@@ -683,8 +817,91 @@ mod tests {
                 Some(vulcan_service_api::ConversationRunOutcome::Completed),
                 true,
                 String::from("1000"),
+                None,
             )
             .is_none()
+        );
+    }
+
+    /// Verifies notification ownership accepts only the complete canonical action format.
+    /// 验证通知所有权只接受完整的规范动作格式。
+    #[test]
+    fn notification_client_identity_requires_canonical_owned_action() {
+        // clientId is the exact expected notification owner.
+        // clientId 是预期的精确通知所有者。
+        let client_id = "11111111-aaaa-4bbb-8ccc-111111111111";
+        // actionId distinguishes the durable user action from its owning client.
+        // actionId 将可靠用户动作与其所属客户端区分开。
+        let action_id = "22222222-2222-4222-8222-222222222222";
+        assert_eq!(
+            notification_client_id_from_action(format!("vcn1:{client_id}:{action_id}").as_str())
+                .as_deref(),
+            Some(client_id)
+        );
+        assert!(notification_client_id_from_action(action_id).is_none());
+        assert!(
+            notification_client_id_from_action(
+                format!("vcn1:{}:{action_id}", client_id.to_uppercase()).as_str()
+            )
+            .is_none()
+        );
+        assert!(
+            notification_client_id_from_action(
+                format!("vcn1:{client_id}:{action_id}:extra").as_str()
+            )
+            .is_none()
+        );
+    }
+
+    /// An unowned later turn must not inherit the preceding turn's notification client.
+    /// 后一轮无归属回合不得继承前一轮的通知客户端。
+    #[test]
+    fn notification_owner_is_scoped_to_the_completed_turn() {
+        use vulcan_session_core::v1::document::{ClientInputSubmission, SessionDocument};
+        use vulcan_session_core::v1::event::TurnOutcome;
+        use vulcan_session_core::v1::ids::ClientActionId;
+
+        // document contains two consecutive completed turns owned by different actions.
+        // document 包含由不同动作发起的两个连续已完成回合。
+        let mut document = SessionDocument::new("session", "project", "title", 1);
+        let first_owner = "11111111-aaaa-4bbb-8ccc-111111111111";
+        let second_owner = "22222222-bbbb-4ccc-8ddd-222222222222";
+        for (index, owner) in [first_owner, second_owner].into_iter().enumerate() {
+            let action = format!("vcn1:{owner}:33333333-3333-4333-8333-333333333333");
+            document
+                .submit_root_input(
+                    ClientInputSubmission::new(
+                        ClientActionId::try_new(action).unwrap(),
+                        format!("prompt {index}"),
+                        Vec::new(),
+                    ),
+                    index as i64 + 2,
+                )
+                .unwrap();
+            document
+                .close_turn(TurnOutcome::Stopped, 0, index as i64 + 2)
+                .unwrap();
+            let final_seq = document.events().last().unwrap().seq;
+            assert_eq!(
+                notification_client_id_in_completed_turn(&document, final_seq).as_deref(),
+                Some(owner)
+            );
+        }
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("legacy-unowned-action").unwrap(),
+                    "legacy prompt",
+                    Vec::new(),
+                ),
+                4,
+            )
+            .unwrap();
+        document.close_turn(TurnOutcome::Stopped, 0, 4).unwrap();
+        let legacy_final_seq = document.events().last().unwrap().seq;
+        assert_eq!(
+            notification_client_id_in_completed_turn(&document, legacy_final_seq),
+            None
         );
     }
 }

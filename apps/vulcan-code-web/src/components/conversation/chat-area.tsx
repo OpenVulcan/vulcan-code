@@ -1,4 +1,5 @@
 import React from "react";
+import { createClientOwnedActionId } from "@/notifications/client-identity";
 import { ChatAreaComposerDockLayer } from "@/components/conversation/chat-area/composer-dock-layer";
 import {
   ConversationLoadingCenter,
@@ -259,7 +260,7 @@ export function ChatArea(props: ChatAreaProps) {
       // clientContinuationId reuses one stable idempotency identity for the exact visible continuation token.
       // clientContinuationId 为精确可见的继续令牌复用同一个稳定幂等身份。
       const clientContinuationId = continuationClientIdsRef.current.get(activeContinuationKey)
-        ?? globalThis.crypto.randomUUID();
+        ?? createClientOwnedActionId();
       continuationClientIdsRef.current.set(activeContinuationKey, clientContinuationId);
       if (continuationClientIdsRef.current.size > 128) {
         // oldestKey bounds retained idempotency identities without removing the active token.

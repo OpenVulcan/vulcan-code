@@ -182,12 +182,23 @@ async function runDesktopSuite(selected, testRoot, record) {
     // 校验此 GUI 验收所用精确可执行文件的原生通知归属身份。
     if (process.platform === 'win32') {
       const identity = await first.evaluate(({ app }) => ({
-        name: app.getName(), activatorClsid: app.toastActivatorCLSID,
+        name: app.getName(),
+        activatorClsid: app.toastActivatorCLSID,
       }));
       const releaseGui = path.basename(selected['desktop-runtime']).toLowerCase() === 'vulcancodedesktop.exe';
-      assert.equal(identity.name, releaseGui ? 'Vulcan Code Desktop' : 'Vulcan Code Desktop Debug');
-      assert.equal(identity.activatorClsid.toUpperCase(), releaseGui
-        ? '{AB3EF79F-A068-4BA3-9B40-814138499202}' : '{3A5A6297-FA5F-4789-83BC-1520F0D103A7}');
+      if (releaseGui) {
+        assert.deepEqual(identity, {
+          name: 'Vulcan Code Desktop',
+          activatorClsid: '{AB3EF79F-A068-4BA3-9B40-814138499202}',
+        });
+      } else {
+        // suffix proves the debug shortcut and AUMID belong to the same exact executable path.
+        // suffix 证明调试快捷方式与 AUMID 属于同一个精确可执行程序路径。
+        const suffix = identity.name.match(/^Vulcan Code Desktop Debug ([0-9a-f]{12})$/)?.[1];
+        assert.ok(suffix);
+        assert.match(identity.activatorClsid.toUpperCase(),
+          /^\{[0-9A-F]{8}-[0-9A-F]{4}-5[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}\}$/);
+      }
       record.cases.push({ id: 'STARTUP_GUI_IDENTITY', status: 'passed', detail: identity });
     }
     // Preserve the child handle before Playwright drops its dispatcher when the GUI closes.

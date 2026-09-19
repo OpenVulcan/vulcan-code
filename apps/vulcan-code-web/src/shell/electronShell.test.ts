@@ -26,6 +26,7 @@ function installDesktopBridge(desktop: Record<string, unknown> | undefined): voi
 function completeBridge(): Record<string, unknown> {
   return {
     nativeNotificationsAvailable: true,
+    openDeveloperTools: vi.fn(async () => {}),
     minimizeWindow: vi.fn(async () => {}),
     toggleWindowMaximize: vi.fn(async () => {}),
     isWindowMaximized: vi.fn(async () => true),
@@ -87,6 +88,20 @@ describe("readElectronDesktopBridge", () => {
 });
 
 describe("ElectronShellClient", () => {
+  it("exposes developer tools only when the current preload provides the action", async () => {
+    const desktop = completeBridge();
+    installDesktopBridge(desktop);
+    const client = createElectronShellClient();
+
+    await client.openDeveloperTools?.();
+    expect(desktop.openDeveloperTools).toHaveBeenCalledOnce();
+
+    delete desktop.openDeveloperTools;
+    installDesktopBridge(desktop);
+    expect(readElectronDesktopBridge()).not.toBeNull();
+    expect(createElectronShellClient().openDeveloperTools).toBeUndefined();
+  });
+
   it("reports source Electron as notification-unsupported when its shortcut identity is shared", async () => {
     // The main process denies native toasts for generic electron.exe; the renderer must agree.
     // 主进程拒绝通用 electron.exe 的原生通知；渲染进程也必须报告相同能力。

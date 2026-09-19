@@ -25,6 +25,7 @@ let root: Root;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  shell.getNotificationCapability.mockReturnValue({ supported: true, shellKind: "tauri", activationSupported: false });
   // storageEntries supplies isolated device storage because Node also exposes an optional localStorage global.
   // storageEntries 提供隔离设备存储，避免 Node 自身的可选 localStorage 全局与浏览器环境冲突。
   const storageEntries = new Map<string, string>();
@@ -118,6 +119,43 @@ describe("notification preferences and permission UI", () => {
     expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
     expect(shell.requestNotificationPermission).not.toHaveBeenCalled();
     expect(container.textContent).toContain("已启用");
+  });
+
+  // A saved Web preference cannot reopen the browser permission prompt without a user gesture.
+  // 已保存的网页偏好不能在缺少用户操作时重新打开浏览器权限弹框。
+  it("waits for an explicit click before requesting saved browser permission", async () => {
+    // preferences represents the enabled state restored into this exact browser client.
+    // preferences 表示恢复到当前精确浏览器客户端的开启状态。
+    const preferences = defaultNotificationPreferences();
+    preferences.channels.local.enabled = true;
+    saveNotificationPreferences(preferences);
+    shell.getNotificationCapability.mockReturnValue({ supported: true, shellKind: "browser", activationSupported: true });
+    shell.getNotificationPermission.mockResolvedValue("default");
+    await renderSettings();
+    expect(shell.requestNotificationPermission).not.toHaveBeenCalled();
+    // requestButton is visible because this client still lacks authorization.
+    // requestButton 可见是因为当前客户端尚未获得授权。
+    const requestButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent === "申请通知权限")!;
+    await act(async () => requestButton.click());
+    expect(shell.requestNotificationPermission).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("已启用");
+  });
+
+  // An enable click must call the browser request directly, before a separate asynchronous read.
+  // 开启点击必须直接调用浏览器申请，不得先经过另一次异步读取。
+  it("requests permission directly from a newly enabled browser client", async () => {
+    shell.getNotificationCapability.mockReturnValue({ supported: true, shellKind: "browser", activationSupported: true });
+    shell.getNotificationPermission.mockResolvedValue("default");
+    await renderSettings();
+    // readsBeforeClick captures the completed mount-time policy read.
+    // readsBeforeClick 记录挂载时已完成的策略读取次数。
+    const readsBeforeClick = shell.getNotificationPermission.mock.calls.length;
+    const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    await act(async () => toggle.click());
+    expect(shell.requestNotificationPermission).toHaveBeenCalledOnce();
+    expect(shell.getNotificationPermission.mock.calls.length).toBe(readsBeforeClick);
+    expect(loadNotificationPreferences().channels.local.enabled).toBe(true);
   });
 
   // Revocation blocks delivery but must not erase the saved intent or prevent explicit disabling.

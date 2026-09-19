@@ -549,6 +549,9 @@ export type TranslationKey =
   | "global.labelSeparator"
   | "global.listDelimiter"
   | "appChrome.menu"
+  | "appChrome.reload"
+  | "appChrome.developerTools"
+  | "appChrome.developerToolsFailed"
   | "appChrome.status"
   | "appChrome.theme"
   | "appChrome.theme.dark"
@@ -944,6 +947,11 @@ export type TranslationKey =
   | "composer.shortcutHint"
   | "composer.selectFallback"
   | "composer.aria.input"
+  | "composer.contextMenu.copy"
+  | "composer.contextMenu.paste"
+  | "composer.contextMenu.cut"
+  | "composer.contextMenu.selectAll"
+  | "composer.contextMenu.clipboardFailed"
   | "composer.aria.mode"
   | "composer.aria.model"
   | "composer.aria.capability"
@@ -1719,6 +1727,8 @@ export type TranslationKey =
   | "markdown.wrap.disable"
   | "markdown.copyCode"
   | "conversation.control.copyFailed"
+  | "conversation.contextMenu.copy"
+  | "conversation.contextMenu.selectAll"
   | "conversation.control.actionFailed"
   | "conversation.control.detailFailed"
   | "conversation.control.retry"
@@ -4363,6 +4373,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "global.labelSeparator": "：",
     "global.listDelimiter": "、",
     "appChrome.menu": "打开应用菜单",
+    "appChrome.reload": "重新载入",
+    "appChrome.developerTools": "开发者控制台",
+    "appChrome.developerToolsFailed": "打开开发者控制台失败",
     "appChrome.status": "状态",
     "appChrome.theme": "主题",
     "appChrome.theme.dark": "暗色",
@@ -4735,6 +4748,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.shortcutHint": "⏎ 发送，Shift + ⏎ 换行",
     "composer.selectFallback": "选择",
     "composer.aria.input": "当前会话输入",
+    "composer.contextMenu.copy": "复制",
+    "composer.contextMenu.paste": "粘贴",
+    "composer.contextMenu.cut": "剪切",
+    "composer.contextMenu.selectAll": "全选",
+    "composer.contextMenu.clipboardFailed": "剪贴板操作失败",
     "composer.aria.mode": "选择构建模式",
     "composer.aria.model": "选择模型",
     "composer.aria.capability": "选择扩展能力",
@@ -5510,6 +5528,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "markdown.wrap.disable": "关闭自动换行",
     "markdown.copyCode": "复制代码",
     "conversation.control.copyFailed": "复制失败",
+    "conversation.contextMenu.copy": "复制",
+    "conversation.contextMenu.selectAll": "全选",
     "conversation.control.actionFailed": "操作失败",
     "conversation.control.detailFailed": "详情读取失败",
     "conversation.control.retry": "重新读取",
@@ -8174,6 +8194,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "global.labelSeparator": ": ",
     "global.listDelimiter": ", ",
     "appChrome.menu": "Open app menu",
+    "appChrome.reload": "Reload",
+    "appChrome.developerTools": "Developer Tools",
+    "appChrome.developerToolsFailed": "Failed to open Developer Tools",
     "appChrome.status": "Status",
     "appChrome.theme": "Theme",
     "appChrome.theme.dark": "Dark",
@@ -8546,6 +8569,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.shortcutHint": "⏎ Send, Shift + ⏎ New line",
     "composer.selectFallback": "Select",
     "composer.aria.input": "Current conversation input",
+    "composer.contextMenu.copy": "Copy",
+    "composer.contextMenu.paste": "Paste",
+    "composer.contextMenu.cut": "Cut",
+    "composer.contextMenu.selectAll": "Select all",
+    "composer.contextMenu.clipboardFailed": "Clipboard operation failed",
     "composer.aria.mode": "Select build mode",
     "composer.aria.model": "Select model",
     "composer.aria.capability": "Select extended capability",
@@ -9321,6 +9349,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "markdown.wrap.disable": "Disable line wrap",
     "markdown.copyCode": "Copy code",
     "conversation.control.copyFailed": "Copy failed",
+    "conversation.contextMenu.copy": "Copy",
+    "conversation.contextMenu.selectAll": "Select all",
     "conversation.control.actionFailed": "Action failed",
     "conversation.control.detailFailed": "Could not load details",
     "conversation.control.retry": "Load again",

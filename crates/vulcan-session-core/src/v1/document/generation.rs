@@ -9,7 +9,7 @@ use crate::v1::event::{
     ConversationEvent, EventBody, EventVisibility, SystemContextEvent, SystemContextOperation,
     SystemContextScope, SystemRoleHint, UserInputSource,
 };
-use crate::v1::ids::{JS_SAFE_INTEGER_MAX, ResourceId, Seq};
+use crate::v1::ids::{ClientActionId, JS_SAFE_INTEGER_MAX, ResourceId, Seq};
 use crate::v1::projection::derive_active_system_state;
 
 use super::{SessionDocument, validate_timestamp, validate_user_input};
@@ -36,6 +36,9 @@ pub struct RootInputReplacement {
     /// Ordered project-level resource identities.
     /// 有序的项目级资源身份。
     pub ordered_resource_ids: Vec<ResourceId>,
+    /// Optional replacement client action that owns the rewritten prompt intent.
+    /// 可选的替换客户端动作，用于持有重写后的提示词意图。
+    pub client_action_id: Option<ClientActionId>,
 }
 
 impl RootInputReplacement {
@@ -53,7 +56,23 @@ impl RootInputReplacement {
         Self {
             text: text.into(),
             ordered_resource_ids,
+            client_action_id: None,
         }
+    }
+
+    /// Assigns the durable client action that owns this rewritten prompt.
+    /// 指定持有本次重写提示词的可靠客户端动作。
+    ///
+    /// # Parameters / 参数
+    /// `client_action_id` is the exact external idempotency and notification-owner identity.
+    /// `client_action_id` 是精确的外部幂等及通知所有者身份。
+    ///
+    /// # Returns / 返回值
+    /// Returns the replacement with its explicit client action installed.
+    /// 返回已安装显式客户端动作的替换载荷。
+    pub fn with_client_action_id(mut self, client_action_id: ClientActionId) -> Self {
+        self.client_action_id = Some(client_action_id);
+        self
     }
 }
 
@@ -147,6 +166,9 @@ impl SessionDocument {
                 &input.replacement.ordered_resource_ids,
             );
             user_input.resource_ids = input.replacement.ordered_resource_ids;
+            if let Some(client_action_id) = input.replacement.client_action_id {
+                user_input.client_action_id = client_action_id;
+            }
         })?;
 
         let mut metadata = self.build_generation_metadata(
@@ -640,10 +662,17 @@ mod tests {
             })
             .expect("second root input must exist");
         let old_event_revision = source.events()[target_seq.value() as usize - 1].event_revision;
+        // replacement_client_action_id records the client that initiated the edit operation.
+        // replacement_client_action_id 记录发起编辑操作的客户端。
+        let replacement_client_action_id = ClientActionId::try_new(
+            "vcn1:4c751b3e-b8de-4ae1-866a-46fa4a093404:8da7f088-04da-444b-918b-a52001dfc3d1",
+        )
+        .unwrap();
         let output = source
             .build_edited_generation(EditGenerationInput {
                 target_seq,
-                replacement: RootInputReplacement::new("replacement", Vec::new()),
+                replacement: RootInputReplacement::new("replacement", Vec::new())
+                    .with_client_action_id(replacement_client_action_id.clone()),
                 now_ms: T0 + 10,
             })
             .unwrap();
@@ -678,6 +707,7 @@ mod tests {
             panic!("target remains a user input")
         };
         assert_eq!(replaced.text, "replacement");
+        assert_eq!(&replaced.client_action_id, &replacement_client_action_id);
         assert!(output.events.iter().any(|event| matches!(
             &event.event,
             EventBody::SystemContext(SystemContextEvent {

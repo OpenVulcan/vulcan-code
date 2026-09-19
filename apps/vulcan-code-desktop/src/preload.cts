@@ -15,6 +15,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 // 通道名在此内联，因为沙箱预加载无法 require 相对本地模块：其中只有 `electron` 模块与少量 Node 内置
 // 模块可用。共享定义仍位于 ./gui/ipc-channels.cts，若两者发生漂移则 ipc-channels.test.ts 会失败。
 const WINDOW_COMMAND_CHANNELS = {
+  openDeveloperTools: 'vulcan:window:open-developer-tools',
   minimize: 'vulcan:window:minimize',
   toggleMaximize: 'vulcan:window:toggle-maximize',
   isMaximized: 'vulcan:window:is-maximized',
@@ -22,6 +23,14 @@ const WINDOW_COMMAND_CHANNELS = {
   isFocused: 'vulcan:window:is-focused',
   isVisible: 'vulcan:window:is-visible',
   close: 'vulcan:window:close',
+} as const;
+
+// Clipboard channels mirror the main-process allowlist without exposing raw Electron IPC.
+// 剪贴板通道与主进程允许列表一致，不暴露原始 Electron IPC。
+const CLIPBOARD_CHANNELS = {
+  readText: 'vulcan:clipboard:read-text',
+  writeText: 'vulcan:clipboard:write-text',
+  paste: 'vulcan:clipboard:paste',
 } as const;
 
 const LOCAL_BROWSER_CHANNELS = {
@@ -65,6 +74,18 @@ const desktop = {
   // Source electron.exe has a shared Start Menu shortcut; only branded binaries own native toasts.
   // 源码 electron.exe 使用共享开始菜单快捷方式；只有品牌化二进制文件拥有原生通知。
   nativeNotificationsAvailable: process.platform !== 'win32' || !/[\\/]electron\.exe$/i.test(process.execPath),
+  // openDeveloperTools requests DevTools for the owning workbench without exposing raw IPC.
+  // openDeveloperTools 请求打开所属工作台的开发者工具，且不暴露原始 IPC。
+  openDeveloperTools: (): Promise<void> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.openDeveloperTools),
+  // readClipboardText returns only the current system clipboard's plain text.
+  // readClipboardText 仅返回当前系统剪贴板中的纯文本。
+  readClipboardText: (): Promise<string> => ipcRenderer.invoke(CLIPBOARD_CHANNELS.readText),
+  // writeClipboardText writes only plain text and never exposes the Electron clipboard object.
+  // writeClipboardText 仅写入纯文本，绝不暴露 Electron 剪贴板对象。
+  writeClipboardText: (value: string): Promise<void> => ipcRenderer.invoke(CLIPBOARD_CHANNELS.writeText, value),
+  // pasteClipboard reuses the page's normal paste event, including attachment handling.
+  // pasteClipboard 复用页面的正常粘贴事件，包括附件处理。
+  pasteClipboard: (): Promise<void> => ipcRenderer.invoke(CLIPBOARD_CHANNELS.paste),
   minimizeWindow: (): Promise<void> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.minimize),
   toggleWindowMaximize: (): Promise<void> =>
     ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.toggleMaximize),

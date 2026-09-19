@@ -13,6 +13,7 @@ import { test } from 'node:test';
 
 import {
   SERVICE_CHANNELS,
+  CLIPBOARD_CHANNELS,
   LOCAL_BROWSER_CHANNELS,
   NOTIFICATION_CHANNELS,
   NOTIFICATION_EVENT_CHANNELS,
@@ -29,6 +30,7 @@ const preloadSourcePath = path.resolve(import.meta.dirname, '..', '..', 'src', '
 function sharedChannelValues(): string[] {
   return [
     ...Object.values(SERVICE_CHANNELS),
+    ...Object.values(CLIPBOARD_CHANNELS),
     ...Object.values(LOCAL_BROWSER_CHANNELS),
     ...Object.values(WINDOW_COMMAND_CHANNELS),
     ...Object.values(WINDOW_EVENT_CHANNELS),

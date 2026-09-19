@@ -296,7 +296,13 @@ impl BrowserManager {
             .get(&owner)
             .cloned();
         let Some(slot) = slot else {
-            return self.takeover_lease(browser_id, holder, None);
+            let browser_id_owned = String::from(browser_id);
+            let holder_owned = String::from(holder);
+            return self
+                .run_blocking(browser_id, move |manager| {
+                    manager.takeover_lease(&browser_id_owned, &holder_owned, None)
+                })
+                .await;
         };
         let owner_session_id = Uuid::parse_str(&owner)
             .map_err(|error| format!("invalid stored browser owner identity: {error}"))?;
@@ -325,7 +331,11 @@ impl BrowserManager {
                 )
                 .await?;
             }
-            manager.takeover_lease(&browser_id, &holder, None)
+            manager
+                .run_blocking(&browser_id.clone(), move |manager| {
+                    manager.takeover_lease(&browser_id, &holder, None)
+                })
+                .await
         })
         .await
     }

@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync vite start stop status build build-release release run run-release service core-build core-restart br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -70,6 +70,8 @@ help:
 	@echo "  make run           # run Electron desktop; start Vite when needed"
 	@echo "  make run-release   # run Core/Electron/WebUI release build"
 	@echo "  make service       # start the tray/background Core only"
+	@echo "  make core-build    # Windows: compile Debug Core only; keep GUI running"
+	@echo "  make core-restart  # Windows: compile and restart Debug Core; keep GUI running"
 	@echo "  make br            # build Core/WebUI/Electron and run desktop with Vite"
 	@echo "  make br-release    # build Core/WebUI/Electron and run desktop"
 	@echo "  make licenses      # generate Rust third-party notices"
@@ -156,6 +158,16 @@ run-release:
 .PHONY: service
 service:
 	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),service release,service))
+
+# core-build compiles the Debug Core without rebuilding or relaunching Electron and WebUI.
+# core-build 只编译 Debug Core，不重建或重启 Electron 与 WebUI。
+core-build:
+	$(call route-command,core-build)
+
+# core-restart publishes the new Debug Core after its tray owner exits, then starts Core again.
+# core-restart 在托盘持有者退出后发布新版 Debug Core，并重新启动 Core。
+core-restart:
+	$(call route-command,core-restart)
 
 # br routes debug by default, or release when the release companion goal is present.
 # br 默认路由 debug，存在 release 伴随目标时路由 release。

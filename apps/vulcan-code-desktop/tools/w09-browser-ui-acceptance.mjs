@@ -17,12 +17,15 @@ import { _electron as electron, chromium } from 'playwright-core';
 // execFileAsync 不通过 Shell 插值测试路径来运行 Windows 通知历史探针。
 const execFileAsync = promisify(execFile);
 
-// readBrandedDebugToastTags observes only the generated debug app's native toast IDs.
-// readBrandedDebugToastTags 只观察本次生成的调试应用的原生通知 ID。
-async function readBrandedDebugToastTags() {
+// readBrandedDebugToastTags observes only one executable-owned debug app's native toast IDs.
+// readBrandedDebugToastTags 只观察一个可执行程序专属调试应用的原生通知 ID。
+// appUserModelId selects the exact path-derived debug identity; the return value contains its tags.
+// appUserModelId 选择精确的路径派生调试身份；返回值包含该身份的通知标签。
+async function readBrandedDebugToastTags(appUserModelId) {
   const command = '$m=[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];'
-    + '$m::History.GetHistory("ai.vulcan.code.desktop.debug") | ForEach-Object { $_.Tag }';
+    + '$m::History.GetHistory($env:VULCAN_W09_AUMID) | ForEach-Object { $_.Tag }';
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', command], {
+    env: { ...process.env, VULCAN_W09_AUMID: appUserModelId },
     timeout: 10_000,
   });
   return stdout.split(/\r?\n/).map((tag) => tag.trim()).filter(Boolean);
@@ -69,11 +72,21 @@ assert.equal(cloneModelConfig, cloneCredentialDatabase,
 // manualG14 requires one real Debug model turn and a generated branded native toast identity.
 // manualG14 要求真实 Debug 模型回合及本次生成的品牌化原生通知身份。
 const manualG14 = process.env.VULCAN_W09_MANUAL_G14 === '1';
+// webNotificationProbe verifies a real browser-owned completion notification and desktop isolation.
+// webNotificationProbe 验证真实网页会话完成通知及与桌面通知的隔离。
+const webNotificationProbe = process.env.VULCAN_W09_WEB_NOTIFICATION === '1';
+assert.ok(!webNotificationProbe || cloneModelConfig,
+  'Web notification acceptance requires the isolated configured-model test.');
 // g14SimulateCom exercises the same native callback when physical notification input is unavailable.
 // g14SimulateCom 在无法操作系统通知时检验同一原生回调，但不冒充物理点击。
 const g14SimulateCom = process.env.VULCAN_W09_G14_SIMULATE_COM === '1';
 assert.ok(!g14SimulateCom || manualG14,
   'G14 COM activation simulation requires the real Debug notification route.');
+// g14ReloadBeforeActivation tests a delivered toast after the owning renderer reloads.
+// g14ReloadBeforeActivation 测试所属渲染器重载后点击已投递的通知。
+const g14ReloadBeforeActivation = process.env.VULCAN_W09_G14_RELOAD === '1';
+assert.ok(!g14ReloadBeforeActivation || g14SimulateCom,
+  'G14 renderer reload requires the isolated COM activation test.');
 // A delayed COM probe distinguishes a fresh banner from an Action Center item after banner expiry.
 // 延迟 COM 探针用于区分刚显示的横幅和横幅消失后仍留在通知中心的条目。
 const g14ComDelayMs = Number(process.env.VULCAN_W09_G14_COM_DELAY_MS ?? '0');
@@ -265,15 +278,18 @@ let capturedUiLeaseSecret = null;
 // debugNotificationId identifies only the opt-in branded debug toast created by this run.
 // debugNotificationId 仅标识本轮可选的品牌化调试通知。
 let debugNotificationId = null;
+// notificationIdentity records the exact GUI identity used by this acceptance process.
+// notificationIdentity 记录本次验收进程使用的精确 GUI 身份。
+let notificationIdentity = null;
+// debugNotificationIdentity expands a path-derived debug identity for Windows probes and cleanup.
+// debugNotificationIdentity 为 Windows 探针与清理展开路径派生的调试身份。
+let debugNotificationIdentity = null;
 // g14NotificationId identifies the exact conversation notification for physical-click cleanup.
 // g14NotificationId 标识物理点击验收的精确会话通知，供定向清理。
 let g14NotificationId = null;
-// g14EventSocket observes the exact Core settlement without injecting a WebUI notification.
-// g14EventSocket 只观察 Core 的精确终态事件，不向 WebUI 注入通知。
-let g14EventSocket = null;
-// g14Settlements retains only the service-owned finality events needed to bind a native ID.
-// g14Settlements 仅保留绑定原生通知 ID 所需的服务终态事件。
-const g14Settlements = [];
+// g14PriorToastTags records this exact GUI identity's history before the model turn.
+// g14PriorToastTags 记录模型回合开始前当前精确 GUI 身份的通知历史。
+let g14PriorToastTags = null;
 // g14Acceptance retains the real notification-to-conversation navigation result.
 // g14Acceptance 保留真实通知到会话导航的验收结果。
 let g14Acceptance = null;
@@ -922,14 +938,30 @@ try {
   });
   // Native notification identity must follow the executable profile even when both GUIs share a user.
   // 即使两种 GUI 属于同一用户，原生通知身份也必须随可执行文件配置隔离。
-  const notificationIdentity = await gui.evaluate(({ app }) => ({
+  notificationIdentity = await gui.evaluate(({ app }) => ({
     name: app.getName(), activatorClsid: app.toastActivatorCLSID,
   }));
   if (process.platform === 'win32') {
     const releaseGui = path.basename(selectedDesktopRuntime).toLowerCase() === 'vulcancodedesktop.exe';
-    assert.equal(notificationIdentity.name, releaseGui ? 'Vulcan Code Desktop' : 'Vulcan Code Desktop Debug');
-    assert.equal(notificationIdentity.activatorClsid.toUpperCase(), releaseGui
-      ? '{AB3EF79F-A068-4BA3-9B40-814138499202}' : '{3A5A6297-FA5F-4789-83BC-1520F0D103A7}');
+    if (releaseGui) {
+      assert.deepEqual(notificationIdentity, {
+        name: 'Vulcan Code Desktop',
+        activatorClsid: '{AB3EF79F-A068-4BA3-9B40-814138499202}',
+      });
+    } else {
+      // debugSuffix binds shortcut, AUMID, and COM activation to this executable path.
+      // debugSuffix 将快捷方式、AUMID 与 COM 激活绑定到当前可执行程序路径。
+      const debugSuffix = notificationIdentity.name
+        .match(/^Vulcan Code Desktop Debug ([0-9a-f]{12})$/)?.[1];
+      assert.ok(debugSuffix);
+      assert.match(notificationIdentity.activatorClsid.toUpperCase(),
+        /^\{[0-9A-F]{8}-[0-9A-F]{4}-5[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}\}$/);
+      debugNotificationIdentity = {
+        name: notificationIdentity.name,
+        appUserModelId: `ai.vulcan.code.desktop.debug.${debugSuffix}`,
+        activatorClsid: notificationIdentity.activatorClsid.toUpperCase(),
+      };
+    }
   }
   // page is the actual desktop workbench renderer served by Core HTTP.
   // page 是由 Core HTTP 提供的实际桌面工作台渲染器。
@@ -996,7 +1028,7 @@ try {
     assert.equal(sourceNotificationBoundary.permission, 'unsupported');
     assert.match(sourceNotificationBoundary.refusal, /Native notifications are not supported/);
     assert.equal((await gui.evaluate(({ app }) => app.toastActivatorCLSID)).toUpperCase(),
-      '{3A5A6297-FA5F-4789-83BC-1520F0D103A7}');
+      debugNotificationIdentity.activatorClsid);
   }
   if (process.platform === 'win32' && process.env.VULCAN_W09_TEST_BRANDED_TOAST === '1') {
     // The opt-in probe is restricted to the generated debug package in this checkout; it must
@@ -1012,21 +1044,27 @@ try {
       return { supported: bridge.nativeNotificationsAvailable, permission };
     }, debugNotificationId);
     assert.deepEqual(debugNotificationBoundary, { supported: true, permission: 'granted' });
+    assert.ok(debugNotificationIdentity);
     assert.equal((await gui.evaluate(({ app }) => app.toastActivatorCLSID)).toUpperCase(),
-      '{3A5A6297-FA5F-4789-83BC-1520F0D103A7}');
+      debugNotificationIdentity.activatorClsid);
     const observeDebugToast = '$m=[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];'
-      + '$t=$m::History.GetHistory("ai.vulcan.code.desktop.debug") | Where-Object { $_.Tag -eq $env:VULCAN_W09_TOAST_ID } | Select-Object -First 1;'
-      + '$p=[Environment]::GetFolderPath("Programs");$f=Join-Path $p "Vulcan Code Desktop Debug.lnk";'
+      + '$t=$m::History.GetHistory($env:VULCAN_W09_AUMID) | Where-Object { $_.Tag -eq $env:VULCAN_W09_TOAST_ID } | Select-Object -First 1;'
+      + '$p=[Environment]::GetFolderPath("Programs");$f=Join-Path $p ($env:VULCAN_W09_APP_NAME + ".lnk");'
       + '$s=(New-Object -ComObject WScript.Shell).CreateShortcut($f);'
-      + '$i=(New-Object -ComObject Shell.Application).NameSpace($p).ParseName("Vulcan Code Desktop Debug.lnk");'
-      + '$k="Registry::HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{3A5A6297-FA5F-4789-83BC-1520F0D103A7}\\LocalServer32";'
+      + '$i=(New-Object -ComObject Shell.Application).NameSpace($p).ParseName($env:VULCAN_W09_APP_NAME + ".lnk");'
+      + '$k="Registry::HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\" + $env:VULCAN_W09_CLSID + "\\LocalServer32";'
       + '[pscustomobject]@{xml=if($t){$t.Content.GetXml()}else{$null};target=$s.TargetPath;'
       + 'aumid=$i.ExtendedProperty("System.AppUserModel.ID");'
       + 'clsid=$i.ExtendedProperty("System.AppUserModel.ToastActivatorCLSID");'
       + 'server=(Get-Item -LiteralPath $k).GetValue("")} | ConvertTo-Json -Compress';
     const debugToast = await until(async () => {
       const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', observeDebugToast], {
-        env: { ...process.env, VULCAN_W09_TOAST_ID: debugNotificationId }, timeout: 10_000,
+        env: { ...process.env,
+          VULCAN_W09_TOAST_ID: debugNotificationId,
+          VULCAN_W09_AUMID: debugNotificationIdentity.appUserModelId,
+          VULCAN_W09_APP_NAME: debugNotificationIdentity.name,
+          VULCAN_W09_CLSID: debugNotificationIdentity.activatorClsid,
+        }, timeout: 10_000,
       });
       const value = JSON.parse(stdout);
       assert.ok(value.xml?.includes(`tag=${debugNotificationId}`));
@@ -1034,8 +1072,8 @@ try {
     }, 20_000);
     assert.equal(debugToast.target.toLowerCase(), selectedDesktopRuntime.toLowerCase());
     assert.equal(debugToast.server.toLowerCase(), selectedDesktopRuntime.toLowerCase());
-    assert.equal(debugToast.aumid, 'ai.vulcan.code.desktop.debug');
-    assert.equal(debugToast.clsid.toUpperCase(), '{3A5A6297-FA5F-4789-83BC-1520F0D103A7}');
+    assert.equal(debugToast.aumid, debugNotificationIdentity.appUserModelId);
+    assert.equal(debugToast.clsid.toUpperCase(), debugNotificationIdentity.activatorClsid);
     debugToastAcceptance = {
       delivered: true, exactHistoryId: debugNotificationId,
       shortcutTargetMatches: true, serverTargetMatches: true,
@@ -1282,7 +1320,9 @@ try {
   const slowWindowFps = Number((slowWindowFrames.length / ((slowEnd - slowStart) / 1_000)).toFixed(1));
   const normalLatencies = normalObserver.frames.map((frame) => frame.latencyMs).filter(Number.isFinite);
   const slowLatencies = slowWindowFrames.map((frame) => frame.latencyMs).filter(Number.isFinite);
-  const performanceTargetFps = Math.max(10, baselineFps * 0.7);
+  // A relative ratio alone accepted the measured 15 fps regression; keep the 20 fps plan floor.
+  // 仅按相对比例曾放过实测 15 帧回退；保留方案规定的每秒 20 帧绝对下限。
+  const performanceTargetFps = Math.max(20, baselineFps * 0.7);
   const streamPerformance = {
     normalObserverFirstFrameMs: normalObserver.first.receivedAt - normalObserver.startedAt,
     normalObserverBaselineFrames: baselineFrames.length,
@@ -1301,9 +1341,11 @@ try {
     performanceTargetMet: slowWindowFps >= performanceTargetFps,
   };
   assert.ok(baselineFrames.length > 0, JSON.stringify(streamPerformance));
+  assert.ok(baselineFps >= 20, JSON.stringify(streamPerformance));
   // A slow subscriber must not starve the active normal observer; performance remains explicit evidence.
   // 慢订阅者不得饿死活动中的正常观察者；性能结果必须作为明确证据保留。
   assert.ok(streamPerformance.normalObserverContinued, JSON.stringify(streamPerformance));
+  assert.ok(streamPerformance.performanceTargetMet, JSON.stringify(streamPerformance));
   normalSocket.close();
   normalSocket = null;
   slowSocket.destroy();
@@ -1594,6 +1636,9 @@ try {
   let shellSecretRedactionAcceptance = null;
   let sensitiveDataAudit = null;
   let webAcceptance = null;
+  // webNotificationAcceptance records the real Web Notification API result and owner isolation.
+  // webNotificationAcceptance 记录真实网页通知接口结果与所有者隔离。
+  let webNotificationAcceptance = null;
   let multiClientBrowserAcceptance = null;
   // providerToolTrace summarizes exact model-facing definitions without retaining prompt bytes.
   // providerToolTrace 只汇总模型实际收到的定义，不保留提示词字节。
@@ -1606,6 +1651,13 @@ try {
   // crossOwnerProtectedMethodCount 统计他人 ID 与不存在 ID 拒绝结果相同的 Core 浏览器 RPC 数量。
   let crossOwnerProtectedMethodCount = null;
   if (cloneModelConfig) {
+    // initiatingNotificationClientId is the exact GUI event-socket owner used by the real model turn.
+    // initiatingNotificationClientId 是真实模型回合使用的精确 GUI 事件套接字所有者。
+    const initiatingNotificationClientId = await page.evaluate(() => window.sessionStorage.getItem(
+      'vulcan.notifications.client-instance.v1',
+    ));
+    assert.match(initiatingNotificationClientId,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     // Enable notifications only in this isolated GUI before the real AI run settles.
     // 仅在此隔离 GUI 中启用通知，并确保发生在真实 AI 回合结束之前。
     if (manualG14) {
@@ -1615,33 +1667,21 @@ try {
           categories: { conversationCompleted: true, conversationFailed: true },
           privacy: { showConversationTitle: false } }),
       ));
-      // A separate read-only observer supplies the unique run UUID before native toast matching.
-      // 单独的只读观察端提供唯一运行 UUID，供原生通知精确匹配。
-      const eventUrl = new URL(`${discovery.baseUrl}/events`);
-      eventUrl.protocol = eventUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-      eventUrl.searchParams.set('token', discovery.serviceToken);
-      eventUrl.searchParams.set('clientId', randomUUID());
-      g14EventSocket = new WebSocket(eventUrl);
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('G14 service event observer did not open.')), 10_000);
-        g14EventSocket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
-        g14EventSocket.addEventListener('error', () => {
-          clearTimeout(timeout);
-          reject(new Error('G14 service event observer failed.'));
-        }, { once: true });
-      });
-      g14EventSocket.addEventListener('message', (event) => {
-        if (typeof event.data !== 'string') return;
-        const parsed = JSON.parse(event.data);
-        if (parsed.kind === 'conversationRunSettled') g14Settlements.push(parsed.payload);
-      });
+      // Native history is the observable owner boundary; another event socket must not receive
+      // this client-owned settlement merely to help the test discover its run identifier.
+      // 原生通知历史是可观察的归属边界；测试不得为获取运行标识而让另一事件套接字
+      // 接收此客户端所属的终态事件。
+      assert.ok(debugNotificationIdentity);
+      g14PriorToastTags = new Set(await readBrandedDebugToastTags(
+        debugNotificationIdentity.appUserModelId,
+      ));
     }
     if (captureProviderTools) {
       await rpc('service_save_provider_request_trace_settings', { request: { enabled: true } });
     }
     const aiPromptPrefix = 'This is an authorized local browser acceptance page:';
     const response = await rpc('service_submit_conversation_prompt', {
-      clientSubmissionId: `w09-ai-browser-${Date.now()}`,
+      clientSubmissionId: `vcn1:${initiatingNotificationClientId}:${randomUUID()}`,
       projectId: project.id,
       conversationId: null,
       draftSlotKey: `new:${project.id}`,
@@ -1692,23 +1732,43 @@ try {
       'The model closed its browser before the required post-run projection check.');
     delete aiAcceptance.screenshotError;
     if (manualG14) {
-      // The Core event's run UUID is the bounded native correlation key, while its full event ID remains the dedupe key.
-      // Core 事件的运行 UUID 是有界原生关联键，完整事件 ID 仍用于去重。
-      const settlement = await until(async () => {
-        const matching = g14Settlements.filter((event) => event.conversationId === aiConversationId);
-        assert.equal(matching.length, 1, JSON.stringify(matching));
-        return matching[0];
-      }, 10_000);
-      assert.match(settlement.runId, /^[0-9a-f-]{36}$/i);
-      g14NotificationId = `notification:${settlement.runId}`;
-      await until(async () => {
-        const tags = await readBrandedDebugToastTags();
-        assert.ok(tags.includes(g14NotificationId), JSON.stringify(tags));
-        return true;
+      // The newly delivered native tag identifies this run without leaking its settlement to
+      // another client. The exact GUI may have older notifications from earlier probes.
+      // 新投递的原生标签在不向其他客户端泄漏终态事件的情况下标识本回合；
+      // 同一 GUI 可能保留此前探针留下的旧通知。
+      g14NotificationId = await until(async () => {
+        const tags = await readBrandedDebugToastTags(debugNotificationIdentity.appUserModelId);
+        const fresh = tags.filter((tag) => !g14PriorToastTags.has(tag)
+          && /^notification:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tag));
+        assert.equal(fresh.length, 1, JSON.stringify(fresh));
+        return fresh[0];
       }, 60_000);
       const aiConversation = (await rpc('workbench.snapshot')).conversations.find(
         (conversation) => conversation.id === aiConversationId);
       assert.ok(aiConversation, 'The notified AI conversation disappeared from the workbench.');
+      if (g14ReloadBeforeActivation) {
+        // The toast stays in the native host while the Vite renderer is replaced.
+        // Vite 渲染器更换期间，通知仍保留在原生宿主中。
+        await gui.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await conversationRow.waitFor({ timeout: 20_000 });
+        await conversationRow.click();
+        await until(async () => {
+          // The row selection and transcript hydration are separate asynchronous steps.
+          // 会话行选中与转录界面恢复是两个独立的异步步骤。
+          const selected = await page.locator('[data-conversation-surface-id]').first()
+            .getAttribute('data-conversation-surface-id');
+          assert.equal(selected, acceptedConversationId);
+          return true;
+        }, 20_000);
+        // A true reload must retain the submitting client identity, unlike a copied tab.
+        // 真正重载必须保留提交回合的客户端身份，复制标签页则不能保留。
+        const reloadedClientId = await page.evaluate(() => window.sessionStorage.getItem(
+          'vulcan.notifications.client-instance.v1',
+        ));
+        assert.equal(reloadedClientId, initiatingNotificationClientId);
+        await gui.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
+      }
       // The conversation surface carries its exact Core identity; titles can collide.
       // 会话界面携带 Core 的精确身份；标题可能重复，不能作为导航验收依据。
       const selectedBeforeClick = await page.locator('[data-conversation-surface-id]').first()
@@ -1747,6 +1807,7 @@ try {
           'proxy', 'pwsh', '-NoProfile', '-File',
           path.join(repository, 'apps/vulcan-code-desktop/tools/windows-toast-activate.ps1'),
           '-NotificationId', g14NotificationId, '-Profile', 'Debug',
+          '-DebugExecutable', selectedDesktopRuntime,
         ], { timeout: 10_000 });
       }
       try {
@@ -1783,8 +1844,15 @@ try {
       }
       g14Acceptance = { physicalClickObserved: !g14SimulateCom,
         systemComActivationObserved: g14SimulateCom,
+        rendererReloadedBeforeActivation: g14ReloadBeforeActivation,
         routedConversationId: aiConversationId, guiRestored: true,
         corePidUnchanged: true, notificationId: g14NotificationId };
+      if (g14ReloadBeforeActivation
+        && await contextPanelToggle.getAttribute('aria-pressed') !== 'true') {
+        // Renderer reload resets the optional right panel; restore it for later browser UI checks.
+        // 渲染器重载会重置可选右侧面板；后续浏览器界面检查前重新打开。
+        await contextPanelToggle.click();
+      }
     }
     if (captureProviderTools) {
       // Read only committed slots from this turn before later model turns can replace ring slots.
@@ -1960,6 +2028,113 @@ try {
         await browserContext.close();
       }
     }
+    if (webNotificationProbe) {
+      // This separate browser context owns its own permission and notification preference.
+      // 此独立浏览器上下文拥有自己的权限和通知偏好。
+      const notificationContext = await webBrowser.newContext({
+        viewport: { width: 1280, height: 800 },
+      });
+      try {
+        await notificationContext.grantPermissions(['notifications'], {
+          origin: new URL(discovery.baseUrl).origin,
+        });
+        await notificationContext.addInitScript(() => {
+          // The proxy delegates to Chromium and records permission requests and accepted toasts.
+          // 代理委托 Chromium，并记录权限申请与已接受的通知。
+          window.__w09WebNotificationCalls = [];
+          window.__w09WebPermissionRequests = 0;
+          window.Notification = new Proxy(window.Notification, {
+            get(target, property) {
+              if (property === 'requestPermission') {
+                return (...args) => {
+                  window.__w09WebPermissionRequests += 1;
+                  return Reflect.apply(target.requestPermission, target, args);
+                };
+              }
+              return Reflect.get(target, property, target);
+            },
+            construct(target, args) {
+              const notification = Reflect.construct(target, args);
+              window.__w09WebNotificationCalls.push({ title: args[0], tag: args[1]?.tag });
+              return notification;
+            },
+          });
+        });
+        const notificationPage = await notificationContext.newPage();
+        await notificationPage.goto(`${discovery.baseUrl}/?service=${encodeURIComponent(discovery.baseUrl)}`);
+        await notificationPage.locator('.conversation-tree-button')
+          .filter({ hasText: aiConversation.title }).first().waitFor({ timeout: 25_000 });
+        // The actual WebUI switch must request permission from this browser, then show a test toast.
+        // 必须由真实 WebUI 开关向当前浏览器申请权限，再发送测试通知。
+        await notificationPage.locator('.sidebar-brand-settings-button').click();
+        await notificationPage.locator('.settings-subarea-button')
+          .filter({ hasText: /^通知$|^Notifications$/ }).click();
+        const notificationSettings = notificationPage.locator('.notification-settings-page');
+        await notificationSettings.getByRole('switch', {
+          name: /本地系统通知|Local system notifications/,
+        }).click();
+        await until(async () => {
+          const state = await notificationPage.evaluate(() => ({
+            permissionRequests: window.__w09WebPermissionRequests,
+            preference: JSON.parse(window.localStorage.getItem('vulcan.notification-preferences.local.v1')),
+          }));
+          assert.equal(state.permissionRequests, 1);
+          assert.equal(state.preference.channels.local.enabled, true);
+          return state;
+        }, 10_000);
+        await notificationSettings.getByRole('button', {
+          name: /发送测试通知|Send test notification/,
+        }).click();
+        await until(async () => {
+          const calls = await notificationPage.evaluate(() => window.__w09WebNotificationCalls);
+          assert.ok(calls.some((call) => call.tag === 'notification-settings-test'),
+            JSON.stringify(calls));
+          return true;
+        }, 10_000);
+        const webNotificationClientId = await notificationPage.evaluate(() =>
+          window.sessionStorage.getItem('vulcan.notifications.client-instance.v1'));
+        assert.match(webNotificationClientId,
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+        assert.equal(await notificationPage.evaluate(() => window.Notification.permission), 'granted');
+        const desktopTagsBefore = debugNotificationIdentity
+          ? new Set(await readBrandedDebugToastTags(debugNotificationIdentity.appUserModelId)) : null;
+        const notificationRun = await rpc('service_submit_conversation_prompt', {
+          clientSubmissionId: `vcn1:${webNotificationClientId}:${randomUUID()}`,
+          projectId: project.id,
+          conversationId: null,
+          draftSlotKey: `new:${project.id}`,
+          prompt: 'Reply exactly OK. Do not call any tools.',
+        });
+        assert.equal(typeof notificationRun.conversationId, 'string');
+        const browserNotification = await until(async () => {
+          const calls = await notificationPage.evaluate(() => window.__w09WebNotificationCalls);
+          const matching = calls.filter((call) =>
+            /^notification:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(call.tag));
+          assert.equal(matching.length, 1, JSON.stringify(calls));
+          return matching[0];
+        }, 90_000);
+        if (desktopTagsBefore) {
+          const desktopTagsAfter = await readBrandedDebugToastTags(
+            debugNotificationIdentity.appUserModelId);
+          const foreignDesktopTags = desktopTagsAfter.filter((tag) =>
+            !desktopTagsBefore.has(tag) && /^notification:/.test(tag));
+          assert.deepEqual(foreignDesktopTags, [],
+            'A browser-owned completion appeared under the desktop notification identity.');
+        }
+        webNotificationAcceptance = {
+          ownerClientId: webNotificationClientId,
+          conversationId: notificationRun.conversationId,
+          nativeBrowserNotification: true,
+          notificationTag: browserNotification.tag,
+          permission: 'granted',
+          permissionRequestedByWebUi: true,
+          settingsTestNotificationDelivered: true,
+          desktopNotificationAbsent: desktopTagsBefore !== null,
+        };
+      } finally {
+        await notificationContext.close();
+      }
+    }
     // Two clients of one VulcanCode conversation must share the browser inventory while each
     // keeps its own tab selection. A close by the second client must update the first client.
     // 同一 VulcanCode 会话的两个客户端共享浏览器列表，但各自保留标签选择；第二端关闭后第一端必须更新。
@@ -2047,7 +2222,7 @@ try {
       projectId: project.id,
       conversationId: aiConversationId,
       draftSlotKey: `conversation:${aiConversationId}`,
-      prompt: `Use browser_open to create a separate Core browser, then use browser_navigate to ${stalledUrl}. Wait for navigation to finish before responding. Keep the earlier browser ${aiBrowser.sessionId} open. Use browser tools directly; do not delegate or use shell/network tools.`,
+      prompt: `W09 automated cancellation test: the test controller will intentionally stop this turn while browser navigation is pending. Use browser_open to create a separate Core browser, then use browser_navigate to ${stalledUrl}. Wait for navigation to finish before responding. Keep the earlier browser ${aiBrowser.sessionId} open. Use browser tools directly; do not delegate or use shell/network tools.`,
     });
     assert.equal(cancelSubmission.conversationId, aiConversationId);
     await until(async () => {
@@ -2074,6 +2249,7 @@ try {
     const cancelledBrowser = (await rpc('browser.session.list', {}, aiConversationId))
       .find((session) => session.status === 'running' && session.sessionId !== aiBrowser.sessionId);
     assert.ok(cancelledBrowser, 'The in-flight navigation did not own a separate Core browser.');
+    console.log(`W09_INTENTIONAL_STOP conversation=${aiConversationId} browser=${cancelledBrowser.sessionId}`);
     const stoppedAiTurn = await rpc('service_stop_conversation_run', {
       conversationId: aiConversationId, mode: 'main_only',
     });
@@ -2091,7 +2267,7 @@ try {
     assert.equal(browserAfterStop.leaseState, 'free', JSON.stringify(browserAfterStop));
     assert.ok(['running', 'closed'].includes(browserAfterStop.status), JSON.stringify(browserAfterStop));
     aiCancellationAcceptance = {
-      conversationRetained: true, inFlightNavigationObserved: true,
+      conversationRetained: true, intentionalStop: true, inFlightNavigationObserved: true,
       browserId: cancelledBrowser.sessionId, browserStatus: browserAfterStop.status,
       automationDetached: true, leaseReleased: true,
     };
@@ -2108,13 +2284,46 @@ try {
       projectId: project.id,
       conversationId: null,
       draftSlotKey: `new:${project.id}`,
-      prompt: `Use browser_open to create a Core browser, then use browser_navigate to ${takeoverStalledUrl}. Wait for navigation to finish before responding. Do not use shell/network tools or delegate.`,
+      prompt: `W09 automated takeover test: the test controller will intentionally interrupt this turn during browser navigation. Use browser_open to create a Core browser, then use browser_navigate to ${takeoverStalledUrl}. Wait for navigation to finish before responding. Do not use shell/network tools or delegate.`,
     });
     const takeoverConversationId = takeoverSubmission.conversationId;
-    await until(async () => {
-      assert.equal(stalledPageRequestSeen, true, 'The takeover model has not reached the delayed page.');
-      return true;
-    }, 90_000);
+    try {
+      await until(async () => {
+        assert.equal(stalledPageRequestSeen, true, 'The takeover model has not reached the delayed page.');
+        return true;
+      }, 90_000);
+    } catch (error) {
+      // A model may finish, refuse, or lose its browser before the fixture sees a request. Record
+      // the bounded answer to this synthetic prompt and tool statuses to distinguish refusal
+      // from host failure without printing provider requests or credential material.
+      // 模型可能在夹具收到请求前完成、拒绝或失去浏览器。仅记录本合成提示的有限答复与工具状态，
+      // 以便区分模型行为与宿主故障。
+      const [history, browsers] = await Promise.allSettled([
+        rpcExact('service_session_event_hydration_v1', { sessionId: takeoverConversationId }),
+        rpc('browser.session.list', {}, takeoverConversationId),
+      ]);
+      const events = history.status === 'fulfilled' ? history.value.events : [];
+      console.error('W09_TAKEOVER_WAIT_DIAGNOSTIC', JSON.stringify({
+        conversationId: takeoverConversationId,
+        openTurnId: history.status === 'fulfilled' ? history.value.open_turn_id : null,
+        eventKinds: events.map((item) => item.event.kind).slice(-24),
+        toolCalls: events.filter((item) => item.event.kind === 'tool_call')
+          .map((item) => ({ name: item.event.tool_name, status: item.event.status })).slice(-12),
+        assistantTexts: events.filter((item) => item.event.kind === 'assistant_text')
+          .map((item) => ({ status: item.event.status, length: item.event.text.length,
+            excerpt: item.event.text.slice(0, 750) })).slice(-5),
+        displayNotes: events.filter((item) => item.event.kind === 'display_note')
+          .map((item) => ({ reasonCode: item.event.reason_code,
+            severity: item.event.severity })).slice(-5),
+        browsers: browsers.status === 'fulfilled'
+          ? browsers.value.map((browser) => ({ sessionId: browser.sessionId,
+            status: browser.status, automationState: browser.automationState,
+            currentUrl: browser.currentUrl })) : [],
+        historyError: history.status === 'rejected' ? String(history.reason) : null,
+        browserError: browsers.status === 'rejected' ? String(browsers.reason) : null,
+      }));
+      throw error;
+    }
     const takeoverBrowser = (await rpc('browser.session.list', {}, takeoverConversationId))
       .find((session) => session.status === 'running');
     assert.ok(takeoverBrowser, 'The in-flight takeover lacks a Core browser.');
@@ -2140,7 +2349,7 @@ try {
     assert.equal((await rpc('browser.session.snapshot',
       { sessionId: takeoverBrowser.sessionId }, takeoverConversationId)).status, 'closed');
     aiTakeoverAcceptance = {
-      inFlightNavigationObserved: true, userTakeoverAttempted: true,
+      intentionalInterruption: true, inFlightNavigationObserved: true, userTakeoverAttempted: true,
       fabricatedLeaseDenied: true, uncertainBrowserClosed: true,
       automationDetached: true, staleNavigationCannotWrite: true,
     };
@@ -2479,6 +2688,7 @@ try {
     crossOwnerProtectedMethodCount,
     crossOwnerDownloadAcceptance,
     webAcceptance,
+    webNotificationAcceptance,
     streamPerformance,
   }));
 } catch (error) {
@@ -2487,25 +2697,28 @@ try {
 } finally {
   if (webBrowser) await webBrowser.close().catch(() => {});
   if (gui) await gui.close().catch(() => {});
-  if (debugNotificationId || manualG14) {
+  if ((debugNotificationId || manualG14) && debugNotificationIdentity) {
     // Remove only this test's toast and the branded identity pointing to this generated executable.
     // 只清理本测试通知，以及指向本次生成程序的品牌化身份。
     const cleanupDebugToast = '$m=[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];'
-      + 'if($env:VULCAN_W09_TOAST_ID){$m::History.Remove($env:VULCAN_W09_TOAST_ID,"Notifications","ai.vulcan.code.desktop.debug")};'
-      + 'if($env:VULCAN_W09_G14_TOAST_ID){$m::History.Remove($env:VULCAN_W09_G14_TOAST_ID,"Notifications","ai.vulcan.code.desktop.debug")};'
-      + '$p=Join-Path ([Environment]::GetFolderPath("Programs")) "Vulcan Code Desktop Debug.lnk";'
+      + 'if($env:VULCAN_W09_TOAST_ID){$m::History.Remove($env:VULCAN_W09_TOAST_ID,"Notifications",$env:VULCAN_W09_AUMID)};'
+      + 'if($env:VULCAN_W09_G14_TOAST_ID){$m::History.Remove($env:VULCAN_W09_G14_TOAST_ID,"Notifications",$env:VULCAN_W09_AUMID)};'
+      + '$p=Join-Path ([Environment]::GetFolderPath("Programs")) ($env:VULCAN_W09_APP_NAME + ".lnk");'
       + 'if(Test-Path -LiteralPath $p){$s=(New-Object -ComObject WScript.Shell).CreateShortcut($p);'
       + 'if($s.TargetPath -eq $env:VULCAN_W09_DEBUG_EXE){Remove-Item -LiteralPath $p}};'
-      + '$k="Registry::HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{3A5A6297-FA5F-4789-83BC-1520F0D103A7}";'
+      + '$k="Registry::HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\" + $env:VULCAN_W09_CLSID;'
       + 'if(Test-Path -LiteralPath "$k\\LocalServer32"){$s=(Get-Item -LiteralPath "$k\\LocalServer32").GetValue("");'
       + 'if($s -eq $env:VULCAN_W09_DEBUG_EXE){Remove-Item -LiteralPath $k -Recurse}}';
     await execFileAsync('powershell.exe', ['-NoProfile', '-Command', cleanupDebugToast], {
       env: { ...process.env, VULCAN_W09_TOAST_ID: debugNotificationId ?? '',
         VULCAN_W09_G14_TOAST_ID: g14NotificationId ?? '',
-        VULCAN_W09_DEBUG_EXE: selectedDesktopRuntime }, timeout: 10_000,
+        VULCAN_W09_DEBUG_EXE: selectedDesktopRuntime,
+        VULCAN_W09_AUMID: debugNotificationIdentity.appUserModelId,
+        VULCAN_W09_APP_NAME: debugNotificationIdentity.name,
+        VULCAN_W09_CLSID: debugNotificationIdentity.activatorClsid,
+      }, timeout: 10_000,
     });
   }
-  if (g14EventSocket) g14EventSocket.close();
   if (normalSocket) normalSocket.close();
   if (slowSocket) slowSocket.destroy();
   if (stalledPageResponse && !stalledPageResponse.destroyed) {

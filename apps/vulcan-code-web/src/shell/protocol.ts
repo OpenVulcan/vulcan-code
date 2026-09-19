@@ -59,6 +59,9 @@ export interface ShellNotificationActivation {
 // ShellClient describes client-host capabilities that are not Core business RPC.
 // ShellClient 描述不属于 Core 业务 RPC 的客户端宿主能力。
 export interface ShellClient {
+  // Opens developer tools only when the current host explicitly exposes that action.
+  // 仅在当前宿主明确提供此操作时打开开发者工具。
+  openDeveloperTools?: () => Promise<void>;
   // Returns local notification capability metadata for this host.
   // 返回当前宿主的本地通知能力元数据。
   getNotificationCapability(): ShellNotificationCapability;

@@ -69,6 +69,49 @@ interface PendingChooser {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+/** One bounded JPEG frame captured from an exact Chromium page target. */
+/** 从精确 Chromium 页面目标捕获的一帧有界 JPEG 画面。 */
+interface CapturedPageFrame {
+  /** Registered Chromium target identity. */
+  /** 已登记的 Chromium 目标身份。 */
+  targetId: string;
+  /** Actual main-frame navigation count at screenshot time. */
+  /** 截图时实际主框架导航次数。 */
+  navigationEpoch: number;
+  /** Page URL at screenshot completion. */
+  /** 截图完成时的页面地址。 */
+  url: string;
+  /** Captured CSS viewport width. */
+  /** 捕获时的 CSS 视口宽度。 */
+  width: number;
+  /** Captured CSS viewport height. */
+  /** 捕获时的 CSS 视口高度。 */
+  height: number;
+  /** Encoded frame media type. */
+  /** 编码后画面的媒体类型。 */
+  mimeType: string;
+  /** Decoded JPEG byte length. */
+  /** 解码后的 JPEG 字节长度。 */
+  byteLength: number;
+  /** Base64 JPEG payload carried by the bounded control frame. */
+  /** 由有界控制帧承载的 Base64 JPEG 内容。 */
+  dataBase64: string;
+  /** Host wall-clock capture timestamp in Unix milliseconds. */
+  /** 宿主记录的 Unix 毫秒截图时间。 */
+  capturedAt: string;
+}
+
+/** A typed reason why the host could not produce a current screenshot. */
+/** 宿主无法生成当前截图时的类型化原因。 */
+interface PageCaptureRefusal {
+  /** Stable host error classification. */
+  /** 稳定的宿主错误类别。 */
+  code: string;
+  /** Human-readable host refusal reason. */
+  /** 供人阅读的宿主拒绝原因。 */
+  message: string;
+}
+
 /** Returns one nonempty named command-line argument. */
 /** 返回一项非空的具名命令行参数。 */
 function requiredArgument(name: string): string {
@@ -129,6 +172,9 @@ class ChromiumHost {
   private authenticated = false;
   private viewport = { width: 1280, height: 800 };
   private readonly pages = new Map<string, Page>();
+  /** Actual main-frame navigation count for each registered Chromium target. */
+  /** 每个已登记 Chromium 目标实际发生的主框架导航次数。 */
+  private readonly navigationEpochs = new Map<string, number>();
   private readonly ids = new Map<Page, string>();
   private readonly registrations = new Map<Page, Promise<string>>();
   private readonly cdpSessions = new Map<string, CDPSession>();
@@ -136,6 +182,9 @@ class ChromiumHost {
   private readonly dialogs = new Map<string, PendingDialog>();
   private readonly pointerDialogSignals = new Map<string, () => void>();
   private readonly captureDialogSignals = new Map<string, () => void>();
+  /** At most one screenshot per page, shared by deferred projection and first-frame requests. */
+  /** 每页最多一项截图任务，供异步投影与首帧请求共同等待。 */
+  private readonly pendingCaptures = new Map<string, Promise<CapturedPageFrame | PageCaptureRefusal>>();
   private readonly choosers = new Map<string, PendingChooser>();
   private readonly pressedKeys = new Map<string, Set<string>>();
   /** One pressed UI pointer per page, retained until up or Core control release. */
@@ -233,10 +282,16 @@ class ChromiumHost {
     }
     this.ids.set(page, targetId);
     this.pages.set(targetId, page);
+    this.navigationEpochs.set(targetId, 0);
     this.cdpSessions.set(targetId, cdp);
     this.emit('pageCreated', { targetId, url: page.url(), openerTargetId });
     page.on('framenavigated', frame => {
-      if (frame === page.mainFrame()) this.emit('pageNavigated', { targetId, url: frame.url() });
+      if (frame === page.mainFrame()) {
+        const previousEpoch = this.navigationEpochs.get(targetId);
+        if (previousEpoch === undefined) return;
+        this.navigationEpochs.set(targetId, previousEpoch + 1);
+        this.emit('pageNavigated', { targetId, url: frame.url() });
+      }
     });
     page.on('dialog', dialog => this.openDialog(targetId, dialog));
     page.on('filechooser', chooser => this.openChooser(targetId, chooser));
@@ -245,6 +300,7 @@ class ChromiumHost {
       this.clearDialog(targetId, 'pageClosed');
       this.clearChooser(targetId, 'pageClosed');
       this.pages.delete(targetId);
+      this.navigationEpochs.delete(targetId);
       this.ids.delete(page);
       this.cdpSessions.delete(targetId);
       this.pressedKeys.delete(targetId);
@@ -512,6 +568,52 @@ class ChromiumHost {
     return this.answer(request, `Chromium host does not implement input kind \`${String(kind)}\`.`, 'capability_unsupported');
   }
 
+  /** Captures one page once while allowing Core to await or defer the same bounded operation. */
+  /** 对一个页面执行一次有界截图，允许 Core 同步等待或异步接收同一操作。 */
+  /** targetId identifies the registered target; page is its live Playwright page. */
+  /** targetId 标识已登记目标；page 是其活动 Playwright 页面。 */
+  /** Returns a JPEG frame or a typed refusal; unexpected screenshot failures reject. */
+  /** 返回 JPEG 画面或类型化拒绝；非预期截图故障以异常返回。 */
+  private async capturePageFrame(targetId: string, page: Page): Promise<CapturedPageFrame | PageCaptureRefusal> {
+    if (this.dialogs.has(targetId))
+      return { code: 'capture_blocked_by_dialog', message: 'Page is waiting for a dialog answer.' };
+    // navigationEpoch is the host's real page lifecycle fact, including Playwright navigation
+    // that never passed through Core's own browser.navigate RPC.
+    // navigationEpoch 是宿主观察到的真实页面生命周期事实，包含未经过 Core
+    // browser.navigate RPC 的 Playwright 导航。
+    const navigationEpoch = this.navigationEpochs.get(targetId);
+    if (navigationEpoch === undefined)
+      return { code: 'unknown_target', message: 'Page target is no longer registered.' };
+    const dialogOpened = new Promise<null>(resolve => this.captureDialogSignals.set(targetId, () => resolve(null)));
+    let image: Buffer | null;
+    // captureStartedAt identifies slow screenshot work that can hold Core's shared control gate.
+    // captureStartedAt 标识可能占用 Core 共享控制锁的缓慢截图工作。
+    const captureStartedAt = Date.now();
+    try {
+      // An in-flight screenshot can wait for the page's synchronous JavaScript dialog. Core
+      // must release its host connection promptly so the lease owner can answer that dialog.
+      // 截图可能等待页面中的同步 JavaScript 对话框；Core 必须迅速释放宿主连接，租约所有者
+      // 才能答复对话框。
+      image = await Promise.race([page.screenshot({ type: 'jpeg', quality: 70, timeout: 1_500 }), dialogOpened]);
+    } finally {
+      this.captureDialogSignals.delete(targetId);
+      const captureDurationMs = Date.now() - captureStartedAt;
+      if (captureDurationMs > 200) diagnostic(`slow page.capture target=${targetId} durationMs=${captureDurationMs}`);
+    }
+    if (this.navigationEpochs.get(targetId) !== navigationEpoch)
+      return { code: 'stale_capture', message: 'Page navigated while the frame was captured.' };
+    if (!image) return { code: 'capture_blocked_by_dialog', message: 'Page opened a dialog while the frame was captured.' };
+    if (image.length > MAX_IMAGE_BYTES)
+      return { code: 'frame_too_large', message: `Captured frame exceeds ${MAX_IMAGE_BYTES} bytes.` };
+    const viewport = page.viewportSize();
+    if (!viewport) return { code: 'capture_failed', message: 'Page viewport is unavailable.' };
+    return {
+      targetId, navigationEpoch, url: page.url(), width: viewport.width, height: viewport.height,
+      mimeType: 'image/jpeg', byteLength: image.length, dataBase64: image.toString('base64'),
+      capturedAt: String(Date.now()),
+    };
+  }
+
   /** Applies one host operation without accepting model-selected task identity. */
   /** 执行一项宿主操作，不接受模型自选任务身份。 */
   private async operation(request: BrowserHostRequest): Promise<void> {
@@ -606,29 +708,44 @@ class ChromiumHost {
           const targetId = request.params.targetId;
           const page = this.page(targetId);
           if (!page || typeof targetId !== 'string') return this.answer(request, 'Unknown page target.', 'unknown_target');
-          if (this.dialogs.has(targetId)) return this.answer(request, 'Page is waiting for a dialog answer.', 'capture_blocked_by_dialog');
-          const dialogOpened = new Promise<null>(resolve => this.captureDialogSignals.set(targetId, () => resolve(null)));
-          let image: Buffer | null;
-          try {
-            // An in-flight screenshot can wait for the page's synchronous JavaScript dialog. Core
-            // must release its host connection promptly so the lease owner can answer that dialog.
-            // 截图可能等待页面中的同步 JavaScript 对话框；Core 必须迅速释放宿主连接，租约所有者
-            // 才能答复对话框。
-            image = await Promise.race([page.screenshot({ type: 'jpeg', quality: 70, timeout: 1_500 }), dialogOpened]);
-          } finally {
-            this.captureDialogSignals.delete(targetId);
+          if (request.params.deferred === true) {
+            const pageGeneration = request.params.pageGeneration;
+            const viewportGeneration = request.params.viewportGeneration;
+            if (typeof pageGeneration !== 'string' || !/^\d+$/.test(pageGeneration)
+                || typeof viewportGeneration !== 'string' || !/^\d+$/.test(viewportGeneration))
+              return this.answer(request, 'Deferred capture requires exact page and viewport generations.', 'invalid_request');
+            if (this.pendingCaptures.has(targetId)) return this.answer(request, { scheduled: false });
+            // The host acknowledges scheduling before a slow screenshot finishes. The resulting
+            // event carries the Core generation captured with this request for stale-frame rejection.
+            // 宿主先确认调度，再等待慢截图完成；结果事件带回本次 Core 代次，供旧画面拒绝。
+            const capture = this.capturePageFrame(targetId, page);
+            this.pendingCaptures.set(targetId, capture);
+            this.answer(request, { scheduled: true });
+            void capture.then(result => {
+              if ('dataBase64' in result && this.navigationEpochs.get(targetId) === result.navigationEpoch)
+                this.emit('pageCaptured', { ...result, pageGeneration, viewportGeneration });
+            }).catch(error => diagnostic(`deferred page.capture failed: ${String(error)}`))
+              .finally(() => {
+                if (this.pendingCaptures.get(targetId) === capture) this.pendingCaptures.delete(targetId);
+              });
+            return;
           }
-          if (!image) return this.answer(request, 'Page opened a dialog while the frame was captured.', 'capture_blocked_by_dialog');
-          if (image.length > MAX_IMAGE_BYTES) return this.answer(request, `Captured frame exceeds ${MAX_IMAGE_BYTES} bytes.`, 'frame_too_large');
-          const viewport = page.viewportSize();
-          if (!viewport) return this.answer(request, 'Page viewport is unavailable.', 'capture_failed');
-          return this.answer(request, {
-            targetId: request.params.targetId, url: page.url(), width: viewport.width, height: viewport.height,
-            mimeType: 'image/jpeg', byteLength: image.length, dataBase64: image.toString('base64'),
-            capturedAt: String(Date.now()),
-          });
+          const captured = await (this.pendingCaptures.get(targetId) ?? this.capturePageFrame(targetId, page));
+          return 'dataBase64' in captured
+            ? this.answer(request, captured)
+            : this.answer(request, captured.message, captured.code);
         }
-        case 'input.dispatch': return this.input(request);
+        case 'input.dispatch': {
+          // inputStartedAt separates host-side CDP delay from time spent waiting for Core's gate.
+          // inputStartedAt 将宿主侧 CDP 延迟与等待 Core 控制锁的时间区分开。
+          const inputStartedAt = Date.now();
+          try { await this.input(request); }
+          finally {
+            const inputDurationMs = Date.now() - inputStartedAt;
+            if (inputDurationMs > 200) diagnostic(`slow input.dispatch durationMs=${inputDurationMs}`);
+          }
+          return;
+        }
         case 'input.releaseAll': return this.answer(request, { released: await this.releaseInputs() });
         case 'page.upload': {
           const targetId = request.params.targetId;

@@ -63,6 +63,9 @@ const ownerSessionId = 'conversation-w09';
 // clicks counts DOM-dispatched clicks received by the fixture server.
 // clicks 统计夹具服务器收到的页面 DOM 点击。
 let clicks = 0;
+// latencyClickTimes records when the fixture server observed each numbered page click.
+// latencyClickTimes 记录夹具服务器观察到每次编号页面点击的时间。
+const latencyClickTimes = [];
 // uploaded records the filename and content observed by the real page after Core attachment.
 // uploaded 记录 Core 附加文件后真实页面观察到的文件名与内容。
 let uploaded = null;
@@ -80,6 +83,14 @@ let dialogClicks = 0;
 const fixture = createServer((request, response) => {
   if (request.url === '/clicked' && request.method === 'POST') {
     clicks += 1;
+    response.writeHead(204).end();
+    return;
+  }
+  // A separate callback distinguishes delayed image delivery from a pointer that never reached DOM.
+  // 单独的回调区分画面延迟与从未到达 DOM 的指针输入。
+  const latencyClick = request.url?.match(/^\/latency-clicked\?count=([0-9]+)$/);
+  if (latencyClick && request.method === 'POST') {
+    latencyClickTimes[Number(latencyClick[1]) - 1] = Date.now();
     response.writeHead(204).end();
     return;
   }
@@ -113,7 +124,7 @@ const fixture = createServer((request, response) => {
     return;
   }
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-  response.end('<!doctype html><meta charset="utf-8"><button style="position:absolute;left:0;top:0;width:220px;height:150px" onclick="fetch(\'/clicked\',{method:\'POST\'})">Core browser test</button><button id="latency" style="position:absolute;left:500px;top:0;width:200px;height:120px" onclick="this.textContent=String(Number(this.textContent)+1)">0</button><input id="upload" type="file" style="position:absolute;top:180px"><a href="/download" style="position:absolute;left:0;top:300px;width:220px;height:60px">Download fixture</a><button style="position:absolute;left:0;top:380px;width:220px;height:60px" onclick="fetch(\'/dialog-clicked\',{method:\'POST\'});alert(\'Core dialog\');fetch(\'/dialog-result\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({answer:\'accepted\'})})">Alert fixture</button><button style="position:absolute;left:0;top:460px;width:220px;height:60px" onclick="const answer=confirm(\'Core confirm\');fetch(\'/dialog-result\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({answer})})">Confirm fixture</button><button style="position:absolute;left:0;top:540px;width:220px;height:60px" onclick="const answer=prompt(\'Core prompt\',\'initial\');fetch(\'/dialog-result\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({answer})})">Prompt fixture</button><script>document.querySelector("#upload").addEventListener("change", async event => { const file = event.target.files[0]; await fetch("/uploaded", {method:"POST",body:JSON.stringify({name:file.name,text:await file.text()})}); });</script>');
+  response.end('<!doctype html><meta charset="utf-8"><button style="position:absolute;left:0;top:0;width:220px;height:150px" onclick="fetch(\'/clicked\',{method:\'POST\'})">Core browser test</button><button id="latency" style="position:absolute;left:500px;top:0;width:200px;height:120px" onclick="this.textContent=String(Number(this.textContent)+1);fetch(\'/latency-clicked?count=\'+this.textContent,{method:\'POST\'})">0</button><input id="upload" type="file" style="position:absolute;top:180px"><a href="/download" style="position:absolute;left:0;top:300px;width:220px;height:60px">Download fixture</a><button style="position:absolute;left:0;top:380px;width:220px;height:60px" onclick="fetch(\'/dialog-clicked\',{method:\'POST\'});alert(\'Core dialog\');fetch(\'/dialog-result\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({answer:\'accepted\'})})">Alert fixture</button><button style="position:absolute;left:0;top:460px;width:220px;height:60px" onclick="const answer=confirm(\'Core confirm\');fetch(\'/dialog-result\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({answer})})">Confirm fixture</button><button style="position:absolute;left:0;top:540px;width:220px;height:60px" onclick="const answer=prompt(\'Core prompt\',\'initial\');fetch(\'/dialog-result\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({answer})})">Prompt fixture</button><script>document.querySelector("#upload").addEventListener("change", async event => { const file = event.target.files[0]; await fetch("/uploaded", {method:"POST",body:JSON.stringify({name:file.name,text:await file.text()})}); });</script>');
 });
 await new Promise((resolve) => fixture.listen(0, '127.0.0.1', resolve));
 // pageUrl is the exact fixture origin loaded by the Core-owned host.
@@ -476,17 +487,26 @@ try {
   // Repeated visible mutations measure the p95 input-to-frame delay on the same page.
   // 在同一页面重复可见变化，测量输入到新画面的第 95 百分位延迟。
   const inputLatencies = [];
+  // inputRpcDurations records the down/up RPC wait independently of frame delivery.
+  // inputRpcDurations 独立于画面交付记录按下和抬起 RPC 的等待时间。
+  const inputRpcDurations = [];
+  // inputStartedAt pairs each actual page callback with its input request start.
+  // inputStartedAt 将每个真实页面回调与其输入请求起点配对。
+  const inputStartedAt = [];
   for (let index = 0; index < 20; index += 1) {
     if (index % 5 === 0) await rpc('browser.lease.heartbeat', { sessionId: session.sessionId, leaseSecret: lease.leaseSecret });
     const previousHash = frameHashes.at(-1)?.hash;
     const sentAt = Date.now();
+    inputStartedAt.push(sentAt);
     for (const [offset, type] of [[0, 'down'], [1, 'up']]) {
+      const rpcStartedAt = Date.now();
       const input = await rpc('browser.input.dispatch', {
         sessionId: session.sessionId, pageId: page.pageId, leaseSecret: lease.leaseSecret,
         pageGeneration: latestFrame.pageGeneration, viewportGeneration: latestFrame.viewportGeneration,
         sequence: String(13 + index * 2 + offset), kind: 'pointer',
         payload: { type, x: 600, y: 50, button: 'left' },
       });
+      inputRpcDurations.push(Date.now() - rpcStartedAt);
       assert.equal(input.outcome, 'applied', JSON.stringify(input));
     }
     const delay = await until(() => {
@@ -522,17 +542,23 @@ try {
   // Measure the original observed page again after another Core page exists and generation settles.
   // 附加 Core 页面存在且页面代次稳定后，再次测量原观察页面的输入到画面延迟。
   const multiPageInputLatencies = [];
+  // multiPageInputRpcDurations isolates host-control contention after another page exists.
+  // multiPageInputRpcDurations 隔离附加页面存在后的宿主控制通道争用。
+  const multiPageInputRpcDurations = [];
   for (let index = 0; index < 12; index += 1) {
     if (index % 5 === 0) await rpc('browser.lease.heartbeat', { sessionId: session.sessionId, leaseSecret: lease.leaseSecret });
     const previousHash = frameHashes.at(-1)?.hash;
     const sentAt = Date.now();
+    inputStartedAt.push(sentAt);
     for (const [offset, type] of [[0, 'down'], [1, 'up']]) {
+      const rpcStartedAt = Date.now();
       const input = await rpc('browser.input.dispatch', {
         sessionId: session.sessionId, pageId: page.pageId, leaseSecret: lease.leaseSecret,
         pageGeneration: latestFrame.pageGeneration, viewportGeneration: latestFrame.viewportGeneration,
         sequence: String(53 + index * 2 + offset), kind: 'pointer',
         payload: { type, x: 600, y: 50, button: 'left' },
       });
+      multiPageInputRpcDurations.push(Date.now() - rpcStartedAt);
       assert.equal(input.outcome, 'applied', JSON.stringify(input));
     }
     const delay = await until(() => {
@@ -543,6 +569,18 @@ try {
     multiPageInputLatencies.push(delay);
   }
   const p95InputToFrameWithTwoPagesMs = multiPageInputLatencies.toSorted((left, right) => left - right)[Math.ceil(multiPageInputLatencies.length * 0.95) - 1];
+  assert.ok(p95InputToFrameMs <= 200,
+    `Single-page input-to-frame p95 exceeded 200 ms: ${p95InputToFrameMs}`);
+  assert.ok(p95InputToFrameWithTwoPagesMs <= 200,
+    `Two-page input-to-frame p95 exceeded 200 ms: ${p95InputToFrameWithTwoPagesMs}`);
+  await until(() => {
+    assert.equal(latencyClickTimes.length, inputStartedAt.length);
+    assert.ok(inputStartedAt.every((_, index) => Number.isFinite(latencyClickTimes[index])));
+    return true;
+  }, 5000);
+  // callbackLagMs is an independent upper bound for input reaching the page event handler.
+  // callbackLagMs 是输入抵达页面事件处理器的独立延迟上界。
+  const callbackLagMs = latencyClickTimes.map((receivedAt, index) => receivedAt - inputStartedAt[index]);
   // The initial completed download uses one slot; fifteen more succeed and the seventeenth is
   // reported as failed without leaving a file in Core's private control directory.
   // 最初的已完成下载占用一个名额；再有十五次成功，第十七次明确失败且不会留下私有控制目录文件。
@@ -599,7 +637,11 @@ try {
   });
   const cancellation = await cancelledStream;
   await rpc('browser.session.close', { sessionId: session.sessionId, leaseSecret: lease.leaseSecret });
-  console.log(JSON.stringify({ result: 'passed', root, sessionId: session.sessionId, pageId: page.pageId, createdPageId: createdPage.pageId, frame: `${frame.width}x${frame.height}`, firstFrameMs, observedFps, observerFpsWhileSlow, p95InputToFrameMs, p95InputToFrameWithTwoPagesMs, inputLatencies, multiPageInputLatencies, clicks, uploaded, download: { id: download.downloadId, size: download.byteLength }, dialogAnswer, chooser: chooser.chooserId, rpcSnapshotReusable: true, cancelledStream: cancellation.code }));
+  // slowHostOperations records only screenshot and input timing diagnostics from this isolated host.
+  // slowHostOperations 仅记录本次隔离宿主的截图和输入耗时诊断。
+  const slowHostOperations = diagnostics.join('').split(/\r?\n/)
+    .filter(line => line.includes('[vulcan-chromium-host] slow '));
+  console.log(JSON.stringify({ result: 'passed', root, sessionId: session.sessionId, pageId: page.pageId, createdPageId: createdPage.pageId, frame: `${frame.width}x${frame.height}`, firstFrameMs, observedFps, observerFpsWhileSlow, p95InputToFrameMs, p95InputToFrameWithTwoPagesMs, inputLatencies, multiPageInputLatencies, callbackLagMs, inputRpcDurations, multiPageInputRpcDurations, slowHostOperations, clicks, uploaded, download: { id: download.downloadId, size: download.byteLength }, dialogAnswer, chooser: chooser.chooserId, rpcSnapshotReusable: true, cancelledStream: cancellation.code }));
 } catch (error) {
   console.error(diagnostics.join(''));
   throw error;

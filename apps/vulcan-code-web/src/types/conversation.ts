@@ -44,6 +44,9 @@ export interface ConversationRunSettledEvent {
   // occurredAt is the Unix-millisecond timestamp text captured by the service.
   // occurredAt 是服务端捕获的 Unix 毫秒时间戳文本。
   occurredAt: string;
+  // notificationClientId identifies the exact WebUI instance allowed to present this event.
+  // notificationClientId 标识获准展示本事件通知的精确 WebUI 实例。
+  notificationClientId?: string | null;
 }
 
 export interface ConversationSummary {

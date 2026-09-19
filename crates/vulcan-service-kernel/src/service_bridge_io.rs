@@ -2,8 +2,10 @@
 //! 浏览器服务桥接与 RPC 适配辅助函数。
 
 use super::*;
-use futures_util::StreamExt;
+use futures_util::future::{BoxFuture, FutureExt};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use reqwest::Url;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use vulcan_service_api::WebuiServiceDiscoverySnapshot;
 
@@ -454,31 +456,44 @@ pub(crate) async fn run_webui_service_http_bridge(
                         // 凭据是所观察会话的唯一权威。
                         let session_id = manager.consume_stream_ticket(&ticket)?;
                         manager.bind_stream_page(&session_id, &page_id, &subscription_id)?;
-                        // A fresh connection receives one actual frame before its snapshot answer.
-                        // 新连接在快照答复前取得一帧真实画面。
-                        let capture_state = state.clone();
-                        let capture_session = session_id.clone();
-                        let capture_page = page_id.clone();
-                        let capture = tokio::task::spawn_blocking(move || {
-                            tokio::runtime::Handle::current().block_on(
-                                crate::browser::service_browser_page_capture(
-                                    capture_state,
-                                    crate::browser::BrowserPageCaptureRequest {
-                                        session_id: capture_session,
-                                        page_id: capture_page,
-                                    },
-                                ),
-                            )
-                        })
-                        .await;
-                        let capture = match capture {
-                            Ok(capture) => capture,
-                            Err(error) => {
-                                let _ = manager
-                                    .release_stream_subscription(&session_id, &subscription_id);
-                                return Err(format!("browser capture worker failed: {error}"));
+                        // A fresh connection waits for one real frame while screenshots remain
+                        // asynchronous, so subscribing cannot hold the host input-control gate.
+                        // 新连接等待一帧真实画面，但截图保持异步，订阅过程不能占住宿主输入控制锁。
+                        let capture = async {
+                            let deadline =
+                                tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+                            loop {
+                                if manager.retained_frame_count(&session_id, &subscription_id)? > 0
+                                {
+                                    break Ok(());
+                                }
+                                tokio::time::timeout_at(
+                                    deadline,
+                                    crate::browser::service_browser_page_capture_deferred(
+                                        state.clone(),
+                                        crate::browser::BrowserPageCaptureRequest {
+                                            session_id: session_id.clone(),
+                                            page_id: page_id.clone(),
+                                        },
+                                    ),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    String::from("browser first frame exceeded two seconds")
+                                })??;
+                                if manager.retained_frame_count(&session_id, &subscription_id)? > 0
+                                {
+                                    break Ok(());
+                                }
+                                if tokio::time::Instant::now() >= deadline {
+                                    break Err(String::from(
+                                        "browser first frame exceeded two seconds",
+                                    ));
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                             }
-                        };
+                        }
+                        .await;
                         if let Err(error) = capture {
                             let _ =
                                 manager.release_stream_subscription(&session_id, &subscription_id);
@@ -557,6 +572,9 @@ pub(crate) async fn run_webui_service_http_bridge(
             "injected post-acknowledgement HTTP bridge failure",
         ));
     }
+    // Host maintenance can wait for a stuck host command; it must not delay frames from other sessions.
+    // 宿主维护可能等待卡住的宿主命令，不能延迟其他会话的画面。
+    tokio::spawn(run_browser_maintenance(state.clone()));
     tokio::spawn(run_browser_frame_producer(state));
     serve_webui_service_http_listener(listener, service_config)
         .await
@@ -591,6 +609,32 @@ fn browser_download_content_disposition(file_name: &str) -> String {
     format!("attachment; filename*=UTF-8''{encoded}")
 }
 
+/// Releases one completed scheduling attempt without forgetting another attempt for the same page.
+/// 释放一项已完成调度，同时保留同一页面的另一项在途调度。
+///
+/// `in_flight` tracks bounded page attempts and `completed` identifies the finished page.
+/// `in_flight` 跟踪页面的有界在途数，`completed` 指定刚结束的页面。
+/// `session_in_flight` tracks the same attempt against its owning session.
+/// `session_in_flight` 按所属会话跟踪同一项调度。
+fn release_browser_frame_attempt(
+    in_flight: &mut HashMap<(String, String), usize>,
+    session_in_flight: &mut HashMap<String, usize>,
+    completed: &(String, String),
+) {
+    if let Some(count) = in_flight.get_mut(completed) {
+        *count -= 1;
+        if *count == 0 {
+            in_flight.remove(completed);
+        }
+        if let Some(session_count) = session_in_flight.get_mut(&completed.0) {
+            *session_count -= 1;
+            if *session_count == 0 {
+                session_in_flight.remove(&completed.0);
+            }
+        }
+    }
+}
+
 /// Captures each observed Core page once per cadence, independent of observer delivery speed.
 /// 按固定节奏对每个被观察的 Core 页面采集一次，不受观察端交付速度影响。
 ///
@@ -605,38 +649,97 @@ async fn run_browser_frame_producer(state: SharedServiceBridgeState) {
     // A 40 ms attempt cadence leaves scheduling headroom for the measured 20 fps projection goal.
     // 40 毫秒尝试周期为实测每秒 20 帧的投影目标保留调度余量。
     let mut cadence = tokio::time::interval(std::time::Duration::from_millis(40));
+    // Per-page counts bound queued acknowledgements without serializing the next cadence.
+    // 每页计数限制排队确认，同时不把下一轮采集串行化。
+    let mut in_flight = HashMap::<(String, String), usize>::new();
+    // A single browser with many observed pages may use at most one quarter of frame slots.
+    // 单个浏览器即使有许多被观察页面，也最多占用四分之一的采集名额。
+    let mut session_in_flight = HashMap::<String, usize>::new();
+    // Pending attempts are polled independently so one slow page cannot delay the next cadence.
+    // 独立轮询待完成的采集，使慢页面不能拖延下一轮调度。
+    let mut pending = FuturesUnordered::<BoxFuture<'static, (String, String)>>::new();
+    // Rotating the starting page prevents a stable sorted order from starving later sessions.
+    // 轮换起始页面，避免固定排序让后续会话长期得不到采集机会。
+    let mut next_page_offset = 0usize;
+    loop {
+        tokio::select! {
+            _ = cadence.tick() => {
+                // A completion and timer tick may become ready together. Drain completions
+                // first so a fast page can schedule its next frame on this same tick.
+                // 完成事件与计时可能同时就绪；先收取完成项，让正常页面在本轮即可安排下一帧。
+                while let Some(Some(completed)) = pending.next().now_or_never() {
+                    release_browser_frame_attempt(&mut in_flight, &mut session_in_flight, &completed);
+                }
+                let Ok(manager) = crate::browser::service_browser_manager(&state) else {
+                    continue;
+                };
+                let Ok(mut pages) = manager.observed_page_targets() else {
+                    continue;
+                };
+                if pages.is_empty() {
+                    continue;
+                }
+                let rotation = next_page_offset % pages.len();
+                pages.rotate_left(rotation);
+                next_page_offset = next_page_offset.wrapping_add(1);
+                // Keep frame attempts below the manager's 32-call blocking limit, leaving
+                // capacity for control input even when every observed host is slow.
+                // 采集请求数低于管理器的 32 项阻塞上限，即使所有宿主变慢仍为控制输入留出容量。
+                for (session_id, page_id) in pages {
+                    if pending.len() >= 16 {
+                        break;
+                    }
+                    if session_in_flight.get(&session_id).copied().unwrap_or(0) >= 4 {
+                        continue;
+                    }
+                    let count = in_flight.entry((session_id.clone(), page_id.clone())).or_default();
+                    if *count >= 2 {
+                        continue;
+                    }
+                    *count += 1;
+                    *session_in_flight.entry(session_id.clone()).or_default() += 1;
+                    let capture_state = state.clone();
+                    pending.push(async move {
+                        let _ = crate::browser::service_browser_page_capture_deferred(
+                            capture_state,
+                            crate::browser::BrowserPageCaptureRequest {
+                                session_id: session_id.clone(),
+                                page_id: page_id.clone(),
+                            },
+                        )
+                        .await;
+                        (session_id, page_id)
+                    }.boxed());
+                }
+            }
+            Some(completed) = pending.next(), if !pending.is_empty() => {
+                release_browser_frame_attempt(&mut in_flight, &mut session_in_flight, &completed);
+            }
+        }
+    }
+}
+
+/// Expires leases and reaps hosts independently from the page frame producer.
+/// 独立于页面画面生产者处理租约到期和宿主回收。
+///
+/// `state` owns the same manager as the browser RPC and frame producer.
+/// `state` 与浏览器 RPC、画面生产者共享同一个管理器。
+/// The task runs until its owning HTTP runtime shuts down.
+/// 任务运行直至所属 HTTP 运行时关闭。
+async fn run_browser_maintenance(state: SharedServiceBridgeState) {
+    // Maintenance needs timely lease cleanup but never participates in the 40 ms frame cadence.
+    // 维护需要及时清理租约，但不参与每 40 毫秒的画面采集节奏。
+    let mut cadence = tokio::time::interval(std::time::Duration::from_millis(200));
     loop {
         cadence.tick().await;
         let Ok(manager) = crate::browser::service_browser_manager(&state) else {
             continue;
         };
-        let Ok(pages) = manager.observed_page_targets() else {
-            continue;
-        };
-        // Independent observed pages capture concurrently, but a small fixed bound prevents
-        // many sessions from exhausting the blocking pool or Chromium screenshot capacity.
-        // 独立观察页并发采集，但固定小上限避免大量会话耗尽阻塞线程池或截图能力。
-        futures_util::stream::iter(pages)
-            .for_each_concurrent(4, |(session_id, page_id)| {
-                let capture_state = state.clone();
-                async move {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        tokio::runtime::Handle::current().block_on(
-                            crate::browser::service_browser_page_capture(
-                                capture_state,
-                                crate::browser::BrowserPageCaptureRequest {
-                                    session_id,
-                                    page_id,
-                                },
-                            ),
-                        )
-                    })
-                    .await;
-                }
-            })
-            .await;
-        let _ = manager.expire_control_leases();
-        let _ = manager.reap_hosts();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = manager.expire_control_leases();
+            let _ = manager.reap_hosts();
+        })
+        .await;
     }
 }
 

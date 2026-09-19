@@ -102,6 +102,10 @@ export interface ConversationEditGenerationV1Request extends Record<string, unkn
    * 精确替换正文。
    */
   replacementText: string;
+  /** Durable action id carrying the exact WebUI notification owner.
+   * 携带精确 WebUI 通知所有者的可靠动作标识。
+   */
+  clientActionId: string;
 }
 
 /** Response for one fully published V1 edit generation.

@@ -31,7 +31,7 @@ describe("conversation continuation architecture", () => {
     const tryStart = handlerSource.indexOf("try {");
     // clientIdCreation locates the fallible Web Crypto request-id generation call.
     // clientIdCreation 定位可能失败的 Web Crypto 请求标识生成调用。
-    const clientIdCreation = handlerSource.indexOf("globalThis.crypto.randomUUID()");
+    const clientIdCreation = handlerSource.indexOf("createClientOwnedActionId()");
     // catchStart locates the user-visible failure classification branch.
     // catchStart 定位用户可见的失败分类分支。
     const catchStart = handlerSource.indexOf("} catch {");

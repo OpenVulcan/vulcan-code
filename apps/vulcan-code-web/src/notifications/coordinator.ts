@@ -2,6 +2,13 @@ import { createConversationNotificationIntent } from "@/notifications/intent";
 import { LocalShellNotificationEndpoint } from "@/notifications/endpoints/local-shell-endpoint";
 import { loadNotificationPreferences } from "@/notifications/preferences";
 import { getNotificationPresentationContext } from "@/notifications/presentation-context";
+import { notificationClientInstanceId } from "@/notifications/client-identity";
+import {
+  currentNotificationRouteStorage,
+  loadNotificationRoutes,
+  saveNotificationRoutes,
+  type NotificationRouteStorage,
+} from "@/notifications/route-storage";
 import type {
   NotificationDeliveryEndpoint,
   NotificationDeliveryResult,
@@ -45,6 +52,12 @@ export class NotificationCoordinator {
   // readPresentation reads the exact current client surface at event time.
   // readPresentation 在事件处理时读取当前客户端精确界面。
   private readonly readPresentation: NotificationPresentationReader;
+  // clientInstanceId is the only service-event notification owner accepted by this coordinator.
+  // clientInstanceId 是当前协调器唯一接受的服务事件通知所有者。
+  private readonly clientInstanceId: string;
+  // routeStorage retains activation targets across a reload of this exact client.
+  // routeStorage 跨此精确客户端的页面重载保留通知激活目标。
+  private readonly routeStorage: NotificationRouteStorage | null;
   // consumedEventIds prevents repeated service events from producing repeated delivery.
   // consumedEventIds 防止重复服务事件产生重复投递。
   private readonly consumedEventIds = new Set<string>();
@@ -54,6 +67,9 @@ export class NotificationCoordinator {
   // routesByNotificationId correlates shell activation with platform-neutral navigation.
   // routesByNotificationId 将壳激活与平台无关导航关联。
   private readonly routesByNotificationId = new Map<string, NotificationRouteV1>();
+  // pendingActivationIds retains known clicks until the React navigation owner mounts.
+  // pendingActivationIds 在 React 导航所有者挂载前保留已知通知点击。
+  private readonly pendingActivationIds = new Set<string>();
   // routeHandler stores the current React-owned navigation callback.
   // routeHandler 保存当前由 React 持有的导航回调。
   private routeHandler: NotificationRouteHandler | null = null;
@@ -68,11 +84,18 @@ export class NotificationCoordinator {
     endpoints: NotificationDeliveryEndpoint[] = [new LocalShellNotificationEndpoint(shell)],
     loadPreferences: NotificationPreferencesLoader = loadNotificationPreferences,
     readPresentation: NotificationPresentationReader = getNotificationPresentationContext,
+    clientInstanceId: string = notificationClientInstanceId,
+    routeStorage: NotificationRouteStorage | null = currentNotificationRouteStorage(),
   ) {
     this.shell = shell;
     this.endpoints = endpoints;
     this.loadPreferences = loadPreferences;
     this.readPresentation = readPresentation;
+    this.clientInstanceId = clientInstanceId;
+    this.routeStorage = routeStorage;
+    for (const stored of loadNotificationRoutes(routeStorage, clientInstanceId)) {
+      this.routesByNotificationId.set(stored.notificationId, stored.route);
+    }
   }
 
   // start subscribes once to optional shell activation without blocking application startup.
@@ -104,6 +127,14 @@ export class NotificationCoordinator {
   // setRouteHandler 安装或清除当前界面导航所有者。
   setRouteHandler(handler: NotificationRouteHandler | null): void {
     this.routeHandler = handler;
+    if (handler === null) return;
+    for (const notificationId of this.pendingActivationIds) {
+      this.pendingActivationIds.delete(notificationId);
+      // route was validated and restored before its activation entered the pending set.
+      // route 在激活进入待处理集合前已经经过验证并恢复。
+      const route = this.routesByNotificationId.get(notificationId);
+      if (route) handler(route);
+    }
   }
 
   // handleConversationRunSettled consumes one service event and dispatches each registered endpoint once.
@@ -113,6 +144,9 @@ export class NotificationCoordinator {
     conversationTitle: string | null,
     resolveText: NotificationTextResolver,
   ): Promise<NotificationDeliveryResult[]> {
+    if (event.notificationClientId !== this.clientInstanceId) {
+      return [{ endpointKind: "local", status: "suppressed", reason: "foreign_client" }];
+    }
     if (!this.consumeEvent(event.eventId)) {
       return [{ endpointKind: "local", status: "suppressed", reason: "duplicate_event" }];
     }
@@ -127,6 +161,8 @@ export class NotificationCoordinator {
     const intent = createConversationNotificationIntent(event, titleForIntent);
     this.routesByNotificationId.set(intent.intentId, intent.route);
     this.trimRoutes();
+    saveNotificationRoutes(this.routeStorage, this.clientInstanceId,
+      [...this.routesByNotificationId].map(([notificationId, route]) => ({ notificationId, route })));
     // presentation is read once at event handling time to avoid cross-endpoint route races.
     // presentation 在事件处理时读取一次，避免跨端点路由竞态。
     const presentation = this.readPresentation();
@@ -165,6 +201,7 @@ export class NotificationCoordinator {
         return;
       }
       this.routesByNotificationId.delete(oldestNotificationId);
+      this.pendingActivationIds.delete(oldestNotificationId);
     }
   }
 
@@ -174,9 +211,9 @@ export class NotificationCoordinator {
     // route is the exact intent route registered for the displayed notification id.
     // route 是为已展示通知标识注册的精确意图路由。
     const route = this.routesByNotificationId.get(activation.notificationId);
-    if (route && this.routeHandler) {
-      this.routeHandler(route);
-    }
+    if (!route) return;
+    if (this.routeHandler) this.routeHandler(route);
+    else this.pendingActivationIds.add(activation.notificationId);
   }
 }
 

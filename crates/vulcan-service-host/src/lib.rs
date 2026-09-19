@@ -1248,8 +1248,8 @@ async fn webui_service_events_socket(
     }
 }
 
-/// Filters terminal content events to their owning browser while leaving shared events broadcast.
-/// 将终端内容事件限制到其归属浏览器，同时保持共享事件广播。
+/// Filters client-owned events to their exact browser while leaving shared events broadcast.
+/// 将客户端所属事件限制到其精确浏览器，同时保持共享事件广播。
 ///
 /// # Parameters / 参数
 /// - `event`: Service event awaiting WebSocket serialization.
@@ -1258,11 +1258,14 @@ async fn webui_service_events_socket(
 /// - `client_id`：持有当前事件套接字的精确浏览器或 WebView 生命周期。
 ///
 /// # Returns / 返回值
-/// Returns true for shared events or terminal events explicitly owned by this client.
-/// 对共享事件或由当前客户端明确持有的终端事件返回 true。
+/// Returns true for shared events or client-owned events explicitly assigned to this client.
+/// 对共享事件或明确分配给当前客户端的所属事件返回 true。
 fn webui_service_event_is_visible_to_client(event: &ServiceEvent, client_id: Uuid) -> bool {
     let expected_client_id = client_id.as_hyphenated().to_string();
     match event {
+        ServiceEvent::ConversationRunSettled(event) => {
+            event.notification_client_id.as_deref() == Some(expected_client_id.as_str())
+        }
         ServiceEvent::CommandSessionDisplayChanged(event) => {
             event.display_client_id == expected_client_id
         }
@@ -1733,6 +1736,45 @@ mod tests {
         ));
         assert!(webui_service_event_is_visible_to_client(&event, owner));
         assert!(!webui_service_event_is_visible_to_client(&event, other));
+    }
+
+    /// Verifies a conversation settlement reaches only its exact notification owner.
+    /// 验证会话终态事件只会到达其精确通知所有者。
+    #[test]
+    fn conversation_settlement_event_is_filtered_by_notification_client_id() {
+        let owner = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        // ownedEvent carries the exact WebUI connection identity selected by the initiating action.
+        // ownedEvent 携带由发起动作选定的精确 WebUI 连接身份。
+        let owned_event = ServiceEvent::ConversationRunSettled(Box::new(
+            vulcan_service_api::ConversationRunSettledEvent {
+                event_id: String::from("conversation-settled:run-a"),
+                conversation_id: Uuid::new_v4().to_string(),
+                project_id: None,
+                run_id: Uuid::new_v4().to_string(),
+                outcome: vulcan_service_api::ConversationRunOutcome::Completed,
+                occurred_at: String::from("1000"),
+                notification_client_id: Some(owner.to_string()),
+            },
+        ));
+        assert!(webui_service_event_is_visible_to_client(&owned_event, owner));
+        assert!(!webui_service_event_is_visible_to_client(&owned_event, other));
+
+        // unownedEvent represents legacy or non-client work and must not select an arbitrary UI.
+        // unownedEvent 表示旧式或非客户端工作，不得任选一个界面投递。
+        let unowned_event = ServiceEvent::ConversationRunSettled(Box::new(
+            vulcan_service_api::ConversationRunSettledEvent {
+                event_id: String::from("conversation-settled:run-b"),
+                conversation_id: Uuid::new_v4().to_string(),
+                project_id: None,
+                run_id: Uuid::new_v4().to_string(),
+                outcome: vulcan_service_api::ConversationRunOutcome::Failed,
+                occurred_at: String::from("1001"),
+                notification_client_id: None,
+            },
+        ));
+        assert!(!webui_service_event_is_visible_to_client(&unowned_event, owner));
+        assert!(!webui_service_event_is_visible_to_client(&unowned_event, other));
     }
 
     /// Builds a minimal test WebUI service router.

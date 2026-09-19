@@ -182,6 +182,8 @@ show_usage() {
     echo "  ./make.sh run         # run Electron desktop; start Vite when needed"
     echo "  ./make.sh run release # run Core/Electron/WebUI release build"
     echo "  ./make.sh service     # start the tray/background Core only"
+    echo "  ./make.sh core-build  # Windows only: compile Debug Core without rebuilding GUI"
+    echo "  ./make.sh core-restart # Windows only: compile and restart Debug Core"
     echo "  ./make.sh deps        # install host, bundled tools, and LuaSkills dependencies"
     echo "  ./make.sh deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
@@ -271,6 +273,20 @@ case "$NormalizedMode" in
             release) node "$ScriptDir/scripts/desktop-runtime.mjs" service release ;;
             *) echo "Unsupported service profile: $CommandVariant" >&2; exit 1 ;;
         esac
+        ;;
+    core-build)
+        if [ "$NormalizedVariant" != "" ]; then
+            echo "Unsupported core-build variant: '$CommandVariant'" >&2
+            exit 1
+        fi
+        invoke_powershell_route core-build
+        ;;
+    core-restart)
+        if [ "$NormalizedVariant" != "" ]; then
+            echo "Unsupported core-restart variant: '$CommandVariant'" >&2
+            exit 1
+        fi
+        invoke_powershell_route core-restart
         ;;
     run)
         if [ "$NormalizedVariant" = "" ]; then

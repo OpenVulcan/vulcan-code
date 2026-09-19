@@ -20,6 +20,9 @@ pub struct ConversationEditGenerationV1Request {
     /// Exact replacement text; project resources remain the target event's ordered references.
     /// 精确替换正文；项目资源保持目标事件原有的有序引用。
     pub replacement_text: String,
+    /// Durable client action identifying the WebUI instance that owns completion notification.
+    /// 标识拥有完成通知之 WebUI 实例的可靠客户端动作。
+    pub client_action_id: String,
 }
 
 /// Confirms one fully published and strictly reloaded edited generation.
@@ -111,6 +114,7 @@ mod tests {
                 "expectedWindowGeneration": 1,
                 "targetSeq": 1,
                 "replacementText": "replacement",
+                "clientActionId": "vcn1:4c751b3e-b8de-4ae1-866a-46fa4a093404:8da7f088-04da-444b-918b-a52001dfc3d1",
                 "messageId": "legacy-message"
             }))
             .expect_err("legacy message identity must be rejected");

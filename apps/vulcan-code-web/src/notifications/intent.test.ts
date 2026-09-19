@@ -12,6 +12,7 @@ function settledEvent(outcome: ConversationRunSettledEvent["outcome"]): Conversa
     runId: "run-1",
     outcome,
     occurredAt: "1000",
+    notificationClientId: "client-1",
   };
 }
 

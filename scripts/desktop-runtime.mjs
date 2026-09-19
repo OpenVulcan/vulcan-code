@@ -5,7 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // The repository is resolved from this script rather than the caller's working directory.
 // 仓库由脚本位置确定，不依赖调用方工作目录。
@@ -403,6 +403,13 @@ async function main() {
     ? 'desktop/runtime/Electron.app/Contents/Resources/app' : 'desktop/runtime/resources/app';
   const appRoot = path.join(output, appEntry);
   await mkdir(appRoot, { recursive: true });
+  // desktopNotificationIdentity keeps executable metadata and the runtime identity resolver aligned.
+  // desktopNotificationIdentity 使可执行文件元数据与运行时身份解析器保持一致。
+  let desktopNotificationIdentity = {
+    name: 'Vulcan Code Desktop',
+    appUserModelId: null,
+    toastActivatorClsid: null,
+  };
   // Preserve relative framework symlinks so a relocated macOS bundle does not point into node_modules.
   // 保留框架的相对符号链接，避免搬移后的 macOS 应用包仍指向 node_modules。
   await cp(path.join(desktop, 'node_modules/electron/dist'), path.join(output, 'desktop/runtime'), { recursive: true, verbatimSymlinks: true });
@@ -417,11 +424,20 @@ async function main() {
     const sourceExecutable = entry('desktop/runtime/electron.exe');
     const brandedExecutable = entry(`desktop/runtime/${desktopExecutableName}`);
     await rename(sourceExecutable, brandedExecutable);
+    // identityModule is the compiled authoritative resolver used by the packaged Electron process.
+    // identityModule 是打包 Electron 进程使用的已编译权威身份解析器。
+    const identityModule = await import(pathToFileURL(
+      path.join(desktop, 'dist/gui/notification-identity-values.js'),
+    ).href);
+    desktopNotificationIdentity = identityModule.resolveGuiNotificationIdentity(
+      brandedExecutable,
+      process.platform,
+    );
     const { rcedit } = createRequire(path.join(desktop, 'package.json'))('rcedit');
     await rcedit(brandedExecutable, {
       'version-string': {
-        ProductName: profile === 'release' ? 'Vulcan Code Desktop' : 'Vulcan Code Desktop Debug',
-        FileDescription: profile === 'release' ? 'Vulcan Code Desktop' : 'Vulcan Code Desktop Debug',
+        ProductName: desktopNotificationIdentity.name,
+        FileDescription: desktopNotificationIdentity.name,
         InternalName: profile === 'release' ? 'VulcanCodeDesktop' : 'VulcanCodeDesktopDebug',
         OriginalFilename: desktopExecutableName,
       },
@@ -440,7 +456,7 @@ async function main() {
    const desktopPackage = JSON.parse(await readFile(path.join(desktop, 'package.json'), 'utf8'));
    await writeFile(path.join(appRoot, 'package.json'), JSON.stringify({
      name: desktopPackage.name,
-     productName: desktopPackage.productName,
+     productName: desktopNotificationIdentity.name,
      version: desktopPackage.version,
      type: 'module',
      main: 'desktop-entry.js',

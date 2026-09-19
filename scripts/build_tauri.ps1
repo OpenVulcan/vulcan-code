@@ -44,6 +44,10 @@ $ProjectDir = Split-Path $PSScriptRoot -Parent
 # WebAppDir 指向 Vite React WebUI 工程。
 $WebAppDir = Join-Path $ProjectDir "apps\vulcan-code-web"
 
+# DesktopAppDir points at the Electron GUI and browser-host package.
+# DesktopAppDir 指向 Electron GUI 与浏览器宿主包。
+$DesktopAppDir = Join-Path $ProjectDir "apps\vulcan-code-desktop"
+
 # TauriAppDir points at the Tauri desktop shell crate.
 # TauriAppDir 指向 Tauri 桌面壳 crate。
 $TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-service"
@@ -142,6 +146,18 @@ if (-not $Release) {
     pnpm --dir $WebAppDir run build
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+
+# The packaged runtime must always consume desktop JavaScript built from the current source tree.
+# 打包运行时必须始终使用由当前源码树构建的桌面 JavaScript。
+if (-not (Test-Path -LiteralPath (Join-Path $DesktopAppDir "node_modules"))) {
+    Write-Host "==> Installing desktop dependencies..."
+    pnpm --dir $DesktopAppDir install
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+Write-Host "==> Building Electron desktop..."
+pnpm --dir $DesktopAppDir run build
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "==> Building Vulcan Core $BuildProfileName..."
 # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
 # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。

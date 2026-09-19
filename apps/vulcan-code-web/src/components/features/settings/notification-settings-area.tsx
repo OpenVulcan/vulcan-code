@@ -52,31 +52,19 @@ export function NotificationSettingsArea() {
     // cancelled 与 unsubscribe 保护原生观察器生命周期。
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
-    // refreshPermission restores authorization for saved enabled intent once; focus refreshes only read it.
-    // refreshPermission 为已保存的开启意图自动申请一次权限；焦点刷新仅查询权限。
-    // Parameters: requestForSavedIntent allows the initial permission request. Returns when permission resolves.
-    // 参数：requestForSavedIntent 允许初次进入时申请权限。返回值：权限处理结束后完成。
-    async function refreshPermission(requestForSavedIntent = false): Promise<void> {
+    // refreshPermission only reads authorization; browsers require a separate user gesture to request it.
+    // refreshPermission 只读取授权状态；浏览器申请权限必须由单独的用户操作触发。
+    // Parameters: none. Returns when the current client permission resolves.
+    // 参数：无。返回值：当前客户端权限状态读取结束后完成。
+    async function refreshPermission(): Promise<void> {
       // revision identifies this exact permission request.
       // revision 标识此次精确权限请求。
       const revision = ++permissionRevision.current;
       try {
         // nextPermission is the current native or browser permission fact.
         // nextPermission 是当前原生或浏览器权限事实。
-        let nextPermission = await shellClient.getNotificationPermission();
+        const nextPermission = await shellClient.getNotificationPermission();
         if (cancelled || revision !== permissionRevision.current) return;
-        // Request only undecided permission, and share the action lock with the explicit enable switch.
-        // 仅申请尚未决定的权限，并与手动开启开关共用操作锁。
-        if (requestForSavedIntent && preferencesRef.current.channels.local.enabled && nextPermission === "default" && !busyRef.current) {
-          busyRef.current = true;
-          setBusy(true);
-          try {
-            nextPermission = await shellClient.requestNotificationPermission();
-          } finally {
-            busyRef.current = false;
-            if (!cancelled) setBusy(false);
-          }
-        }
         if (!cancelled && revision === permissionRevision.current) {
           setPermission(nextPermission);
           setPermissionError("");
@@ -88,7 +76,7 @@ export function NotificationSettingsArea() {
         }
       }
     }
-    void refreshPermission(true);
+    void refreshPermission();
     void shellClient.subscribeNotificationPresentationChange(() => {
       if (!busyRef.current) void refreshPermission();
     }).then((next) => {
@@ -116,10 +104,10 @@ export function NotificationSettingsArea() {
     }
   };
 
-  // requestPermission queries first so a previously granted desktop permission never prompts again.
-  // requestPermission 先查询，使此前已经获得的桌面权限不重复请求。
-  // Parameters: none. Returns after the explicit user authorization action.
-  // 参数：无。返回值：用户明确授权操作结束后完成。
+  // requestPermission starts the current client's permission request inside the explicit user gesture.
+  // requestPermission 在明确的用户操作内发起当前客户端的权限申请。
+  // Parameters: none. Returns after the browser or desktop host resolves the request.
+  // 参数：无。返回值：浏览器或桌面宿主完成申请后结束。
   const requestPermission = async (): Promise<void> => {
     if (busyRef.current || !capability.supported) return;
     busyRef.current = true;
@@ -128,15 +116,31 @@ export function NotificationSettingsArea() {
     setError("");
     setPermissionError("");
     try {
-      // currentPermission comes from the shell authority rather than rendered state.
-      // currentPermission 来自壳权威，而不是已渲染状态。
-      const currentPermission = await shellClient.getNotificationPermission();
-      // nextPermission requests only an undecided permission from this explicit action.
-      // nextPermission 仅在本次明确操作中请求尚未决定的权限。
-      const nextPermission = currentPermission === "default"
-        ? await shellClient.requestNotificationPermission()
-        : currentPermission;
+      // The shell call must occur before any await so a Web Notification prompt retains user activation.
+      // 壳调用必须发生在任何 await 之前，使网页通知弹框保留用户激活资格。
+      const nextPermission = await shellClient.requestNotificationPermission();
       setPermission(nextPermission);
+    } catch (cause) {
+      setPermission(null);
+      setPermissionError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  // recheckPermission reads an existing system or browser policy after the user changes it externally.
+  // recheckPermission 在用户从外部更改系统或浏览器策略后重新读取既有权限。
+  // Parameters: none. Returns after the current client reports its permission.
+  // 参数：无。返回值：当前客户端报告权限后结束。
+  const recheckPermission = async (): Promise<void> => {
+    if (busyRef.current || !capability.supported) return;
+    busyRef.current = true;
+    setBusy(true);
+    ++permissionRevision.current;
+    setPermissionError("");
+    try {
+      setPermission(await shellClient.getNotificationPermission());
     } catch (cause) {
       setPermission(null);
       setPermissionError(cause instanceof Error ? cause.message : String(cause));
@@ -189,6 +193,9 @@ export function NotificationSettingsArea() {
       toast.error(text("测试通知发送失败", "Test notification failed"), {
         description: cause instanceof Error ? cause.message : String(cause),
       });
+      // A failed delivery remains inspectable in settings after the transient toast disappears.
+      // 投递失败在瞬时提示消失后仍可于设置页查看。
+      setError(cause instanceof Error ? cause.message : String(cause));
       if (!permissionChecked) {
         setPermission(null);
         setPermissionError(cause instanceof Error ? cause.message : String(cause));
@@ -212,7 +219,7 @@ export function NotificationSettingsArea() {
   return <section className="settings-preferences-page settings-detail-panel notification-settings-page">
     <section className="settings-preferences-section">
       <div className="settings-preference-row">
-        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("开启时自动申请通知权限。设置保存在当前客户端，下次启动自动恢复。", "Enabling automatically requests notification permission. Settings are saved on this client and restored at the next launch.")}</p></div>
+        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("在当前客户端开启时申请通知权限；下次打开时恢复设置并读取权限。", "Enabling requests permission in this client; reopening restores the setting and reads permission.")}</p></div>
         <Switch aria-label={t("settings.notifications.localChannel")} checked={enabled}
           disabled={!capability.supported || busy} onCheckedChange={(checked) => void changeEnabled(checked)} />
       </div>
@@ -226,9 +233,9 @@ export function NotificationSettingsArea() {
         </div>
         <Button type="button" size="sm" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{text("发送测试通知", "Send test notification")}</Button>
       </div>
-      {enabled && (permission === "denied" || permissionError) && capability.supported ? <div className="settings-card-actions">
-        <Button type="button" variant="outline" disabled={busy} onClick={() => void requestPermission()}>
-          {text("重新检查权限", "Recheck permission")}
+      {enabled && (permission === "default" || permission === "denied" || permissionError) && capability.supported ? <div className="settings-card-actions">
+        <Button type="button" variant="outline" disabled={busy} onClick={() => void (permission === "default" ? requestPermission() : recheckPermission())}>
+          {permission === "default" ? text("申请通知权限", "Request permission") : text("重新检查权限", "Recheck permission")}
         </Button>
         {permission === "denied" ? <span className="settings-muted-line">{text("请在系统或浏览器设置中允许通知，再重新检查。", "Allow notifications in system or browser settings, then recheck.")}</span> : null}
       </div> : null}
