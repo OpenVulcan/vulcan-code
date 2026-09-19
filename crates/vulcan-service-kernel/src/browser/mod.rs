@@ -5780,6 +5780,23 @@ mod tests {
             alive: Arc<AtomicBool>,
             fail_page_list: bool,
         ) -> Self {
+            Self::start_with_failures(handshake_delay, alive, fail_page_list, false)
+        }
+
+        /// Starts a fake host with precisely selected protocol failures.
+        /// 启动一个带精确协议故障选择的伪宿主。
+        /// `handshake_delay` delays the hello, `fail_page_list` refuses page enumeration, and
+        /// `fail_input_release_after_first` refuses ownership cleanup after initial acquisition.
+        /// `handshake_delay` 延迟 hello，`fail_page_list` 拒绝页面枚举，
+        /// `fail_input_release_after_first` 在首次获取租约后拒绝归属清理。
+        /// Returns the listener endpoint used by the production discovery path.
+        /// 返回供生产发现路径使用的监听端点。
+        fn start_with_failures(
+            handshake_delay: Duration,
+            alive: Arc<AtomicBool>,
+            fail_page_list: bool,
+            fail_input_release_after_first: bool,
+        ) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake host");
             let address = listener.local_addr().expect("fake host address");
             thread::spawn(move || {
@@ -5822,6 +5839,12 @@ mod tests {
                         if stream.write_all(&frame).is_err() {
                             return;
                         }
+                        // Acquisition performs one defensive release before issuing a lease. A
+                        // later refusal therefore exercises an ownership transition rather than
+                        // preventing the initial controller from being established.
+                        // 获取租约前会先执行一次防御性释放，因此后续拒绝检验的是真实归属交接，而不是
+                        // 阻止初始控制者建立。
+                        let mut input_release_count = 0_usize;
                         loop {
                             match stream.read(&mut buffer) {
                                 // Core closed the channel, which is how a host learns to exit.
@@ -5857,6 +5880,28 @@ mod tests {
                                                 return;
                                             }
                                             continue;
+                                        }
+                                        if value["operation"].as_str() == Some("input.releaseAll") {
+                                            input_release_count += 1;
+                                            if fail_input_release_after_first
+                                                && input_release_count > 1
+                                            {
+                                                let response = json!({
+                                                    "requestId": request_id,
+                                                    "ok": false,
+                                                    "error": {
+                                                        "code": "fixture_input_release_failure",
+                                                        "message": "pressed inputs were not released",
+                                                    },
+                                                });
+                                                let Ok(frame) = encode_host_frame(&response) else {
+                                                    return;
+                                                };
+                                                if stream.write_all(&frame).is_err() {
+                                                    return;
+                                                }
+                                                continue;
+                                            }
                                         }
                                         let result = match value["operation"].as_str() {
                                             Some("page.list") => json!({ "pages": [] }),
@@ -5954,12 +5999,26 @@ mod tests {
         handshake_delay: Duration,
         fail_page_list: bool,
     ) -> (BrowserManager, Arc<AtomicBool>, Arc<AtomicBool>) {
+        manager_with_fake_host_behavior(handshake_delay, fail_page_list, false)
+    }
+
+    /// Builds a fake-host manager with precise page-list and input-release failures.
+    /// 构建一个带精确页面清单及输入释放故障的伪宿主管理器。
+    /// The two failure flags map directly to the fake host operations; the returned liveness and
+    /// poll-error controls expose process supervision state to each test.
+    /// 两个故障标志直接对应伪宿主操作；返回的存活与检查错误控制量向测试暴露进程监督状态。
+    fn manager_with_fake_host_behavior(
+        handshake_delay: Duration,
+        fail_page_list: bool,
+        fail_input_release_after_first: bool,
+    ) -> (BrowserManager, Arc<AtomicBool>, Arc<AtomicBool>) {
         let alive = Arc::new(AtomicBool::new(true));
         let poll_error = Arc::new(AtomicBool::new(false));
-        let host = FakeBrowserHost::start_with_page_list_failure(
+        let host = FakeBrowserHost::start_with_failures(
             handshake_delay,
             Arc::clone(&alive),
             fail_page_list,
+            fail_input_release_after_first,
         );
         let profiles_root =
             std::env::temp_dir().join(format!("vulcan-w06-profiles-{}", Uuid::new_v4()));
@@ -5980,6 +6039,46 @@ mod tests {
             })
             .expect("configure host runtime");
         (manager, alive, poll_error)
+    }
+
+    /// Verifies a refused host input release blocks lease handoff without minting a new owner.
+    /// 验证宿主拒绝释放输入时会阻止租约交接，且不会签发新的所有者。
+    #[test]
+    fn refused_host_input_release_blocks_lease_handoff() {
+        let (manager, _alive, _poll_error) =
+            manager_with_fake_host_behavior(Duration::ZERO, false, true);
+        let session = manager
+            .create_owned_session("conversation-a", BrowserProfileMode::Ephemeral)
+            .expect("create browser");
+        manager.start_host(&session.session_id).expect("start host");
+        let (_, lease_secret) = manager
+            .acquire_lease(&session.session_id, "first-controller", None)
+            .expect("acquire initial lease after the first successful defensive release");
+
+        let error = manager
+            .release_lease(&session.session_id, &lease_secret)
+            .expect_err("a refused input release must block ownership handoff");
+        assert!(error.contains(BROWSER_ERROR_LEASE_BLOCKED), "{error}");
+        assert!(error.contains("fixture_input_release_failure"), "{error}");
+        let projection = manager
+            .session_projection(&session.session_id)
+            .expect("blocked projection");
+        assert_eq!(projection.lease_state, BrowserLeaseState::Blocked);
+        assert!(
+            projection
+                .blocked_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("fixture_input_release_failure"))
+        );
+        assert_eq!(
+            manager
+                .takeover_lease(&session.session_id, "second-controller", None)
+                .expect_err("a second controller must not receive a fabricated lease"),
+            format!(
+                "{BROWSER_ERROR_LEASE_BLOCKED}: {}",
+                projection.blocked_reason.expect("blocked reason")
+            )
+        );
     }
 
     /// Keeps a rejected initial page inventory from publishing a live browser or leaking its host.
