@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# run_tauri.sh runs the compiled Tauri/WebUI main application without managing Vite.
-# run_tauri.sh 用于运行已编译的 Tauri/WebUI 主应用，但不管理 Vite。
+# run_tauri.sh opens the Electron workbench and prepares Vite in development mode.
+# run_tauri.sh 打开 Electron 工作台，并在开发模式准备 Vite。
 
 set -eu
 
@@ -32,9 +32,9 @@ esac
 
 # BinaryFileName stores the platform-specific Tauri shell binary name.
 # BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
-BinaryFileName=vulcan-code-tauri
+BinaryFileName=vulcan-code-service
 if [ "$IsWindowsPlatform" = "1" ]; then
-    BinaryFileName=vulcan-code-tauri.exe
+    BinaryFileName=vulcan-code-service.exe
 fi
 
 # OutputBinDir stores the stable runtime binary directory produced by make build.
@@ -63,5 +63,8 @@ if [ "$Release" = "1" ]; then
     ProfileName=release
 fi
 
-echo "==> Running Vulcan Code Tauri $ProfileName from output/bin..."
-"$OutputBinaryPath"
+echo "==> Running Vulcan Code desktop $ProfileName..."
+if [ "$Release" = "0" ]; then
+    bash "$ProjectDir/scripts/vite_dev_server.sh" start
+fi
+node "$ProjectDir/scripts/desktop-runtime.mjs" run "$ProfileName"

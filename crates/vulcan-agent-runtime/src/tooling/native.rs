@@ -238,11 +238,13 @@ pub(crate) use shell_command::*;
 #[cfg(test)]
 pub(crate) use shell_session::*;
 mod goal;
+mod browser;
 mod runtime_config;
 mod submit_plan;
 mod todolist;
 
 pub(crate) use goal::*;
+pub use browser::*;
 pub(crate) use runtime_config::*;
 pub(crate) use submit_plan::*;
 pub(crate) use todolist::*;
@@ -341,6 +343,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional stable controller session identifier that owns this tool invocation.
     /// 拥有当前工具调用的可选稳定控制器会话标识。
     pub session_id: Option<SessionId>,
+    /// Optional host-injected Core browser runtime for direct browser tools.
+    /// 供浏览器直接工具使用的可选宿主注入 Core 浏览器运行时。
+    pub native_browser_runtime: Option<Arc<dyn NativeBrowserRuntime>>,
     /// Optional stable VulcanCode project identity that owns this tool invocation.
     /// 拥有当前工具调用的可选稳定 VulcanCode 项目身份。
     pub host_project_id: Option<String>,
@@ -508,6 +513,10 @@ pub fn build_native_tool_catalog(
         build_file_tool(),
         build_file_edit_tool(),
         build_apply_patch_tool(),
+        build_browser_list_tool(),
+        build_browser_open_tool(),
+        build_browser_select_tool(),
+        build_browser_close_tool(),
     ];
     if let Some(runtime) = luaskills_runtime {
         definitions.push(build_runtime_config_tool(runtime));

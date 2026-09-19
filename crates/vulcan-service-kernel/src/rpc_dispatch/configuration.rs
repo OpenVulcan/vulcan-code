@@ -144,12 +144,8 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_save_tool_collapse_default" => rpc_json_result(
-            service_save_tool_collapse_default(
-                app,
-                state,
-                rpc_required_param(params, "enabled")?,
-            )
-            .await,
+            service_save_tool_collapse_default(app, state, rpc_required_param(params, "enabled")?)
+                .await,
         ),
         "service_select_webui_locale" => rpc_json_result(
             service_select_webui_locale(app, state, rpc_required_param(params, "locale")?).await,

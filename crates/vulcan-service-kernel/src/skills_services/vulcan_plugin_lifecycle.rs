@@ -354,37 +354,34 @@ async fn prepare_enable_transition(
             transition.plugin_id
         )
     })?;
+    // environment_ready is a read-only preflight so enabling never downloads dependencies.
+    // environment_ready 是只读前置检查，确保启用过程绝不下载依赖。
+    let environment_ready = runtime
+        .plugin_environment_ready(&transition.plugin_id)
+        .map_err(|error| error.to_string())?;
+    if !environment_ready {
+        return Err(format!(
+            "Vulcan 插件 `{}` 的执行环境尚未安装，请先在插件设置中安装环境。",
+            transition.plugin_id
+        ));
+    }
     runtime
         .begin_enabling(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
+    // Keep owner MCP admission closed for the whole preparation window, including a previously plain Disabled state.
+    // 在整个启用准备窗口内保持所有者 MCP 准入关闭，包括此前只是普通 Disabled 的状态。
+    begin_plugin_owner_mcp_drain(state, &transition.plugin_id).map_err(|error| {
+        append_rollback_error(
+            format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
+            restore_previous_projection(state, runtime, transition, Vec::new()),
+        )
+    })?;
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin hook 同步失败：{error}"),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         )
     })?;
-    // preparation_runtime moves blocking environment work away from the async executor.
-    // preparation_runtime 把阻塞式环境准备移出异步执行器。
-    let preparation_runtime = runtime.clone();
-    // preparation_plugin_id preserves the exact transaction identity in the blocking task.
-    // preparation_plugin_id 在阻塞任务中保留精确事务标识。
-    let preparation_plugin_id = transition.plugin_id.clone();
-    if let Err(error) = run_extension_management_blocking("prepare plugin environment", move || {
-        preparation_runtime
-            .prepare_plugin_environment(&preparation_plugin_id)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    })
-    .await
-    {
-        return Err(append_rollback_error(
-            format!(
-                "Vulcan 插件 `{}` 环境准备失败：{error}",
-                transition.plugin_id
-            ),
-            restore_previous_projection(state, runtime, transition, Vec::new()),
-        ));
-    }
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
@@ -483,12 +480,27 @@ fn prepare_disable_transition(
     runtime
         .begin_draining(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
-    synchronize_transient_hooks(state, runtime).map_err(|error| {
+    // Close the shared owner MCP gate before any asynchronous drain or durable publication.
+    // 在任何异步排空或可靠发布前关闭共享所有者 MCP 闸门。
+    begin_plugin_owner_mcp_drain(state, &transition.plugin_id).map_err(|error| {
         append_rollback_error(
-            format!("Vulcan Plugin hook 同步失败：{error}"),
+            format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         )
-    })
+    })?;
+    if let Err(error) = synchronize_transient_hooks(state, runtime) {
+        let rollback = restore_previous_projection(state, runtime, transition, Vec::new());
+        // Restore the gate to the immutable pre-transition policy instead of reopening it blindly.
+        // 按不可变的转换前策略恢复闸门，不能无条件重新开放。
+        let gate = if transition.previous_enabled {
+            finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+        } else {
+            begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
+        };
+        let rollback = append_rollback_error(append_rollback_error(error, rollback), gate);
+        return Err(format!("Vulcan Plugin hook 同步失败：{rollback}"));
+    }
+    Ok(())
 }
 
 /// Persists the requested target policy after runtime preparation succeeds.
@@ -651,6 +663,22 @@ async fn commit_enable_transition(
             rollback_result,
         ));
     }
+    // Reopen owner MCP admission only after the enabled catalog and matching runtime generation are published.
+    // 仅在启用目录及其匹配运行时代次发布后重新开放所有者 MCP 准入。
+    if let Err(error) = finish_plugin_owner_mcp_drain(state, &transition.plugin_id) {
+        let rollback_result = rollback_finalized_enable_to_policy(
+            state,
+            runtime,
+            transition,
+            transition.previous_enabled,
+            &transition.previous_policy,
+        )
+        .await;
+        return Err(append_rollback_error(
+            format!("Vulcan Plugin 所有者 MCP 准入恢复失败：{error}"),
+            rollback_result,
+        ));
+    }
     Ok(())
 }
 
@@ -685,6 +713,19 @@ async fn commit_disable_transition(
         .await
     {
         cleanup_failures.push(format!("插件停用生命周期回调失败：{error}"));
+    }
+    if transition.plugin_id == "vulcan-browser" {
+        // Browser cleanup is part of the disable transaction and must be observed before the
+        // final catalog publication, otherwise a failed retirement is reported as plain Disabled.
+        // 浏览器清理属于停用事务，必须在最终目录发布前纳入结果，否则撤销失败会被误报为普通 Disabled。
+        let browser_manager = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .browser_manager
+            .clone();
+        if let Err(error) = browser_manager.shutdown_ai_connections().await {
+            cleanup_failures.push(format!("浏览器 AI MCP 清理失败：{error}"));
+        }
     }
     // finish_result is the only post-callback state publication and therefore owns disable rollback.
     // finish_result 是回调后唯一的状态发布，因此持有停用回滚责任。
@@ -757,12 +798,36 @@ async fn rollback_prepared_transition(
             // cleanup_failures compensates the completed enable callback before projection rollback.
             // cleanup_failures 在投影回滚前补偿已完成的启用回调。
             let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
-            restore_previous_projection(state, runtime, transition, cleanup_failures)
+            let result = restore_previous_projection(state, runtime, transition, cleanup_failures);
+            let gate_result = if transition.previous_enabled {
+                finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+            } else {
+                begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
+            };
+            match (result, gate_result) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(gate_error)) => {
+                    Err(format!("{error}；所有者 MCP 闸门补偿失败：{gate_error}"))
+                }
+            }
         }
         VulcanPluginTargetState::Disabled => {
             // No disable callback ran before persistence, so only catalog and hooks need restoration.
             // 持久化前尚未执行停用回调，因此只需恢复目录与 Hook。
-            restore_previous_projection(state, runtime, transition, Vec::new())
+            let result = restore_previous_projection(state, runtime, transition, Vec::new());
+            let gate_result = if transition.previous_enabled {
+                finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+            } else {
+                begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
+            };
+            match (result, gate_result) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(gate_error)) => {
+                    Err(format!("{error}；所有者 MCP 闸门补偿失败：{gate_error}"))
+                }
+            }
         }
     }
 }
@@ -796,6 +861,9 @@ async fn rollback_finalized_enable_to_policy(
     runtime
         .begin_draining(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
+    // Keep the owner MCP gate closed while compensating a failed finalized enable.
+    // 在补偿已完成但失败的启用事务时保持所有者 MCP 闸门关闭。
+    begin_plugin_owner_mcp_drain(state, &transition.plugin_id)?;
     synchronize_transient_hooks(state, runtime)?;
     // cleanup_failures records whether the real disable compensation was complete.
     // cleanup_failures 记录真实停用补偿是否完整。
@@ -980,6 +1048,9 @@ async fn rollback_disable(
             .await,
         ));
     }
+    // Reopen owner MCP admission only after the reverse enable transaction is fully recovered.
+    // 仅在反向启用事务完整恢复后重新开放所有者 MCP 准入。
+    finish_plugin_owner_mcp_drain(state, &transition.plugin_id)?;
     Ok(())
 }
 
@@ -1034,6 +1105,57 @@ fn synchronize_transient_hooks(
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
 ) -> Result<(), String> {
     synchronize_service_vulcan_plugin_hooks(state, runtime.clone(), &runtime.snapshot())
+}
+
+/// Closes owner-scoped MCP admission for one plugin before its disable transaction can await.
+/// 在停用事务进入异步等待前关闭指定插件的所有者范围 MCP 准入。
+fn begin_plugin_owner_mcp_drain(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+) -> Result<(), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    let browser_manager = guard.browser_manager.clone();
+    let mcp_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    drop(guard);
+    mcp_runtime.begin_plugin_owner_drain(plugin_id)?;
+    if plugin_id == "vulcan-browser" {
+        // The MCP gate closes first; Core's latch then prevents any new transition while the
+        // async disable barrier waits for work that was already admitted.
+        // MCP 闸门先关闭；Core 锁存位随后阻止新转换，异步停用屏障再等待此前已准入的任务。
+        browser_manager.begin_ai_drain();
+    }
+    Ok(())
+}
+
+/// Reopens owner-scoped MCP admission after an enabled projection is fully published.
+/// 在启用投影完整发布后重新开放所有者范围 MCP 准入。
+fn finish_plugin_owner_mcp_drain(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+) -> Result<(), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    let browser_manager = guard.browser_manager.clone();
+    let mcp_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    drop(guard);
+    mcp_runtime.finish_plugin_owner_drain(plugin_id)?;
+    if plugin_id == "vulcan-browser" {
+        // Publish Core admission only after the exact owner MCP runtime has reopened.
+        // 仅在精确所有者 MCP 运行时重新开放后发布 Core 准入。
+        browser_manager.finish_ai_drain();
+    }
+    Ok(())
 }
 
 /// Restores the previous catalog and Hook projection from immutable transaction facts.

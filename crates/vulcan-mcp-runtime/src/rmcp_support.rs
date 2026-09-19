@@ -16,6 +16,10 @@ use tokio::sync::broadcast;
 use crate::error::McpRuntimeError;
 use crate::transport::{McpToolSchema, McpTransportEvent};
 
+/// Maximum decoded bytes retained for one MCP image content block.
+/// 单个 MCP 图片内容块允许保留的最大解码字节数。
+const MCP_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
+
 /// Stable metadata key used by some MCP servers to declare which input fields should be treated as local file-path uploads.
 /// 某些 MCP 服务器用于声明哪些输入字段应被视为本地文件路径上传的稳定元数据键。
 const OPENAI_FILE_PARAMS_META_KEY: &str = "openai/fileParams";
@@ -118,8 +122,22 @@ pub(crate) fn rmcp_call_tool_result_to_value(
         return Err(McpRuntimeError::transport(message));
     }
 
-    if let Some(value) = result.structured_content {
-        return Ok(value);
+    if let Some(value) = result.structured_content.as_ref() {
+        if !result
+            .content
+            .iter()
+            .any(|content| content.as_image().is_some())
+        {
+            return Ok(value.clone());
+        }
+    }
+
+    if result
+        .content
+        .iter()
+        .any(|content| content.as_image().is_some())
+    {
+        return rmcp_call_tool_result_with_media_to_value(result);
     }
 
     if let Some(text) = result
@@ -134,6 +152,126 @@ pub(crate) fn rmcp_call_tool_result_to_value(
     }
 
     Ok(Value::Null)
+}
+
+/// Preserve text and image blocks in an explicit JSON envelope when an MCP result carries media.
+/// MCP 结果包含媒体时，以明确的 JSON 信封保留文本与图片块。
+///
+/// The legacy scalar/structured return forms remain handled by the caller, so ordinary text tools
+/// keep their existing shape while media-bearing results cannot silently lose content blocks.
+/// 调用方继续处理旧的标量/结构化返回形态，因此普通文本工具保持原样，同时带媒体的结果不会静默丢失内容块。
+fn rmcp_call_tool_result_with_media_to_value(
+    result: CallToolResult,
+) -> Result<Value, McpRuntimeError> {
+    let mut content = Vec::with_capacity(result.content.len());
+    for block in result.content {
+        if let Some(text) = block.as_text() {
+            content.push(serde_json::json!({
+                "type": "text",
+                "text": text.text,
+            }));
+            continue;
+        }
+        if let Some(image) = block.as_image() {
+            validate_mcp_image_content(image.data.as_str(), image.mime_type.as_str())
+                .map_err(McpRuntimeError::transport)?;
+            content.push(serde_json::json!({
+                "type": "image",
+                "data": image.data,
+                "mimeType": image.mime_type,
+            }));
+            continue;
+        }
+        return Err(McpRuntimeError::transport(
+            "MCP media result contains an unsupported content block.",
+        ));
+    }
+
+    let mut envelope = Map::new();
+    envelope.insert(String::from("content"), Value::Array(content));
+    if let Some(structured_content) = result.structured_content {
+        envelope.insert(String::from("structured_content"), structured_content);
+    }
+    Ok(Value::Object(envelope))
+}
+
+/// Validate one MCP image MIME/data pair without including image data in diagnostics.
+/// 校验单个 MCP 图片 MIME/数据对，诊断信息不包含图片数据。
+fn validate_mcp_image_content(data: &str, mime_type: &str) -> Result<(), String> {
+    if !matches!(mime_type, "image/png" | "image/jpeg" | "image/webp") {
+        return Err(String::from(
+            "MCP image content uses an unsupported MIME type.",
+        ));
+    }
+    decode_standard_base64_bounded(data)?;
+    Ok(())
+}
+
+/// Decode standard padded Base64 solely to validate syntax and enforce the decoded byte limit.
+/// 仅为校验语法并限制解码字节数而解码标准带填充 Base64。
+fn decode_standard_base64_bounded(data: &str) -> Result<Vec<u8>, String> {
+    let bytes = data.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 != 0 {
+        return Err(String::from("MCP image content has invalid Base64 data."));
+    }
+    let padding = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
+    if padding > 2 || bytes[..bytes.len() - padding].contains(&b'=') {
+        return Err(String::from("MCP image content has invalid Base64 data."));
+    }
+    let decoded_len = (bytes.len() / 4)
+        .checked_mul(3)
+        .and_then(|length| length.checked_sub(padding))
+        .ok_or_else(|| String::from("MCP image content exceeds the 20 MiB limit."))?;
+    if decoded_len == 0 {
+        return Err(String::from("MCP image content has empty Base64 data."));
+    }
+    if decoded_len > MCP_IMAGE_MAX_BYTES {
+        return Err(String::from("MCP image content exceeds the 20 MiB limit."));
+    }
+
+    let mut decoded = Vec::with_capacity(decoded_len);
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let is_last = index + 1 == bytes.len() / 4;
+        let first = decode_base64_value(chunk[0])?;
+        let second = decode_base64_value(chunk[1])?;
+        let third = if chunk[2] == b'=' {
+            if !is_last || chunk[3] != b'=' || second & 0x0f != 0 {
+                return Err(String::from("MCP image content has invalid Base64 data."));
+            }
+            None
+        } else {
+            Some(decode_base64_value(chunk[2])?)
+        };
+        let fourth = if chunk[3] == b'=' {
+            if !is_last || third.is_some_and(|value| value & 0x03 != 0) {
+                return Err(String::from("MCP image content has invalid Base64 data."));
+            }
+            None
+        } else {
+            Some(decode_base64_value(chunk[3])?)
+        };
+        decoded.push((first << 2) | (second >> 4));
+        if let Some(third) = third {
+            decoded.push((second << 4) | (third >> 2));
+            if let Some(fourth) = fourth {
+                decoded.push((third << 6) | fourth);
+            }
+        }
+    }
+    Ok(decoded)
+}
+
+/// Decode one standard Base64 alphabet byte.
+/// 解码一个标准 Base64 字母表字节。
+fn decode_base64_value(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'A'..=b'Z' => Ok(byte - b'A'),
+        b'a'..=b'z' => Ok(byte - b'a' + 26),
+        b'0'..=b'9' => Ok(byte - b'0' + 52),
+        b'+' => Ok(62),
+        b'/' => Ok(63),
+        _ => Err(String::from("MCP image content has invalid Base64 data.")),
+    }
 }
 
 /// Convert one rmcp tool schema into the host-owned MCP tool schema.
@@ -380,9 +518,10 @@ pub(crate) async fn call_rmcp_tool(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_model_visible_tool_input_schema, build_rmcp_call_tool_request_params,
-        declared_openai_file_input_param_names, rmcp_call_tool_result_to_value,
-        rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources,
+        MCP_IMAGE_MAX_BYTES, build_model_visible_tool_input_schema,
+        build_rmcp_call_tool_request_params, declared_openai_file_input_param_names,
+        rmcp_call_tool_result_to_value, rmcp_capabilities_support_prompts,
+        rmcp_capabilities_support_resources,
     };
     use rmcp::model::{CallToolResult, ServerCapabilities};
     use serde_json::{Value, json};
@@ -418,6 +557,99 @@ mod tests {
             rmcp_call_tool_result_to_value(result).expect("plain text should decode"),
             Value::String(String::from("plain-text"))
         );
+    }
+
+    #[test]
+    fn rmcp_call_tool_result_preserves_ordered_text_and_image_blocks() {
+        let mut result = CallToolResult::default();
+        result.content = vec![
+            rmcp::model::ContentBlock::text("before"),
+            rmcp::model::ContentBlock::image("iVBORw0KGgo=", "image/png"),
+            rmcp::model::ContentBlock::text("after"),
+        ];
+
+        assert_eq!(
+            rmcp_call_tool_result_to_value(result).expect("media content should decode"),
+            json!({
+                "content": [
+                    {"type": "text", "text": "before"},
+                    {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"},
+                    {"type": "text", "text": "after"},
+                ]
+            })
+        );
+    }
+
+    /// Verifies standard Base64 with two terminal padding characters remains valid.
+    /// 验证带两个末尾填充字符的标准 Base64 仍然被视为有效数据。
+    #[test]
+    fn rmcp_call_tool_result_accepts_double_padded_image_data() {
+        let mut result = CallToolResult::default();
+        result.content = vec![rmcp::model::ContentBlock::image("TQ==", "image/png")];
+
+        assert_eq!(
+            rmcp_call_tool_result_to_value(result).expect("double-padded image should decode"),
+            json!({
+                "content": [{"type": "image", "data": "TQ==", "mimeType": "image/png"}],
+            })
+        );
+    }
+
+    #[test]
+    fn rmcp_call_tool_result_preserves_structured_content_with_image_envelope() {
+        let mut result = CallToolResult::default();
+        result.structured_content = Some(json!({"ok": true}));
+        result.content = vec![rmcp::model::ContentBlock::image(
+            "iVBORw0KGgo=",
+            "image/png",
+        )];
+
+        assert_eq!(
+            rmcp_call_tool_result_to_value(result).expect("structured media should decode"),
+            json!({
+                "content": [{"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}],
+                "structured_content": {"ok": true},
+            })
+        );
+    }
+
+    #[test]
+    fn rmcp_call_tool_result_rejects_invalid_image_without_echoing_data() {
+        let secret = "not-valid-image-data";
+        let mut result = CallToolResult::default();
+        result.content = vec![rmcp::model::ContentBlock::image(secret, "image/png")];
+
+        let error = rmcp_call_tool_result_to_value(result)
+            .expect_err("invalid image Base64 must be rejected")
+            .to_string();
+        assert!(error.contains("invalid Base64"));
+        assert!(!error.contains(secret));
+    }
+
+    #[test]
+    fn rmcp_call_tool_result_rejects_unsupported_image_mime_without_echoing_data() {
+        let secret = "iVBORw0KGgo=";
+        let mut result = CallToolResult::default();
+        result.content = vec![rmcp::model::ContentBlock::image(secret, "image/svg+xml")];
+
+        let error = rmcp_call_tool_result_to_value(result)
+            .expect_err("unsupported image MIME must be rejected")
+            .to_string();
+        assert!(error.contains("unsupported MIME"));
+        assert!(!error.contains(secret));
+    }
+
+    #[test]
+    fn rmcp_call_tool_result_rejects_images_over_the_decoded_limit() {
+        let oversized = "A".repeat((MCP_IMAGE_MAX_BYTES / 3 + 1) * 4);
+        let mut result = CallToolResult::default();
+        result.content = vec![rmcp::model::ContentBlock::image(&oversized, "image/png")];
+
+        let error = rmcp_call_tool_result_to_value(result)
+            .expect_err("oversized image must be rejected")
+            .to_string();
+        assert!(error.contains("20 MiB"));
+        assert!(!error.contains(&oversized));
     }
 
     #[test]

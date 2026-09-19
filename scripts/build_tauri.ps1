@@ -1,9 +1,12 @@
-﻿# build_tauri.ps1 builds the new Tauri/WebUI main application.
-# build_tauri.ps1 用于构建新的 Tauri/WebUI 主应用。
+# build_tauri.ps1 builds the Core, WebUI, desktop, and shared Chromium distribution.
+# build_tauri.ps1 构建 Core、WebUI、桌面及共用 Chromium 发行物。
 # Usage:
 # 用法：
 #   .\build_tauri.ps1           # debug build
 #   .\build_tauri.ps1 -Release  # release build
+#
+# This legacy filename is retained by make; the service and workbench are separate processes.
+# make 保留此旧文件名；服务和工作台是独立进程。
 
 param(
     [switch]$Release
@@ -43,7 +46,7 @@ $WebAppDir = Join-Path $ProjectDir "apps\vulcan-code-web"
 
 # TauriAppDir points at the Tauri desktop shell crate.
 # TauriAppDir 指向 Tauri 桌面壳 crate。
-$TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-tauri"
+$TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-service"
 
 # IsWindowsPlatform records whether the current build target is the Windows host platform.
 # IsWindowsPlatform 记录当前构建目标是否为 Windows 宿主平台。
@@ -122,18 +125,24 @@ if ($Release) {
 
     # CargoBuildArguments selects the release shell and terminal host from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host', '--release', '--features', 'custom-protocol')
+    $CargoBuildArguments = @('build', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '--release', '--features', 'custom-protocol')
 }
 else {
     # CargoBuildArguments selects the debug shell and terminal host from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 debug 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '-p', 'vulcan-code-tauri', '-p', 'vulcan-terminal-host')
+    $CargoBuildArguments = @('build', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host')
 }
 
 # BuildProfileName names the selected artifact profile in diagnostics.
 # BuildProfileName 在诊断中标识所选制品 profile。
 $BuildProfileName = if ($Release) { 'release' } else { 'debug' }
-Write-Host "==> Building Tauri shell $BuildProfileName..."
+# Debug also ships static WebUI for direct Core access; the GUI still selects Vite in debug.
+# 调试同样携带静态网页以支持直接访问 Core；调试 GUI 仍选择 Vite。
+if (-not $Release) {
+    pnpm --dir $WebAppDir run build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+Write-Host "==> Building Vulcan Core $BuildProfileName..."
 # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
 # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
 $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments
@@ -143,14 +152,14 @@ if ($CargoBuildResult.ExitCode -ne 0) {
 
 # BinaryFileName stores the platform-specific Tauri shell binary name.
 # BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
-$BinaryFileName = "vulcan-code-tauri"
+$BinaryFileName = "vulcan-code-service"
 if ($IsWindowsPlatform) {
-    $BinaryFileName = "vulcan-code-tauri.exe"
+    $BinaryFileName = "vulcan-code-service.exe"
 }
 
 # BuiltBinaryPath uses Cargo's executable path, including configured target triples.
 # BuiltBinaryPath 使用 Cargo 的可执行文件路径，包括配置的目标三元组。
-$BuiltBinaryPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-code-tauri' -and $_.target.kind -contains 'bin' }).executable
+$BuiltBinaryPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-code-service' -and $_.target.kind -contains 'bin' }).executable
 
 # TerminalHostFileName stores the platform-specific isolated terminal-host binary name.
 # TerminalHostFileName 保存平台相关的隔离终端宿主二进制名称。
@@ -163,9 +172,30 @@ if ($IsWindowsPlatform) {
 # BuiltTerminalHostPath 保存与桌面壳 Cargo profile 一致的终端宿主制品路径。
 $BuiltTerminalHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-terminal-host' -and $_.target.kind -contains 'bin' }).executable
 
-# OutputBinDir stores the stable runtime binary output directory used by make run.
-# OutputBinDir 保存 make run 使用的稳定运行时二进制输出目录。
-$OutputBinDir = Join-Path $ProjectDir "output\bin"
+# DistributionRoot selects the same validated output boundary as sync and desktop packaging.
+# DistributionRoot 选择与同步和桌面打包相同的已验证输出边界。
+$DistributionRoot = Join-Path $ProjectDir "output"
+if (-not [string]::IsNullOrWhiteSpace($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
+    if (-not [System.IO.Path]::IsPathFullyQualified($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
+        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be an absolute path."
+    }
+    # TargetRoot confines isolated distributions to generated artifacts inside this workspace.
+    # TargetRoot 将独立发行物限制在本工作区生成的 target 制品内。
+    $TargetRoot = [System.IO.Path]::GetFullPath((Join-Path $ProjectDir "target"))
+    # SelectedRoot is the caller-owned exact distribution root.
+    # SelectedRoot 是调用方拥有的精确发行根目录。
+    $SelectedRoot = [System.IO.Path]::GetFullPath($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)
+    # PathComparison follows the platform's case-sensitive or case-insensitive path semantics.
+    # PathComparison 遵循平台路径区分或不区分大小写的语义。
+    $PathComparison = if ($IsWindowsPlatform) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    if (-not $SelectedRoot.StartsWith($TargetRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, $PathComparison)) {
+        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be inside the repository target directory."
+    }
+    $DistributionRoot = $SelectedRoot
+}
+# OutputBinDir stores the runtime executables beneath the selected distribution root.
+# OutputBinDir 保存选定发行根目录下的运行时可执行文件。
+$OutputBinDir = Join-Path $DistributionRoot "bin"
 
 # OutputBinaryPath stores the copied executable path that users and run scripts should launch.
 # OutputBinaryPath 保存用户与运行脚本应启动的已复制可执行文件路径。
@@ -176,7 +206,7 @@ $OutputBinaryPath = Join-Path $OutputBinDir $BinaryFileName
 $OutputTerminalHostPath = Join-Path $OutputBinDir $TerminalHostFileName
 
 if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
-    throw "Built Tauri binary was not found: $BuiltBinaryPath"
+    throw "Built Core binary was not found: $BuiltBinaryPath"
 }
 if (-not (Test-Path -LiteralPath $BuiltTerminalHostPath)) {
     throw "Built terminal host was not found: $BuiltTerminalHostPath"
@@ -212,3 +242,10 @@ if ($TerminalHostCopied) {
 else {
     Write-Host "==> Done. Terminal host remained unchanged because it is in use: $OutputTerminalHostPath"
 }
+# Never label an old locked executable as a newly published profile.
+# 绝不将被锁定的旧可执行文件标记为新发布模式。
+if (-not $BinaryCopied -or -not $TerminalHostCopied) {
+    throw 'Distribution was not published because an output executable is locked.'
+}
+& node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

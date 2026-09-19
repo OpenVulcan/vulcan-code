@@ -559,11 +559,11 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   },
   commandSessions: [
     { id: "preview-command", name: "WebUI build", command: "pnpm --dir apps\\vulcan-code-web run build", status: "preview", preview: "Frontend preview command session" },
-    { id: "preview-cargo", name: "Cargo check", command: "cargo check -p vulcan-code-tauri", status: "preview", preview: "Tauri desktop shell check entry" },
+    { id: "preview-cargo", name: "Cargo check", command: "cargo check -p vulcan-code-service", status: "preview", preview: "Service shell check entry" },
   ],
   logs: [
     { id: "preview-log", level: "info", source: "webui", message: "Browser preview mode loaded" },
-    { id: "preview-service", level: "info", source: "service", message: "Tauri/WebUI is the current desktop entry" },
+    { id: "preview-service", level: "info", source: "service", message: "Service/WebUI is the current desktop entry" },
   ],
 };
 

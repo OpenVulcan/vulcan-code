@@ -22,6 +22,7 @@ import {
 import { I18nProvider, normalizeLocaleCode } from "@/i18n";
 import { translations, type LocaleCode, type TranslationKey } from "@/i18n-messages";
 import { notificationCoordinator } from "@/notifications/coordinator";
+import { isDesktopShutdownDialogRuntime } from "@/shell/runtime";
 import type { NotificationIntentV1, NotificationText } from "@/notifications/types";
 import {
   BROWSER_SERVICE_CONNECTION_EVENT,
@@ -224,7 +225,7 @@ export function WorkbenchApp(props: {
   }, []);
 
   React.useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) {
+    if (!isDesktopShutdownDialogRuntime()) {
       return;
     }
     // disposed prevents a late native subscription from surviving component unmount.

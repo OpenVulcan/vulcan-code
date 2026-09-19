@@ -76,6 +76,7 @@ pub(super) fn codebase_tool_routing_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_tools_manager::VulcanToolOrigin;
 
     /// Builds one minimal visible tool descriptor for routing-prompt tests.
     /// 为路由提示词测试构建一条最小可见工具描述。
@@ -92,13 +93,13 @@ mod tests {
     /// A descriptor carrying the requested identifier and source.
     /// 一条携带指定标识与来源的工具描述。
     fn test_tool_descriptor(id: &str, source: VulcanToolSourceKind) -> VulcanToolDescriptor {
-        VulcanToolDescriptor {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::from("test tool"),
-            help_text: None,
-            source,
-        }
+        VulcanToolDescriptor::new(
+            id,
+            id,
+            String::from("test tool"),
+            None,
+            VulcanToolOrigin::new(source, "test", id),
+        )
     }
 
     /// Builds the canonical native VCE descriptor.

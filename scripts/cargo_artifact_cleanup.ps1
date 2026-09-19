@@ -164,7 +164,7 @@ function Invoke-TrackedCargoBuild {
         if ($BuildExitCode -eq 0 -and $BuildFinished) {
             # ShellArtifacts identifies the exact main executable through Cargo target metadata.
             # ShellArtifacts 通过 Cargo 目标元数据识别精确的主程序可执行文件。
-            $ShellArtifacts = @($Artifacts | Where-Object { $_.target.name -eq 'vulcan-code-tauri' -and $_.target.kind -contains 'bin' })
+            $ShellArtifacts = @($Artifacts | Where-Object { $_.target.name -eq 'vulcan-code-service' -and $_.target.kind -contains 'bin' })
             if ($ShellArtifacts.Count -ne 1 -or [string]::IsNullOrWhiteSpace($ShellArtifacts[0].executable)) { throw 'Cargo did not report exactly one Tauri executable.' }
             try {
                 if (-not $ProtocolValid) { throw 'Cargo output contained malformed JSON; preserving the previous artifact baseline.' }

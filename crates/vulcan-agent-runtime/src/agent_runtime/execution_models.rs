@@ -529,6 +529,12 @@ pub struct ExecutionPreparationRequest {
     /// Optional host-injected V1 Goal domain port used by native Goal tools.
     /// 原生 Goal 工具使用的可选宿主注入 V1 Goal 领域端口。
     pub native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
+    /// Optional host-injected browser scheduler for direct AI tools in the trusted conversation.
+    /// 可信会话内 AI 直接工具使用的可选宿主注入浏览器调度接口。
+    pub native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
+    /// Owner-scoped MCP bindings discovered before a provider turn and subjected to normal tool policy.
+    /// Provider 回合前发现并接受常规工具策略过滤的所有者范围 MCP 绑定。
+    pub supplemental_mcp_tools: Vec<crate::mcp::McpRuntimeToolBinding>,
     /// Host-owned V1 project resource resolver for explicit media tool calls, inherited by child executions.
     /// 显式媒体工具调用使用的宿主V1项目资源解析器，由子执行继承。
     pub media_resource_runtime:

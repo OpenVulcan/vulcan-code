@@ -319,16 +319,19 @@ export class BrowserServiceTransport implements ServiceTransport {
     }
     const socket = new WebSocket(webSocketUrlFromBaseUrl(baseUrl));
     socket.addEventListener("message", (event) => {
+      if (this.socket !== socket) return;
       this.dispatchSocketMessage(event.data);
     });
     socket.addEventListener("open", () => {
+      if (this.socket !== socket) return;
       this.reconnectDelayMs = 500;
       emitBrowserServiceConnectionStatus("connected");
     });
     socket.addEventListener("close", () => {
-      if (this.socket === socket) {
-        this.socket = null;
-      }
+      // A superseded socket cannot clear the newer socket's endpoint or reconnect state.
+      // 已被替换的旧套接字不能清除新套接字的端点或重连状态。
+      if (this.socket !== socket) return;
+      this.socket = null;
       // Active reconnects must rediscover the endpoint because service restarts rotate tokens.
       // 活跃重连必须重新发现端点，因为服务重启会轮换令牌。
       if (!this.disposed && this.handlerCount() > 0) {
@@ -342,9 +345,8 @@ export class BrowserServiceTransport implements ServiceTransport {
     socket.addEventListener("error", () => {
       // A failed handshake cannot remain the reusable socket for the next bootstrap attempt.
       // 失败的握手不能继续充当下一次启动尝试复用的套接字。
-      if (this.socket === socket) {
-        this.socket = null;
-      }
+      if (this.socket !== socket) return;
+      this.socket = null;
       emitBrowserServiceConnectionStatus("disconnected", "Browser service connection failed.");
       this.scheduleReconnect();
     });

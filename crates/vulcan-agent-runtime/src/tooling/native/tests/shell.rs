@@ -343,6 +343,7 @@ async fn shell_command_tool_executes_simple_command() {
                 "command": "echo hello"
             }),
             session_id: None,
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -400,6 +401,7 @@ async fn read_shell_session_until_text(
             .invoke(NativeToolExecutionRequest {
                 arguments,
                 session_id: Some(owner_session_id),
+                native_browser_runtime: None,
                 workspace_root: None,
                 host_project_id: None,
                 controller_runtime: None,
@@ -458,6 +460,7 @@ async fn shell_session_tool_round_trips_stdio_and_output_reads() {
                 "shell": if cfg!(windows) { "cmd" } else { "sh" }
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -503,6 +506,7 @@ async fn shell_session_tool_round_trips_stdio_and_output_reads() {
                 "append_newline": true
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -544,6 +548,7 @@ async fn shell_session_tool_round_trips_stdio_and_output_reads() {
                 "command_session_id": command_session_id.clone()
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -586,6 +591,7 @@ async fn shell_session_tool_enforces_owner_isolation_and_stop() {
                 "command": long_running_shell_session_test_command()
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -616,6 +622,7 @@ async fn shell_session_tool_enforces_owner_isolation_and_stop() {
                 "command_session_id": command_session_id.clone()
             }),
             session_id: Some(foreign_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -644,6 +651,7 @@ async fn shell_session_tool_enforces_owner_isolation_and_stop() {
                 "command_session_id": command_session_id.clone()
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,

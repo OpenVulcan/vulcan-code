@@ -1,0 +1,236 @@
+// Authoritative Electron preload bridge contract shared by the runtime probe and the shell facade.
+// 由运行时探测与壳门面共享的权威 Electron 预加载桥契约。
+//
+// Both consumers must read the same object shape. Keeping one definition here prevents the drift
+// where the runtime probe and the shell facade expected different method names on the same global.
+// 两个使用方必须读取同一对象形状。在此保留唯一定义，避免运行时探测与壳门面在同一个全局对象上
+// 期待不同方法名而漂移。
+
+import type {
+  ShellNotificationActivation,
+  ShellNotificationPermission,
+  ShellNotificationRequest,
+} from "@/shell/protocol";
+
+// ElectronDesktopBridge is the exact native window and notification surface the preload exposes.
+// ElectronDesktopBridge 是预加载暴露的精确原生窗口与通知表面。
+export interface ElectronDesktopBridge {
+  // Reports whether this exact executable has an isolated native notification identity.
+  // 表示当前可执行文件是否拥有隔离的原生通知身份。
+  nativeNotificationsAvailable: boolean;
+  // Minimizes the current desktop window.
+  // 最小化当前桌面窗口。
+  minimizeWindow: () => Promise<void>;
+  // Toggles the current desktop window maximize state.
+  // 切换当前桌面窗口最大化状态。
+  toggleWindowMaximize: () => Promise<void>;
+  // Returns whether the current desktop window is maximized.
+  // 返回当前桌面窗口是否处于最大化状态。
+  isWindowMaximized: () => Promise<boolean>;
+  // Closes the current desktop window without stopping Core.
+  // 关闭当前桌面窗口，不停止 Core。
+  closeWindow: () => Promise<void>;
+  // Subscribes to native window resize events and returns the unsubscribe function.
+  // 订阅原生窗口尺寸变化事件并返回取消订阅函数。
+  subscribeWindowResize: (handler: () => void) => Promise<() => void>;
+  // Returns whether the current desktop window is minimized.
+  // 返回当前桌面窗口是否已最小化。
+  isWindowMinimized: () => Promise<boolean>;
+  // Returns whether the current desktop window has input focus.
+  // 返回当前桌面窗口是否拥有输入焦点。
+  isWindowFocused: () => Promise<boolean>;
+  // Returns whether the current desktop window is visible.
+  // 返回当前桌面窗口是否可见。
+  isWindowVisible: () => Promise<boolean>;
+  // Subscribes to native window focus changes and returns the unsubscribe function.
+  // 订阅原生窗口焦点变化并返回取消订阅函数。
+  subscribeWindowFocusChange: (handler: () => void) => Promise<() => void>;
+  // Returns whether the host can present local notifications without prompting.
+  // 返回宿主能否在不提示用户的情况下展示本地通知。
+  getNotificationPermission: () => Promise<ShellNotificationPermission>;
+  // Requests local notification permission from an explicit user action.
+  // 通过明确用户操作请求本地通知权限。
+  requestNotificationPermission: () => Promise<ShellNotificationPermission>;
+  // Presents one localized local notification through the native host.
+  // 通过原生宿主展示一条已本地化的本地通知。
+  showNotification: (request: ShellNotificationRequest) => Promise<void>;
+  // Subscribes to native notification activation events.
+  // 订阅原生通知激活事件。
+  subscribeNotificationActivation: (
+    handler: (activation: ShellNotificationActivation) => void,
+  ) => Promise<() => void>;
+}
+
+// ElectronLocalBrowserTab is a GUI-local page and never a Core browser session.
+// ElectronLocalBrowserTab 是 GUI 本地页面，绝不是 Core 浏览器会话。
+export interface ElectronLocalBrowserTab {
+  // id is valid only for this desktop GUI lifetime.
+  // id 仅在当前桌面 GUI 生命周期内有效。
+  id: string;
+  // title is untrusted page text.
+  // title 是不受信任的页面文本。
+  title: string;
+  // url is the current top-level page address.
+  // url 是当前顶层页面地址。
+  url: string;
+  // loading reports native navigation activity.
+  // loading 报告原生导航活动。
+  loading: boolean;
+}
+
+// ElectronLocalBrowserSnapshot is the native temporary-tab projection.
+// ElectronLocalBrowserSnapshot 是原生临时标签投影。
+export interface ElectronLocalBrowserSnapshot {
+  // activeId selects the page shown in the sidebar.
+  // activeId 选择侧栏中显示的页面。
+  activeId: string | null;
+  // tabs contains only this client's temporary pages.
+  // tabs 仅包含本客户端的临时页面。
+  tabs: ElectronLocalBrowserTab[];
+}
+
+// ElectronLocalBrowserViewport maps one DOM placeholder to the native view bounds.
+// ElectronLocalBrowserViewport 将一个 DOM 占位区域映射到原生视图边界。
+export interface ElectronLocalBrowserViewport {
+  // x and y locate the visible placeholder in CSS pixels.
+  // x 与 y 以 CSS 像素定位可见占位区域。
+  x: number;
+  y: number;
+  // width and height describe its visible extent.
+  // width 与 height 描述其可见范围。
+  width: number;
+  height: number;
+  // viewportWidth and viewportHeight map browser zoom onto native content coordinates.
+  // viewportWidth 与 viewportHeight 将浏览器缩放映射到原生内容坐标。
+  viewportWidth: number;
+  viewportHeight: number;
+  // visible is false while a workbench modal is open or the panel is hidden.
+  // visible 在工作台模态框打开或面板隐藏时为 false。
+  visible: boolean;
+}
+
+// ElectronLocalBrowserBridge exposes tab operations without WebContents or Core credentials.
+// ElectronLocalBrowserBridge 公开标签操作，不公开 WebContents 或 Core 凭据。
+export interface ElectronLocalBrowserBridge {
+  // snapshot returns the current client-local tabs.
+  // snapshot 返回当前客户端本地标签。
+  snapshot: () => Promise<ElectronLocalBrowserSnapshot>;
+  // open creates one sandboxed HTTP tab and returns its id.
+  // open 创建一个沙箱 HTTP 标签并返回其标识。
+  open: (url: string) => Promise<string>;
+  // navigate changes one existing local tab's address.
+  // navigate 更改一个已有本地标签的地址。
+  navigate: (id: string, url: string) => Promise<void>;
+  // select displays one existing local tab.
+  // select 显示一个已有本地标签。
+  select: (id: string) => Promise<void>;
+  // close destroys one local tab.
+  // close 销毁一个本地标签。
+  close: (id: string) => Promise<void>;
+  // viewport updates or hides the native sidebar view.
+  // viewport 更新或隐藏侧栏中的原生视图。
+  viewport: (rect: ElectronLocalBrowserViewport | null) => Promise<void>;
+  // subscribeChanged observes local tab changes and returns synchronous cleanup.
+  // subscribeChanged 观察本地标签变化并返回同步清理函数。
+  subscribeChanged: (handler: (snapshot: ElectronLocalBrowserSnapshot) => void) => () => void;
+}
+
+// ElectronDesktopApi narrows the trusted preload surface mounted on window.
+// ElectronDesktopApi 收窄挂载在 window 上的受信预加载界面。
+interface ElectronDesktopApi {
+  // desktop exposes window and notification actions through the isolated preload bridge.
+  // desktop 通过隔离预加载桥暴露窗口与通知能力。
+  desktop: ElectronDesktopBridge;
+  // service resolves the exact ready Core selected by the GUI owner.
+  // service 解析 GUI 所有者选中的精确就绪 Core。
+  service: { getConnection: () => Promise<ElectronServiceConnection> };
+  // localBrowser is the optional isolated temporary-page surface of this GUI.
+  // localBrowser 是此 GUI 可选的隔离临时页面界面。
+  localBrowser?: ElectronLocalBrowserBridge;
+}
+
+// ElectronServiceConnection carries one authenticated instance in memory, never in navigation URLs.
+// ElectronServiceConnection 在内存中携带一个鉴权实例，绝不进入导航 URL。
+export interface ElectronServiceConnection {
+  // baseUrl names the selected Core HTTP origin.
+  // baseUrl 标识选定 Core 的 HTTP 源。
+  baseUrl: string;
+  // pid identifies the owning process.
+  // pid 标识所属进程。
+  pid: number;
+  // startedAt identifies this process lifetime.
+  // startedAt 标识本次进程生命周期。
+  startedAt: string;
+  // serviceToken authorizes requests to this instance only.
+  // serviceToken 仅授权访问本实例。
+  serviceToken: string;
+  // status is ready only after business bootstrap succeeds.
+  // status 仅在业务初始化成功后为 ready。
+  status: string;
+}
+
+// readElectronServiceConnection returns the selected ready instance, or null outside Electron.
+// readElectronServiceConnection 返回选中的就绪实例；非 Electron 环境返回 null。
+export async function readElectronServiceConnection(): Promise<ElectronServiceConnection | null> {
+  if (typeof window === "undefined") return null;
+  const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
+  if (!api) return null;
+  if (!api.service || typeof api.service.getConnection !== "function") {
+    throw new Error("The desktop service connection bridge is unavailable.");
+  }
+  return api.service.getConnection();
+}
+
+// electronDesktopBridgeMethodNames lists every method the contract requires at runtime.
+// electronDesktopBridgeMethodNames 列出契约在运行时要求的全部方法。
+const electronDesktopBridgeMethodNames = [
+  "minimizeWindow",
+  "toggleWindowMaximize",
+  "isWindowMaximized",
+  "closeWindow",
+  "subscribeWindowResize",
+  "isWindowMinimized",
+  "isWindowFocused",
+  "isWindowVisible",
+  "subscribeWindowFocusChange",
+  "getNotificationPermission",
+  "requestNotificationPermission",
+  "showNotification",
+  "subscribeNotificationActivation",
+] as const;
+
+// readElectronDesktopBridge returns the trusted preload bridge only when it is complete.
+// readElectronDesktopBridge 仅在受信预加载桥完整时返回它。
+//
+// # Returns / 返回值
+// The bridge when every contract method exists, otherwise null so the caller never calls a
+// missing method at runtime.
+// 当契约方法全部存在时返回该桥，否则返回 null，使调用方不会在运行时调用缺失的方法。
+export function readElectronDesktopBridge(): ElectronDesktopBridge | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
+  if (!api || typeof api.desktop !== "object" || api.desktop === null) {
+    return null;
+  }
+  const desktop = api.desktop as unknown as Record<string, unknown>;
+  const complete = electronDesktopBridgeMethodNames.every(
+    (name) => typeof desktop[name] === "function",
+  ) && typeof desktop.nativeNotificationsAvailable === "boolean";
+  return complete ? (api.desktop as ElectronDesktopBridge) : null;
+}
+
+// readElectronLocalBrowserBridge returns the complete temporary-browser bridge when Electron provides it.
+// readElectronLocalBrowserBridge 在 Electron 提供完整临时浏览器桥时返回该桥。
+// Returns null for ordinary WebUI clients or an incomplete preload.
+// 普通 WebUI 客户端或不完整预加载返回 null。
+export function readElectronLocalBrowserBridge(): ElectronLocalBrowserBridge | null {
+  if (typeof window === "undefined") return null;
+  const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
+  const bridge = api?.localBrowser;
+  if (!bridge) return null;
+  const methods = ["snapshot", "open", "navigate", "select", "close", "viewport", "subscribeChanged"];
+  return methods.every((method) => typeof (bridge as unknown as Record<string, unknown>)[method] === "function")
+    ? bridge : null;
+}

@@ -29,7 +29,7 @@ use vulcan_provider_adapters::{
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolSourceKind,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
 };
 
 /// Maximum generated image or generic file size accepted by the host.
@@ -449,15 +449,19 @@ fn build_model_extension_parameters_candidate(
     catalog: Arc<BTreeMap<ProviderToolCapabilityKind, Vec<AvailableProviderToolTarget>>>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(MODEL_EXTENSION_PARAMETERS_TOOL_ID),
-            name: String::from(MODEL_EXTENSION_PARAMETERS_TOOL_ID),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            MODEL_EXTENSION_PARAMETERS_TOOL_ID,
+            MODEL_EXTENSION_PARAMETERS_TOOL_ID,
+            String::from(
                 "MUST be called before any model-extension tool. Returns the currently enabled native models, reviewed capabilities, constraints, and exact args schema for one extension capability. Never invent a model id or model-specific argument.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::AiHostBinding,
-        },
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::AiHostBinding,
+                "ai_host_binding",
+                MODEL_EXTENSION_PARAMETERS_TOOL_ID,
+            ),
+        ),
         parameters_schema: model_extension_parameters_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
@@ -491,13 +495,17 @@ fn build_model_extension_executor_candidate(
 ) -> VulcanToolCandidate {
     let tool_id = model_extension_tool_id(capability);
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(tool_id),
-            name: String::from(tool_id),
-            description: model_extension_tool_description(capability),
-            help_text: None,
-            source: VulcanToolSourceKind::AiHostBinding,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            tool_id,
+            tool_id,
+            model_extension_tool_description(capability),
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::AiHostBinding,
+                "ai_host_binding",
+                tool_id,
+            ),
+        ),
         parameters_schema: model_extension_executor_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
@@ -1052,14 +1060,13 @@ fn build_direct_provider_tool_candidate(
     } else {
         contract.description.clone()
     };
+    let origin = VulcanToolOrigin::new(
+        VulcanToolSourceKind::AiHostBinding,
+        selected.target.provider_id.clone(),
+        contract.tool_id.clone(),
+    );
     Ok(VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: tool_id.clone(),
-            name: tool_id,
-            description,
-            help_text: None,
-            source: VulcanToolSourceKind::AiHostBinding,
-        },
+        descriptor: VulcanToolDescriptor::new(tool_id.clone(), tool_id, description, None, origin),
         parameters_schema,
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,

@@ -36,4 +36,7 @@ pub use handle::{
     replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
     validate_plugin_mcp_runtime_partition,
 };
-pub use tools::{McpRuntimeAccess, McpRuntimeToolBinding, configured_mcp_runtime_access};
+pub use tools::{
+    McpRuntimeAccess, McpRuntimeOwnedPartitionKey, McpRuntimeOwnedStdioPartition,
+    McpRuntimeToolBinding, configured_mcp_runtime_access,
+};

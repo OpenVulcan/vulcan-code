@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vulcan Code",
+  "version": "0.1.0",
+  "identifier": "ai.vulcan.code",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../vulcan-code-web dev --host 127.0.0.1 --port 17601 --strictPort",
+    "beforeBuildCommand": "pnpm --dir ../vulcan-code-web build",
+    "devUrl": "http://127.0.0.1:17601",
+    "frontendDist": "../vulcan-code-web/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: vulcan-media: http://vulcan-media.localhost https://vulcan-media.localhost; media-src 'self' data: blob: vulcan-media: http://vulcan-media.localhost https://vulcan-media.localhost; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* vulcan-media: http://vulcan-media.localhost https://vulcan-media.localhost; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
+  }
+}

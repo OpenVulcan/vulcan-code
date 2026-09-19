@@ -302,6 +302,19 @@ enum ProjectTerminalControl {
 }
 
 impl ProjectTerminalRecord {
+    /// Returns whether the terminal is currently running without blocking.
+    /// 非阻塞地返回终端当前是否运行中。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `false` when the mutable state is already locked by the supervisor.
+    /// 当可变状态已被监控器锁定时返回 `false`。
+    fn is_running_now(&self) -> bool {
+        self.state
+            .try_lock()
+            .is_ok_and(|state| state.status == ProjectTerminalStatus::Running)
+    }
+
     /// Builds one immutable snapshot from locked state.
     /// 从已锁定状态构建一个不可变快照。
     ///
@@ -495,6 +508,27 @@ impl ProjectTerminalRuntime {
             next_running_count_revision: AtomicU64::new(1),
             running_count_revisions: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Returns the number of currently running project terminals.
+    /// 返回当前运行中的项目终端数量。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact global running-terminal count observed without blocking the supervisor.
+    /// 返回在不阻塞监控器的情况下观察到的精确全局运行中终端计数。
+    pub fn running_terminal_count(&self) -> Result<u64, String> {
+        let records = self
+            .terminals
+            .read()
+            .map_err(|_| String::from("Project terminal registry is poisoned."))?
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(records
+            .iter()
+            .filter(|record| record.is_running_now())
+            .count() as u64)
     }
 
     /// Returns the latest running-count revision for one project.

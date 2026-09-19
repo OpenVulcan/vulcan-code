@@ -395,7 +395,7 @@ impl McpRuntimeHandle {
     /// 返回值
     /// Returns success only for a fully connected partition; terminal failure or deadline expiry returns a diagnostic error.
     /// 仅对完全连接的分区返回成功；终止失败或期限到期会返回诊断错误。
-    async fn wait_until_ready(&self, maximum_wait: Duration) -> Result<(), String> {
+    pub(super) async fn wait_until_ready(&self, maximum_wait: Duration) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + maximum_wait;
         loop {
             let snapshot = self.snapshot();
@@ -504,7 +504,9 @@ fn request_mcp_runtime_shutdown(shutdown_tx: &watch::Sender<bool>) {
 
 /// Boots one long-lived MCP runtime handle from source-neutral server definitions.
 /// 根据中立服务器定义引导一个长期 MCP 运行时句柄。
-async fn bootstrap_mcp_runtime(servers: Vec<McpServerConfig>) -> Result<McpRuntimeHandle, String> {
+pub(super) async fn bootstrap_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+) -> Result<McpRuntimeHandle, String> {
     let registry = McpServerRegistry::new(servers);
     let (shutdown_tx, _) = watch::channel(false);
     let snapshot = McpRuntimeSnapshot {
@@ -2156,6 +2158,206 @@ mod optional_capability_tests {
             Vec::new(),
         );
         assert!(runtime.is_fully_stopped());
+    }
+
+    /// Verifies owner bindings reject foreign callers and remain fail-closed after revocation.
+    /// 验证所有者绑定拒绝外部调用者，并在撤销后保持安全失败。
+    #[tokio::test]
+    async fn owned_stdio_binding_requires_owner_and_stops_after_revoke() {
+        // server identifies the exact plugin generation while keeping the test transport disabled for bootstrap.
+        // server 标识精确插件代次，同时让测试传输保持禁用以避免引导子进程。
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::Plugin {
+                plugin_id: String::from("fixture"),
+                generation: 11,
+            },
+            id: String::from("fixture:browser"),
+            name: String::from("Fixture Browser"),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: String::from("unused"),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                env_passthrough: Vec::new(),
+                inherit_environment: false,
+            },
+        };
+        let mut inner = empty_runtime_inner();
+        Arc::get_mut(&mut inner)
+            .expect("unique owner binding fixture")
+            .registry = McpServerRegistry::new(vec![server.clone()]);
+        let mut snapshot = initial_server_snapshot(&server);
+        snapshot.status = McpRuntimeServerStatus::Connected;
+        snapshot.tools.push(McpRuntimeToolDescriptor::new(
+            "fixture:browser",
+            "read_page",
+            "Read page",
+            json!({"type":"object"}),
+        ));
+        *inner.snapshot.write().expect("owner binding snapshot lock") = McpRuntimeSnapshot {
+            servers: BTreeMap::from([(server.id.clone(), snapshot)]),
+        };
+        let (events, _) = broadcast::channel(1);
+        inner
+            .transports
+            .write()
+            .expect("owner binding transport lock")
+            .insert(
+                server.id.clone(),
+                Arc::new(ShutdownTrackingTransport {
+                    shutdown_count: Arc::new(AtomicUsize::new(0)),
+                    event_tx: events,
+                }),
+            );
+
+        let runtime = McpRuntimeHandle { inner };
+        // Capture the latched shutdown signal before moving the handle into the owner lease.
+        // 在把运行时句柄移动到所有者租约前捕获锁存的关闭信号。
+        let shutdown_receiver = runtime.inner.shutdown_tx.subscribe();
+        let access = McpRuntimeAccess::new(runtime.overview(), BTreeMap::new());
+        let owner = crate::model::SessionId::from_u128(11);
+        let foreign_owner = crate::model::SessionId::from_u128(12);
+        let key = McpRuntimeOwnedPartitionKey::try_new("fixture", 11, owner)
+            .expect("valid owner partition key");
+        let partition = access.register_owned_stdio_partition_for_test(key, runtime);
+        let bindings = partition
+            .available_tool_bindings_filtered(&McpRuntimeToolAllowlist::default())
+            .expect("owner tools should be queryable");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].id(), "mcp_fixture_browser_read_page");
+        assert_eq!(bindings[0].owner_session_id(), Some(owner));
+        let following_binding = access
+            .owned_stdio_tool_bindings_following_replacement(
+                "fixture",
+                11,
+                owner,
+                &McpRuntimeToolAllowlist::default(),
+            )
+            .expect("browser-style owner binding")
+            .remove(0);
+        assert!(bindings[0].invoke(json!({})).await.is_err());
+        let foreign_error = bindings[0]
+            .invoke_for_owner(foreign_owner, json!({}))
+            .await
+            .expect_err("foreign owner must be rejected");
+        assert!(foreign_error.contains("does not match"));
+        let direct_foreign_error = access
+            .invoke_owned_stdio_tool(
+                "fixture",
+                11,
+                foreign_owner,
+                "fixture:browser/read_page",
+                json!({}),
+            )
+            .await
+            .expect_err("direct invocation must not fall back to another owner");
+        assert!(direct_foreign_error.contains("unavailable"));
+
+        // A browser grant replacement keeps the same owner and plugin lifecycle, so only the
+        // explicitly following binding reaches the replacement catalog.
+        // 浏览器授权替换保持同一所有者与插件生命周期，因此只有显式跟随的绑定会到达新目录。
+        access
+            .replace_owned_stdio_partition(
+                "fixture",
+                11,
+                owner,
+                vec![McpServerConfig {
+                    enabled: false,
+                    ..server.clone()
+                }],
+            )
+            .await
+            .expect("replace owner grant within one plugin lifecycle");
+        let following_replacement_error = following_binding
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("replacement catalog intentionally has no tools");
+        assert!(following_replacement_error.contains("未找到 MCP 工具"));
+        let strict_replacement_error = bindings[0]
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("ordinary bindings must remain pinned to their original lease");
+        assert!(strict_replacement_error.contains("stale"));
+
+        // Plugin drain revokes the captured binding and closes admission for every owner.
+        // 插件排空会撤销已捕获绑定，并关闭所有所有者的准入。
+        access
+            .begin_plugin_owner_drain("fixture")
+            .expect("begin plugin owner MCP drain");
+        assert!(
+            *shutdown_receiver.borrow(),
+            "plugin drain must request shutdown before removing the owner lease"
+        );
+        let drained_binding_error = bindings[0]
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("drained plugin binding must fail closed");
+        assert!(drained_binding_error.contains("unavailable"));
+        let drained_open_error = access
+            .open_owned_stdio_partition("fixture", 11, owner, vec![server.clone()])
+            .await
+            .expect_err("drained plugin must reject new owner partition");
+        assert!(drained_open_error.contains("draining"));
+        access
+            .finish_plugin_owner_drain("fixture")
+            .expect("finish plugin owner MCP drain");
+        let reopened_binding_error = bindings[0]
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("a revoked binding must stay stale after admission reopens");
+        assert!(reopened_binding_error.contains("unavailable"));
+        let reopened_following_error = following_binding
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("a browser-style binding must stay revoked after plugin drain");
+        assert!(reopened_following_error.contains("plugin drain"));
+
+        // replacement_server is disabled so the replacement path can prove atomic lease turnover without a child process.
+        // replacement_server 保持禁用，使替换路径可以在不启动子进程的情况下验证租约原子切换。
+        let replacement_server = McpServerConfig {
+            enabled: false,
+            ..server.clone()
+        };
+        let replacement = access
+            .replace_owned_stdio_partition("fixture", 11, owner, vec![replacement_server])
+            .await
+            .expect("replacement owner partition should become ready");
+        let stale_binding_error = bindings[0]
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("replacement binding must resolve the current lease");
+        assert!(stale_binding_error.contains("stale"));
+        let replacement_following_error = following_binding
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("a drained browser-style binding must not follow a new lifecycle");
+        assert!(replacement_following_error.contains("plugin drain"));
+        let current_lease_error = access
+            .invoke_owned_stdio_tool("fixture", 11, owner, "fixture:browser/read_page", json!({}))
+            .await
+            .expect_err("current replacement lease must resolve its own catalog");
+        assert!(current_lease_error.contains("未找到 MCP 工具"));
+        replacement
+            .shutdown()
+            .expect("shutdown replacement owner partition");
+
+        partition.revoke().expect("owner partition revoke");
+        let revoked_error = bindings[0]
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect_err("binding must fail closed when the current lease is gone");
+        assert!(revoked_error.contains("unavailable"));
+        assert!(
+            partition
+                .available_tool_bindings_filtered(&McpRuntimeToolAllowlist::default())
+                .is_err()
+        );
+        let direct_revoked_error = access
+            .invoke_owned_stdio_tool("fixture", 11, owner, "fixture:browser/read_page", json!({}))
+            .await
+            .expect_err("direct invocation must not use a revoked lease");
+        assert!(direct_revoked_error.contains("unavailable"));
     }
 
     /// Verifies a replacement generation shares retired-lease safety and blocks uninstall until the old partition is terminally stopped.

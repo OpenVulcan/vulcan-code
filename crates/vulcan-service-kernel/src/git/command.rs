@@ -7,8 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 use vulcan_host_tools::{
-    output_decode::decode_shell_output_bytes,
-    process_creation::apply_windows_release_no_window_to_std_command,
+    output_decode::decode_shell_output_bytes, process_creation::new_background_std_command,
 };
 
 /// Runs one bounded Git command with filters and pagers disabled.
@@ -70,7 +69,9 @@ pub(crate) fn run_webui_git_mutating_command_with_stdin(
 /// A configured `git` command without caller-specific arguments or stdio configuration.
 /// 返回尚未附加调用方参数或 stdio 配置的 `git` 命令。
 fn webui_git_command(working_directory: &Path, disable_repository_hooks: bool) -> Command {
-    let mut command = Command::new("git");
+    // Git is a background service task even in Debug, where Core may have no inherited console.
+    // 即使在 Debug 下，Git 仍是后台服务任务；Core 此时可能没有可继承的控制台。
+    let mut command = new_background_std_command("git");
     // Git receives a standard host path so Windows child-process startup never inherits a verbatim prefix.
     // Git 接收标准宿主路径，避免 Windows 子进程启动继承逐字路径前缀。
     let native_working_directory = vulcan_runtime_assets::native_host_path(working_directory);
@@ -119,7 +120,6 @@ fn run_webui_git_command_without_stdin(
 ) -> Result<std::process::Output, String> {
     let mut command = webui_git_command(working_directory, disable_repository_hooks);
     command.args(args);
-    apply_windows_release_no_window_to_std_command(&mut command);
     command.output().map_err(|error| {
         format!(
             "failed to run {command_label} `{}`: {error}",
@@ -161,7 +161,6 @@ fn run_webui_git_command_with_stdin_context(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    apply_windows_release_no_window_to_std_command(&mut command);
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run {command_label} `{}` with stdin: {error}",

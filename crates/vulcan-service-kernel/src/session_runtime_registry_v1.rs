@@ -4013,11 +4013,21 @@ impl SessionRuntimeRegistry {
     /// 返回注册表关闭栅栏的精确反值。
     #[cfg(test)]
     pub(crate) fn accepts_root_turns_for_test(&self) -> Result<bool, SessionRuntimeError> {
-        Ok(!self
-            .state
+        Ok(!self.shutdown_admission_is_closed())
+    }
+
+    /// Reports whether registry-wide root admission is currently closed.
+    /// 报告注册表级根回合准入当前是否关闭。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` after shutdown begins and before a failed shutdown is resumed.
+    /// 关闭开始后、失败关闭恢复前返回 `true`。
+    pub(crate) fn shutdown_admission_is_closed(&self) -> bool {
+        self.state
             .lock()
-            .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?
-            .shutting_down)
+            .map(|state| state.shutting_down)
+            .unwrap_or(true)
     }
 }
 

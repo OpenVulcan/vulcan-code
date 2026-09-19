@@ -8,13 +8,17 @@ use super::*;
 pub(super) fn native_descriptor_to_vulcan(
     descriptor: &NativeToolDescriptor,
 ) -> VulcanToolDescriptor {
-    VulcanToolDescriptor {
-        id: descriptor.id.clone(),
-        name: descriptor.name.clone(),
-        description: descriptor.description.clone(),
-        help_text: descriptor.help_text.clone(),
-        source: VulcanToolSourceKind::Native,
-    }
+    VulcanToolDescriptor::new(
+        descriptor.id.clone(),
+        descriptor.name.clone(),
+        descriptor.description.clone(),
+        descriptor.help_text.clone(),
+        VulcanToolOrigin::new(
+            VulcanToolSourceKind::Native,
+            "native",
+            descriptor.id.clone(),
+        ),
+    )
 }
 
 /// Returns whether a native tool id belongs to the VMM memory tool family.
@@ -51,25 +55,38 @@ pub(super) fn luaskills_descriptor_to_vulcan(
         allocate_unique_public_tool_name(&preferred_public_id, occupied_public_tool_ids)
     };
 
-    VulcanToolDescriptor {
-        id: public_id.clone(),
-        name: public_id,
-        description: entry.description.clone(),
-        help_text: None,
-        source: VulcanToolSourceKind::LuaSkills,
-    }
+    VulcanToolDescriptor::new(
+        public_id.clone(),
+        public_id,
+        entry.description.clone(),
+        None,
+        VulcanToolOrigin::new(
+            VulcanToolSourceKind::LuaSkills,
+            entry.skill_id.clone(),
+            entry.canonical_name.clone(),
+        ),
+    )
 }
 
 /// Converts one MCP runtime binding into the unified host-facing tool descriptor.
 /// 将单条 MCP 运行时工具绑定转换为统一宿主侧工具描述。
 pub(super) fn mcp_tool_binding_to_vulcan(tool: &McpRuntimeToolBinding) -> VulcanToolDescriptor {
-    VulcanToolDescriptor {
-        id: tool.id().to_string(),
-        name: tool.name().to_string(),
-        description: tool.description().to_string(),
-        help_text: None,
-        source: VulcanToolSourceKind::Mcp,
-    }
+    // Hook declarations name the source MCP server, while the mutable partition key only
+    // selects the live generation. Exposing that key here would make a static hook miss.
+    // Hook 声明命名来源 MCP 服务；可变分区键仅选择活动代次。若在此暴露分区键，静态 Hook 将失配。
+    VulcanToolDescriptor::new(
+        tool.id().to_string(),
+        tool.name().to_string(),
+        tool.description().to_string(),
+        None,
+        VulcanToolOrigin::new(
+            VulcanToolSourceKind::Mcp,
+            tool.server_id()
+                .expect("MCP runtime bindings must retain an original server identity"),
+            tool.origin_tool_name()
+                .expect("MCP runtime bindings must retain a qualified origin tool name"),
+        ),
+    )
 }
 
 /// Converts one native-tool Plan execution flag into the standalone manager Plan policy.

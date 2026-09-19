@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
-# build_tauri.sh builds the Tauri/WebUI main application.
-# build_tauri.sh 用于构建 Tauri/WebUI 主应用。
+# build_tauri.sh builds the renamed service host and its WebUI assets.
+# build_tauri.sh 用于构建重命名后的服务宿主及其 WebUI 产物.
+# This legacy entry name is retained as a thin forwarder; the service no longer
+# embeds a workbench window.
 
 set -eu
 
@@ -11,6 +13,10 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # ProjectDir stores the repository root for stable child command paths.
 # ProjectDir 保存仓库根目录，确保子命令路径稳定。
 ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
+
+# OutputRootDir is the same validated distribution root used by sync and packaging.
+# OutputRootDir 是同步与打包共同使用的已验证发行根目录。
+OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root)
 
 # Release stores whether this build should target Cargo release output.
 # Release 保存本次构建是否面向 Cargo release 产物。
@@ -48,11 +54,11 @@ if [ "$Release" = "1" ]; then
     echo "==> Building WebUI for release..."
     pnpm --dir "$WebAppDir" run build
 
-    echo "==> Building Tauri shell release..."
-    cargo build -p vulcan-code-tauri -p vulcan-terminal-host --release --features custom-protocol
+    echo "==> Building Vulcan Core release..."
+    cargo build -p vulcan-code-service -p vulcan-terminal-host --release --features custom-protocol
 else
-    echo "==> Building Tauri shell debug..."
-    cargo build -p vulcan-code-tauri -p vulcan-terminal-host
+    echo "==> Building Vulcan Core debug..."
+    cargo build -p vulcan-code-service -p vulcan-terminal-host
 fi
 
 # CargoTargetDir stores Cargo's effective artifact root, including environment and config overrides.
@@ -72,9 +78,9 @@ fi
 
 # BinaryFileName stores the platform-specific Tauri shell binary name.
 # BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
-BinaryFileName=vulcan-code-tauri
+BinaryFileName=vulcan-code-service
 if [ "$IsWindowsPlatform" = "1" ]; then
-    BinaryFileName=vulcan-code-tauri.exe
+    BinaryFileName=vulcan-code-service.exe
 fi
 
 # BuiltBinaryPath stores the desktop shell under Cargo's effective artifact root.
@@ -92,9 +98,9 @@ fi
 # BuiltTerminalHostPath 保存与桌面壳 Cargo profile 一致的终端宿主制品路径。
 BuiltTerminalHostPath="$CargoTargetDir/$ProfileName/$TerminalHostFileName"
 
-# OutputBinDir stores the stable runtime binary output directory used by make run.
-# OutputBinDir 保存 make run 使用的稳定运行时二进制输出目录。
-OutputBinDir="$ProjectDir/output/bin"
+# OutputBinDir stores runtime executables beneath the selected distribution root.
+# OutputBinDir 保存选定发行根目录下的运行时可执行文件。
+OutputBinDir="$OutputRootDir/bin"
 
 # OutputBinaryPath stores the copied executable path that users and run scripts should launch.
 # OutputBinaryPath 保存用户与运行脚本应启动的已复制可执行文件路径。
@@ -105,7 +111,7 @@ OutputBinaryPath="$OutputBinDir/$BinaryFileName"
 OutputTerminalHostPath="$OutputBinDir/$TerminalHostFileName"
 
 if [ ! -f "$BuiltBinaryPath" ]; then
-    echo "Built Tauri binary was not found: $BuiltBinaryPath" >&2
+    echo "Built Core binary was not found: $BuiltBinaryPath" >&2
     exit 1
 fi
 if [ ! -f "$BuiltTerminalHostPath" ]; then
@@ -127,3 +133,9 @@ cp "$BuiltTerminalHostPath" "$OutputTerminalHostPath"
 
 echo "==> Done. Binary: $OutputBinaryPath"
 echo "==> Done. Terminal host: $OutputTerminalHostPath"
+# Debug distributions also serve a complete static WebUI through Core.
+# 调试发行物同样通过 Core 提供完整静态网页。
+if [ "$Release" = "0" ]; then
+    pnpm --dir "$ProjectDir/apps/vulcan-code-web" run build
+fi
+node "$ProjectDir/scripts/desktop-runtime.mjs" package "$ProfileName"

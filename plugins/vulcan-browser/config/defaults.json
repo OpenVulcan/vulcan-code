@@ -1,0 +1,6 @@
+{
+  "actionTimeoutMs": "5000",
+  "navigationTimeoutMs": "60000",
+  "settleTimeoutMs": "500",
+  "consoleLevel": "warning"
+}

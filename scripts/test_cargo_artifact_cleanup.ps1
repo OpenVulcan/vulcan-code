@@ -36,7 +36,7 @@ Push-Location $FixtureRoot
 try {
     @'
 [package]
-name = "vulcan-code-tauri"
+name = "vulcan-code-service"
 version = "0.1.0"
 edition = "2021"
 
@@ -65,8 +65,7 @@ pub fn value() -> u8 { cleanup_dependency::value() }
     @'
 // Exercise the fixture library; takes no parameters and returns unit.
 // 调用测试库；无参数，返回单元类型。
-fn main() { println!("{}", vulcan_code_tauri::value()); }
-'@ | Set-Content -LiteralPath 'src/main.rs'
+fn main() { println!("{}", vulcan_code_service::value()); }'@ | Set-Content -LiteralPath 'src/main.rs'
     $env:CARGO_TARGET_DIR = Join-Path $FixtureRoot 'custom-target'
     # FirstBuild establishes a real baseline including a hashed rlib.
     # FirstBuild 建立真实基线，包括带哈希的 rlib。

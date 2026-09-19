@@ -11,11 +11,11 @@ use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
-use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
+use vulcan_luaskills_prompt::{LuaSkillPromptEntry, LUASKILL_HELP_TOOL_NAME};
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
     ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
-    VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind, VulcanToolsManager,
 };
 use vulcan_vmm::VmmConfigLayer;
 
@@ -142,13 +142,17 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         None,
     );
     let provider_candidate = VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from("file"),
-            name: String::from("file"),
-            description: String::from("Provider file tool."),
-            help_text: None,
-            source: VulcanToolSourceKind::AiHostBinding,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            String::from("file"),
+            String::from("file"),
+            String::from("Provider file tool."),
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::AiHostBinding,
+                "test",
+                String::from("file"),
+            ),
+        ),
         parameters_schema: json!({"type": "object"}),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
@@ -186,6 +190,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
     );
 
     let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
@@ -220,13 +225,17 @@ fn native_vce_public_id_is_reserved_from_provider_collisions() {
         None,
     );
     let provider_candidate = VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
-            name: String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
-            description: String::from("Provider collision."),
-            help_text: None,
-            source: VulcanToolSourceKind::AiHostBinding,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
+            String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
+            String::from("Provider collision."),
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::AiHostBinding,
+                "test",
+                String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
+            ),
+        ),
         parameters_schema: json!({"type": "object"}),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
@@ -268,6 +277,7 @@ fn native_vce_public_id_is_reserved_from_provider_collisions() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
     );
 
     let resolved = manager.resolve_for_execution_mode("Build");
@@ -328,15 +338,14 @@ fn native_vce_tool_is_hidden_without_ready_handler() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
     );
 
-    assert!(
-        manager
-            .resolve_for_execution_mode("Build")
-            .descriptors
-            .iter()
-            .all(|descriptor| descriptor.id != vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID)
-    );
+    assert!(manager
+        .resolve_for_execution_mode("Build")
+        .descriptors
+        .iter()
+        .all(|descriptor| descriptor.id != vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID));
 }
 
 /// Verifies VMM memory tools require ready configuration, enabled AI tools, and one live runtime.
@@ -403,6 +412,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         true,
+        None,
     );
     let enabled_ids = enabled_manager
         .resolve_for_execution_mode("Build")
@@ -481,6 +491,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
             ..VmmConfigLayer::default()
         },
         true,
+        None,
     );
     let disabled_ids = disabled_manager
         .resolve_for_execution_mode("Build")
@@ -515,6 +526,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
     );
     let stopped_ids = stopped_manager
         .resolve_for_execution_mode("Build")

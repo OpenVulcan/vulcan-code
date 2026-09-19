@@ -1,4 +1,5 @@
 import React from "react";
+import "@/styles/workspace-files.css";
 import {
   Copy,
   FileText,

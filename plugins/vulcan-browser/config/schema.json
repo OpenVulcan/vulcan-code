@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "actionTimeoutMs": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{2,5}$",
+      "description": "Playwright MCP action timeout in milliseconds (100-999999)."
+    },
+    "navigationTimeoutMs": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{2,5}$",
+      "description": "Playwright MCP navigation timeout in milliseconds (100-999999)."
+    },
+    "settleTimeoutMs": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,5})$",
+      "description": "Playwright MCP post-action settle time in milliseconds (0-999999)."
+    },
+    "consoleLevel": {
+      "type": "string",
+      "enum": ["error", "warning", "info", "debug"],
+      "description": "Lowest browser console severity included in MCP results."
+    }
+  },
+  "required": ["actionTimeoutMs", "navigationTimeoutMs", "settleTimeoutMs", "consoleLevel"],
+  "additionalProperties": false
+}

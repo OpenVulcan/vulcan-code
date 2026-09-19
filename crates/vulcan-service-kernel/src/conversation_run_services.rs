@@ -377,6 +377,19 @@ async fn service_stop_conversation_run_owned(
     } else {
         None
     };
+    // Stop owns the terminal boundary after aborting the stream, so no Finished event can
+    // retire its Playwright process. Revoke the exact conversation grant while replacement
+    // admission remains closed, leaving the Core browser itself available after cancellation.
+    // Stop 中止流后持有终态边界，Finished 事件已无法退休 Playwright 进程；因此在替代
+    // 准入仍关闭时撤销精确会话授权，并保留取消后的 Core 浏览器本身。
+    let browser_manager = state
+        .lock()
+        .map(|guard| guard.browser_manager.clone())
+        .map_err(|error| format!("停止浏览器授权时服务状态加锁失败：{error}"))?;
+    browser_manager
+        .retire_ai_connection_after_turn(target_session_id)
+        .await
+        .map_err(|error| format!("停止浏览器自动化授权失败：{error}"))?;
     // The aborted stream cannot publish its normal Finished event, so Stop owns the V1 API interruption.
     // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责 V1 API 中断事实。
     let goal_handle = session_v1_handle_from_state(&state, target_session_id).await?;

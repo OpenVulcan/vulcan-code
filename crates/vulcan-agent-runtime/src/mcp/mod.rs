@@ -11,12 +11,14 @@ pub use config::{
     McpTransportKind, runtime_mcp_server_configs,
 };
 pub use plugin::{
-    PluginMcpSecretStore, plugin_mcp_server_configs, plugin_mcp_server_configs_for_descriptors,
+    PluginMcpSecretStore, plugin_conversation_mcp_server_config, plugin_mcp_server_configs,
+    plugin_mcp_server_configs_for_descriptors,
 };
 pub use runtime::{
-    McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeServerState,
-    McpRuntimeServerStatus, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
-    bootstrap_mcp_runtime_access, configured_mcp_runtime_access,
-    remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
-    replace_user_mcp_runtime_partition, validate_plugin_mcp_runtime_partition,
+    McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
+    McpRuntimeOwnedStdioPartition, McpRuntimeServerState, McpRuntimeServerStatus,
+    McpRuntimeToolAllowlist, McpRuntimeToolBinding, bootstrap_mcp_runtime_access,
+    configured_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
+    replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
+    validate_plugin_mcp_runtime_partition,
 };

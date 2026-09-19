@@ -111,6 +111,24 @@ pub(crate) struct VceRuntimeProjectStatus {
     pub(crate) last_error: Option<String>,
 }
 
+/// Counts retained VCE job controls without awaiting async runtime locks.
+/// 在不等待异步运行时锁的情况下统计保留的 VCE 作业控制数。
+///
+/// # Parameters
+/// 参数
+/// `manager` is the optional VCE runtime owned by shared service state.
+/// `manager` 是共享服务状态持有的可选 VCE 运行时。
+///
+/// # Returns
+/// 返回值
+/// Best-effort job-control gauge; an absent manager reports zero.
+/// 尽力而为的作业控制度量；管理器缺失时报告零。
+pub(crate) fn vce_retained_job_gauge(manager: Option<&VceRuntimeManager>) -> u64 {
+    manager
+        .map(|manager| manager.retained_job_control_gauge())
+        .unwrap_or(0)
+}
+
 /// Immutable runtime envelope returned by one project-scoped semantic retrieval.
 /// 单次项目作用域语义检索返回的不可变运行时信封。
 #[derive(Clone, Debug)]

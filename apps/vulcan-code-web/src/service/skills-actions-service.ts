@@ -314,6 +314,96 @@ export async function setVulcanPluginEnabled(pluginId: string, enabled: boolean)
   return update;
 }
 
+// pluginEnvironmentReady checks the exact installed generation without side effects.
+// pluginEnvironmentReady 无副作用地检查精确的已安装代次。
+// Parameters: pluginId is the original host plugin identity.
+// 参数：pluginId 是原始宿主插件身份。
+// Returns: true only when the execution environment is prepared.
+// 返回值：仅在执行环境已准备好时返回真。
+export async function pluginEnvironmentReady(pluginId: string): Promise<boolean> {
+  if (!hasServiceRuntime()) {
+    return true;
+  }
+  return serviceClient.request<boolean>("service_plugin_environment_ready", { pluginId });
+}
+
+// PluginEnvironmentInstallTaskStatus is the Core-owned lifecycle of one explicit install request.
+// PluginEnvironmentInstallTaskStatus 是一次显式安装请求由 Core 持有的生命周期。
+export interface PluginEnvironmentInstallTaskStatus {
+  // taskId is the stable identity used for read-only polling.
+  // taskId 是用于只读轮询的稳定身份。
+  taskId: string;
+  // pluginId is the catalog identity selected when the task was queued.
+  // pluginId 是任务排队时所选的目录身份。
+  pluginId: string;
+  // generation identifies the exact plugin package revision captured at enqueue time.
+  // generation 标识排队时捕获的精确插件包修订版。
+  generation: string;
+  // state is the bounded Core task lifecycle.
+  // state 是 Core 任务的有界生命周期。
+  state: "queued" | "running" | "succeeded" | "failed";
+  // stage identifies the current installation phase without exposing private paths.
+  // stage 标识当前安装阶段，不暴露私有路径。
+  stage: "queued" | "preparing" | "verifying" | "completed" | "failed";
+  // error is a bounded service diagnostic for failed tasks only.
+  // error 是仅失败任务携带的有界服务诊断。
+  error?: string;
+}
+
+// startPluginEnvironmentInstall asks Core to own one explicit background install operation.
+// startPluginEnvironmentInstall 请求 Core 持有一次显式后台安装操作。
+// Parameters: pluginId selects an installed, disabled plugin from the current catalog.
+// 参数：pluginId 从当前目录选择一个已安装且停用的插件。
+// Returns: the newly queued or already running task status.
+// 返回值：新排队或已在运行的任务状态。
+export async function startPluginEnvironmentInstall(pluginId: string): Promise<PluginEnvironmentInstallTaskStatus> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Plugin environment installation requires the Core service.");
+  }
+  return serviceClient.request<PluginEnvironmentInstallTaskStatus>("service_start_plugin_environment_install", { pluginId });
+}
+
+// pluginEnvironmentInstallStatus reads one Core-owned task without changing it.
+// pluginEnvironmentInstallStatus 只读查询一个 Core 自有任务，不修改它。
+// Parameters: taskId is the exact identifier returned by the start operation.
+// 参数：taskId 是启动操作返回的精确标识。
+// Returns: the currently retained stage and terminal outcome.
+// 返回值：当前保留的阶段与终态结果。
+export async function pluginEnvironmentInstallStatus(taskId: string): Promise<PluginEnvironmentInstallTaskStatus> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Plugin environment installation requires the Core service.");
+  }
+  return serviceClient.request<PluginEnvironmentInstallTaskStatus>("service_plugin_environment_install_status", { taskId });
+}
+
+// pluginEnvironmentInstallStatusForPlugin reads the current package generation's latest task.
+// pluginEnvironmentInstallStatusForPlugin 只读查询当前插件包代次最近的安装任务。
+// Parameters: pluginId selects the exact installed plugin row.
+// 参数：pluginId 选择精确的已安装插件行。
+// Returns: the latest retained task, or null if this generation has never been installed.
+// 返回值：最近保留的任务；本代次从未请求安装时为 null。
+export async function pluginEnvironmentInstallStatusForPlugin(pluginId: string): Promise<PluginEnvironmentInstallTaskStatus | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<PluginEnvironmentInstallTaskStatus | null>(
+    "service_plugin_environment_install_status_for_plugin", { pluginId },
+  );
+}
+
+// preparePluginEnvironment explicitly installs dependencies before plugin enablement.
+// preparePluginEnvironment 在启用插件前显式安装依赖。
+// Parameters: pluginId is the original identity of one disabled host plugin.
+// 参数：pluginId 是一个已停用宿主插件的原始身份。
+// Returns: true after the current generation passes an independent readiness check.
+// 返回值：当前代次通过独立就绪检查后返回真。
+export async function preparePluginEnvironment(pluginId: string): Promise<boolean> {
+  if (!hasServiceRuntime()) {
+    return true;
+  }
+  return serviceClient.request<boolean>("service_prepare_plugin_environment", { pluginId });
+}
+
 // inspectLocalPlugin validates one local package without changing installed state.
 // inspectLocalPlugin 在不改变安装状态的情况下校验一个本地插件包。
 //

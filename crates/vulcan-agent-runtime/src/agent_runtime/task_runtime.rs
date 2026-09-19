@@ -75,7 +75,7 @@ use vulcan_task_session::{
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolSourceKind,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
 };
 /// Default nested-task depth limit used to prevent unbounded recursive task spawning.
 /// 用于防止无限递归任务派生的默认嵌套任务深度上限。
@@ -1027,6 +1027,9 @@ impl CloseAgentArchiveFailure {
 /// Host-managed registry for resumable task sessions and per-session task execution backends.
 /// 宿主管理的可恢复任务会话与按会话划分任务执行后端的注册表。
 pub struct TaskRuntime {
+    /// Exact host credentials that must be removed before any tool result reaches a model or durable history.
+    /// 工具结果到达模型或可靠历史前必须移除的精确宿主凭据。
+    sensitive_tool_output_values: Arc<RwLock<Vec<String>>>,
     /// V1-backed executions awaiting durable return publication; completed entries retain exact feedback.
     /// 等待可靠回流发布的 V1 执行；已完成条目保留精确反馈。
     durable_return_mailboxes: RwLock<HashMap<SessionId, (String, Option<SubagentMailboxEvent>)>>,

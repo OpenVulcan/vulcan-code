@@ -89,7 +89,7 @@ describe("NotificationCoordinator", () => {
       { endpointKind: "local", status: "suppressed", reason: "duplicate_event" },
     ]);
     expect(endpoint.intents).toHaveLength(1);
-    shell.activate("notification:event-1");
+    shell.activate("notification:run-1");
     expect(routeHandler).toHaveBeenCalledWith({
       kind: "conversation",
       projectId: "project-1",

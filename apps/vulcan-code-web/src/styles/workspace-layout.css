@@ -192,7 +192,17 @@
 }
 
 .conversation-plugin-right-mounts {
-  flex: 0 1 45%;
+  /* Reserve enough height for plugin browser controls and the native view at 150% renderer zoom. */
+  /* 在渲染器缩放至 150% 时，为插件浏览器控件和原生视图保留足够高度。 */
+  flex: 0 1 65%;
+}
+
+@media (max-height: 700px) {
+  .conversation-plugin-right-mounts {
+    /* Keep the plugin viewport usable when renderer zoom reduces the CSS viewport height. */
+    /* 渲染器缩放压缩 CSS 视口高度时，仍为插件页面保留可操作的视图。 */
+    flex-basis: 80%;
+  }
 }
 
 .workspace-context-panel > .context-panel-shell {

@@ -1,10 +1,10 @@
 use super::{
-    ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
-    VulcanToolInvocationResult, VulcanToolMode, VulcanToolSchemaProjectionProfile,
-    VulcanToolSourceKind, VulcanToolsManager, project_tool_parameters_schema,
-    public_tool_name_is_valid,
+    project_tool_parameters_schema, public_tool_name_is_valid, ResolvedToolSet,
+    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolInvocationResult,
+    VulcanToolMode, VulcanToolOrigin, VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
+    VulcanToolsManager,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// Builds one inert candidate descriptor for public-name allocation tests.
@@ -15,13 +15,13 @@ fn test_candidate(
     plan_policy: VulcanPlanToolPolicy,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: format!("测试工具 {id}"),
-            help_text: None,
-            source,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            id.to_string(),
+            id.to_string(),
+            format!("测试工具 {id}"),
+            None,
+            VulcanToolOrigin::new(source, "test", id.to_string()),
+        ),
         parameters_schema: json!({"type": "object"}),
         ai_visible: true,
         plan_policy,
@@ -30,6 +30,69 @@ fn test_candidate(
             Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!("ok"))) })
         }),
     }
+}
+
+/// Verifies public-name normalization never changes the captured source identity.
+/// 验证公开名称归一化不会改变已捕获的来源身份。
+#[test]
+fn manager_preserves_source_origin_after_public_name_normalization() {
+    let manager = VulcanToolsManager::new(vec![test_candidate(
+        "Original.Tool",
+        VulcanToolSourceKind::Native,
+        VulcanPlanToolPolicy::Visible,
+    )]);
+    let resolved = manager.resolve_for_execution_mode("Build");
+    let definition = resolved
+        .definitions
+        .first()
+        .expect("the normalized tool should remain resolvable");
+
+    assert_eq!(definition.descriptor.name, "original_tool");
+    assert_eq!(
+        definition.descriptor.origin().source_kind(),
+        VulcanToolSourceKind::Native
+    );
+    assert_eq!(definition.descriptor.origin().namespace(), "test");
+    assert_eq!(
+        definition.descriptor.origin().original_name(),
+        "Original.Tool"
+    );
+}
+
+/// Verifies duplicate public names retain distinct immutable source identities.
+/// 验证重复公开名称仍保留彼此独立的不可变来源身份。
+#[test]
+fn manager_keeps_origins_distinct_for_duplicate_public_names() {
+    let mut first = test_candidate(
+        "duplicate",
+        VulcanToolSourceKind::Native,
+        VulcanPlanToolPolicy::Visible,
+    );
+    first.descriptor = VulcanToolDescriptor::new(
+        "duplicate",
+        "duplicate",
+        "First duplicate",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Native, "source-a", "duplicate"),
+    );
+    let mut second = test_candidate(
+        "duplicate",
+        VulcanToolSourceKind::Native,
+        VulcanPlanToolPolicy::Visible,
+    );
+    second.descriptor = VulcanToolDescriptor::new(
+        "duplicate",
+        "duplicate",
+        "Second duplicate",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Native, "source-b", "duplicate"),
+    );
+
+    let resolved = VulcanToolsManager::new(vec![first, second]).resolve_for_execution_mode("Build");
+    assert_eq!(resolved.descriptors[0].name, "duplicate");
+    assert_eq!(resolved.descriptors[1].name, "duplicate_1");
+    assert_eq!(resolved.descriptors[0].origin().namespace(), "source-a");
+    assert_eq!(resolved.descriptors[1].origin().namespace(), "source-b");
 }
 
 /// Extracts resolved tool names from one resolved tool set.
@@ -217,12 +280,10 @@ fn manager_allows_command_line_tools_in_plan_mode() {
         resolved_names(resolved.clone()),
         vec!["shell_command", "terminal_session"]
     );
-    assert!(
-        resolved
-            .definitions
-            .iter()
-            .all(super::tool_is_allowed_in_plan)
-    );
+    assert!(resolved
+        .definitions
+        .iter()
+        .all(super::tool_is_allowed_in_plan));
 }
 
 /// Verifies the Gemini projection keeps mode selectors compact while hydrating only required branch properties.

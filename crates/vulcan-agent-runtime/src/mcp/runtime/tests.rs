@@ -1,8 +1,11 @@
 use super::{
-    McpRuntimeEventProjection, McpRuntimeEventProjectionKind, McpRuntimeServerDiagnostic,
-    McpRuntimeServerSnapshot, McpRuntimeServerStatus, McpRuntimeSnapshot, McpRuntimeToolAllowlist,
-    McpRuntimeToolDescriptor,
+    McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeEventProjection,
+    McpRuntimeEventProjectionKind, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
+    McpRuntimeServerDiagnostic, McpRuntimeServerSnapshot, McpRuntimeServerStatus,
+    McpRuntimeSnapshot, McpRuntimeToolAllowlist, McpRuntimeToolDescriptor,
 };
+use crate::mcp::config::{McpServerConfig, McpServerSource, McpServerTransportConfig};
+use crate::model::SessionId;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Builds a minimal server snapshot used as the struct-update base in tests.
@@ -525,4 +528,139 @@ fn filtered_tool_views_keep_cached_tools_while_server_is_offline() {
             disconnected_tool.host_tool_view(String::from("mcp_server_b_edit_file")),
         ]
     );
+}
+
+/// Verifies owner partitions reuse one exact key, remain isolated across owners, and reopen after revocation.
+/// 验证所有者分区复用同一个精确键、在不同所有者之间隔离，并可在撤销后重新打开。
+#[tokio::test]
+async fn owned_stdio_partitions_reuse_exact_keys_and_reopen_after_revoke() {
+    // access contains no ordinary live partitions, so this test exercises only the opt-in owner registry.
+    // access 不包含普通实时分区，因此本测试只验证可选的所有者注册表。
+    let access = McpRuntimeAccess::new(
+        McpRuntimeOverview::new(Vec::new(), Vec::new(), McpRuntimeDiscoveryReport::default()),
+        BTreeMap::new(),
+    );
+    let owner_a = SessionId::from_u128(101);
+    let owner_b = SessionId::from_u128(102);
+    let server = McpServerConfig {
+        source: McpServerSource::Plugin {
+            plugin_id: String::from("fixture"),
+            generation: 5,
+        },
+        id: String::from("fixture:stdio"),
+        name: String::from("Fixture Stdio"),
+        enabled: false,
+        transport: McpServerTransportConfig::Stdio {
+            command: String::from("unused"),
+            args: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            env_passthrough: Vec::new(),
+            inherit_environment: false,
+        },
+    };
+
+    let first = access
+        .open_owned_stdio_partition("fixture", 5, owner_a, vec![server.clone()])
+        .await
+        .expect("first owner partition should open");
+    // The reuse guard must observe the exact published owner lease, not only the browser slot.
+    // 复用闸门必须观察精确发布的所有者租约，而不能只依赖浏览器连接槽状态。
+    assert!(
+        access
+            .has_active_owned_stdio_partition("fixture", 5, owner_a)
+            .expect("active owner partition query should validate")
+    );
+    let reused = access
+        .open_owned_stdio_partition("fixture", 5, owner_a, vec![server.clone()])
+        .await
+        .expect("same owner key should reuse");
+    assert_eq!(first.key(), reused.key());
+
+    let other = access
+        .open_owned_stdio_partition("fixture", 5, owner_b, vec![server.clone()])
+        .await
+        .expect("different owner should receive a separate partition");
+    assert_ne!(first.key(), other.key());
+    assert_eq!(first.owner_session_id(), owner_a);
+    assert_eq!(other.owner_session_id(), owner_b);
+
+    first.revoke().expect("revoke first owner partition");
+    assert!(
+        !access
+            .has_active_owned_stdio_partition("fixture", 5, owner_a)
+            .expect("active owner partition query should validate after revoke")
+    );
+    assert!(access.owned_stdio_partition("fixture", 5, owner_a).is_err());
+    let reopened = access
+        .open_owned_stdio_partition("fixture", 5, owner_a, vec![server])
+        .await
+        .expect("revoked key should reopen with a new lease");
+    assert_eq!(reopened.key(), first.key());
+    assert!(
+        access
+            .has_active_owned_stdio_partition("fixture", 5, owner_a)
+            .expect("reopened owner partition should be queryable")
+    );
+
+    other.shutdown().expect("shutdown second owner partition");
+    reopened
+        .shutdown()
+        .expect("shutdown reopened owner partition");
+}
+
+/// Verifies owner partition input rejects foreign sources, non-stdio transports, and nil owners before launch.
+/// 验证所有者分区输入会在启动前拒绝外部来源、非 stdio 传输及空所有者。
+#[tokio::test]
+async fn owned_stdio_partition_validates_source_transport_and_owner() {
+    let access = McpRuntimeAccess::new(
+        McpRuntimeOverview::new(Vec::new(), Vec::new(), McpRuntimeDiscoveryReport::default()),
+        BTreeMap::new(),
+    );
+    let owner = SessionId::from_u128(103);
+    let user_server = McpServerConfig {
+        source: McpServerSource::UserConfigured,
+        id: String::from("foreign"),
+        name: String::from("Foreign"),
+        enabled: true,
+        transport: McpServerTransportConfig::Stdio {
+            command: String::from("must-not-launch"),
+            args: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            env_passthrough: Vec::new(),
+            inherit_environment: true,
+        },
+    };
+    let source_error = access
+        .open_owned_stdio_partition("fixture", 6, owner, vec![user_server])
+        .await
+        .expect_err("foreign source must fail before launch");
+    assert!(source_error.contains("another source"));
+
+    let http_server = McpServerConfig {
+        source: McpServerSource::Plugin {
+            plugin_id: String::from("fixture"),
+            generation: 6,
+        },
+        id: String::from("fixture:http"),
+        name: String::from("Fixture HTTP"),
+        enabled: true,
+        transport: McpServerTransportConfig::Http {
+            url: String::from("https://example.test/mcp"),
+            bearer_token: None,
+            headers: BTreeMap::new(),
+            headers_from_env: BTreeMap::new(),
+            oauth: None,
+        },
+    };
+    let transport_error = access
+        .open_owned_stdio_partition("fixture", 6, owner, vec![http_server])
+        .await
+        .expect_err("non-stdio transport must fail before launch");
+    assert!(transport_error.contains("stdio servers only"));
+
+    let nil_owner_error = McpRuntimeOwnedPartitionKey::try_new("fixture", 6, SessionId::nil())
+        .expect_err("nil owner must be rejected");
+    assert!(nil_owner_error.contains("non-nil"));
 }

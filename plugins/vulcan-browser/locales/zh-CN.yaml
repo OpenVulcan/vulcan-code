@@ -1,0 +1,16 @@
+name: Vulcan 浏览器
+capability: 由 Core 持有并按会话隔离的 AI 浏览器投影
+messages:
+  navigationLabel: AI 浏览器
+  localBrowserLabel: 本地浏览器
+  conversationRequired: 请先选择会话以查看 AI 浏览器。
+  settingsLabel: Playwright 设置
+  actionTimeoutLabel: 操作超时（毫秒）
+  navigationTimeoutLabel: 导航超时（毫秒）
+  settleTimeoutLabel: 操作后等待（毫秒）
+  consoleLevelLabel: 控制台级别
+  settingsSave: 保存设置
+  settingsRetry: 重新加载
+  settingsSaved: 设置已保存，新建浏览器连接将使用更新后的值。
+  settingsHint: 设置在新建 AI 浏览器连接时生效。
+  settingsInvalid: 请填写有效的超时时间后再保存。

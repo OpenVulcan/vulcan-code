@@ -1,0 +1,16 @@
+name: Vulcan Browser
+capability: Core-owned browser projection for AI browser sessions
+messages:
+  navigationLabel: AI Browser
+  localBrowserLabel: Local Browser
+  conversationRequired: Select a conversation to view its AI browser.
+  settingsLabel: Playwright Settings
+  actionTimeoutLabel: Action timeout (ms)
+  navigationTimeoutLabel: Navigation timeout (ms)
+  settleTimeoutLabel: Settle time (ms)
+  consoleLevelLabel: Console level
+  settingsSave: Save settings
+  settingsRetry: Retry loading
+  settingsSaved: Settings saved. New browser connections use the updated values.
+  settingsHint: These settings apply when a new AI browser connection starts.
+  settingsInvalid: Enter valid timeouts before saving.

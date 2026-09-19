@@ -5,15 +5,16 @@ use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::mcp::McpRuntimeToolBinding;
 use crate::tooling::native::{
+    BROWSER_CLOSE_TOOL_ID, BROWSER_LIST_TOOL_ID, BROWSER_OPEN_TOOL_ID, BROWSER_SELECT_TOOL_ID,
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
+use vulcan_luaskills_prompt::{LuaSkillPromptEntry, LUASKILL_HELP_TOOL_NAME};
 use vulcan_plugin_runtime::VulcanPluginToolDescriptor;
 use vulcan_session_core::{
-    CapabilityPolicyMode, ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
+    normalized_tool_selector_set, tool_selector_matches, CapabilityPolicyMode, ToolExposureSnapshot,
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};
@@ -50,9 +51,13 @@ pub(crate) fn resolve_execution_tool_exposure(
     request: &ExecutionPreparationRequest,
 ) -> ExecutionToolExposureSelection {
     let selectors = ToolExposureSelectorState::from_snapshot(&request.tool_exposure_override);
-    let native_tool_ids = filter_native_tool_ids(
+    let mut native_tool_ids = filter_native_tool_ids(
         foundation.resolved_native_tools_for_agent(agent_id),
         &selectors,
+    );
+    filter_browser_tools_without_runtime(
+        &mut native_tool_ids,
+        request.native_browser_runtime.is_some(),
     );
     let luaskills_tools = filter_luaskills_entries(
         foundation.resolved_luaskills_tools_for_agent(agent_id),
@@ -66,10 +71,11 @@ pub(crate) fn resolve_execution_tool_exposure(
         foundation.resolved_luaskills_prompt_entries_for_agent(agent_id),
         &selectors,
     );
-    let mcp_tools = filter_mcp_tool_bindings(
-        foundation.resolved_mcp_tools_for_agent(agent_id),
-        &selectors,
-    );
+    // Merge pre-discovered owner-scoped bindings before applying the same MCP selector gate.
+    // 在应用相同的 MCP 选择器闸门前合并预先发现的所有者范围绑定。
+    let mut mcp_bindings = foundation.resolved_mcp_tools_for_agent(agent_id);
+    mcp_bindings.extend(request.supplemental_mcp_tools.iter().cloned());
+    let mcp_tools = filter_mcp_tool_bindings(mcp_bindings, &selectors);
     ExecutionToolExposureSelection {
         native_tool_ids,
         luaskills_tools,
@@ -78,6 +84,23 @@ pub(crate) fn resolve_execution_tool_exposure(
         mcp_tools,
         selectors,
     }
+}
+
+/// Removes direct browser management tools when the host did not inject an enabled browser runtime.
+/// 宿主未注入已启用浏览器运行时时移除直接浏览器管理工具。
+fn filter_browser_tools_without_runtime(tool_ids: &mut Vec<String>, runtime_available: bool) {
+    if runtime_available {
+        return;
+    }
+    tool_ids.retain(|tool_id| {
+        !matches!(
+            tool_id.as_str(),
+            BROWSER_LIST_TOOL_ID
+                | BROWSER_OPEN_TOOL_ID
+                | BROWSER_SELECT_TOOL_ID
+                | BROWSER_CLOSE_TOOL_ID
+        )
+    });
 }
 
 /// Applies the same final public-tool selector gate used by preparation and bootstrap.
@@ -588,4 +611,46 @@ fn native_tool_id_is_universal(tool_id: &str) -> bool {
         tool_id,
         TODOLIST_TOOL_ID | GET_GOAL_TOOL_ID | CREATE_GOAL_TOOL_ID | UPDATE_GOAL_TOOL_ID
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies browser tools are omitted without an injected enabled runtime.
+    /// 验证未注入已启用运行时就不会暴露浏览器工具。
+    #[test]
+    fn browser_tools_require_runtime_for_exposure() {
+        let mut tool_ids = vec![
+            String::from(BROWSER_LIST_TOOL_ID),
+            String::from("shell_command"),
+            String::from(BROWSER_OPEN_TOOL_ID),
+            String::from(BROWSER_SELECT_TOOL_ID),
+            String::from(BROWSER_CLOSE_TOOL_ID),
+        ];
+
+        filter_browser_tools_without_runtime(&mut tool_ids, false);
+
+        assert_eq!(tool_ids, vec![String::from("shell_command")]);
+    }
+
+    /// Verifies an injected runtime keeps all browser management tools eligible for policy filtering.
+    /// 验证注入运行时后所有浏览器管理工具仍交由策略过滤。
+    #[test]
+    fn browser_tools_remain_when_runtime_is_available() {
+        let mut tool_ids = vec![
+            String::from(BROWSER_LIST_TOOL_ID),
+            String::from(BROWSER_OPEN_TOOL_ID),
+        ];
+
+        filter_browser_tools_without_runtime(&mut tool_ids, true);
+
+        assert_eq!(
+            tool_ids,
+            vec![
+                String::from(BROWSER_LIST_TOOL_ID),
+                String::from(BROWSER_OPEN_TOOL_ID),
+            ]
+        );
+    }
 }

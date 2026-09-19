@@ -37,7 +37,6 @@ const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/Mem
 // LazyKnowledgeBaseArea isolates knowledge management from the console-first workbench chunk.
 // LazyKnowledgeBaseArea 将知识库管理隔离在控制台优先的工作台分块之外。
 const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/KnowledgeBaseArea").then((module) => ({ default: module.KnowledgeBaseArea })));
-
 // FeatureLoadBoundary provides one stable non-layout-shifting fallback for deferred feature chunks.
 // FeatureLoadBoundary 为延迟功能分块提供一个稳定且不改变布局的加载回退。
 export function FeatureLoadBoundary(props: {

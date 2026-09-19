@@ -2,7 +2,9 @@
 //! 浏览器服务桥接与 RPC 适配辅助函数。
 
 use super::*;
+use futures_util::StreamExt;
 use reqwest::Url;
+use std::sync::OnceLock;
 use vulcan_service_api::WebuiServiceDiscoverySnapshot;
 
 /// Stable service result returned after an external URL is opened.
@@ -16,6 +18,18 @@ const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
 /// Explicit worker-stack capacity reserved for deeply nested agent stream polling on the WebUI bridge runtime.
 /// 为 WebUI 桥接运行时中的深层智能体流轮询显式预留的工作线程栈容量。
 const WEBUI_SERVICE_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Returns the one process-lifetime generation timestamp shared by discovery and status.
+/// 返回发现记录与状态接口共用的进程生命周期代次时间戳。
+/// No parameters; the returned timestamp remains stable until this Core process exits.
+/// 无参数；返回的时间戳在当前 Core 进程退出前保持不变。
+fn service_generation_started_at() -> &'static str {
+    // The tray compares discovery with live status; sampling the clock independently on each
+    // read makes a healthy Core look like a different generation every time.
+    // 托盘会比较发现记录与实时状态；每次读取分别取时钟会让健康 Core 每次都像新代次。
+    static STARTED_AT: OnceLock<String> = OnceLock::new();
+    STARTED_AT.get_or_init(current_unix_millis_text).as_str()
+}
 
 /// Build the host's HTTP execution configuration without starting threads or publishing discovery.
 /// 构建宿主 HTTP 执行配置，不启动线程或发布服务发现。
@@ -195,30 +209,107 @@ where
 
 /// Spawns the browser-facing local service bridge on the first available loopback port.
 /// 在首个可用回环端口启动面向浏览器的本地服务桥接层。
+///
+/// # Parameters
+/// 参数
+/// `manifest_static_root` is the WebUI root declared by the validated runtime layout manifest.
+/// `manifest_static_root` 是已校验运行时布局清单声明的 WebUI 根目录。
 pub fn spawn_webui_service_http_bridge(
     event_emitter: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     event_bus: broadcast::Sender<ServiceEvent>,
-) {
-    std::thread::Builder::new()
+    manifest_static_root: Option<PathBuf>,
+) -> Result<WebuiServiceHttpBridgeHandle, String> {
+    // The one-shot acknowledgement carries real bind/publication failures to the caller.
+    // 一次性确认将实际绑定或发布失败传递给调用方，不以固定休眠推测就绪。
+    let (listening, ready) = std::sync::mpsc::channel();
+    let failure: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let failure_for_thread = Arc::clone(&failure);
+    let failure_state = Arc::clone(&state);
+    let failure_emitter = event_emitter.clone();
+    let join = std::thread::Builder::new()
         .name(String::from("vulcan-webui-http-bridge"))
         .spawn(move || {
-            let runtime = match webui_service_runtime_builder().build() {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    eprintln!(
-                        "[webui-service] browser service bridge runtime creation failed: {error}"
-                    );
-                    return;
-                }
+            // Retain a sender for failures occurring before the listener acknowledgement.
+            // 为监听确认之前发生的错误保留发送端。
+            let errors = listening.clone();
+            // A returned listener or a panicked bridge is abnormal while its owner is alive.
+            // 所有者仍运行时监听器返回或桥线程恐慌都属于异常。
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                webui_service_runtime_builder()
+                    .build()
+                    .map_err(|error| error.to_string())
+                    .and_then(|runtime| {
+                        runtime.block_on(run_webui_service_http_bridge(
+                            event_emitter,
+                            state,
+                            event_bus,
+                            listening,
+                            manifest_static_root,
+                        ))
+                    })
+            }));
+            let error = match outcome {
+                Ok(Ok(())) => String::from("HTTP bridge stopped unexpectedly"),
+                Ok(Err(error)) => error,
+                Err(_) => String::from("HTTP bridge thread panicked"),
             };
-            runtime.block_on(run_webui_service_http_bridge(
-                event_emitter,
-                state,
-                event_bus,
-            ));
+            eprintln!("[webui-service] HTTP bridge failed: {error}");
+            // Publish the fault to the same service state that bootstrap checks before ready.
+            // 把故障发布到引导在发布 ready 前检查的同一服务状态。
+            if let Ok(mut guard) = failure_state.lock() {
+                guard.service_lifecycle_state.http_bridge_failed = true;
+            }
+            crate::service_bootstrap::update_service_failure(
+                &failure_state,
+                &failure_emitter,
+                crate::service_bootstrap::ServiceBootstrapError::new(
+                    "service-process",
+                    "Core Service",
+                    format!("HTTP bridge failed: {error}"),
+                ),
+            );
+            if let Ok(mut failure) = failure_for_thread.lock() {
+                *failure = Some(error.clone());
+            }
+            let _ = errors.send(Err(error));
         })
-        .expect("failed to spawn Vulcan WebUI HTTP bridge thread");
+        .map_err(|error| error.to_string())?;
+    ready
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .map_err(|error| format!("Service listener acknowledgement failed: {error}"))??;
+    Ok(WebuiServiceHttpBridgeHandle {
+        _join: Some(join),
+        failure,
+    })
+}
+
+/// Owned join handle for the browser-facing HTTP bridge thread.
+/// 浏览器侧 HTTP 桥线程拥有的 join 句柄。
+pub struct WebuiServiceHttpBridgeHandle {
+    /// Bridge thread retained until the owning service releases it.
+    /// 归属服务释放前一直保留的桥线程。
+    _join: Option<std::thread::JoinHandle<()>>,
+    /// Listener failure reported after the acknowledgement, observed by the supervisor.
+    /// 确认后报告的监听失败，由监督器观察。
+    failure: Arc<Mutex<Option<String>>>,
+}
+
+impl WebuiServiceHttpBridgeHandle {
+    /// Returns the post-acknowledgement bridge failure observed by the supervisor.
+    /// 返回监督器观察到的确认后桥失败。
+    pub fn observed_failure(&self) -> Option<String> {
+        self.failure
+            .lock()
+            .map(|failure| failure.clone())
+            .unwrap_or(None)
+    }
+
+    /// Borrows the owned bridge failure slot for an external supervisor.
+    /// 为外部监督器借出自有桥失败槽。
+    pub fn failure_slot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.failure)
+    }
 }
 
 /// Runs the browser-facing local service bridge inside an owned Tokio runtime.
@@ -236,33 +327,27 @@ pub(crate) async fn run_webui_service_http_bridge(
     event_emitter: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     event_bus: broadcast::Sender<ServiceEvent>,
-) {
+    listening: std::sync::mpsc::Sender<Result<(), String>>,
+    manifest_static_root: Option<PathBuf>,
+) -> Result<(), String> {
     let port_override = env::var(WEBUI_SERVICE_PORT_ENV).ok();
-    let (listener, address) = match bind_webui_service_http_listener(port_override.as_deref()).await
-    {
-        Ok(bound) => bound,
-        Err(error) => {
-            eprintln!("[webui-service] browser service bridge failed to bind: {error}");
-            return;
-        }
-    };
+    // Binding and publication finish before bootstrap is admitted.
+    // 绑定和发布完成后才允许启动引导，避免就绪状态被初始状态覆盖。
+    let (listener, address) = bind_webui_service_http_listener(port_override.as_deref()).await?;
     let port = address.port();
     let service_token = SessionId::new_v4().to_string();
     let discovery = webui_service_starting_discovery_snapshot(
         port,
         std::process::id(),
-        current_unix_millis_text(),
+        service_generation_started_at().to_owned(),
         service_token.clone(),
     );
     let shared_discovery = Arc::new(Mutex::new(discovery.clone()));
-    if let Ok(mut guard) = state.lock() {
-        guard.webui_service_discovery = Some(Arc::clone(&shared_discovery));
-    }
-    if let Err(error) =
-        write_webui_service_discovery_snapshot(&discovery, dirs::home_dir(), std::env::temp_dir())
-    {
-        eprintln!("[webui-service] browser service discovery write failed: {error}");
-    }
+    state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .webui_service_discovery = Some(Arc::clone(&shared_discovery));
+    write_webui_service_discovery_snapshot(&discovery, dirs::home_dir(), std::env::temp_dir())?;
     let rpc_event_emitter = event_emitter.clone();
     let rpc_state = state.clone();
     let rpc_dispatcher: WebuiServiceRpcDispatcher = Arc::new(move |method, params| {
@@ -279,11 +364,13 @@ pub(crate) async fn run_webui_service_http_bridge(
     // session_resource_state preserves the same kernel authority for opaque content resolution.
     // session_resource_state 为不透明内容解析保留同一内核权威。
     let session_resource_state = state.clone();
+    let status_state = state.clone();
+    let browser_download_state = state.clone();
     let service_config = WebuiServiceHttpConfig {
         discovery: shared_discovery,
         service_token,
         event_bus,
-        static_root: webui_static_root(),
+        static_root: webui_static_root(manifest_static_root),
         rpc_dispatcher,
         session_resource_resolver: Arc::new(move |request| {
             let state = session_resource_state.clone();
@@ -294,11 +381,262 @@ pub(crate) async fn run_webui_service_http_bridge(
                 .await
             })
         }),
+        browser_download_resolver: Some(Arc::new(move |download_id, owner_session_id, is_head| {
+            let state = browser_download_state.clone();
+            Box::pin(async move {
+                let manager = crate::browser::service_browser_manager(&state)?;
+                let (record, bytes) = tokio::task::spawn_blocking(move || {
+                    manager.download_content(&download_id, &owner_session_id)
+                })
+                .await
+                .map_err(|error| format!("browser download worker failed: {error}"))??;
+                let byte_length = bytes.len();
+                Ok(vulcan_service_api::ServiceMediaResponse {
+                    status: 200,
+                    headers: vec![
+                        (
+                            String::from("Content-Type"),
+                            String::from("application/octet-stream"),
+                        ),
+                        (
+                            String::from("Content-Disposition"),
+                            browser_download_content_disposition(&record.file_name),
+                        ),
+                        (String::from("Content-Length"), byte_length.to_string()),
+                        (String::from("Cache-Control"), String::from("no-store")),
+                        (
+                            String::from("X-Content-Type-Options"),
+                            String::from("nosniff"),
+                        ),
+                    ],
+                    body: if is_head { Vec::new() } else { bytes },
+                })
+            })
+        })),
         client_disconnected,
+        status_provider: Some(Arc::new(move || {
+            service_status_snapshot_from_state(&status_state)
+        })),
+        // The typed browser routes receive closures over the kernel manager, so the transport layer
+        // never links against the kernel and every browser operation keeps one implementation.
+        // 类型化浏览器路由接收操作内核管理器的闭包，因此传输层绝不链接内核，且每个浏览器操作只有
+        // 一份实现。
+        browser_stream: {
+            let ticket_state = state.clone();
+            let resume_state = state.clone();
+            let poll_state = state.clone();
+            let release_state = state.clone();
+            Some(vulcan_service_host::WebuiServiceBrowserStream {
+                issue_ticket: Arc::new(move |session_id, owner_session_id| {
+                    let state = ticket_state.clone();
+                    Box::pin(async move {
+                        let manager = crate::browser::service_browser_manager(&state)?;
+                        manager.require_owner(&session_id, &owner_session_id)?;
+                        serde_json::to_value(manager.issue_stream_ticket(&session_id)?)
+                            .map_err(|error| format!("failed to serialize stream ticket: {error}"))
+                    })
+                }),
+                resume: Arc::new(move |ticket, page_id, subscription_id, cursor| {
+                    let state = resume_state.clone();
+                    Box::pin(async move {
+                        // Reject malformed cursors before binding any observer resources.
+                        // 在绑定任何观察资源前拒绝格式错误的游标。
+                        let cursor = match cursor {
+                            Some(cursor) => {
+                                Some(serde_json::from_value(cursor).map_err(|error| {
+                                    format!("invalid browser stream cursor: {error}")
+                                })?)
+                            }
+                            None => None,
+                        };
+                        let manager = crate::browser::service_browser_manager(&state)?;
+                        // The ticket is the sole authority for the observed session.
+                        // 凭据是所观察会话的唯一权威。
+                        let session_id = manager.consume_stream_ticket(&ticket)?;
+                        manager.bind_stream_page(&session_id, &page_id, &subscription_id)?;
+                        // A fresh connection receives one actual frame before its snapshot answer.
+                        // 新连接在快照答复前取得一帧真实画面。
+                        let capture_state = state.clone();
+                        let capture_session = session_id.clone();
+                        let capture_page = page_id.clone();
+                        let capture = tokio::task::spawn_blocking(move || {
+                            tokio::runtime::Handle::current().block_on(
+                                crate::browser::service_browser_page_capture(
+                                    capture_state,
+                                    crate::browser::BrowserPageCaptureRequest {
+                                        session_id: capture_session,
+                                        page_id: capture_page,
+                                    },
+                                ),
+                            )
+                        })
+                        .await;
+                        let capture = match capture {
+                            Ok(capture) => capture,
+                            Err(error) => {
+                                let _ = manager
+                                    .release_stream_subscription(&session_id, &subscription_id);
+                                return Err(format!("browser capture worker failed: {error}"));
+                            }
+                        };
+                        if let Err(error) = capture {
+                            let _ =
+                                manager.release_stream_subscription(&session_id, &subscription_id);
+                            return Err(error);
+                        }
+                        let resume = match manager.resume_bound_stream(
+                            &session_id,
+                            &subscription_id,
+                            cursor,
+                        ) {
+                            Ok(resume) => resume,
+                            Err(error) => {
+                                let _ = manager
+                                    .release_stream_subscription(&session_id, &subscription_id);
+                                return Err(error);
+                            }
+                        };
+                        let mut answer = serde_json::to_value(resume).map_err(|error| {
+                            let _ =
+                                manager.release_stream_subscription(&session_id, &subscription_id);
+                            format!("failed to serialize stream resume: {error}")
+                        })?;
+                        // The authorising session travels with the answer so the continuing stream
+                        // never has to guess which session it observes.
+                        // 授权会话随答复一起传递，使持续流无需猜测自己观察的是哪个会话。
+                        if let Some(object) = answer.as_object_mut() {
+                            object.insert(
+                                String::from("sessionId"),
+                                serde_json::Value::String(session_id),
+                            );
+                        }
+                        Ok(answer)
+                    })
+                }),
+                poll: Arc::new(move |session_id, subscription_id, cursor| {
+                    let state = poll_state.clone();
+                    Box::pin(async move {
+                        let manager = crate::browser::service_browser_manager(&state)?;
+                        let cursor: crate::browser::BrowserStreamCursor =
+                            serde_json::from_value(cursor).map_err(|error| {
+                                format!("invalid browser stream cursor: {error}")
+                            })?;
+                        let resume =
+                            manager.poll_bound_stream(&session_id, &subscription_id, cursor)?;
+                        serde_json::to_value(resume)
+                            .map_err(|error| format!("failed to serialize stream resume: {error}"))
+                    })
+                }),
+                release: Arc::new(move |session_id, subscription_id| {
+                    let state = release_state.clone();
+                    Box::pin(async move {
+                        let manager = crate::browser::service_browser_manager(&state)?;
+                        // Only a connection-owned subscription is released, so a disconnecting
+                        // observer cannot clear an explicitly subscribed observer's frames.
+                        // 只释放由连接拥有的订阅，因此断开的观察端无法清除显式订阅观察者的帧。
+                        let released =
+                            manager.release_stream_subscription(&session_id, &subscription_id)?;
+                        Ok(serde_json::json!({ "released": released }))
+                    })
+                }),
+            })
+        },
     };
     eprintln!("[webui-service] browser service bridge listening on http://{address}");
-    if let Err(error) = serve_webui_service_http_listener(listener, service_config).await {
-        eprintln!("[webui-service] browser service bridge stopped: {error}");
+    listening.send(Ok(())).map_err(|error| error.to_string())?;
+    // Only a test-support binary can simulate a listener dying after startup acknowledgement.
+    // 只有测试支持构建可以模拟监听器在启动确认后死亡。
+    #[cfg(feature = "test-support")]
+    if std::env::var("VULCAN_TEST_HTTP_BRIDGE_FAIL_AFTER_ACK")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        return Err(String::from(
+            "injected post-acknowledgement HTTP bridge failure",
+        ));
+    }
+    tokio::spawn(run_browser_frame_producer(state));
+    serve_webui_service_http_listener(listener, service_config)
+        .await
+        .map_err(|error| error.to_string())
+}
+/// Builds an RFC 5987 attachment header from Core's sanitized download filename.
+/// 根据 Core 清理后的下载文件名构建 RFC 5987 附件响应头。
+fn browser_download_content_disposition(file_name: &str) -> String {
+    let mut encoded = String::new();
+    for byte in file_name.as_bytes() {
+        if matches!(
+            *byte,
+            b'0'..=b'9'
+                | b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'!'
+                | b'#'..=b'&'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        ) {
+            encoded.push(char::from(*byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("attachment; filename*=UTF-8''{encoded}")
+}
+
+/// Captures each observed Core page once per cadence, independent of observer delivery speed.
+/// 按固定节奏对每个被观察的 Core 页面采集一次，不受观察端交付速度影响。
+///
+/// # Parameters / 参数
+/// `state` owns the same BrowserManager as RPC and stream subscriptions.
+/// `state` 拥有与 RPC 和流订阅相同的 BrowserManager。
+///
+/// # Returns / 返回值
+/// The task runs until its owning HTTP runtime shuts down.
+/// 任务运行直至所属 HTTP 运行时关闭。
+async fn run_browser_frame_producer(state: SharedServiceBridgeState) {
+    // A 40 ms attempt cadence leaves scheduling headroom for the measured 20 fps projection goal.
+    // 40 毫秒尝试周期为实测每秒 20 帧的投影目标保留调度余量。
+    let mut cadence = tokio::time::interval(std::time::Duration::from_millis(40));
+    loop {
+        cadence.tick().await;
+        let Ok(manager) = crate::browser::service_browser_manager(&state) else {
+            continue;
+        };
+        let Ok(pages) = manager.observed_page_targets() else {
+            continue;
+        };
+        // Independent observed pages capture concurrently, but a small fixed bound prevents
+        // many sessions from exhausting the blocking pool or Chromium screenshot capacity.
+        // 独立观察页并发采集，但固定小上限避免大量会话耗尽阻塞线程池或截图能力。
+        futures_util::stream::iter(pages)
+            .for_each_concurrent(4, |(session_id, page_id)| {
+                let capture_state = state.clone();
+                async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        tokio::runtime::Handle::current().block_on(
+                            crate::browser::service_browser_page_capture(
+                                capture_state,
+                                crate::browser::BrowserPageCaptureRequest {
+                                    session_id,
+                                    page_id,
+                                },
+                            ),
+                        )
+                    })
+                    .await;
+                }
+            })
+            .await;
+        let _ = manager.expire_control_leases();
+        let _ = manager.reap_hosts();
     }
 }
 
@@ -313,10 +651,19 @@ pub(crate) fn mark_webui_service_discovery_status(
     state: &SharedServiceBridgeState,
     status: &'static str,
 ) {
-    let shared_discovery = match state.lock() {
-        Ok(guard) => guard.webui_service_discovery.clone(),
-        Err(error) => error.into_inner().webui_service_discovery.clone(),
+    // Keep the state lock through the publication: a bridge-failure publisher takes the same
+    // lock before writing `failed`, so a late bootstrap can never overwrite that terminal state.
+    // 发布期间保持状态锁：桥故障发布器写入 failed 前也取得同一把锁，因此迟到的引导绝不能覆盖终态。
+    let state_guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
     };
+    if status == WEBUI_SERVICE_DISCOVERY_STATUS_READY
+        && state_guard.service_lifecycle_state.http_bridge_failed
+    {
+        return;
+    }
+    let shared_discovery = state_guard.webui_service_discovery.clone();
     let Some(shared_discovery) = shared_discovery else {
         return;
     };
@@ -335,6 +682,7 @@ pub(crate) fn mark_webui_service_discovery_status(
     ) {
         eprintln!("[webui-service] browser service discovery {status} write failed: {error}");
     }
+    drop(state_guard);
 }
 
 /// Rebuilds one WebUI service discovery snapshot with a replacement status.
@@ -376,20 +724,95 @@ pub(crate) fn mark_webui_service_discovery_failed(state: &SharedServiceBridgeSta
     mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED);
 }
 
+/// Removes the discovery record only while it still belongs to this Core instance.
+/// 仅当发现记录仍属于当前 Core 实例时将其移除。
+/// `state` carries the published instance identity; returns whether an owned file was removed.
+/// `state` 携带已发布的实例身份；返回是否移除了当前实例的文件。
+pub fn remove_owned_webui_service_discovery(
+    state: &SharedServiceBridgeState,
+) -> Result<bool, String> {
+    let state_guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service discovery state: {error}"))?;
+    let Some(discovery) = state_guard.webui_service_discovery.as_ref() else {
+        return Ok(false);
+    };
+    let expected = discovery
+        .lock()
+        .map_err(|error| format!("failed to lock service discovery identity: {error}"))?
+        .clone();
+    let path = vulcan_service_api::webui_service_discovery_snapshot_path(
+        dirs::home_dir(),
+        std::env::temp_dir(),
+    );
+    remove_discovery_file_if_owned(&path, &expected)
+}
+
+/// Compares the durable discovery identity before deleting one exact file.
+/// 删除精确文件前先比较持久发现记录的实例身份。
+/// `path` is the authoritative discovery path and `expected` is this Core's live identity.
+/// `path` 是权威发现路径，`expected` 是当前 Core 的实时身份。
+/// Returns false when another owner replaced the file or no file remains.
+/// 其他实例已替换文件或文件不存在时返回 false。
+fn remove_discovery_file_if_owned(
+    path: &std::path::Path,
+    expected: &WebuiServiceDiscoverySnapshot,
+) -> Result<bool, String> {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("failed to read service discovery: {error}")),
+    };
+    let published: WebuiServiceDiscoverySnapshot = serde_json::from_str(&body)
+        .map_err(|error| format!("failed to parse service discovery: {error}"))?;
+    // PID alone can be reused, and status changes during the lifecycle. Match the startup
+    // generation and secret as well, without removing a newly published replacement.
+    // PID 可能复用且状态会变化，因此还需核对启动代次与凭据，避免删除新发布的替代记录。
+    if published.pid != expected.pid
+        || published.started_at != expected.started_at
+        || published.service_token != expected.service_token
+    {
+        return Ok(false);
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("failed to remove service discovery: {error}")),
+    }
+}
+
 /// Resolves the WebUI static root used by the browser-facing service.
 /// 解析面向浏览器服务使用的 WebUI 静态根目录。
-pub(crate) fn webui_static_root() -> Option<PathBuf> {
-    let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../vulcan-code-web/dist")
-        .components()
-        .collect::<PathBuf>();
+///
+/// # Parameters
+/// 参数
+/// `manifest_static_root` is the root declared by the validated runtime layout manifest, when the
+/// owning service resolved one. The explicit environment override still wins over it.
+/// `manifest_static_root` 是已校验运行时布局清单声明的根目录（当归属服务解析出时）。
+/// 显式环境覆盖仍然优先于它。
+pub(crate) fn webui_static_root(manifest_static_root: Option<PathBuf>) -> Option<PathBuf> {
+    // Debug sources and installed release assets have explicitly different owners.
+    // 开发源码和已安装的发布资源具有明确不同的归属路径。
+    // The kernel crate lives at crates/vulcan-service-kernel, so the debug bundle is two
+    // levels above the workspace apps directory; release assets ship beside the executable.
+    // 内核 crate 位于 crates/vulcan-service-kernel，因此开发包相对工作区 apps 目录上溯两级；
+    // 发布资源随可执行文件同目录分发。
+    let packaged_root = manifest_static_root.or_else(|| {
+        if cfg!(debug_assertions) {
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/vulcan-code-web/dist"))
+        } else {
+            std::env::current_exe()
+                .ok()
+                .and_then(|executable| executable.parent().map(|directory| directory.join("webui")))
+        }
+    });
     let override_path = env::var(WEBUI_STATIC_DIR_ENV).ok();
-    webui_static_root_from_candidates(override_path.as_deref(), Some(manifest_path))
+    webui_static_root_from_candidates(override_path.as_deref(), packaged_root)
 }
 
 /// Returns the current startup snapshot.
 /// 返回当前启动快照。
-pub(crate) fn service_startup_snapshot(
+pub fn service_startup_snapshot(
     state: SharedServiceBridgeState,
 ) -> Result<StartupSnapshot, String> {
     state
@@ -410,7 +833,7 @@ pub(crate) fn service_startup_snapshot(
 /// 返回值
 /// Returns the live workbench snapshot, or a service-state or question-projection error.
 /// 返回实时工作台快照，失败时返回服务状态或问题投影错误。
-pub(crate) fn service_workbench_snapshot(
+pub fn service_workbench_snapshot(
     state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     // guard keeps the retained workbench stable while live pending questions are attached.
@@ -419,6 +842,151 @@ pub(crate) fn service_workbench_snapshot(
         .lock()
         .map_err(|error| format!("failed to lock service workbench state: {error}"))?;
     workbench_with_live_pending_question(&guard)
+}
+
+/// Builds one detailed service status snapshot from shared service state.
+/// 从共享服务状态构建一个详细服务状态快照。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state that owns startup progress, shutdown admission,
+/// and activity counts.
+/// `state` 是持有启动进度、关闭准入与活动计数的共享服务状态。
+///
+/// # Returns
+/// 返回值
+/// A status snapshot without configuration or credential content.
+/// 返回不含配置或凭据内容的状态快照。
+pub fn service_status_snapshot_from_state(
+    state: &SharedServiceBridgeState,
+) -> ServiceStatusSnapshot {
+    // gauge_* snapshots never block HTTP dispatch on browser-driven I/O.
+    // gauge_* 快照绝不在浏览器驱动的 I/O 上阻塞 HTTP 分发。
+    let (
+        lifecycle_fallback,
+        revision,
+        active_stream_tasks,
+        vce_jobs,
+        registry_draining,
+        drain_active,
+        last_bootstrap_failure,
+        last_recovery_failure,
+    ) = {
+        // status_guard takes one short observation; counters below never block service I/O.
+        // status_guard 只做一次短观察；以下计数绝不阻塞服务 I/O。
+        let status_guard = state.lock();
+        let failed_guard = status_guard.as_deref();
+        let guard = match failed_guard {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.get_ref(),
+        };
+        (
+            service_lifecycle_from_startup_phase(&guard.startup.phase),
+            guard.workbench_generation,
+            guard.active_stream_tasks.len() as u64,
+            crate::vce::vce_retained_job_gauge(guard.vce_runtime.as_ref()),
+            guard
+                .session_runtime_registry
+                .shutdown_admission_is_closed(),
+            guard.service_lifecycle_state.shutdown_drain_active,
+            guard.service_lifecycle_state.last_bootstrap_failure.clone(),
+            guard.service_lifecycle_state.last_recovery_failure.clone(),
+        )
+    };
+    let running_terminals = service_terminal_running_gauge();
+    let active_work = ServiceActiveWorkSummary {
+        active_stream_tasks,
+        vce_jobs,
+        running_terminals,
+    };
+    // lifecycle reports explicit shutdown and recovery states before bootstrap phases so
+    // a draining service never advertises itself as ready for new writes or leases.
+    // lifecycle 在引导阶段之前报告明确关闭与恢复状态，使正在排空的服务绝不会把自己
+    // 宣传为可接受新写入或新租约。
+    let (lifecycle, last_failure) = service_lifecycle_with_recovery(
+        lifecycle_fallback,
+        registry_draining,
+        drain_active,
+        last_bootstrap_failure,
+        last_recovery_failure,
+    );
+    ServiceStatusSnapshot {
+        lifecycle,
+        pid: std::process::id(),
+        started_at: service_generation_started_at().to_owned(),
+        revision,
+        last_failure,
+        active_work,
+    }
+}
+
+/// Resolves the protected lifecycle and retained failure from shutdown and recovery facts.
+/// 从关闭与恢复事实解析受保护生命周期及保留失败。
+fn service_lifecycle_with_recovery(
+    lifecycle_fallback: ServiceLifecycle,
+    registry_draining: bool,
+    drain_active: bool,
+    last_bootstrap_failure: Option<ServiceStatusFailure>,
+    last_recovery_failure: Option<ServiceStatusFailure>,
+) -> (ServiceLifecycle, Option<ServiceStatusFailure>) {
+    // An admission registry retained in drain after failed recovery is a terminal service error,
+    // not an indefinitely healthy-looking stopping phase.
+    // 恢复失败后仍在排空的准入注册表属于服务终态故障，不能无限呈现为看似正常的停止阶段。
+    if registry_draining && last_recovery_failure.is_some() {
+        return (ServiceLifecycle::RecoveryFailed, last_recovery_failure);
+    }
+    if last_recovery_failure.is_some()
+        && matches!(
+            lifecycle_fallback,
+            ServiceLifecycle::Failed | ServiceLifecycle::RecoveryFailed
+        )
+    {
+        return (ServiceLifecycle::RecoveryFailed, last_recovery_failure);
+    }
+    if lifecycle_fallback == ServiceLifecycle::Failed {
+        return (
+            ServiceLifecycle::Failed,
+            last_bootstrap_failure.or(last_recovery_failure),
+        );
+    }
+    if drain_active || registry_draining {
+        return (ServiceLifecycle::Stopping, None);
+    }
+    if last_recovery_failure.is_some() {
+        return (ServiceLifecycle::Recovering, last_recovery_failure);
+    }
+    (lifecycle_fallback, last_bootstrap_failure)
+}
+
+/// Counts retained VCE jobs without awaiting async runtime locks from HTTP dispatch.
+/// 在 HTTP 分发线程上统计保留的 VCE 任务，不等待异步运行时锁。
+/// Kept as documentation for the sync gauge boundary; production uses the state projection above.
+/// 作为同步度量边界的说明保留；生产使用上述状态投影。
+#[allow(dead_code)]
+fn service_vce_job_gauge() -> u64 {
+    // VCE job ownership lives behind async locks; /v1/service/status is an activity gauge.
+    // VCE 任务归属位于异步锁之后；/v1/service/status 仅作为活动度量。
+    0
+}
+
+/// Counts running project terminals without blocking HTTP dispatch on host I/O.
+/// 在 HTTP 分发线程上统计运行中的项目终端，不阻塞宿主 I/O。
+fn service_terminal_running_gauge() -> u64 {
+    // Terminal gauge uses only non-blocking try_lock probes; a contended supervisor
+    // reports zero for this observation rather than delaying the status endpoint.
+    // 终端度量仅使用非阻塞 try_lock 探测；监控器竞争时本次观察报告零，
+    // 而不延迟状态端点。
+    crate::project_terminals::project_terminal_running_gauge()
+}
+
+/// Maps one bootstrap startup phase to the detailed service lifecycle.
+/// 将一个引导启动阶段映射为详细服务生命周期。
+fn service_lifecycle_from_startup_phase(phase: &str) -> ServiceLifecycle {
+    match phase {
+        "ready" => ServiceLifecycle::Ready,
+        "failed" => ServiceLifecycle::Failed,
+        _ => ServiceLifecycle::Starting,
+    }
 }
 
 #[cfg(test)]
@@ -572,5 +1140,44 @@ mod tests {
         assert_eq!(replaced.pid, snapshot.pid);
         assert_eq!(replaced.started_at, snapshot.started_at);
         assert_eq!(replaced.service_token, snapshot.service_token);
+    }
+
+    /// Verifies shutdown removes only the discovery identity owned by this instance.
+    /// 验证关闭时只移除属于当前实例身份的发现记录。
+    #[test]
+    fn discovery_cleanup_preserves_replacement_instance() {
+        let directory = tempfile::tempdir().expect("temporary discovery directory");
+        let path = directory.path().join("webui-service.json");
+        let expected = webui_service_starting_discovery_snapshot(48123, 42, "1000", "token-a");
+        let replacement = webui_service_starting_discovery_snapshot(48124, 42, "2000", "token-b");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&replacement).expect("replacement JSON"),
+        )
+        .expect("publish replacement");
+        assert!(!remove_discovery_file_if_owned(&path, &expected).expect("compare identity"));
+        assert!(path.exists(), "replacement identity must remain published");
+        std::fs::write(&path, serde_json::to_vec(&expected).expect("owned JSON"))
+            .expect("publish owned identity");
+        assert!(remove_discovery_file_if_owned(&path, &expected).expect("remove owned identity"));
+        assert!(
+            !path.exists(),
+            "owned discovery must be removed on shutdown"
+        );
+        assert!(!remove_discovery_file_if_owned(&path, &expected).expect("repeat cleanup"));
+    }
+
+    /// Verifies browser downloads preserve sanitized UTF-8 names without creating a header injection.
+    /// 验证浏览器下载保留清理后的 UTF-8 文件名，且不会形成响应头注入。
+    #[test]
+    fn browser_download_content_disposition_preserves_utf8_name() {
+        assert_eq!(
+            browser_download_content_disposition("中文文件.txt"),
+            "attachment; filename*=UTF-8''%E4%B8%AD%E6%96%87%E6%96%87%E4%BB%B6.txt"
+        );
+        assert_eq!(
+            browser_download_content_disposition("line\nname.txt"),
+            "attachment; filename*=UTF-8''line%0Aname.txt"
+        );
     }
 }

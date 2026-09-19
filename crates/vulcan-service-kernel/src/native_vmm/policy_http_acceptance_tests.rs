@@ -248,6 +248,9 @@ pub(in crate::native_vmm) async fn verify(
             crate::cancel_command_session_displays_for_client(client_id);
             crate::cancel_project_terminal_displays_for_client(client_id);
         }),
+        status_provider: None,
+        browser_stream: None,
+        browser_download_resolver: None,
     };
     // The owned task is aborted on both success and assertion failure.
     // 持有任务在成功及断言失败时均被终止。

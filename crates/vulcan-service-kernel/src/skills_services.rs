@@ -2593,6 +2593,319 @@ pub(crate) async fn service_set_vulcan_plugin_enabled(
     })
     .await
 }
+
+/// Reads the exact current plugin environment readiness without installing dependencies.
+/// 只读检查当前精确插件环境的就绪状态，不安装依赖。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the plugin catalog and `plugin_id` selects its original identity.
+/// `state` 持有插件目录，`plugin_id` 选择其中的原始身份。
+///
+/// # Returns
+/// 返回值
+/// Returns true only when the current generation can execute from its prepared environment.
+/// 仅当当前代次可从已准备环境执行时返回真。
+pub(crate) async fn service_plugin_environment_ready(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<bool, String> {
+    // runtime is the sole authority for exact package generation and environment roots.
+    // runtime 是精确插件包代次及环境根目录的唯一权威。
+    let runtime = service_vulcan_plugin_runtime(&state)?;
+    run_extension_management_blocking("inspect plugin environment", move || {
+        runtime
+            .plugin_environment_ready(&plugin_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+/// Explicitly installs the current disabled plugin environment before enabling the plugin.
+/// 在启用插件前显式安装当前已停用插件的环境。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the plugin catalog and `plugin_id` selects its original identity.
+/// `state` 持有插件目录，`plugin_id` 选择其中的原始身份。
+///
+/// # Returns
+/// 返回值
+/// Returns true after the exact generation is prepared and independently checked.
+/// 在精确代次准备完成并经过独立检查后返回真。
+pub(crate) async fn service_prepare_plugin_environment(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<bool, String> {
+    run_luaskills_management_owned("prepare plugin environment", move || async move {
+        // runtime and plugin are resolved while the management lock excludes lifecycle mutations.
+        // runtime 和 plugin 在管理锁排除生命周期变更期间解析。
+        let runtime = service_vulcan_plugin_runtime(&state)?;
+        // snapshot fixes the package generation and current desired state for this install.
+        // snapshot 固定本次安装的插件包代次和当前期望状态。
+        let snapshot = runtime.snapshot();
+        // plugin is the exact current catalog descriptor, never a caller-supplied path.
+        // plugin 是当前目录的精确描述符，绝不是调用方提供的路径。
+        let plugin = snapshot
+            .plugins
+            .get(&plugin_id)
+            .ok_or_else(|| format!("未发现 Vulcan 插件：{plugin_id}"))?;
+        if plugin.desired_enabled
+            || plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
+        {
+            return Err(format!(
+                "Vulcan 插件 `{plugin_id}` 必须先停用，才能安装其执行环境。"
+            ));
+        }
+        if !matches!(
+            plugin.availability,
+            vulcan_plugin_runtime::VulcanPluginAvailability::Enabled
+                | vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
+        ) {
+            return Err(format!(
+                "Vulcan 插件 `{plugin_id}` 当前不可安装：{}",
+                plugin.diagnostics.join("；")
+            ));
+        }
+        run_extension_management_blocking("install plugin environment", move || {
+            runtime
+                .prepare_plugin_environment(&plugin_id)
+                .map_err(|error| error.to_string())?;
+            runtime
+                .plugin_environment_ready(&plugin_id)
+                .map_err(|error| error.to_string())
+        })
+        .await
+    })
+    .await
+}
+
+/// Starts one detached, deduplicated plugin environment installation task.
+/// 启动一个分离运行且按插件目录代次去重的插件环境安装任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the Core task registry and the validated plugin runtime.
+/// `state` 持有 Core 任务登记表及已校验的插件运行时。
+/// `plugin_id` selects the exact disabled catalog entry.
+/// `plugin_id` 选择精确的已停用目录条目。
+///
+/// # Returns
+/// 返回值
+/// Returns the existing task status for a duplicate generation, or the newly queued status.
+/// 对重复代次返回已有任务状态，否则返回新排队任务状态。
+pub(crate) async fn service_start_plugin_environment_install(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<PluginEnvironmentInstallTaskStatus, String> {
+    let runtime = service_vulcan_plugin_runtime(&state)?;
+    let snapshot = runtime.snapshot();
+    let plugin = snapshot
+        .plugins
+        .get(&plugin_id)
+        .ok_or_else(|| format!("未发现 Vulcan 插件：{plugin_id}"))?;
+    if plugin.desired_enabled
+        || plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
+    {
+        return Err(format!(
+            "Vulcan 插件 `{plugin_id}` 必须先停用，才能安装其执行环境。"
+        ));
+    }
+    if !matches!(
+        plugin.availability,
+        vulcan_plugin_runtime::VulcanPluginAvailability::Enabled
+            | vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
+    ) {
+        return Err(format!(
+            "Vulcan 插件 `{plugin_id}` 当前不可安装：{}",
+            plugin.diagnostics.join("；")
+        ));
+    }
+    // key fixes one request to the exact source directory generation observed at enqueue time.
+    // key 将一次请求固定到排队时观察到的精确源目录代次。
+    let key = PluginEnvironmentInstallKey {
+        plugin_id: plugin.id.clone(),
+        package_root: plugin.package_root.clone(),
+        catalog_generation: plugin.generation,
+        content_fingerprint: plugin.content_fingerprint.clone(),
+    };
+    // expected_key binds the detached worker to the exact generation accepted by this request.
+    // expected_key 将分离 worker 绑定到本次请求接受的精确代次。
+    let expected_key = key.clone();
+    let registry = plugin_environment_install_task_registry().clone();
+    let enqueue = registry.enqueue(key)?;
+    if !enqueue.should_start {
+        return Ok(enqueue.status);
+    }
+    let task_id = enqueue.status.task_id.clone();
+    let task_plugin_id = plugin_id.clone();
+    let task_runtime = runtime.clone();
+    let task_registry = registry.clone();
+    // Detached ownership keeps installation alive when an RPC waiter or GUI disappears.
+    // 分离任务拥有安装生命周期，即使 RPC 等待者或 GUI 消失也继续执行。
+    spawn_service_task(async move {
+        let _ = task_registry.update(&task_id, "running", "preparing", None);
+        let operation_task_id = task_id.clone();
+        let operation_registry = task_registry.clone();
+        let result =
+            run_luaskills_management_owned("prepare plugin environment task", move || async move {
+                let current = task_runtime.snapshot();
+                let current_plugin = current
+                    .plugins
+                    .get(&task_plugin_id)
+                    .ok_or_else(|| format!("未发现 Vulcan 插件：{task_plugin_id}"))?;
+                if current_plugin.desired_enabled
+                    || current_plugin.runtime_state
+                        != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
+                {
+                    return Err(format!(
+                        "Vulcan 插件 `{task_plugin_id}` 在安装期间必须保持停用状态。"
+                    ));
+                }
+                let current_key = PluginEnvironmentInstallKey {
+                    plugin_id: current_plugin.id.clone(),
+                    package_root: current_plugin.package_root.clone(),
+                    catalog_generation: current_plugin.generation,
+                    content_fingerprint: current_plugin.content_fingerprint.clone(),
+                };
+                if current_key != expected_key {
+                    return Err(format!(
+                        "Vulcan 插件 `{task_plugin_id}` 的目录代次在排队期间发生变化，请刷新目录后重试。"
+                    ));
+                }
+                let install_plugin_id = task_plugin_id.clone();
+                let verify_plugin_id = task_plugin_id.clone();
+                operation_registry.update(&operation_task_id, "running", "preparing", None)?;
+                let prepare_runtime = task_runtime.clone();
+                run_extension_management_blocking("install plugin environment task", move || {
+                    prepare_runtime
+                        .prepare_plugin_environment(&install_plugin_id)
+                        .map_err(|error| error.to_string())
+                })
+                .await?;
+                let prepared_key = {
+                    let prepared_snapshot = task_runtime.snapshot();
+                    let prepared_plugin = prepared_snapshot
+                        .plugins
+                        .get(&task_plugin_id)
+                        .ok_or_else(|| format!("未发现 Vulcan 插件：{task_plugin_id}"))?;
+                    PluginEnvironmentInstallKey {
+                        plugin_id: prepared_plugin.id.clone(),
+                        package_root: prepared_plugin.package_root.clone(),
+                        catalog_generation: prepared_plugin.generation,
+                        content_fingerprint: prepared_plugin.content_fingerprint.clone(),
+                    }
+                };
+                if prepared_key != expected_key {
+                    return Err(format!(
+                        "Vulcan 插件 `{task_plugin_id}` 的目录代次在安装期间发生变化，已拒绝旧任务结果。"
+                    ));
+                }
+                operation_registry.update(&operation_task_id, "running", "verifying", None)?;
+                let verify_runtime = task_runtime.clone();
+                let verification_result = run_extension_management_blocking(
+                    "verify plugin environment task",
+                    move || {
+                    verify_runtime
+                        .plugin_environment_ready(&verify_plugin_id)
+                        .map_err(|error| error.to_string())
+                    },
+                )
+                .await?;
+                let verified_key = {
+                    let verified_snapshot = task_runtime.snapshot();
+                    let verified_plugin = verified_snapshot
+                        .plugins
+                        .get(&task_plugin_id)
+                        .ok_or_else(|| format!("未发现 Vulcan 插件：{task_plugin_id}"))?;
+                    PluginEnvironmentInstallKey {
+                        plugin_id: verified_plugin.id.clone(),
+                        package_root: verified_plugin.package_root.clone(),
+                        catalog_generation: verified_plugin.generation,
+                        content_fingerprint: verified_plugin.content_fingerprint.clone(),
+                    }
+                };
+                if verified_key != expected_key {
+                    return Err(format!(
+                        "Vulcan 插件 `{task_plugin_id}` 的目录代次在校验期间发生变化，已拒绝旧任务结果。"
+                    ));
+                }
+                Ok(verification_result)
+            })
+            .await;
+        match result {
+            Ok(true) => {
+                let _ = task_registry.update(&task_id, "succeeded", "completed", None);
+            }
+            Ok(false) => {
+                let _ = task_registry.update(
+                    &task_id,
+                    "failed",
+                    "failed",
+                    Some("插件执行环境安装后未通过完整性检查。"),
+                );
+            }
+            Err(error) => {
+                let _ = task_registry.update(&task_id, "failed", "failed", Some(&error));
+            }
+        }
+    });
+    Ok(enqueue.status)
+}
+
+/// Reads one detached plugin environment installation task without changing it.
+/// 只读查询一个分离运行的插件环境安装任务，不改变任务状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the Core task registry; `task_id` identifies the exact task.
+/// `state` 持有 Core 任务登记表；`task_id` 标识精确任务。
+///
+/// # Returns
+/// 返回值
+/// Returns the retained status, or an explicit error when the task was evicted or unknown.
+/// 返回保留的状态；任务被淘汰或未知时返回明确错误。
+pub(crate) fn service_plugin_environment_install_status(
+    _state: SharedServiceBridgeState,
+    task_id: String,
+) -> Result<PluginEnvironmentInstallTaskStatus, String> {
+    let registry = plugin_environment_install_task_registry().clone();
+    registry
+        .status(&task_id)?
+        .ok_or_else(|| format!("未找到插件环境安装任务：{task_id}"))
+}
+
+/// Reads the latest task for the plugin's current catalog directory generation.
+/// 只读查询插件当前目录代次对应的最新任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the validated plugin runtime; `plugin_id` selects the exact catalog entry.
+/// `state` 持有已校验插件运行时；`plugin_id` 选择精确目录条目。
+///
+/// # Returns
+/// 返回值
+/// Returns `None` when this generation has never been requested.
+/// 当此代次从未被请求时返回 `None`。
+pub(crate) fn service_plugin_environment_install_status_for_plugin(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<Option<PluginEnvironmentInstallTaskStatus>, String> {
+    let runtime = service_vulcan_plugin_runtime(&state)?;
+    let snapshot = runtime.snapshot();
+    let plugin = snapshot
+        .plugins
+        .get(&plugin_id)
+        .ok_or_else(|| format!("未发现 Vulcan 插件：{plugin_id}"))?;
+    let key = PluginEnvironmentInstallKey {
+        plugin_id: plugin.id.clone(),
+        package_root: plugin.package_root.clone(),
+        catalog_generation: plugin.generation,
+        content_fingerprint: plugin.content_fingerprint.clone(),
+    };
+    plugin_environment_install_task_registry().status_for_key(&key)
+}
+
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
 /// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
 pub(crate) async fn service_uninstall_luaskill(

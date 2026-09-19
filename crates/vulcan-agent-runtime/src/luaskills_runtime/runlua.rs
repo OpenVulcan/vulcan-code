@@ -9,7 +9,7 @@ use std::time::Instant;
 use tempfile::{Builder as TempFileBuilder, NamedTempFile};
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolSourceKind,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
 };
 
 /// Stable public tool identifier for one-shot Lua execution.
@@ -288,13 +288,17 @@ pub fn build_runlua_tool_candidates(
         // one_shot_workspace_root 将分页落盘文件固定到当前项目。
         let one_shot_workspace_root = workspace_root.clone();
         candidates.push(VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from(RUNLUA_TOOL_NAME),
-                name: String::from(RUNLUA_TOOL_NAME),
-                description: String::from(RUNLUA_TOOL_DESCRIPTION),
-                help_text: None,
-                source: VulcanToolSourceKind::LuaSkills,
-            },
+            descriptor: VulcanToolDescriptor::new(
+                RUNLUA_TOOL_NAME,
+                RUNLUA_TOOL_NAME,
+                RUNLUA_TOOL_DESCRIPTION,
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::LuaSkills,
+                    "luaskills",
+                    RUNLUA_TOOL_NAME,
+                ),
+            ),
             parameters_schema: runlua_args_schema(),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -321,13 +325,17 @@ pub fn build_runlua_tool_candidates(
         // session_workspace_root 为 `start` 提供唯一允许的 cwd/workspace 身份。
         let session_workspace_root = workspace_root;
         candidates.push(VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from(RUNLUA_SESSION_TOOL_NAME),
-                name: String::from(RUNLUA_SESSION_TOOL_NAME),
-                description: String::from(RUNLUA_SESSION_TOOL_DESCRIPTION),
-                help_text: None,
-                source: VulcanToolSourceKind::LuaSkills,
-            },
+            descriptor: VulcanToolDescriptor::new(
+                RUNLUA_SESSION_TOOL_NAME,
+                RUNLUA_SESSION_TOOL_NAME,
+                RUNLUA_SESSION_TOOL_DESCRIPTION,
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::LuaSkills,
+                    "luaskills",
+                    RUNLUA_SESSION_TOOL_NAME,
+                ),
+            ),
             parameters_schema: runlua_session_args_schema(),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Hidden,

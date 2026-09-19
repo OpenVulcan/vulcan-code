@@ -6,6 +6,10 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { configDefaults } from "vitest/config";
 
+// VULCAN_DEV_WEBUI_ORIGIN is the exact debug workbench allowed to read its service discovery token.
+// VULCAN_DEV_WEBUI_ORIGIN 是获准读取服务发现令牌的精确调试工作台来源。
+const VULCAN_DEV_WEBUI_ORIGIN = "http://127.0.0.1:17601";
+
 // Configure the Vite app used by the Tauri desktop shell.
 // 配置 Tauri 桌面壳使用的 Vite 应用。
 export default defineConfig(({ mode }) => {
@@ -48,7 +52,16 @@ function vulcanServiceDiscoveryPlugin(userVulcanRootName: string) {
   return {
     name: "vulcan-service-discovery",
     configureServer(server: { middlewares: { use: (route: string, handler: (request: unknown, response: import("node:http").ServerResponse) => void) => void } }) {
-      server.middlewares.use("/vulcan-service-discovery.json", (_request, response) => {
+      server.middlewares.use("/vulcan-service-discovery.json", (request: import("node:http").IncomingMessage, response) => {
+        // A different localhost website must not receive the Core token through Vite's dev CORS.
+        // 其他 localhost 网站不得借助 Vite 开发服务器的 CORS 取得 Core 令牌。
+        const origin = request.headers.origin;
+        if (origin !== undefined && origin !== VULCAN_DEV_WEBUI_ORIGIN) {
+          response.statusCode = 403;
+          response.setHeader("cache-control", "no-store");
+          response.end();
+          return;
+        }
         void readVulcanServiceDiscoveryFile(userVulcanRootName)
           .then((body) => {
             response.setHeader("content-type", "application/json; charset=utf-8");

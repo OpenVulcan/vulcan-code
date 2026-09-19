@@ -40,7 +40,7 @@ pub struct StartupStepSnapshot {
 
 /// Represents the lifecycle status of one startup step.
 /// 表示单个启动步骤的生命周期状态。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupStepStatus {
     /// The startup step has not started yet.
@@ -100,4 +100,86 @@ pub struct RuntimeModuleSnapshot {
     /// Short module status message.
     /// 简短模块状态消息。
     pub message: String,
+}
+
+/// Detailed Core service lifecycle reported by the protected status endpoint.
+/// 受保护状态端点报告的详细 Core 服务生命周期。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ServiceLifecycle {
+    /// Listening socket is bound and bootstrap is still running.
+    /// 监听已绑定，引导仍在运行。
+    Starting,
+    /// Full bootstrap completed and the service accepts business work.
+    /// 完整引导完成，服务接受业务工作。
+    Ready,
+    /// Explicit shutdown entered; new writes and leases are refused.
+    /// 已进入明确关闭；拒绝新写入与新租约。
+    Stopping,
+    /// Shutdown drain failed and admission was reopened.
+    /// 关闭排空失败，准入已重新开放。
+    Recovering,
+    /// Bootstrap or a required HTTP host failed.
+    /// 引导或必需 HTTP 宿主失败。
+    Failed,
+    /// Admission recovery after a failed drain also failed.
+    /// 排空失败后的准入恢复同样失败。
+    RecoveryFailed,
+}
+
+/// Exact failure record retained for the protected service status endpoint.
+/// 受保护服务状态端点保留的精确失败记录。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceStatusFailure {
+    /// Stable bootstrap step that failed.
+    /// 失败的稳定引导步骤。
+    pub stage: String,
+    /// Stable machine-readable error code.
+    /// 稳定的机器可读错误码。
+    pub code: String,
+    /// User-facing diagnostic message.
+    /// 面向用户的诊断信息。
+    pub message: String,
+}
+
+/// Exact activity counts exposed through the protected service status endpoint.
+/// 受保护服务状态端点暴露的精确活动计数。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceActiveWorkSummary {
+    /// Number of active agent stream tasks.
+    /// 活动智能体流任务数。
+    pub active_stream_tasks: u64,
+    /// Number of detailed VCE jobs currently tracked.
+    /// 当前跟踪的详细 VCE 任务数。
+    pub vce_jobs: u64,
+    /// Number of running project terminals.
+    /// 运行中的项目终端数。
+    pub running_terminals: u64,
+}
+
+/// Detailed Core service status served by the protected status endpoint.
+/// 受保护状态端点提供的详细 Core 服务状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceStatusSnapshot {
+    /// Detailed service lifecycle state.
+    /// 详细服务生命周期状态。
+    pub lifecycle: ServiceLifecycle,
+    /// Owning process id.
+    /// 拥有该服务的进程标识。
+    pub pid: u32,
+    /// UTC startup timestamp in Unix milliseconds.
+    /// UTC 启动时间戳，单位为 Unix 毫秒。
+    pub started_at: String,
+    /// Monotonic status revision published by the service.
+    /// 服务发布的单调状态版本号。
+    pub revision: u64,
+    /// Latest retained failure, when one exists.
+    /// 最近一次保留的失败（如有）。
+    pub last_failure: Option<ServiceStatusFailure>,
+    /// Current activity counts without configuration or credential content.
+    /// 当前活动计数，不含配置或凭据内容。
+    pub active_work: ServiceActiveWorkSummary,
 }

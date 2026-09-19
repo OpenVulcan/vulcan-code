@@ -341,6 +341,9 @@ fn plugin_mcp_manifest_endpoint_summary(transport: &VulcanPluginMcpTransportMani
             VulcanPluginValueSourceManifest::Config { key } => format!("config:{key}"),
             VulcanPluginValueSourceManifest::Secret { .. } => String::from("secret-managed URL"),
             VulcanPluginValueSourceManifest::Environment { name } => format!("env:{name}"),
+            VulcanPluginValueSourceManifest::CoreBrowserEndpoint => {
+                String::from("Core-owned browser endpoint")
+            }
         },
     }
 }

@@ -10,15 +10,19 @@ pub(super) fn build_luaskills_help_candidate(
 ) -> VulcanToolCandidate {
     let entries = Arc::new(entries);
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(LUASKILL_HELP_TOOL_NAME),
-            name: String::from(LUASKILL_HELP_TOOL_NAME),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            LUASKILL_HELP_TOOL_NAME,
+            LUASKILL_HELP_TOOL_NAME,
+            String::from(
                 "Return full prompt help and structured Markdown argument schema help for one enabled implicit LuaSkills entry by complete canonical name.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::Native,
+                "native",
+                LUASKILL_HELP_TOOL_NAME,
+            ),
+        ),
         parameters_schema: luaskill_help_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
@@ -47,15 +51,19 @@ pub(super) fn build_luaskills_dispatch_candidate(
     });
     let dispatch_entries = Arc::new(dispatch_entries);
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(CALL_LUASKILL_TOOL_NAME),
-            name: String::from(CALL_LUASKILL_TOOL_NAME),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            CALL_LUASKILL_TOOL_NAME,
+            CALL_LUASKILL_TOOL_NAME,
+            String::from(
                 "Call one enabled LuaSkills entry by its complete canonical tool name with compact argument pairs. Use this dispatcher for implicit LuaSkills entries that are not registered as direct function tools.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::Native,
+                "native",
+                CALL_LUASKILL_TOOL_NAME,
+            ),
+        ),
         parameters_schema: call_luaskill_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(

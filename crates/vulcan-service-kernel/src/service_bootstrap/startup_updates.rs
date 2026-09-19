@@ -45,7 +45,7 @@ pub(crate) fn update_luaskills_bootstrap_progress(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Tauri 本地服务桥接已启动",
+                        "Core Service 已启动",
                     ),
                     (
                         "vldb",
@@ -86,7 +86,7 @@ pub(crate) fn update_managed_runtime_bootstrap_progress(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Tauri 本地服务桥接已启动",
+                        "Core Service 已启动",
                     ),
                     (
                         "vldb",
@@ -136,6 +136,7 @@ pub(crate) fn update_service_failure(
         ),
     ];
     eprintln!("{}", logs[0]);
+    let failure = error.service_status_failure();
     let mut startup = startup_snapshot_with_phase(
         "failed",
         startup_failure_steps(OffsetDateTime::now_utc(), &error),
@@ -150,6 +151,7 @@ pub(crate) fn update_service_failure(
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
+        guard.service_lifecycle_state.last_bootstrap_failure = Some(failure);
     }
     mark_webui_service_discovery_failed(state);
     emit_service_snapshots(event_emitter, &startup, &workbench);
@@ -206,7 +208,7 @@ pub(crate) fn startup_failure_steps(
 /// 返回单个启动步骤的稳定就绪文案。
 pub(crate) fn startup_ready_message(step_id: &str) -> String {
     match step_id {
-        "service-process" => "Tauri 本地服务桥接已启动",
+        "service-process" => "Core Service 已启动",
         "vldb" => "VLDB/controller 数据平面已就绪",
         "luaskills" => "LuaSkills 引擎与技能目录已就绪",
         "mcp" => "MCP Runtime 已初始化",

@@ -13,6 +13,7 @@ use crate::agent_runtime::events::RuntimeEventKind;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -26,14 +27,47 @@ use vulcan_core::tool::{AllowAllToolPolicy, VulcanToolExecutor};
 use vulcan_core::types::{
     ControllerConfig, ConversationPayload, ConversationSnapshot, ConversationToolCall,
     CoreError as VulcanCoreError, ProviderRequestSnapshot, ProviderTurnResponse,
-    ToolInvocationRequest,
+    ToolInvocationRequest, ToolInvocationResult,
 };
 use vulcan_session_core::v1::document::PreparedToolReceipt;
 use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
 use vulcan_tools_manager::{
     VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
-    VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
+    VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
+    VulcanToolsManager,
 };
+
+/// Verifies a host credential never reaches model text or structured durable tool details.
+/// 验证宿主凭据不会到达模型文本或结构化可靠工具详情。
+#[test]
+fn host_credential_is_redacted_from_tool_model_and_host_results() {
+    let secret = String::from("w09-service-token-1234567890abcdef");
+    let runtime = TaskRuntime::new();
+    runtime
+        .register_sensitive_tool_output_value(secret.clone())
+        .expect("long host token should register");
+    let (manager, definitions) = build_demo_manager();
+    let bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build")
+            .with_sensitive_tool_output_values(runtime.sensitive_tool_output_values());
+    let result = ToolInvocationResult {
+        tool_call_id: String::from("call-1"),
+        tool_name: String::from("shell_command"),
+        model_output: format!("file content: {secret}"),
+        host_result: Some(json!({ "nested": [secret, { "detail": "safe" }] })),
+        is_error: false,
+    };
+    let filtered = bridge
+        .redact_sensitive_tool_result(result)
+        .expect("registered filter should apply");
+    assert_eq!(filtered.model_output, "file content: [redacted]");
+    assert_eq!(
+        filtered.host_result,
+        Some(json!({
+            "nested": ["[redacted]", { "detail": "safe" }]
+        }))
+    );
+}
 
 /// Installs one exact durable local identity before a bridge test dispatches the tool body.
 /// 在桥接测试分派工具主体前安装一条精确的持久化本地身份。
@@ -68,13 +102,17 @@ fn build_demo_manager() -> (
 ) {
     let manager = VulcanToolsManager::new(vec![
         VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from("demo_tool"),
-                name: String::from("demo_tool"),
-                description: String::from("Demo tool"),
-                help_text: None,
-                source: VulcanToolSourceKind::Native,
-            },
+            descriptor: VulcanToolDescriptor::new(
+                String::from("demo_tool"),
+                String::from("demo_tool"),
+                String::from("Demo tool"),
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::Native,
+                    "test",
+                    String::from("demo_tool"),
+                ),
+            ),
             parameters_schema: json!({
                 "type": "object",
                 "properties": {
@@ -102,13 +140,17 @@ fn build_demo_manager() -> (
             }),
         },
         VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from("failing_tool"),
-                name: String::from("failing_tool"),
-                description: String::from("Failing demo tool"),
-                help_text: None,
-                source: VulcanToolSourceKind::Native,
-            },
+            descriptor: VulcanToolDescriptor::new(
+                String::from("failing_tool"),
+                String::from("failing_tool"),
+                String::from("Failing demo tool"),
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::Native,
+                    "test",
+                    String::from("failing_tool"),
+                ),
+            ),
             parameters_schema: json!({
                 "type": "object",
                 "properties": {
@@ -124,13 +166,17 @@ fn build_demo_manager() -> (
             }),
         },
         VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from("structured_failure_tool"),
-                name: String::from("structured_failure_tool"),
-                description: String::from("Structured failure demo tool"),
-                help_text: None,
-                source: VulcanToolSourceKind::Native,
-            },
+            descriptor: VulcanToolDescriptor::new(
+                String::from("structured_failure_tool"),
+                String::from("structured_failure_tool"),
+                String::from("Structured failure demo tool"),
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::Native,
+                    "test",
+                    String::from("structured_failure_tool"),
+                ),
+            ),
             parameters_schema: json!({ "type": "object" }),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Visible,
@@ -145,13 +191,17 @@ fn build_demo_manager() -> (
             }),
         },
         VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from("invalid_structured_failure_tool"),
-                name: String::from("invalid_structured_failure_tool"),
-                description: String::from("Invalid structured failure demo tool"),
-                help_text: None,
-                source: VulcanToolSourceKind::Native,
-            },
+            descriptor: VulcanToolDescriptor::new(
+                String::from("invalid_structured_failure_tool"),
+                String::from("invalid_structured_failure_tool"),
+                String::from("Invalid structured failure demo tool"),
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::Native,
+                    "test",
+                    String::from("invalid_structured_failure_tool"),
+                ),
+            ),
             parameters_schema: json!({ "type": "object" }),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Visible,
@@ -180,13 +230,17 @@ fn build_panic_demo_manager() -> (
     Vec<vulcan_tools_manager::ResolvedToolDefinition>,
 ) {
     let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from("panic_tool"),
-            name: String::from("panic_tool"),
-            description: String::from("Panic demo tool"),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            String::from("panic_tool"),
+            String::from("panic_tool"),
+            String::from("Panic demo tool"),
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::Native,
+                "test",
+                String::from("panic_tool"),
+            ),
+        ),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -217,13 +271,17 @@ fn build_gated_demo_manager(
     Vec<vulcan_tools_manager::ResolvedToolDefinition>,
 ) {
     let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from("gated_tool"),
-            name: String::from("gated_tool"),
-            description: String::from("Gated demo tool"),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            String::from("gated_tool"),
+            String::from("gated_tool"),
+            String::from("Gated demo tool"),
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::Native,
+                "test",
+                String::from("gated_tool"),
+            ),
+        ),
         parameters_schema: json!({
             "type": "object",
             "properties": {

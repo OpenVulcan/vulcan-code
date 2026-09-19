@@ -1,9 +1,12 @@
-# run_tauri.ps1 runs the compiled Tauri/WebUI main application without managing Vite.
-# run_tauri.ps1 用于运行已编译的 Tauri/WebUI 主应用，但不管理 Vite。
+# run_tauri.ps1 opens the desktop and prepares Vite for development.
+# run_tauri.ps1 打开桌面工作台，并在开发模式准备 Vite。
 # Usage:
 # 用法：
-#   .\run_tauri.ps1           # run debug build; start Vite separately with make vite start
+#   .\run_tauri.ps1           # run debug desktop and prepare Vite
 #   .\run_tauri.ps1 -Release  # run release build from built WebUI assets
+#
+# This legacy entry preserves the user-facing GUI launch contract.
+# 此旧入口保留面向用户的 GUI 启动契约。
 
 param(
     # Release selects the release output instead of the debug output.
@@ -45,11 +48,11 @@ $ProjectDir = Split-Path $PSScriptRoot -Parent
 # IsWindowsPlatform 记录启动制品是否需要 Windows 可执行文件后缀。
 $IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 
-# BinaryFileName stores the platform-specific Tauri shell binary name.
-# BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
-$BinaryFileName = "vulcan-code-tauri"
+# BinaryFileName stores the platform-specific service host binary name.
+# BinaryFileName 保存平台相关的服务宿主二进制名称。
+$BinaryFileName = "vulcan-code-service"
 if ($IsWindowsPlatform) {
-    $BinaryFileName = "vulcan-code-tauri.exe"
+    $BinaryFileName = "vulcan-code-service.exe"
 }
 
 # OutputBinDir stores the stable runtime binary directory produced by make build.
@@ -64,12 +67,16 @@ if (-not (Test-Path -LiteralPath $OutputBinaryPath -PathType Leaf)) {
     # BuildCommand tells the user which build mode should produce the missing executable.
     # BuildCommand 告知用户应使用哪种构建模式产出缺失的可执行文件。
     $BuildCommand = if ($Release) { "./make.ps1 build release" } else { "./make.ps1 build" }
-    throw "Missing built Tauri binary: $OutputBinaryPath. Run $BuildCommand first."
+    throw "Missing built service binary: $OutputBinaryPath. Run $BuildCommand first."
 }
 
 # ProfileName describes the selected runtime profile in command output.
 # ProfileName 在命令输出中描述选定的运行时 profile。
 $ProfileName = if ($Release) { "release" } else { "debug" }
-Write-Host "==> Running Vulcan Code Tauri $ProfileName from output/bin..."
-& $OutputBinaryPath
+Write-Host "==> Running Vulcan Code desktop $ProfileName..."
+if (-not $Release) {
+    & (Join-Path $PSScriptRoot 'vite_dev_server.ps1') start
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+& node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') run $ProfileName
 exit $LASTEXITCODE

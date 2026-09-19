@@ -36,7 +36,7 @@ use vulcan_session_core::{
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
     ResolvedToolDefinition, ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolDescriptor,
-    VulcanToolInvocationResult, VulcanToolSourceKind,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
 };
 use vulcan_vmm::VmmConfigLayer;
 
@@ -759,13 +759,13 @@ fn test_exposure_with_selectors(
 /// 为公开选择器测试构建一条最小已解析工具定义。
 fn test_resolved_tool(id: &str, source: VulcanToolSourceKind) -> ResolvedToolDefinition {
     ResolvedToolDefinition {
-        descriptor: VulcanToolDescriptor {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::from("test tool"),
-            help_text: None,
-            source,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            id.to_string(),
+            id.to_string(),
+            String::from("test tool"),
+            None,
+            VulcanToolOrigin::new(source, "test", id.to_string()),
+        ),
         parameters_schema: json!({ "type": "object" }),
         plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
@@ -834,6 +834,8 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
         native_goal_runtime: None,
+        native_browser_runtime: None,
+        supplemental_mcp_tools: Vec::new(),
         media_resource_runtime: None,
         knowledge_access: None,
         session_goal_context: None,

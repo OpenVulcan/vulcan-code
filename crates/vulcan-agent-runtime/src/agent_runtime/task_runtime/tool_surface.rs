@@ -32,13 +32,13 @@ pub(super) fn build_spawn_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(SPAWN_AGENT_TOOL),
-            name: String::from(SPAWN_AGENT_TOOL),
-            description: spawn_agent_tool_description(),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            SPAWN_AGENT_TOOL,
+            SPAWN_AGENT_TOOL,
+            spawn_agent_tool_description(),
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", SPAWN_AGENT_TOOL),
+        ),
         parameters_schema: spawn_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -88,15 +88,19 @@ pub(super) fn build_agent_orchestration_info_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(AGENT_ORCHESTRATION_INFO_TOOL),
-            name: String::from(AGENT_ORCHESTRATION_INFO_TOOL),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            AGENT_ORCHESTRATION_INFO_TOOL,
+            AGENT_ORCHESTRATION_INFO_TOOL,
+            String::from(
                 "Return enabled child-agent profiles, supported creation modes, available model selectors, and runtime counts without changing runtime state.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::Native,
+                "native",
+                AGENT_ORCHESTRATION_INFO_TOOL,
+            ),
+        ),
         parameters_schema: agent_orchestration_info_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -122,15 +126,13 @@ pub(super) fn build_send_message_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(SEND_MESSAGE_TOOL),
-            name: String::from(SEND_MESSAGE_TOOL),
-            description: String::from(
-                "Deliver a message to an open child agent using queue or interrupt mode.",
-            ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            SEND_MESSAGE_TOOL,
+            SEND_MESSAGE_TOOL,
+            String::from("Deliver a message to an open child agent using queue or interrupt mode."),
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", SEND_MESSAGE_TOOL),
+        ),
         parameters_schema: send_message_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -154,15 +156,15 @@ pub(super) fn build_wait_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(WAIT_AGENT_TOOL),
-            name: String::from(WAIT_AGENT_TOOL),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            WAIT_AGENT_TOOL,
+            WAIT_AGENT_TOOL,
+            String::from(
                 "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started. When present, statistics contains exact unreturned cumulative child usage, including prior stopped turns. Its output_timing contains summed request durations and paired measurements: average first-token latency is first_token_latency_ms / request_count; output speed is output_tokens * 1000 / output_duration_ms. Never divide by all API calls when only some calls have measured timing, and never add repeated feedback for the same execution twice.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", WAIT_AGENT_TOOL),
+        ),
         parameters_schema: wait_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -186,15 +188,15 @@ pub(super) fn build_list_agents_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(LIST_AGENTS_TOOL),
-            name: String::from(LIST_AGENTS_TOOL),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            LIST_AGENTS_TOOL,
+            LIST_AGENTS_TOOL,
+            String::from(
                 "Return current status snapshots for known open child agents, including completed agents that have not been closed.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", LIST_AGENTS_TOOL),
+        ),
         parameters_schema: list_agents_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -218,15 +220,15 @@ pub(super) fn build_interrupt_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(INTERRUPT_AGENT_TOOL),
-            name: String::from(INTERRUPT_AGENT_TOOL),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            INTERRUPT_AGENT_TOOL,
+            INTERRUPT_AGENT_TOOL,
+            String::from(
                 "Stop an open child agent's current turn, return its previous status, and keep the agent open.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", INTERRUPT_AGENT_TOOL),
+        ),
         parameters_schema: interrupt_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
@@ -250,13 +252,13 @@ pub(super) fn build_close_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(CLOSE_AGENT_TOOL),
-            name: String::from(CLOSE_AGENT_TOOL),
-            description: String::from("Close an open child agent and stop its active run, if any."),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+        descriptor: VulcanToolDescriptor::new(
+            CLOSE_AGENT_TOOL,
+            CLOSE_AGENT_TOOL,
+            String::from("Close an open child agent and stop its active run, if any."),
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", CLOSE_AGENT_TOOL),
+        ),
         parameters_schema: close_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,

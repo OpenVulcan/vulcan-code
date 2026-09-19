@@ -172,15 +172,16 @@ show_usage() {
     echo "  ./make.sh vite start  # start the standalone WebUI Vite dev server"
     echo "  ./make.sh vite stop   # stop the standalone WebUI Vite dev server"
     echo "  ./make.sh vite status # show the standalone WebUI Vite dev server status"
-    echo "  ./make.sh             # Tauri/WebUI debug build"
-    echo "  ./make.sh build       # Tauri/WebUI debug build"
-    echo "  ./make.sh br          # build and run Tauri/WebUI debug; Vite is managed separately"
-    echo "  ./make.sh br release  # build and run Tauri/WebUI release"
-    echo "  ./make.sh release     # Tauri/WebUI release build"
+    echo "  ./make.sh             # Core/Electron/WebUI debug build"
+    echo "  ./make.sh build       # Core/Electron/WebUI debug build"
+    echo "  ./make.sh br          # build Core/WebUI/Electron and run desktop with Vite"
+    echo "  ./make.sh br release  # build Core/WebUI/Electron and run desktop"
+    echo "  ./make.sh release     # Core/Electron/WebUI release build"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
-    echo "  ./make.sh run         # run Tauri/WebUI debug build; Vite is managed separately"
-    echo "  ./make.sh run release # run Tauri/WebUI release build"
+    echo "  ./make.sh run         # run Electron desktop; start Vite when needed"
+    echo "  ./make.sh run release # run Core/Electron/WebUI release build"
+    echo "  ./make.sh service     # start the tray/background Core only"
     echo "  ./make.sh deps        # install host, bundled tools, and LuaSkills dependencies"
     echo "  ./make.sh deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
@@ -261,6 +262,15 @@ case "$NormalizedMode" in
             exit 1
         fi
         invoke_powershell_route check-deps
+        ;;
+    service)
+        # Select one explicit build profile for the background-only entry point.
+        # 为纯后台入口选择一个明确的构建模式。
+        case "$NormalizedVariant" in
+            "") node "$ScriptDir/scripts/desktop-runtime.mjs" service debug ;;
+            release) node "$ScriptDir/scripts/desktop-runtime.mjs" service release ;;
+            *) echo "Unsupported service profile: $CommandVariant" >&2; exit 1 ;;
+        esac
         ;;
     run)
         if [ "$NormalizedVariant" = "" ]; then

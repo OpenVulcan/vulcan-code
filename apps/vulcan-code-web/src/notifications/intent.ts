@@ -29,7 +29,9 @@ export function createConversationNotificationIntent(
   }
   return {
     version: 1,
-    intentId: `notification:${event.eventId}`,
+    // A run UUID uniquely identifies this settlement while fitting the native host's 64-character ID limit.
+    // 运行 UUID 唯一标识这次终态，且符合原生壳 64 字符的通知 ID 限制。
+    intentId: `notification:${event.runId}`,
     sourceEventId: event.eventId,
     category,
     conversationId: event.conversationId,

@@ -419,6 +419,8 @@ mod tests {
             runtime_system_updates: Vec::new(),
             controller_runtime: None,
             native_goal_runtime: None,
+            native_browser_runtime: None,
+            supplemental_mcp_tools: Vec::new(),
             media_resource_runtime: None,
             knowledge_access: None,
             session_goal_context: None,

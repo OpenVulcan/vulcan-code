@@ -115,7 +115,9 @@ use vulcan_service_api::{
     SubagentNavigationSnapshot, SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
     TransientReasoningStatusChangedDelta, TransientReasoningStatusKind,
     TransientReasoningStatusSnapshot, TransientReasoningSummaryItemSnapshot,
-    UpdateConversationRunPhaseDelta, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    UpdateConversationRunPhaseDelta, VmmMemorySnapshot, ServiceActiveWorkSummary,
+    ServiceLifecycle, ServiceStatusFailure, ServiceStatusSnapshot,
+    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
     WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
     WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceGitChangedEvent,
     webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
@@ -153,6 +155,7 @@ mod agent_skills_watcher;
 mod agent_stream;
 mod ai_credential_secret_store;
 mod attachments;
+pub mod browser;
 mod command_sessions;
 pub mod configured_inference;
 mod context_compaction;
@@ -181,6 +184,7 @@ mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
 mod plugin_mcp_secret_store;
+mod plugin_environment_install_tasks;
 mod plugin_services;
 mod plugin_storage;
 mod plugin_ui_events;
@@ -233,6 +237,7 @@ mod workspace_files;
 mod workspace_persistence_versions;
 mod workspace_session_queries;
 mod workspace_watcher;
+use plugin_environment_install_tasks::*;
 use agent_stream::*;
 use attachments::{
     composer_attachment_capabilities, composer_attachment_draft_scope,
@@ -314,7 +319,11 @@ use runtime_summary_projection::*;
 use runtime_workspace_helpers::*;
 use service_bootstrap::startup_snapshot_with_phase;
 pub use service_bootstrap::{emit_initial_service_events, spawn_service_bootstrap};
-pub use service_bridge_io::spawn_webui_service_http_bridge;
+pub use service_bridge_io::{
+    WebuiServiceHttpBridgeHandle, remove_owned_webui_service_discovery,
+    service_startup_snapshot, service_status_snapshot_from_state, service_workbench_snapshot,
+    spawn_webui_service_http_bridge,
+};
 use service_bridge_io::*;
 use service_diagnostics_paths::*;
 use service_state_access::*;
@@ -349,6 +358,7 @@ use settings_runtime_projection::*;
 use skill_catalog_projection::*;
 use skills_services::*;
 pub use state::ServiceShellHost;
+pub use state::SharedServiceBridgeState;
 use state::*;
 use subagent_event_ingest::*;
 use subagent_panels::*;
@@ -453,9 +463,11 @@ pub fn create_service_bridge_state(
         session_terminal_persistence_owners: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_runtime_registry: Arc::new(Default::default()),
+        service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         project_resource_catalog_registry: Arc::new(Default::default()),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
+        browser_manager: crate::browser::BrowserManager::new(),
     }))
 }
 
@@ -512,20 +524,38 @@ pub fn service_prepare_for_app_shutdown(
             ),
         }
     };
+    if state
+        .lock()
+        .map(|mut guard| guard.service_lifecycle_state.begin_shutdown_drain())
+        .is_err()
+    {
+        return Err(String::from(
+            "The service bridge state is locked during shutdown.",
+        ));
+    }
     let session_v1_handles = session_v1_handles
         .begin_shutdown()
         .map_err(|error| error.to_string())?;
-    if let Some(provider_manifest_sync) = provider_manifest_sync {
-        provider_manifest_sync.stop_periodic_task()?;
-    }
     if let Some(vce_runtime) = vce_runtime.as_ref() {
         // VCE rejects new semantic operations now, while active tool Futures remain cancellable by
         // the task-runtime shutdown immediately below.
         // VCE 此时拒绝新的语义操作，同时让活动工具 Future 可被紧随其后的任务运行时关闭取消。
         vce_runtime.begin_shutdown();
     }
-    let project_terminal_shutdown = cancel_all_project_terminal_displays()
-        .and_then(|_| project_terminal_runtime().request_all_terminal_stops_for_shutdown());
+    // A terminal drain failure is still recoverable here; no process-owned provider/MCP runtime
+    // has been stopped. Do not continue into irreversible teardown after that failure.
+    // 此时终端排空失败仍可恢复；供应商与 MCP 进程运行时尚未停止。失败后不得继续不可逆拆卸。
+    cancel_all_project_terminal_displays()
+        .and_then(|_| project_terminal_runtime().request_all_terminal_stops_for_shutdown())
+        .map_err(|error| format!("Project terminal shutdown failed: {error}"))?;
+    if let Some(provider_manifest_sync) = provider_manifest_sync {
+        provider_manifest_sync.stop_periodic_task()?;
+    }
+    // The periodic synchronizer and subsequent task/MCP teardown have no complete in-process
+    // rollback. A later persistence or VCE error must leave admission closed and report failure.
+    // 周期同步器及后续任务/MCP 拆卸没有完整的进程内回滚；之后持久化或 VCE 失败必须保持准入关闭并报告故障。
+    state.lock().map_err(|error| error.to_string())?
+        .service_lifecycle_state.block_shutdown_recovery();
     let runtime_shutdown = ordered_runtime_shutdown(
         || match task_runtime.as_ref() {
             Some(task_runtime) => {
@@ -555,8 +585,7 @@ pub fn service_prepare_for_app_shutdown(
         Ok(stopped_task_ids) => (stopped_task_ids, None),
         Err(error) => (Vec::new(), Some(error)),
     };
-    let terminal_error = project_terminal_shutdown.err();
-    if runtime_error.is_none() && terminal_error.is_none() {
+    if runtime_error.is_none() {
         let vce_shutdown = match service_runtime.as_ref() {
             Some(service_runtime) => service_runtime.block_on(async {
                 if let Some(vce_runtime) = vce_runtime.as_ref() {
@@ -581,14 +610,7 @@ pub fn service_prepare_for_app_shutdown(
         crate::luaskills_install_progress::shutdown_global();
         return Ok(stopped_task_ids);
     }
-    let mut errors = Vec::new();
-    if let Some(error) = runtime_error {
-        errors.push(error);
-    }
-    if let Some(error) = terminal_error {
-        errors.push(format!("Project terminal shutdown failed: {error}"));
-    }
-    Err(errors.join(" "))
+    Err(runtime_error.expect("runtime shutdown failed before successful return"))
 }
 
 /// Reopens V1 session mutation admission after the host keeps the window open following a failed shutdown.
@@ -601,7 +623,7 @@ pub fn service_prepare_for_app_shutdown(
 pub fn service_resume_after_failed_app_shutdown(
     state: &SharedServiceBridgeState,
 ) -> Result<(), String> {
-    let (session_runtime_registry, service_runtime, vce_runtime) = {
+    let (session_runtime_registry, service_runtime, vce_runtime, recovery_blocked) = {
         let guard = state.lock().map_err(|_| {
             String::from("The service bridge state is locked during shutdown recovery.")
         })?;
@@ -609,41 +631,74 @@ pub fn service_resume_after_failed_app_shutdown(
             Arc::clone(&guard.session_runtime_registry),
             guard.service_runtime.clone(),
             guard.vce_runtime.clone(),
+            guard.service_lifecycle_state.shutdown_recovery_blocked,
         )
     };
-    if let Some(manager) = vce_runtime {
-        let reconcile_projects = manager.resume_after_failed_shutdown();
-        if reconcile_projects {
-            // A completed VCE teardown removed every runtime and deactivated its HostAI registration.
-            // Reconcile the authoritative workspace snapshot before the still-open window accepts work.
-            // 已完成的 VCE 拆卸移除了全部运行时并注销其 HostAI 注册。仍打开的窗口重新接纳工作前，
-            // 必须按权威工作区快照完成协调。
-            let service_runtime = service_runtime.ok_or_else(|| {
-                String::from("VCE shutdown recovery requires the retained service runtime.")
-            })?;
-            service_runtime.block_on(manager.restore_after_failed_shutdown())?;
-            let report = service_runtime.block_on(vce::reconcile_vce_projects(state))?;
-            if !report.failures.is_empty() {
-                return Err(format!(
-                    "VCE shutdown recovery failed for projects: {}",
-                    report
-                        .failures
-                        .into_iter()
-                        .map(|(project_id, error)| format!("{project_id}: {error}"))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ));
-            }
+    if recovery_blocked {
+        // Reopening a registry after MCP or provider teardown would advertise a ready service
+        // whose next AI call cannot use the runtime it was promised.
+        // MCP 或供应商运行时拆卸后重新开放注册表，会虚假宣称服务就绪，而下一次 AI 调用已无法使用原有运行时。
+        let error = String::from(
+            "Shutdown stopped process-owned runtimes; admission cannot safely recover in this process. Restart the service.",
+        );
+        if let Ok(mut guard) = state.lock() {
+            guard.service_lifecycle_state.retain_recovery_failure(ServiceStatusFailure {
+                stage: String::from("shutdown-recovery"),
+                code: String::from("shutdown_recovery_failed"),
+                message: error.clone(),
+            });
         }
+        return Err(error);
     }
     // Session admission is the final recovery publication point. Opening it before VCE restoration
     // would let a new root turn observe a partially recovered service graph, and a VCE failure would
     // leave root turns enabled even though this function returned an error.
     // 会话准入是恢复流程最后的发布点。若在 VCE 恢复前开放，新根回合会观察到部分恢复的服务图；
     // VCE 恢复失败时，还会在本函数返回错误后错误地保持根回合可用。
-    session_runtime_registry
-        .resume_after_failed_shutdown()
-        .map_err(|error| error.to_string())?;
+    let recovery_result = (|| -> Result<(), String> {
+        if let Some(manager) = vce_runtime {
+            let reconcile_projects = manager.resume_after_failed_shutdown();
+            if reconcile_projects {
+                // A completed VCE teardown removed every runtime and deactivated its HostAI registration.
+                // Reconcile the authoritative workspace snapshot before the still-open window accepts work.
+                // 已完成的 VCE 拆卸移除了全部运行时并注销其 HostAI 注册。仍打开的窗口重新接纳工作前，
+                // 必须按权威工作区快照完成协调。
+                let service_runtime = service_runtime.ok_or_else(|| {
+                    String::from("VCE shutdown recovery requires the retained service runtime.")
+                })?;
+                service_runtime.block_on(manager.restore_after_failed_shutdown())?;
+                let report = service_runtime.block_on(vce::reconcile_vce_projects(state))?;
+                if !report.failures.is_empty() {
+                    return Err(format!(
+                        "VCE shutdown recovery failed for projects: {}",
+                        report
+                            .failures
+                            .into_iter()
+                            .map(|(project_id, error)| format!("{project_id}: {error}"))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ));
+                }
+            }
+        }
+        session_runtime_registry
+            .resume_after_failed_shutdown()
+            .map_err(|error| error.to_string())?;
+        state.lock().map_err(|error| error.to_string())?
+            .service_lifecycle_state.end_shutdown_drain();
+        Ok(())
+    })();
+    if let Err(error) = recovery_result {
+        let failure = ServiceStatusFailure {
+            stage: String::from("shutdown-recovery"),
+            code: String::from("shutdown_recovery_failed"),
+            message: error.clone(),
+        };
+        if let Ok(mut guard) = state.lock() {
+            guard.service_lifecycle_state.retain_recovery_failure(failure);
+        }
+        return Err(error);
+    }
     Ok(())
 }
 

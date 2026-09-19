@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vulcan W02 Browser Compatibility Fixture</title>
+  </head>
+  <body>
+    <h1 id="fixture-title">Vulcan W02 Browser Compatibility Fixture</h1>
+    <p id="click-count">0</p>
+    <button id="click-target" type="button">Increment</button>
+    <input id="text-input" type="text" aria-label="Text input" />
+    <input id="file-input" type="file" aria-label="Upload input" />
+    <a id="popup-link" href="w02-iframe.html" target="_blank">Open popup</a>
+    <a id="download-link" href="w02-download.txt" download>Download payload</a>
+    <iframe id="fixture-frame" src="w02-iframe.html" title="Fixture frame"></iframe>
+    <script>
+      let clicks = 0;
+      document.getElementById('click-target').addEventListener('click', () => {
+        clicks += 1;
+        document.getElementById('click-count').textContent = String(clicks);
+      });
+    </script>
+  </body>
+</html>

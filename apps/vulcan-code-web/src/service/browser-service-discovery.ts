@@ -1,3 +1,5 @@
+import { readElectronServiceConnection } from "@/shell/electronBridge";
+
 // BrowserServiceDiscoverySnapshot describes the service endpoint advertised by /health or dev discovery.
 // BrowserServiceDiscoverySnapshot 描述 /health 或开发发现端点公布的服务端点。
 interface BrowserServiceDiscoverySnapshot {
@@ -10,6 +12,12 @@ interface BrowserServiceDiscoverySnapshot {
   // port is the loopback TCP port used by the service.
   // port 是服务使用的回环 TCP 端口。
   port?: number;
+  // pid is the owning service process identifier used for instance matching.
+  // pid 是用于实例匹配的服务进程标识。
+  pid?: number;
+  // startedAt is the UTC startup timestamp used for instance matching.
+  // startedAt 是用于实例匹配的 UTC 启动时间戳。
+  startedAt?: string;
   // serviceToken is the instance token required by protected service routes.
   // serviceToken 是受保护服务路由要求携带的实例令牌。
   serviceToken?: string;
@@ -21,6 +29,12 @@ interface BrowserServiceEndpoint {
   // baseUrl is the normalized service HTTP endpoint.
   // baseUrl 是标准化后的服务 HTTP 端点。
   baseUrl: string;
+  // pid is the owning service process identifier used for instance matching.
+  // pid 是用于实例匹配的服务进程标识。
+  pid: number | null;
+  // startedAt is the UTC startup timestamp used for instance matching.
+  // startedAt 是用于实例匹配的 UTC 启动时间戳。
+  startedAt: string | null;
   // serviceToken is the optional instance token advertised by the service.
   // serviceToken 是服务公布的可选实例令牌。
   serviceToken: string | null;
@@ -142,11 +156,108 @@ export function resolveBrowserServiceClientId(): string {
   return browserServiceClientId;
 }
 
+// BrowserServiceCandidatePlan separates an explicit selection from fallback discovery candidates.
+// BrowserServiceCandidatePlan 将明确选择与回退发现候选项区分开。
+export interface BrowserServiceCandidatePlan {
+  // pinnedBaseUrl is the exclusively selected endpoint, or null when nothing was explicitly selected.
+  // pinnedBaseUrl 是被排他选中的端点；未明确选择时为 null。
+  pinnedBaseUrl: string | null;
+  // candidates are the fallback endpoints, probed only when nothing was pinned.
+  // candidates 是回退端点，仅在未固定任何端点时探测。
+  candidates: string[];
+}
+
+// BrowserServiceCandidateSources lists every raw endpoint source in documented priority order.
+// BrowserServiceCandidateSources 按文档规定的优先级列出全部原始端点来源。
+export interface BrowserServiceCandidateSources {
+  // fromQuery is the explicit `?service=` selection from the page URL.
+  // fromQuery 是页面 URL 中显式的 `?service=` 选择。
+  fromQuery: string | null;
+  // fromEnv is the explicit build-time service URL.
+  // fromEnv 是构建期显式的服务 URL。
+  fromEnv: string | null;
+  // fromLocation is the same-origin URL when the page is served by the local service.
+  // fromLocation 是页面由本地服务提供时的同源 URL。
+  fromLocation: string | null;
+  // fromDiscovery is the endpoint published by the authoritative same-origin discovery document.
+  // fromDiscovery 是同源权威发现文档发布的端点。
+  fromDiscovery: string | null;
+  // fromStorage is the cached endpoint from an earlier successful connection.
+  // fromStorage 是此前成功连接的缓存端点。
+  fromStorage: string | null;
+  // fromDefault is the documented default loopback endpoint.
+  // fromDefault 是文档规定的默认回环端点。
+  fromDefault: string | null;
+  // rangeCandidates are the last-resort loopback endpoints inside the backend bind range.
+  // rangeCandidates 是后端绑定范围内最后的回环端点兜底。
+  rangeCandidates: string[];
+}
+
+// planBrowserServiceCandidates pins an explicit selection and never allows silent switching.
+// planBrowserServiceCandidates 固定明确选择，且绝不允许静默切换。
+export function planBrowserServiceCandidates(
+  sources: BrowserServiceCandidateSources,
+): BrowserServiceCandidatePlan {
+  // An explicit selection is authoritative: if it is down the client must report an error
+  // instead of connecting to another running instance.
+  // 明确选择是权威的：若其不可用，客户端必须报告错误，而不是连接到另一个运行中的实例。
+  if (sources.fromQuery !== null || sources.fromEnv !== null) {
+    const selected = sources.fromQuery !== null ? sources.fromQuery : sources.fromEnv;
+    const pinnedBaseUrl = normalizeBrowserServiceBaseUrl(selected);
+    if (!pinnedBaseUrl) {
+      throw new Error("The explicitly selected browser service URL is invalid.");
+    }
+    return { pinnedBaseUrl, candidates: [] };
+  }
+  return {
+    pinnedBaseUrl: null,
+    candidates: uniqueBrowserServiceBaseUrls([
+      sources.fromLocation,
+      sources.fromDiscovery,
+      sources.fromStorage,
+      sources.fromDefault,
+      ...sources.rangeCandidates,
+    ]),
+  };
+}
+
 // resolveReachableBrowserServiceBaseUrl finds the active local service endpoint.
 // resolveReachableBrowserServiceBaseUrl 查找当前可用的本地服务端点。
 export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
-  const candidates = await browserServiceDiscoveryCandidates();
-  for (const candidate of candidates) {
+  // The GUI has already selected and authenticated Core; renderer discovery cannot override it.
+  // GUI 已选定并验证 Core，渲染端发现流程不能覆盖此选择。
+  const desktopConnection = await readElectronServiceConnection();
+  if (desktopConnection) {
+    if (desktopConnection.status !== "ready") {
+      throw new Error("The selected desktop service is not ready.");
+    }
+    rememberBrowserServiceEndpoint(desktopConnection);
+    emitBrowserServiceConnectionStatus("connected");
+    return desktopConnection.baseUrl;
+  }
+  let plan: BrowserServiceCandidatePlan;
+  try {
+    plan = await browserServiceDiscoveryPlan();
+  } catch (error) {
+    // Invalid explicit selections must become visible connection failures as well as rejected calls.
+    // 非法显式选择既要拒绝调用，也要进入可见的连接失败状态。
+    emitBrowserServiceConnectionStatus("disconnected", String(error));
+    throw error;
+  }
+  if (plan.pinnedBaseUrl) {
+    const reachable = await probeBrowserServiceBaseUrl(plan.pinnedBaseUrl);
+    if (reachable && reachable.baseUrl === plan.pinnedBaseUrl) {
+      rememberBrowserServiceEndpoint(reachable);
+      emitBrowserServiceConnectionStatus("connected");
+      return reachable.baseUrl;
+    }
+    // Falling through to another instance here would silently connect the user to the wrong Core.
+    // 此处若继续回退到另一个实例，会把用户静默连接到错误的 Core。
+    const message = `The selected browser service ${plan.pinnedBaseUrl} is unavailable.`;
+    emitBrowserServiceConnectionStatus("disconnected", message);
+    throw new Error(message);
+  }
+  for (const candidate of plan.candidates) {
     const reachable = await probeBrowserServiceBaseUrl(candidate);
     if (reachable) {
       rememberBrowserServiceEndpoint(reachable);
@@ -185,25 +296,24 @@ export function webSocketUrlFromBaseUrl(baseUrl: string): string {
   return url.toString();
 }
 
-// browserServiceDiscoveryCandidates returns prioritized service endpoint candidates.
-// browserServiceDiscoveryCandidates 返回按优先级排序的服务端点候选项。
-async function browserServiceDiscoveryCandidates(): Promise<string[]> {
-  const fromQuery = new URLSearchParams(window.location.search).get("service");
-  const fromLocation = browserServiceBaseUrlFromLocation();
-  const fromDiscovery = await readBrowserServiceDiscoveryBaseUrl();
-  const fromStorage = window.localStorage.getItem(BROWSER_SERVICE_URL_STORAGE_KEY);
+// browserServiceDiscoveryPlan collects every raw source and returns the candidate plan.
+// browserServiceDiscoveryPlan 收集全部原始来源并返回候选计划。
+async function browserServiceDiscoveryPlan(): Promise<BrowserServiceCandidatePlan> {
   const importMeta = import.meta as ImportMeta & { env?: Record<string, string | undefined> };
-  const fromEnv = importMeta.env?.VITE_VULCAN_SERVICE_URL;
-  const rangeCandidates = browserServicePortRangeCandidates();
-  return uniqueBrowserServiceBaseUrls([
+  // An explicit target must be validated before even reading another instance's discovery.
+  // 显式目标须先完成校验，不能预先读取其他实例的发现文档。
+  const fromQuery = new URLSearchParams(window.location.search).get("service");
+  const fromEnv = importMeta.env?.VITE_VULCAN_SERVICE_URL ?? null;
+  return planBrowserServiceCandidates({
     fromQuery,
-    fromLocation,
-    fromDiscovery,
-    fromStorage,
     fromEnv,
-    DEFAULT_BROWSER_SERVICE_URL,
-    ...rangeCandidates,
-  ]);
+    fromLocation: browserServiceBaseUrlFromLocation(),
+    fromDiscovery: fromQuery !== null || fromEnv !== null
+      ? null : await readBrowserServiceDiscoveryBaseUrl(),
+    fromStorage: window.localStorage.getItem(BROWSER_SERVICE_URL_STORAGE_KEY),
+    fromDefault: DEFAULT_BROWSER_SERVICE_URL,
+    rangeCandidates: browserServicePortRangeCandidates(),
+  });
 }
 
 // browserServiceBaseUrlFromLocation returns the current same-origin service URL when the page is served by the local service.
@@ -233,7 +343,6 @@ async function readBrowserServiceDiscoveryBaseUrl(): Promise<string | null> {
     const payload = await response.json() as BrowserServiceDiscoverySnapshot;
     const endpoint = browserServiceEndpointFromDiscovery(payload, payload.baseUrl ?? null);
     if (endpoint) {
-      rememberBrowserServiceEndpoint(endpoint);
       return endpoint.baseUrl;
     }
     return normalizeBrowserServiceBaseUrl(payload.baseUrl ?? null);
@@ -281,6 +390,11 @@ function normalizeBrowserServiceBaseUrl(value: string | null): string | null {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       return null;
     }
+    // A service selection names an origin, never a path or embedded credential.
+    // 服务选择只能指定来源，不能携带路径或内嵌凭据。
+    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+      return null;
+    }
     return url.toString().replace(/\/+$/, "");
   } catch {
     return null;
@@ -309,7 +423,6 @@ async function probeBrowserServiceBaseUrl(baseUrl: string): Promise<BrowserServi
     if (!endpoint) {
       return null;
     }
-    rememberBrowserServiceEndpoint(endpoint);
     return endpoint;
   } catch {
     return null;
@@ -330,8 +443,31 @@ function browserServiceEndpointFromDiscovery(
   }
   return {
     baseUrl,
+    pid: typeof payload.pid === "number" ? payload.pid : null,
+    startedAt: typeof payload.startedAt === "string" && payload.startedAt ? payload.startedAt : null,
     serviceToken: normalizeBrowserServiceAccessToken(payload.serviceToken ?? null),
   };
+}
+
+// browserServiceIdentityMatches reports whether two endpoints describe the same service generation.
+// browserServiceIdentityMatches 报告两个端点是否描述同一服务代际。
+export function browserServiceIdentityMatches(
+  first: Pick<BrowserServiceEndpoint, "pid" | "startedAt" | "serviceToken"> | null,
+  second: Pick<BrowserServiceEndpoint, "pid" | "startedAt" | "serviceToken"> | null,
+): boolean {
+  if (!first || !second) {
+    return false;
+  }
+  if (first.pid === null || second.pid === null || first.pid !== second.pid) {
+    return false;
+  }
+  if (!first.startedAt || !second.startedAt || first.startedAt !== second.startedAt) {
+    return false;
+  }
+  if (!first.serviceToken || !second.serviceToken || first.serviceToken !== second.serviceToken) {
+    return false;
+  }
+  return true;
 }
 
 // rememberBrowserServiceEndpoint stores one discovered endpoint for future sync helpers.

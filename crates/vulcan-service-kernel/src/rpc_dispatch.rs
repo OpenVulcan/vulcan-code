@@ -1,8 +1,9 @@
 //! WebUI RPC method dispatch.
-//! WebUI RPC 方法分发。
+//! WebUI RPC 方法分发.
 
 use super::*;
 
+mod browser;
 mod configuration;
 mod conversation_events_v1;
 mod conversation_runtime;
@@ -88,6 +89,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = configuration::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = browser::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -211,6 +216,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         project_conversation::RPC_METHODS,
         knowledge_base::RPC_METHODS,
         vce::RPC_METHODS,
+        browser::RPC_METHODS,
     ]
     .into_iter()
     .flatten()
@@ -237,12 +243,17 @@ mod tests {
             + conversation_runtime::RPC_METHODS.len()
             + configuration::RPC_METHODS.len()
             + project_conversation::RPC_METHODS.len();
-        let declared_method_count =
-            declared_method_count + knowledge_base::RPC_METHODS.len() + vce::RPC_METHODS.len();
+        let declared_method_count = declared_method_count
+            + knowledge_base::RPC_METHODS.len()
+            + vce::RPC_METHODS.len()
+            + browser::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
         assert!(methods.contains("service_continue_conversation"));
         assert!(methods.contains("service_set_vulcan_plugin_enabled"));
+        assert!(methods.contains("service_start_plugin_environment_install"));
+        assert!(methods.contains("service_plugin_environment_install_status"));
+        assert!(methods.contains("service_plugin_environment_install_status_for_plugin"));
         assert!(methods.contains("service_update_local_plugin"));
         assert!(methods.contains("service_set_plugin_mcp_secret"));
         assert!(methods.contains("service_delete_plugin_mcp_secret"));
@@ -265,6 +276,9 @@ mod tests {
         assert!(methods.contains("service_get_vce_project_overview"));
         assert!(methods.contains("service_update_vce_project_settings"));
         assert!(methods.contains("service_list_vce_files"));
+        assert!(methods.contains("browser.session.create"));
+        assert!(methods.contains("browser.session.list"));
+        assert!(methods.contains("browser.session.close"));
     }
 
     /// Verifies unknown methods retain the browser bridge's canonical diagnostic.

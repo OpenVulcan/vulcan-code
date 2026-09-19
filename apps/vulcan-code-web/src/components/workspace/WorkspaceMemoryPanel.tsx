@@ -1,4 +1,5 @@
 import React from "react";
+import "@/styles/context-injection.css";
 import { Brain, BrainCircuit, Database, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {

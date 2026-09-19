@@ -365,6 +365,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
                 "shell": "pwsh"
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -398,6 +399,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
                 "wait_policy": { "mode": "return_immediately" }
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -437,6 +439,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
                 }
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -476,6 +479,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
                 }
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -537,6 +541,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
                 }
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -576,6 +581,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
                 "terminal_session_id": terminal_session_id
             }),
             session_id: Some(owner_session_id),
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,

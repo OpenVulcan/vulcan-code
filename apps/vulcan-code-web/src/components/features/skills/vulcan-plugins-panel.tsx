@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
+import { getCoreBrowserRuntimeStatus } from "@/service/core-browser-service";
 import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -148,6 +149,15 @@ export function VulcanPluginsPanel(props: {
   // busyPluginId identifies the single Vulcan Plugin mutation currently in flight.
   // busyPluginId 标识当前正在执行变更的唯一 Vulcan Plugin。
   const [busyPluginId, setBusyPluginId] = React.useState<string | null>(null);
+  // environmentReadyByPlugin records the service-checked readiness of each exact plugin generation.
+  // environmentReadyByPlugin 记录每个精确插件代次经服务检查后的就绪状态。
+  const [environmentReadyByPlugin, setEnvironmentReadyByPlugin] = React.useState<Record<string, boolean>>({});
+  // coreBrowserReady is independent of the Playwright MCP package installed for the browser plugin.
+  // coreBrowserReady 独立于浏览器插件所安装的 Playwright MCP 包。
+  const [coreBrowserReady, setCoreBrowserReady] = React.useState<boolean | null>(null);
+  // installTasksByPlugin reflects Core-owned work, including work started by another client.
+  // installTasksByPlugin 反映 Core 持有的任务，包括其他客户端启动的任务。
+  const [installTasksByPlugin, setInstallTasksByPlugin] = React.useState<Record<string, import("../../../service/skills-actions-service").PluginEnvironmentInstallTaskStatus>>({});
   // installSourcePath stores the exact local plugin directory selected for inspection.
   // installSourcePath 保存等待检查的精确本地插件目录。
   const [installSourcePath, setInstallSourcePath] = React.useState("");
@@ -195,6 +205,96 @@ export function VulcanPluginsPanel(props: {
     () => props.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin"),
     [props.plugins],
   );
+  // Refresh the optional Core browser component when this catalog view mounts or changes.
+  // 此目录视图挂载或变化时刷新可选 Core 浏览器组件状态。
+  React.useEffect(() => {
+    if (!vulcanPlugins.some((plugin) => plugin.id === "vulcan-browser")) return;
+    let active = true;
+    void getCoreBrowserRuntimeStatus()
+      .then((status) => { if (active) setCoreBrowserReady(status.ready); })
+      .catch(() => { if (active) setCoreBrowserReady(null); });
+    return () => { active = false; };
+  }, [vulcanPlugins]);
+  // Refresh readiness when the committed plugin catalog changes; stale responses cannot replace a newer view.
+  // 已提交插件目录变化时刷新就绪状态；过期响应不能覆盖较新的视图。
+  React.useEffect(() => {
+    // active prevents an outdated catalog request from publishing readiness after cleanup.
+    // active 防止过期目录请求在清理后发布就绪状态。
+    let active = true;
+    void Promise.all(vulcanPlugins.map(async (plugin) => {
+      // ready is read from Core, which owns the plugin generation and private environment.
+      // ready 从持有插件代次和私有环境的 Core 读取。
+      const ready = plugin.desiredEnabled
+        ? true
+        : await props.actions.onPluginEnvironmentReady(plugin.id).catch(() => false);
+      const task = await props.actions.onPluginEnvironmentInstallStatusForPlugin(plugin.id).catch(() => null);
+      return [plugin.id, ready, task] as const;
+    })).then((entries) => {
+      if (active) {
+        setEnvironmentReadyByPlugin(Object.fromEntries(entries.map(([id, ready]) => [id, ready])));
+        setInstallTasksByPlugin(Object.fromEntries(entries.flatMap(([id, , task]) => task ? [[id, task]] : [])));
+      }
+    });
+    return () => { active = false; };
+  }, [props.actions, vulcanPlugins]);
+  // Poll only unfinished Core tasks; unmounting the panel never cancels their installation.
+  // 只轮询尚未完成的 Core 任务；卸载面板绝不取消安装。
+  React.useEffect(() => {
+    const pending = Object.values(installTasksByPlugin).filter((task) => task.state === "queued" || task.state === "running");
+    if (pending.length === 0) return;
+    let active = true;
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const updates = await Promise.all(pending.map((task) => props.actions.onPluginEnvironmentInstallStatus(task.taskId)));
+        if (!active) return;
+        setInstallTasksByPlugin((current) => {
+          const next = { ...current };
+          for (const task of updates) {
+            if (next[task.pluginId]?.taskId === task.taskId) next[task.pluginId] = task;
+          }
+          return next;
+        });
+        for (const task of updates) {
+          if (task.state === "succeeded") {
+            const ready = await props.actions.onPluginEnvironmentReady(task.pluginId);
+            if (active) setEnvironmentReadyByPlugin((current) => ({ ...current, [task.pluginId]: ready }));
+          }
+        }
+      } catch (reason) {
+        if (active) setInstallError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        polling = false;
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [installTasksByPlugin, props.actions]);
+  // A second client can start installation while this panel is open, so refresh Core's latest task by plugin.
+  // 其他客户端可能在本面板打开期间启动安装，因此按插件刷新 Core 的最近任务。
+  React.useEffect(() => {
+    if (vulcanPlugins.length === 0) return;
+    let active = true;
+    const synchronize = async () => {
+      const entries = await Promise.all(vulcanPlugins.map(async (plugin) => [
+        plugin.id,
+        await props.actions.onPluginEnvironmentInstallStatusForPlugin(plugin.id).catch(() => null),
+      ] as const));
+      if (!active) return;
+      setInstallTasksByPlugin(Object.fromEntries(entries.flatMap(([id, task]) => task ? [[id, task] as const] : [])));
+      const succeeded = entries.filter(([, task]) => task?.state === "succeeded");
+      const readiness = await Promise.all(succeeded.map(async ([id]) => [
+        id,
+        await props.actions.onPluginEnvironmentReady(id).catch(() => false),
+      ] as const));
+      if (active) setEnvironmentReadyByPlugin((current) => ({ ...current, ...Object.fromEntries(readiness) }));
+    };
+    const timer = window.setInterval(() => { void synchronize(); }, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [props.actions, vulcanPlugins]);
   // visiblePlugins applies localized text and lifecycle filters to the Vulcan Plugin projection.
   // visiblePlugins 对 Vulcan 插件投影应用本地化文本与生命周期筛选。
   const visiblePlugins = React.useMemo(() => vulcanPlugins.filter((plugin) => {
@@ -228,7 +328,7 @@ export function VulcanPluginsPanel(props: {
   // Returns: a promise that settles after the service response updates the catalog.
   // 返回值：服务响应更新目录后结束的 Promise。
   const togglePlugin = React.useCallback(async (plugin: PluginSummary) => {
-    if (actionRunningRef.current || !plugin.available) {
+    if (actionRunningRef.current || !plugin.available || (!plugin.desiredEnabled && environmentReadyByPlugin[plugin.id] !== true)) {
       return;
     }
     actionRunningRef.current = true;
@@ -247,7 +347,33 @@ export function VulcanPluginsPanel(props: {
       actionRunningRef.current = false;
       setBusyPluginId(null);
     }
-  }, [props.actions]);
+  }, [environmentReadyByPlugin, props.actions]);
+
+  // installPluginEnvironment starts one detached Core task without changing the plugin state.
+  // installPluginEnvironment 启动一个分离的 Core 任务，不改变插件启用状态。
+  // Parameters: plugin is the exact catalog row selected by the user.
+  // 参数：plugin 是用户选择的精确目录行。
+  // Returns: a promise that settles after Core accepts the task identity.
+  // 返回值：Core 接受任务身份后结束的 Promise。
+  const installPluginEnvironment = React.useCallback(async (plugin: PluginSummary) => {
+    const currentTask = installTasksByPlugin[plugin.id];
+    if (actionRunningRef.current || !plugin.available || plugin.desiredEnabled || plugin.runtimeState !== "disabled"
+      || currentTask?.state === "queued" || currentTask?.state === "running") {
+      return;
+    }
+    actionRunningRef.current = true;
+    setBusyPluginId(plugin.id);
+    setInstallError("");
+    try {
+      const task = await props.actions.onStartPluginEnvironmentInstall(plugin.id);
+      setInstallTasksByPlugin((current) => ({ ...current, [plugin.id]: task }));
+    } catch (reason) {
+      setInstallError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      actionRunningRef.current = false;
+      setBusyPluginId(null);
+    }
+  }, [installTasksByPlugin, props.actions]);
 
   // inspectPluginPackage validates the current path and resets every prior authorization decision.
   // inspectPluginPackage 校验当前路径并重置此前的所有授权决定。
@@ -583,6 +709,9 @@ export function VulcanPluginsPanel(props: {
             {vulcanPlugins.length === 0 ? t("skills.plugins.emptyDetail") : t("skills.filter.empty")}
           </div>
         ) : visiblePlugins.map((plugin) => {
+          // installTask is the newest Core-owned installation attempt for this plugin generation.
+          // installTask 是当前插件代次最近一次由 Core 持有的安装尝试。
+          const installTask = installTasksByPlugin[plugin.id];
           // localizedName follows the active UI locale instead of the service snapshot locale.
           // localizedName 跟随当前界面语言，而不是服务快照生成时的语言。
           const localizedName = localizedPluginText(plugin.nameByLocale, locale, plugin.name);
@@ -632,6 +761,11 @@ export function VulcanPluginsPanel(props: {
                 </div>
                 <p>{localizedCapability}</p>
                 <span className="agent-definition-row-path">{plugin.id}</span>
+                {plugin.id === "vulcan-browser" ? <div className="text-xs" role="status">
+                  {locale.startsWith("zh")
+                    ? `Playwright MCP 依赖：${environmentReadyByPlugin[plugin.id] === true ? "已安装" : environmentReadyByPlugin[plugin.id] === false ? "缺失或已损坏" : "检查中"}；Core 浏览器组件：${coreBrowserReady === true ? "已找到" : coreBrowserReady === false ? "缺失或不可用" : "状态未知"}`
+                    : `Playwright MCP dependencies: ${environmentReadyByPlugin[plugin.id] === true ? "installed" : environmentReadyByPlugin[plugin.id] === false ? "missing or damaged" : "checking"}; Core browser component: ${coreBrowserReady === true ? "found" : coreBrowserReady === false ? "missing or unavailable" : "unknown"}`}
+                </div> : null}
                 {plugin.diagnostics.length > 0 ? <details className="vulcan-plugin-component-details text-[var(--vcn-content-warning)]">
                   <summary>{locale.startsWith("zh") ? "查看插件诊断" : "View plugin diagnostics"}</summary>
                   <pre className="plugin-control-error-details">{plugin.diagnostics.join("\n")}</pre>
@@ -732,6 +866,21 @@ export function VulcanPluginsPanel(props: {
                 ) : null}
               </div>
               <div className="agent-definition-row-actions">
+              {!plugin.desiredEnabled && environmentReadyByPlugin[plugin.id] === false && plugin.runtimeState === "disabled" ? (
+                <Button
+                  disabled={!plugin.available || mutationBusy || installTask?.state === "queued" || installTask?.state === "running"}
+                  onClick={() => void installPluginEnvironment(plugin)}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {installTask?.state === "queued"
+                    ? (locale.startsWith("zh") ? "等待安装" : "Install queued")
+                    : installTask?.state === "running"
+                      ? (locale.startsWith("zh") ? "正在安装" : "Installing runtime")
+                      : (locale.startsWith("zh") ? "安装运行环境" : "Install runtime")}
+                </Button>
+              ) : null}
               {plugin.extension?.origin === "userInstalled" ? (
                 <IconButton
                   aria-label={locale.startsWith("zh") ? "卸载用户插件" : "Uninstall user plugin"}
@@ -751,11 +900,18 @@ export function VulcanPluginsPanel(props: {
                 aria-busy={busyPluginId === plugin.id}
                 checked={plugin.desiredEnabled}
                 aria-label={toggleLabel}
-                disabled={!plugin.available || mutationBusy || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining"}
+                disabled={!plugin.available || mutationBusy || (!plugin.desiredEnabled && environmentReadyByPlugin[plugin.id] !== true) || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining"}
                 onCheckedChange={() => void togglePlugin(plugin)}
                 title={toggleLabel}
               />
               </div>
+              {installTask ? <div className="text-xs" role={installTask.state === "failed" ? "alert" : "status"}>
+                {installTask.state === "failed"
+                  ? (locale.startsWith("zh") ? `运行环境安装失败：${installTask.error ?? "未知错误"}` : `Runtime installation failed: ${installTask.error ?? "Unknown error"}`)
+                  : installTask.state === "succeeded"
+                    ? (locale.startsWith("zh") ? "运行环境安装完成" : "Runtime installation complete")
+                    : locale.startsWith("zh") ? `安装阶段：${installTask.stage}` : `Install stage: ${installTask.stage}`}
+              </div> : null}
             </article>
           );
         })}

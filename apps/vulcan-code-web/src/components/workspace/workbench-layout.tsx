@@ -47,15 +47,14 @@ import {
 } from "@/components/workspace/workspace-resizable-body";
 import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-submission-state";
 import { resolveEmptyWorkbenchDraftRoute } from "@/components/workspace/workbench-layout/empty-workbench-route";
-import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
 import { ComposerMediaUploadProgressContext } from "@/components/composer/composer-media-upload-context";
 import {
   isConversationUploadFailure,
   mediaUploadProgressKey,
   reduceMediaUploadProgress,
 } from "@/components/workspace/media-upload-progress-state";
-import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
 import { routeWorkspaceInputOwnerFromPointer } from "@/components/workspace/workspace-input-owner";
+
 import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout/shell-chrome";
 import {
   copyText,
@@ -234,6 +233,16 @@ import {
   TerminalSquare,
   Trash2,
 } from "lucide-react";
+
+// WorkbenchDialogs loads project and question dialogs only after one actually opens.
+// WorkbenchDialogs 仅在项目或提问对话框真正打开后加载其界面。
+const WorkbenchDialogs = React.lazy(() => import("@/components/workspace/workbench-dialogs")
+  .then((module) => ({ default: module.WorkbenchDialogs })));
+
+// MediaUploadProgressPanel loads only for an active transfer while preserving the stream-owned progress row.
+// MediaUploadProgressPanel 仅在传输进行时加载，同时保留由事件流管理的进度行。
+const MediaUploadProgressPanel = React.lazy(() => import("@/components/workspace/media-upload-progress-panel")
+  .then((module) => ({ default: module.MediaUploadProgressPanel })));
 
 // WorkbenchLayout renders the WebUI workbench shell.
 // WorkbenchLayout 渲染 WebUI 工作台外壳。
@@ -1984,6 +1993,20 @@ export function WorkbenchLayout(props: {
     }
   }, [handleCompactSelectedConversationContext, handleOpenWorkspaceSkills]);
 
+  // dialogsRequested identifies a visible dialog without loading dialog code for the common workbench path.
+  // dialogsRequested 识别可见对话框，避免常规工作台路径加载对话框代码。
+  const dialogsRequested = projectFolderPickerOpen || renameTarget !== null || projectIconTarget !== null
+    || projectSettingsTarget !== null || archiveProjectTarget !== null || removeProjectTarget !== null
+    || Boolean(workbenchState.pendingQuestion) || stopConversationAgents !== null;
+  // dialogsActivated keeps the dialog host mounted after its first use so close animations can finish.
+  // dialogsActivated 在首次使用后保持对话框宿主挂载，以便关闭动画完成。
+  const [dialogsActivated, setDialogsActivated] = React.useState(dialogsRequested);
+  React.useEffect(() => {
+    if (dialogsRequested) {
+      setDialogsActivated(true);
+    }
+  }, [dialogsRequested]);
+
   return (
     <ThinkingDisplaySystemContext.Provider value={{
       mode: workbenchState.thinkingDisplayMode,
@@ -2009,6 +2032,7 @@ export function WorkbenchLayout(props: {
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
       {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
+          <React.Suspense fallback={<div role="status">{i18n.t("composer.attachment.processing")}</div>}>
           {floatingMediaUploadProgresses.map((progress) => (
             <MediaUploadProgressPanel
               key={mediaUploadProgressKey(progress)}
@@ -2016,6 +2040,7 @@ export function WorkbenchLayout(props: {
               onCancel={handleCancelConversationSubmission}
             />
           ))}
+          </React.Suspense>
         </div>
       ) : null}
       <main className="workspace">
@@ -2170,6 +2195,7 @@ export function WorkbenchLayout(props: {
             }}
             startup={props.startup}
             workbench={workbenchState}
+            selectedConversationId={selectedConversationId}
             chromeActions={shellChromeActions}
             titlebarDragRegion={windowDragRegionEnabled}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
@@ -2183,7 +2209,7 @@ export function WorkbenchLayout(props: {
         />
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
-      <WorkbenchDialogs
+      {dialogsActivated ? <React.Suspense fallback={null}><WorkbenchDialogs
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}
         pendingQuestion={workbenchState.pendingQuestion ?? null}
@@ -2247,7 +2273,7 @@ export function WorkbenchLayout(props: {
         onSaveVmmDraft={handleProjectSettingsVmmSave}
         onSetAgentSkillState={handleProjectSettingsAgentSkillSave}
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
-      />
+      /></React.Suspense> : null}
     </div>
       </VceProjectSurfaceProvider>
       </VceJobObserverProvider>

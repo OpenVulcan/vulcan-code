@@ -28,6 +28,21 @@ impl ServiceBootstrapError {
             message: message.into(),
         }
     }
+
+    /// Projects one stable status failure without configuration or credential content.
+    /// 投影一条不含配置或凭据内容的稳定状态失败。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A machine-readable failure record owned by the protected status endpoint.
+    /// 返回受保护状态端点持有的机器可读失败记录。
+    pub(crate) fn service_status_failure(&self) -> vulcan_service_api::ServiceStatusFailure {
+        vulcan_service_api::ServiceStatusFailure {
+            stage: self.step_id.to_string(),
+            code: format!("bootstrap_{}", self.step_id),
+            message: self.message.clone(),
+        }
+    }
 }
 
 /// Wraps a subsystem result with one startup step scope.

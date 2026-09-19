@@ -1,0 +1,257 @@
+// Targeted tests for the package input checks used by desktop-runtime.mjs.
+// 针对 desktop-runtime.mjs 使用的打包输入检查编写定向测试。
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import test from 'node:test';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { packageRelativePath, verifyPackagedLayout } from './desktop-runtime.mjs';
+
+test('rejects an isolated distribution root outside generated target artifacts', () => {
+  const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
+  const attemptedRoot = path.parse(script).root;
+  const result = spawnSync(process.execPath, [script, 'package', 'release'], {
+    env: { ...process.env, VULCAN_DESKTOP_DISTRIBUTION_ROOT: attemptedRoot },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must be inside the repository target directory/);
+});
+
+test('prints one validated isolated root and refuses a linked cleanup boundary', async (t) => {
+  // script and target derive from the same repository entry used by the actual build scripts.
+  // script 与 target 来自真实构建脚本使用的同一仓库入口。
+  const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
+  const target = path.resolve(path.dirname(script), '..', 'target');
+  await mkdir(target, { recursive: true });
+  // ownedRoot and outside are unique test-owned paths; the link is removed before either tree.
+  // ownedRoot 与 outside 是测试独占路径；清理任一目录树前先移除目录链接。
+  const ownedRoot = await mkdtemp(path.join(target, 'desktop-root-test-'));
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'desktop-root-outside-'));
+  const linkedRoot = path.join(ownedRoot, 'linked');
+  await symlink(outside, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(async () => {
+    await unlink(linkedRoot);
+    await rm(ownedRoot, { recursive: true });
+    await rm(outside, { recursive: true });
+  });
+  // valid confirms the CLI prints the exact root consumed by Unix sync and build scripts.
+  // valid 确认命令输出 Unix 同步与构建脚本实际使用的精确根目录。
+  const valid = spawnSync(process.execPath, [script, 'root'], {
+    env: { ...process.env, VULCAN_DESKTOP_DISTRIBUTION_ROOT: ownedRoot },
+    encoding: 'utf8',
+  });
+  assert.equal(valid.status, 0);
+  assert.equal(valid.stdout, ownedRoot);
+  // escaped must fail before a recursive sync can follow an existing junction or symlink.
+  // escaped 必须在递归同步跟随已有联接或符号链接之前失败。
+  const escaped = spawnSync(process.execPath, [script, 'root'], {
+    env: { ...process.env, VULCAN_DESKTOP_DISTRIBUTION_ROOT: path.join(linkedRoot, 'child') },
+    encoding: 'utf8',
+  });
+  assert.notEqual(escaped.status, 0);
+  assert.match(escaped.stderr, /contains a link or non-directory/);
+});
+
+// The fixture mirrors the relative entries emitted by the package layout.
+// 测试夹具复现打包清单生成的相对路径条目。
+const fixtureLayout = Object.freeze({
+  profile: 'debug',
+  platform: 'win32',
+  architecture: 'x64',
+  serviceExecutable: 'bin/vulcan-code-service.exe',
+  desktopExecutable: 'desktop/runtime/electron.exe',
+  desktopEntry: 'desktop/runtime/resources/app/gui/main.js',
+  browserHostEntry: 'desktop/runtime/resources/app/chromium-host/main.js',
+  chromiumExecutable: 'browser/chromium/chrome-win64/chrome.exe',
+  webuiRoot: 'webui',
+});
+
+// Release fixtures include the runtime resources that are intentionally optional in debug mode.
+// Release 夹具包含调试模式有意可选、但发布模式必须存在的运行时资源。
+function releaseLayout(chromium = true) {
+  return {
+    ...fixtureLayout,
+    profile: 'release',
+    capabilities: chromium ? ['desktop', 'browser-host', 'webui'] : ['desktop', 'webui'],
+    chromiumExecutable: chromium ? fixtureLayout.chromiumExecutable : null,
+  };
+}
+
+// Create a complete detached distribution fixture with files and directories of the right kind.
+// 创建包含正确文件和目录类型的完整脱离源码发行夹具。
+async function createFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vulcan-desktop-runtime-'));
+  const files = [
+    fixtureLayout.serviceExecutable,
+    fixtureLayout.desktopExecutable,
+    fixtureLayout.desktopEntry,
+    fixtureLayout.browserHostEntry,
+    fixtureLayout.chromiumExecutable,
+  ];
+  for (const relative of files) {
+    const filename = path.join(root, relative);
+    await mkdir(path.dirname(filename), { recursive: true });
+    await writeFile(filename, 'fixture');
+  }
+  await mkdir(path.join(root, fixtureLayout.webuiRoot), { recursive: true });
+  return root;
+}
+
+// Create a release-shaped fixture with an explicit managed Node manifest and Chromium inventory.
+// 创建带有明确受管 Node 清单及 Chromium 文件清单的发布形状夹具。
+async function createReleaseFixture({ chromium = true } = {}) {
+  const root = await createFixture();
+  for (const relative of ['resources', 'plugins', 'lua_runtime', 'tools']) {
+    await mkdir(path.join(root, relative), { recursive: true });
+  }
+  const nodeRoot = path.join(root, 'dependencies/runtimes/node/node-24.18.0-windows-x64');
+  await mkdir(nodeRoot, { recursive: true });
+  await writeFile(path.join(nodeRoot, 'node.exe'), 'node');
+  await writeFile(path.join(nodeRoot, 'runtime-manifest.json'), JSON.stringify({
+    schema_version: 1, runtime: 'node', version: '24.18.0', platform: 'windows-x64', executable: 'node.exe',
+  }));
+  const pythonRoot = path.join(root, 'dependencies/runtimes/python/cpython-3.14.6-windows-x64');
+  await mkdir(pythonRoot, { recursive: true });
+  await writeFile(path.join(pythonRoot, 'python.exe'), 'python');
+  await writeFile(path.join(pythonRoot, 'runtime-manifest.json'), JSON.stringify({
+    schema_version: 1, runtime: 'python', version: '3.14.6', platform: 'windows-x64', executable: 'python.exe',
+  }));
+  if (chromium) {
+    const sidecar = 'browser/chromium/chrome-win64/chrome.dll';
+    await writeFile(path.join(root, sidecar), 'sidecar');
+    await writeFile(path.join(root, 'browser/chromium/package-manifest.json'), JSON.stringify({
+      schemaVersion: 1,
+      executable: fixtureLayout.chromiumExecutable,
+      version: '153.0.8010.12',
+      files: [
+        { path: fixtureLayout.chromiumExecutable, bytes: 7 },
+        { path: sidecar, bytes: 7 },
+      ],
+    }));
+  }
+  return root;
+}
+
+// Remove the temporary fixture after each test, including nested generated paths.
+// 每个测试后删除临时夹具及其嵌套生成路径。
+async function removeFixture(root) {
+  await rm(root, { recursive: true, force: true });
+}
+
+test('accepts a complete package layout', async (t) => {
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  await verifyPackagedLayout(fixtureLayout, root);
+});
+
+test('writes portable manifest paths from Windows distribution paths', async (t) => {
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  const absoluteExecutable = path.join(root, fixtureLayout.chromiumExecutable);
+  assert.equal(packageRelativePath(root, absoluteExecutable), fixtureLayout.chromiumExecutable);
+  assert.equal(packageRelativePath(root, path.join(root, 'browser/chromium/chrome-win64/chrome.dll')),
+    'browser/chromium/chrome-win64/chrome.dll');
+});
+
+test('accepts a package without optional Chromium', async (t) => {
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  const layout = { ...fixtureLayout, chromiumExecutable: null };
+  await rm(path.join(root, fixtureLayout.chromiumExecutable));
+  await verifyPackagedLayout(layout, root);
+});
+
+test('accepts a complete release package with managed assets', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await verifyPackagedLayout({ ...releaseLayout() }, root);
+});
+
+test('accepts a release package without optional Chromium', async (t) => {
+  const root = await createReleaseFixture({ chromium: false });
+  t.after(() => removeFixture(root));
+  await verifyPackagedLayout(releaseLayout(false), root);
+});
+
+test('keeps debug layout checks independent from release-only assets', async (t) => {
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  await verifyPackagedLayout({ ...fixtureLayout, chromiumExecutable: null }, root);
+});
+
+for (const relative of ['resources', 'plugins', 'lua_runtime', 'tools']) {
+  test(`rejects a release package missing ${relative}`, async (t) => {
+    const root = await createReleaseFixture();
+    t.after(() => removeFixture(root));
+    await rm(path.join(root, relative), { recursive: true, force: true });
+    await assert.rejects(verifyPackagedLayout(releaseLayout(), root), new RegExp(`Missing package input ${relative}`));
+  });
+}
+
+test('rejects a release package without the matching managed Node runtime', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await rm(path.join(root, 'dependencies/runtimes/node'), { recursive: true, force: true });
+  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Missing package input managedNodeRuntimeRoot/);
+});
+
+test('rejects a release package without the matching managed Python runtime', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await rm(path.join(root, 'dependencies/runtimes/python'), { recursive: true, force: true });
+  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Missing package input managedPythonRuntimeRoot/);
+});
+
+test('rejects a declared Chromium package without component evidence', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await rm(path.join(root, 'browser/chromium/package-manifest.json'), { force: true });
+  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Missing package input chromiumPackageManifest/);
+});
+
+test('rejects a Chromium component whose copied size changed', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await writeFile(path.join(root, 'browser/chromium/chrome-win64/chrome.dll'), 'changed-size');
+  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Chromium component size changed/);
+});
+
+// Every required entry must report its manifest field and exact relative filename.
+// 每个必需条目都必须报告清单字段和准确的相对文件名。
+const requiredEntries = [
+  ['serviceExecutable', fixtureLayout.serviceExecutable],
+  ['desktopExecutable', fixtureLayout.desktopExecutable],
+  ['desktopEntry', fixtureLayout.desktopEntry],
+  ['browserHostEntry', fixtureLayout.browserHostEntry],
+  ['webuiRoot', fixtureLayout.webuiRoot],
+  ['chromiumExecutable', fixtureLayout.chromiumExecutable],
+];
+
+for (const [name, relative] of requiredEntries) {
+  test(`rejects a missing ${name}`, async (t) => {
+    const root = await createFixture();
+    t.after(() => removeFixture(root));
+    await rm(path.join(root, relative), { recursive: true, force: true });
+    await assert.rejects(
+      verifyPackagedLayout(fixtureLayout, root),
+      error => {
+        assert.match(error.message, new RegExp(`Missing package input ${name} .*${relative.replaceAll('\\', '\\\\')}`));
+        return true;
+      },
+    );
+  });
+}
+
+test('rejects an entry with the wrong filesystem kind', async (t) => {
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  await rm(path.join(root, fixtureLayout.desktopEntry));
+  await mkdir(path.join(root, fixtureLayout.desktopEntry), { recursive: true });
+  await assert.rejects(
+    verifyPackagedLayout(fixtureLayout, root),
+    { message: `Invalid package input desktopEntry ${fixtureLayout.desktopEntry}: expected a file.` },
+  );
+});

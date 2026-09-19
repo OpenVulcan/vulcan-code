@@ -71,9 +71,9 @@ $CargoAboutConfigFile = Join-Path $ProjectDir "about.toml"
 # CargoAboutTemplateFile 指向用于 Markdown 输出的 cargo-about Handlebars 模板。
 $CargoAboutTemplateFile = Join-Path $ProjectDir "about.hbs"
 
-# TauriManifestPath points at the Tauri/WebUI desktop shell manifest used as the dependency graph root.
-# TauriManifestPath 指向作为依赖图根节点的 Tauri/WebUI 桌面壳清单文件。
-$TauriManifestPath = Join-Path $ProjectDir "apps/vulcan-code-tauri/Cargo.toml"
+# TauriManifestPath points at the service-host manifest used as the dependency graph root.
+# TauriManifestPath 指向作为依赖图根节点的服务宿主清单文件。
+$TauriManifestPath = Join-Path $ProjectDir "apps/vulcan-code-service/Cargo.toml"
 
 # Load the shared deterministic indexer used by generation and fixture validation.
 # 加载生成流程与样例验证共用的确定性索引器。
@@ -105,7 +105,7 @@ function Invoke-GenerateRustThirdPartyNotices {
         throw "Missing cargo-about template: $CargoAboutTemplateFile"
     }
     if (-not (Test-Path -LiteralPath $TauriManifestPath)) {
-        throw "Missing Tauri/WebUI manifest: $TauriManifestPath"
+        throw "Missing service manifest: $TauriManifestPath"
     }
 
     & $RtkCommand.Source cargo about generate $CargoAboutTemplateFile --manifest-path $TauriManifestPath --config $CargoAboutConfigFile --output-file $GeneratedThirdPartyNoticesFile --locked --fail

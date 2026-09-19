@@ -334,7 +334,7 @@ fn resolve_plugin_managed_node(
 /// 返回值
 /// Returns a Shell-free specification for the contained installed package bin, or an identity/path error.
 /// 返回受目录约束的已安装包入口的不使用Shell启动规格，或身份/路径错误。
-fn resolve_plugin_node_package_bin(
+pub(super) fn resolve_plugin_node_package_bin(
     state: &VulcanPluginManagerState,
     plugin: &crate::VulcanPluginDescriptor,
     manifest: &VulcanPluginManifest,
@@ -370,6 +370,16 @@ fn resolve_plugin_node_package_bin(
         .join("node_modules")
         .canonicalize()
         .map_err(|error| format!("Failed to resolve plugin node_modules directory: {error}"))?;
+    // The installed package tree must remain inside this plugin generation's private root.
+    // 已安装包目录树必须位于当前插件代次的私有根目录内。
+    let canonical_environment_root = environment_root
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve plugin environment root: {error}"))?;
+    if !node_modules_root.starts_with(&canonical_environment_root) {
+        return Err(String::from(
+            "Plugin node_modules directory escapes the plugin-private environment.",
+        ));
+    }
     let package_root = node_modules_root
         .join(package_relative)
         .canonicalize()

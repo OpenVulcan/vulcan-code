@@ -5,6 +5,7 @@ use super::{
     NativeGoalTerminalStatus, NativeToolDefinition, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER,
     TerminalSessionInput, TerminalSessionToolAction, TerminalSessionToolArgs,
     TerminalSessionWaitPolicy, build_agent_list_tool, build_create_goal_tool, build_get_goal_tool,
+    build_native_tool_catalog,
     build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
     build_mcp_server_list_tool, build_prompt_skill_detail_tool, build_shell_command_tool,
     build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
@@ -20,6 +21,7 @@ use super::{
     terminal_read_chunk_budget, terminal_screen_text_from_chunks, terminal_session_args_schema,
     terminal_wait_budget_ms, validate_shell_session_start_stdin_policy,
     validate_terminal_session_start_shell_policy,
+    BROWSER_CLOSE_TOOL_ID, BROWSER_LIST_TOOL_ID, BROWSER_OPEN_TOOL_ID, BROWSER_SELECT_TOOL_ID,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -87,6 +89,7 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
     NativeToolExecutionRequest {
         arguments,
         session_id: None,
+        native_browser_runtime: None,
         workspace_root: None,
         host_project_id: None,
         controller_runtime: None,
@@ -111,6 +114,41 @@ fn test_native_request_with_workspace(
     NativeToolExecutionRequest {
         workspace_root: Some(workspace_root),
         ..test_native_request(arguments)
+    }
+}
+
+/// Verifies the native catalog registers every direct browser management tool.
+/// 验证原生工具目录注册了全部直接浏览器管理工具。
+#[test]
+fn native_catalog_registers_browser_management_tools() {
+    let config = AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("test-agent"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let catalog = build_native_tool_catalog(
+        &config,
+        None,
+        Arc::new(CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+
+    for tool_id in [
+        BROWSER_LIST_TOOL_ID,
+        BROWSER_OPEN_TOOL_ID,
+        BROWSER_SELECT_TOOL_ID,
+        BROWSER_CLOSE_TOOL_ID,
+    ] {
+        assert!(
+            catalog.definition(tool_id).is_some(),
+            "browser management tool {tool_id} should be registered"
+        );
     }
 }
 

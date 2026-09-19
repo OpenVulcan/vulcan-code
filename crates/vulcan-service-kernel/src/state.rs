@@ -90,8 +90,8 @@ pub(crate) struct SessionVmmPolicyUpdateRequest {
     pub(crate) mode: String,
 }
 
-/// Maximum loaded subagent transcript surfaces retained by the Tauri service.
-/// Tauri 服务保留的已加载子代理转录界面最大数量。
+/// Maximum loaded subagent transcript surfaces retained by the Core service.
+/// Core 服务保留的已加载子代理转录界面最大数量。
 pub(crate) const SUBAGENT_SURFACE_DETAIL_CACHE_LIMIT: usize = 128;
 
 /// Milliseconds before an unused loaded subagent transcript surface can be evicted.
@@ -241,6 +241,58 @@ pub(crate) struct ProjectAdmissionReservation {
     pub(crate) kind: ProjectAdmissionReservationKind,
 }
 
+/// Retained service lifecycle diagnostics used by the protected status endpoint.
+/// 受保护状态端点使用的保留服务生命周期诊断。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ServiceLifecycleState {
+    /// Exact bootstrap failure retained after `update_service_failure`, if any.
+    /// `update_service_failure` 之后保留的精确引导失败（如有）。
+    pub(crate) last_bootstrap_failure: Option<ServiceStatusFailure>,
+    /// The required HTTP bridge has stopped, so a concurrent bootstrap may not publish ready.
+    /// 必需的 HTTP 桥已经停止，因此并行引导不得再发布 ready。
+    pub(crate) http_bridge_failed: bool,
+    /// Whether the shutdown coordinator currently owns admission.
+    /// 关闭协调器当前是否持有准入。
+    pub(crate) shutdown_drain_active: bool,
+    /// Exact recovery failure retained when failed-shutdown admission could not reopen.
+    /// 失败关闭准入无法重新开放时保留的精确恢复失败。
+    pub(crate) last_recovery_failure: Option<ServiceStatusFailure>,
+    /// Once a process-owned runtime is stopped, failed shutdown cannot safely reopen admission.
+    /// 进程持有的运行时一旦停止，关闭失败后就不能安全地重新开放准入。
+    pub(crate) shutdown_recovery_blocked: bool,
+}
+
+impl ServiceLifecycleState {
+    /// Marks the shutdown coordinator as the current admission owner.
+    /// 将关闭协调器标记为当前准入持有者。
+    pub(crate) fn begin_shutdown_drain(&mut self) {
+        self.shutdown_drain_active = true;
+        self.last_recovery_failure = None;
+        self.shutdown_recovery_blocked = false;
+    }
+
+    /// Marks the irreversible shutdown boundary before stopping process-owned runtimes.
+    /// 在停止进程持有的运行时之前标记不可逆关闭边界。
+    pub(crate) fn block_shutdown_recovery(&mut self) {
+        self.shutdown_recovery_blocked = true;
+    }
+
+    /// Clears shutdown ownership after the drain succeeds or admission is reopened.
+    /// 排空成功或准入重新开放后清除关闭归属。
+    pub(crate) fn end_shutdown_drain(&mut self) {
+        self.shutdown_drain_active = false;
+        self.last_recovery_failure = None;
+        self.shutdown_recovery_blocked = false;
+    }
+
+    /// Retains one exact recovery failure and clears shutdown ownership.
+    /// 保留一条精确恢复失败并清除关闭归属。
+    pub(crate) fn retain_recovery_failure(&mut self, failure: ServiceStatusFailure) {
+        self.shutdown_drain_active = false;
+        self.last_recovery_failure = Some(failure);
+    }
+}
+
 /// Process-local compatibility owner for one session's pending-prompt UI and Hook queue.
 /// 单个会话待发送提示词界面与 Hook 队列的进程内兼容 owner。
 ///
@@ -371,6 +423,9 @@ pub struct ServiceBridgeState {
     /// 按 WebUI 根会话标识索引的唯一 V1 可变会话所有者。
     pub(crate) session_runtime_registry:
         Arc<crate::session_runtime_registry_v1::SessionRuntimeRegistry>,
+    /// Retained service lifecycle diagnostics used by the protected status endpoint.
+    /// 受保护状态端点使用的保留服务生命周期诊断。
+    pub(crate) service_lifecycle_state: ServiceLifecycleState,
     /// Unique project-level resource catalog owners keyed by exact storage partition path.
     /// 按精确存储分区路径索引的唯一项目级资源目录 owner。
     pub(crate) project_resource_catalog_registry:
@@ -383,6 +438,9 @@ pub struct ServiceBridgeState {
     /// 按精确或未解析作用域索引的有所有权项目准入预留。
     pub(crate) project_admission_reservations:
         BTreeMap<ProjectAdmissionScope, ProjectAdmissionReservation>,
+    /// Shared Core browser session manager owned by this service process.
+    /// 本服务进程拥有的共享 Core 浏览器会话管理器。
+    pub(crate) browser_manager: crate::browser::BrowserManager,
 }
 
 impl Drop for ServiceBridgeState {

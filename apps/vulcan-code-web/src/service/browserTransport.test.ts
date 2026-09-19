@@ -110,6 +110,63 @@ describe("waitForWebSocketOpen", () => {
 });
 
 describe("VCE browser event transport", () => {
+  // Verifies a late close and late message from the replaced socket cannot disrupt its successor.
+  // 验证被替换套接字的迟到关闭与消息不能干扰后继连接。
+  it("keeps the new subscription authoritative after an old socket closes", async () => {
+    const sockets: BrowserSocketFixture[] = [];
+    const fetchSpy = vi.fn(() => { throw new Error("Unexpected browser fixture HTTP request"); });
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("WebSocket", class extends BrowserSocketFixture {
+      // Capture only the sockets created by this transport, without opening a network connection.
+      // 仅捕获此传输创建的套接字，不建立网络连接。
+      constructor() {
+        super();
+        sockets.push(this);
+      }
+    });
+    const transport = new BrowserServiceTransport("http://127.0.0.1:17999");
+    const statuses: string[] = [];
+    const onConnection = (event: Event) => statuses.push((event as CustomEvent).detail.status);
+    window.addEventListener("vulcan:browser-service-connection", onConnection);
+    try {
+      const oldHandler = vi.fn();
+      const firstSubscription = transport.subscribe<VceProjectChangedEvent>("vce.project.changed", oldHandler);
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      const oldSocket = sockets[0]!;
+      oldSocket.open();
+      const unsubscribeOld = await firstSubscription;
+      oldSocket.fail();
+      const newHandler = vi.fn();
+      const secondSubscription = transport.subscribe<VceProjectChangedEvent>("vce.project.changed", newHandler);
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      const newSocket = sockets[1]!;
+      newSocket.open();
+      const unsubscribeNew = await secondSubscription;
+      const statusCountAfterReplacement = statuses.length;
+      oldSocket.dispatchEvent(new Event("close"));
+      oldSocket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+        kind: "vceProjectChanged", payload: { projectId: "stale" },
+      }) }));
+      expect(statuses).toHaveLength(statusCountAfterReplacement);
+      expect(oldHandler).not.toHaveBeenCalled();
+      expect(newHandler).not.toHaveBeenCalled();
+      const fresh = { projectId: "current", settingsRevision: 1, lifecycle: "ready",
+        checkpointVersion: 1 } satisfies VceProjectChangedEvent;
+      newSocket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+        kind: "vceProjectChanged", payload: fresh,
+      }) }));
+      expect(oldHandler).toHaveBeenCalledExactlyOnceWith(fresh);
+      expect(newHandler).toHaveBeenCalledExactlyOnceWith(fresh);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      unsubscribeOld();
+      unsubscribeNew();
+    } finally {
+      transport.dispose();
+      window.removeEventListener("vulcan:browser-service-connection", onConnection);
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Use production subscription and message dispatch while replacing only browser network primitives.
   // 使用生产订阅和消息分发，仅替换浏览器网络原语。
   it("routes both semantic topics through one socket and retains the remaining subscriber", async () => {

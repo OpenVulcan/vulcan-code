@@ -90,7 +90,7 @@ pub(crate) fn runtime_modules(
             "core",
             "Core Service",
             StartupStepStatus::Ready,
-            "Tauri 本地服务运行中",
+            "Core Service 运行中",
         ),
         runtime_module(
             "vldb",

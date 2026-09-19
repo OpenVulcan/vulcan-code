@@ -5,7 +5,10 @@ use super::{
     VulcanPluginManagerState, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
     canonical_plugin_file, copy_plugin_directory_tree, write_plugin_json_record,
 };
-use crate::{VulcanPluginDependencyInstallMode, VulcanPluginManifest, VulcanPluginPackageOrigin};
+use crate::{
+    VulcanPluginDependencyInstallMode, VulcanPluginManifest, VulcanPluginMcpStdioLauncherManifest,
+    VulcanPluginMcpTransportManifest, VulcanPluginPackageOrigin,
+};
 use luaskills::{
     ManagedRuntimeKind, PackageDependencyManifest, current_managed_runtime_platform_key,
     resolve_managed_runtime_install,
@@ -19,7 +22,7 @@ use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 
 /// Windows creation flag that prevents a console window for a child process.
 /// 防止子进程创建控制台窗口的 Windows 创建标志。
-#[cfg(all(windows, not(debug_assertions)))]
+#[cfg(windows)]
 const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Immutable identity marker for one Vulcan-owned plugin process environment.
@@ -44,8 +47,8 @@ struct VulcanPluginEnvironmentMarker {
     install_mode: String,
 }
 
-/// Apply the Release-only no-console flag to a plugin dependency child process.
-/// 为插件依赖子进程应用仅 Release 生效的无控制台标志。
+/// Applies the no-console flag to one background plugin dependency process on Windows.
+/// 在 Windows 上为一个后台插件依赖进程应用无控制台标志。
 ///
 /// # Parameters
 /// 参数
@@ -54,16 +57,16 @@ struct VulcanPluginEnvironmentMarker {
 ///
 /// # Returns
 /// 返回值
-/// Returns no value; modifies the command only for Windows Release builds.
-/// 返回空值；仅在Windows Release构建中修改命令。
-fn apply_release_no_window_to_command(command: &mut Command) {
-    #[cfg(all(windows, not(debug_assertions)))]
+/// Returns no value; modifies the command in every Windows build profile.
+/// 返回空值；在所有 Windows 构建配置中修改命令。
+fn apply_windows_no_window_to_command(command: &mut Command) {
+    #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
 
         command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
     }
-    #[cfg(any(not(windows), debug_assertions))]
+    #[cfg(not(windows))]
     {
         let _ = command;
     }
@@ -221,6 +224,146 @@ pub(super) fn ensure_plugin_execution_environment(
     })
 }
 
+/// Checks a published plugin environment without creating files or accessing a registry.
+/// 检查已发布插件环境，不创建文件，也不访问依赖注册表。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the private runtime root and `plugin` identifies the exact package generation.
+/// `state` 持有私有运行时根，`plugin` 标识精确的插件包代次。
+///
+/// # Returns
+/// 返回值
+/// Returns the existing root, `None` for an unprepared generation, or an explicit integrity error.
+/// 返回已有根目录、表示代次尚未准备的 `None`，或明确的完整性错误。
+fn inspect_plugin_execution_environment(
+    state: &VulcanPluginManagerState,
+    plugin: &crate::VulcanPluginDescriptor,
+) -> Result<Option<PathBuf>, String> {
+    // manifest and version come from the validated catalog generation, never from a caller path.
+    // manifest 和 version 来自已校验目录代次，绝不来自调用方路径。
+    let manifest = plugin
+        .manifest
+        .as_ref()
+        .ok_or_else(|| format!("Vulcan plugin `{}` has no valid manifest.", plugin.id))?;
+    let version = plugin
+        .version
+        .as_deref()
+        .ok_or_else(|| format!("Vulcan plugin `{}` has no validated version.", plugin.id))?;
+    if !manifest.has_lua_runtime()
+        && manifest.mcp.servers.is_empty()
+        && manifest.execution.dependencies.install_mode
+            == VulcanPluginDependencyInstallMode::Bundled
+        && manifest.execution.native_binaries.is_empty()
+        && manifest.execution.node_entries.is_empty()
+        && manifest.execution.python_entries.is_empty()
+    {
+        return Ok(Some(plugin.package_root.clone()));
+    }
+    // destination is derived solely from the manager root and exact catalog identity.
+    // destination 仅由管理器根目录和精确目录身份推导。
+    let destination = state
+        .plugin_runtime_root
+        .join(&plugin.id)
+        .join(version)
+        .join(&plugin.content_fingerprint);
+    if !destination.exists() {
+        return Ok(None);
+    }
+    // expected_marker forbids treating an old or tampered environment as ready.
+    // expected_marker 禁止将旧代次或被篡改的环境视为就绪。
+    let expected_marker = VulcanPluginEnvironmentMarker {
+        schema_version: 1,
+        plugin_id: plugin.id.clone(),
+        version: version.to_string(),
+        content_fingerprint: plugin.content_fingerprint.clone(),
+        install_mode: plugin_dependency_install_mode_key(
+            manifest.execution.dependencies.install_mode,
+        )
+        .to_string(),
+    };
+    validate_plugin_environment_marker(&destination, &expected_marker)?;
+    if manifest.execution.dependencies.install_mode == VulcanPluginDependencyInstallMode::Registry {
+        // dependency_file is the package-owned, already-authorized lock declaration.
+        // dependency_file 是插件包自有且已授权的锁定依赖声明。
+        let dependency_file = canonical_plugin_file(
+            &destination,
+            manifest
+                .execution
+                .dependencies
+                .manifest
+                .as_deref()
+                .ok_or_else(|| String::from("Plugin registry dependencies require a manifest."))?,
+            "dependency manifest",
+        )?;
+        // dependencies identifies exactly which managed runtimes and private install roots must exist.
+        // dependencies 精确标识必须存在的受管运行时与私有安装根目录。
+        let dependencies = PackageDependencyManifest::load_from_path(&dependency_file)?;
+        // platform matches the immutable managed runtime installation key.
+        // platform 与不可变受管运行时安装键一致。
+        let platform = current_managed_runtime_platform_key()?;
+        if let Some(node) = &dependencies.node_runtime {
+            resolve_managed_runtime_install(
+                &state.managed_runtime_distribution_root,
+                ManagedRuntimeKind::Node,
+                &node.version,
+                &platform,
+            )?;
+            // package_json locates the exact node_modules directory installed by pnpm.
+            // package_json 定位 pnpm 安装的精确 node_modules 目录。
+            let package_json =
+                canonical_plugin_file(&destination, &node.package_json, "Node package manifest")?;
+            if !package_json
+                .parent()
+                .ok_or_else(|| String::from("Node package manifest has no parent directory."))?
+                .join("node_modules")
+                .is_dir()
+            {
+                return Ok(None);
+            }
+        }
+        if let Some(python) = &dependencies.python_runtime {
+            resolve_managed_runtime_install(
+                &state.managed_runtime_distribution_root,
+                ManagedRuntimeKind::Python,
+                &python.version,
+                &platform,
+            )?;
+            if !plugin_python_environment_executable(&destination).is_file() {
+                return Ok(None);
+            }
+        }
+        for server in &manifest.mcp.servers {
+            if let VulcanPluginMcpTransportManifest::Stdio {
+                launcher: VulcanPluginMcpStdioLauncherManifest::NodePackageBin { package, bin },
+                ..
+            } = &server.transport
+            {
+                // The exact declared package bin must resolve before an AI-visible MCP server starts.
+                // AI 可见 MCP 服务启动前，必须能解析清单声明的精确包入口。
+                if super::process::resolve_plugin_node_package_bin(
+                    state,
+                    plugin,
+                    manifest,
+                    &destination,
+                    package,
+                    bin,
+                )
+                .is_err()
+                {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+    destination.canonicalize().map(Some).map_err(|error| {
+        format!(
+            "Failed to resolve Vulcan plugin environment `{}`: {error}",
+            destination.display()
+        )
+    })
+}
+
 /// Removes one exact unpublished plugin execution environment generation after update rollback.
 /// 在更新回滚后移除单个精确的未发布插件执行环境代次。
 ///
@@ -246,6 +389,28 @@ pub(super) fn remove_plugin_execution_environment_generation(
         .join(fingerprint);
     if !environment.exists() {
         return Ok(());
+    }
+    // Every untrusted path component must be a real directory before recursive deletion.
+    // 递归删除前，所有非可信路径组件都必须是真实目录。
+    for component in [
+        state.plugin_runtime_root.join(plugin_id),
+        state.plugin_runtime_root.join(plugin_id).join(version),
+        environment.clone(),
+    ] {
+        // metadata rejects a junction or symlink even when its target remains inside the runtime root.
+        // metadata 即使在目标仍位于运行时根目录内，也拒绝目录联接或符号链接。
+        let metadata = fs::symlink_metadata(&component).map_err(|error| {
+            format!(
+                "Failed to inspect plugin environment component `{}`: {error}",
+                component.display()
+            )
+        })?;
+        if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+            return Err(format!(
+                "Plugin environment component `{}` is not a plain directory.",
+                component.display()
+            ));
+        }
     }
     let canonical_runtime_root = state.plugin_runtime_root.canonicalize().map_err(|error| {
         format!(
@@ -630,7 +795,7 @@ fn resolve_plugin_package_manager(
 /// Returns success on a successful exit, otherwise the decoded stdout/stderr diagnostic.
 /// 返回成功退出时的成功结果，否则返回解码后的标准输出/错误诊断。
 fn run_plugin_dependency_command(command: &mut Command, label: &str) -> Result<(), String> {
-    apply_release_no_window_to_command(command);
+    apply_windows_no_window_to_command(command);
     let output = command
         .output()
         .map_err(|error| format!("Failed to {label}: {error}"))?;
@@ -695,6 +860,35 @@ pub(super) fn plugin_python_environment_executable(environment_root: &Path) -> P
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Reports whether the exact current plugin generation has a prepared execution environment.
+    /// 报告当前精确插件代次是否已有准备完成的执行环境。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` identifies one plugin in the current validated catalog snapshot.
+    /// `plugin_id` 标识当前已校验目录快照中的一个插件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns readiness without side effects, or an explicit integrity error.
+    /// 无副作用地返回就绪状态，或明确的完整性错误。
+    pub fn plugin_environment_ready(
+        &self,
+        plugin_id: &str,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        // snapshot freezes the descriptor while readiness is checked.
+        // snapshot 在检查就绪状态期间固定描述符。
+        let snapshot = self.snapshot();
+        // plugin is selected by its exact unmodified catalog name.
+        // plugin 通过未经修改的精确目录名称选取。
+        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
+        })?;
+        inspect_plugin_execution_environment(&self.state, plugin)
+            .map(|root| root.is_some())
+            .map_err(VulcanPluginRuntimeError::new)
+    }
+
     /// Prepares one versioned private process environment owned by Vulcan Code.
     /// 准备一个由 Vulcan Code 持有的版本化插件私有进程环境。
     ///
@@ -734,8 +928,61 @@ impl VulcanPluginRuntimeManager {
         {
             return Ok(plugin.package_root.clone());
         }
-        ensure_plugin_execution_environment(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)
+        // A complete marker with missing installed files is repairable only while no session owns the plugin.
+        // 标记完整但安装文件缺失时，仅在没有会话持有插件期间才允许修复。
+        if inspect_plugin_execution_environment(&self.state, plugin)
+            .map_err(VulcanPluginRuntimeError::new)?
+            .is_none()
+        {
+            // version is the exact catalog identity of the private environment being replaced.
+            // version 是将被替换的私有环境的精确目录身份。
+            let version = plugin.version.as_deref().ok_or_else(|| {
+                VulcanPluginRuntimeError::new(format!(
+                    "Vulcan plugin `{plugin_id}` has no validated version."
+                ))
+            })?;
+            // destination is derived exclusively from validated catalog fields.
+            // destination 完全由已校验的目录字段推导。
+            let destination = self
+                .state
+                .plugin_runtime_root
+                .join(&plugin.id)
+                .join(version)
+                .join(&plugin.content_fingerprint);
+            if destination.exists() {
+                if plugin.runtime_state != crate::VulcanPluginRuntimeState::Disabled
+                    || plugin.active_session_count != 0
+                {
+                    return Err(VulcanPluginRuntimeError::new(format!(
+                        "Vulcan plugin `{plugin_id}` has an incomplete environment but is not fully disabled."
+                    )));
+                }
+                remove_plugin_execution_environment_generation(
+                    &self.state,
+                    &plugin.id,
+                    version,
+                    &plugin.content_fingerprint,
+                )
+                .map_err(VulcanPluginRuntimeError::new)?;
+            }
+        }
+        // prepared_root is not sufficient evidence of readiness: the dependency installer can
+        // publish a marker even when the manifest names a nonexistent MCP package executable.
+        // prepared_root 不足以证明就绪：依赖安装器可能在清单声明不存在的 MCP 包入口时仍发布标记。
+        let prepared_root = ensure_plugin_execution_environment(&self.state, plugin)
+            .map_err(VulcanPluginRuntimeError::new)?;
+        // The same read-only integrity gate used before enable must pass before an installation
+        // or update transaction can commit this environment as a usable generation.
+        // 安装或更新事务提交可用代次前，必须通过启用前使用的同一只读完整性关卡。
+        if inspect_plugin_execution_environment(&self.state, plugin)
+            .map_err(VulcanPluginRuntimeError::new)?
+            .is_none()
+        {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan plugin `{plugin_id}` prepared environment is incomplete."
+            )));
+        }
+        Ok(prepared_root)
     }
 
     /// Resolves the immutable package root used to execute or render one effective plugin.

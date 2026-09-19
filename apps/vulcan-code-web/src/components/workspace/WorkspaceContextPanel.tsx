@@ -62,6 +62,7 @@ import type {
   WorkspaceFileReadResponse,
 } from "@/types";
 import { WorkspaceMemoryPanel } from "@/components/workspace/WorkspaceMemoryPanel";
+import { workspaceContextTabDefaultTitle } from "@/components/workspace/workspace-context-tab-title";
 
 // LazyWorkspaceReviewPanelHost loads the heavy Git review surface only when the context rail renders it.
 // LazyWorkspaceReviewPanelHost 仅在上下文栏渲染审核页时加载较重的 Git 审核界面。
@@ -1134,21 +1135,6 @@ function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): R
     return <Brain size={size} />;
   }
   return <GitPullRequest size={size} />;
-}
-
-// workspaceContextTabDefaultTitle returns the initial title for one tab kind.
-// workspaceContextTabDefaultTitle 返回单个页签类型的初始标题。
-export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t?: (key: TranslationKey) => string): string {
-  if (kind === "subagent") {
-    return t ? t("conversation.subagent.schedule") : "Subagent";
-  }
-  if (kind === "files") {
-    return t ? t("workspaceFilePreview.openFile") : "Open file";
-  }
-  if (kind === "memory") {
-    return t ? t("contextPanel.memory") : "Memory";
-  }
-  return t ? t("contextPanel.review") : "Review";
 }
 
 // workspaceContextTabDisplayTitle returns the locale-aware visible title for one opened tab.

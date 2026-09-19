@@ -495,6 +495,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
         .invoke(NativeToolExecutionRequest {
             arguments: serde_json::Value::Object(Default::default()),
             session_id: None,
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,
@@ -599,6 +600,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
         .invoke(NativeToolExecutionRequest {
             arguments: serde_json::Value::Object(Default::default()),
             session_id: None,
+            native_browser_runtime: None,
             workspace_root: None,
             host_project_id: None,
             controller_runtime: None,

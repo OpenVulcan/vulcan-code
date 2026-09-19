@@ -350,6 +350,9 @@ async fn run_browser_acceptance(
             crate::cancel_command_session_displays_for_client(client_id);
             crate::cancel_project_terminal_displays_for_client(client_id);
         }),
+        status_provider: None,
+        browser_stream: None,
+        browser_download_resolver: None,
     };
     let server = tokio::spawn(vulcan_service_host::serve_webui_service_http_listener(
         listener, config,

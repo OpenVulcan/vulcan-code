@@ -25,6 +25,21 @@ export interface SkillActionProps {
   // Persists one host-owned Vulcan Plugin enabled state through the unified plugin action.
   // 通过统一插件操作持久化单个宿主持有 Vulcan 插件的启用状态。
   onSetVulcanPluginEnabled: (pluginId: string, enabled: boolean) => Promise<void>
+  // Checks one plugin's exact environment without installing dependencies.
+  // 无需安装依赖即可检查单个插件的精确环境。
+  onPluginEnvironmentReady: (pluginId: string) => Promise<boolean>
+  // Installs one disabled plugin's environment before the enable action.
+  // 在启用前安装单个已停用插件的环境。
+  onPreparePluginEnvironment: (pluginId: string) => Promise<boolean>
+  // Starts an explicit Core-owned plugin environment installation task.
+  // 启动一个显式的 Core 自有插件环境安装任务。
+  onStartPluginEnvironmentInstall: (pluginId: string) => Promise<import("../../../service/skills-actions-service").PluginEnvironmentInstallTaskStatus>
+  // Reads a retained install task without extending its lifetime or restarting it.
+  // 只读查询一个已保留安装任务，不延长其寿命或重新启动它。
+  onPluginEnvironmentInstallStatus: (taskId: string) => Promise<import("../../../service/skills-actions-service").PluginEnvironmentInstallTaskStatus>
+  // Reads a plugin generation's latest retained install task across clients.
+  // 跨客户端读取一个插件代次最近保留的安装任务。
+  onPluginEnvironmentInstallStatusForPlugin: (pluginId: string) => Promise<import("../../../service/skills-actions-service").PluginEnvironmentInstallTaskStatus | null>
   // Inspects one local user plugin before authorization.
   // 在授权前检查单个本地用户插件。
   onInspectLocalPlugin: (sourcePath: string) => Promise<VulcanPluginPermissionPreview>

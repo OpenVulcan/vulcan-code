@@ -249,10 +249,12 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         session_terminal_persistence_owners: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_runtime_registry: Default::default(),
+        service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         project_resource_catalog_registry: Default::default(),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         vmm_controller_registry: Default::default(),
+        browser_manager: crate::browser::BrowserManager::new(),
     };
     let task_states = vec![cached_navigation_test_state(
         parent_session_id,

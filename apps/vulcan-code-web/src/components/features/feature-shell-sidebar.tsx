@@ -1,6 +1,7 @@
 import * as React from "react"
 import {
   BrainCircuit,
+  Globe2,
   BookMarked,
   ChartNoAxesCombined,
   ChevronDown,
@@ -385,6 +386,9 @@ function CollapsedSettingsGroupMenu(props: {
 // areaIconMap 将功能区域标识映射到 lucide 图标。
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   chat: <PanelTopOpen size={17} />,
+  // Retain the legacy icon key for old deep links while browser navigation is plugin-owned.
+  // 为旧深链接保留图标键，但浏览器导航已经归属插件。
+  browser: <Globe2 size={17} />,
   "agent-skills": <Hammer size={17} />,
   skills: <Puzzle size={17} />,
   agents: <Network size={17} />,

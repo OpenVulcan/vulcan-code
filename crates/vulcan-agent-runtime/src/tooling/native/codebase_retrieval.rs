@@ -90,6 +90,7 @@ mod tests {
         NativeToolExecutionRequest {
             arguments,
             session_id: None,
+            native_browser_runtime: None,
             host_project_id: None,
             workspace_root: None,
             controller_runtime: None,

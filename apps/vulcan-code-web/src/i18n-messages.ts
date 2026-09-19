@@ -362,6 +362,7 @@ export type TranslationKey =
   | "app.serviceReconnecting"
   | "app.serviceCheckingRecovery"
   | "area.chat"
+  | "area.browser"
   | "area.skills"
   | "area.agentSkills"
   | "area.agents"
@@ -376,6 +377,7 @@ export type TranslationKey =
   | "area.memory.description"
   | "area.contextEngine.description"
   | "area.knowledge.description"
+  | "area.browser.description"
   | "knowledge.name"
   | "knowledge.name.placeholder"
   | "knowledge.create"
@@ -4174,6 +4176,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.serviceReconnecting": "本地服务连接已断开，正在重连...",
     "app.serviceCheckingRecovery": "本地服务连接已断开，正在检测恢复...",
     "area.chat": "工作台",
+    "area.browser": "浏览器",
     "area.skills": "插件",
     "area.agentSkills": "技能",
     "area.agents": "智能体",
@@ -4188,6 +4191,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.memory.description": "VMM 用户、项目与会话记忆",
       "area.contextEngine.description": "ContextEngine 代码语义索引、模型路由与运行状态",
       "area.knowledge.description": "Markdown、Jieba 与 BM25 项目资料",
+      "area.browser.description": "Core 浏览器会话、页面与实时投影",
       "knowledge.name": "知识库名称",
       "knowledge.name.placeholder": "新知识库名称",
       "knowledge.create": "创建",
@@ -7983,6 +7987,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.serviceReconnecting": "Local service connection lost. Reconnecting...",
     "app.serviceCheckingRecovery": "Local service connection lost. Checking recovery...",
     "area.chat": "Workspace",
+    "area.browser": "Browser",
     "area.skills": "Plugins",
     "area.agentSkills": "Skills",
     "area.agents": "Agents",
@@ -7997,6 +8002,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.memory.description": "VMM user, project, and conversation memory",
       "area.contextEngine.description": "ContextEngine code-semantic indexing, model routes, and runtime status",
       "area.knowledge.description": "Project Markdown with Jieba BM25 search",
+      "area.browser.description": "Core browser sessions, pages, and live projection",
       "knowledge.name": "Knowledge library name",
       "knowledge.name.placeholder": "New knowledge library",
       "knowledge.create": "Create",

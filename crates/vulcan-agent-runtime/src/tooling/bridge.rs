@@ -1,19 +1,20 @@
 //! host-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
 //! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的宿主侧桥接层。
 
-use crate::agent_runtime::question_runtime::{QuestionRuntime, build_question_tool_candidate};
-use crate::agent_runtime::task_runtime::{TaskRuntime, build_subagent_tool_candidates};
+use crate::agent_runtime::question_runtime::{build_question_tool_candidate, QuestionRuntime};
+use crate::agent_runtime::task_runtime::{build_subagent_tool_candidates, TaskRuntime};
+use crate::agent_runtime::vulcan_plugin_hooks::prepare_vulcan_plugin_tool_candidates;
 use crate::luaskills_runtime::{
-    LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
-    PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
+    build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
     call_luaskills_tool_entry, luaskills_entry_args_schema,
-    render_luaskills_invocation_result_text,
+    render_luaskills_invocation_result_text, LuaSkillsRuntimeHandle,
+    LUASKILLS_HOST_MANAGED_SID_PREFIX, LUASKILL_SID_PARAMETER_NAME, PWD_PARAMETER_NAME,
 };
 use crate::mcp::McpRuntimeToolBinding;
 use crate::tooling::{
-    NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
     allocate_unique_public_tool_name, build_direct_public_tool_name,
-    build_prefixed_public_tool_name,
+    build_prefixed_public_tool_name, NativeToolCatalog, NativeToolDescriptor,
+    NativeToolExecutionRequest,
 };
 use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
@@ -23,19 +24,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_luaskills_prompt::{
-    LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
+    render_luaskill_help_output, LuaSkillPromptEntry, LUASKILL_HELP_TOOL_NAME,
 };
 use vulcan_plugin_runtime::{
     VulcanPluginInvocationRequest, VulcanPluginRuntimeManager, VulcanPluginToolDescriptor,
 };
 use vulcan_tools_luaskills_call::{
-    CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
-    parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
-    restore_call_luaskill_args_for_entry,
+    call_luaskill_args_schema, parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
+    restore_call_luaskill_args_for_entry, LuaSkillCallEntryView, CALL_LUASKILL_TOOL_NAME,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind, VulcanToolsManager,
 };
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
@@ -84,6 +84,7 @@ pub fn build_vulcan_tools_manager(
     project_vmm: vulcan_vmm::VmmConfigLayer,
     session_vmm: vulcan_vmm::VmmConfigLayer,
     vmm_runtime_ready: bool,
+    native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
@@ -136,6 +137,7 @@ pub fn build_vulcan_tools_manager(
         let host_project_id_for_context = host_project_id.clone();
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
+        let native_browser_runtime_for_context = native_browser_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
         let vce_retrieval_handler_for_context = vce_retrieval_handler.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
@@ -163,6 +165,7 @@ pub fn build_vulcan_tools_manager(
                 let prepared_prompt_skills = prepared_prompt_skills_for_context.clone();
                 let project_vmm = project_vmm_for_context.clone();
                 let session_vmm = session_vmm_for_context.clone();
+                let native_browser_runtime = native_browser_runtime_for_context.clone();
                 Box::pin(async move {
                     catalog
                         .invoke(
@@ -175,6 +178,7 @@ pub fn build_vulcan_tools_manager(
                                 workspace_root,
                                 controller_runtime,
                                 goal_runtime,
+                                native_browser_runtime,
                                 knowledge_access,
                                 vce_retrieval_handler,
                                 enabled_prompt_skill_names,
@@ -230,13 +234,17 @@ pub fn build_vulcan_tools_manager(
             continue;
         }
         for tool in tools {
-            let descriptor = VulcanToolDescriptor {
-                id: tool.id.clone(),
-                name: tool.id.clone(),
-                description: tool.description.clone(),
-                help_text: None,
-                source: VulcanToolSourceKind::VulcanPlugin,
-            };
+            let descriptor = VulcanToolDescriptor::new(
+                tool.id.clone(),
+                tool.id.clone(),
+                tool.description.clone(),
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::VulcanPlugin,
+                    tool.plugin_id.clone(),
+                    tool.id.clone(),
+                ),
+            );
             occupied_public_tool_ids.insert(tool.id.clone());
             let runtime = vulcan_plugin_runtime.clone();
             let tool_id = tool.id.clone();
@@ -392,16 +400,31 @@ pub fn build_vulcan_tools_manager(
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             request_streaming: None,
-            invoke: std::sync::Arc::new(move |args, _invocation_context| {
+            invoke: std::sync::Arc::new(move |args, invocation_context| {
                 let tool = tool.clone();
                 Box::pin(async move {
-                    tool.invoke(args)
-                        .await
-                        .map(VulcanToolInvocationResult::from_model_output)
+                    // Owner-scoped MCP bindings must use the host-authenticated session context.
+                    // 会话范围 MCP 绑定必须使用宿主认证的会话上下文。
+                    let result = if tool.owner_session_id().is_some() {
+                        let owner_session_id = Uuid::parse_str(&invocation_context.session_id)
+                            .map_err(|error| {
+                                format!(
+                                    "MCP tool `{}` requires a valid trusted owner session id: {}",
+                                    tool.id(),
+                                    error
+                                )
+                            })?;
+                        tool.invoke_for_owner(owner_session_id, args).await
+                    } else {
+                        tool.invoke(args).await
+                    };
+                    result.map(VulcanToolInvocationResult::from_model_output)
                 })
             }),
         });
     }
 
+    let candidates =
+        prepare_vulcan_plugin_tool_candidates(vulcan_plugin_runtime, candidates, workspace_root);
     VulcanToolsManager::new(candidates)
 }

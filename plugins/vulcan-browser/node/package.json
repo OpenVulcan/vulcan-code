@@ -1,0 +1,12 @@
+{
+  "name": "vulcan-browser-playwright-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.18.0"
+  },
+  "dependencies": {
+    "@playwright/mcp": "0.0.81"
+  }
+}

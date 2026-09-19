@@ -24,7 +24,7 @@ use vulcan_provider_adapters::{
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolSourceKind,
+    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
 };
 
 /// Maximum UTF-8 byte length accepted for the canonical answer.
@@ -224,14 +224,13 @@ pub(crate) fn build_model_replacement_media_candidate(
             .input_resource_constraints
             .as_slice(),
     )?;
+    let origin = VulcanToolOrigin::new(
+        VulcanToolSourceKind::AiHostBinding,
+        selection.provider_id.clone(),
+        tool_id.clone(),
+    );
     Ok(VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: tool_id.clone(),
-            name: tool_id,
-            description,
-            help_text: None,
-            source: VulcanToolSourceKind::AiHostBinding,
-        },
+        descriptor: VulcanToolDescriptor::new(tool_id.clone(), tool_id, description, None, origin),
         parameters_schema,
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,

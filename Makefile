@@ -64,13 +64,14 @@ help:
 	@echo "  make vite start    # start the standalone WebUI Vite dev server"
 	@echo "  make vite stop     # stop the standalone WebUI Vite dev server"
 	@echo "  make vite status   # show the standalone WebUI Vite dev server status"
-	@echo "  make build         # Tauri/WebUI debug build"
-	@echo "  make build-release # Tauri/WebUI release build"
-	@echo "  make release       # Tauri/WebUI release build"
-	@echo "  make run           # run Tauri/WebUI debug build; Vite is managed separately"
-	@echo "  make run-release   # run Tauri/WebUI release build"
-	@echo "  make br            # build and run Tauri/WebUI debug; Vite is managed separately"
-	@echo "  make br-release    # build and run Tauri/WebUI release"
+	@echo "  make build         # Core/Electron/WebUI debug build"
+	@echo "  make build-release # Core/Electron/WebUI release build"
+	@echo "  make release       # Core/Electron/WebUI release build"
+	@echo "  make run           # run Electron desktop; start Vite when needed"
+	@echo "  make run-release   # run Core/Electron/WebUI release build"
+	@echo "  make service       # start the tray/background Core only"
+	@echo "  make br            # build Core/WebUI/Electron and run desktop with Vite"
+	@echo "  make br-release    # build Core/WebUI/Electron and run desktop"
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make deps          # install host, bundled tools, and Lua dependencies"
 	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
@@ -134,7 +135,7 @@ build-release:
 # release routes the short release build command or becomes a companion no-op for paired goals.
 # release 路由短形式 release 构建命令，或在组合目标中作为伴随空操作。
 release:
-ifneq ($(filter build build-release run run-release br br-release,$(MAKECMDGOALS)),)
+ifneq ($(filter build build-release run run-release service br br-release,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,release)
@@ -149,6 +150,12 @@ run:
 # run-release 路由 release 运行命令。
 run-release:
 	$(call route-command,run release)
+
+# service starts the tray/background Core without opening the desktop workbench.
+# service 启动托盘或后台 Core，不打开桌面工作台。
+.PHONY: service
+service:
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),service release,service))
 
 # br routes debug by default, or release when the release companion goal is present.
 # br 默认路由 debug，存在 release 伴随目标时路由 release。

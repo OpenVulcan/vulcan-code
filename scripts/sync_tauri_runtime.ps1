@@ -96,13 +96,26 @@ $SourceVulcanPluginsDir = Join-Path $ProjectDir "plugins"
 # SourcePluginBridgeDir 包含 Vulcan 插件使用的唯一 LuaSkills System package。
 $SourcePluginBridgeDir = Join-Path $ProjectDir "plugin-bridge\vulcan-plugin-bridge"
 
-# OutputConfigDir stores packaged configuration read by output/bin runtime launches.
-# OutputConfigDir 保存 output/bin 运行时启动读取的打包配置目录。
-$OutputConfigDir = Join-Path $ProjectDir "output\config"
-
 # OutputRootDir stores the only directory tree that synchronization may clean.
 # OutputRootDir 保存同步流程允许执行清理的唯一目录树。
 $OutputRootDir = Join-Path $ProjectDir "output"
+if (-not [string]::IsNullOrWhiteSpace($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
+    if (-not [System.IO.Path]::IsPathFullyQualified($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
+        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be an absolute path."
+    }
+    # TargetRoot confines isolated release verification to generated build artifacts.
+    # TargetRoot 将独立发布验收限定在构建生成产物内。
+    $TargetRoot = [System.IO.Path]::GetFullPath((Join-Path $ProjectDir "target"))
+    $SelectedRoot = [System.IO.Path]::GetFullPath($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)
+    if (-not $SelectedRoot.StartsWith($TargetRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, $OutputPathComparison)) {
+        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be inside the repository target directory."
+    }
+    $OutputRootDir = $SelectedRoot
+}
+
+# OutputConfigDir stores packaged configuration read by distribution runtime launches.
+# OutputConfigDir 保存发行运行时启动时读取的打包配置目录。
+$OutputConfigDir = Join-Path $OutputRootDir "config"
 
 # ResolvedOutputRootDir stores the normalized cleanup boundary used by deletion guards.
 # ResolvedOutputRootDir 保存删除保护使用的规范化清理边界。
@@ -110,7 +123,7 @@ $ResolvedOutputRootDir = [System.IO.Path]::GetFullPath($OutputRootDir).TrimEnd([
 
 # OutputResourcesDir stores the packaged resource catalog read by output/bin runtime launches.
 # OutputResourcesDir 保存 output/bin 运行时启动读取的打包资源目录。
-$OutputResourcesDir = Join-Path $ProjectDir "output\resources"
+$OutputResourcesDir = Join-Path $OutputRootDir "resources"
 
 # OutputSystemPromptSkillsDir stores packaged system Agent Skills read directly by the runtime.
 # OutputSystemPromptSkillsDir 保存运行时直接读取的打包系统 Agent Skills。
@@ -118,11 +131,11 @@ $OutputSystemPromptSkillsDir = Join-Path $OutputResourcesDir "prompt-skills\syst
 
 # OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
-$OutputLuaRuntimeDir = Join-Path $ProjectDir "output\lua_runtime"
+$OutputLuaRuntimeDir = Join-Path $OutputRootDir "lua_runtime"
 
 # OutputBundledToolsDir is the runtime-owned sg and rg distribution root.
 # OutputBundledToolsDir 是运行时持有的 sg 与 rg 发行根目录。
-$OutputBundledToolsDir = Join-Path $ProjectDir "output\tools"
+$OutputBundledToolsDir = Join-Path $OutputRootDir "tools"
 
 # LegacyManagedRuntimeScriptsDir stores obsolete downloader scripts removed by native Rust bootstrap.
 # LegacyManagedRuntimeScriptsDir 保存由 Rust 原生初始化取代的废弃下载脚本。
@@ -134,7 +147,7 @@ $LegacyManagedRuntimeDistributionDir = Join-Path $OutputLuaRuntimeDir "dependenc
 
 # OutputVulcanPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
 # OutputVulcanPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
-$OutputVulcanPluginsDir = Join-Path $ProjectDir "output\plugins"
+$OutputVulcanPluginsDir = Join-Path $OutputRootDir "plugins"
 
 # OutputPluginBridgeDir is the only plugin-related package deployed below system_lua_lib.
 # OutputPluginBridgeDir 是部署到 system_lua_lib 下的唯一插件相关 package。
@@ -473,4 +486,4 @@ if ($IsWindowsPlatform) {
     }
 }
 
-Write-Host "==> Done. Runtime resources synchronized into: $(Join-Path $ProjectDir 'output')"
+Write-Host "==> Done. Runtime resources synchronized into: $OutputRootDir"

@@ -9,6 +9,16 @@ use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 /// 当前宿主接受的清单结构版本。
 pub const VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
+/// Host point for a cached transformation of one AI-visible tool definition.
+/// 对单个 AI 可见工具定义执行缓存变换的宿主点位。
+pub const VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION: &str = "tool.registration";
+/// Host point immediately before an explicitly targeted tool body runs.
+/// 显式定向的工具主体运行前的宿主点位。
+pub const VULCAN_PLUGIN_HOOK_TOOL_BEFORE: &str = "tool.before";
+/// Host point after the tool body returns and before its result reaches the AI.
+/// 工具主体返回后、结果交给 AI 前的宿主点位。
+pub const VULCAN_PLUGIN_HOOK_TOOL_AFTER: &str = "tool.after";
+
 /// Stable host-owned argument used to address one managed plugin session.
 /// 用于寻址单个受管插件会话的稳定宿主参数。
 pub const VULCAN_PLUGIN_SESSION_ID_ARGUMENT: &str = "session_id";
@@ -517,9 +527,27 @@ pub struct VulcanPluginMcpServerManifest {
     /// Default user-facing server name.
     /// 默认的用户可见服务器名称。
     pub name: String,
+    /// Launch lifetime selected for this server; conversation servers require an owner grant.
+    /// 当前服务器选择的启动生命周期；会话服务器要求所有者授权。
+    #[serde(default)]
+    pub scope: VulcanPluginMcpScopeManifest,
     /// Strictly selected transport and its transport-specific settings.
     /// 严格选择的传输方式及其专属设置。
     pub transport: VulcanPluginMcpTransportManifest,
+}
+
+/// Lifetime of one plugin-owned MCP server declaration.
+/// 单个插件自有 MCP 服务器声明的生命周期。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VulcanPluginMcpScopeManifest {
+    /// Start with the enabled plugin's global MCP runtime partition.
+    /// 随已启用插件的全局 MCP 运行时分区启动。
+    #[default]
+    Global,
+    /// Start only for one trusted conversation after a Core-owned grant is issued.
+    /// 仅在 Core 为某个可信会话颁发授权后启动。
+    Conversation,
 }
 
 impl VulcanPluginMcpServerManifest {
@@ -724,6 +752,9 @@ pub enum VulcanPluginValueSourceManifest {
         /// 精确环境变量名称。
         name: String,
     },
+    /// One-use browser-level CDP endpoint issued by Core for this conversation.
+    /// Core 针对当前会话颁发的一次性浏览器级 CDP 端点。
+    CoreBrowserEndpoint,
 }
 
 /// One Lua handler bound to an existing host-owned hook point.
@@ -737,6 +768,10 @@ pub struct VulcanPluginHookManifest {
     /// Exact host hook point subscribed by this handler.
     /// 该处理器订阅的精确宿主 hook 点位。
     pub point: String,
+    /// Exact original tool identity required by the three generic tool hook points.
+    /// 三个通用工具 Hook 点位必须声明的原始工具精确身份。
+    #[serde(default)]
+    pub tool_target: Option<VulcanPluginToolHookTargetManifest>,
     /// Existing host hook behavior mode used for result aggregation.
     /// 结果聚合所使用的现有宿主 hook 行为模式。
     pub mode: HookMode,
@@ -771,6 +806,47 @@ pub struct VulcanPluginHookManifest {
     /// 阻塞式前置执行使用的可选进度标签。
     #[serde(default)]
     pub progress_label: Option<String>,
+}
+
+/// Original source identity matched before the host changes a tool's public name.
+/// 宿主改写工具公开名称前用于匹配的原始来源身份。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginToolHookTargetManifest {
+    /// Exact kind of the original tool source.
+    /// 原始工具来源的精确类别。
+    pub source_kind: VulcanPluginToolHookSourceKind,
+    /// Exact source-owned namespace, such as one MCP server identity.
+    /// 来源持有的精确命名空间，例如一个 MCP 服务器身份。
+    pub namespace: String,
+    /// Exact source-owned name, never the normalized AI-visible tool name.
+    /// 来源持有的精确名称，绝非归一化后 AI 可见的工具名称。
+    pub original_name: String,
+}
+
+/// Supported source kinds for an explicitly targeted generic tool hook.
+/// 显式定向的通用工具 Hook 所支持的来源类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VulcanPluginToolHookSourceKind {
+    /// Host-owned native Rust tool.
+    /// 宿主自有的 Rust 原生工具。
+    Native,
+    /// Host-managed internal runtime tool.
+    /// 宿主管理的内部运行时工具。
+    VulcanManaged,
+    /// Manifest-driven plugin tool.
+    /// 清单驱动的插件工具。
+    VulcanPlugin,
+    /// LuaSkills runtime tool.
+    /// LuaSkills 运行时工具。
+    LuaSkills,
+    /// Tool discovered from a Model Context Protocol server.
+    /// 从模型上下文协议服务器发现的工具。
+    Mcp,
+    /// AI-specialized alias backed by a host tool.
+    /// 由宿主工具承载的 AI 专用别名。
+    AiHostBinding,
 }
 
 /// Supported generic tool execution lifecycle.

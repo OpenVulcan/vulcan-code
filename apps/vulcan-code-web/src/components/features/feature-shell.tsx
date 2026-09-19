@@ -97,6 +97,9 @@ function FeatureShell(props: {
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
+  // Selected conversation route used to scope Core browser sessions.
+  // 用于限定 Core 浏览器会话范围的当前会话路由。
+  selectedConversationId: string | null
   // App-wide chrome actions rendered in the shared content header.
   // 渲染在共享内容标题栏中的应用级窗口控制区。
   chromeActions?: React.ReactNode

@@ -30,7 +30,7 @@ impl VulcanToolMode {
 
 /// Stable tool-source kind surfaced by the unified host tool manager.
 /// 由统一宿主工具管理器对外暴露的稳定工具来源类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VulcanToolSourceKind {
     /// Host-owned native Rust tool.
     /// 宿主自有的 Rust 原生工具。
@@ -52,6 +52,59 @@ pub enum VulcanToolSourceKind {
     AiHostBinding,
 }
 
+/// Immutable identity of the source tool before host-facing name normalization.
+/// 宿主侧名称归一化之前的来源工具不可变身份。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VulcanToolOrigin {
+    /// Exact source kind that owns the tool.
+    /// 拥有该工具的精确来源种类。
+    source_kind: VulcanToolSourceKind,
+    /// Stable namespace assigned by the source registry.
+    /// 由来源注册表分配的稳定命名空间。
+    namespace: String,
+    /// Exact source-owned tool name used before public-name normalization.
+    /// 名称归一化前由来源拥有的精确工具名。
+    original_name: String,
+}
+
+impl VulcanToolOrigin {
+    /// Builds one immutable source identity from authoritative source fields.
+    /// 根据来源的权威字段构建一份不可变来源身份。
+    pub fn new(
+        source_kind: VulcanToolSourceKind,
+        namespace: impl Into<String>,
+        original_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            source_kind,
+            namespace: namespace.into(),
+            original_name: original_name.into(),
+        }
+    }
+
+    /// Returns the exact source kind captured before public-name normalization.
+    /// 返回公开名称归一化前捕获的精确来源种类。
+    pub fn source_kind(&self) -> VulcanToolSourceKind {
+        self.source_kind
+    }
+
+    /// Returns the stable source namespace captured before public-name normalization.
+    /// 返回公开名称归一化前捕获的稳定来源命名空间。
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    /// Returns the exact source-owned tool name captured before public-name normalization.
+    /// 返回公开名称归一化前捕获的来源自有精确工具名。
+    pub fn original_name(&self) -> &str {
+        &self.original_name
+    }
+}
+
+/// Compatibility alias for callers that name the immutable source identity explicitly.
+/// 为明确称呼不可变来源身份的调用方提供兼容别名。
+pub type VulcanToolSourceIdentity = VulcanToolOrigin;
+
 /// One unified tool descriptor emitted by the host tool manager.
 /// 由宿主工具管理器发出的统一工具描述。
 #[derive(Debug, Clone)]
@@ -71,6 +124,42 @@ pub struct VulcanToolDescriptor {
     /// Stable tool-source kind.
     /// 稳定工具来源类型。
     pub source: VulcanToolSourceKind,
+    /// Immutable source identity captured before public-name normalization.
+    /// 在公开名称归一化前捕获的不可变来源身份。
+    origin: VulcanToolOrigin,
+}
+
+impl VulcanToolDescriptor {
+    /// Builds one descriptor whose source kind is derived from its immutable origin.
+    /// 构建一份来源种类由不可变来源身份派生的工具描述。
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        help_text: Option<String>,
+        origin: VulcanToolOrigin,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            help_text,
+            source: origin.source_kind(),
+            origin,
+        }
+    }
+
+    /// Returns the immutable source identity captured before public-name normalization.
+    /// 返回公开名称归一化前捕获的不可变来源身份。
+    pub fn origin(&self) -> &VulcanToolOrigin {
+        &self.origin
+    }
+
+    /// Returns the immutable source identity under an explicit identity-oriented name.
+    /// 以明确身份语义的名称返回不可变来源身份。
+    pub fn source_identity(&self) -> &VulcanToolSourceIdentity {
+        &self.origin
+    }
 }
 
 /// Stable Plan-mode execution policy attached to one candidate tool.

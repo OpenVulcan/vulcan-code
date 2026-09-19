@@ -304,6 +304,32 @@ pub(super) async fn handle_finished_stream_event(
     } else {
         "stream_finished_without_v1_api_terminal"
     };
+    // The terminal-persistence owner still blocks the next prompt here. Retire this turn's
+    // Playwright MCP process and host grant before releasing that gate, so a successor cannot
+    // accidentally inherit or have its fresh connection revoked by the previous turn.
+    // 此处终态持久化所有者仍阻止下一提示；释放闸门之前退休本回合的 Playwright MCP
+    // 进程及宿主授权，避免后继继承旧凭据，或让前一回合误撤销后继的新连接。
+    if logical_turn_completed {
+        let browser_manager = task_state
+            .lock()
+            .map(|guard| guard.browser_manager.clone())
+            .map_err(|error| error.to_string());
+        match browser_manager {
+            Ok(manager) => {
+                if let Err(error) = manager
+                    .retire_ai_connection_after_turn(finished_session_id)
+                    .await
+                {
+                    eprintln!(
+                        "[webui-service] browser AI turn retirement failed: session={finished_session_id} error={error}"
+                    );
+                }
+            }
+            Err(error) => eprintln!(
+                "[webui-service] browser AI turn retirement state unavailable: session={finished_session_id} error={error}"
+            ),
+        }
+    }
     // A sufficient ApiStats or an explicit fallback is required before the exact owner may reopen admission.
     // 只有充分的 ApiStats 或明确回退落盘后，精确 owner 才允许重新开放准入。
     let terminal_authority_settled = settle_stream_terminal_authority(

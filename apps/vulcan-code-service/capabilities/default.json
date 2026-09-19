@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow the tray-hosted service to emit local notifications.",
+  "windows": [],
+  "tray": true,
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:tray:default",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify"
+  ]
+}

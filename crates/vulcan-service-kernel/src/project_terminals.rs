@@ -152,6 +152,18 @@ pub(crate) fn project_terminal_runtime() -> &'static Arc<ProjectTerminalRuntime>
     PROJECT_TERMINAL_RUNTIME.get_or_init(|| Arc::new(ProjectTerminalRuntime::new()))
 }
 
+/// Counts currently running project terminals for the protected status endpoint.
+/// 为受保护状态端点统计当前运行中的项目终端。
+///
+/// # Returns / 返回值
+/// Best-effort running-terminal gauge; a poisoned registry reports zero.
+/// 尽力而为的运行中终端度量；注册表损坏时报告零。
+pub(crate) fn project_terminal_running_gauge() -> u64 {
+    project_terminal_runtime()
+        .running_terminal_count()
+        .unwrap_or(0)
+}
+
 /// Returns the registry containing only visible terminal displays.
 /// 返回仅包含可见终端显示层的注册表。
 ///

@@ -12,6 +12,10 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # ProjectDir 保存仓库根目录，确保源目录与输出目录路径稳定。
 ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
 
+# OutputRootDir is validated before any synchronization or recursive cleanup.
+# OutputRootDir 在任何同步或递归清理之前完成验证。
+OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root)
+
 # SourceConfigDir points at repository-owned packaged configuration templates.
 # SourceConfigDir 指向仓库持有的打包配置模板目录。
 SourceConfigDir="$ProjectDir/config"
@@ -66,11 +70,11 @@ SourcePluginBridgeDir="$ProjectDir/plugin-bridge/vulcan-plugin-bridge"
 
 # OutputConfigDir stores packaged configuration read by output/bin runtime launches.
 # OutputConfigDir 保存 output/bin 运行时启动读取的打包配置目录。
-OutputConfigDir="$ProjectDir/output/config"
+OutputConfigDir="$OutputRootDir/config"
 
 # OutputResourcesDir stores the packaged resource catalog read by output/bin runtime launches.
 # OutputResourcesDir 保存 output/bin 运行时启动读取的打包资源目录。
-OutputResourcesDir="$ProjectDir/output/resources"
+OutputResourcesDir="$OutputRootDir/resources"
 
 # OutputSystemPromptSkillsDir stores packaged system Agent Skills read directly by the runtime.
 # OutputSystemPromptSkillsDir 保存运行时直接读取的打包系统 Agent Skills。
@@ -78,11 +82,11 @@ OutputSystemPromptSkillsDir="$OutputResourcesDir/prompt-skills/system"
 
 # OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
-OutputLuaRuntimeDir="$ProjectDir/output/lua_runtime"
+OutputLuaRuntimeDir="$OutputRootDir/lua_runtime"
 
 # OutputBundledToolsDir is the runtime-owned sg and rg distribution root.
 # OutputBundledToolsDir 是运行时持有的 sg 与 rg 发行根目录。
-OutputBundledToolsDir="$ProjectDir/output/tools"
+OutputBundledToolsDir="$OutputRootDir/tools"
 
 # LegacyManagedRuntimeDistributionDir is the obsolete LuaSkills-private Python/Node location.
 # LegacyManagedRuntimeDistributionDir 是已经废弃的 LuaSkills 私有 Python/Node 位置。
@@ -94,7 +98,7 @@ LegacyManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
 
 # OutputVulcanPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
 # OutputVulcanPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
-OutputVulcanPluginsDir="$ProjectDir/output/plugins"
+OutputVulcanPluginsDir="$OutputRootDir/plugins"
 
 # OutputPluginBridgeDir is the only plugin-related package deployed below system_lua_lib.
 # OutputPluginBridgeDir 是部署到 system_lua_lib 下的唯一插件相关 package。
@@ -113,7 +117,7 @@ remove_output_directory() {
     # TargetDirectory 是准备递归删除的精确 output 子目录。
     TargetDirectory=$1
     case "$TargetDirectory" in
-        "$ProjectDir"/output/*)
+        "$OutputRootDir"/*)
             rm -rf -- "$TargetDirectory"
             ;;
         *)
@@ -312,4 +316,4 @@ if [ ! -f "$OutputRtkPluginBinary" ]; then
     exit 1
 fi
 
-echo "==> Done. Runtime resources synchronized into: $ProjectDir/output"
+echo "==> Done. Runtime resources synchronized into: $OutputRootDir"

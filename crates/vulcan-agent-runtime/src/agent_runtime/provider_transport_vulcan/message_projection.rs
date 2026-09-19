@@ -235,13 +235,18 @@ pub(super) fn core_message_to_public(
                     "Canonical tool result is missing its provider-visible call identifier.",
                 )
             })?;
+            let content = crate::agent_runtime::tool_result_media::project_tool_result_content(
+                text,
+                protocol_profile_id,
+            )
+            .map_err(|error| provider_failure(provider_id, error.as_str()))?;
             Ok(AiMessage {
                 role: MessageRole::Tool,
                 content: vec![ContentItem::ToolResult {
                     result: ToolResult {
                         call_id,
                         is_error: *is_error,
-                        content: Value::String(text.clone()),
+                        content,
                     },
                 }],
                 provider_context_items: Vec::new(),
@@ -389,7 +394,10 @@ pub(super) fn core_message_text(
     match &message.payload {
         CoreConversationPayload::UserText { text, .. } => Ok(text.clone()),
         CoreConversationPayload::Assistant { text, .. } => Ok(text.clone()),
-        CoreConversationPayload::ToolResult { text, .. } => Ok(text.clone()),
+        CoreConversationPayload::ToolResult { text, .. } => {
+            crate::agent_runtime::tool_result_media::tool_result_text_preview(text)
+                .map_err(|error| provider_failure("vulcan", error.as_str()))
+        }
         CoreConversationPayload::AgentMessage { .. } => message
             .payload
             .agent_message_model_text()

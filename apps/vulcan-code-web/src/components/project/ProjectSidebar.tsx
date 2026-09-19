@@ -334,8 +334,6 @@ export function ProjectSidebar(props: {
       project={conversation.projectId ? projectsById.get(conversation.projectId) : undefined}
     />
   );
-  // collapsedFeatureMenuItems groups the five feature shortcuts under one collapsed plugin icon.
-  // collapsedFeatureMenuItems 将五个功能快捷入口归组到折叠后的单个插件图标下。
   const collapsedFeatureMenuItems = [
     { id: "skills", label: t("area.skills"), icon: <Puzzle size={16} />, active: props.skillsActive, onSelect: navigate(props.onOpenSkills) },
     { id: "agent-skills", label: t("area.agentSkills"), icon: <Hammer size={16} />, active: props.agentSkillsActive, onSelect: navigate(props.onOpenAgentSkills) },

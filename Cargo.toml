@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "apps/vulcan-code-tauri",
+    "apps/vulcan-code-service",
     "crates/vulcan-agent-runtime",
     "crates/vulcan-subagent-core",
     "crates/vulcan-session-core",

@@ -1,9 +1,9 @@
 import {
-  workspaceContextTabDefaultTitle,
   type WorkspaceContextTabItem,
   type WorkspaceContextTabKind,
   type WorkspaceContextTabState,
 } from "@/components/workspace/WorkspaceContextPanel";
+import { workspaceContextTabDefaultTitle } from "@/components/workspace/workspace-context-tab-title";
 import type { TranslationKey } from "@/i18n";
 import {
   selectedConversationWorkspacePath,

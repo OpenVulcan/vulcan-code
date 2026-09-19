@@ -8,6 +8,8 @@ use super::{
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 /// Returns the deterministic configuration document path for one validated plugin identity.
 /// 返回一个已校验插件身份的确定性配置文档路径。
@@ -119,6 +121,12 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         value: Value,
     ) -> Result<Value, VulcanPluginRuntimeError> {
+        // Configuration writes and catalog publication share the registration gate so a
+        // concurrent package refresh cannot publish an older registration-cache revision.
+        // 配置写入和目录发布共用注册门，避免并发包刷新发布旧的注册缓存修订。
+        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
@@ -143,11 +151,19 @@ impl VulcanPluginRuntimeManager {
                 "Failed to encode Vulcan plugin `{plugin_id}` configuration: {error}"
             ))
         })?;
+        let mut published = self.state.snapshot.write().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
+        })?;
         crate::atomic_file::write_file_atomically(
             &plugin_config_state_path(&self.state.plugin_state_root, plugin_id),
             &encoded,
         )
         .map_err(VulcanPluginRuntimeError::new)?;
+        // Registration hooks may read this configuration while shaping model-visible tools.
+        // 注册 Hook 可读取此配置来塑造模型可见工具，因此写盘成功后必须失效旧目录缓存。
+        let mut next_snapshot = (**published).clone();
+        next_snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
+        *published = Arc::new(next_snapshot);
         Ok(value)
     }
 

@@ -517,6 +517,9 @@ where
     // relative_python 证明清单可执行文件始终位于暂存目录内。
     let relative_python = relative_canonical_path(&staging, &python_path)?;
     verify_binary_version(&python_path, &["--version"], request.python_version)?;
+    // uv also creates a short-version directory link with an absolute target inside staging.
+    // uv 还会创建指向暂存目录内部的短版本目录链接；提交前必须移除以保证发行包可搬移。
+    remove_uv_staging_aliases(&staging, &relative_python)?;
     write_runtime_manifest(
         &staging,
         RuntimeManifest {
@@ -538,6 +541,99 @@ where
         None,
         None,
     );
+    Ok(())
+}
+
+/// Remove uv's direct short-version links before the staging directory is renamed.
+/// 在暂存目录重命名前移除 uv 创建的直属短版本链接。
+/// staging is the temporary Python root and relative_python is its verified executable path; returns an error for any unrelated link.
+/// staging 是临时 Python 根，relative_python 是已验证的可执行文件相对路径；遇到无关链接时返回错误。
+fn remove_uv_staging_aliases(staging: &Path, relative_python: &Path) -> Result<(), String> {
+    // version_name is the first verified path component, independent of Windows or Unix bin layouts.
+    // version_name 是已验证路径的首段，不依赖 Windows 或 Unix 的 bin 目录布局。
+    let version_name = match relative_python.components().next() {
+        Some(std::path::Component::Normal(name)) => name,
+        _ => {
+            return Err(format!(
+                "managed Python executable has no version directory: {}",
+                relative_python.display()
+            ));
+        }
+    };
+    // installed_root is the exact version directory that uv's short-version alias may reference.
+    // installed_root 是 uv 短版本别名可能指向的精确版本目录。
+    let installed_root = staging.join(version_name);
+    // installed_root is canonicalized before comparing it with uv's direct alias target.
+    // 比较 uv 直属别名目标之前，先将 installed_root 规范化。
+    let installed_root = fs::canonicalize(&installed_root).map_err(|error| {
+        format!(
+            "failed to resolve managed Python directory {}: {error}",
+            installed_root.display()
+        )
+    })?;
+    // entry visits direct children because uv creates its version alias at this level.
+    // entry 遍历直属子项，因为 uv 在这一层创建版本别名。
+    for entry in fs::read_dir(staging).map_err(|error| {
+        format!(
+            "failed to read Python staging directory {}: {error}",
+            staging.display()
+        )
+    })? {
+        // entry is the resolved directory entry inspected without following links.
+        // entry 是不跟随链接而检查的已解析目录子项。
+        let entry = entry.map_err(|error| {
+            format!("failed to read entry under {}: {error}", staging.display())
+        })?;
+        // metadata describes the entry itself, including its Windows reparse attribute.
+        // metadata 描述子项本身，包括 Windows 重解析属性。
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+            format!(
+                "failed to inspect Python staging entry {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        // Windows junctions are reparse points and are not reliably classified as symbolic links.
+        // Windows 目录联接属于重解析点，不能只依赖符号链接分类来识别。
+        #[cfg(windows)]
+        let is_link = {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_attributes() & 0x400 != 0
+        };
+        #[cfg(not(windows))]
+        let is_link = metadata.file_type().is_symlink();
+        if !is_link {
+            continue;
+        }
+        // linked_root must equal the verified interpreter directory; unrelated links remain explicit errors.
+        // linked_root 必须等于已验证的解释器目录；无关链接会明确报错。
+        let linked_root = fs::canonicalize(entry.path()).map_err(|error| {
+            format!(
+                "failed to resolve Python staging link {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        if linked_root != installed_root {
+            return Err(format!(
+                "unexpected Python staging link {} -> {}",
+                entry.path().display(),
+                linked_root.display()
+            ));
+        }
+        #[cfg(windows)]
+        fs::remove_dir(entry.path()).map_err(|error| {
+            format!(
+                "failed to remove Python staging directory link {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        #[cfg(not(windows))]
+        fs::remove_file(entry.path()).map_err(|error| {
+            format!(
+                "failed to remove Python staging link {}: {error}",
+                entry.path().display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -1610,6 +1706,85 @@ mod tests {
         if let Some(parent) = target.parent() {
             let _ = fs::remove_dir_all(parent);
         }
+    }
+
+    /// Verify uv's Windows version junction is removed without deleting its interpreter before the atomic rename.
+    /// 验证原子重命名前移除 uv 的 Windows 版本目录联接，同时保留实际解释器。
+    #[cfg(windows)]
+    #[test]
+    fn uv_staging_alias_does_not_escape_into_published_runtime() {
+        use std::os::windows::process::CommandExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // nonce separates simultaneous test runs without touching existing temporary data.
+        // nonce 隔离并行测试运行，且不触碰已有临时数据。
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        // root is a unique test-owned directory, and all cleanup remains beneath this exact root.
+        // root 是测试独占的唯一目录，所有清理均限制在这个精确根目录之下。
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-python-alias-test-{}-{nonce}",
+            std::process::id()
+        ));
+        // published is the final Python runtime directory used after commit.
+        // published 是提交后的最终 Python 运行时目录。
+        let published = root.join("cpython-3.14.6-windows-x64");
+        // staging is the same-volume sibling given to uv before commit.
+        // staging 是提交前交给 uv 的同卷同级暂存目录。
+        let staging = sibling_work_path(&published, "installing").expect("staging should resolve");
+        // interpreter_root is the actual full-version installation behind uv's alias.
+        // interpreter_root 是 uv 别名背后的实际完整版本安装目录。
+        let interpreter_root = staging.join("cpython-3.14.6-windows-x86_64-none");
+        // interpreter marks the exact executable location recorded in the runtime manifest.
+        // interpreter 标记运行时清单记录的精确可执行文件位置。
+        let interpreter = interpreter_root.join("python.exe");
+        // unix_interpreter exercises the additional bin directory used on Unix platforms.
+        // unix_interpreter 覆盖 Unix 平台在版本根之下额外使用 bin 目录的布局。
+        let unix_interpreter = interpreter_root.join("bin/python3");
+        // alias is the short-version directory junction created by uv.
+        // alias 是 uv 创建的短版本目录联接。
+        let alias = staging.join("cpython-3.14-windows-x86_64-none");
+        fs::create_dir_all(
+            unix_interpreter
+                .parent()
+                .expect("nested interpreter has a parent"),
+        )
+        .expect("interpreter root should be created");
+        fs::write(&interpreter, b"test interpreter").expect("interpreter marker should be created");
+        fs::write(&unix_interpreter, b"test nested interpreter")
+            .expect("nested interpreter marker should be created");
+        // A directory junction requires no Developer Mode and reproduces uv's actual Windows alias.
+        // 目录联接不要求开发者模式，且复现 uv 在 Windows 创建的实际别名。
+        // status confirms native junction creation before testing alias removal.
+        // status 在测试别名清理前确认原生目录联接已创建。
+        let status = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&interpreter_root)
+            .creation_flags(0x0800_0000)
+            .status()
+            .expect("junction command should launch");
+        assert!(status.success(), "junction creation should succeed");
+
+        remove_uv_staging_aliases(
+            &staging,
+            Path::new("cpython-3.14.6-windows-x86_64-none/bin/python3"),
+        )
+        .expect("uv alias should be removed");
+        assert!(
+            fs::symlink_metadata(&alias).is_err(),
+            "uv alias should be absent"
+        );
+        commit_staging_directory(&staging, &published).expect("runtime should publish");
+        assert!(
+            published
+                .join("cpython-3.14.6-windows-x86_64-none/python.exe")
+                .exists(),
+            "actual interpreter should survive alias cleanup and publish"
+        );
+        fs::remove_dir_all(&root).expect("test-owned runtime should be removed");
     }
 
     /// Verify Node.js version checks accept a canonical Windows verbatim executable path.

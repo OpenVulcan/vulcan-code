@@ -326,6 +326,13 @@ pub fn spawn_service_bootstrap(
     std::thread::Builder::new()
         .name(String::from("vulcan-webui-service-bootstrap"))
         .spawn(move || {
+            // Hold the already-published starting phase only in test-support builds so two
+            // real GUI launchers can prove they reuse one Core before business readiness.
+            // 仅在测试构建中保持已发布的 starting 阶段，让两个真实 GUI 启动器证明业务就绪前复用同一 Core。
+            #[cfg(feature = "test-support")]
+            if std::env::var("VULCAN_TEST_HOLD_STARTING").ok().as_deref() == Some("1") {
+                std::thread::sleep(std::time::Duration::from_secs(15));
+            }
             if let Err(error) = run_service_bootstrap(&state, &event_emitter) {
                 update_service_failure(&state, &event_emitter, error);
             }
@@ -431,7 +438,7 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
+                    "Core Service 已启动",
                 ),
                 (
                     "vldb",
@@ -461,7 +468,7 @@ fn run_service_bootstrap(
                 ServiceBootstrapError::new(
                     "service-process",
                     "Core Service",
-                    format!("创建 Tauri service tokio runtime 失败：{error}"),
+                    format!("创建 Core Service tokio runtime 失败：{error}"),
                 )
             })?,
     );
@@ -518,7 +525,7 @@ fn run_service_bootstrap(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Tauri 本地服务桥接已启动",
+                        "Core Service 已启动",
                     ),
                     (
                         "vldb",
@@ -679,7 +686,7 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
+                    "Core Service 已启动",
                 ),
                 (
                     "vldb",
@@ -756,7 +763,7 @@ fn run_service_bootstrap(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Tauri 本地服务桥接已启动",
+                        "Core Service 已启动",
                     ),
                     (
                         "vldb",
@@ -924,7 +931,7 @@ fn run_service_bootstrap(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Tauri 本地服务桥接已启动",
+                        "Core Service 已启动",
                     ),
                     (
                         "vldb",
@@ -1366,6 +1373,36 @@ fn run_service_bootstrap(
         }
     };
     let task_runtime = Arc::new(TaskRuntime::new());
+    // The browser service bearer lives in its discovery snapshot; register it before any
+    // model tool can run so a shell reading that file cannot persist or replay the credential.
+    // 浏览器服务凭据位于发现快照；在任何模型工具运行前注册，避免 shell 读取该文件后将凭据持久化或重放。
+    let service_discovery = state
+        .lock()
+        .map_err(|_| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                "failed to lock service state for tool-output protection",
+            )
+        })?
+        .webui_service_discovery
+        .clone();
+    if let Some(service_discovery) = service_discovery {
+        let service_token = service_discovery
+            .lock()
+            .map_err(|_| {
+                ServiceBootstrapError::new(
+                    "workspace",
+                    "Workspace",
+                    "failed to lock service discovery for tool-output protection",
+                )
+            })?
+            .service_token
+            .clone();
+        task_runtime
+            .register_sensitive_tool_output_value(service_token)
+            .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    }
     task_runtime
         .replace_subagent_catalog(subagent_catalog.clone())
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
@@ -1429,7 +1466,7 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
+                    "Core Service 已启动",
                 ),
                 (
                     "vldb",
@@ -1560,7 +1597,7 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
+                    "Core Service 已启动",
                 ),
                 (
                     "vldb",
@@ -1714,6 +1751,16 @@ fn run_service_bootstrap(
                 format!("failed to lock service state while publishing startup readiness: {error}"),
             )
         })?;
+        // The HTTP owner can fail concurrently with the final workspace stage. Publishing ready
+        // after that failure would leave clients pointed at a dead listener.
+        // HTTP 所有者可能与工作区最后阶段并发失败；之后发布 ready 会让客户端指向已死亡的监听器。
+        if guard.service_lifecycle_state.http_bridge_failed {
+            return Err(ServiceBootstrapError::new(
+                "service-process",
+                "Core Service",
+                "HTTP bridge failed before readiness publication",
+            ));
+        }
         guard.host_database_providers = Some(pending_host_database_providers.commit());
         guard.startup = startup.clone();
     }

@@ -34,10 +34,6 @@
   padding-right: 0;
 }
 
-.full-height {
-  height: 100%;
-}
-
 .vmm-workspace-body { container: memory-body / inline-size; }
 .vmm-workspace-body .vmm-memory-page { overflow: visible; scrollbar-gutter: auto; }
 .vmm-workspace-body .vmm-memory-shell { min-height: 0; }

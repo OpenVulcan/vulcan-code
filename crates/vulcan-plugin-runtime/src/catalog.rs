@@ -2,9 +2,11 @@
 //! 安全的插件包发现与不可变 Vulcan 插件目录快照。
 
 use crate::{
-    VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION, VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS,
-    VULCAN_PLUGIN_SESSION_ID_ARGUMENT, VulcanPluginDependencyInstallMode, VulcanPluginHookManifest,
-    VulcanPluginLocaleManifest, VulcanPluginManifest, VulcanPluginMcpServerManifest,
+    VULCAN_PLUGIN_HOOK_TOOL_AFTER, VULCAN_PLUGIN_HOOK_TOOL_BEFORE,
+    VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION, VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
+    VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS, VULCAN_PLUGIN_SESSION_ID_ARGUMENT,
+    VulcanPluginDependencyInstallMode, VulcanPluginHookManifest, VulcanPluginLocaleManifest,
+    VulcanPluginManifest, VulcanPluginMcpScopeManifest, VulcanPluginMcpServerManifest,
     VulcanPluginMcpStdioLauncherManifest, VulcanPluginMcpTransportManifest, VulcanPluginPermission,
     VulcanPluginPromptManifest, VulcanPluginToolExecutionKind, VulcanPluginToolManifest,
     VulcanPluginValueSourceManifest,
@@ -16,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use vulcan_hooks::HookMode;
 use vulcan_prompt_skills::{PromptSkill, load_plugin_prompt_skills};
 use vulcan_task_session::{SubagentDefinition, load_plugin_subagent_catalog};
 
@@ -1427,7 +1430,13 @@ fn validate_non_lua_manifest(manifest: &VulcanPluginManifest) -> Result<(), Stri
                 server.id
             ));
         }
-        validate_mcp_transport(manifest, &server.id, &server.transport, &permissions)?;
+        validate_mcp_transport(
+            manifest,
+            &server.id,
+            server.scope,
+            &server.transport,
+            &permissions,
+        )?;
     }
     Ok(())
 }
@@ -1437,9 +1446,9 @@ fn validate_non_lua_manifest(manifest: &VulcanPluginManifest) -> Result<(), Stri
 ///
 /// # Parameters
 /// 参数
-/// `manifest` owns referenced resources, `server_id` identifies diagnostics, `transport` is exact,
+/// `manifest` owns referenced resources, `server_id` identifies diagnostics, `scope` selects lifetime, `transport` is exact,
 /// and `permissions` is the already deduplicated permission set.
-/// `manifest` 持有被引用资源，`server_id` 标识诊断，`transport` 是精确传输，`permissions` 是已去重权限集合。
+/// `manifest` 持有被引用资源，`server_id` 标识诊断，`scope` 选择生命周期，`transport` 是精确传输，`permissions` 是已去重权限集合。
 ///
 /// # Returns
 /// 返回值
@@ -1448,6 +1457,7 @@ fn validate_non_lua_manifest(manifest: &VulcanPluginManifest) -> Result<(), Stri
 fn validate_mcp_transport(
     manifest: &VulcanPluginManifest,
     server_id: &str,
+    scope: VulcanPluginMcpScopeManifest,
     transport: &VulcanPluginMcpTransportManifest,
     permissions: &BTreeSet<&VulcanPluginPermission>,
 ) -> Result<(), String> {
@@ -1457,6 +1467,29 @@ fn validate_mcp_transport(
             args,
             env,
         } => {
+            // One endpoint source is bound to one owner grant; repeating it in args or env
+            // would multiply bearer-capability exposure without adding any functionality.
+            // 一份端点来源绑定一份所有者授权；在参数或环境中重复只会扩大承载能力泄露面。
+            let endpoint_sources = args
+                .iter()
+                .chain(env.values())
+                .filter(|value| {
+                    matches!(value, VulcanPluginValueSourceManifest::CoreBrowserEndpoint)
+                })
+                .count();
+            match scope {
+                VulcanPluginMcpScopeManifest::Global if endpoint_sources != 0 => {
+                    return Err(format!(
+                        "Plugin MCP server `{server_id}` core_browser_endpoint requires conversation scope."
+                    ));
+                }
+                VulcanPluginMcpScopeManifest::Conversation if endpoint_sources != 1 => {
+                    return Err(format!(
+                        "Plugin MCP server `{server_id}` conversation scope requires exactly one core_browser_endpoint source."
+                    ));
+                }
+                _ => {}
+            }
             if !permissions.contains(&VulcanPluginPermission::ProcessSession) {
                 return Err(format!(
                     "Plugin MCP server `{server_id}` stdio transport requires permission `process_session`."
@@ -1525,7 +1558,9 @@ fn validate_mcp_transport(
                 }
             }
             for value in args.iter().chain(env.values()) {
-                validate_plugin_value_source(manifest, server_id, value, permissions)?;
+                if !matches!(value, VulcanPluginValueSourceManifest::CoreBrowserEndpoint) {
+                    validate_plugin_value_source(manifest, server_id, value, permissions)?;
+                }
             }
         }
         VulcanPluginMcpTransportManifest::Http {
@@ -1538,6 +1573,11 @@ fn validate_mcp_transport(
             headers,
             oauth,
         } => {
+            if scope == VulcanPluginMcpScopeManifest::Conversation {
+                return Err(format!(
+                    "Plugin MCP server `{server_id}` conversation scope requires stdio transport."
+                ));
+            }
             if !permissions.contains(&VulcanPluginPermission::NetworkHttps) {
                 return Err(format!(
                     "Plugin MCP server `{server_id}` remote transport requires permission `network_https`."
@@ -1664,6 +1704,11 @@ fn validate_plugin_value_source(
             }
             ("environment variable name", name.as_str())
         }
+        VulcanPluginValueSourceManifest::CoreBrowserEndpoint => {
+            return Err(format!(
+                "Plugin MCP server `{server_id}` core_browser_endpoint is valid only in conversation-scoped stdio args or env."
+            ));
+        }
     };
     if value.trim().is_empty() {
         return Err(format!(
@@ -1741,6 +1786,51 @@ fn validate_hook_manifest(hook: &VulcanPluginHookManifest) -> Result<(), String>
             "Hook `{}` point must be a non-empty dot-separated identifier.",
             hook.id
         ));
+    }
+    // A tool hook must bind one original source identity; other hook points cannot silently ignore it.
+    // 工具 Hook 必须绑定一份原始来源身份；其他点位不能静默忽略这个目标。
+    let tool_point = matches!(
+        hook.point.as_str(),
+        VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION
+            | VULCAN_PLUGIN_HOOK_TOOL_BEFORE
+            | VULCAN_PLUGIN_HOOK_TOOL_AFTER
+    );
+    match (tool_point, hook.tool_target.as_ref()) {
+        (true, None) => return Err(format!("Hook `{}` must declare tool_target.", hook.id)),
+        (false, Some(_)) => {
+            return Err(format!(
+                "Hook `{}` declares tool_target for a non-tool point.",
+                hook.id
+            ));
+        }
+        (true, Some(target)) => {
+            if target.namespace.is_empty()
+                || target.namespace != target.namespace.trim()
+                || target.namespace.contains('*')
+                || target.original_name.is_empty()
+                || target.original_name != target.original_name.trim()
+                || target.original_name.contains('*')
+            {
+                return Err(format!(
+                    "Hook `{}` tool_target must use exact non-empty namespace and original_name.",
+                    hook.id
+                ));
+            }
+            let mode_supported = match hook.point.as_str() {
+                VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION | VULCAN_PLUGIN_HOOK_TOOL_BEFORE => {
+                    matches!(hook.mode, HookMode::Transform | HookMode::Decision)
+                }
+                VULCAN_PLUGIN_HOOK_TOOL_AFTER => hook.mode == HookMode::Transform,
+                _ => unreachable!(),
+            };
+            if !mode_supported {
+                return Err(format!(
+                    "Hook `{}` uses an unsupported mode for `{}`.",
+                    hook.id, hook.point
+                ));
+            }
+        }
+        (false, None) => {}
     }
     validate_lua_identifier(&hook.function, "hook function")?;
     if hook.timeout_ms == Some(0) {
@@ -2553,6 +2643,56 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Verifies generic tool hooks require an exact original identity and a phase-compatible mode.
+    /// 验证通用工具 Hook 必须声明精确原始身份及与阶段兼容的模式。
+    #[test]
+    fn generic_tool_hook_declarations_are_exact_and_phase_bound() {
+        let valid = serde_json::json!({
+            "id": "navigate-filter",
+            "point": "tool.before",
+            "tool_target": {
+                "source_kind": "mcp",
+                "namespace": "plugin:playwright:browser",
+                "original_name": "browser_navigate"
+            },
+            "mode": "transform",
+            "function": "before_navigate"
+        });
+        let hook: VulcanPluginHookManifest =
+            serde_json::from_value(valid.clone()).expect("decode exact hook");
+        validate_hook_manifest(&hook).expect("accept exact original tool hook");
+        for (changed, expected) in [
+            (
+                serde_json::json!({"point": "tool.before", "tool_target": null}),
+                "tool_target",
+            ),
+            (
+                serde_json::json!({"point": "conversation.turn.precheck", "tool_target": valid["tool_target"]}),
+                "non-tool",
+            ),
+            (
+                serde_json::json!({"point": "tool.before", "tool_target": {"source_kind": "mcp", "namespace": "*", "original_name": "browser_navigate"}}),
+                "exact",
+            ),
+            (
+                serde_json::json!({"point": "tool.after", "mode": "decision"}),
+                "unsupported mode",
+            ),
+        ] {
+            let mut candidate = valid.clone();
+            for (key, value) in changed.as_object().expect("changed fields") {
+                candidate[key] = value.clone();
+            }
+            let hook: VulcanPluginHookManifest =
+                serde_json::from_value(candidate).expect("decode invalid hook shape");
+            assert!(
+                validate_hook_manifest(&hook)
+                    .expect_err("reject invalid target")
+                    .contains(expected)
+            );
+        }
+    }
+
     /// Verifies plugin schemas allow local references and opaque annotation data while rejecting external reference resolution without echoing values.
     /// 验证插件 Schema 接受本地引用与不透明注解数据，同时拒绝外部引用解析且不回显引用值。
     #[test]
@@ -2681,6 +2821,27 @@ prompt_contributions:
             ),
         )
         .expect("write MCP manifest");
+    }
+
+    /// Writes one managed package-bin stdio MCP fixture with caller-selected lifetime and sources.
+    /// 写入一个由调用方选择生命周期及来源的受管包入口 stdio MCP 夹具。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `root` owns the package; `scope` is the exact manifest lifetime; `args` is YAML array content.
+    /// `root` 持有插件包；`scope` 是精确清单生命周期；`args` 是 YAML 参数数组内容。
+    fn write_scoped_stdio_mcp_package(root: &Path, scope: &str, args: &str) {
+        write_mcp_only_package(
+            root,
+            &format!(
+                "permissions:\n  - process_node\n  - process_session\nexecution:\n  dependencies:\n    manifest: dependencies.yaml\n    install_mode: bundled\nmcp:\n  servers:\n    - id: browser\n      name: Browser\n      scope: {scope}\n      transport:\n        type: stdio\n        launcher:\n          type: node_package_bin\n          package: '@playwright/mcp'\n          bin: playwright-mcp\n        args:\n{args}"
+            ),
+        );
+        fs::write(
+            root.join("mcp-plugin/dependencies.yaml"),
+            "dependencies: []\n",
+        )
+        .expect("write MCP dependency declaration");
     }
 
     /// Writes one named runtime-free plugin for namespace-collision tests.
@@ -2848,6 +3009,107 @@ mcp:
             snapshot
                 .enabled_mcp_servers
                 .contains_key("mcp-plugin:documentation")
+        );
+    }
+
+    /// Verifies a conversation-scoped stdio server declares exactly one owner-granted endpoint.
+    /// 验证会话作用域 stdio 服务器恰好声明一个所有者授权端点。
+    #[test]
+    fn conversation_mcp_catalog_requires_one_endpoint_only_in_stdio() {
+        let valid_root = tempfile::tempdir().expect("create conversation fixture");
+        write_scoped_stdio_mcp_package(
+            valid_root.path(),
+            "conversation",
+            "          - source: core_browser_endpoint\n",
+        );
+        let valid =
+            load_plugin_root_catalog(valid_root.path(), &BTreeSet::new(), &BTreeSet::new(), 20);
+        assert_eq!(
+            valid.plugins["mcp-plugin"].availability,
+            VulcanPluginAvailability::Enabled,
+            "{:?}",
+            valid.plugins["mcp-plugin"].diagnostics
+        );
+        assert_eq!(
+            valid.enabled_mcp_servers["mcp-plugin:browser"]
+                .manifest
+                .scope,
+            VulcanPluginMcpScopeManifest::Conversation
+        );
+
+        let global_root = tempfile::tempdir().expect("create global misuse fixture");
+        write_scoped_stdio_mcp_package(
+            global_root.path(),
+            "global",
+            "          - source: core_browser_endpoint\n",
+        );
+        let global =
+            load_plugin_root_catalog(global_root.path(), &BTreeSet::new(), &BTreeSet::new(), 21);
+        assert!(
+            global.plugins["mcp-plugin"]
+                .diagnostics
+                .iter()
+                .any(|message| message.contains("requires conversation scope"))
+        );
+
+        let duplicate_root = tempfile::tempdir().expect("create duplicate endpoint fixture");
+        write_scoped_stdio_mcp_package(
+            duplicate_root.path(),
+            "conversation",
+            "          - source: core_browser_endpoint\n          - source: core_browser_endpoint\n",
+        );
+        let duplicate = load_plugin_root_catalog(
+            duplicate_root.path(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            22,
+        );
+        assert!(
+            duplicate.plugins["mcp-plugin"]
+                .diagnostics
+                .iter()
+                .any(|message| message.contains("exactly one core_browser_endpoint"))
+        );
+
+        let missing_root = tempfile::tempdir().expect("create missing endpoint fixture");
+        write_scoped_stdio_mcp_package(
+            missing_root.path(),
+            "conversation",
+            "          - source: literal\n            value: --no-browser\n",
+        );
+        let missing =
+            load_plugin_root_catalog(missing_root.path(), &BTreeSet::new(), &BTreeSet::new(), 24);
+        assert!(
+            missing.plugins["mcp-plugin"]
+                .diagnostics
+                .iter()
+                .any(|message| message.contains("exactly one core_browser_endpoint"))
+        );
+
+        let remote_root = tempfile::tempdir().expect("create remote conversation fixture");
+        write_mcp_only_package(
+            remote_root.path(),
+            r#"permissions:
+  - network_https
+mcp:
+  servers:
+    - id: remote
+      name: Remote
+      scope: conversation
+      transport:
+        type: http
+        url:
+          source: literal
+          value: https://example.test/mcp
+"#,
+        );
+        let remote =
+            load_plugin_root_catalog(remote_root.path(), &BTreeSet::new(), &BTreeSet::new(), 23);
+        assert!(
+            remote.plugins["mcp-plugin"]
+                .diagnostics
+                .iter()
+                .any(|message| message.contains("conversation scope requires stdio"))
         );
     }
 
@@ -3800,7 +4062,16 @@ display:
             snapshot
                 .plugins
                 .values()
-                .all(|plugin| plugin.availability == VulcanPluginAvailability::Enabled),
+                .all(|plugin| {
+                    // The validated manifest is authoritative for the package's default state.
+                    // 已校验清单是插件包默认状态的权威来源。
+                    let manifest = plugin.manifest.as_ref().expect("validated bundled manifest");
+                    plugin.availability == if manifest.default_enabled {
+                        VulcanPluginAvailability::Enabled
+                    } else {
+                        VulcanPluginAvailability::Disabled
+                    }
+                }),
             "bundled plugin validation failed: {:?}",
             snapshot
                 .plugins

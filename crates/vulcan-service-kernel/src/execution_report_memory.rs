@@ -260,8 +260,8 @@ where
 ///
 /// # Parameters
 /// 参数
-/// `state` is the shared Tauri service bridge state that owns the in-memory workspace snapshot.
-/// `state` 是持有内存工作区快照的共享 Tauri 服务桥状态。
+/// `state` is the shared Core service bridge state that owns the in-memory workspace snapshot.
+/// `state` 是持有内存工作区快照的共享 Core 服务桥状态。
 /// `report` is the completed child execution report.
 /// `report` 是已完成的子执行报告。
 ///

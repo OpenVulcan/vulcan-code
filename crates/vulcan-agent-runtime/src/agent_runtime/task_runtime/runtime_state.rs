@@ -7,6 +7,7 @@ impl TaskRuntime {
         let (subagent_mailbox_activity_tx, _) = watch::channel(0_u64);
         let (wait_agent_parent_interruption_tx, _) = watch::channel(0_u64);
         Self {
+            sensitive_tool_output_values: Arc::new(RwLock::new(Vec::new())),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
@@ -23,6 +24,33 @@ impl TaskRuntime {
             subagent_catalog: RwLock::new(SubagentCatalog::default()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
+    }
+
+    /// Registers one exact host credential for tool-result redaction before model dispatch.
+    /// 在模型分派前注册一条需要从工具结果中遮蔽的精确宿主凭据。
+    ///
+    /// `secret` is a nontrivial host-owned value; the method returns a diagnostic without echoing it.
+    /// `secret` 是非平凡的宿主持有值；本方法返回的诊断不会回显该值。
+    pub fn register_sensitive_tool_output_value(&self, secret: String) -> Result<(), String> {
+        if secret.len() < 16 {
+            return Err(String::from(
+                "Sensitive tool-output value is too short to register.",
+            ));
+        }
+        let mut values = self
+            .sensitive_tool_output_values
+            .write()
+            .map_err(|_| String::from("Sensitive tool-output registry is unavailable."))?;
+        if !values.contains(&secret) {
+            values.push(secret);
+        }
+        Ok(())
+    }
+
+    /// Shares the live redaction registry with the host tool bridge for this runtime generation.
+    /// 与当前运行世代的宿主工具桥共享实时遮蔽注册表。
+    pub(crate) fn sensitive_tool_output_values(&self) -> Arc<RwLock<Vec<String>>> {
+        Arc::clone(&self.sensitive_tool_output_values)
     }
 
     /// Returns the maximum supported nested task depth.

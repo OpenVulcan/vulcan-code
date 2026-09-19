@@ -33,6 +33,9 @@ import {
   subscribePluginUiInvalidation,
 } from "@/service/plugin-ui-events";
 import type { PluginSummary } from "@/types";
+import { detectShellHost, type ShellHostMarker } from "@/shell/runtime";
+import { BrowserArea } from "@/components/features/browser/BrowserArea";
+import { ClientBrowserArea } from "@/components/features/browser/ClientBrowserArea";
 
 // PluginUiSdk is the stable host context exposed to one authorized dynamic plugin module.
 // PluginUiSdk 是暴露给单个已授权动态插件模块的稳定宿主上下文。
@@ -40,6 +43,16 @@ interface PluginUiSdk {
   // Host React instance keeps plugin components inside the current renderer.
   // 宿主 React 实例确保插件组件留在当前渲染器内。
   React: typeof React;
+  // Host-selected route and actual renderer host identify the UI context without plugin inference.
+  // 宿主选中的路由与实际渲染器宿主标识界面上下文，无须插件自行猜测。
+  context: {
+    // The persisted VulcanCode conversation selected for this mount, when present.
+    // 此挂载项选中的已持久化 VulcanCode 会话，如存在。
+    conversationId: string | null;
+    // The actual host type detected from the current renderer bridge.
+    // 从当前渲染器桥接检测到的实际宿主类型。
+    clientHost: ShellHostMarker;
+  };
   // Invokes one action declared by the owning plugin manifest.
   // 调用所属插件清单声明的单个 Action。
   invoke: <Result>(actionId: string, argumentsValue: unknown) => Promise<Result>;
@@ -55,6 +68,12 @@ interface PluginUiSdk {
   // Stable host components preserve the active design system and theme.
   // 稳定宿主组件保持当前设计系统与主题。
   components: {
+    // CoreBrowserArea is the host-owned projection for the enabled browser plugin.
+    // CoreBrowserArea 是已启用浏览器插件使用的宿主自有投影组件。
+    CoreBrowserArea: typeof BrowserArea;
+    // ClientBrowserArea is a client-local temporary page, independent of Core automation.
+    // ClientBrowserArea 是独立于 Core 自动化的客户端本地临时页面。
+    ClientBrowserArea: typeof ClientBrowserArea;
     // Shared Vulcan badge component.
     // Vulcan 共享徽标组件。
     Badge: typeof Badge;
@@ -181,6 +200,9 @@ interface DynamicPluginMountPanelProps {
   // Optional trusted workspace context forwarded only to manifest-declared plugin actions.
   // 仅转发给清单声明插件 Action 的可选可信工作区上下文。
   workspacePath?: string | null;
+  // Current persisted conversation selected by the host for conversation-scoped UI.
+  // 宿主为会话范围界面选中的当前已持久化会话。
+  conversationId?: string | null;
 }
 
 // DynamicPluginMountPanel loads and renders one authenticated uncompressed plugin ESM mount.
@@ -233,6 +255,10 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
   // sdk 把每次 Action 调用绑定到所选插件身份与宿主上下文。
   const sdk = React.useMemo<Omit<PluginUiSdk, "t">>(() => ({
     React,
+    context: {
+      conversationId: props.conversationId ?? null,
+      clientHost: detectShellHost(),
+    },
     invoke: <Result,>(actionId: string, argumentsValue: unknown) => (
       invokePluginAction<Result>(props.plugin.id, actionId, argumentsValue, props.workspacePath)
     ),
@@ -245,6 +271,8 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     openExternalUrl: openPluginExternalUrl,
     locale,
     components: {
+      CoreBrowserArea: BrowserArea,
+      ClientBrowserArea,
       Badge,
       Button,
       Dialog,
@@ -273,7 +301,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       success: (message: string) => toast.success(message),
       error: (message: string) => toast.error(message),
     },
-  }), [locale, openPluginExternalUrl, props.plugin.id, props.workspacePath]);
+  }), [locale, openPluginExternalUrl, props.conversationId, props.plugin.id, props.workspacePath]);
 
   React.useEffect(() => {
     // cancelled prevents a stale module from replacing a newer plugin selection.

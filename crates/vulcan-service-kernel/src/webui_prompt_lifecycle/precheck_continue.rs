@@ -700,6 +700,10 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         state.clone(),
         app.clone(),
     ));
+    // Browser tools are registered only while their exact plugin is enabled; each call still
+    // checks the live generation and derives ownership from the trusted execution session.
+    // 浏览器工具仅在精确插件启用时注册；每次调用仍核对实时代次并从可信执行会话确定归属。
+    request.native_browser_runtime = crate::browser::native_browser_runtime(state.clone())?;
     // vceProjectReady binds tool visibility to both the exact project and the current global model contract.
     // vceProjectReady 将工具可见性同时绑定到精确项目与当前全局模型契约。
     let vce_project_ready = request
@@ -1049,7 +1053,30 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 publication.as_ref(),
             )
         }) {
-            Ok(Some(request)) => {
+            Ok(Some(mut request)) => {
+                // Discover owner-scoped Playwright schemas before the Provider sees this turn's
+                // tool catalog; an empty browser uses a non-connectable template until AI opens one.
+                // 在 Provider 看到本回合工具目录前发现所有者范围 Playwright Schema；没有浏览器时先用
+                // 不可连接的模板，直至 AI 打开浏览器。
+                match crate::browser::prepare_browser_mcp_bindings(state.clone(), session_id).await {
+                    Ok(bindings) => request.supplemental_mcp_tools = bindings,
+                    Err(error) => {
+                        eprintln!("[webui-service] prepare browser MCP failed: {error}");
+                        if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
+                            &app,
+                            &state,
+                            &agent_runtime,
+                            session_id,
+                            &preparation_turn_id,
+                            &error,
+                        )
+                        .await
+                        {
+                            eprintln!("[webui-service] cleanup failed browser MCP preparation failed: {cleanup_error}");
+                        }
+                        return;
+                    }
+                }
                 webui_after_precheck_trace(
                     "after_precheck_18_stream_spawn_call",
                     format!(

@@ -1,6 +1,9 @@
 use super::*;
 use crate::mcp::config::runtime_mcp_server_configs;
+use crate::mcp::config::{McpServerSource, McpServerTransportConfig};
+use crate::model::SessionId;
 use crate::provider_config::ProviderConfigurationFile;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +202,93 @@ pub struct McpRuntimeToolBinding {
     /// Stable partition identity that prevents same-server-id source confusion.
     /// 防止同服务器标识来源混淆的稳定分区身份。
     partition_key: String,
+    /// Shared owner registry used to resolve the current lease after browser-grant replacement.
+    /// 用于浏览器授权替换后解析当前租约的共享所有者注册表。
+    owner_access: Option<McpRuntimeAccess>,
+    /// Runtime-only owner key retained for exact invocation authorization.
+    /// 仅运行时使用的所有者键，用于精确调用授权。
+    owner_key: Option<McpRuntimeOwnedPartitionKey>,
+    /// Optional plugin-lifecycle guard allowing this owner's browser tools to follow grant replacements.
+    /// 可选插件生命周期闸门，允许该所有者的浏览器工具跟随授权替换。
+    owner_replacement_guard: Option<Arc<AtomicBool>>,
+}
+
+/// Stable runtime-only identity for one plugin generation owned by one trusted workbench session.
+/// 仅供运行时使用的稳定身份，用于标识某个插件代次及其可信工作台会话所有者。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct McpRuntimeOwnedPartitionKey {
+    /// Stable plugin identifier from the immutable plugin source declaration.
+    /// 来自不可变插件来源声明的稳定插件标识。
+    plugin_id: String,
+    /// Immutable plugin generation used to prevent replacement cross-talk.
+    /// 用于阻止代次串扰的不可变插件代次。
+    generation: u64,
+    /// Trusted workbench session identity supplied by the host boundary.
+    /// 由宿主边界提供的可信工作台会话身份。
+    owner_session_id: SessionId,
+}
+
+impl McpRuntimeOwnedPartitionKey {
+    /// Creates an owned partition key after rejecting ambiguous plugin or owner identities.
+    /// 在拒绝含糊的插件或所有者身份后创建会话拥有的分区键。
+    pub fn try_new(
+        plugin_id: impl Into<String>,
+        generation: u64,
+        owner_session_id: SessionId,
+    ) -> Result<Self, String> {
+        let plugin_id = plugin_id.into();
+        if plugin_id.trim().is_empty() {
+            return Err(String::from(
+                "owned MCP partition requires a non-empty plugin id",
+            ));
+        }
+        if owner_session_id.is_nil() {
+            return Err(String::from(
+                "owned MCP partition requires a non-nil trusted owner session id",
+            ));
+        }
+        Ok(Self {
+            plugin_id,
+            generation,
+            owner_session_id,
+        })
+    }
+
+    /// Returns the exact plugin identifier encoded in this runtime key.
+    /// 返回此运行时键中编码的精确插件标识。
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// Returns the immutable plugin generation encoded in this runtime key.
+    /// 返回此运行时键中编码的不可变插件代次。
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Returns the trusted owner session identity encoded in this runtime key.
+    /// 返回此运行时键中编码的可信所有者会话身份。
+    pub const fn owner_session_id(&self) -> SessionId {
+        self.owner_session_id
+    }
+
+    /// Returns the source partition label without exposing the owner in public tool metadata.
+    /// 返回不把所有者暴露到公开工具元数据中的来源分区标签。
+    fn source_partition_key(&self) -> String {
+        format!("plugin:{}:{}", self.plugin_id, self.generation)
+    }
+}
+
+/// Capability handle for one session-owned stdio MCP partition.
+/// 某个会话拥有的 stdio MCP 分区能力句柄。
+#[derive(Debug, Clone)]
+pub struct McpRuntimeOwnedStdioPartition {
+    /// Shared MCP access registry used to resolve the current lease by exact owner key.
+    /// 用于按精确所有者键解析当前租约的共享 MCP 访问注册表。
+    access: McpRuntimeAccess,
+    /// Runtime-only identity that never changes the public tool name or manifest schema.
+    /// 不改变公开工具名称或 manifest schema 的仅运行时身份。
+    key: McpRuntimeOwnedPartitionKey,
 }
 
 /// Reference-counted ownership boundary for one independently replaceable MCP runtime partition.
@@ -207,12 +297,34 @@ struct McpRuntimePartitionLease {
     /// Live runtime retained until the last generation or in-flight tool binding releases the partition.
     /// 保留到最后一个代次或执行中工具绑定释放分区为止的实时运行时。
     runtime: McpRuntimeHandle,
+    /// Optional owner scope that turns this lease into a session-owned execution capability.
+    /// 可选的所有者范围，用于把该租约变成会话拥有的执行能力。
+    owner_key: Option<McpRuntimeOwnedPartitionKey>,
+    /// Monotonic revocation latch checked before every owner-scoped invocation.
+    /// 在每次所有者范围调用前检查的单调撤销锁存位。
+    revoked: AtomicBool,
+    /// Serializes owner-scoped calls so a revocation check cannot be bypassed by a queued call.
+    /// 串行化所有者范围调用，避免排队调用绕过撤销检查。
+    owner_call_gate: Option<Arc<tokio::sync::Mutex<()>>>,
 }
 
 /// Shared weak registry used to reject package removal while retired plugin leases can still execute.
 /// 用于在已退休插件租约仍可执行时拒绝删除包的共享弱引用注册表。
 type RetiredPluginPartitionRegistry =
     Arc<Mutex<BTreeMap<String, Vec<Weak<McpRuntimePartitionLease>>>>>;
+
+/// Shared registry for opt-in session-owned stdio MCP leases.
+/// 供可选会话拥有 stdio MCP 租约使用的共享注册表。
+type OwnedStdioPartitionRegistry =
+    Arc<Mutex<BTreeMap<McpRuntimeOwnedPartitionKey, Arc<McpRuntimePartitionLease>>>>;
+
+/// Shared plugin gate that rejects new owner-scoped MCP work while a plugin is draining.
+/// 在插件排空期间拒绝新的所有者范围 MCP 工作的共享插件闸门。
+type BlockedOwnerPluginRegistry = Arc<Mutex<BTreeSet<String>>>;
+
+/// Shared revocation guards for owner bindings that intentionally follow browser grant replacements.
+/// 供有意跟随浏览器授权替换的所有者绑定共享的撤销闸门。
+type OwnerReplacementGuardRegistry = Arc<Mutex<BTreeMap<String, Arc<AtomicBool>>>>;
 
 impl std::fmt::Debug for McpRuntimePartitionLease {
     /// Formats only the lease type so transport configuration and credential-bearing state never enter logs.
@@ -236,7 +348,78 @@ impl McpRuntimePartitionLease {
     /// Wraps one newly booted runtime in a shared lifecycle lease.
     /// 将一个新引导的运行时包装为共享生命周期租约。
     fn new(runtime: McpRuntimeHandle) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            owner_key: None,
+            revoked: AtomicBool::new(false),
+            owner_call_gate: None,
+        }
+    }
+
+    /// Wraps one independently booted runtime in a session-owned lease.
+    /// 将一个独立引导的运行时包装为会话拥有的租约。
+    fn new_owned(runtime: McpRuntimeHandle, owner_key: McpRuntimeOwnedPartitionKey) -> Self {
+        Self {
+            runtime,
+            owner_key: Some(owner_key),
+            revoked: AtomicBool::new(false),
+            owner_call_gate: Some(Arc::new(tokio::sync::Mutex::new(()))),
+        }
+    }
+
+    /// Returns whether this lease is scoped to a session owner.
+    /// 返回该租约是否绑定了会话所有者。
+    fn is_owner_scoped(&self) -> bool {
+        self.owner_key.is_some()
+    }
+
+    /// Marks this lease revoked before it can be removed from the owner registry.
+    /// 在从所有者注册表移除前先将此租约标记为已撤销。
+    fn revoke(&self) {
+        self.revoked.store(true, Ordering::Release);
+    }
+
+    /// Returns whether this lease has been revoked or otherwise invalidated.
+    /// 返回该租约是否已撤销或以其他方式失效。
+    fn is_revoked(&self) -> bool {
+        self.revoked.load(Ordering::Acquire)
+    }
+
+    /// Verifies one caller is the exact trusted owner and that the lease remains live.
+    /// 校验调用者是精确的可信所有者且租约仍然有效。
+    fn require_owner(&self, owner_session_id: SessionId) -> Result<(), String> {
+        if self.is_revoked() {
+            return Err(String::from("owned MCP tool binding has been revoked"));
+        }
+        let Some(owner_key) = self.owner_key.as_ref() else {
+            return Err(String::from(
+                "MCP tool binding is not scoped to a session owner",
+            ));
+        };
+        if owner_key.owner_session_id != owner_session_id {
+            return Err(String::from(
+                "MCP tool binding owner does not match the caller",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Invokes one tool only after acquiring the owner gate and rechecking revocation.
+    /// 仅在取得所有者闸门并重新检查撤销状态后调用单个工具。
+    async fn call_tool_for_owner(
+        &self,
+        owner_session_id: SessionId,
+        tool_id: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let Some(owner_call_gate) = self.owner_call_gate.as_ref() else {
+            return Err(String::from(
+                "MCP tool binding is not scoped to a session owner",
+            ));
+        };
+        let _gate = owner_call_gate.lock().await;
+        self.require_owner(owner_session_id)?;
+        self.runtime.call_tool_by_id(tool_id, args).await
     }
 }
 
@@ -253,6 +436,15 @@ pub struct McpRuntimeAccess {
     /// Weak retired-lease registry shared by every generation derived from the same bootstrap access.
     /// 由同一引导访问面派生的每个代次共享的弱退休租约注册表。
     retired_plugin_partitions: RetiredPluginPartitionRegistry,
+    /// Opt-in owner registry shared by every access generation derived from the same bootstrap access.
+    /// 由同一引导访问面派生的所有访问代次共享的可选所有者注册表。
+    owned_stdio_partitions: OwnedStdioPartitionRegistry,
+    /// Shared lifecycle gate retained across published extension generations.
+    /// 在已发布扩展代次之间持续共享的生命周期闸门。
+    blocked_owner_plugins: BlockedOwnerPluginRegistry,
+    /// Plugin-lifecycle guards shared across every access generation and revoked on drain.
+    /// 跨所有访问代次共享并在插件排空时撤销的插件生命周期闸门。
+    owner_replacement_guards: OwnerReplacementGuardRegistry,
 }
 
 impl McpRuntimeAccess {
@@ -269,6 +461,9 @@ impl McpRuntimeAccess {
                 .map(|(key, runtime)| (key, Arc::new(McpRuntimePartitionLease::new(runtime))))
                 .collect(),
             retired_plugin_partitions: Arc::new(Mutex::new(BTreeMap::new())),
+            owned_stdio_partitions: Arc::new(Mutex::new(BTreeMap::new())),
+            blocked_owner_plugins: Arc::new(Mutex::new(BTreeSet::new())),
+            owner_replacement_guards: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -278,11 +473,17 @@ impl McpRuntimeAccess {
         configured_overview: McpRuntimeOverview,
         live_partitions: BTreeMap<String, Arc<McpRuntimePartitionLease>>,
         retired_plugin_partitions: RetiredPluginPartitionRegistry,
+        owned_stdio_partitions: OwnedStdioPartitionRegistry,
+        blocked_owner_plugins: BlockedOwnerPluginRegistry,
+        owner_replacement_guards: OwnerReplacementGuardRegistry,
     ) -> Self {
         Self {
             configured_overview,
             live_partitions,
             retired_plugin_partitions,
+            owned_stdio_partitions,
+            blocked_owner_plugins,
+            owner_replacement_guards,
         }
     }
 
@@ -310,6 +511,9 @@ impl McpRuntimeAccess {
             configured_overview,
             live_partitions,
             Arc::clone(&self.retired_plugin_partitions),
+            Arc::clone(&self.owned_stdio_partitions),
+            Arc::clone(&self.blocked_owner_plugins),
+            Arc::clone(&self.owner_replacement_guards),
         )
     }
 
@@ -341,6 +545,9 @@ impl McpRuntimeAccess {
             configured_overview,
             live_partitions,
             Arc::clone(&self.retired_plugin_partitions),
+            Arc::clone(&self.owned_stdio_partitions),
+            Arc::clone(&self.blocked_owner_plugins),
+            Arc::clone(&self.owner_replacement_guards),
         )
     }
 
@@ -359,6 +566,9 @@ impl McpRuntimeAccess {
             configured_overview,
             live_partitions,
             Arc::clone(&self.retired_plugin_partitions),
+            Arc::clone(&self.owned_stdio_partitions),
+            Arc::clone(&self.blocked_owner_plugins),
+            Arc::clone(&self.owner_replacement_guards),
         )
     }
 
@@ -440,10 +650,484 @@ impl McpRuntimeAccess {
         bindings
     }
 
+    /// Opens or reuses one independently booted stdio partition for an exact plugin generation and owner session.
+    /// 为精确插件代次及所有者会话启动或复用一个独立引导的 stdio 分区。
+    ///
+    /// The owner key is runtime-only; it is never added to public tool names, schemas, or manifests.
+    /// 所有者键仅存在于运行时，不会加入公开工具名称、Schema 或 manifest。
+    pub async fn open_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        validate_owned_stdio_partition(&key, &servers)?;
+        self.ensure_owner_plugin_admission(plugin_id)?;
+
+        if self.active_owned_stdio_lease(&key).is_some() {
+            return Ok(McpRuntimeOwnedStdioPartition {
+                access: self.clone(),
+                key,
+            });
+        }
+
+        let runtime = bootstrap_owned_stdio_runtime(servers).await?;
+
+        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone()));
+        let mut replaced_lease = None;
+        let installed = {
+            // Keep the lifecycle gate locked while publishing the lease so a disable that
+            // starts during bootstrap cannot be overtaken by this late owner registration.
+            // 在发布租约期间保持生命周期闸门锁定，避免引导期间开始的停用被迟到的所有者注册反超。
+            let blocked_plugins = self
+                .blocked_owner_plugins
+                .lock()
+                .expect("blocked MCP owner plugin registry poisoned");
+            if blocked_plugins.contains(plugin_id) {
+                new_lease.revoke();
+                return Err(format!(
+                    "owner-scoped MCP access for plugin `{plugin_id}` is draining"
+                ));
+            }
+            let mut registry = self
+                .owned_stdio_partitions
+                .lock()
+                .expect("owned MCP stdio partition registry poisoned");
+            if let Some(existing) = registry.get(&key).cloned() {
+                if existing.is_revoked() || existing.runtime.is_fully_stopped() {
+                    replaced_lease = registry.insert(key.clone(), Arc::clone(&new_lease));
+                    true
+                } else {
+                    false
+                }
+            } else {
+                registry.insert(key.clone(), Arc::clone(&new_lease));
+                true
+            }
+        };
+        if let Some(replaced_lease) = replaced_lease {
+            replaced_lease.revoke();
+        }
+        if !installed {
+            new_lease.revoke();
+        }
+
+        Ok(McpRuntimeOwnedStdioPartition {
+            access: self.clone(),
+            key,
+        })
+    }
+
+    /// Replaces one owner partition only after the new stdio runtime is ready for execution.
+    /// 仅在新的 stdio 运行时准备好执行后替换一个所有者分区。
+    ///
+    /// The old lease is revoked before shutdown so bindings captured from the previous browser grant fail closed.
+    /// 旧租约会先撤销再关闭，因此从上一次浏览器授权捕获的绑定会安全失败。
+    pub async fn replace_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        validate_owned_stdio_partition(&key, &servers)?;
+        self.ensure_owner_plugin_admission(plugin_id)?;
+        let runtime = bootstrap_owned_stdio_runtime(servers).await?;
+        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone()));
+        // The gate remains held through replacement publication, so disable cannot race a
+        // completed bootstrap into installing a new owner partition after revocation.
+        // 替换发布期间持续持有闸门，避免停用在撤销后又竞态安装新的所有者分区。
+        let blocked_plugins = self
+            .blocked_owner_plugins
+            .lock()
+            .expect("blocked MCP owner plugin registry poisoned");
+        if blocked_plugins.contains(plugin_id) {
+            new_lease.revoke();
+            new_lease.runtime.shutdown();
+            return Err(format!(
+                "owner-scoped MCP access for plugin `{plugin_id}` is draining"
+            ));
+        }
+        let old_lease = self
+            .owned_stdio_partitions
+            .lock()
+            .expect("owned MCP stdio partition registry poisoned")
+            .insert(key.clone(), Arc::clone(&new_lease));
+        if let Some(old_lease) = old_lease {
+            old_lease.revoke();
+            old_lease.runtime.shutdown();
+        }
+        Ok(McpRuntimeOwnedStdioPartition {
+            access: self.clone(),
+            key,
+        })
+    }
+
+    /// Resolves and invokes one raw server/tool id through the current exact owner lease.
+    /// 通过当前精确所有者租约解析并调用一个原始 server/tool 标识。
+    ///
+    /// This path never consults global or another-owner partitions after a browser grant changes.
+    /// 浏览器授权变化后，此路径绝不查询全局分区或其他所有者分区。
+    pub async fn invoke_owned_stdio_tool(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        origin_tool_id: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        let lease = self
+            .active_owned_stdio_lease(&key)
+            .ok_or_else(|| String::from("owned MCP stdio partition is unavailable"))?;
+        lease
+            .call_tool_for_owner(owner_session_id, origin_tool_id, args)
+            .await
+    }
+
+    /// Blocks new owner-scoped MCP calls for one plugin and revokes every published owner lease.
+    /// 封锁指定插件的新所有者范围 MCP 调用，并撤销全部已发布的所有者租约。
+    ///
+    /// Existing bindings retain their lease reference while the runtime observes the shutdown request;
+    /// the revoked latch prevents queued calls from starting after this method returns.
+    /// 已存在的绑定会在运行时处理关闭请求期间保留租约引用；撤销锁存位会阻止本方法返回后的排队调用启动。
+    pub fn begin_plugin_owner_drain(&self, plugin_id: &str) -> Result<(), String> {
+        if plugin_id.trim().is_empty() {
+            return Err(String::from(
+                "plugin owner MCP drain requires a non-empty plugin id",
+            ));
+        }
+        let blocked_plugins = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+        if blocked_plugins.contains(plugin_id) {
+            return Ok(());
+        }
+        let mut guards = self
+            .owner_replacement_guards
+            .lock()
+            .map_err(|_| String::from("owner MCP replacement guard registry poisoned"))?;
+        let mut blocked_plugins = blocked_plugins;
+        blocked_plugins.insert(plugin_id.to_owned());
+        if let Some(guard) = guards.remove(plugin_id) {
+            guard.store(false, Ordering::Release);
+        }
+        drop(guards);
+        let mut owner_registry = self
+            .owned_stdio_partitions
+            .lock()
+            .map_err(|_| String::from("owned MCP stdio partition registry poisoned"))?;
+        // Hold the gate and owner registry together so no new owner partition can be published
+        // between the block and the lease removal.
+        // 同时持有闸门与所有者注册表，确保封锁与租约移除之间不会发布新分区。
+        let revoked_keys = owner_registry
+            .keys()
+            .filter(|key| key.plugin_id() == plugin_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let revoked_leases = revoked_keys
+            .into_iter()
+            .filter_map(|key| owner_registry.remove(&key))
+            .collect::<Vec<_>>();
+        drop(owner_registry);
+        drop(blocked_plugins);
+        for lease in revoked_leases {
+            lease.revoke();
+            // Stop each removed owner runtime explicitly because the registry removal below can make later keyed cleanup a no-op.
+            // 显式停止每个已移除的所有者运行时，因为注册表移除后后续按键清理可能变成空操作。
+            lease.runtime.shutdown();
+        }
+        Ok(())
+    }
+
+    /// Reopens owner-scoped MCP admission after a plugin enable transition is ready.
+    /// 在插件启用转换准备完成后重新开放所有者范围 MCP 准入。
+    pub fn finish_plugin_owner_drain(&self, plugin_id: &str) -> Result<(), String> {
+        if plugin_id.trim().is_empty() {
+            return Err(String::from(
+                "plugin owner MCP admission requires a non-empty plugin id",
+            ));
+        }
+        self.blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?
+            .remove(plugin_id);
+        Ok(())
+    }
+
+    /// Resolves one live owner partition only when the exact owner key matches the registry entry.
+    /// 仅当精确所有者键匹配注册表条目时解析一个仍有效的所有者分区。
+    pub fn owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        if self.active_owned_stdio_lease(&key).is_none() {
+            return Err(String::from("owned MCP stdio partition is unavailable"));
+        }
+        Ok(McpRuntimeOwnedStdioPartition {
+            access: self.clone(),
+            key,
+        })
+    }
+
+    /// Reports whether the exact owner partition is currently published and usable.
+    /// 报告精确的所有者分区当前是否已发布且可用。
+    ///
+    /// This query is intended for connection-slot reuse decisions. A ready browser connection
+    /// is not sufficient after plugin drain because the owner lease may have been revoked and its
+    /// MCP process may already be shutting down.
+    /// 此查询专门用于连接槽复用判定。插件排空后，即使浏览器连接仍标记为 ready，也不能代表所有者租约仍然存在，
+    /// 因为该租约可能已经撤销且其 MCP 进程可能正在停止。
+    pub fn has_active_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+    ) -> Result<bool, String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        Ok(self.active_owned_stdio_lease(&key).is_some())
+    }
+
+    /// Returns owner-scoped bindings only after resolving the exact trusted owner session key.
+    /// 仅在解析精确可信所有者会话键后返回所有者范围内的工具绑定。
+    pub fn owned_stdio_tool_bindings(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Result<Vec<McpRuntimeToolBinding>, String> {
+        self.owned_stdio_tool_bindings_with_guard(
+            plugin_id,
+            generation,
+            owner_session_id,
+            allowlist,
+            None,
+        )
+    }
+
+    /// Discovers browser bindings that may follow a new grant for the same owner and plugin generation.
+    /// 发现可跟随同一所有者及插件代次的新授权的浏览器绑定。
+    ///
+    /// The guard is permanently revoked when the plugin enters lifecycle drain.
+    /// 插件进入生命周期排空时，该闸门会被永久撤销。
+    pub fn owned_stdio_tool_bindings_following_replacement(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Result<Vec<McpRuntimeToolBinding>, String> {
+        let guard = {
+            let blocked_plugins = self
+                .blocked_owner_plugins
+                .lock()
+                .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+            if blocked_plugins.contains(plugin_id) {
+                return Err(format!(
+                    "owner-scoped MCP access for plugin `{plugin_id}` is draining"
+                ));
+            }
+            self.owner_replacement_guards
+                .lock()
+                .map_err(|_| String::from("owner MCP replacement guard registry poisoned"))?
+                .entry(String::from(plugin_id))
+                .or_insert_with(|| Arc::new(AtomicBool::new(true)))
+                .clone()
+        };
+        self.owned_stdio_tool_bindings_with_guard(
+            plugin_id,
+            generation,
+            owner_session_id,
+            allowlist,
+            Some(guard),
+        )
+    }
+
+    /// Builds one owner tool catalog with an explicit replacement policy.
+    /// 按明确的替换策略构建所有者工具目录。
+    fn owned_stdio_tool_bindings_with_guard(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        allowlist: &McpRuntimeToolAllowlist,
+        replacement_guard: Option<Arc<AtomicBool>>,
+    ) -> Result<Vec<McpRuntimeToolBinding>, String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        let lease = self
+            .active_owned_stdio_lease(&key)
+            .ok_or_else(|| String::from("owned MCP stdio partition is unavailable"))?;
+        if replacement_guard
+            .as_ref()
+            .is_some_and(|guard| !guard.load(Ordering::Acquire))
+        {
+            return Err(String::from("owned MCP tool binding was revoked by plugin drain"));
+        }
+        let mut occupied_public_names = BTreeSet::new();
+        let mut bindings = Vec::new();
+        for mut view in lease.runtime.available_tool_views_filtered(allowlist) {
+            let public_name =
+                allocate_unique_public_tool_name(view.id(), &mut occupied_public_names);
+            view.id = public_name.clone();
+            view.name = public_name;
+            bindings.push(McpRuntimeToolBinding::new_owned(
+                view,
+                lease.clone(),
+                self.clone(),
+                key.clone(),
+                replacement_guard.clone(),
+            ));
+        }
+        Ok(bindings)
+    }
+
+    /// Revokes one owner partition before dropping its registry lease, making all old bindings fail closed.
+    /// 在丢弃注册表租约前撤销一个所有者分区，使所有旧绑定安全失败。
+    pub fn revoke_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+    ) -> Result<(), String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        if let Some(lease) = self.remove_owned_stdio_lease(&key) {
+            lease.revoke();
+        }
+        Ok(())
+    }
+
+    /// Revokes and requests shutdown for one exact owner partition.
+    /// 撤销并请求关闭一个精确的所有者分区。
+    pub fn shutdown_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+    ) -> Result<(), String> {
+        let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
+        if let Some(lease) = self.remove_owned_stdio_lease(&key) {
+            lease.revoke();
+            lease.runtime.shutdown();
+        }
+        Ok(())
+    }
+
+    /// Resolves an active owner lease while removing stale or revoked registry entries.
+    /// 解析有效的所有者租约，同时移除过期或已撤销的注册表条目。
+    fn active_owned_stdio_lease(
+        &self,
+        key: &McpRuntimeOwnedPartitionKey,
+    ) -> Option<Arc<McpRuntimePartitionLease>> {
+        let blocked_plugins = self
+            .blocked_owner_plugins
+            .lock()
+            .expect("blocked MCP owner plugin registry poisoned");
+        if blocked_plugins.contains(key.plugin_id()) {
+            return None;
+        }
+        let stale_lease = {
+            let mut registry = self
+                .owned_stdio_partitions
+                .lock()
+                .expect("owned MCP stdio partition registry poisoned");
+            let Some(existing) = registry.get(key).cloned() else {
+                return None;
+            };
+            if !existing.is_revoked() && !existing.runtime.is_fully_stopped() {
+                return Some(existing);
+            }
+            registry.remove(key)
+        };
+        if let Some(stale_lease) = stale_lease {
+            stale_lease.revoke();
+        }
+        None
+    }
+
+    /// Rejects owner admission while the exact plugin is in a lifecycle drain.
+    /// 在精确插件处于生命周期排空期间拒绝所有者准入。
+    fn ensure_owner_plugin_admission(&self, plugin_id: &str) -> Result<(), String> {
+        let blocked_plugins = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+        if blocked_plugins.contains(plugin_id) {
+            return Err(format!(
+                "owner-scoped MCP access for plugin `{plugin_id}` is draining"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Removes one owner lease without touching any binding that may still hold its reference.
+    /// 移除一个所有者租约，同时不触碰可能仍持有其引用的绑定。
+    fn remove_owned_stdio_lease(
+        &self,
+        key: &McpRuntimeOwnedPartitionKey,
+    ) -> Option<Arc<McpRuntimePartitionLease>> {
+        self.owned_stdio_partitions
+            .lock()
+            .expect("owned MCP stdio partition registry poisoned")
+            .remove(key)
+    }
+
+    /// Installs a prebuilt owner runtime for lifecycle tests without launching a child process.
+    /// 为生命周期测试安装预构建的所有者运行时，避免启动子进程。
+    #[cfg(test)]
+    pub(super) fn register_owned_stdio_partition_for_test(
+        &self,
+        key: McpRuntimeOwnedPartitionKey,
+        runtime: McpRuntimeHandle,
+    ) -> McpRuntimeOwnedStdioPartition {
+        let lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone()));
+        if let Some(previous) = self
+            .owned_stdio_partitions
+            .lock()
+            .expect("owned MCP stdio partition registry poisoned")
+            .insert(key.clone(), Arc::clone(&lease))
+        {
+            previous.revoke();
+        }
+        McpRuntimeOwnedStdioPartition {
+            access: self.clone(),
+            key,
+        }
+    }
+
     /// Requests the live MCP runtime to stop when one real runtime handle is currently available.
     /// 当当前存在真实运行时句柄时，请求实时 MCP 运行时停止。
     pub fn shutdown(&self) {
+        let guards = std::mem::take(
+            &mut *self
+                .owner_replacement_guards
+                .lock()
+                .expect("owner MCP replacement guard registry poisoned"),
+        );
+        for guard in guards.into_values() {
+            guard.store(false, Ordering::Release);
+        }
         for lease in self.live_partitions.values() {
+            lease.runtime.shutdown();
+        }
+        let owned_leases = {
+            let mut registry = self
+                .owned_stdio_partitions
+                .lock()
+                .expect("owned MCP stdio partition registry poisoned");
+            std::mem::take(&mut *registry)
+                .into_values()
+                .collect::<Vec<_>>()
+        };
+        for lease in owned_leases {
+            lease.revoke();
             lease.runtime.shutdown();
         }
     }
@@ -610,6 +1294,140 @@ impl McpRuntimeAccess {
     }
 }
 
+impl McpRuntimeOwnedStdioPartition {
+    /// Returns the exact runtime-only owner key for this capability handle.
+    /// 返回此能力句柄的精确仅运行时所有者键。
+    pub fn key(&self) -> &McpRuntimeOwnedPartitionKey {
+        &self.key
+    }
+
+    /// Returns the plugin identifier owned by this capability handle.
+    /// 返回此能力句柄所属的插件标识。
+    pub fn plugin_id(&self) -> &str {
+        self.key.plugin_id()
+    }
+
+    /// Returns the immutable plugin generation owned by this capability handle.
+    /// 返回此能力句柄所属的不可变插件代次。
+    pub const fn generation(&self) -> u64 {
+        self.key.generation()
+    }
+
+    /// Returns the trusted owner session identity for this capability handle.
+    /// 返回此能力句柄对应的可信所有者会话身份。
+    pub const fn owner_session_id(&self) -> SessionId {
+        self.key.owner_session_id()
+    }
+
+    /// Queries owner-scoped bindings without publishing owner identity in tool metadata.
+    /// 查询所有者范围内的工具绑定，同时不在工具元数据中发布所有者身份。
+    pub fn available_tool_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Result<Vec<McpRuntimeToolBinding>, String> {
+        self.access.owned_stdio_tool_bindings(
+            self.key.plugin_id(),
+            self.key.generation(),
+            self.key.owner_session_id(),
+            allowlist,
+        )
+    }
+
+    /// Revokes this capability and makes every binding cloned from it fail closed.
+    /// 撤销此能力，并使从中克隆的所有绑定安全失败。
+    pub fn revoke(&self) -> Result<(), String> {
+        self.access.revoke_owned_stdio_partition(
+            self.key.plugin_id(),
+            self.key.generation(),
+            self.key.owner_session_id(),
+        )
+    }
+
+    /// Revokes this capability and requests shutdown of its dedicated process set.
+    /// 撤销此能力，并请求关闭其专属进程集合。
+    pub fn shutdown(&self) -> Result<(), String> {
+        self.access.shutdown_owned_stdio_partition(
+            self.key.plugin_id(),
+            self.key.generation(),
+            self.key.owner_session_id(),
+        )
+    }
+
+    /// Invokes one raw server/tool id through the current owner lease after checking the caller identity.
+    /// 在校验调用者身份后，通过当前所有者租约调用原始 server/tool 标识。
+    ///
+    /// `owner_session_id` must be the trusted session identity supplied by the host boundary.
+    /// `owner_session_id` 必须是宿主边界提供的可信会话身份。
+    pub async fn invoke_tool(
+        &self,
+        owner_session_id: SessionId,
+        origin_tool_id: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.access
+            .invoke_owned_stdio_tool(
+                self.key.plugin_id(),
+                self.key.generation(),
+                owner_session_id,
+                origin_tool_id,
+                args,
+            )
+            .await
+    }
+}
+
+/// Boots one owner-scoped stdio runtime and waits for complete tool discovery before publishing it.
+/// 引导一个所有者范围 stdio 运行时，并在发布前等待完整工具发现。
+async fn bootstrap_owned_stdio_runtime(
+    servers: Vec<McpServerConfig>,
+) -> Result<McpRuntimeHandle, String> {
+    let runtime = super::handle::bootstrap_mcp_runtime(servers).await?;
+    if let Err(error) = runtime.wait_until_ready(Duration::from_secs(15)).await {
+        runtime.shutdown();
+        return Err(error);
+    }
+    Ok(runtime)
+}
+
+/// Validates the exact plugin source and stdio-only transport contract before any child process launch.
+/// 在启动任何子进程前校验精确插件来源及仅 stdio 传输契约。
+fn validate_owned_stdio_partition(
+    key: &McpRuntimeOwnedPartitionKey,
+    servers: &[McpServerConfig],
+) -> Result<(), String> {
+    for server in servers {
+        match (&server.source, &server.transport) {
+            (
+                McpServerSource::Plugin {
+                    plugin_id,
+                    generation,
+                },
+                McpServerTransportConfig::Stdio { .. },
+            ) if plugin_id == key.plugin_id() && *generation == key.generation() => {}
+            (
+                McpServerSource::Plugin {
+                    plugin_id,
+                    generation,
+                },
+                _,
+            ) if plugin_id == key.plugin_id() && *generation == key.generation() => {
+                return Err(format!(
+                    "owned MCP partition `{plugin_id}:{generation}` accepts stdio servers only; `{}` is not stdio",
+                    server.id
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "owned MCP partition `{}` received server `{}` from another source",
+                    key.source_partition_key(),
+                    server.id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Builds one stable MCP runtime access surface from provider configuration without a live runtime handle.
 /// 根据供应商配置构建一个不包含实时运行时句柄的稳定 MCP 运行时访问面。
 pub fn configured_mcp_runtime_access(config: &ProviderConfigurationFile) -> McpRuntimeAccess {
@@ -670,6 +1488,28 @@ impl McpRuntimeToolBinding {
             view,
             runtime,
             partition_key,
+            owner_access: None,
+            owner_key: None,
+            owner_replacement_guard: None,
+        }
+    }
+
+    /// Builds an owner-scoped binding tied to one exact owner lease identity.
+    /// 构建一个绑定到精确所有者租约身份的所有者范围绑定。
+    fn new_owned(
+        view: McpRuntimeToolView,
+        runtime: Arc<McpRuntimePartitionLease>,
+        access: McpRuntimeAccess,
+        owner_key: McpRuntimeOwnedPartitionKey,
+        owner_replacement_guard: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        Self {
+            view,
+            runtime,
+            partition_key: owner_key.source_partition_key(),
+            owner_access: Some(access),
+            owner_key: Some(owner_key),
+            owner_replacement_guard,
         }
     }
 
@@ -729,12 +1569,82 @@ impl McpRuntimeToolBinding {
             .filter(|tool_name| !tool_name.is_empty())
     }
 
+    /// Invokes an owner-scoped binding through the current exact owner lease.
+    /// 通过当前精确所有者租约调用所有者范围绑定。
+    ///
+    /// Owner bindings validate the shared registry and captured lease identity on every call.
+    /// 所有者绑定在每次调用时校验共享注册表与捕获的租约身份。
+    /// Returns the owner session for a session-scoped binding, without changing its public tool identity.
+    /// 返回会话范围绑定的所有者会话，同时不改变其公开工具身份。
+    pub fn owner_session_id(&self) -> Option<SessionId> {
+        self.owner_key
+            .as_ref()
+            .map(McpRuntimeOwnedPartitionKey::owner_session_id)
+    }
+
     /// Invokes the bound MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
     pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
+        if self.runtime.is_owner_scoped() {
+            return Err(String::from(
+                "session-owned MCP binding requires invoke_for_owner",
+            ));
+        }
         self.runtime
             .runtime
             .call_tool_by_id(self.view.origin_tool_id(), args)
+            .await
+    }
+
+    /// Invokes an owner-scoped binding only through its still-current exact owner lease.
+    /// 仅通过仍然当前的精确所有者租约调用所有者范围绑定。
+    ///
+    /// Normal bindings reject replacements; explicitly guarded browser bindings follow only the same owner and plugin generation.
+    /// 普通绑定拒绝替换；显式受闸门保护的浏览器绑定仅跟随同一所有者与插件代次。
+    pub async fn invoke_for_owner(
+        &self,
+        owner_session_id: SessionId,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        if let Some(owner_key) = self.owner_key.as_ref() {
+            if owner_key.owner_session_id() != owner_session_id {
+                return Err(String::from(
+                    "MCP tool binding owner does not match the caller",
+                ));
+            }
+            let Some(access) = self.owner_access.as_ref() else {
+                return Err(String::from("owned MCP binding has no owner registry"));
+            };
+            if self
+                .owner_replacement_guard
+                .as_ref()
+                .is_some_and(|guard| !guard.load(Ordering::Acquire))
+            {
+                return Err(String::from("owned MCP tool binding was revoked by plugin drain"));
+            }
+            let Some(current_lease) = access.active_owned_stdio_lease(owner_key) else {
+                return Err(String::from("owned MCP stdio partition is unavailable"));
+            };
+            if !Arc::ptr_eq(&current_lease, &self.runtime)
+                && self.owner_replacement_guard.is_none()
+            {
+                return Err(String::from(
+                    "owned MCP tool binding is stale after owner lease replacement",
+                ));
+            }
+            if self
+                .owner_replacement_guard
+                .as_ref()
+                .is_some_and(|guard| !guard.load(Ordering::Acquire))
+            {
+                return Err(String::from("owned MCP tool binding was revoked by plugin drain"));
+            }
+            return current_lease
+                .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args)
+                .await;
+        }
+        self.runtime
+            .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args)
             .await
     }
 }

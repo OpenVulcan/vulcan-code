@@ -52,3 +52,20 @@ it("ignores an old plugin module that resolves after navigation", async () => {
   await act(async () => complete(loaded("old")));
   await vi.waitFor(async () => { await act(async () => undefined); expect(host.textContent).toBe("new loaded"); });
 });
+
+it("rebuilds the plugin UI with the host-selected conversation when the route changes", async () => {
+  // module reads only SDK context, proving the plugin need not infer the active route.
+  // module 只读取 SDK 上下文，证明插件无需自行推断当前路由。
+  const module = loaded("fixture");
+  module.namespace.create = (sdk: {
+    context: { conversationId: string | null; clientHost: string };
+    components: { CoreBrowserArea: unknown };
+  }) => (
+    () => <div>{sdk.context.conversationId}:{sdk.context.clientHost}:{typeof sdk.components.CoreBrowserArea}</div>
+  );
+  vi.mocked(loadPersistentPluginUiModule).mockResolvedValue(module);
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "fixture" } as PluginSummary} mount={mount} conversationId="conversation-a" />));
+  await vi.waitFor(async () => { await act(async () => undefined); expect(host.textContent).toBe("conversation-a:browser:function"); });
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "fixture" } as PluginSummary} mount={mount} conversationId="conversation-b" />));
+  await vi.waitFor(async () => { await act(async () => undefined); expect(host.textContent).toBe("conversation-b:browser:function"); });
+});

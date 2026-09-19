@@ -732,6 +732,20 @@ impl VceManagedJob {
 }
 
 impl VceRuntimeManager {
+    /// Counts retained project job controls for the protected status endpoint.
+    /// 为受保护状态端点统计保留的项目作业控制数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Best-effort job-control gauge; a contended lock reports zero.
+    /// 尽力而为的作业控制度量；锁竞争时报告零。
+    pub(crate) fn retained_job_control_gauge(&self) -> u64 {
+        self.project_job_states
+            .try_lock()
+            .map(|states| states.len() as u64)
+            .unwrap_or(0)
+    }
+
     /// Resolve the stable project job slot without opening storage, registering models or starting work.
     /// 解析稳定项目作业槽位，不打开存储、注册模型或启动处理。
     /// `project_id` is already validated by the owning lifecycle entry; returns shared metadata-only control.

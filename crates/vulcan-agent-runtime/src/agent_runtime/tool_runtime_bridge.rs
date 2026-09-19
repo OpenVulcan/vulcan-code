@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -41,6 +41,9 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// Workbench session identifier attached to every host-managed tool invocation.
     /// 附着到每一次宿主管理工具调用上的工作台会话标识。
     session_id: SessionId,
+    /// Live exact-value filter for host credentials before tool outputs reach Core persistence.
+    /// 工具输出进入 Core 持久化前用于宿主凭据的实时精确值过滤器。
+    sensitive_tool_output_values: Option<Arc<RwLock<Vec<String>>>>,
     /// Execution mode label used by invocation-time Plan-mode guards.
     /// 调用期计划模式守卫使用的执行模式标签。
     execution_mode: String,
@@ -188,9 +191,47 @@ impl VulcanManagedToolRuntimeBridge {
             manager,
             definitions_by_id,
             session_id,
+            sensitive_tool_output_values: None,
             execution_mode: execution_mode.into(),
             prepared_invocation_identities: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Installs the current runtime's live host-credential filter on this invocation bridge.
+    /// 在此调用桥上安装当前运行时的实时宿主凭据过滤器。
+    ///
+    /// `values` is shared with the service bootstrap; the returned bridge applies it to every result.
+    /// `values` 与服务引导共享；返回的桥对每个结果应用该过滤器。
+    pub(crate) fn with_sensitive_tool_output_values(
+        mut self,
+        values: Arc<RwLock<Vec<String>>>,
+    ) -> Self {
+        self.sensitive_tool_output_values = Some(values);
+        self
+    }
+
+    /// Removes exact host credentials from both model text and user-visible structured details.
+    /// 从模型文本和用户可见的结构化详情中移除精确宿主凭据。
+    ///
+    /// `result` is the canonical output; a poisoned filter fails closed before persistence.
+    /// `result` 是规范输出；过滤器损坏时在持久化前闭锁失败。
+    fn redact_sensitive_tool_result(
+        &self,
+        mut result: CoreToolInvocationResult,
+    ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
+        let Some(values) = self.sensitive_tool_output_values.as_ref() else {
+            return Ok(result);
+        };
+        let values = values.read().map_err(|_| VulcanCoreError::InvalidState {
+            message: String::from("Sensitive tool-output filter is unavailable."),
+        })?;
+        for secret in values.iter() {
+            result.model_output = result.model_output.replace(secret, "[redacted]");
+        }
+        if let Some(host_result) = result.host_result.as_mut() {
+            redact_sensitive_json_strings(host_result, &values);
+        }
+        Ok(result)
     }
 
     /// Installs one complete durable tool-batch identity receipt before any tool body starts.
@@ -327,6 +368,11 @@ pub(crate) fn resolved_tool_binding_fingerprint(
             "description": definition.descriptor.description,
             "help_text": definition.descriptor.help_text,
             "source": format!("{:?}", definition.descriptor.source),
+            "origin": {
+                "source_kind": format!("{:?}", definition.descriptor.origin().source_kind()),
+                "namespace": definition.descriptor.origin().namespace(),
+                "original_name": definition.descriptor.origin().original_name(),
+            },
         },
         "parameters_schema": definition.parameters_schema,
         "plan_policy": format!("{:?}", definition.plan_policy),
@@ -1010,13 +1056,25 @@ pub fn canonicalize_tool_invocation_result(
         ),
         None => (None, false),
     };
+    let model_output = match result.model_output {
+        Value::String(text) => text,
+        other => {
+            match crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(other) {
+                Ok(Value::String(text)) => text,
+                Ok(value) => serde_json::to_string(&value).unwrap_or_else(|_| value.to_string()),
+                Err(message) => {
+                    return build_tool_failure_invocation_result(
+                        request,
+                        format!("Tool result media validation failed: {message}"),
+                    );
+                }
+            }
+        }
+    };
     CoreToolInvocationResult {
         tool_call_id: request.tool_call_id.clone(),
         tool_name: request.tool_name.clone(),
-        model_output: match result.model_output {
-            Value::String(text) => text,
-            other => serde_json::to_string(&other).unwrap_or_else(|_| other.to_string()),
-        },
+        model_output,
         host_result,
         is_error,
     }
@@ -1044,6 +1102,32 @@ pub fn persistent_tool_output_from_result(
         "host_result": result.host_result,
         "is_error": result.is_error,
     }))
+}
+
+/// Redacts exact host credentials from every string leaf of a structured tool result.
+/// 从结构化工具结果的每个字符串叶节点遮蔽精确宿主凭据。
+///
+/// `value` is mutated in place and `secrets` contains only bootstrap-registered host values.
+/// `value` 就地修改，`secrets` 仅包含引导阶段注册的宿主值。
+fn redact_sensitive_json_strings(value: &mut Value, secrets: &[String]) {
+    match value {
+        Value::String(text) => {
+            for secret in secrets {
+                *text = text.replace(secret, "[redacted]");
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_strings(item, secrets);
+            }
+        }
+        Value::Object(fields) => {
+            for field in fields.values_mut() {
+                redact_sensitive_json_strings(field, secrets);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Builds one controller-visible policy rejection result without failing the provider turn.
@@ -1086,7 +1170,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
         let identity = self.take_prepared_invocation_identity(request)?;
         let Some(definition) = self.definitions_by_id.get(&request.tool_name) else {
-            return Ok(build_tool_failure_invocation_result(
+            return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
                 request,
                 format!(
                     "Tool `{}` is not registered in the resolved definition set.",
@@ -1111,10 +1195,14 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             .await
         {
             Ok(result) => result,
-            Err(message) => return Ok(build_tool_failure_invocation_result(request, message)),
+            Err(message) => {
+                return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
+                    request, message,
+                ));
+            }
         };
 
-        Ok(canonicalize_tool_invocation_result(request, result))
+        self.redact_sensitive_tool_result(canonicalize_tool_invocation_result(request, result))
     }
 }
 

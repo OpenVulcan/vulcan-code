@@ -296,15 +296,16 @@ function Show-Usage {
     Write-Host "  ./make vite start  # start the standalone WebUI Vite dev server"
     Write-Host "  ./make vite stop   # stop the standalone WebUI Vite dev server"
     Write-Host "  ./make vite status # show the standalone WebUI Vite dev server status"
-    Write-Host "  ./make             # Tauri/WebUI debug build"
-    Write-Host "  ./make build       # Tauri/WebUI debug build"
-    Write-Host "  ./make br          # build and run Tauri/WebUI debug; Vite is managed separately"
-    Write-Host "  ./make br release  # build and run Tauri/WebUI release"
-    Write-Host "  ./make release     # Tauri/WebUI release build"
+    Write-Host "  ./make             # Core/Electron/WebUI debug build"
+    Write-Host "  ./make build       # Core/Electron/WebUI debug build"
+    Write-Host "  ./make br          # build Core/WebUI/Electron and run desktop with Vite"
+    Write-Host "  ./make br release  # build Core/WebUI/Electron and run desktop"
+    Write-Host "  ./make release     # Core/Electron/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
-    Write-Host "  ./make run         # run Tauri/WebUI debug build; Vite is managed separately"
-    Write-Host "  ./make run release # run Tauri/WebUI release build"
+    Write-Host "  ./make run         # run Electron desktop; start Vite when needed"
+    Write-Host "  ./make run release # run Core/Electron/WebUI release build"
+    Write-Host "  ./make service     # start the tray/background Core only"
     Write-Host "  ./make deps        # install host, bundled tools, and LuaSkills dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
@@ -398,6 +399,16 @@ switch ($NormalizedMode) {
             Show-Usage
             exit 1
         }
+    }
+    "service" {
+        if ($NormalizedVariant -ne "" -and $NormalizedVariant -ne "release") {
+            throw "Unsupported service profile: $CommandVariant"
+        }
+        # The service command deliberately starts no desktop window.
+        # service 命令明确不启动桌面窗口。
+        $ServiceProfile = if ($NormalizedVariant -eq "release") { "release" } else { "debug" }
+        & node (Join-Path $ScriptDir 'scripts/desktop-runtime.mjs') service $ServiceProfile
+        exit $LASTEXITCODE
     }
     "init-system" {
         Invoke-SystemInitialization -Variant $NormalizedVariant

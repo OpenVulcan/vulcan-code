@@ -4,7 +4,7 @@ export type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "e
 
 // MainAreaId describes selectable top-level WebUI areas.
 // MainAreaId 描述 WebUI 顶层可选择区域。
-export type MainAreaId = "chat" | "agent-skills" | "skills" | "agents" | "memory" | "knowledge" | "settings";
+export type MainAreaId = "chat" | "browser" | "agent-skills" | "skills" | "agents" | "memory" | "knowledge" | "settings";
 
 // SettingsSubAreaId describes secondary settings pages exposed by the WebUI settings shell.
 // SettingsSubAreaId 描述 WebUI 设置壳暴露的设置二级页面。

@@ -273,6 +273,9 @@ pub(in crate::native_vmm) async fn verify(
             })
         }),
         client_disconnected: Arc::new(|_| {}),
+        status_provider: None,
+        browser_stream: None,
+        browser_download_resolver: None,
     };
     // The server remains owned and is aborted even if a later assertion fails.
     // 服务保持所有权，即使后续断言失败也会中止。

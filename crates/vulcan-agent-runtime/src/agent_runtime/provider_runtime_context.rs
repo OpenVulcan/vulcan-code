@@ -1376,13 +1376,17 @@ mod tests {
             String::from("D:/missing"),
             PersistedPromptConfiguration::default(),
         );
-        preparation.tool_descriptors = vec![vulcan_tools_manager::VulcanToolDescriptor {
-            id: String::from("custom_tool"),
-            name: String::from("custom_tool"),
-            description: String::from("Custom test tool"),
-            help_text: Some(String::from("Use category 5 for project context.")),
-            source: vulcan_tools_manager::VulcanToolSourceKind::Native,
-        }];
+        preparation.tool_descriptors = vec![vulcan_tools_manager::VulcanToolDescriptor::new(
+            String::from("custom_tool"),
+            String::from("custom_tool"),
+            String::from("Custom test tool"),
+            Some(String::from("Use category 5 for project context.")),
+            vulcan_tools_manager::VulcanToolOrigin::new(
+                vulcan_tools_manager::VulcanToolSourceKind::Native,
+                "test",
+                String::from("custom_tool"),
+            ),
+        )];
 
         let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
             .expect("runtime prompt layers should build");
@@ -1505,13 +1509,17 @@ mod tests {
             PersistedPromptConfiguration::default(),
         );
         preparation.prompt_purpose = ExecutionPromptPurpose::ContextCompaction;
-        preparation.tool_descriptors = vec![vulcan_tools_manager::VulcanToolDescriptor {
-            id: String::from("shell_command"),
-            name: String::from("shell_command"),
-            description: String::from("Run one shell command"),
-            help_text: None,
-            source: vulcan_tools_manager::VulcanToolSourceKind::Native,
-        }];
+        preparation.tool_descriptors = vec![vulcan_tools_manager::VulcanToolDescriptor::new(
+            String::from("shell_command"),
+            String::from("shell_command"),
+            String::from("Run one shell command"),
+            None,
+            vulcan_tools_manager::VulcanToolOrigin::new(
+                vulcan_tools_manager::VulcanToolSourceKind::Native,
+                "test",
+                String::from("shell_command"),
+            ),
+        )];
 
         let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
             .expect("runtime prompt layers should build");

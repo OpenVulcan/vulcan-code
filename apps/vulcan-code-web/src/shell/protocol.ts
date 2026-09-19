@@ -1,6 +1,6 @@
 // ShellKind identifies the client host without coupling business events to an operating system.
 // ShellKind 标识客户端宿主，且不把业务事件耦合到操作系统。
-export type ShellKind = "browser" | "tauri" | "mobile";
+export type ShellKind = "browser" | "tauri" | "electron" | "mobile";
 
 // ShellNotificationPermission normalizes notification authorization across client hosts.
 // ShellNotificationPermission 统一不同客户端宿主的通知授权状态。

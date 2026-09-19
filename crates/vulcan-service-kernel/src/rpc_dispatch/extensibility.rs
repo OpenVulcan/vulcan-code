@@ -30,6 +30,11 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_luaskill_operation_progress",
     "service_set_luaskill_enabled",
     "service_set_vulcan_plugin_enabled",
+    "service_plugin_environment_ready",
+    "service_prepare_plugin_environment",
+    "service_start_plugin_environment_install",
+    "service_plugin_environment_install_status",
+    "service_plugin_environment_install_status_for_plugin",
     "service_uninstall_luaskill",
     "service_set_luaskill_tool_registration_state",
     "service_refresh_agent_skills_catalog",
@@ -242,6 +247,29 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_plugin_environment_ready" => rpc_json_result(
+            service_plugin_environment_ready(state, rpc_required_param(params, "pluginId")?).await,
+        ),
+        "service_prepare_plugin_environment" => rpc_json_result(
+            service_prepare_plugin_environment(state, rpc_required_param(params, "pluginId")?)
+                .await,
+        ),
+        "service_start_plugin_environment_install" => rpc_json_result(
+            service_start_plugin_environment_install(
+                state,
+                rpc_required_param(params, "pluginId")?,
+            )
+            .await,
+        ),
+        "service_plugin_environment_install_status" => rpc_json_result(
+            service_plugin_environment_install_status(state, rpc_required_param(params, "taskId")?),
+        ),
+        "service_plugin_environment_install_status_for_plugin" => {
+            rpc_json_result(service_plugin_environment_install_status_for_plugin(
+                state,
+                rpc_required_param(params, "pluginId")?,
+            ))
+        }
         "service_uninstall_luaskill" => rpc_json_result(
             service_uninstall_luaskill(app.clone(), state, rpc_required_param(params, "skillId")?)
                 .await,

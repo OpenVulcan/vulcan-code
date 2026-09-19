@@ -1,0 +1,159 @@
+schema_version: 1
+id: vulcan-browser
+version: 0.1.0
+default_enabled: false
+display:
+  name: Vulcan Browser
+  capability: Core-owned browser projection for AI browser sessions
+permissions:
+  - ui_host_context
+  - process_node
+  - process_session
+  - dependency_registry_network
+  - config
+required_files:
+  - ui/index.mjs
+  - ui/settings.mjs
+  - runtime/plugin.bundle.lua
+  - locales/en.yaml
+  - locales/zh-CN.yaml
+  - dependencies.yaml
+  - node/package.json
+  - node/pnpm-lock.yaml
+  - config/schema.json
+  - config/defaults.json
+execution:
+  dependencies:
+    manifest: dependencies.yaml
+    install_mode: registry
+lua_runtime:
+  bundle: runtime/plugin.bundle.lua
+  invoke_function: dispatch
+  shutdown_function: shutdown
+  max_active_sessions: 2
+  session_idle_timeout_sec: 300
+  actions:
+    - id: settings-get
+      function: settings_get
+      output_schema_file: config/schema.json
+      timeout_ms: 5000
+      callers:
+        - plugin_ui
+    - id: settings-update
+      function: settings_update
+      input_schema_file: config/schema.json
+      output_schema_file: config/schema.json
+      timeout_ms: 5000
+      callers:
+        - plugin_ui
+  hooks:
+    - id: screenshot-registration
+      point: tool.registration
+      tool_target:
+        source_kind: mcp
+        namespace: vulcan-browser:playwright
+        original_name: browser_take_screenshot
+      mode: transform
+      scope: global
+      function: screenshot_registration
+      timeout_ms: 3000
+      failure_policy: stop
+    - id: screenshot-before
+      point: tool.before
+      tool_target:
+        source_kind: mcp
+        namespace: vulcan-browser:playwright
+        original_name: browser_take_screenshot
+      mode: transform
+      scope: session
+      function: screenshot_before
+      timeout_ms: 3000
+      failure_policy: stop
+    - id: unsafe-run-code-registration
+      point: tool.registration
+      tool_target:
+        source_kind: mcp
+        namespace: vulcan-browser:playwright
+        original_name: browser_run_code_unsafe
+      mode: transform
+      scope: global
+      function: unsafe_run_code_registration
+      priority: -100
+      timeout_ms: 3000
+      failure_policy: stop
+    - id: unsafe-run-code-registration-block
+      point: tool.registration
+      tool_target:
+        source_kind: mcp
+        namespace: vulcan-browser:playwright
+        original_name: browser_run_code_unsafe
+      mode: decision
+      scope: global
+      function: unsafe_run_code_registration_block
+      priority: -90
+      timeout_ms: 3000
+      failure_policy: stop
+    - id: unsafe-run-code-before
+      point: tool.before
+      tool_target:
+        source_kind: mcp
+        namespace: vulcan-browser:playwright
+        original_name: browser_run_code_unsafe
+      mode: decision
+      scope: session
+      function: unsafe_run_code_before
+      timeout_ms: 3000
+      failure_policy: stop
+mcp:
+  servers:
+    - id: playwright
+      name: Playwright Browser
+      scope: conversation
+      transport:
+        type: stdio
+        launcher:
+          type: node_package_bin
+          package: "@playwright/mcp"
+          bin: playwright-mcp
+        args:
+          - source: literal
+            value: "--endpoint"
+          - source: core_browser_endpoint
+          - source: literal
+            value: "--timeout-action"
+          - source: config
+            key: actionTimeoutMs
+          - source: literal
+            value: "--timeout-navigation"
+          - source: config
+            key: navigationTimeoutMs
+          - source: literal
+            value: "--timeout-settle"
+          - source: config
+            key: settleTimeoutMs
+          - source: literal
+            value: "--console-level"
+          - source: config
+            key: consoleLevel
+config:
+  schema_file: config/schema.json
+  defaults_file: config/defaults.json
+ui:
+  mounts:
+    - id: core-browser
+      point: conversation_right_panel
+      label: AI Browser
+      label_message_key: navigationLabel
+      icon: plugin
+      entry: ui/index.mjs
+      export: createPluginPanel
+    - id: browser-settings
+      point: skills_plugin_detail
+      label: Playwright Settings
+      label_message_key: settingsLabel
+      icon: plugin
+      entry: ui/settings.mjs
+      export: createPluginPanel
+locales:
+  en: locales/en.yaml
+  zh-CN: locales/zh-CN.yaml

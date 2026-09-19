@@ -16,7 +16,8 @@ use vulcan_core::types::{
 use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, ToolCallId};
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationContext, VulcanToolInvocationResult, VulcanToolSourceKind,
+    VulcanToolInvocationContext, VulcanToolInvocationResult, VulcanToolOrigin,
+    VulcanToolSourceKind,
 };
 
 use crate::agent_runtime::tool_runtime_bridge::{
@@ -764,16 +765,17 @@ pub fn build_question_tool_candidate(
     public_tool_name: impl Into<String>,
 ) -> VulcanToolCandidate {
     let tool_name = public_tool_name.into();
+    let origin = VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", tool_name.clone());
     VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: tool_name.clone(),
-            name: tool_name.clone(),
-            description: String::from(
+        descriptor: VulcanToolDescriptor::new(
+            tool_name.clone(),
+            tool_name.clone(),
+            String::from(
                 "Ask the user one or more structured questions and wait for the answers before continuing. Use this tool whenever progress depends on a user decision, preference, missing requirement, or explicit confirmation. Prefer this tool over guessing when choices are ambiguous, risky, or approval-sensitive.",
             ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
+            None,
+            origin,
+        ),
         parameters_schema: question_tool_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,

@@ -19,7 +19,7 @@ pub(crate) fn startup_snapshot_with_phase(
                     (
                         "service-process",
                         StartupStepStatus::Pending,
-                        "等待 Tauri 本地服务桥接启动",
+                        "等待 Core Service 启动",
                     ),
                     ("vldb", StartupStepStatus::Pending, "等待初始化"),
                     ("luaskills", StartupStepStatus::Pending, "等待初始化"),
@@ -46,7 +46,7 @@ pub(crate) fn startup_steps_with_status(
         .map(|(id, status, message)| StartupStepSnapshot {
             id: (*id).to_string(),
             label: startup_step_label(id),
-            status: status.clone(),
+            status: *status,
             message: Some((*message).to_string()),
             progress_percent: None,
             completed_bytes: None,

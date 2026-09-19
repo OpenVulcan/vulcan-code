@@ -47,7 +47,16 @@ target
 /apps/vulcan-code-web/dist/
 /apps/vulcan-code-web/.vite/
 /apps/vulcan-code-web/tsconfig.tsbuildinfo
-/apps/vulcan-code-tauri/gen/
+
+# Generated Electron desktop dependencies and build outputs.
+# Electron 桌面端生成的依赖与构建产物。
+/apps/vulcan-code-desktop/node_modules/
+/apps/vulcan-code-desktop/dist/
+/apps/vulcan-code-desktop/tsconfig.tsbuildinfo
+
+# Generated Tauri capability schemas for the service host.
+# 服务宿主生成的 Tauri 能力架构文件。
+/apps/vulcan-code-service/gen/
 TASK_LOG.md
 
 # Local Reasonix runtime state.

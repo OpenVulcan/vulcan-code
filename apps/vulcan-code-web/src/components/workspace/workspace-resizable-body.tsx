@@ -1,13 +1,11 @@
 import React from "react";
 import { ConversationLoadingCenter } from "@/components/conversation/conversation-chrome";
-import {
-  WorkspaceContextPanel,
-  type WorkspaceContextTabItem,
-  type WorkspaceContextTabKind,
-  type WorkspaceContextPanelProps,
+import type {
+  WorkspaceContextTabItem,
+  WorkspaceContextTabKind,
+  WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
-import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useI18n } from "@/i18n";
@@ -21,6 +19,46 @@ import type {
 } from "@/types";
 import type { WorkspacePagePanelDescriptor } from "@/components/workspace/workspace-page-descriptor";
 import type { WorkspaceReviewFocusRequest } from "@/diff/types";
+
+// DynamicPluginMountPanel loads plugin and browser hosts only when an enabled mount is visible.
+// DynamicPluginMountPanel 仅在已启用挂载点可见时加载插件与浏览器宿主。
+const DynamicPluginMountPanel = React.lazy(() => import("@/components/plugins/dynamic-plugin-mount-panel")
+  .then((module) => ({ default: module.DynamicPluginMountPanel })));
+
+// WorkspaceContextPanel loads review, files, and memory context only when the right rail is mounted.
+// WorkspaceContextPanel 仅在右侧栏挂载时加载审阅、文件与记忆上下文。
+const WorkspaceContextPanel = React.lazy(() => import("@/components/workspace/WorkspaceContextPanel")
+  .then((module) => ({ default: module.WorkspaceContextPanel })));
+
+// ConversationRightPluginMount binds enabled plugin contributions to the selected conversation panel.
+// ConversationRightPluginMount 将已启用插件贡献绑定到当前会话右侧面板。
+export type ConversationRightPluginMount = {
+  // Exact enabled plugin descriptor projected by Core.
+  // Core 投影的精确已启用插件描述。
+  plugin: WorkbenchSnapshot["plugins"][number];
+  // Exact manifest UI mount selected from the plugin descriptor.
+  // 从插件描述中选出的精确清单界面挂载项。
+  mount: NonNullable<WorkbenchSnapshot["plugins"][number]["extension"]>["uiMounts"][number];
+};
+
+// selectConversationRightPluginMounts filters only runnable, enabled conversation-side contributions.
+// selectConversationRightPluginMounts 仅筛选可运行且已启用的会话右侧贡献。
+//
+// Parameters: plugins is the immutable service-projected plugin catalog.
+// 参数：plugins 是服务投影的不可变插件目录。
+// Returns: exact plugin and mount pairs that may be rendered in the conversation right panel.
+// 返回值：可在会话右侧面板渲染的精确插件与挂载项配对。
+export function selectConversationRightPluginMounts(
+  plugins: WorkbenchSnapshot["plugins"],
+): ConversationRightPluginMount[] {
+  return plugins.flatMap((plugin) => (
+    plugin.enabled && plugin.runtimeState === "enabled" && plugin.extension
+      ? plugin.extension.uiMounts
+        .filter((mount) => mount.point === "conversationRightPanel")
+        .map((mount) => ({ plugin, mount }))
+      : []
+  ));
+}
 
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS matches the CSS slide animation duration.
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS 对齐 CSS 右侧面板滑动动画时长。
@@ -412,7 +450,7 @@ export function WorkspaceResizableBody(props: {
   // enabledPluginMounts flattens only enabled manifest-declared dynamic UI contributions.
   // enabledPluginMounts 仅展开已启用且由清单声明的动态界面贡献。
   const enabledPluginMounts = props.workbench.plugins.flatMap((plugin) => (
-    plugin.enabled && plugin.extension
+    plugin.enabled && plugin.runtimeState === "enabled" && plugin.extension
       ? plugin.extension.uiMounts.map((mount) => ({ plugin, mount }))
       : []
   ));
@@ -423,9 +461,7 @@ export function WorkspaceResizableBody(props: {
   );
   // conversationRightPluginMounts target the selected conversation's right-side context surface.
   // conversationRightPluginMounts 指向所选会话的右侧上下文界面。
-  const conversationRightPluginMounts = enabledPluginMounts.filter(
-    ({ mount }) => mount.point === "conversationRightPanel",
-  );
+  const conversationRightPluginMounts = selectConversationRightPluginMounts(props.workbench.plugins);
   // mainContent keeps the body content shape identical with or without a side panel.
   // mainContent 保持有无侧边面板时主体内容结构一致。
   const mainContent = (
@@ -433,14 +469,16 @@ export function WorkspaceResizableBody(props: {
       {props.children}
       {workspaceMainPluginMounts.length > 0 ? (
         <div className="workspace-plugin-main-mounts">
-          {workspaceMainPluginMounts.map(({ plugin, mount }) => (
-            <DynamicPluginMountPanel
-              key={`${plugin.id}:${mount.id}`}
-              mount={mount}
-              plugin={plugin}
-              workspacePath={selectedWorkspacePath}
-            />
-          ))}
+          <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
+            {workspaceMainPluginMounts.map(({ plugin, mount }) => (
+              <DynamicPluginMountPanel
+                key={`${plugin.id}:${mount.id}`}
+                mount={mount}
+                plugin={plugin}
+                workspacePath={selectedWorkspacePath}
+              />
+            ))}
+          </React.Suspense>
         </div>
       ) : null}
       {props.conversationNavigationShowLoading && (props.conversationNavigationPhase === "loading" || props.conversationNavigationPhase === "waiting-owner") ? (
@@ -519,6 +557,7 @@ export function WorkspaceResizableBody(props: {
             id="workspaceContext"
             inert={!rightPanelTransition.visible}
           >
+            <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
             <WorkspaceContextPanel
               activeTabId={props.contextPanelActiveTabId}
               floating={renderedRightPanelFloating}
@@ -554,16 +593,22 @@ export function WorkspaceResizableBody(props: {
               gitCommitActionLabel={props.gitCommitActionLabel}
               onOpenGitCommitAction={props.onOpenGitCommitAction}
             />
+            </React.Suspense>
             {conversationRightPluginMounts.length > 0 ? (
               <div className="conversation-plugin-right-mounts">
-                {conversationRightPluginMounts.map(({ plugin, mount }) => (
-                  <DynamicPluginMountPanel
-                    key={`${plugin.id}:${mount.id}`}
-                    mount={mount}
-                    plugin={plugin}
-                    workspacePath={selectedWorkspacePath}
-                  />
-                ))}
+                <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
+                  {conversationRightPluginMounts.map(({ plugin, mount }) => (
+                    <DynamicPluginMountPanel
+                      key={`${plugin.id}:${mount.id}:${props.selectedConversationId ?? "none"}`}
+                      mount={mount}
+                      plugin={plugin}
+                      workspacePath={selectedWorkspacePath}
+                      conversationId={props.workbench.conversations.some(
+                        (conversation) => conversation.id === props.selectedConversationId,
+                      ) ? props.selectedConversationId : null}
+                    />
+                  ))}
+                </React.Suspense>
               </div>
             ) : null}
           </div>

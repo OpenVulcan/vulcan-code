@@ -68,6 +68,7 @@ pub mod session_goal_prompt;
 pub mod task_runtime;
 pub(crate) mod tool_request_argument_assembler;
 pub mod tool_request_stream;
+pub(crate) mod tool_result_media;
 pub mod tool_runtime_bridge;
 pub mod vmm_hooks;
 pub mod vulcan_plugin_hooks;

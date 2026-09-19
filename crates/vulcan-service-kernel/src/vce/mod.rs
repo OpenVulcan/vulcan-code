@@ -23,7 +23,7 @@ pub(crate) use ai_port::{
 pub(crate) use manager::{
     VCE_CONSUMER_PROFILE_ID, VCE_REFRESH_CANCELLED_ERROR, VceJobAdmission, VceProjectLifecycle,
     VcePublicationAuthority, VcePublicationContract, VcePublicationError, VceRebuildProjectInput,
-    VceRuntimeManager, VceRuntimeProjectStatus, VceRuntimeRetrieveResult,
+    VceRuntimeManager, VceRuntimeProjectStatus, VceRuntimeRetrieveResult, vce_retained_job_gauge,
 };
 pub(crate) use readiness::*;
 pub(crate) use services::*;
