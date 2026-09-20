@@ -5,31 +5,73 @@ use super::{VceProjectIndex, port_failed, port_invalid, port_rejected, sqlite_te
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use vulcan_context_engine::{
-    VceAiPurpose, VceCodeNodeSnapshot, VceEmbeddingBatchProviderState, VceEmbeddingBatchRecord,
-    VceEmbeddingBatchResult, VceEmbeddingBatchSnapshot, VceEmbeddingBatchState,
-    VceEmbeddingRemoteBatchRecord, VceEmbeddingRemoteBatchState, VceEmbeddingRunContract,
-    VceEmbeddingRunManifest, VceEmbeddingRunState, VcePortError, VcePortOperation,
+    VceAiPurpose, VceCodeNodeSnapshot, VceEmbeddingActivity, VceEmbeddingActivityStage,
+    VceEmbeddingBatchProviderState, VceEmbeddingBatchRecord, VceEmbeddingBatchResult,
+    VceEmbeddingBatchSnapshot, VceEmbeddingBatchState, VceEmbeddingRemoteBatchRecord,
+    VceEmbeddingRemoteBatchState, VceEmbeddingRunContract, VceEmbeddingRunManifest,
+    VceEmbeddingRunState, VcePortError, VcePortOperation, VceRefreshControl, VceRefreshPhase,
+    VceRefreshProgress, VceRefreshUnit,
 };
 use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
-/// The one manifest layout: an envelope, node chunks, reused Blobs, and batch rows.
-/// 唯一的清单布局：概要、节点分片、复用 Blob 及批次记录。
+/// Observe acknowledged file snapshots without counting buffered or partially written files.
+/// 观察已确认文件快照，不计入缓冲区中或仅部分写入的文件。
+/// `control` receives progress for `run_id`; counters describe whole files and `path` identifies active work.
+/// `control` 接收 `run_id` 的进度；计数描述完整文件，`path` 标识当前工作。无返回值。
+fn observe_manifest_file_progress(
+    control: Option<&VceRefreshControl>,
+    run_id: &str,
+    completed: usize,
+    total: usize,
+    path: Option<&str>,
+) {
+    if let Some(control) = control {
+        control.observe(VceRefreshProgress {
+            activity: Some(VceEmbeddingActivity {
+                stage: VceEmbeddingActivityStage::Persisting,
+                provider_batch_id: None,
+                next_poll_at_unix_ms: None,
+            }),
+            phase: VceRefreshPhase::Embedding,
+            operation_id: format!("{run_id}:persist-files"),
+            unit: VceRefreshUnit::Files,
+            completed: completed as u64,
+            total: Some(total as u64),
+            // Snapshot persistence precedes final index writes; it must not advance overall completion.
+            // 快照保存发生在最终索引写入之前，不能推进整体完成数。
+            overall_completed: 0,
+            overall_total: Some(total as u64),
+            provider_batch_state: None,
+            current_path: path.map(str::to_owned),
+        });
+    }
+}
+
+/// The supported manifest envelope with shared node references, reused Blobs and batch rows.
+/// 支持的清单概要，配合共享节点引用、复用 Blob 和批次记录。
 ///
-/// This is the pinned v1 storage format, in the same sense as the pinned Lance file version: a database
-/// carrying any other value is rejected rather than decoded, because this build has no other layout to
-/// decode it with. There is deliberately no constant for a predecessor layout — naming one would be the
-/// first step back to a dual-read path.
-/// 这是固定的 v1 存储格式，与固定的 Lance 文件版本同理：携带任何其他值的数据库会被拒绝而不是被解码，因为本构建
-/// 没有别的布局可以解码它。此处刻意不为前代布局保留常量——命名它就是退回双读路径的第一步。
+/// Opening storage migrates legacy child bodies to shared references without changing this envelope.
+/// 打开存储时将旧子记录正文迁移为共享引用，不改变此概要。
+/// Other envelope versions remain unsupported; runtime reads use only the migrated child tables.
+/// 其他概要版本仍不受支持；运行时仅读取已迁移的子表。
 const VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED: i64 = 2;
 
-/// Maximum UTF-8 bytes stored in one node JSON chunk.
-/// 单个节点 JSON 分片保存的最大 UTF-8 字节数。
+/// Legacy fixture fragment size used only to verify Unicode reconstruction.
+/// 仅用于验证 Unicode 重建的旧夹具分片大小。
+#[cfg(test)]
 const VCE_EMBEDDING_NODE_CHUNK_BYTES: usize = 32 * 1024;
 
-/// Maximum node chunks sent in one storage engine write or read page.
-/// 单次存储引擎写入或读取页允许的最大节点分片数。
+/// Maximum whole nodes persisted or restored in one bounded page.
+/// 单个有界页中持久保存或恢复的完整节点数上限。
 const VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE: usize = 8;
+
+/// Seek directly after the node cursor without rescanning earlier references.
+/// 直接定位节点游标之后的位置，不重复扫描此前引用。
+pub(super) const VCE_EMBEDDING_NODE_PAGE_SQL: &str = r#"SELECT node_index, blob_name, artifact_hash
+    FROM vce_embedding_run_nodes
+    WHERE namespace_id = ? AND run_id = ?
+      AND node_index > ?
+    ORDER BY node_index ASC LIMIT 8;"#;
 
 /// Maximum reused Blob identities sent in one storage engine write or read page.
 /// 单次存储引擎写入或读取页允许的最大复用 Blob 身份数。
@@ -187,24 +229,6 @@ struct EmbeddingRunStorageRow {
     revision: i64,
 }
 
-/// One ordered node JSON fragment returned from SQLite.
-/// 从 SQLite 返回的一条有序节点 JSON 分片。
-#[derive(Clone, Debug, Deserialize)]
-struct EmbeddingNodeChunkRow {
-    /// Zero-based node position.
-    /// 从零开始的节点位置。
-    node_index: i64,
-    /// Zero-based fragment position inside the node.
-    /// 节点内部从零开始的分片位置。
-    chunk_index: i64,
-    /// Frozen Blob identity repeated for fragment integrity.
-    /// 为分片完整性重复保存的冻结 Blob 身份。
-    blob_name: String,
-    /// Exact UTF-8 JSON fragment.
-    /// 精确 UTF-8 JSON 分片。
-    node_json_chunk: String,
-}
-
 /// One ordered reused Blob identity returned from SQLite.
 /// 从 SQLite 返回的一条有序复用 Blob 身份。
 #[derive(Clone, Debug, Deserialize)]
@@ -236,15 +260,6 @@ struct EmbeddingBatchStorageRow {
     /// Timestamp copied atomically to the parent by the batch-update trigger.
     /// 由批次更新触发器原子复制到父记录的时间戳。
     updated_at_unix_ms: i64,
-}
-
-/// One bounded provider-result row used to validate a batch lifecycle transition.
-/// 用于校验批次生命周期转换的一条有界供应商结果记录。
-#[derive(Deserialize)]
-struct EmbeddingResultStorageRow {
-    /// Complete durable result JSON.
-    /// 完整持久结果 JSON。
-    result_json: String,
 }
 
 /// One bounded remote asynchronous Batch record returned from SQLite.
@@ -281,6 +296,19 @@ impl VceProjectIndex {
         &self,
         manifest: VceEmbeddingRunManifest,
     ) -> Result<(), VcePortError> {
+        self.persist_embedding_manifest_sharded_observed(manifest, None)
+            .await
+    }
+
+    /// Persist the frozen plan with optional progress from acknowledged node-fragment writes.
+    /// 持久化冻结计划，可选地报告已确认节点分片写入的进度。
+    /// `manifest` is the exact plan; `control` observes file counters. Returns after parent publication.
+    /// `manifest` 是精确计划；`control` 观察文件计数。父记录发布后返回。
+    pub(super) async fn persist_embedding_manifest_sharded_observed(
+        &self,
+        manifest: VceEmbeddingRunManifest,
+        control: Option<&VceRefreshControl>,
+    ) -> Result<(), VcePortError> {
         self.require_embedding_manifest_write_access()?;
         manifest
             .validate()
@@ -291,6 +319,25 @@ impl VceProjectIndex {
                 "embedding manifest does not belong to this physical index",
             ));
         }
+        // Reclaim only settled older owners; keep the operation currently being persisted.
+        // 仅回收已结束的旧归属；保留当前正在持久化的操作。
+        let keep_run = manifest.run_id.clone();
+        // Freeze admission against older unresolved provider operations before writing another plan.
+        // 写入另一份计划前，针对较早未决供应商操作冻结准入判断。
+        let namespace = manifest.namespace_id.clone();
+        let batches = manifest.batches.clone();
+        crate::local_sql::with_connection_async(
+            &self.data_plane.local_runtime,
+            &self.data_plane.sqlite_binding,
+            move |connection| {
+                super::shared_result_store::require_resolved_predecessors(
+                    connection, &namespace, &keep_run, &batches,
+                )?;
+                super::artifact_retention::collect(connection, &keep_run)
+            },
+        )
+        .await
+        .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
         // Digest of the frozen source plan, excluding mutable lifecycle fields.
         // 冻结源码计划的摘要，不包含可变生命周期字段。
         let plan_fingerprint = manifest
@@ -402,7 +449,7 @@ impl VceProjectIndex {
             .await?;
         self.persist_reused_blobs(&manifest.run_id, &manifest.reused_blob_names)
             .await?;
-        self.persist_embedding_nodes(&manifest.run_id, &manifest.nodes)
+        self.persist_embedding_nodes(&manifest.run_id, &manifest.nodes, control)
             .await?;
         self.persist_embedding_batches(
             &manifest.run_id,
@@ -469,6 +516,73 @@ impl VceProjectIndex {
             }
         }
         unreachable!("positive VCE embedding manifest load attempt bound")
+    }
+
+    /// Require every logical gap to own a successful durable result before admitting a remote range.
+    /// 准入远端范围前，要求每个逻辑间隙持有成功的持久结果。
+    /// Half-open indices are purpose-local; overlap, missing rows and unfinished work are rejected.
+    /// 半开区间序号局限于指定用途；拒绝重叠、缺失行和未完成工作。
+    async fn require_cached_logical_gap(
+        &self,
+        run: &str,
+        purpose: &str,
+        first: u32,
+        end: u32,
+    ) -> Result<(), VcePortError> {
+        if first > end {
+            return Err(port_rejected(
+                VcePortOperation::EmbeddingManifest,
+                "Remote embedding ranges overlap",
+            ));
+        }
+        if first == end {
+            return Ok(());
+        }
+        // Owner joins prove durability without materializing vector bodies.
+        // 归属连接证明持久性，无需物化向量正文。
+        let namespace = self.binding.namespace_id.clone();
+        let run = run.to_owned();
+        let purpose = purpose.to_owned();
+        crate::local_sql::with_connection_async(&self.data_plane.local_runtime,&self.data_plane.sqlite_binding,move |connection| {
+            let (count,valid): (i64,i64) = connection.query_row(r#"SELECT count(*),coalesce(sum(CASE WHEN json_extract(b.batch_json,'$.state')='succeeded' AND r.artifact_hash IS NOT NULL THEN 1 ELSE 0 END),0)
+              FROM (SELECT namespace_id,run_id,batch_id,batch_json FROM vce_embedding_run_batches WHERE namespace_id=? AND run_id=? AND json_extract(batch_json,'$.purpose')=? ORDER BY batch_index LIMIT ? OFFSET ?) b
+              LEFT JOIN vce_embedding_result_refs r ON r.namespace_id=b.namespace_id AND r.run_id=b.run_id AND r.batch_id=b.batch_id"#,rusqlite::params![namespace,run,purpose,end-first,first],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|error.to_string())?;
+            if count != i64::from(end-first) || valid != count { return Err(String::from("Remote embedding gap lacks successful durable results")); }
+            Ok(())
+        }).await.map_err(|error|port_rejected(VcePortOperation::EmbeddingManifest,error))
+    }
+
+    /// Read a bounded, identity-checked parent summary without opening source artifacts.
+    /// 读取有界且校验身份的父概要，不打开源码产物。
+    /// The run key is exact; returns generation/state only for a fully published plan.
+    /// 运行键精确；仅对完整发布的计划返回代次与状态。
+    pub(super) async fn load_embedding_run_summary_sharded(
+        &self,
+        run_id: String,
+    ) -> Result<Option<(u64, VceEmbeddingRunState)>, VcePortError> {
+        validate_run_id(&run_id)?;
+        let Some(row) = self.load_embedding_run_storage_row(&run_id).await? else {
+            return Ok(None);
+        };
+        if row.manifest_complete == 0 {
+            return Ok(None);
+        }
+        require_complete_sharded_parent(&row)?;
+        let envelope = decode_envelope(&row.manifest_json)?;
+        if envelope.run_id != run_id
+            || envelope.namespace_id != self.binding.namespace_id
+            || i64::try_from(envelope.generation).ok() != Some(row.generation)
+            || row.plan_fingerprint.as_deref() != Some(envelope.plan_fingerprint.as_str())
+        {
+            return Err(port_invalid(
+                VcePortOperation::EmbeddingManifest,
+                "Embedding summary owner mismatch",
+            ));
+        }
+        Ok(Some((
+            envelope.generation,
+            parse_embedding_run_state(&row.state)?,
+        )))
     }
 
     /// Persist only one run state and timestamp after the complete plan has been published.
@@ -782,22 +896,28 @@ impl VceProjectIndex {
             let existing_records = self
                 .load_embedding_remote_batch_records(run_id.clone(), purpose)
                 .await?;
-            let expected_first = existing_records.iter().try_fold(0_u32, |first, existing| {
-                first
-                    .checked_add(existing.logical_batch_count)
-                    .ok_or_else(|| {
-                        port_invalid(
-                            VcePortOperation::EmbeddingManifest,
-                            "remote embedding Batch range exceeds u32",
-                        )
-                    })
-            })?;
-            if record.first_logical_batch_index != expected_first {
-                return Err(port_rejected(
-                    VcePortOperation::EmbeddingManifest,
-                    "new remote embedding Batch record is not a contiguous plan suffix",
-                ));
-            }
+            let expected_first = existing_records
+                .last()
+                .map(|existing| {
+                    existing
+                        .first_logical_batch_index
+                        .checked_add(existing.logical_batch_count)
+                        .ok_or_else(|| {
+                            port_invalid(
+                                VcePortOperation::EmbeddingManifest,
+                                "remote batch range overflow",
+                            )
+                        })
+                })
+                .transpose()?
+                .unwrap_or(0);
+            self.require_cached_logical_gap(
+                &run_id,
+                &record.purpose,
+                expected_first,
+                record.first_logical_batch_index,
+            )
+            .await?;
         }
         let first_logical_batch_index = sqlite_manifest_u64(
             u64::from(record.first_logical_batch_index),
@@ -906,13 +1026,15 @@ impl VceProjectIndex {
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
             let record = decode_remote_batch(&row)?;
-            if record.first_logical_batch_index != expected_first {
-                return Err(port_invalid(
-                    VcePortOperation::EmbeddingManifest,
-                    "remote embedding Batch ranges are not contiguous",
-                ));
-            }
-            expected_first = expected_first
+            self.require_cached_logical_gap(
+                &run_id,
+                &record.purpose,
+                expected_first,
+                record.first_logical_batch_index,
+            )
+            .await?;
+            expected_first = record
+                .first_logical_batch_index
                 .checked_add(record.logical_batch_count)
                 .ok_or_else(|| {
                     port_invalid(
@@ -1042,9 +1164,8 @@ impl VceProjectIndex {
                     "embedding manifest run does not exist",
                 )
             })?;
-        // No conversion and no repair. A row that is not the pinned layout is reported, not rewritten:
-        // silently converting it in place would be exactly the runtime migration this build does not do.
-        // 不转换、不修补。不是固定布局的记录会被报出，而不是被改写：原地静默转换正是本构建所不做的运行时迁移。
+        // Child-body migration preserves the envelope version; an unknown parent layout is an error.
+        // 子记录正文迁移保持概要版本不变；未知父记录布局必须报错。
         if parent.layout_version != VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED {
             return Err(port_invalid(
                 VcePortOperation::EmbeddingManifest,
@@ -1160,10 +1281,7 @@ impl VceProjectIndex {
     /// `run_id` 必须标识一个已校验运行；其可替换子记录移除后返回。
     async fn clear_embedding_manifest_children(&self, run_id: &str) -> Result<(), VcePortError> {
         for (table, context) in [
-            (
-                "vce_embedding_run_node_chunks",
-                "Clear VCE embedding node chunks",
-            ),
+            ("vce_embedding_run_nodes", "Clear VCE embedding node chunks"),
             (
                 "vce_embedding_run_reused_blobs",
                 "Clear VCE reused Blob rows",
@@ -1248,69 +1366,80 @@ impl VceProjectIndex {
         Ok(())
     }
 
-    /// Persist serialized source-node snapshots as bounded UTF-8 fragments.
-    /// 将序列化源码节点快照持久化为有界 UTF-8 分片。
+    /// Persist source-node references and shared payloads in bounded whole-file transactions.
+    /// 以有界完整文件事务持久化源码节点引用与共享负载。
     ///
-    /// Persists ordered `nodes` for `run_id`; returns only after the final UTF-8 fragment page succeeds.
-    /// 为 `run_id` 持久化有序 `nodes`；最后一页 UTF-8 分片成功后才返回。
+    /// Persists ordered `nodes` for `run_id`; returns only after the final file page succeeds.
+    /// 为 `run_id` 持久化有序 `nodes`；最后一页文件成功后才返回。
     async fn persist_embedding_nodes(
         &self,
         run_id: &str,
         nodes: &[VceCodeNodeSnapshot],
+        control: Option<&VceRefreshControl>,
     ) -> Result<(), VcePortError> {
-        // Bounded typed row parameters sent through a single storage engine batch.
-        // 通过一次存储引擎批次发送的有界类型化行参数。
-        let mut items = Vec::with_capacity(VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE);
-        for (node_index, node) in nodes.iter().enumerate() {
-            // One source-node JSON body split into bounded UTF-8 fragments.
-            // 将拆分为有界 UTF-8 分片的单个源码节点 JSON 正文。
-            let node_json = serde_json::to_string(node).map_err(|error| {
-                port_invalid(VcePortOperation::EmbeddingManifest, error.to_string())
-            })?;
-            for (chunk_index, chunk) in split_utf8_chunks(&node_json).into_iter().enumerate() {
-                items.push(vec![
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(run_id),
-                    SqliteValue::Integer(sqlite_manifest_usize(
-                        node_index,
-                        "VCE embedding node index",
-                    )?),
-                    SqliteValue::Integer(sqlite_manifest_usize(
-                        chunk_index,
-                        "VCE embedding node chunk index",
-                    )?),
-                    sqlite_text(&node.blob_name),
-                    sqlite_text(chunk),
-                ]);
-                if items.len() == VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE {
-                    self.flush_embedding_node_chunks(std::mem::take(&mut items))
-                        .await?;
-                }
-            }
-        }
-        self.flush_embedding_node_chunks(items).await
-    }
-
-    /// Flush one bounded collection of node fragments through the storage engine.
-    /// 通过存储引擎写入一组有界节点分片。
-    ///
-    /// `items` contains one bounded typed parameter page; returns the storage engine write result.
-    /// `items` 包含一页有界类型化参数；返回存储引擎写入结果。
-    async fn flush_embedding_node_chunks(
-        &self,
-        items: Vec<Vec<SqliteValue>>,
-    ) -> Result<(), VcePortError> {
-        self.data_plane
-            .execute_batch(
-                r#"INSERT INTO vce_embedding_run_node_chunks(
-                       namespace_id, run_id, node_index, chunk_index,
-                       blob_name, node_json_chunk
-                   ) VALUES (?, ?, ?, ?, ?, ?);"#,
-                items,
-                "Persist VCE embedding node chunks",
+        for (page_index, page) in nodes.chunks(VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE).enumerate() {
+            // A bounded file page owns one connection, transaction and all shared payload references.
+            // 有界文件页持有一个连接、一个事务和全部共享负载引用。
+            let namespace = self.binding.namespace_id.clone();
+            // Run identity remains exact even when immutable bodies are shared with other runs.
+            // 即使不可变正文与其他运行共享，运行身份仍保持精确。
+            let run = run_id.to_owned();
+            // Owned nodes cross the blocking boundary without extending the observer's lifetime.
+            // 节点所有权跨越阻塞边界，不延长观察器的生命周期。
+            let owned = page.to_vec();
+            // File order remains identical to the public manifest fingerprint.
+            // 文件顺序与公共清单指纹保持一致。
+            let start = page_index * VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE;
+            observe_manifest_file_progress(
+                control,
+                run_id,
+                start,
+                nodes.len(),
+                Some(&page[0].path),
+            );
+            super::local_sql::with_connection_async(
+                &self.data_plane.local_runtime,
+                &self.data_plane.sqlite_binding,
+                move |connection| {
+                    // The frozen contract is bounded metadata, read once per page rather than once per text.
+                    // 冻结契约是有界元数据，每页只读一次，而不是每段文本读取一次。
+                    let contract =
+                        super::shared_manifest_store::run_contract(connection, &namespace, &run)?;
+                    // Shared descriptors and run references are published or rolled back together.
+                    // 共享描述与运行引用一同发布或回滚。
+                    let transaction = connection
+                        .transaction()
+                        .map_err(|error| error.to_string())?;
+                    for (offset, node) in owned.iter().enumerate() {
+                        super::shared_manifest_store::store_node(
+                            &transaction,
+                            &namespace,
+                            &run,
+                            (start + offset) as i64,
+                            node,
+                            &contract,
+                            super::current_unix_epoch_millis_i64()?,
+                        )?;
+                    }
+                    transaction.commit().map_err(|error| error.to_string())
+                },
             )
             .await
-            .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))
+            .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
+            // Report only whole-file receipts acknowledged by the transaction.
+            // 仅报告事务已确认的完整文件回执。
+            for (offset, node) in page.iter().enumerate() {
+                observe_manifest_file_progress(
+                    control,
+                    run_id,
+                    start + offset + 1,
+                    nodes.len(),
+                    Some(&node.path),
+                );
+            }
+        }
+        observe_manifest_file_progress(control, run_id, nodes.len(), nodes.len(), None);
+        Ok(())
     }
 
     /// Persist bounded mutable batch records in stable execution order.
@@ -1422,7 +1551,7 @@ impl VceProjectIndex {
                       AND revision = ?
                       AND plan_fingerprint = ?
                      AND (SELECT COUNT(DISTINCT node_index)
-                          FROM vce_embedding_run_node_chunks
+                          FROM vce_embedding_run_nodes
                           WHERE namespace_id = ? AND run_id = ?) = ?
                      AND (SELECT COUNT(*) FROM vce_embedding_run_reused_blobs
                           WHERE namespace_id = ? AND run_id = ?) = ?
@@ -1671,117 +1800,66 @@ impl VceProjectIndex {
         run_id: &str,
         expected_count: u64,
     ) -> Result<Vec<VceCodeNodeSnapshot>, VcePortError> {
-        // Expected row count used for validation while initial allocation stays page-bounded.
-        // 用于校验的预期行数，初始内存分配仍限制为一页。
-        let capacity = usize::try_from(expected_count).map_err(|_| {
-            port_invalid(
-                VcePortOperation::EmbeddingManifest,
-                "VCE embedding node count exceeds platform limits",
-            )
-        })?;
-        // Ordered source snapshots reconstructed without allocating the declared total upfront.
-        // 有序源码快照，不按声明总数一次性预分配内存。
-        let mut nodes = Vec::with_capacity(capacity.min(VCE_EMBEDDING_NODE_CHUNK_PAGE_SIZE));
-        // Last consumed node index for the next keyset page.
-        // 下一键集页使用的最近消费节点索引。
-        let mut cursor_node = -1_i64;
-        // Last consumed fragment index inside the cursor node.
-        // 游标节点内最近消费的分片索引。
-        let mut cursor_chunk = -1_i64;
-        // Node currently being assembled across storage engine page boundaries.
-        // 当前跨存储引擎分页边界组装的节点。
-        let mut current_node_index = None;
-        // Blob identity required to match every fragment of the current node.
-        // 要求当前节点的每个分片一致的 Blob 身份。
-        let mut current_blob_name = String::new();
-        // Single-node assembly buffer cleared at each node boundary.
-        // 在每个节点边界清空的单节点组装缓冲区。
-        let mut current_json = String::new();
-        // Next contiguous fragment position within the current node.
-        // 当前节点内下一个连续分片位置。
-        let mut expected_chunk_index = 0_i64;
+        // Reconstruct one bounded page per connection while retaining manifest order.
+        // 每个连接重建一个有界页面，并保持清单顺序。
+        let mut nodes = Vec::new();
         loop {
-            // One bounded storage engine result page, scoped to the exact manifest identity.
-            // 范围限定到精确清单身份的一页有界存储引擎结果。
-            let rows: Vec<EmbeddingNodeChunkRow> = self
-                .data_plane
-                .query_rows(
-                    r#"SELECT node_index, chunk_index, blob_name, node_json_chunk
-                       FROM vce_embedding_run_node_chunks
-                       WHERE namespace_id = ? AND run_id = ?
-                         AND (node_index > ? OR (node_index = ? AND chunk_index > ?))
-                       ORDER BY node_index ASC, chunk_index ASC LIMIT 8;"#,
-                    vec![
-                        sqlite_text(&self.binding.namespace_id),
-                        sqlite_text(run_id),
-                        SqliteValue::Integer(cursor_node),
-                        SqliteValue::Integer(cursor_node),
-                        SqliteValue::Integer(cursor_chunk),
-                    ],
+            // The cursor seeks by the complete run key and node ordinal.
+            // 游标通过完整运行键与节点序号定位。
+            let cursor = i64::try_from(nodes.len()).map_err(|_| {
+                port_invalid(
+                    VcePortOperation::EmbeddingManifest,
+                    "VCE node count exceeds platform limits",
                 )
-                .await
-                .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
-            if rows.is_empty() {
+            })? - 1;
+            // Owned lookup keys cross only the controlled database boundary.
+            // 查询键所有权仅跨越受控数据库边界。
+            let namespace = self.binding.namespace_id.clone();
+            // The stable run identity selects the generation used to restore shared nodes.
+            // 稳定运行身份选择恢复共享节点所需的代次。
+            let run = run_id.to_owned();
+            // No source body is duplicated in the host JSON row projection.
+            // 宿主 JSON 行投影不再复制源码正文。
+            let page = super::local_sql::with_connection_async(
+                    &self.data_plane.local_runtime, &self.data_plane.sqlite_binding, move |connection| {
+                        // Generation is run metadata and is never taken from another cached owner.
+                        // 代次属于运行元数据，绝不取自其他缓存所有者。
+                    let generation: i64 = connection.query_row(
+                            "SELECT generation FROM vce_embedding_runs WHERE namespace_id=? AND run_id=?",
+                            rusqlite::params![namespace,run], |row| row.get(0),
+                        ).map_err(|error| error.to_string())?;
+                        // The query is shared with the regression assertion for direct cursor seeking.
+                        // 查询与直接游标定位的回归断言共享。
+                        let mut statement = connection.prepare_cached(VCE_EMBEDDING_NODE_PAGE_SQL).map_err(|error| error.to_string())?;
+                        // Collect only bounded reference metadata before reading immutable bodies.
+                        // 读取不可变正文前仅收集有界引用元数据。
+                        let references = statement.query_map(rusqlite::params![namespace,run,cursor], |row|
+                            Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?))
+                        ).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+                        references.into_iter().enumerate().map(|(offset,(index,blob,artifact))| {
+                            if index != cursor + offset as i64 + 1 {
+                                return Err(String::from("VCE shared node ordinals are not contiguous"));
+                            }
+                        super::shared_manifest_store::restore_node(connection,&artifact,&blob,
+                            u64::try_from(generation).map_err(|_| String::from("VCE run generation is invalid"))?)
+                        }).collect::<Result<Vec<_>,String>>()
+                    },
+                ).await.map_err(|error| port_failed(VcePortOperation::EmbeddingManifest,error))?;
+            if page.is_empty() {
                 break;
             }
-            for row in rows {
-                if current_node_index != Some(row.node_index) {
-                    if let Some(previous_index) = current_node_index {
-                        nodes.push(decode_node(
-                            previous_index,
-                            &current_blob_name,
-                            &current_json,
-                        )?);
-                    }
-                    // Next contiguous node position after decoding the preceding node.
-                    // 解码前一个节点后的下一个连续节点位置。
-                    let expected_node_index =
-                        sqlite_manifest_usize(nodes.len(), "VCE embedding expected node index")?;
-                    if row.node_index != expected_node_index
-                        || row.chunk_index != 0
-                        || nodes.len() >= capacity
-                    {
-                        return Err(port_invalid(
-                            VcePortOperation::EmbeddingManifest,
-                            "VCE embedding node chunks are not contiguous",
-                        ));
-                    }
-                    current_node_index = Some(row.node_index);
-                    current_blob_name = row.blob_name.clone();
-                    current_json.clear();
-                    expected_chunk_index = 0;
-                }
-                if row.chunk_index != expected_chunk_index
-                    || row.blob_name != current_blob_name
-                    || row.node_json_chunk.is_empty()
-                {
-                    return Err(port_invalid(
-                        VcePortOperation::EmbeddingManifest,
-                        "VCE embedding node chunk identity is inconsistent",
-                    ));
-                }
-                current_json.push_str(&row.node_json_chunk);
-                expected_chunk_index = expected_chunk_index.checked_add(1).ok_or_else(|| {
-                    port_invalid(
-                        VcePortOperation::EmbeddingManifest,
-                        "VCE embedding node chunk index overflowed",
-                    )
-                })?;
-                cursor_node = row.node_index;
-                cursor_chunk = row.chunk_index;
+            nodes.extend(page);
+            if nodes.len() as u64 > expected_count {
+                return Err(port_invalid(
+                    VcePortOperation::EmbeddingManifest,
+                    "VCE shared node count exceeds its envelope",
+                ));
             }
         }
-        if let Some(previous_index) = current_node_index {
-            nodes.push(decode_node(
-                previous_index,
-                &current_blob_name,
-                &current_json,
-            )?);
-        }
-        if nodes.len() != capacity {
+        if nodes.len() as u64 != expected_count {
             return Err(port_invalid(
                 VcePortOperation::EmbeddingManifest,
-                "VCE embedding node row count disagrees with the envelope",
+                "VCE shared node count differs from its envelope",
             ));
         }
         Ok(nodes)
@@ -1896,42 +1974,25 @@ impl VceProjectIndex {
     /// `run_id` and `batch_id` select the exact durable result. Returns absence or one validated
     /// identity-matching result without changing parent state.
     /// `run_id` 与 `batch_id` 选择精确持久结果。返回空值或一份已校验且身份匹配的结果，不修改父状态。
-    async fn load_embedding_result_for_transition(
+    pub(super) async fn load_embedding_result_for_transition(
         &self,
         run_id: &str,
         batch_id: &str,
     ) -> Result<Option<VceEmbeddingBatchResult>, VcePortError> {
-        // One exact result row is enough because the relational primary key enforces uniqueness.
-        // 关系主键保证唯一性，因此只需读取一条精确结果记录。
-        let rows: Vec<EmbeddingResultStorageRow> = self
-            .data_plane
-            .query_rows(
-                "SELECT result_json FROM vce_embedding_batch_results WHERE namespace_id = ? AND run_id = ? AND batch_id = ? LIMIT 1;",
-                vec![
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(run_id),
-                    sqlite_text(batch_id),
-                ],
-            )
-            .await
-            .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        let result =
-            serde_json::from_str::<VceEmbeddingBatchResult>(&row.result_json).map_err(|error| {
-                port_invalid(VcePortOperation::EmbeddingManifest, error.to_string())
-            })?;
-        result
-            .validate()
-            .map_err(|error| port_invalid(VcePortOperation::EmbeddingManifest, error))?;
-        if result.batch_id != batch_id {
-            return Err(port_invalid(
-                VcePortOperation::EmbeddingManifest,
-                "persisted embedding batch result identity disagrees with its row",
-            ));
-        }
-        Ok(Some(result))
+        // Own exact keys across the asynchronous connection boundary.
+        // 在异步连接边界持有精确键。
+        let namespace = self.binding.namespace_id.clone();
+        let run = run_id.to_owned();
+        let batch = batch_id.to_owned();
+        crate::local_sql::with_connection_async(
+            &self.data_plane.local_runtime,
+            &self.data_plane.sqlite_binding,
+            move |connection| {
+                super::shared_result_store::load(connection, &namespace, &run, &batch)
+            },
+        )
+        .await
+        .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))
     }
 }
 
@@ -2193,35 +2254,6 @@ fn decode_envelope(value: &str) -> Result<StoredEmbeddingManifestEnvelope, VcePo
     Ok(envelope)
 }
 
-/// Decode one complete node and verify its repeated Blob identity.
-/// 解码一个完整节点并校验其重复保存的 Blob 身份。
-///
-/// Validates `node_index` and `blob_name` against assembled JSON `value`; returns its source snapshot.
-/// 根据组装 JSON `value` 校验 `node_index` 与 `blob_name`；返回其源码快照。
-fn decode_node(
-    node_index: i64,
-    blob_name: &str,
-    value: &str,
-) -> Result<VceCodeNodeSnapshot, VcePortError> {
-    if node_index < 0 || value.is_empty() {
-        return Err(port_invalid(
-            VcePortOperation::EmbeddingManifest,
-            "VCE embedding node payload is invalid",
-        ));
-    }
-    // Source snapshot decoded after all of its ordered fragments are assembled.
-    // 全部有序分片组装后解码的源码快照。
-    let node = serde_json::from_str::<VceCodeNodeSnapshot>(value)
-        .map_err(|error| port_invalid(VcePortOperation::EmbeddingManifest, error.to_string()))?;
-    if node.blob_name != blob_name {
-        return Err(port_invalid(
-            VcePortOperation::EmbeddingManifest,
-            "VCE embedding node Blob identity disagrees with its chunks",
-        ));
-    }
-    Ok(node)
-}
-
 /// Decode one batch row and verify both stable identity projections.
 /// 解码一条批次记录并校验两个稳定身份投影。
 ///
@@ -2260,6 +2292,7 @@ fn decode_batch(row: &EmbeddingBatchStorageRow) -> Result<VceEmbeddingBatchRecor
 ///
 /// Splits JSON `value` into ordered fragments no larger than the chunk limit; concatenation restores the input.
 /// 将 JSON `value` 拆分为不超过分片上限的有序片段；拼接后恢复原始输入。
+#[cfg(test)]
 fn split_utf8_chunks(value: &str) -> Vec<String> {
     // Ordered UTF-8 fragments retained for exact JSON round-trip reconstruction.
     // 为精确 JSON 往返重建保留的有序 UTF-8 分片。

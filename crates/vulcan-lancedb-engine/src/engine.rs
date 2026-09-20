@@ -420,6 +420,54 @@ impl LanceDbEngine {
         }
     }
 
+    /// Maintain a scalar merge key index without scanning the complete target on every upsert.
+    /// 维护标量合并键索引，避免每次更新插入都扫描完整目标。
+    /// `table_name` and `column` are explicit caller-owned identities; returns after bounded-tail maintenance.
+    /// `table_name` 和 `column` 是调用方明确持有的身份；有界尾部维护完成后返回。
+    pub async fn maintain_merge_key_index(
+        &self,
+        table_name: &str,
+        column: &str,
+    ) -> EngineResult<()> {
+        // Serialize index metadata changes with writes to the same physical table.
+        // 将索引元数据变更与同一物理表写入串行化。
+        let table_name = normalize_table_name(table_name);
+        validate_table_name(&table_name)?;
+        let _table_guard = self.acquire_table_write(&table_name).await;
+        let _permit = self.acquire_concurrency_permit().await?;
+        let table = self.open_table(&table_name).await?;
+        let indices = table.list_indices().await.map_err(map_lancedb_error)?;
+        let existing = indices.iter().find(|index| {
+            index.columns == [column] && index.index_type == lancedb::index::IndexType::BTree
+        });
+        if let Some(index) = existing {
+            // Index statistics count the uncovered tail explicitly; missing statistics are an error.
+            // 索引统计明确计算未覆盖尾部；统计缺失视为错误。
+            let statistics = table
+                .index_stats(&index.name)
+                .await
+                .map_err(map_lancedb_error)?
+                .ok_or_else(|| {
+                    LanceDbEngineError::internal("merge key index statistics disappeared")
+                })?;
+            if statistics.num_unindexed_rows >= 4096 {
+                table
+                    .optimize(lancedb::table::OptimizeAction::Index(Default::default()))
+                    .await
+                    .map_err(map_lancedb_error)?;
+            }
+        } else if table.count_rows(None).await.map_err(map_lancedb_error)? != 0 {
+            // The first nonempty batch seeds the index; subsequent merges scan only an at-most-4096-row tail.
+            // 首个非空批次建立索引；后续合并仅扫描最多 4096 行的尾部。
+            table
+                .create_index(&[column], lancedb::index::Index::BTree(Default::default()))
+                .execute()
+                .await
+                .map_err(map_lancedb_error)?;
+        }
+        Ok(())
+    }
+
     /// Runs a nearest-neighbour vector search.
     /// 执行最近邻向量检索。
     pub async fn vector_search(
@@ -2020,6 +2068,10 @@ mod tests {
             .expect("create table");
 
         for content in ["first", "second"] {
+            engine
+                .maintain_merge_key_index("docs", "id")
+                .await
+                .expect("maintain exact merge key index");
             let mut upsert = json_upsert("docs", vec![json_row("a", content, [1.0, 0.0, 0.0])]);
             upsert.key_columns = vec!["id".to_string()];
             engine.vector_upsert(upsert).await.expect("keyed upsert");
@@ -2033,7 +2085,66 @@ mod tests {
             .expect("statistics");
 
         assert_eq!(stats.row_count, 1, "a keyed upsert must not duplicate rows");
+        let table = engine.open_table("docs").await.expect("open indexed table");
+        assert!(
+            table
+                .list_indices()
+                .await
+                .unwrap()
+                .iter()
+                .any(|index| index.columns == ["id"]
+                    && index.index_type == lancedb::index::IndexType::BTree)
+        );
     }
+    /// Merge-key maintenance folds the uncovered tail into the index without duplicating existing IDs.
+    /// 合并键维护将未覆盖尾部纳入索引，不重复已有 ID。
+    #[tokio::test]
+    async fn keyed_upsert_index_bounds_unindexed_tail() {
+        let (_directory, engine) = isolated_engine(4).await;
+        engine
+            .create_table(documents_definition("indexed_tail"))
+            .await
+            .unwrap();
+        let mut seed = json_upsert(
+            "indexed_tail",
+            vec![json_row("seed", "seed", [1.0, 0.0, 0.0])],
+        );
+        seed.key_columns = vec!["id".into()];
+        engine.vector_upsert(seed).await.unwrap();
+        engine
+            .maintain_merge_key_index("indexed_tail", "id")
+            .await
+            .unwrap();
+        let mut tail = json_upsert(
+            "indexed_tail",
+            (0..4096)
+                .map(|index| json_row(&format!("row-{index}"), "tail", [1.0, 0.0, 0.0]))
+                .collect(),
+        );
+        tail.key_columns = vec!["id".into()];
+        engine.vector_upsert(tail).await.unwrap();
+        engine
+            .maintain_merge_key_index("indexed_tail", "id")
+            .await
+            .unwrap();
+        let table = engine.open_table("indexed_tail").await.unwrap();
+        let indices = table.list_indices().await.unwrap();
+        let index = indices
+            .iter()
+            .find(|index| index.columns == ["id"])
+            .unwrap();
+        assert_eq!(
+            table
+                .index_stats(&index.name)
+                .await
+                .unwrap()
+                .unwrap()
+                .num_unindexed_rows,
+            0
+        );
+        assert_eq!(table.count_rows(None).await.unwrap(), 4097);
+    }
+
     /// Verifies a payload larger than the retired controller's 4 MiB ceiling is written locally.
     /// 验证大于已退役控制器 4 MiB 上限的载荷在本地直接写入。
     ///

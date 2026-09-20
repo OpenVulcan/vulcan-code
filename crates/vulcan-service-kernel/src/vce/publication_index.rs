@@ -351,6 +351,20 @@ impl VceIndexPort for VcePublicationIndex {
         self.runtime.index.persist_embedding_manifest(manifest)
     }
 
+    /// Forward observed plan persistence to the same project index and refresh observer.
+    /// 将可观察计划持久化转发到同一项目索引及刷新观察器。
+    /// `manifest` and `control` retain exact operation ownership; returns the storage result.
+    /// `manifest` 与 `control` 保留精确操作归属；返回存储结果。
+    fn persist_embedding_manifest_observed(
+        &self,
+        manifest: VceEmbeddingRunManifest,
+        control: vulcan_context_engine::VceRefreshControl,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.runtime
+            .index
+            .persist_embedding_manifest_observed(manifest, control)
+    }
+
     /// Forward exact manifest recovery without creating or replacing a run.
     /// 转发精确清单恢复，不创建或替换运行。
     /// `run_id` selects one plan; returns its optional durable snapshot or the storage error.
@@ -428,6 +442,48 @@ impl VceIndexPort for VcePublicationIndex {
         self.runtime
             .index
             .persist_embedding_batch_result(run_id, result)
+    }
+
+    /// Forward immutable preparation lookup using the exact analyzer and generation.
+    /// 使用精确分析器与代次转发不可变准备查询。
+    /// Parameters retain the engine's frozen contract; returns the storage result unchanged.
+    /// 参数保留引擎冻结契约；原样返回存储结果。
+    fn load_prepared_artifacts(
+        &self,
+        contract: vulcan_context_engine::VceEmbeddingRunContract,
+        blobs: Vec<String>,
+        analyzer_id: String,
+        generation: u64,
+    ) -> VceFuture<Result<Vec<vulcan_context_engine::VceCodeNodeSnapshot>, VcePortError>> {
+        self.runtime
+            .index
+            .load_prepared_artifacts(contract, blobs, analyzer_id, generation)
+    }
+
+    /// Forward bounded lifecycle reads without materializing immutable sources.
+    /// 转发有界生命周期读取，不物化不可变源码。
+    /// The run ID selects the exact optional summary returned by project storage.
+    /// 运行 ID 选择项目存储返回的精确可选概要。
+    fn load_embedding_run_summary(
+        &self,
+        run_id: String,
+    ) -> VceFuture<Result<Option<(u64, vulcan_context_engine::VceEmbeddingRunState)>, VcePortError>>
+    {
+        self.runtime.index.load_embedding_run_summary(run_id)
+    }
+
+    /// Forward exact cached-result adoption before provider task admission.
+    /// 在供应商任务准入前转发精确缓存结果接纳。
+    /// Run and batch IDs select the frozen request; returns the optional adopted result.
+    /// 运行与批次 ID 选择冻结请求；返回可选的已接纳结果。
+    fn reuse_embedding_batch_result(
+        &self,
+        run_id: String,
+        batch_id: String,
+    ) -> VceFuture<Result<Option<VceEmbeddingBatchResult>, VcePortError>> {
+        self.runtime
+            .index
+            .reuse_embedding_batch_result(run_id, batch_id)
     }
 
     /// Forward one exact provider-result lookup for durable batch recovery.

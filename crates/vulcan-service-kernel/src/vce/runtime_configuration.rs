@@ -67,11 +67,7 @@ pub(super) fn prepare_runtime_configuration(
     }
     // preliminary_limits preserve the existing root/filter validation before core limits are available.
     // preliminary_limits 在核心限制可用之前保留既有根目录／过滤验证。
-    let preliminary_limits = VceSourceLimits::new(
-        settings.max_file_bytes,
-        8,
-        (4 * 1_048_576_u64).max(settings.max_file_bytes),
-    )?;
+    let preliminary_limits = VceSourceLimits::new(settings.max_file_bytes, 64)?;
     // preliminary validates only root metadata and ignore syntax; activation does not enumerate project files.
     // preliminary 仅验证根目录元数据及忽略语法；激活不枚举项目文件。
     let preliminary = VceProjectSourceAdapter::activate(
@@ -107,7 +103,6 @@ pub(super) fn prepare_runtime_configuration(
     let mut engine = vulcan_context_engine::VceConfig::new(chain.clone(), space.clone())
         .map_err(|error| error.to_string())?;
     engine.indexing.max_file_bytes = settings.max_file_bytes;
-    engine.index_stage_max_bytes = engine.index_stage_max_bytes.max(settings.max_file_bytes);
     engine.embedding_max_concurrency = settings.embedding_max_concurrency;
     engine.query_max_concurrency = settings.query_max_concurrency;
     engine.retrieval.coverage.max_results = settings.max_results;
@@ -120,7 +115,6 @@ pub(super) fn prepare_runtime_configuration(
         VceSourceLimits::new(
             engine.indexing.max_file_bytes,
             engine.index_stage_blob_limit,
-            engine.index_stage_max_bytes,
         )?,
         &settings.extra_ignore_patterns,
     )?);

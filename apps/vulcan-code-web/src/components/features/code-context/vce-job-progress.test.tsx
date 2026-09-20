@@ -162,8 +162,8 @@ describe("durable VCE job projections", () => {
     }
   });
 
-  // File preparation shows a cumulative denominator while keeping source paths out of the status surface.
-  // 文件准备显示累计分母，同时不在状态界面暴露源码路径。
+  // File preparation exposes the actual path and cumulative denominator requested by the user.
+  // 文件准备直接展示用户要求的真实路径与累计分母。
   it("shows cumulative file preparation and explains an unchanging state", () => {
     // job freezes a real file-stage receipt long enough to exercise the inactivity explanation.
     // job 冻结实际文件阶段回执，持续时间足以验证无变化说明。
@@ -176,10 +176,32 @@ describe("durable VCE job projections", () => {
     expect(markup).toContain('aria-valuenow="120"');
     expect(markup).toContain('aria-valuemax="3264"');
     expect(markup).toContain("120 / 3264 文件");
-    expect(markup).not.toContain("src/private.rs");
+    expect(markup).toContain("src/private.rs");
+    expect(markup).toContain("本次处理 3264 个文件");
     expect(markup).toContain("距最近进度更新");
     expect(markup).toContain("当前步骤尚未返回新的完成回执");
     expect(markup).not.toContain("卡死");
+  });
+
+  // File-write receipts remain visible without opening task details and do not claim index completion.
+  // 文件写入回执无需展开任务详情即可看到，且不声称索引已完成。
+  it("shows acknowledged file snapshots and current path outside collapsed details", () => {
+    // job represents the exact local persistence stage from the host observer.
+    // job 表示宿主观察器提供的精确本地持久化阶段。
+    const job: VceJobSummary = { ...receipt(), state: "running", progress: {
+      phase: "embedding", operationId: "job-a:persist-files", unit: "files", completed: 120, total: 3264,
+      overallCompleted: 0, overallTotal: 3264, providerBatchState: null, currentPath: "src/index.rs",
+      activity: {stage: "persisting", providerBatchId: null, nextPollAtUnixMs: null},
+    }};
+    // visible removes collapsed detail content from the rendered settings presentation.
+    // visible 从渲染后的设置界面移除已折叠详情内容。
+    const visible = renderToStaticMarkup(<VceJobProgress job={job} chinese presentation="settings" />)
+      .replace(/<details[\s\S]*?<\/details>/g, "");
+    expect(visible).toContain("文件快照保存");
+    expect(visible).toContain("120 / 3264 文件");
+    expect(visible).toContain("本次处理 3264 个文件 · 已写入索引 0 个");
+    expect(visible).toContain("src/index.rs");
+    expect(visible).not.toContain("总量待确定");
   });
 
   // Durable planning has a specific local activity rather than an empty frozen progress bar.

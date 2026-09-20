@@ -72,6 +72,22 @@ mod initial_allocation;
 #[path = "vce_embedding_manifest_store.rs"]
 mod embedding_manifest_store;
 
+#[path = "vce_shared_artifacts.rs"]
+mod shared_artifacts;
+
+#[path = "vce_shared_result_store.rs"]
+mod shared_result_store;
+
+#[path = "vce_artifact_retention.rs"]
+mod artifact_retention;
+
+#[cfg(test)]
+#[path = "vce_shared_storage_tests.rs"]
+mod shared_storage_tests;
+
+#[path = "vce_shared_manifest_store.rs"]
+mod shared_manifest_store;
+
 /// Stable logical space reserved for code-semantic state.
 /// 为代码语义状态保留的稳定逻辑空间。
 pub const VCE_SPACE_ID: &str = "vce";
@@ -1042,15 +1058,6 @@ struct VectorCleanupIssueRow {
     error: Option<String>,
 }
 
-/// One persisted provider-result row used to resume a completed batch without another request.
-/// 一条用于在不重复请求的情况下恢复已完成批次的持久化供应商结果记录。
-#[derive(Clone, Debug, Deserialize)]
-struct EmbeddingBatchResultRow {
-    /// JSON payload containing validated segment vectors.
-    /// 包含已校验分段向量的 JSON 负载。
-    result_json: String,
-}
-
 /// One durable publication intent used to recover an uncertain commit boundary.
 /// 用于恢复不确定提交边界的一条持久化发布意图。
 #[derive(Clone, Debug, Deserialize)]
@@ -1135,7 +1142,6 @@ fn staged_symbol_params(
         sqlite_usize_raw(symbol.range.end_line, "VCE symbol end line")?,
         sqlite_usize_raw(symbol.start_char_offset, "VCE symbol offset")?,
         sqlite_text(&symbol.chunk_id),
-        sqlite_text(&symbol.content),
         sqlite_text(symbol_kind_text(symbol.kind)),
     ])
 }
@@ -1821,13 +1827,6 @@ fn sqlite_u64_raw(value: u64, label: &str) -> Result<SqliteValue, String> {
         .map_err(|_| format!("{label} exceeds SQLite integer range"))
 }
 
-/// Converts one usize into a checked SQLite integer parameter.
-/// 将一个 usize 转换为经过校验的 SQLite 整数参数。
-fn sqlite_usize(value: usize, label: &str) -> Result<SqliteValue, VcePortError> {
-    sqlite_usize_raw(value, label)
-        .map_err(|message| port_rejected(VcePortOperation::Stage, message))
-}
-
 /// Converts one usize into a checked raw SQLite integer parameter.
 /// 将一个 usize 转换为经过校验的原始 SQLite 整数参数。
 fn sqlite_usize_raw(value: usize, label: &str) -> Result<SqliteValue, String> {
@@ -2034,8 +2033,9 @@ mod tests {
     };
     use crate::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
     use sha2::{Digest, Sha256};
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
+    use std::sync::Arc;
     use tempfile::tempdir;
     use uuid::Uuid;
     use vulcan_context_engine::{
@@ -2087,7 +2087,7 @@ mod tests {
 
     /// Build one bounded planned remote Batch record for durable storage tests.
     /// 为持久存储测试构建一条有界的已规划远端 Batch 记录。
-    fn test_remote_embedding_batch_record() -> VceEmbeddingRemoteBatchRecord {
+    pub(super) fn test_remote_embedding_batch_record() -> VceEmbeddingRemoteBatchRecord {
         let remote_task_id = String::from("remote-task-0");
         VceEmbeddingRemoteBatchRecord {
             remote_task_id: remote_task_id.clone(),
@@ -2328,13 +2328,13 @@ mod tests {
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_publication_intents"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_commit_guards"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_runs"));
-        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_node_chunks"));
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_nodes"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_reused_blobs"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_run_batches"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_remote_batches"));
         assert!(schema.contains(VceAiPurpose::CodeDocumentEmbedding.as_str()));
         assert!(schema.contains(VceAiPurpose::CodePathEmbedding.as_str()));
-        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_batch_results"));
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_embedding_result_refs"));
         assert!(schema.contains("manifest_complete INTEGER NOT NULL DEFAULT 0"));
         assert!(schema.contains("revision INTEGER NOT NULL DEFAULT 1"));
         assert!(schema.contains("trg_vce_embedding_run_batches_touch_parent"));
@@ -2694,6 +2694,52 @@ mod tests {
             )
         );
         assert!(!isolated_a.is_read_only());
+        // Every child lookup used by file-level cascades must include the complete Blob foreign key.
+        // 文件级级联使用的每个子表查询必须覆盖完整 Blob 外键。
+        for (table, index) in [
+            ("vce_staged_chunks", "idx_vce_staged_chunk_blob"),
+            ("vce_staged_symbols", "idx_vce_staged_symbol_blob"),
+            ("vce_chunk_versions", "idx_vce_version_chunk_blob"),
+            ("vce_symbol_versions", "idx_vce_version_symbol_blob"),
+        ] {
+            // plan is produced by the real host SQLite planner, not inferred from index declarations.
+            // plan 来自真实宿主 SQLite 查询规划器，不从索引声明推断。
+            let plan: Vec<serde_json::Value> = isolated_a.data_plane.query_rows(
+                &format!("EXPLAIN QUERY PLAN SELECT rowid FROM {table} WHERE namespace_id = ? AND refresh_id = ? AND generation = ? AND blob_name = ?;"),
+                vec![super::sqlite_text("namespace"), super::sqlite_text("refresh"), SqliteValue::Integer(1), super::sqlite_text("blob")],
+            ).await.expect("inspect exact file cascade query");
+            assert!(
+                plan.iter().any(|row| {
+                    row["detail"].as_str().is_some_and(|detail| {
+                        detail.contains(index) && detail.contains("blob_name=?")
+                    })
+                }),
+                "{table}: {plan:?}"
+            );
+        }
+        // Inspect the production paging statement so a logically correct full-prefix scan cannot regress unnoticed.
+        // 检查生产分页语句，防止逻辑正确但反复扫描整个前缀的查询悄然回归。
+        let page_plan: Vec<serde_json::Value> = isolated_a
+            .data_plane
+            .query_rows(
+                &format!(
+                    "EXPLAIN QUERY PLAN {}",
+                    super::embedding_manifest_store::VCE_EMBEDDING_NODE_PAGE_SQL
+                ),
+                vec![
+                    super::sqlite_text("namespace"),
+                    super::sqlite_text("run"),
+                    SqliteValue::Integer(100),
+                ],
+            )
+            .await
+            .expect("inspect manifest keyset seek");
+        assert!(
+            page_plan.iter().any(|row| row["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("node_index>?"))),
+            "{page_plan:?}"
+        );
         // Recovery uses a distinct namespace so all following synthetic storage fixtures stay independent.
         // 恢复使用独立命名空间，使后续合成存储夹具保持独立。
         let recovery_index = factory
@@ -2754,10 +2800,34 @@ mod tests {
                     .len()
                     > 8 * 1024 * 1024
             );
-            isolated_b
-                .persist_embedding_manifest(large_manifest.clone())
+            // receipts captures real bounded writes, including files larger than one fragment page.
+            // receipts 捕获真实有界写入，包括大于一页分片的文件。
+            let receipts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<vulcan_context_engine::VceRefreshProgress>::new()));
+            // sink shares only progress records with the exact refresh observer.
+            // sink 仅与精确刷新观察器共享进度记录。
+            let sink = receipts.clone();
+            // control reports progress without changing index publication or provider behavior.
+            // control 报告进度，不改变索引发布或供应商行为。
+            let control = vulcan_context_engine::VceRefreshControl::default().with_observer(std::sync::Arc::new(move |progress| {
+                sink.lock().unwrap().push(progress);
+            }));
+            VceIndexPort::persist_embedding_manifest_observed(&isolated_b, large_manifest.clone(), control)
                 .await
                 .expect("persist large sharded manifest");
+            {
+                // observed must contain incremental whole-file completions and the exact relative paths.
+                // observed 必须包含递增的完整文件完成量与精确相对路径。
+                let observed = receipts.lock().unwrap();
+                assert!(observed.len() > 2);
+                assert!(observed.iter().all(|progress| progress.total == Some(large_manifest.nodes.len() as u64)
+                    && progress.overall_completed == 0
+                    && progress.unit == vulcan_context_engine::VceRefreshUnit::Files));
+                assert!(observed.windows(2).all(|pair| pair[0].completed <= pair[1].completed));
+                assert_eq!(observed.last().unwrap().completed, large_manifest.nodes.len() as u64);
+                assert!(observed.iter().any(|progress| progress.completed > 0 && progress.completed < large_manifest.nodes.len() as u64));
+                assert_eq!(observed.iter().filter_map(|progress| progress.current_path.as_deref()).collect::<BTreeSet<_>>(),
+                    large_manifest.nodes.iter().map(|node| node.path.as_str()).collect::<BTreeSet<_>>());
+            }
             assert_eq!(
                 isolated_b
                     .load_embedding_manifest(large_manifest.run_id.clone())
@@ -2768,9 +2838,9 @@ mod tests {
             // Node guards make accidental full-plan rewrites fail during lifecycle updates.
             // 节点保护使生命周期更新期间意外重写完整计划的行为直接失败。
             isolated_b.data_plane.execute(
-                "CREATE TRIGGER reject_manifest_node_insert BEFORE INSERT ON vce_embedding_run_node_chunks WHEN NEW.run_id = 'large-manifest-run' BEGIN SELECT RAISE(ABORT, 'node rewrite'); END;
-                 CREATE TRIGGER reject_manifest_node_delete BEFORE DELETE ON vce_embedding_run_node_chunks WHEN OLD.run_id = 'large-manifest-run' BEGIN SELECT RAISE(ABORT, 'node rewrite'); END;
-                 CREATE TRIGGER reject_manifest_node_update BEFORE UPDATE ON vce_embedding_run_node_chunks WHEN OLD.run_id = 'large-manifest-run' BEGIN SELECT RAISE(ABORT, 'node rewrite'); END;",
+                "CREATE TRIGGER reject_manifest_node_insert BEFORE INSERT ON vce_embedding_run_nodes WHEN NEW.run_id = 'large-manifest-run' BEGIN SELECT RAISE(ABORT, 'node rewrite'); END;
+                 CREATE TRIGGER reject_manifest_node_delete BEFORE DELETE ON vce_embedding_run_nodes WHEN OLD.run_id = 'large-manifest-run' BEGIN SELECT RAISE(ABORT, 'node rewrite'); END;
+                 CREATE TRIGGER reject_manifest_node_update BEFORE UPDATE ON vce_embedding_run_nodes WHEN OLD.run_id = 'large-manifest-run' BEGIN SELECT RAISE(ABORT, 'node rewrite'); END;",
                 Vec::new(), "guard immutable node shards",
             ).await.expect("guard immutable node shards");
             large_manifest
@@ -2929,7 +2999,7 @@ mod tests {
                 &large_manifest.batches[0].batch_id,
                 &[vulcan_context_engine::SegmentVector {
                     input_id: String::from("manifest-input-0"),
-                    values: vec![0.25, 0.75],
+                    values: vec![0.25, 0.75, 0.0],
                 }],
             );
             isolated_b
@@ -2950,7 +3020,7 @@ mod tests {
                 &large_manifest.batches[0].batch_id,
                 &[vulcan_context_engine::SegmentVector {
                     input_id: String::from("manifest-input-0"),
-                    values: vec![0.5, 0.5],
+                    values: vec![0.5, 0.5, 0.0],
                 }],
             );
             assert!(
@@ -3024,7 +3094,7 @@ mod tests {
                 ..large_manifest.clone()
             };
             isolated_b.data_plane.execute(
-                "CREATE TRIGGER reject_manifest_chunk BEFORE INSERT ON vce_embedding_run_node_chunks WHEN NEW.run_id = 'interrupted-manifest-run' AND NEW.chunk_index = 1 BEGIN SELECT RAISE(ABORT, 'injected partial plan failure'); END;",
+                "CREATE TRIGGER reject_manifest_chunk BEFORE INSERT ON vce_embedding_run_nodes WHEN NEW.run_id = 'interrupted-manifest-run' BEGIN SELECT RAISE(ABORT, 'injected partial plan failure'); END;",
                 Vec::new(), "inject first-plan interruption",
             ).await.expect("inject first-plan interruption");
             assert!(isolated_b.persist_embedding_manifest(interrupted_manifest.clone()).await.is_err());
@@ -6513,6 +6583,132 @@ mod tests {
         }
     }
 
+    /// Measure real storage for 3,398 synthetic files and a repeated rebuild without network calls.
+    /// 对 3,398 个合成文件及重复重建测量真实存储，不发起网络调用。
+    /// Explicit opt-in keeps the scale fixture out of routine correctness tests.
+    /// 显式选择执行，避免规模夹具进入常规正确性测试。
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "run explicitly for shared storage scale measurements"]
+    async fn shared_storage_scale_baseline() {
+        // Every physical store belongs to this disposable fixture.
+        // 全部物理存储归属于此可丢弃夹具。
+        let temporary = tempdir().unwrap();
+        let data_root = temporary.path().join("data");
+        let project_root = temporary.path().join("project");
+        fs::create_dir_all(&data_root).unwrap();
+        fs::create_dir_all(&project_root).unwrap();
+        let metadata_path = data_root.join("host.sqlite3");
+        let host = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root,
+            sqlite_path: metadata_path.clone(),
+            sqlite_binding_id: format!("vce-scale-{}", Uuid::new_v4()),
+            system_statistics_sqlite_path: metadata_path,
+            system_statistics_sqlite_binding_id: format!("vce-scale-statistics-{}", Uuid::new_v4()),
+        });
+        let factory = bootstrap_vce_data_plane(&host).await.unwrap();
+        let index = factory
+            .create_project_index(test_project_config("scale", &project_root, 1))
+            .await
+            .unwrap();
+        let config = VceConfig::new(
+            index.binding().checkpoint_chain_id.clone(),
+            index.binding().embedding_space.clone(),
+        )
+        .unwrap();
+        let mut engine = VceEngine::new(config).unwrap();
+        // Source size and vector dimensions are synthetic; timings exclude real provider latency.
+        // 源码大小和向量维度为合成数据；耗时不包含真实供应商延迟。
+        let files = (0..3398)
+            .map(|number| {
+                FileObservation::present(
+                    format!("src/file_{number}.rs"),
+                    format!("pub fn value_{number}() -> usize {{ {number} }}\n"),
+                    Some(1),
+                    FileSource::Filesystem,
+                )
+            })
+            .collect::<Vec<_>>();
+        for round in 0..2 {
+            let ai = deterministic_ai_for(&index);
+            let mut request = RefreshRequest::full(
+                format!("scale-{round}"),
+                RefreshReason::Initial,
+                files.clone(),
+                Some("scale-source".into()),
+            );
+            request.force_reindex = true;
+            // Attribute elapsed wall time to the last observed phase without modifying production state.
+            // 将墙钟耗时归于最后观察的阶段，不修改生产状态。
+            let phases = Arc::new(std::sync::Mutex::new((
+                std::time::Instant::now(),
+                String::from("admission"),
+                BTreeMap::<String, u128>::new(),
+            )));
+            let observed = phases.clone();
+            let control = vulcan_context_engine::VceRefreshControl::default().with_observer(
+                Arc::new(move |progress: vulcan_context_engine::VceRefreshProgress| {
+                    let mut measurements = observed.lock().unwrap();
+                    let key = format!(
+                        "{:?}/{:?}",
+                        progress.phase,
+                        progress.activity.as_ref().map(|activity| activity.stage)
+                    );
+                    if key != measurements.1 {
+                        let elapsed = measurements.0.elapsed().as_micros();
+                        let previous = measurements.1.clone();
+                        *measurements.2.entry(previous).or_default() += elapsed;
+                        measurements.0 = std::time::Instant::now();
+                        measurements.1 = key;
+                    }
+                }),
+            );
+            let started = std::time::Instant::now();
+            let result = engine
+                .refresh_observed(request, &index, &ai, &NoReadSource, &control)
+                .await
+                .unwrap();
+            assert_eq!(result.indexed_blobs.len(), 3398);
+            let calls = ai.embedding_requests.lock().unwrap().len();
+            if round == 1 {
+                assert_eq!(
+                    calls, 0,
+                    "unchanged rebuild must reuse all provider results"
+                );
+            }
+            let plane = index.data_plane.clone();
+            let sizes = crate::local_sql::with_connection_async(
+                &plane.local_runtime,
+                &plane.sqlite_binding,
+                |connection| {
+                    let payload: i64 = connection
+                        .query_row(
+                            "SELECT sum(byte_size) FROM vce_shared_payloads",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    let pages: i64 = connection
+                        .query_row("PRAGMA page_count", [], |row| row.get(0))
+                        .map_err(|error| error.to_string())?;
+                    let free: i64 = connection
+                        .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+                        .map_err(|error| error.to_string())?;
+                    Ok((payload, pages, free))
+                },
+            )
+            .await
+            .unwrap();
+            println!(
+                "VCE_SHARED_SCALE round={round} files=3398 total_ms={} provider_calls={calls} shared_payload_bytes={} sqlite_pages={} free_pages={} phases_us={:?}",
+                started.elapsed().as_millis(),
+                sizes.0,
+                sizes.1,
+                sizes.2,
+                phases.lock().unwrap().2
+            );
+        }
+    }
+
     /// Verify a fresh engine resumes a persisted plan after a future is dropped mid-provider call.
     /// 验证供应商调用期间 Future 被丢弃后，新引擎能够恢复持久化计划。
     ///
@@ -6583,7 +6779,7 @@ mod tests {
         let mut resumed = VceEngine::new(config).expect("fresh recovery engine");
         let resumed_ai = deterministic_ai_for(index);
         let result = resumed
-            .refresh(request, index, &resumed_ai, &NoReadSource)
+            .refresh(request.clone(), index, &resumed_ai, &NoReadSource)
             .await
             .expect("resume durable manifest and publish");
         assert_eq!(result.indexed_blobs.len(), 3);
@@ -6611,6 +6807,21 @@ mod tests {
                     .lock()
                     .expect("read original requests")[0]
             )
+        );
+        drop(requests);
+        // A new forced run must reuse exact successful vectors instead of repeating provider requests.
+        // 新的强制运行必须复用精确成功向量，而非重复供应商请求。
+        let mut retry = request;
+        retry.request_id = String::from("cross-run-reuse");
+        retry.force_reindex = true;
+        let cached_ai = deterministic_ai_for(index);
+        resumed
+            .refresh(retry, index, &cached_ai, &NoReadSource)
+            .await
+            .expect("rebuild through shared preparation and results");
+        assert!(
+            cached_ai.embedding_requests.lock().unwrap().is_empty(),
+            "a repeated unchanged rebuild must make no embedding calls"
         );
     }
 
@@ -7139,7 +7350,45 @@ impl VceDataPlaneHandle {
             .await
             .map_err(|error| format!("初始化 VCE 数据结构失败：{error}"))?;
         }
+        // Migrate old source copies before any manifest reader can observe mixed storage layouts.
+        // 在任何清单读取者观察到混合存储布局之前迁移旧源码副本。
+        local_sql::with_connection_async(&self.local_runtime, &self.sqlite_binding, |connection| {
+            // Existing databases receive the same additive structures before one-way conversion.
+            // 已有数据库在单向转换前获得相同的增量结构。
+            connection
+                .execute_batch(&format!(
+                    "{}{}{}",
+                    shared_artifacts::SCHEMA,
+                    shared_manifest_store::SCHEMA,
+                    shared_result_store::SCHEMA
+                ))
+                .map_err(|error| error.to_string())?;
+            shared_manifest_store::migrate_nodes(connection)
+        })
+        .await
+        .map_err(|error| format!("迁移 VCE 共享准备材料失败：{error}"))?;
+        local_sql::with_connection_async(
+            &self.local_runtime,
+            &self.sqlite_binding,
+            shared_result_store::migrate,
+        )
+        .await
+        .map_err(|error| format!("迁移 VCE 共享向量结果失败：{error}"))?;
+        local_sql::with_connection_async(
+            &self.local_runtime,
+            &self.sqlite_binding,
+            read_generations::migrate_symbol_bodies,
+        )
+        .await
+        .map_err(|error| format!("迁移 VCE 符号正文引用失败：{error}"))?;
         self.reconcile_publication_intents().await?;
+        // Reopening also reclaims settled historical work; unknown remote tasks and active jobs stay pinned.
+        // 重新打开时也回收已结束历史工作；未知远端任务和活动作业仍被固定保留。
+        local_sql::with_connection_async(&self.local_runtime, &self.sqlite_binding, |connection| {
+            artifact_retention::collect(connection, "")
+        })
+        .await
+        .map_err(|error| format!("回收 VCE 过期运行材料失败：{error}"))?;
         Ok(())
     }
 
@@ -8110,19 +8359,8 @@ CREATE TABLE IF NOT EXISTS vce_embedding_runs (
 CREATE INDEX IF NOT EXISTS idx_vce_embedding_runs_recent
 ON vce_embedding_runs(namespace_id, updated_at_unix_ms DESC, run_id);
 
-CREATE TABLE IF NOT EXISTS vce_embedding_run_node_chunks (
-    namespace_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    node_index INTEGER NOT NULL CHECK(node_index >= 0),
-    chunk_index INTEGER NOT NULL CHECK(chunk_index >= 0),
-    blob_name TEXT NOT NULL CHECK(length(trim(blob_name)) > 0 AND length(blob_name) <= 8192),
-    node_json_chunk TEXT NOT NULL CHECK(length(CAST(node_json_chunk AS BLOB)) BETWEEN 1 AND 32768),
-    PRIMARY KEY(namespace_id, run_id, node_index, chunk_index),
-    FOREIGN KEY(namespace_id, run_id)
-        REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_vce_embedding_run_node_chunks_order
-ON vce_embedding_run_node_chunks(namespace_id, run_id, node_index, chunk_index);
+{shared_artifact_schema}
+{shared_manifest_schema}
 
 CREATE TABLE IF NOT EXISTS vce_embedding_run_reused_blobs (
     namespace_id TEXT NOT NULL,
@@ -8184,16 +8422,7 @@ BEGIN
       AND layout_version = 2 AND manifest_complete = 1;
 END;
 
-CREATE TABLE IF NOT EXISTS vce_embedding_batch_results (
-    namespace_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    batch_id TEXT NOT NULL,
-    result_json TEXT NOT NULL,
-    updated_at_unix_ms INTEGER NOT NULL,
-    PRIMARY KEY(namespace_id, run_id, batch_id),
-    FOREIGN KEY(namespace_id, run_id)
-        REFERENCES vce_embedding_runs(namespace_id, run_id) ON DELETE CASCADE
-);
+{shared_result_schema}
 
 CREATE TABLE IF NOT EXISTS vce_staged_blobs (
     namespace_id TEXT NOT NULL,
@@ -8250,13 +8479,18 @@ CREATE TABLE IF NOT EXISTS vce_staged_symbols (
     end_line INTEGER NOT NULL,
     start_char_offset INTEGER NOT NULL,
     chunk_id TEXT NOT NULL,
-    content TEXT NOT NULL,
     kind TEXT NOT NULL,
     PRIMARY KEY(namespace_id, refresh_id, generation, occurrence_id),
     FOREIGN KEY(namespace_id, refresh_id, generation, blob_name)
         REFERENCES vce_staged_blobs(namespace_id, refresh_id, generation, blob_name) ON DELETE CASCADE
 );
 
+-- Cascade cleanup must locate one exact file instead of scanning its entire generation for every parent.
+-- 级联清理必须定位单个精确文件，避免为每个父记录扫描整个代次。
+CREATE INDEX IF NOT EXISTS idx_vce_staged_chunk_blob
+ON vce_staged_chunks(namespace_id, refresh_id, generation, blob_name);
+CREATE INDEX IF NOT EXISTS idx_vce_staged_symbol_blob
+ON vce_staged_symbols(namespace_id, refresh_id, generation, blob_name);
 
 CREATE TABLE IF NOT EXISTS vce_operations (
     namespace_id TEXT NOT NULL,
@@ -8303,6 +8537,9 @@ ON vce_vector_cleanup(namespace_id, state, created_at_unix_ms, cleanup_id);
         read_schema = read_generations::read_generation_schema_script(),
         origin_schema = embedding_provenance::embedding_origin_schema_script(),
         initial_schema = initial_allocation::initial_allocation_schema_script(),
+        shared_artifact_schema = shared_artifacts::SCHEMA,
+        shared_manifest_schema = shared_manifest_store::SCHEMA,
+        shared_result_schema = shared_result_store::SCHEMA,
     )
 }
 
@@ -8433,6 +8670,25 @@ impl VceIndexPort for VceProjectIndex {
         Box::pin(async move { index.persist_embedding_manifest(manifest).await })
     }
 
+    /// Persist a plan with file-level receipts from the actual bounded storage writes.
+    /// 持久化计划，并从真实的有界存储写入报告文件级回执。
+    /// `manifest` owns the plan; `control` receives progress. Returns the final persistence result.
+    /// `manifest` 持有计划；`control` 接收进度。返回最终持久化结果。
+    fn persist_embedding_manifest_observed(
+        &self,
+        manifest: VceEmbeddingRunManifest,
+        control: vulcan_context_engine::VceRefreshControl,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        // index preserves the exact storage lifetime across asynchronous writes.
+        // index 在异步写入期间保留精确存储生命周期。
+        let index = self.clone();
+        Box::pin(async move {
+            index
+                .persist_embedding_manifest_sharded_observed(manifest, Some(&control))
+                .await
+        })
+    }
+
     /// Loads one exact durable embedding manifest for host recovery.
     /// 为宿主恢复读取一份精确的持久化向量清单。
     fn load_embedding_manifest(
@@ -8441,6 +8697,18 @@ impl VceIndexPort for VceProjectIndex {
     ) -> VceFuture<Result<Option<VceEmbeddingRunManifest>, VcePortError>> {
         let index = self.clone();
         Box::pin(async move { index.load_embedding_manifest(run_id).await })
+    }
+
+    /// Read bounded run metadata without reloading frozen source bodies.
+    /// 读取有界运行元数据，不重新加载冻结源码正文。
+    /// Run identity selects the exact optional generation and lifecycle.
+    /// 运行身份选择精确的可选代次与生命周期。
+    fn load_embedding_run_summary(
+        &self,
+        run_id: String,
+    ) -> VceFuture<Result<Option<(u64, VceEmbeddingRunState)>, VcePortError>> {
+        let index = self.clone();
+        Box::pin(async move { index.load_embedding_run_summary_sharded(run_id).await })
     }
 
     /// Persists one run lifecycle transition without rewriting frozen source-node shards.
@@ -8502,6 +8770,77 @@ impl VceIndexPort for VceProjectIndex {
             index
                 .load_embedding_remote_batch_records(run_id, purpose)
                 .await
+        })
+    }
+
+    /// Load a bounded group of exact prepared artifacts, validating the producing analyzer.
+    /// 读取一组有界精确准备材料，校验生产分析器。
+    /// Contract, Blob IDs and generation select compatible snapshots; returns matching nodes only.
+    /// 契约、Blob ID 与代次选择兼容快照；仅返回匹配节点。
+    fn load_prepared_artifacts(
+        &self,
+        contract: vulcan_context_engine::VceEmbeddingRunContract,
+        blobs: Vec<String>,
+        analyzer_id: String,
+        generation: u64,
+    ) -> VceFuture<Result<Vec<vulcan_context_engine::VceCodeNodeSnapshot>, VcePortError>> {
+        // Owned storage handle survives the blocking connection boundary.
+        // 拥有的存储句柄跨越阻塞连接边界。
+        let plane = self.data_plane.clone();
+        Box::pin(async move {
+            local_sql::with_connection_async(&plane.local_runtime,&plane.sqlite_binding,move |connection| {
+                use rusqlite::OptionalExtension;
+                let key = shared_manifest_store::preparation_identity(&contract)?;
+                let mut nodes = Vec::new();
+                let mut lookup = connection.prepare_cached("SELECT artifact_hash FROM vce_prepared_artifact_cache WHERE contract_hash=? AND blob_name=?").map_err(|error|error.to_string())?;
+                for blob in blobs {
+                    let artifact: Option<String> = lookup.query_row(rusqlite::params![key,blob],|row|row.get(0)).optional().map_err(|error|error.to_string())?;
+                    if let Some(artifact) = artifact {
+                        let node = shared_manifest_store::restore_node(connection,&artifact,&blob,generation)?;
+                        if node.structure_analyzer_id.as_deref() == Some(analyzer_id.as_str()) && node.structure_fallback_reason.is_none() { nodes.push(node); }
+                    }
+                }
+                Ok(nodes)
+            }).await.map_err(|error|port_failed(VcePortOperation::EmbeddingManifest,error))
+        })
+    }
+
+    /// Adopt compatible vectors for an active run before it owns remote tasks.
+    /// 在活动运行持有远端任务前接纳兼容向量。
+    /// Run and batch identify the frozen request; returns owned vectors or absence.
+    /// 运行和批次标识冻结请求；返回已归属向量或空值。
+    fn reuse_embedding_batch_result(
+        &self,
+        run_id: String,
+        batch_id: String,
+    ) -> VceFuture<Result<Option<VceEmbeddingBatchResult>, VcePortError>> {
+        // Exact frozen batch ownership is checked again inside the transaction.
+        // 在事务中再次核对精确冻结批次归属。
+        let index = self.clone();
+        Box::pin(async move {
+            if index.read_view.is_some() {
+                return Err(port_rejected(
+                    VcePortOperation::EmbeddingManifest,
+                    "Pinned views cannot adopt results",
+                ));
+            }
+            let batch = index
+                .load_published_embedding_batch(&run_id, &batch_id)
+                .await?;
+            let namespace = index.binding.namespace_id.clone();
+            let now = current_unix_epoch_millis_i64()
+                .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
+            local_sql::with_connection_async(&index.data_plane.local_runtime,&index.data_plane.sqlite_binding,move |connection| {
+                // Do not replace an existing remote task with a cache hit; reconcile its durable lifecycle.
+                // 不以缓存命中替代已有远端任务；应对账其持久生命周期。
+                let transaction = connection.transaction().map_err(|error| error.to_string())?;
+                let active: bool = transaction.query_row("SELECT state='running' AND manifest_complete=1 FROM vce_embedding_runs WHERE namespace_id=? AND run_id=?", rusqlite::params![namespace,run_id], |row| row.get(0)).map_err(|error| error.to_string())?;
+                let remote: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM vce_embedding_remote_batches WHERE namespace_id=? AND run_id=? AND purpose=?)",rusqlite::params![namespace,run_id,batch.purpose],|row|row.get(0)).map_err(|error|error.to_string())?;
+                if !active || remote { return Ok(None); }
+                let result = shared_result_store::reuse(&transaction,&namespace,&run_id,&batch,now)?;
+                transaction.commit().map_err(|error|error.to_string())?;
+                Ok(result)
+            }).await.map_err(|error|port_failed(VcePortOperation::EmbeddingManifest,error))
         })
     }
 
@@ -9054,39 +9393,26 @@ impl VceProjectIndex {
                 "embedding batch result does not cover its frozen request",
             ));
         }
-        let result_json = serde_json::to_string(&result).map_err(|error| {
-            port_invalid(VcePortOperation::EmbeddingManifest, error.to_string())
-        })?;
         let now = current_unix_epoch_millis_i64()
             .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
         // A result is immutable once inserted; exact replays reconcile an ambiguous write response.
         // 结果一旦插入即不可变；精确重放用于收敛结果不明确的写入响应。
-        let write_error = self
-            .data_plane
-            .execute(
-                r#"INSERT INTO vce_embedding_batch_results(
-                       namespace_id, run_id, batch_id, result_json, updated_at_unix_ms
-                   )
-                   SELECT ?, ?, ?, ?, ?
-                   WHERE EXISTS(
-                       SELECT 1 FROM vce_embedding_runs
-                       WHERE namespace_id = ? AND run_id = ?
-                         AND state = 'running' AND manifest_complete = 1
-                   )
-                   ON CONFLICT(namespace_id, run_id, batch_id) DO NOTHING;"#,
-                vec![
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(&run_id),
-                    sqlite_text(&result.batch_id),
-                    sqlite_text(&result_json),
-                    SqliteValue::Integer(now),
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(&run_id),
-                ],
-                "Persist VCE embedding batch result",
-            )
-            .await
-            .err();
+        let namespace = self.binding.namespace_id.clone();
+        // Move one immutable request/result pair across the blocking database boundary.
+        // 将一对不可变请求和结果移交到阻塞数据库边界。
+        let owned_run = run_id.clone();
+        let owned_result = result.clone();
+        let write_error = local_sql::with_connection_async(
+            &self.data_plane.local_runtime, &self.data_plane.sqlite_binding,
+            move |connection| {
+                // Admission and all shared references commit together.
+                // 准入和全部共享引用一同提交。
+                let transaction = connection.transaction().map_err(|error| error.to_string())?;
+                let active: bool = transaction.query_row("SELECT state='running' AND manifest_complete=1 FROM vce_embedding_runs WHERE namespace_id=? AND run_id=?", rusqlite::params![namespace,owned_run], |row| row.get(0)).map_err(|error| error.to_string())?;
+                if active { shared_result_store::store(&transaction,&namespace,&owned_run,&batch,&owned_result,now)?; }
+                transaction.commit().map_err(|error| error.to_string())
+            },
+        ).await.err();
         let stored = self
             .load_embedding_batch_result(run_id, result.batch_id.clone())
             .await;
@@ -9131,40 +9457,13 @@ impl VceProjectIndex {
         {
             return Err(port_rejected(
                 VcePortOperation::EmbeddingManifest,
-                "embedding batch result identity is empty or exceeds its bound",
+                "embedding result identity is invalid",
             ));
         }
         self.require_published_embedding_batch(&run_id, &batch_id)
             .await?;
-        let rows: Vec<EmbeddingBatchResultRow> = self
-            .data_plane
-            .query_rows(
-                "SELECT result_json FROM vce_embedding_batch_results WHERE namespace_id = ? AND run_id = ? AND batch_id = ? LIMIT 1;",
-                vec![
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(&run_id),
-                    sqlite_text(&batch_id),
-                ],
-            )
+        self.load_embedding_result_for_transition(&run_id, &batch_id)
             .await
-            .map_err(|error| port_failed(VcePortOperation::EmbeddingManifest, error))?;
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        let result =
-            serde_json::from_str::<VceEmbeddingBatchResult>(&row.result_json).map_err(|error| {
-                port_invalid(VcePortOperation::EmbeddingManifest, error.to_string())
-            })?;
-        result
-            .validate()
-            .map_err(|error| port_invalid(VcePortOperation::EmbeddingManifest, error))?;
-        if result.batch_id != batch_id {
-            return Err(port_invalid(
-                VcePortOperation::EmbeddingManifest,
-                "persisted embedding batch result identity disagrees with its lookup",
-            ));
-        }
-        Ok(Some(result))
     }
 
     /// Retry only cleanup already authorized by a durable abort or retirement transaction.
@@ -9557,11 +9856,9 @@ impl VceProjectIndex {
         self.submit_prepared_vector_rows(prepared_paths)
             .await
             .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
-        for blob in &request.blobs {
-            self.replace_staged_blob(blob, &request.refresh_id)
-                .await
-                .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
-        }
+        self.replace_staged_blob(&request.blobs, &request.refresh_id)
+            .await
+            .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
         let staged_count = u64::try_from(staged_blob_names.len()).unwrap_or(u64::MAX);
         // The bounded storage call finished; only the host receipt owns the continuing refresh job.
         // 有界存储调用已经结束；只有宿主回执持有仍在继续的刷新作业。
@@ -10163,10 +10460,12 @@ impl VceProjectIndex {
             // sql 在不接纳范围外行的同时保持精确符号排序确定性。
             let sql = format!(
                 r#"SELECT s.occurrence_id, s.identifier, s.blob_name, s.path, s.start_line, s.end_line,
-                          s.start_char_offset, s.chunk_id, s.content, s.kind
+                          s.start_char_offset, s.chunk_id, c.content, s.kind
                    FROM vce_symbol_versions s JOIN vce_read_members m
                    ON m.namespace_id = s.namespace_id AND m.refresh_id = s.refresh_id
                      AND m.generation = s.generation AND m.blob_name = s.blob_name
+                   JOIN vce_chunk_versions c ON c.namespace_id=s.namespace_id AND c.refresh_id=s.refresh_id
+                     AND c.generation=s.generation AND c.chunk_id=s.chunk_id AND c.blob_name=s.blob_name
                    WHERE m.namespace_id = ? AND m.checkpoint_version = ?
                      AND s.identifier = ? AND m.blob_name IN ({allowed_blob_placeholders})
                    ORDER BY CASE s.kind WHEN 'endpoint' THEN 0 WHEN 'definition' THEN 1 ELSE 2 END,
@@ -10450,6 +10749,14 @@ impl VceProjectIndex {
         prepared: PreparedVectorRows,
     ) -> Result<(), String> {
         for data in prepared.batches {
+            // The exact row identity index prevents each small file batch from scanning all previous vectors.
+            // 精确行身份索引避免每个小文件批次扫描此前全部向量。
+            self.data_plane
+                .vector_engine()
+                .await?
+                .maintain_merge_key_index(&prepared.table_name, "row_id")
+                .await
+                .map_err(|error| error.to_string())?;
             self.data_plane
                 .vector_engine()
                 .await?
@@ -10470,119 +10777,51 @@ impl VceProjectIndex {
         Ok(())
     }
 
-    /// Replaces one Blob's staged relational records idempotently.
-    /// 幂等替换一个 Blob 的暂存关系记录。
+    /// Replace a bounded batch of staged Blob records atomically and idempotently.
+    /// 原子且幂等地替换有界批次的暂存 Blob 关系记录。
+    /// Files belong to the given refresh; returns after all related rows commit together.
+    /// 文件归属于指定刷新；全部关联行一同提交后返回。
     async fn replace_staged_blob(
         &self,
-        blob: &IndexedBlob,
+        blobs: &[IndexedBlob],
         refresh_id: &str,
     ) -> Result<(), String> {
-        self.data_plane
-            .execute(
-                r#"DELETE FROM vce_staged_blobs
-                   WHERE namespace_id = ? AND refresh_id = ? AND generation = ? AND blob_name = ?;"#,
-                vec![
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(refresh_id),
-                    sqlite_u64(blob.generation, "VCE generation")
-                        .map_err(|error| error.to_string())?,
-                    sqlite_text(&blob.blob_name),
-                ],
-                "清理 VCE 旧暂存 Blob 失败",
-            )
-            .await?;
-        let (path_status, path_error) = auxiliary_status_fields(&blob.path_status);
-        let (symbol_status, symbol_error) = auxiliary_status_fields(&blob.symbol_status);
-        let (status, status_reason) = indexed_status_fields(&blob.status);
-        self.data_plane
-            .execute(
-                r#"INSERT INTO vce_staged_blobs(
-                    namespace_id, refresh_id, generation, blob_name, path,
-                    structure_analyzer_id, structure_mode, structure_fallback_reason,
-                    path_document, path_status, path_error, symbol_status, symbol_error,
-                    status, status_reason, chunk_count, vector_count, symbol_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
-                vec![
-                    sqlite_text(&self.binding.namespace_id),
-                    sqlite_text(refresh_id),
-                    sqlite_u64(blob.generation, "VCE generation")
-                        .map_err(|error| error.to_string())?,
-                    sqlite_text(&blob.blob_name),
-                    sqlite_text(&blob.path),
-                    sqlite_optional_text(blob.structure_analyzer_id.as_deref()),
-                    sqlite_optional_text(blob.structure_mode.map(structure_mode_text)),
-                    sqlite_optional_text(blob.structure_fallback_reason.as_deref()),
-                    sqlite_optional_text(
-                        blob.path_document
-                            .as_ref()
-                            .map(|item| item.document.as_str()),
-                    ),
-                    sqlite_text(path_status),
-                    sqlite_optional_text(path_error),
-                    sqlite_text(symbol_status),
-                    sqlite_optional_text(symbol_error),
-                    sqlite_text(status),
-                    sqlite_optional_text(status_reason),
-                    sqlite_usize(blob.chunks.len(), "VCE chunk count")
-                        .map_err(|error| error.to_string())?,
-                    sqlite_usize(
-                        blob.embedding_vectors.len() + usize::from(blob.path_embedding.is_some()),
-                        "VCE vector count",
-                    )
-                    .map_err(|error| error.to_string())?,
-                    sqlite_usize(blob.symbols.len(), "VCE symbol count")
-                        .map_err(|error| error.to_string())?,
-                ],
-                "写入 VCE 暂存 Blob 失败",
-            )
-            .await?;
-        let vector_ids = blob
-            .embedding_vectors
-            .iter()
-            .map(|vector| vector.input_id.as_str())
-            .collect::<BTreeSet<_>>();
-        self.data_plane
-            .execute_batch(
-                r#"INSERT INTO vce_staged_chunks(
-                    namespace_id, refresh_id, generation, blob_name, chunk_id, content_hash,
-                    path, content, start_line, end_line, start_char_offset, kind, vector_ready
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
-                blob.chunks
-                    .iter()
-                    .map(|chunk| {
-                        staged_chunk_params(
-                            &self.binding.namespace_id,
-                            refresh_id,
-                            blob.generation,
-                            chunk,
-                            vector_ids.contains(chunk.chunk_id.as_str()),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-                "写入 VCE 暂存 Chunk 失败",
-            )
-            .await?;
-        self.data_plane
-            .execute_batch(
-                r#"INSERT INTO vce_staged_symbols(
-                    namespace_id, refresh_id, generation, blob_name, occurrence_id, identifier,
-                    path, start_line, end_line, start_char_offset, chunk_id, content, kind
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
-                blob.symbols
-                    .iter()
-                    .map(|symbol| {
-                        staged_symbol_params(
-                            &self.binding.namespace_id,
-                            refresh_id,
-                            blob.generation,
-                            symbol,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-                "写入 VCE 暂存符号失败",
-            )
-            .await?;
-        Ok(())
+        // One bounded stage batch owns one connection and one atomic relational transaction.
+        // 一个有界暂存批次持有一个连接与一个原子关系事务。
+        let blobs = blobs.to_vec();
+        let namespace = self.binding.namespace_id.clone();
+        let refresh = refresh_id.to_owned();
+        local_sql::with_connection_async(&self.data_plane.local_runtime,&self.data_plane.sqlite_binding,move |connection| {
+            let transaction = connection.transaction().map_err(|error|error.to_string())?;
+            {
+                // Prepared statements are reused across files, chunks and symbols.
+                // 在文件、代码块与符号之间复用预编译语句。
+                let mut delete = transaction.prepare_cached("DELETE FROM vce_staged_blobs WHERE namespace_id=? AND refresh_id=? AND generation=? AND blob_name=?").map_err(|error|error.to_string())?;
+                let mut insert_blob = transaction.prepare_cached("INSERT INTO vce_staged_blobs(namespace_id,refresh_id,generation,blob_name,path,structure_analyzer_id,structure_mode,structure_fallback_reason,path_document,path_status,path_error,symbol_status,symbol_error,status,status_reason,chunk_count,vector_count,symbol_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").map_err(|error|error.to_string())?;
+                let mut insert_chunk = transaction.prepare_cached("INSERT INTO vce_staged_chunks(namespace_id,refresh_id,generation,blob_name,chunk_id,content_hash,path,content,start_line,end_line,start_char_offset,kind,vector_ready) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").map_err(|error|error.to_string())?;
+                let mut insert_symbol = transaction.prepare_cached("INSERT INTO vce_staged_symbols(namespace_id,refresh_id,generation,blob_name,occurrence_id,identifier,path,start_line,end_line,start_char_offset,chunk_id,kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").map_err(|error|error.to_string())?;
+                for blob in &blobs {
+                    let generation = i64::try_from(blob.generation).map_err(|error|error.to_string())?;
+                    let (path_status,path_error) = auxiliary_status_fields(&blob.path_status);
+                    let (symbol_status,symbol_error) = auxiliary_status_fields(&blob.symbol_status);
+                    let (status,status_reason) = indexed_status_fields(&blob.status);
+                    delete.execute(rusqlite::params![namespace,refresh,generation,blob.blob_name]).map_err(|error|error.to_string())?;
+                    insert_blob.execute(rusqlite::params![namespace,refresh,generation,blob.blob_name,blob.path,blob.structure_analyzer_id,blob.structure_mode.map(structure_mode_text),blob.structure_fallback_reason,blob.path_document.as_ref().map(|document|document.document.as_str()),path_status,path_error,symbol_status,symbol_error,status,status_reason,blob.chunks.len() as i64,(blob.embedding_vectors.len()+usize::from(blob.path_embedding.is_some())) as i64,blob.symbols.len() as i64]).map_err(|error|error.to_string())?;
+                    // Membership is built once per file; no per-row database lookup is needed.
+                    // 每文件只构建一次成员集合；无需逐行数据库检索。
+                    let vector_ids = blob.embedding_vectors.iter().map(|vector|vector.input_id.as_str()).collect::<BTreeSet<_>>();
+                    for chunk in &blob.chunks {
+                        let parameters = staged_chunk_params(&namespace,&refresh,blob.generation,chunk,vector_ids.contains(chunk.chunk_id.as_str()))?;
+                        insert_chunk.execute(rusqlite::params_from_iter(parameters.iter())).map_err(|error|error.to_string())?;
+                    }
+                    for symbol in &blob.symbols {
+                        let parameters = staged_symbol_params(&namespace,&refresh,blob.generation,symbol)?;
+                        insert_symbol.execute(rusqlite::params_from_iter(parameters.iter())).map_err(|error|error.to_string())?;
+                    }
+                }
+            }
+            transaction.commit().map_err(|error|error.to_string())
+        }).await
     }
 
     /// Validates checkpoint identity and membership before storage mutation.
@@ -10838,9 +11077,9 @@ SELECT namespace_id, refresh_id, generation, blob_name, chunk_id, content_hash, 
 FROM vce_staged_chunks WHERE namespace_id = '{namespace}' AND refresh_id = '{refresh_id}' AND generation = {generation};
 INSERT OR ROLLBACK INTO vce_symbol_versions(
  namespace_id, refresh_id, generation, blob_name, occurrence_id, identifier, path, start_line,
- end_line, start_char_offset, chunk_id, content, kind)
+ end_line, start_char_offset, chunk_id, kind)
 SELECT namespace_id, refresh_id, generation, blob_name, occurrence_id, identifier, path, start_line,
- end_line, start_char_offset, chunk_id, content, kind
+ end_line, start_char_offset, chunk_id, kind
 FROM vce_staged_symbols WHERE namespace_id = '{namespace}' AND refresh_id = '{refresh_id}' AND generation = {generation};
 {retained_clause}
 INSERT OR ROLLBACK INTO vce_read_members(namespace_id, checkpoint_version, blob_name, refresh_id, generation)

@@ -355,12 +355,15 @@ pub fn validate_structure_analysis(
         source_identity.get_or_insert(identity);
     }
     let mut occurrence_ids = BTreeSet::new();
+    // Resolve chunk ownership once rather than linearly rescanning all chunks for every symbol.
+    // 一次构建代码块归属，避免每个符号都线性重扫全部代码块。
+    let chunks_by_id = analysis
+        .chunks
+        .iter()
+        .map(|chunk| (chunk.chunk_id.as_str(), chunk))
+        .collect::<std::collections::BTreeMap<_, _>>();
     for symbol in &analysis.symbols {
-        let Some(chunk) = analysis
-            .chunks
-            .iter()
-            .find(|chunk| chunk.chunk_id == symbol.chunk_id)
-        else {
+        let Some(chunk) = chunks_by_id.get(symbol.chunk_id.as_str()) else {
             return Err(StructureError::AnalysisFailed {
                 message: format!(
                     "symbol occurrence `{}` references an unknown Chunk",

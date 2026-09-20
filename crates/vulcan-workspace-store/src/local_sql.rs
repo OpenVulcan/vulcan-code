@@ -254,6 +254,33 @@ pub async fn execute_batch_async(
         .map_err(render_boundary_failure)
 }
 
+/// Run a bounded multi-statement operation with one connection and one physical database gate.
+/// 使用一个连接和一道物理数据库闸门执行有界多语句操作。
+/// `runtime` and `target` identify the database; `body` owns its inputs and may start a transaction.
+/// `runtime` 和 `target` 标识数据库；`body` 持有输入且可开启事务。返回操作结果或明确错误。
+pub async fn with_connection_async<T: Send + 'static>(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    body: impl FnOnce(&mut rusqlite::Connection) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    // Resolve the same canonical gate used by ordinary reads, writes and shutdown.
+    // 解析普通读取、写入与关闭共同使用的规范闸门。
+    let target = target.into();
+    // Preserve the physical identity before moving the owned target into the blocking call.
+    // 在将目标所有权移入阻塞调用之前保留物理身份。
+    let key = target.key(runtime.as_ref())?;
+    // Retain the runtime while the blocking operation owns its connection.
+    // 阻塞操作持有连接期间保留运行时。
+    let shared = Arc::clone(runtime);
+    runtime
+        .boundary()
+        .run(key, move || {
+            with_connection(shared.as_ref(), target.as_target(), body)
+        })
+        .await
+        .map_err(render_boundary_failure)
+}
+
 /// Runs ordered scripts and one parameterized terminal statement atomically on the blocking boundary.
 /// 在阻塞边界上原子执行有序脚本与一条参数化终结语句。
 ///

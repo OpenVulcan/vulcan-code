@@ -1613,6 +1613,16 @@ impl VceRuntimeManager {
                         return Ok(Some(receipt));
                     }
                 }
+                // Active progress lives in the managed receipt; SQLite may be busy publishing a checkpoint.
+                // 活动进度位于托管回执中；SQLite 此时可能正忙于发布检查点。
+                let include_active = match &selection {
+                    VceJobSelection::Latest => true,
+                    VceJobSelection::Exact(job_id) => job.job_id == *job_id,
+                    VceJobSelection::LastSuccessfulUpdate => false,
+                };
+                if include_active {
+                    return Ok(Some(job.receipt.lock().await.clone()));
+                }
                 return selection.read(&job.store).await;
             }
         }

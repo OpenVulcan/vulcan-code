@@ -107,9 +107,6 @@ pub struct VceConfig {
     /// Maximum prepared Blobs retained before one staging flush.
     /// 一次暂存刷新前最多保留的已准备 Blob 数量。
     pub index_stage_blob_limit: usize,
-    /// Maximum aggregate source bytes prepared before one staging flush.
-    /// 一次暂存刷新前最多准备的源码总字节数。
-    pub index_stage_max_bytes: u64,
     /// Maximum concurrent host Embedding batches within one logical plan.
     /// 一个逻辑计划内并发调用宿主向量批次的最大数量。
     pub embedding_max_concurrency: usize,
@@ -141,8 +138,9 @@ impl VceConfig {
             rerank_candidate_limit: 32,
             fusion_candidate_limit: 64,
             exact_scope_limit: 2_000,
-            index_stage_blob_limit: 8,
-            index_stage_max_bytes: 4 * 1_048_576,
+            // Bound local work by file count; storage no longer uses the retired RPC message ceiling.
+            // 按文件数量约束本地工作；存储不再使用已退役的 RPC 消息上限。
+            index_stage_blob_limit: 64,
             embedding_max_concurrency: 4,
             query_max_concurrency: 3,
         };
@@ -178,15 +176,11 @@ impl VceConfig {
             || self.fusion_candidate_limit == 0
             || self.exact_scope_limit == 0
             || self.index_stage_blob_limit == 0
-            || self.index_stage_max_bytes == 0
             || self.embedding_max_concurrency == 0
             || self.query_max_concurrency == 0
             || self.index_schema_version == 0
         {
             return Err(VceConfigError::InvalidLookupBudget);
-        }
-        if self.index_stage_max_bytes < self.indexing.max_file_bytes {
-            return Err(VceConfigError::InvalidStagingBudget);
         }
         if self.indexing.max_file_bytes == 0
             || self.indexing.embedding_max_inputs == 0
@@ -278,9 +272,6 @@ pub enum VceConfigError {
     /// A host lookup budget is zero.
     /// 宿主检索预算为零。
     InvalidLookupBudget,
-    /// The staging byte budget cannot contain one accepted source file.
-    /// 暂存字节预算无法容纳一个已接受的源码文件。
-    InvalidStagingBudget,
     /// Source admission or Embedding planning budgets are internally inconsistent.
     /// 源码准入或向量规划预算内部不一致。
     InvalidIndexingConfig,
@@ -321,8 +312,6 @@ impl Display for VceConfigError {
             Self::InvalidLookupBudget => {
                 formatter.write_str("VCE lookup budgets must be greater than zero")
             }
-            Self::InvalidStagingBudget => formatter
-                .write_str("VCE staging byte budget must cover the maximum accepted source file"),
             Self::InvalidIndexingConfig => formatter
                 .write_str("VCE indexing and Embedding budgets are internally inconsistent"),
             Self::InvalidRetrievalConfig => {
@@ -1438,14 +1427,25 @@ impl VceEngine {
         let reason = request.reason;
         let force_reindex = request.force_reindex;
         let source_revision = request.source_revision;
-        let durable_manifest = index
-            .load_embedding_manifest(request_id.clone())
+        let durable_summary = index
+            .load_embedding_run_summary(request_id.clone())
             .await
             .map_err(VceError::Port)?;
-        let retry_generation = durable_manifest
-            .as_ref()
-            .filter(|manifest| manifest.state != VceEmbeddingRunState::Succeeded)
-            .map(|manifest| manifest.generation);
+        let retry_generation = durable_summary
+            .filter(|(_, state)| *state != VceEmbeddingRunState::Succeeded)
+            .map(|(generation, _)| generation);
+        // Only candidate reconciliation needs the full plan; ordinary retries load it once during staging.
+        // 仅候选对账需要完整计划；普通重试在暂存阶段加载一次。
+        let durable_manifest = if durable_summary
+            .is_some_and(|(_, state)| state == VceEmbeddingRunState::CandidateReady)
+        {
+            index
+                .load_embedding_manifest(request_id.clone())
+                .await
+                .map_err(VceError::Port)?
+        } else {
+            None
+        };
         control.observe(VceRefreshProgress {
             activity: None,
             phase: VceRefreshPhase::Reconciling,
@@ -1558,16 +1558,16 @@ impl VceEngine {
         // Finalize a candidate-ready manifest inside the same commit transaction as its checkpoint.
         // 将候选就绪清单与检查点放入同一个提交事务中完成终态收口。
         let finalize_embedding_manifest = index
-            .load_embedding_manifest(request_id.clone())
+            .load_embedding_run_summary(request_id.clone())
             .await
             .map_err(VceError::Port)?
-            .map(|manifest| {
-                if manifest.run_id != request_id || manifest.generation != snapshot.generation {
+            .map(|(generation, state)| {
+                if generation != snapshot.generation {
                     return Err(VceError::InvalidRequest(
                         "durable Embedding manifest does not match the refresh commit".to_owned(),
                     ));
                 }
-                Ok(manifest.state == VceEmbeddingRunState::CandidateReady)
+                Ok(state == VceEmbeddingRunState::CandidateReady)
             })
             .transpose()?
             .unwrap_or(false);
@@ -2361,7 +2361,6 @@ impl VceEngine {
     ) -> Result<BTreeSet<String>, VceError> {
         let mut record_batches = Vec::<Vec<FileRecord>>::new();
         let mut current_batch = Vec::new();
-        let mut current_bytes = 0_u64;
         // Select borrowed records in the existing Blob order before forming bounded source batches.
         // 在形成有界源码批次前，按既有块顺序选择借用记录。
         let selected_records =
@@ -2371,31 +2370,9 @@ impl VceEngine {
             // The batch retains the same owned record as before; selection never clones source content.
             // 批次仍保留与此前相同的自有记录；选择阶段不克隆源码正文。
             let record = record.clone();
-            // Over-limit records publish metadata only and therefore consume no source-read or
-            // Embedding staging budget. They still consume one Blob slot in the bounded batch.
-            // 超限记录只发布元数据，因此不占用源码读取或向量暂存字节预算，但仍占用有界批次中的一个 Blob 槽位。
-            let staged_source_bytes = if record.size > self.config.indexing.max_file_bytes {
-                0
-            } else {
-                record.size
-            };
-            let next_bytes = current_bytes
-                .checked_add(staged_source_bytes)
-                .ok_or_else(|| {
-                    VceError::InvalidRequest("staging source byte count overflowed".to_owned())
-                })?;
-            if !current_batch.is_empty()
-                && (current_batch.len() >= self.config.index_stage_blob_limit
-                    || next_bytes > self.config.index_stage_max_bytes)
-            {
+            if current_batch.len() >= self.config.index_stage_blob_limit {
                 record_batches.push(std::mem::take(&mut current_batch));
-                current_bytes = 0;
             }
-            current_bytes = current_bytes
-                .checked_add(staged_source_bytes)
-                .ok_or_else(|| {
-                    VceError::InvalidRequest("staging source byte count overflowed".to_owned())
-                })?;
             current_batch.push(record);
         }
         if !current_batch.is_empty() {
@@ -2423,6 +2400,7 @@ impl VceEngine {
                     prepared_files,
                     preparation_total,
                     staged.len() as u64,
+                    &record.path,
                 );
                 if record.size > self.config.indexing.max_file_bytes {
                     blob_slots.push(PreparedBlobSlot::Ready(Box::new(
@@ -2435,6 +2413,7 @@ impl VceEngine {
                         prepared_files,
                         preparation_total,
                         staged.len() as u64,
+                        &record.path,
                     );
                     context.control.check()?;
                     continue;
@@ -2485,6 +2464,7 @@ impl VceEngine {
                     prepared_files,
                     preparation_total,
                     staged.len() as u64,
+                    &record.path,
                 );
                 context.control.check()?;
             }
@@ -2747,19 +2727,17 @@ impl VceEngine {
             .load_embedding_manifest(context.refresh_id.to_owned())
             .await
             .map_err(VceError::Port)?;
+        // Borrow the frozen nodes; a lookup map must not clone the complete source snapshot.
+        // 借用冻结节点；定位映射不应克隆整份源码快照。
         let persisted_nodes = persisted_manifest.as_ref().map(|manifest| {
             manifest
                 .nodes
                 .iter()
-                .map(|node| (node.blob_name.clone(), node.clone()))
+                .map(|node| (node.blob_name.clone(), node))
                 .collect::<BTreeMap<_, _>>()
         });
-        let selected_records = if let Some(existing) = persisted_manifest.as_ref() {
-            let persisted_blob_names = existing
-                .nodes
-                .iter()
-                .map(|node| node.blob_name.clone())
-                .collect::<BTreeSet<_>>();
+        let selected_records = if let Some(existing) = persisted_nodes.as_ref() {
+            let persisted_blob_names = existing.keys().cloned().collect::<BTreeSet<_>>();
             if persisted_blob_names != *blob_names {
                 return Err(VceError::InvalidRequest(
                     "durable Embedding source snapshot does not match the requested Blob set"
@@ -2770,9 +2748,7 @@ impl VceEngine {
                 .iter()
                 .map(|blob_name| {
                     let node = existing
-                        .nodes
-                        .iter()
-                        .find(|node| node.blob_name == *blob_name)
+                        .get(blob_name)
                         .ok_or_else(|| {
                             VceError::InvalidRequest(format!(
                                 "durable Embedding source snapshot is missing Blob `{blob_name}`"
@@ -2821,7 +2797,6 @@ impl VceEngine {
         let mut source_contents = BTreeMap::<String, String>::new();
         let mut record_batches = Vec::<Vec<FileRecord>>::new();
         let mut current_batch = Vec::new();
-        let mut current_bytes = 0_u64;
         for record in &selected_records {
             context.control.check()?;
             let blob_name = record.blob_name.clone().ok_or_else(|| {
@@ -2842,28 +2817,11 @@ impl VceEngine {
                 ));
             }
             let record = record.clone();
-            let staged_source_bytes = if record.size > self.config.indexing.max_file_bytes {
-                0
-            } else {
-                record.size
-            };
-            let next_bytes = current_bytes
-                .checked_add(staged_source_bytes)
-                .ok_or_else(|| {
-                    VceError::InvalidRequest("staging source byte count overflowed".to_owned())
-                })?;
-            if !current_batch.is_empty()
-                && (current_batch.len() >= self.config.index_stage_blob_limit
-                    || next_bytes > self.config.index_stage_max_bytes)
-            {
+            // The local source and storage ports share a document count bound, not an RPC payload bound.
+            // 本地源码与存储端口共用文档数量边界，不使用 RPC 载荷边界。
+            if current_batch.len() >= self.config.index_stage_blob_limit {
                 record_batches.push(std::mem::take(&mut current_batch));
-                current_bytes = 0;
             }
-            current_bytes = current_bytes
-                .checked_add(staged_source_bytes)
-                .ok_or_else(|| {
-                    VceError::InvalidRequest("staging source byte count overflowed".to_owned())
-                })?;
             current_batch.push(record);
         }
         if !current_batch.is_empty() {
@@ -2876,11 +2834,57 @@ impl VceEngine {
         // The source set is frozen before any file preparation starts.
         // 开始准备文件前已冻结源码集合。
         let preparation_total = selected_records.len() as u64;
+        // Freeze reusable preparation limits before reading any cache entry.
+        // 在读取任何缓存条目前冻结可复用准备限制。
+        let configured_max_inputs = self.config.indexing.embedding_max_inputs;
+        let provider_max_inputs = context.ai.embedding_max_inputs();
+        let effective_max_inputs = provider_max_inputs.map_or(configured_max_inputs, |limit| {
+            configured_max_inputs.min(limit)
+        });
+        let mut contract = VceEmbeddingRunContract {
+            // An approved producer switch preserves storage identity but changes result compatibility.
+            // 已批准生产方切换保留存储身份，但改变结果兼容性。
+            embedding_space: match &self.config.embedding_execution {
+                Some(grant) => grant.execution().clone(),
+                None => self.config.embedding_space.clone(),
+            },
+            configured_max_inputs,
+            provider_max_inputs,
+            effective_max_inputs,
+            max_chars: self.config.indexing.embedding_max_chars,
+            max_segment_chars: self.config.indexing.embedding_max_segment_chars,
+            overlap_chars: self.config.indexing.embedding_overlap_chars,
+            max_file_bytes: self.config.indexing.max_file_bytes,
+            purposes: Vec::new(),
+        };
+        contract.validate().map_err(VceError::InvalidRequest)?;
         let mut prepared_batches = Vec::with_capacity(record_batches.len());
         let mut content_inputs = Vec::new();
         let mut content_segment_owners = BTreeMap::<String, (usize, usize)>::new();
         for (batch_index, records) in record_batches.into_iter().enumerate() {
             context.control.check()?;
+            // Exact same-run recovery is authoritative; only new runs consult reusable preparation.
+            // 同运行精确恢复具有权威性；仅新运行查询可复用准备。
+            let cached_nodes = if persisted_nodes.is_none() {
+                context
+                    .index
+                    .load_prepared_artifacts(
+                        contract.clone(),
+                        records
+                            .iter()
+                            .filter_map(|record| record.blob_name.clone())
+                            .collect(),
+                        self.structure_analyzer.analyzer_id().to_owned(),
+                        context.generation,
+                    )
+                    .await
+                    .map_err(VceError::Port)?
+                    .into_iter()
+                    .map(|node| (node.blob_name.clone(), node))
+                    .collect::<BTreeMap<_, _>>()
+            } else {
+                BTreeMap::new()
+            };
             let loaded = self
                 .read_sources_for_records(context.refresh_id, batch_index, &records, context.source)
                 .await?;
@@ -2894,6 +2898,7 @@ impl VceEngine {
                     prepared_files,
                     preparation_total,
                     0,
+                    &record.path,
                 );
                 if record.size > self.config.indexing.max_file_bytes {
                     let blob_name = record.blob_name.as_deref().ok_or_else(|| {
@@ -2924,6 +2929,7 @@ impl VceEngine {
                         prepared_files,
                         preparation_total,
                         0,
+                        &record.path,
                     );
                     context.control.check()?;
                     continue;
@@ -2943,12 +2949,23 @@ impl VceEngine {
                     ))
                 })?;
                 source_contents.insert(blob_name.to_owned(), content.to_owned());
-                let restored = persisted_nodes
-                    .as_ref()
-                    .and_then(|nodes| nodes.get(blob_name))
-                    .map(|node| self.restore_prepared_blob(record, Some(content), node, &context))
-                    .transpose()?
-                    .flatten();
+                // Modification time is observation metadata; exact path/content Blob identity guards reuse.
+                // 修改时间是观察元数据；精确路径和正文的 Blob 身份保护复用。
+                let restored = if let Some(nodes) = &persisted_nodes {
+                    nodes
+                        .get(blob_name)
+                        .map(|node| {
+                            self.restore_prepared_blob(record, Some(content), node, &context)
+                        })
+                        .transpose()?
+                        .flatten()
+                } else if let Some(cached) = cached_nodes.get(blob_name) {
+                    let mut node = cached.clone();
+                    node.mtime_ns = record.mtime_ns;
+                    self.restore_prepared_blob(record, Some(content), &node, &context)?
+                } else {
+                    None
+                };
                 let prepared_result = match restored {
                     Some(result) => Ok(result),
                     None => self.prepare_blob(record, content, &context),
@@ -3008,6 +3025,7 @@ impl VceEngine {
                     prepared_files,
                     preparation_total,
                     0,
+                    &record.path,
                 );
                 context.control.check()?;
             }
@@ -3029,16 +3047,6 @@ impl VceEngine {
             None,
             None,
         );
-        let configured_max_inputs = self.config.indexing.embedding_max_inputs;
-        let provider_max_inputs = context.ai.embedding_max_inputs();
-        let effective_max_inputs = provider_max_inputs.map_or(configured_max_inputs, |limit| {
-            configured_max_inputs.min(limit)
-        });
-        if effective_max_inputs == 0 {
-            return Err(VceError::InvalidRequest(
-                "effective Embedding batch input limit must be positive".to_owned(),
-            ));
-        }
         let build_plan = |inputs: Vec<EmbeddingInput>| {
             EmbeddingPlan::new(
                 inputs,
@@ -3092,17 +3100,7 @@ impl VceEngine {
         if path_plan.is_some() {
             purposes.push(VceAiPurpose::CodePathEmbedding.as_str().to_owned());
         }
-        let contract = VceEmbeddingRunContract {
-            embedding_space: self.config.embedding_space.clone(),
-            configured_max_inputs,
-            provider_max_inputs,
-            effective_max_inputs,
-            max_chars: self.config.indexing.embedding_max_chars,
-            max_segment_chars: self.config.indexing.embedding_max_segment_chars,
-            overlap_chars: self.config.indexing.embedding_overlap_chars,
-            max_file_bytes: self.config.indexing.max_file_bytes,
-            purposes,
-        };
+        contract.purposes = purposes;
         contract.validate().map_err(VceError::InvalidRequest)?;
 
         let current_blob_names = self
@@ -3318,7 +3316,10 @@ impl VceEngine {
             None => {
                 context
                     .index
-                    .persist_embedding_manifest(planned_manifest.clone())
+                    .persist_embedding_manifest_observed(
+                        planned_manifest.clone(),
+                        context.control.clone(),
+                    )
                     .await
                     .map_err(VceError::Port)?;
                 planned_manifest
@@ -3329,9 +3330,46 @@ impl VceEngine {
             .map_err(VceError::InvalidRequest)?;
         context
             .index
-            .persist_embedding_manifest(manifest.clone())
+            .persist_embedding_run_state(
+                manifest.run_id.clone(),
+                manifest.state,
+                manifest.updated_at_unix_ms,
+            )
             .await
             .map_err(VceError::Port)?;
+
+        // Adopt compatible results before planning remote tasks, preserving Running -> Succeeded admission.
+        // 在规划远端任务前接纳兼容结果，保留 Running 到 Succeeded 的准入顺序。
+        for position in 0..manifest.batches.len() {
+            context.control.check()?;
+            if manifest.batches[position].state == VceEmbeddingBatchState::Succeeded {
+                continue;
+            }
+            if context
+                .index
+                .reuse_embedding_batch_result(
+                    manifest.run_id.clone(),
+                    manifest.batches[position].batch_id.clone(),
+                )
+                .await
+                .map_err(VceError::Port)?
+                .is_some()
+            {
+                if matches!(
+                    manifest.batches[position].state,
+                    VceEmbeddingBatchState::Pending | VceEmbeddingBatchState::Failed
+                ) {
+                    manifest.batches[position]
+                        .mark_running()
+                        .map_err(VceError::InvalidRequest)?;
+                    manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                    persist_manifest_batch_record(context.index, &manifest, position).await?;
+                }
+                manifest.batches[position].mark_succeeded();
+                manifest.updated_at_unix_ms = current_unix_epoch_millis();
+                persist_manifest_batch_record(context.index, &manifest, position).await?;
+            }
+        }
 
         let use_remote_embedding_batch = context.use_remote_embedding_batch
             && context.ai.embedding_batch_capabilities().is_some();
@@ -4063,6 +4101,18 @@ impl VceEngine {
             .await
             .map_err(VceError::Port)?;
         let mut first_logical_batch = 0_usize;
+        // Successful logical batches already own durable vectors and need no remote task.
+        // 成功逻辑批次已持有持久向量，不需要远端任务。
+        let logical_batches = manifest
+            .batches
+            .iter()
+            .filter(|batch| batch.purpose == purpose.as_str())
+            .collect::<Vec<_>>();
+        if logical_batches.len() != plan.batches.len() {
+            return Err(VceError::InvalidRequest(String::from(
+                "Remote plan logical batch count changed",
+            )));
+        }
         let mut frozen_capabilities = records
             .first()
             .map(|record| record.plan.capabilities.clone());
@@ -4086,6 +4136,15 @@ impl VceEngine {
         for (remote_index, record) in records.iter().enumerate() {
             control.check()?;
             record.validate().map_err(VceError::InvalidRequest)?;
+            // Gaps are valid only where a frozen logical result was already adopted before planning.
+            // 仅在规划前已接纳冻结逻辑结果的位置允许间隙。
+            while first_logical_batch < record.first_logical_batch_index as usize
+                && logical_batches
+                    .get(first_logical_batch)
+                    .is_some_and(|batch| batch.state == VceEmbeddingBatchState::Succeeded)
+            {
+                first_logical_batch += 1;
+            }
             if record.purpose != purpose.as_str()
                 || usize::try_from(record.first_logical_batch_index).ok()
                     != Some(first_logical_batch)
@@ -4135,6 +4194,10 @@ impl VceEngine {
 
         while first_logical_batch < plan.batches.len() {
             control.check()?;
+            if logical_batches[first_logical_batch].state == VceEmbeddingBatchState::Succeeded {
+                first_logical_batch += 1;
+                continue;
+            }
             let remote_index = records.len();
             let operation_id = format!("{request_id}:remote:{remote_index}");
             let maximum_requests = usize::try_from(
@@ -4154,7 +4217,12 @@ impl VceEngine {
             })?;
             let mut probe_logical_count = 0_usize;
             let mut probe_segment_count = 0_usize;
-            for batch in &plan.batches[first_logical_batch..] {
+            for (offset, batch) in plan.batches[first_logical_batch..].iter().enumerate() {
+                if logical_batches[first_logical_batch + offset].state
+                    == VceEmbeddingBatchState::Succeeded
+                {
+                    break;
+                }
                 let next = probe_segment_count
                     .checked_add(batch.segments.len())
                     .ok_or(EmbeddingError::InvalidBudget)?;
@@ -4205,7 +4273,7 @@ impl VceEngine {
             })?;
             let mut logical_count = 0_usize;
             let mut segment_count = 0_usize;
-            for batch in &plan.batches[first_logical_batch..] {
+            for batch in &plan.batches[first_logical_batch..probe_end] {
                 let next = segment_count
                     .checked_add(batch.segments.len())
                     .ok_or(EmbeddingError::InvalidBudget)?;
@@ -4329,6 +4397,39 @@ impl VceEngine {
                 "durable Embedding manifest batch count mismatch for {}",
                 purpose.as_str()
             )));
+        }
+        // Cache-only gaps have no remote owner; keep their validated vectors alongside task results.
+        // 仅缓存命中的间隙没有远端归属；将其已校验向量与任务结果一同保留。
+        let mut cached_vectors = Vec::new();
+        for (logical_index, position) in manifest_positions.iter().enumerate() {
+            let covered = records.iter().any(|record| {
+                logical_index >= record.first_logical_batch_index as usize
+                    && logical_index
+                        < (record.first_logical_batch_index + record.logical_batch_count) as usize
+            });
+            if !covered {
+                if manifest.batches[*position].state != VceEmbeddingBatchState::Succeeded {
+                    return Err(VceError::InvalidRequest(String::from(
+                        "Unowned remote logical batch has no successful result",
+                    )));
+                }
+                let result = index
+                    .load_embedding_batch_result(
+                        manifest.run_id.clone(),
+                        manifest.batches[*position].batch_id.clone(),
+                    )
+                    .await
+                    .map_err(VceError::Port)?
+                    .ok_or_else(|| {
+                        VceError::InvalidRequest(String::from(
+                            "Cached logical batch result is missing",
+                        ))
+                    })?;
+                cached_vectors.extend(result.into_vectors().map_err(VceError::InvalidRequest)?);
+            }
+        }
+        if records.is_empty() {
+            return Ok(cached_vectors);
         }
         // Admit every unfinished logical batch before remote I/O so success can never skip Running.
         // 在远端调用前准入每个未完成逻辑批次，确保成功状态绝不会跳过 Running。
@@ -4808,7 +4909,7 @@ impl VceEngine {
                             vectors: result
                                 .into_vectors()
                                 .map_err(VceError::InvalidRequest)?,
-                            space: self.config.embedding_space.clone(),
+                            space: manifest.contract.embedding_space.clone(),
                         },
                         logical_batch,
                     )?;
@@ -5225,7 +5326,7 @@ impl VceEngine {
             }
         }
         }
-        let mut vectors = Vec::new();
+        let mut vectors = cached_vectors;
         for task in task_vectors {
             let task = task.ok_or_else(|| {
                 VceError::InvalidRequest(String::from(
@@ -5234,7 +5335,19 @@ impl VceEngine {
             })?;
             vectors.extend(task);
         }
-        Ok(vectors)
+        // Reconstruct input order across remote ranges and cache gaps, rejecting missing or duplicate IDs.
+        // 跨远端范围与缓存间隙重建输入顺序，拒绝缺失或重复 ID。
+        let vector_count = vectors.len();
+        let mut by_id = vectors.into_iter().map(|vector|(vector.input_id.clone(),vector)).collect::<BTreeMap<_,_>>();
+        if by_id.len() != vector_count { return Err(VceError::InvalidRequest(String::from("Duplicate remote embedding result identity"))); }
+        let mut ordered = Vec::with_capacity(vector_count);
+        for batch in &plan.batches {
+            for id in batch.request_input_ids() {
+                ordered.push(by_id.remove(&id).ok_or_else(||VceError::InvalidRequest(format!("Missing embedding result {id}")))?);
+            }
+        }
+        if !by_id.is_empty() { return Err(VceError::InvalidRequest(String::from("Unexpected remote embedding result identity"))); }
+        Ok(ordered)
         }
         .await;
         if matches!(polling_phase, Err(VceError::RefreshCancelled))
@@ -5472,7 +5585,7 @@ impl VceEngine {
                         VceEmbeddingResponse {
                             operation_id: operation_id.clone(),
                             vectors: stored_vectors,
-                            space: self.config.embedding_space.clone(),
+                            space: manifest.contract.embedding_space.clone(),
                         },
                         batch,
                     )?;
@@ -6263,6 +6376,7 @@ fn observe_prepared_files(
     completed: u64,
     total: u64,
     staged: u64,
+    current_path: &str,
 ) {
     control.observe(VceRefreshProgress {
         activity: None,
@@ -6274,7 +6388,7 @@ fn observe_prepared_files(
         overall_completed: staged,
         overall_total: Some(total),
         provider_batch_state: None,
-        current_path: None,
+        current_path: Some(current_path.to_owned()),
     });
 }
 
@@ -8931,7 +9045,14 @@ mod tests {
         );
         assert!(preparation.iter().all(|progress| progress.total == Some(3)
             && progress.operation_id == "prepare-files:prepare"
-            && progress.current_path.is_none()));
+            && progress.current_path.is_some()));
+        assert_eq!(
+            preparation
+                .iter()
+                .filter_map(|progress| progress.current_path.as_deref())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["src/a.rs", "src/empty.rs", "src/large.rs"])
+        );
         assert!(observed.iter().any(|progress| {
             progress
                 .activity
@@ -8975,7 +9096,7 @@ mod tests {
                         && progress.completed == completed_boundary
                     {
                         assert_eq!(progress.total, Some(1));
-                        assert_eq!(progress.current_path, None);
+                        assert!(progress.current_path.is_some());
                         *event_counter.lock().unwrap() += 1;
                         assert_eq!(requested.cancel(), crate::VceCancelOutcome::Accepted);
                     }
@@ -10053,6 +10174,136 @@ mod tests {
                 .filter(|event| event.starts_with("cancel:"))
                 .count(),
             1
+        );
+    }
+
+    /// Cached logical batches become explicit gaps without changing result order or resubmitting them.
+    /// 缓存逻辑批次形成显式间隙，不改变结果顺序，也不重复提交。
+    #[tokio::test]
+    async fn remote_batch_skips_cached_ranges_and_preserves_order() {
+        let engine = test_engine();
+        let (mut ai, index, _, _) = fake_host();
+        ai.embedding_batch_capabilities = Some(fake_file_batch_capabilities());
+        let plan = EmbeddingPlan::new(
+            (0..3)
+                .map(|ordinal| {
+                    EmbeddingInput::new(format!("input-{ordinal}"), format!("text {ordinal}"))
+                        .unwrap()
+                })
+                .collect(),
+            1,
+            8192,
+            4096,
+            128,
+        )
+        .unwrap();
+        let mut manifest = VceEmbeddingRunManifest {
+            schema_version: crate::manifest::VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION,
+            run_id: "cached-gaps".into(),
+            namespace_id: "vce:code-chain".into(),
+            generation: 1,
+            source_revision: None,
+            state: VceEmbeddingRunState::Running,
+            contract: VceEmbeddingRunContract {
+                embedding_space: test_space(),
+                configured_max_inputs: 1,
+                provider_max_inputs: Some(20),
+                effective_max_inputs: 1,
+                max_chars: 8192,
+                max_segment_chars: 4096,
+                overlap_chars: 128,
+                max_file_bytes: 16777216,
+                purposes: vec![VceAiPurpose::CodeDocumentEmbedding.as_str().into()],
+            },
+            base_checkpoint_version: None,
+            reused_blob_names: vec![],
+            nodes: vec![],
+            batches: plan
+                .batches
+                .iter()
+                .enumerate()
+                .map(|(index, batch)| {
+                    VceEmbeddingBatchRecord::pending(
+                        format!("cached-gaps:content:{index}"),
+                        VceAiPurpose::CodeDocumentEmbedding.as_str(),
+                        batch,
+                    )
+                })
+                .collect(),
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+        };
+        // First and last batches already have immutable results; only the middle range needs a task.
+        // 首尾批次已持有不可变结果；仅中间范围需要任务。
+        for ordinal in [0, 2] {
+            manifest.batches[ordinal].mark_succeeded();
+            let id = manifest.batches[ordinal].batch_id.clone();
+            index.embedding_batch_results.lock().unwrap().insert(
+                (manifest.run_id.clone(), id.clone()),
+                VceEmbeddingBatchResult::from_vectors(
+                    id,
+                    &[SegmentVector {
+                        input_id: plan.batches[ordinal].request_input_ids()[0].clone(),
+                        values: vec![1.0, 1.0],
+                    }],
+                ),
+            );
+        }
+        let capability = ai.capability_snapshot();
+        let context = EmbeddingExecutionContext {
+            request_id: "cached-gaps:content",
+            purpose: VceAiPurpose::CodeDocumentEmbedding,
+            ai: &ai,
+            capability: &capability,
+            use_remote_batch: true,
+            overall: None,
+        };
+        let result = engine
+            .execute_embedding_plan_remote_durable(
+                &plan,
+                &context,
+                &VceRefreshControl::default(),
+                &index,
+                &mut manifest,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result
+                .iter()
+                .map(|vector| vector.input_id.clone())
+                .collect::<Vec<_>>(),
+            plan.batches
+                .iter()
+                .flat_map(|batch| batch.request_input_ids())
+                .collect::<Vec<_>>()
+        );
+        let records = index.remote_batch_records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records.values().next().unwrap().first_logical_batch_index,
+            1
+        );
+        assert_eq!(records.values().next().unwrap().logical_batch_count, 1);
+        drop(records);
+        // No remote records are required when every result is already durable.
+        // 全部结果已持久化时无需任何远端记录。
+        index.remote_batch_records.lock().unwrap().clear();
+        let events_before = ai.embedding_batch_events.lock().unwrap().len();
+        let cached = engine
+            .execute_embedding_plan_remote_durable(
+                &plan,
+                &context,
+                &VceRefreshControl::default(),
+                &index,
+                &mut manifest,
+            )
+            .await
+            .unwrap();
+        assert_eq!(cached, result);
+        assert_eq!(
+            ai.embedding_batch_events.lock().unwrap().len(),
+            events_before
         );
     }
 
@@ -11263,13 +11514,12 @@ mod tests {
         assert!(ai.embedding_operation_ids.lock().unwrap().is_empty());
     }
 
-    /// Verify an over-limit metadata observation can exceed the source staging byte budget.
-    /// 验证超限的仅元数据观察可以大于源码暂存字节预算。
+    /// Verify an over-limit metadata observation is staged without loading its source.
+    /// 验证超限的仅元数据观察不读取源码即可暂存。
     #[test]
     fn over_limit_metadata_blob_bypasses_source_staging_bytes() {
         let mut config = VceConfig::new("code-chain", test_space()).unwrap();
         config.indexing.max_file_bytes = 1;
-        config.index_stage_max_bytes = 1;
         let mut engine = VceEngine::new(config).unwrap();
         let (mut ai, index, source, _) = fake_host();
         ai.embedding_available = false;
@@ -12064,16 +12314,15 @@ mod tests {
         assert!(snapshot.index.is_none());
     }
 
-    /// Verify initial indexing flushes prepared Blobs by both count and source bytes.
-    /// 验证初次索引会同时按 Blob 数量和源码字节数刷新暂存批次。
+    /// Verify initial indexing groups admitted files without a separate aggregate source-byte ceiling.
+    /// 验证初次索引合并已准入文件，不再受独立的源码总字节上限限制。
     #[test]
-    fn staging_batches_obey_source_byte_budget() {
+    fn staging_batches_group_admitted_files_by_count() {
         let mut config = VceConfig::new("code-chain", test_space()).unwrap();
         config.indexing.chunker.max_chars = 100;
         config.indexing.chunker.min_chars = 1;
         config.indexing.max_file_bytes = 16;
         config.index_stage_blob_limit = 8;
-        config.index_stage_max_bytes = 16;
         let mut engine = VceEngine::new(config).unwrap();
         let (ai, index, source, _) = fake_host();
         let staged = index.staged.clone();
@@ -12104,7 +12353,7 @@ mod tests {
         ))
         .unwrap();
         let staged = staged.lock().unwrap();
-        assert_eq!(*stage_call_count.lock().unwrap(), 2);
+        assert_eq!(*stage_call_count.lock().unwrap(), 1);
         assert_eq!(staged.len(), 2);
     }
 

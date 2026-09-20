@@ -133,9 +133,6 @@ pub(crate) struct VceSourceLimits {
     /// Maximum document count accepted by one deferred source request.
     /// 单次延迟源码请求允许的最大文档数量。
     pub(crate) max_batch_documents: usize,
-    /// Maximum aggregate source bytes accepted by one deferred source request.
-    /// 单次延迟源码请求允许的源码总字节数。
-    pub(crate) max_batch_bytes: u64,
     /// Maximum file count represented by one full project scan.
     /// 单次完整项目扫描允许表示的最大文件数量。
     pub(crate) max_manifest_files: usize,
@@ -151,22 +148,15 @@ impl VceSourceLimits {
     /// `max_file_bytes` 是 VCE 单文件索引上限。
     /// `max_batch_documents` is the VCE staging Blob count limit.
     /// `max_batch_documents` 是 VCE 暂存 Blob 数量上限。
-    /// `max_batch_bytes` is the VCE staging source byte limit.
-    /// `max_batch_bytes` 是 VCE 暂存源码字节上限。
     ///
     /// # Returns
     /// 返回值
     /// A validated host source-limit contract.
     /// 返回经过校验的宿主源码限制契约。
-    pub(crate) fn new(
-        max_file_bytes: u64,
-        max_batch_documents: usize,
-        max_batch_bytes: u64,
-    ) -> Result<Self, String> {
+    pub(crate) fn new(max_file_bytes: u64, max_batch_documents: usize) -> Result<Self, String> {
         let limits = Self {
             max_file_bytes,
             max_batch_documents,
-            max_batch_bytes,
             max_manifest_files: DEFAULT_MANIFEST_FILE_LIMIT,
         };
         limits.validate()?;
@@ -187,11 +177,6 @@ impl VceSourceLimits {
         if self.max_batch_documents == 0 {
             return Err(String::from(
                 "VCE max_batch_documents must be greater than zero",
-            ));
-        }
-        if self.max_batch_bytes < self.max_file_bytes {
-            return Err(String::from(
-                "VCE max_batch_bytes must cover at least one maximum-sized file",
             ));
         }
         if self.max_manifest_files == 0 {
@@ -723,7 +708,6 @@ impl VceProjectSourceAdapter {
             )));
         }
         let mut expected_paths = HashSet::with_capacity(request.expectations.len());
-        let mut expected_bytes = 0u64;
         for expectation in &request.expectations {
             let normalized = validate_relative_path(&expectation.path).map_err(rejected_source)?;
             if normalized != expectation.path {
@@ -742,15 +726,6 @@ impl VceProjectSourceAdapter {
                 return Err(rejected_source(format!(
                     "source path `{}` exceeds per-file byte limit",
                     expectation.path
-                )));
-            }
-            expected_bytes = expected_bytes
-                .checked_add(expectation.size)
-                .ok_or_else(|| rejected_source("source request byte count overflowed"))?;
-            if expected_bytes > self.limits.max_batch_bytes {
-                return Err(rejected_source(format!(
-                    "source request bytes exceed limit {}",
-                    self.limits.max_batch_bytes
                 )));
             }
         }
@@ -1303,7 +1278,7 @@ mod tests {
     /// A valid source-limit contract.
     /// 返回有效的源码限制契约。
     fn test_limits() -> VceSourceLimits {
-        VceSourceLimits::new(128, 4, 256).expect("valid test source limits")
+        VceSourceLimits::new(128, 4).expect("valid test source limits")
     }
 
     /// Full scans retain identities while excluding hard-ignored dependencies.
@@ -1576,6 +1551,55 @@ mod tests {
         assert_eq!(response.operation_id, "read-1");
         assert_eq!(response.documents[0].content, "fn main() {}\n");
         fs::remove_dir_all(root).expect("remove source fixture");
+    }
+
+    /// Local deferred reads may exceed the retired 4 MiB RPC limit while respecting document limits.
+    /// 本地延迟读取可以超过已退役的 4 MiB RPC 限制，同时遵守文档数量限制。
+    /// Uses disposable files and no provider calls; returns after exact content and admission checks.
+    /// 使用临时文件且不调用供应商；精确正文及准入校验完成后返回。
+    #[tokio::test]
+    async fn deferred_read_accepts_more_than_four_mib_and_bounds_document_count() {
+        // Two valid files exceed the old aggregate ceiling without exceeding their configured size.
+        // 两个合法文件超过旧总量上限，但各自未超过配置的单文件大小。
+        let root = temp_project("large-local-batch");
+        let body = "x".repeat(3 * 1_048_576);
+        fs::write(root.join("first.rs"), &body).unwrap();
+        fs::write(root.join("second.rs"), &body).unwrap();
+        let limits = VceSourceLimits::new(body.len() as u64, 2).unwrap();
+        let adapter = VceProjectSourceAdapter::activate(&root, limits, &[]).unwrap();
+        let manifest = adapter.scan_full().await.unwrap();
+        let request = VceSourceReadRequest {
+            operation_id: String::from("local-six-mib"),
+            expectations: manifest
+                .observations
+                .iter()
+                .map(|observation| vulcan_context_engine::VceSourceExpectation {
+                    path: observation.path.clone(),
+                    blob_name: observation.blob_name.clone().unwrap(),
+                    size: observation.size,
+                    mtime_ns: observation.mtime_ns,
+                })
+                .collect(),
+        };
+        let response = adapter.read_sources(request.clone()).await.unwrap();
+        assert_eq!(response.documents.len(), 2);
+        assert!(
+            response
+                .documents
+                .iter()
+                .all(|document| document.content == body)
+        );
+        // File-count admission remains authoritative even though the transport ceiling was removed.
+        // 移除传输上限后，文件数量准入仍然有效。
+        let one_document = VceProjectSourceAdapter::activate(
+            &root,
+            VceSourceLimits::new(body.len() as u64, 1).unwrap(),
+            &[],
+        )
+        .unwrap();
+        let error = one_document.read_sources(request).await.unwrap_err();
+        assert!(error.to_string().contains("exceeding limit 1"));
+        fs::remove_dir_all(root).expect("remove isolated large source fixture");
     }
 
     /// Deferred reads reject content changed after manifest creation.

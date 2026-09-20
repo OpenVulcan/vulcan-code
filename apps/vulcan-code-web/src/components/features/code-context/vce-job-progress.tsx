@@ -254,11 +254,19 @@ export function VceJobProgress(props: {
                 : copy("即将查询批量任务状态", "Checking Batch status shortly")}</p> : null}
           </div> : null}
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{copy("当前阶段进度", "Current phase progress")}</span>
-            <span>{measured ? `${progress.completed} / ${progress.total} ${unitLabels[progress.unit]}` : copy("处理中，总量待确定", "Processing; total not yet known")}</span>
+            <span>{activity?.stage === "persisting" && progress?.unit === "files" ? copy("文件快照保存", "File snapshots saved") : copy("当前阶段进度", "Current phase progress")}</span>
+            <span>{measured ? `${progress.completed} / ${progress.total} ${unitLabels[progress.unit]}` : progress?.unit === "files" ? copy(`已扫描 ${progress.completed} 个文件，总量统计中`, `${progress.completed} files scanned; counting total`) : copy("处理中，总量待确定", "Processing; total not yet known")}</span>
           </div>
           {measured ? <Progress className="h-1.5 w-full" aria-label={copy("当前阶段进度", "Current phase progress")} value={progress.completed} max={progress.total!} />
             : <div role="progressbar" aria-label={copy("当前阶段进度", "Current phase progress")} className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary/40 motion-reduce:animate-none" /></div>}
+          {/* File scope stays visible while embedding counts use batches or requests.
+              当向量阶段按批次或请求计数时，仍直接展示文件范围。 */}
+          {!compact && overallMeasured ? <p className="text-xs text-muted-foreground">
+            {copy(`本次处理 ${progress.overallTotal} 个文件 · 已写入索引 ${progress.overallCompleted ?? 0} 个`, `${progress.overallTotal} files in this update · ${progress.overallCompleted ?? 0} written to the index`)}
+          </p> : null}
+          {progress?.currentPath ? <p className="break-all text-xs text-muted-foreground" title={progress.currentPath}>
+            {copy("当前处理文件", "Current file")}: <span className="font-mono">{progress.currentPath}</span>
+          </p> : null}
           <div className="vce-job-meta">
             <p className="text-xs text-muted-foreground">{copy("已用时", "Elapsed")}: {elapsedSeconds} {copy("秒", "s")}</p>
             {settingsPresentation ? <details className="vce-job-details">

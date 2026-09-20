@@ -2118,6 +2118,20 @@ pub trait VceIndexPort: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Persist a plan while reporting acknowledged file writes through the refresh observer.
+    /// 持久化计划，并通过刷新观察器报告已确认的文件写入。
+    /// `manifest` owns the frozen files; `control` carries the operation observer. Returns the storage result.
+    /// `manifest` 持有冻结文件；`control` 携带操作观察器。返回存储结果。
+    /// Ports without granular persistence retain their existing all-or-nothing implementation.
+    /// 没有细粒度持久化的端口保留既有整体写入实现。
+    fn persist_embedding_manifest_observed(
+        &self,
+        manifest: crate::manifest::VceEmbeddingRunManifest,
+        _control: crate::VceRefreshControl,
+    ) -> VceFuture<Result<(), VcePortError>> {
+        self.persist_embedding_manifest(manifest)
+    }
+
     /// Load one exact durable embedding manifest without creating a new run.
     /// 读取一份精确的持久化向量清单，不创建新运行。
     fn load_embedding_manifest(
@@ -2125,6 +2139,22 @@ pub trait VceIndexPort: Send + Sync {
         _run_id: String,
     ) -> VceFuture<Result<Option<crate::manifest::VceEmbeddingRunManifest>, VcePortError>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// Read generation and lifecycle without loading any source bodies.
+    /// 读取代次与生命周期，不加载任何源码正文。
+    /// The exact run ID selects the summary; simple test ports derive it from their in-memory manifest.
+    /// 精确运行 ID 选择概要；简单测试端口从其内存清单派生概要。
+    fn load_embedding_run_summary(
+        &self,
+        run_id: String,
+    ) -> VceFuture<Result<Option<(u64, crate::manifest::VceEmbeddingRunState)>, VcePortError>> {
+        let manifest = self.load_embedding_manifest(run_id);
+        Box::pin(async move {
+            manifest
+                .await
+                .map(|value| value.map(|manifest| (manifest.generation, manifest.state)))
+        })
     }
 
     /// Persist only one run lifecycle transition without rewriting its frozen source plan.
@@ -2177,6 +2207,32 @@ pub trait VceIndexPort: Send + Sync {
         _purpose: VceAiPurpose,
     ) -> VceFuture<Result<Vec<crate::manifest::VceEmbeddingRemoteBatchRecord>, VcePortError>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Read immutable preparation for exact Blob identities and one analyzer contract.
+    /// 按精确 Blob 身份和分析器契约读取不可变准备材料。
+    /// Returns only compatible cached nodes at the requested generation; absence requires fresh analysis.
+    /// 仅返回指定代次的兼容缓存节点；缺失时需要重新分析。
+    fn load_prepared_artifacts(
+        &self,
+        _contract: crate::manifest::VceEmbeddingRunContract,
+        _blobs: Vec<String>,
+        _analyzer_id: String,
+        _generation: u64,
+    ) -> VceFuture<Result<Vec<crate::manifest::VceCodeNodeSnapshot>, VcePortError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Adopt an exact cached result before remote planning; absence means provider work remains necessary.
+    /// 在远端规划前接纳精确缓存结果；空值表示仍需供应商工作。
+    /// Run and batch IDs select the frozen request; ports without caches return absence explicitly.
+    /// 运行和批次 ID 选择冻结请求；无缓存端口明确返回空值。
+    fn reuse_embedding_batch_result(
+        &self,
+        _run_id: String,
+        _batch_id: String,
+    ) -> VceFuture<Result<Option<crate::manifest::VceEmbeddingBatchResult>, VcePortError>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Persist validated vectors for one exact manifest batch before source staging.
