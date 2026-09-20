@@ -258,6 +258,26 @@ async function verifyChromiumPackage(layout, distributionRoot) {
   }
 }
 
+// Retain a declared browser package when a rebuild supplies no replacement source.
+// 重建没有提供替换来源时，保留已声明的浏览器包。
+// distributionRoot is the existing package root; returns its verified executable or null for an absent package.
+// distributionRoot 是现有发行根；返回已验证的程序路径，尚无组件时返回 null。
+export async function retainedChromiumPackage(distributionRoot) {
+  let layout;
+  try {
+    layout = JSON.parse(await readFile(path.join(distributionRoot, 'runtime-layout.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`Cannot retain existing browser package: ${error.message}`, { cause: error });
+  }
+  if (layout.chromiumExecutable === null || layout.chromiumExecutable === undefined) return null;
+  if (layout.platform !== process.platform || layout.architecture !== process.arch) {
+    throw new Error('Existing browser package targets another platform. Supply an explicit replacement Chromium source.');
+  }
+  await verifyChromiumPackage(layout, distributionRoot);
+  return layout.chromiumExecutable;
+}
+
 // Build a deterministic inventory so a relocated release can detect truncated Chromium payloads.
 // 构建确定性文件清单，使迁移后的发行物能够发现不完整的 Chromium 载荷。
 async function chromiumPackageInventory(root, current = root, files = []) {
@@ -388,12 +408,12 @@ async function main() {
     await access(sourceExecutable);
     chromiumSource = { sourceRoot, executableRelative };
   }
-  // Each generated application tree is replaced as a unit; omitting optional Chromium also removes
-  // a previous package's browser payload instead of shipping it behind a false capability flag.
-  // 每个生成应用目录整体替换；省略可选 Chromium 时也移除旧浏览器载荷，而不是仅关闭能力标记。
+  // Missing input means retain the verified installed package, never implicitly uninstall it.
+  // 缺少输入表示保留已验证安装包，绝不隐式卸载。
+  const retainedChromium = chromiumSource ? null : await retainedChromiumPackage(output);
   await resetGeneratedDirectory('desktop/runtime');
   await resetGeneratedDirectory('webui');
-  await resetGeneratedDirectory('browser/chromium');
+  if (chromiumSource) await resetGeneratedDirectory('browser/chromium');
   // Electron runs the GUI and the host's Node script; the optional, exact Chromium package runs
   // Core-owned pages and is never silently obtained from a system browser.
   // Electron 运行 GUI 和宿主 Node 脚本；可选的精确 Chromium 包运行 Core 页面，绝不静默使用系统浏览器。
@@ -473,7 +493,7 @@ async function main() {
   // A source root is explicit and must contain the executable selected by this locked Playwright
   // version. Absence produces a desktop/service package with browser capability omitted.
   // 源根目录必须显式指定，且须包含此锁定 Playwright 版本选定的可执行文件；缺失时发行物不声明浏览器能力。
-  let chromiumExecutable = null;
+  let chromiumExecutable = retainedChromium;
   if (chromiumSource) {
     const { sourceRoot, executableRelative } = chromiumSource;
     await cp(sourceRoot, path.join(output, 'browser/chromium'), { recursive: true, dereference: true });

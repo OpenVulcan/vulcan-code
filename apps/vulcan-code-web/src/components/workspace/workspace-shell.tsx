@@ -45,6 +45,7 @@ import {
 } from "@/components/workspace/workspace-resizable-body";
 import { listCoreBrowserSessions } from "@/service/core-browser-service";
 import { readElectronLocalBrowserBridge } from "@/shell/electronBridge";
+import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/WorkspaceContextPanel";
@@ -498,14 +499,36 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: openWorkspaceContextTab(current.state, kind, t),
     }));
   }, [t]);
-  // closeContextTab removes one opened right context tab and selects a nearby tab.
-  // closeContextTab 移除一个已打开的右侧上下文页签并选择相邻页签。
+  // browserClosePending prevents duplicate native confirmation dialogs before React updates.
+  // browserClosePending 在 React 更新前阻止重复原生确认弹窗。
+  const browserClosePending = React.useRef(false);
+  // closeContextTab removes tabId after browser confirmation and resource release; returns immediately.
+  // closeContextTab 在浏览器确认及资源释放后移除 tabId；调用立即返回。
   const closeContextTab = React.useCallback((tabId: string) => {
+    // tab resolves the exact singleton being closed rather than the currently selected tab.
+    // tab 定位正在关闭的精确单实例，而不是当前选中的页签。
+    const tab = contextTabState.tabs.find((candidate) => candidate.id === tabId);
+    if (tab?.kind === "local-browser") {
+      if (browserClosePending.current || !props.selectedConversationId) return;
+      // bridge closes only this conversation's GUI-owned pages, never Core AI pages.
+      // bridge 仅关闭此会话由 GUI 持有的页面，绝不关闭 Core AI 页面。
+      const bridge = readElectronLocalBrowserBridge();
+      if (!bridge) return;
+      browserClosePending.current = true;
+      void bridge.closeOwner(props.selectedConversationId, locale).then((closed) => {
+        if (!closed) return;
+        setContextTabStateEntry((current) => current.cacheKey === contextTabCacheKey
+          ? { ...current, state: closeWorkspaceContextTab(current.state, tabId) } : current);
+      }).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }).finally(() => { browserClosePending.current = false; });
+      return;
+    }
     setContextTabStateEntry((current) => ({
       ...current,
       state: closeWorkspaceContextTab(current.state, tabId),
     }));
-  }, []);
+  }, [contextTabCacheKey, contextTabState.tabs, locale, props.selectedConversationId]);
   // activateContextTab switches the right context content to an opened tab.
   // activateContextTab 将右侧上下文内容切换到已打开页签。
   const activateContextTab = React.useCallback((tabId: string) => {
@@ -543,9 +566,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // openConversationLinkInLocalBrowser 将普通网页点击限定在当前 GUI 与当前会话的浏览器中。
   const openConversationLinkInLocalBrowser = React.useCallback((event: React.MouseEvent<HTMLElement>): void => {
     if (!hasSelectedChatConversation || !props.selectedConversationId || !localBrowserAvailable
+      || !readConversationLinkPreference()
       || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey
       || event.shiftKey || event.altKey || !(event.target instanceof Element)) return;
     const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
+    // Only transcript content participates; adjacent plugin mounts and other workspace controls do not.
+    // 仅会话转录内容参与此行为；相邻插件挂载区与其他工作台控件不参与。
+    if (!anchor?.closest(".conversation-scroll-content")) return;
     // Resource links are Core-owned downloads and previews, not navigable conversation websites.
     // 资源链接是 Core 管理的下载与预览，不属于会话中的网页导航。
     if (!anchor || !event.currentTarget.contains(anchor) || anchor.hasAttribute("download")

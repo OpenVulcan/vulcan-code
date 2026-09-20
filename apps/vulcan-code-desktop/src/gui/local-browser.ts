@@ -1,7 +1,7 @@
 // Client-owned temporary pages are isolated from both the Core browser and the workbench preload.
 // 客户端持有的临时页面同时与 Core 浏览器及工作台预加载桥隔离。
 import { randomUUID } from 'node:crypto';
-import { BrowserWindow, WebContentsView, session } from 'electron';
+import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 
 // Bounds native views created by user actions and untrusted page popups in one GUI window.
 // 限制单个 GUI 窗口由用户操作或不受信任页面弹窗创建的原生视图数量。
@@ -19,9 +19,16 @@ export interface LocalBrowserTab {
   // url is the current top-level address of this temporary page.
   // url 是此临时页面当前的顶层地址。
   url: string;
+  // faviconUrl is a native-reported HTTP(S) image URL, or null when unavailable.
+  // faviconUrl 是原生事件报告的 HTTP(S) 图标地址，不可用时为空。
+  faviconUrl: string | null;
   // loading reports the current native navigation state.
   // loading 报告当前原生导航状态。
   loading: boolean;
+  // Native history determines whether navigation controls are available.
+  // 原生历史决定导航控件是否可用。
+  canGoBack: boolean;
+  canGoForward: boolean;
 }
 
 // LocalBrowserSnapshot names the selected GUI-local tab and its sibling tabs.
@@ -33,8 +40,8 @@ export interface LocalBrowserSnapshot {
   // activeId is null when no temporary page remains.
   // activeId 在没有临时页面时为 null。
   activeId: string | null;
-  // tabs are ordered by creation and contain no Core browser sessions.
-  // tabs 按创建顺序排列，且不包含 Core 浏览器会话。
+  // tabs follow the user's visual order and contain no Core browser sessions.
+  // tabs 按用户的视觉顺序排列，且不包含 Core 浏览器会话。
   tabs: LocalBrowserTab[];
 }
 
@@ -56,6 +63,9 @@ export interface LocalBrowserViewport {
   // visible is false while the panel is obscured or a workbench modal is open.
   // visible 在面板被遮挡或工作台模态框打开时为 false。
   visible: boolean;
+  // An omitted or null deviceSize uses the panel size; otherwise fit this CSS viewport inside it.
+  // 未提供或为空的 deviceSize 使用面板尺寸；否则在面板内适配此 CSS 视口。
+  deviceSize?: { width: number; height: number } | null;
 }
 
 // LocalBrowserEntry owns one native view and its current user-facing metadata.
@@ -70,13 +80,19 @@ interface LocalBrowserEntry {
   // tab is the metadata emitted to the trusted workbench main frame.
   // tab 是发往受信任工作台主框架的元数据。
   tab: LocalBrowserTab;
+  // emulationKey avoids resetting Chromium emulation on unchanged layout notifications.
+  // emulationKey 避免在布局未变化的通知中重设 Chromium 模拟。
+  emulationKey: string;
+  // documentReady is set only by main-frame dom-ready, after Chromium creates its render view.
+  // documentReady 仅由主框架 dom-ready 设置，此时 Chromium 已创建渲染视图。
+  documentReady: boolean;
 }
 
 // LocalBrowserManager owns temporary tabs for exactly one desktop GUI window.
 // LocalBrowserManager 为一个确定的桌面 GUI 窗口持有临时标签。
 export class LocalBrowserManager {
-  // tabs preserves creation order and prevents a renderer from reaching native views directly.
-  // tabs 保持创建顺序，并阻止渲染器直接接触原生视图。
+  // tabs preserves user ordering and prevents a renderer from reaching native views directly.
+  // tabs 保持用户排序，并阻止渲染器直接接触原生视图。
   private readonly tabs = new Map<string, LocalBrowserEntry>();
   // activeId selects the one native page that may be visible in the sidebar.
   // activeId 选择唯一可在侧栏显示的原生页面。
@@ -102,7 +118,23 @@ export class LocalBrowserManager {
     private readonly window: BrowserWindow,
     private readonly blockedOrigins: ReadonlySet<string>,
     private readonly onChanged: (snapshot: LocalBrowserSnapshot) => void,
-  ) {}
+  ) {
+    // Native cleanup starts before a full reload, even if the renderer cannot send its cleanup message.
+    // 完整重载开始前由原生端清理，即使渲染界面无法发送清理消息也能执行。
+    window.webContents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) this.dispose();
+    });
+    window.webContents.on('render-process-gone', () => this.dispose());
+  }
+
+  // initialize acknowledges a new renderer by releasing every previous native page.
+  // initialize 通过释放全部旧原生页面，确认新渲染界面的初始化请求。
+  // Takes no arguments and returns after resetting state and publishing an empty snapshot.
+  // 无参数；重置状态并发布空快照后返回。
+  initialize(): void {
+    this.dispose();
+    this.emit();
+  }
 
   // partitionForOwner creates one sandboxed, non-persistent browser session per conversation.
   // partitionForOwner 为每个会话创建独立、沙箱化且不落盘的浏览器会话。
@@ -176,8 +208,9 @@ export class LocalBrowserManager {
         webSecurity: true,
       },
     });
-    const tab: LocalBrowserTab = { id, title: destination, url: destination, loading: true };
-    const entry: LocalBrowserEntry = { ownerSessionId, view, tab };
+    const tab: LocalBrowserTab = { id, title: destination, url: destination, faviconUrl: null, loading: true,
+      canGoBack: false, canGoForward: false };
+    const entry: LocalBrowserEntry = { ownerSessionId, view, tab, emulationKey: '', documentReady: false };
     this.tabs.set(id, entry);
     this.window.contentView.addChildView(view);
     view.setVisible(false);
@@ -196,9 +229,30 @@ export class LocalBrowserManager {
     view.webContents.on('will-redirect', (event, target) => {
       if (!this.isAllowedUrl(target)) event.preventDefault();
     });
-    view.webContents.on('did-navigate', (_event, currentUrl) => this.update(id, { url: currentUrl }));
-    view.webContents.on('did-navigate-in-page', (_event, currentUrl) => this.update(id, { url: currentUrl }));
+    view.webContents.on('did-navigate', (_event, currentUrl) => {
+      // A committed navigation may replace the render view; wait for the new document's dom-ready.
+      // 已提交导航可能替换渲染视图；等待新文档的 dom-ready。
+      entry.documentReady = false;
+      entry.emulationKey = '';
+      this.update(id, { url: currentUrl, faviconUrl: null });
+    });
+    view.webContents.on('dom-ready', () => {
+      entry.documentReady = true;
+      this.layout();
+    });
+    view.webContents.on('render-process-gone', () => {
+      entry.documentReady = false;
+      entry.emulationKey = '';
+    });
+    view.webContents.on('did-navigate-in-page', (_event, currentUrl, isMainFrame) => {
+      if (isMainFrame) this.update(id, { url: currentUrl });
+    });
     view.webContents.on('page-title-updated', (_event, title) => this.update(id, { title }));
+    // Accept only native-reported web images outside the protected workbench origins.
+    // 仅接受原生报告的网页图标，并排除受保护的工作台来源。
+    view.webContents.on('page-favicon-updated', (_event, favicons) => {
+      this.update(id, { faviconUrl: favicons.find((url) => /^https?:\/\//i.test(url) && this.isAllowedUrl(url)) ?? null });
+    });
     view.webContents.on('did-start-loading', () => this.update(id, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.update(id, { loading: false }));
     if (ownerSessionId === this.currentOwnerSessionId) this.select(id);
@@ -214,6 +268,68 @@ export class LocalBrowserManager {
     const entry = this.requireCurrentTab(id);
     const destination = this.normalizeUrl(url);
     void entry.view.webContents.loadURL(destination).catch(() => this.update(id, { loading: false }));
+  }
+
+  // history acts on the selected owner's exact tab using Chromium's real history.
+  // history 使用 Chromium 真实历史操作当前归属的精确标签。
+  // id identifies the page; action selects back, forward, reload or stop; returns nothing.
+  // id 标识页面；action 选择后退、前进、刷新或停止；无返回值。
+  history(id: string, action: 'back' | 'forward' | 'reload' | 'stop'): void {
+    // contents owns navigation state, including redirects and same-document entries.
+    // contents 持有导航状态，包括重定向和同文档历史条目。
+    const contents = this.requireCurrentTab(id).view.webContents;
+    switch (action) {
+      case 'back': if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); break;
+      case 'forward': if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); break;
+      case 'reload': contents.reload(); break;
+      case 'stop': contents.stop(); break;
+      default: throw new Error('Unknown local browser navigation action.');
+    }
+  }
+
+  // move places one tab at a sibling's position without recreating native pages or changing selection.
+  // move 将标签移动到同级标签的位置，不重建原生页面也不改变选中状态。
+  // id is the dragged tab and targetId is the destination sibling; returns nothing.
+  // id 是拖动标签，targetId 是目标同级标签；无返回值。
+  move(id: string, targetId: string): void {
+    this.requireCurrentTab(id);
+    this.requireCurrentTab(targetId);
+    if (id === targetId) return;
+    // ordered preserves every other owner's relative order as well as page identities.
+    // ordered 同时保留其他归属的相对顺序及页面身份。
+    const ordered = [...this.tabs.entries()];
+    // destination is measured before removal so a forward drag passes the target tab.
+    // destination 在移除前计算，使向后拖动能经过目标标签。
+    const destination = ordered.findIndex(([key]) => key === targetId);
+    // moved retains the original WebContentsView and its full navigation state.
+    // moved 保留原始 WebContentsView 及完整导航状态。
+    const [moved] = ordered.splice(ordered.findIndex(([key]) => key === id), 1);
+    ordered.splice(destination, 0, moved!);
+    this.tabs.clear();
+    for (const [key, entry] of ordered) this.tabs.set(key, entry);
+    this.emit();
+  }
+
+  // openDeveloperTools opens the requested page inspector in a separate native window.
+  // openDeveloperTools 在独立原生窗口打开请求页面的检查器。
+  // id belongs to the current conversation; returns nothing after opening DevTools.
+  // id 属于当前会话；打开开发者工具后无返回值。
+  openDeveloperTools(id: string): void {
+    this.requireCurrentTab(id).view.webContents.openDevTools({ mode: 'detach', activate: true });
+  }
+
+  // openExternal opens the actual committed HTTP(S) address in the system browser.
+  // openExternal 在系统浏览器打开实际已提交的 HTTP(S) 地址。
+  // id identifies the current owner's page; resolves when the OS accepts the request.
+  // id 标识当前归属的页面；操作系统接受请求后完成。
+  async openExternal(id: string): Promise<void> {
+    // url comes from native contents, never from a renderer-supplied external protocol.
+    // url 来自原生页面，绝不采用渲染端传入的外部协议。
+    const url = this.requireCurrentTab(id).view.webContents.getURL();
+    if (!/^https?:\/\//i.test(url) || !this.isAllowedUrl(url)) {
+      throw new Error('Only an active HTTP or HTTPS page can be opened externally.');
+    }
+    await shell.openExternal(url);
   }
 
   // select makes one existing tab the only potentially visible native view.
@@ -246,6 +362,38 @@ export class LocalBrowserManager {
     this.emit();
   }
 
+  // closeOwner confirms before releasing all pages of one conversation, including inactive pages.
+  // closeOwner 确认后释放一个会话的全部页面，包括非活动页面。
+  // ownerSessionId identifies the conversation; confirm receives its page count; returns false on cancellation.
+  // ownerSessionId 标识会话；confirm 接收页面数量；取消时返回 false。
+  // A true result waits for actual WebContents destruction before the renderer removes its browser panel.
+  // 返回 true 前等待 WebContents 实际销毁，渲染界面随后才移除浏览器面板。
+  async closeOwner(ownerSessionId: string, confirm: (count: number) => Promise<boolean>): Promise<boolean> {
+    if (typeof ownerSessionId !== 'string' || !ownerSessionId.trim()) throw new Error('Invalid local browser conversation owner.');
+    // count covers loaded pages and blank native tabs, both of which consume resources.
+    // count 包含已加载页面和空白原生标签，两者都会占用资源。
+    const count = [...this.tabs.values()].filter((entry) => entry.ownerSessionId === ownerSessionId).length;
+    if (count > 0 && !await confirm(count)) return false;
+    // closing is refreshed after confirmation to include pages created while the dialog was open.
+    // closing 在确认后重新取得，包含弹窗期间创建的页面。
+    const closing = [...this.tabs.entries()].filter(([, entry]) => entry.ownerSessionId === ownerSessionId);
+    for (const [id] of closing) this.tabs.delete(id);
+    this.activeIdByOwner.delete(ownerSessionId);
+    this.ownerPartitions.delete(ownerSessionId);
+    if (this.currentOwnerSessionId === ownerSessionId) {
+      this.activeId = null;
+      this.viewport = null;
+    }
+    await Promise.all(closing.map(([, { view }]) => new Promise<void>((resolve) => {
+      view.setVisible(false);
+      this.window.contentView.removeChildView(view);
+      view.webContents.once('destroyed', () => resolve());
+      view.webContents.close();
+    })));
+    if (!this.window.isDestroyed()) this.emit();
+    return true;
+  }
+
   // setViewport maps the rendered sidebar rectangle to native content coordinates.
   // setViewport 将已渲染的侧栏矩形映射到原生内容坐标。
   // viewport is null when the panel unmounts; otherwise all dimensions must be finite.
@@ -262,19 +410,30 @@ export class LocalBrowserManager {
         || viewport.viewportHeight <= 0 || viewport.width < 0 || viewport.height < 0) {
         throw new Error('Invalid local browser viewport.');
       }
+      if (viewport.deviceSize != null && (typeof viewport.deviceSize !== 'object'
+        || ![viewport.deviceSize.width, viewport.deviceSize.height]
+          .every((value) => Number.isInteger(value) && value >= 240 && value <= 3840))) {
+        throw new Error('Browser viewport dimensions must be integers between 240 and 3840.');
+      }
     }
     this.viewport = viewport;
     this.layout();
   }
 
-  // dispose releases every GUI-local page before the owning window closes.
-  // dispose 在所属窗口关闭前释放全部 GUI 本地页面。
+  // dispose releases every GUI-local page on window close, reload or renderer loss.
+  // dispose 在窗口关闭、重载或渲染进程丢失时释放全部 GUI 本地页面。
+  // Takes no arguments; the empty manager remains reusable by the next renderer.
+  // 无参数；清空后的管理器可由下一个渲染界面复用。
   dispose(): void {
-    for (const { view } of this.tabs.values()) {
+    // retired detaches metadata first so late native events cannot revive stale tabs.
+    // retired 先移除元数据，避免迟到的原生事件恢复旧标签。
+    const retired = [...this.tabs.values()];
+    this.tabs.clear();
+    for (const { view } of retired) {
+      view.setVisible(false);
       this.window.contentView.removeChildView(view);
       view.webContents.close();
     }
-    this.tabs.clear();
     this.ownerPartitions.clear();
     this.activeIdByOwner.clear();
     this.activeId = null;
@@ -343,6 +502,8 @@ export class LocalBrowserManager {
     const entry = this.tabs.get(id);
     if (!entry) return;
     Object.assign(entry.tab, patch);
+    entry.tab.canGoBack = entry.view.webContents.navigationHistory.canGoBack();
+    entry.tab.canGoForward = entry.view.webContents.navigationHistory.canGoForward();
     if (entry.ownerSessionId === this.currentOwnerSessionId) this.emit();
   }
 
@@ -351,7 +512,10 @@ export class LocalBrowserManager {
   private layout(): void {
     const content = this.window.getContentBounds();
     const viewport = this.viewport;
-    for (const [id, { view }] of this.tabs) {
+    for (const [id, entry] of this.tabs) {
+      // view is kept alive when tabs or display modes change.
+      // view 在切换标签或显示模式时保持存活。
+      const { view } = entry;
       const visible = id === this.activeId && viewport?.visible === true;
       if (!visible || !viewport) {
         view.setVisible(false);
@@ -367,7 +531,32 @@ export class LocalBrowserManager {
         view.setVisible(false);
         continue;
       }
-      view.setBounds({ x: left, y: top, width: right - left, height: bottom - top });
+      // Both modes declare their current viewport explicitly: Electron 44 restores a stale host size
+      // when disabling emulation after fitting. Panel mode therefore uses current bounds at scale one.
+      // 两种模式均明确声明当前视口：Electron 44 在适配后关闭模拟时会恢复陈旧宿主尺寸，
+      // 因此面板模式使用当前边界和一倍缩放，不依赖旧尺寸缓存。
+      const size = viewport.deviceSize ?? { width: right - left, height: bottom - top };
+      // scale fits the requested viewport without changing its responsive layout width.
+      // scale 适配请求视口，同时保持响应式布局宽度不变。
+      const scale = Math.min(1, (right - left) / size.width, (bottom - top) / size.height);
+      // width and height are the fitted native view dimensions in device-independent pixels.
+      // width 和 height 是适配后的原生视图尺寸，单位为设备独立像素。
+      const width = Math.max(1, Math.floor(size.width * scale));
+      const height = Math.max(1, Math.floor(size.height * scale));
+      view.setBounds({ x: left + Math.floor((right - left - width) / 2),
+        y: top + Math.floor((bottom - top - height) / 2), width, height });
+      // key prevents geometry-only movement from resetting device emulation.
+      // key 防止仅位置变化时重设设备模拟。
+      const key = `${size.width}:${size.height}:${scale}`;
+      // Electron dereferences the native render view inside enableDeviceEmulation; calling it before
+      // dom-ready can terminate the entire GUI, so only native document readiness permits this call.
+      // Electron 在 enableDeviceEmulation 内部解引用原生渲染视图；dom-ready 前调用会终止整个 GUI，
+      // 因此只有原生文档就绪事件才允许执行此调用。
+      if (entry.documentReady && entry.emulationKey !== key) {
+        view.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: size,
+          viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: size, scale });
+        entry.emulationKey = key;
+      }
       view.setVisible(true);
     }
   }

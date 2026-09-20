@@ -1,5 +1,6 @@
 @import "./ui/foundations/theme.css";
 @import "./ui/foundations/tokens.css";
+@import "./styles/scrollbars.css";
 
 /* Knowledge-base management workspace. */
 /* 知识库管理工作区。 */

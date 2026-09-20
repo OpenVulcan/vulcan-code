@@ -20,6 +20,7 @@ import { BrowserArea, coreBrowserAddress } from "./BrowserArea";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US" }) }));
 vi.mock("@/service/core-browser-service", () => ({
+  getCoreBrowserRuntimeStatus: vi.fn(async () => ({ ready: true, canInstall: true, diagnostic: null, installation: null })),
   requestCoreBrowser: vi.fn(),
   listCoreBrowserPages: vi.fn(),
   listCoreBrowserDownloads: vi.fn(),

@@ -7,6 +7,7 @@ use super::*;
 /// Core 浏览器路由持有的精确公开 RPC 线协议名称。
 pub(super) const RPC_METHODS: &[&str] = &[
     "browser.runtime.status",
+    "browser.runtime.install",
     "browser.session.create",
     "browser.session.list",
     "browser.session.close",
@@ -58,25 +59,26 @@ pub(super) async fn dispatch(
     if !RPC_METHODS.contains(&method) {
         return Ok(ServiceRpcDispatch::Unknown);
     }
-    if method == "browser.runtime.status" {
+    if matches!(method, "browser.runtime.status" | "browser.runtime.install") {
         if params.as_object().is_none_or(|fields| !fields.is_empty()) {
             return Err(String::from(
-                "invalid params for browser.runtime.status: empty object required",
+                "invalid params for browser runtime operation: empty object required",
             ));
         }
         // runtime is a Core-wide package capability; no conversation browser identity exists yet.
         // runtime 是 Core 全局安装组件能力；此时尚不存在会话浏览器身份。
-        let runtime = crate::browser::service_browser_manager(&state)?.host_runtime_config()?;
-        // ready checks files again so removing an optional package after startup is visible.
-        // ready 再次检查文件，使启动后移除可选组件也能反映到状态。
-        let ready = runtime.is_some_and(|config| {
-            config.executable.is_file()
-                && config.entry.is_file()
-                && config.chromium_executable.is_file()
-        });
-        return Ok(ServiceRpcDispatch::Handled(Ok(
-            serde_json::json!({ "ready": ready }),
-        )));
+        let manager = crate::browser::service_browser_manager(&state)?;
+        if method == "browser.runtime.install" {
+            return Ok(ServiceRpcDispatch::Handled(
+                manager
+                    .start_runtime_installation()
+                    .and_then(|task| serde_json::to_value(task).map_err(|error| error.to_string())),
+            ));
+        }
+        return Ok(ServiceRpcDispatch::Handled(Ok(serde_json::to_value(
+            manager.runtime_status()?,
+        )
+        .map_err(|error| error.to_string())?)));
     }
     // owner_session_id is the selected VulcanCode conversation, separate from the Core browser id.
     // owner_session_id 是选中的 VulcanCode 会话，与 Core 浏览器标识分离。
@@ -260,7 +262,7 @@ mod tests {
         .await
         .expect("dispatch status");
         assert!(
-            matches!(status, ServiceRpcDispatch::Handled(Ok(value)) if value == serde_json::json!({ "ready": false }))
+            matches!(status, ServiceRpcDispatch::Handled(Ok(value)) if value["ready"] == false && value["canInstall"] == false)
         );
         let invalid = dispatch(
             state,

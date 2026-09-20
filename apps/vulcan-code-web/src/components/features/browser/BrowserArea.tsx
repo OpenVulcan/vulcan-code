@@ -2,6 +2,7 @@ import * as React from "react";
 import { Download, Globe2, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { CoreBrowserRuntimeControls } from "./CoreBrowserRuntimeControls";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n } from "@/i18n";
 import {
@@ -1162,6 +1163,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto bg-background p-3" aria-label={chinese ? "AI 浏览器" : "AI browser"}>
+      <CoreBrowserRuntimeControls />
       <div className="flex items-center justify-between gap-2 border-b pb-2">
         <div className="flex min-w-0 items-center gap-2"><Globe2 size={17} /><strong>{chinese ? "AI 浏览器" : "AI Browser"}</strong></div>
         <Button type="button" size="icon" variant="ghost" aria-label={chinese ? "刷新浏览器列表" : "Refresh browser list"} onClick={() => {

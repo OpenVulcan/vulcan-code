@@ -283,6 +283,13 @@
   padding: 6px 8px 8px;
 }
 
+/* Highlight the native browser tab's drop destination without changing its shared dimensions. */
+/* 突出原生浏览器标签的拖放目标，同时保持共用尺寸。 */
+.context-dynamic-tab.local-browser-tab-drop {
+  border-color: var(--primary);
+  background: var(--accent);
+}
+
 .context-tab-content.browser-tab-content {
   display: flex;
   padding: 0;

@@ -281,7 +281,7 @@ fn service_webui_root() -> Result<Option<std::path::PathBuf>, String> {
 /// 返回值
 /// The runtime configuration, or a diagnostic when the build cannot locate a browser host.
 /// 返回运行时配置；构建无法定位浏览器宿主时返回诊断。
-fn service_browser_host_runtime(
+pub(crate) fn service_browser_host_runtime(
     data_root: &std::path::Path,
 ) -> Result<vulcan_service_kernel::browser::BrowserHostRuntimeConfig, String> {
     use crate::runtime_layout::{
@@ -301,13 +301,19 @@ fn service_browser_host_runtime(
             let root = runtime_layout_root(&manifest_path)?;
             let executable = resolve_layout_entry(&root, &manifest.desktop_executable)?;
             let entry = resolve_layout_entry(&root, &manifest.browser_host_entry)?;
-            let chromium_entry = manifest.chromium_executable.as_deref().ok_or_else(|| {
+            let chromium_executable = if let Some(installed) =
+                crate::browser_runtime_install::installed_chromium(data_root, &entry)?
+            {
+                installed
+            } else {
+                let chromium_entry = manifest.chromium_executable.as_deref().ok_or_else(|| {
                 format!(
                     "runtime layout {} does not include the optional standalone Chromium package",
                     manifest_path.display()
                 )
             })?;
-            let chromium_executable = resolve_layout_entry(&root, chromium_entry)?;
+                resolve_layout_entry(&root, chromium_entry)?
+            };
             if !executable.is_file() || !entry.is_file() || !chromium_executable.is_file() {
                 return Err(format!(
                     "runtime layout {} declares a browser host that does not exist: {} / {} / {}",
@@ -344,11 +350,17 @@ fn service_browser_host_runtime(
             // A development browser runtime is explicit; it is never found by probing an
             // unrelated installed browser or silently downloading one at service startup.
             // 开发浏览器运行时必须显式指定；服务启动时绝不探测无关已安装浏览器或静默下载。
-            let chromium_executable = std::env::var_os("VULCAN_CHROMIUM_EXECUTABLE")
-                .map(std::path::PathBuf::from)
-                .ok_or_else(|| {
-                    String::from("development Core browser requires VULCAN_CHROMIUM_EXECUTABLE")
-                })?;
+            let chromium_executable = if let Some(installed) =
+                crate::browser_runtime_install::installed_chromium(data_root, &entry)?
+            {
+                installed
+            } else {
+                std::env::var_os("VULCAN_CHROMIUM_EXECUTABLE")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| {
+                        String::from("development Core browser requires VULCAN_CHROMIUM_EXECUTABLE")
+                    })?
+            };
             if !executable.is_file() || !entry.is_file() || !chromium_executable.is_file() {
                 return Err(format!(
                     "the development browser host is not built: {} / {} / {}",
@@ -571,7 +583,25 @@ impl HeadlessService {
         // The browser host runtime is configured before any session can be created, so a session
         // is never delivered without the background browser that owns it.
         // 在任何会话可被创建之前配置浏览器宿主运行时，因此绝不会交付没有后台浏览器拥有的会话。
-        match service_browser_host_runtime(&data_root) {
+        // Register explicit recovery even when Chromium is absent; installation is always user initiated.
+        // 即使 Chromium 缺失也注册显式恢复能力；安装始终由用户主动触发。
+        let browser_manager = vulcan_service_kernel::browser::service_browser_manager(&state)?;
+        let browser_config = service_browser_host_runtime(&data_root);
+        let (browser_installer, installer_error) =
+            match crate::browser_runtime_install::installer(data_root.clone()) {
+                Ok(installer) => (Some(installer), None),
+                Err(error) => (None, Some(error)),
+            };
+        browser_manager.configure_runtime_installation(
+            browser_installer,
+            Some(Arc::new({
+                let runtime_data_root = data_root.clone();
+                move || service_browser_host_runtime(&runtime_data_root)
+            })),
+            installer_error.or_else(|| browser_config.as_ref().err().cloned()),
+        )?;
+        spawn_browser_host_reaper(Arc::clone(&state));
+        match browser_config {
             Ok(config) => {
                 if let Err(error) = clear_orphaned_browser_data(&data_root, &config) {
                     eprintln!(
@@ -584,8 +614,6 @@ impl HeadlessService {
                             eprintln!(
                                 "[vulcan-code-service] browser host configuration failed: {error}"
                             );
-                        } else {
-                            spawn_browser_host_reaper(Arc::clone(&state));
                         }
                     }
                     Err(error) => {

@@ -24,6 +24,7 @@ import { ProviderToolSelectionSettingsArea } from "@/components/features/setting
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
+import { ConversationLinkSettingsSection } from "./conversation-link-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
@@ -126,6 +127,7 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
           <ToolCollapseSettingsSection />
           <ThinkingPopupSettingsSection />
+          <ConversationLinkSettingsSection />
         </>}
       />
     );

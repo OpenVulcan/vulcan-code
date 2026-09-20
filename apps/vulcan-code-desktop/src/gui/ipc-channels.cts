@@ -12,6 +12,9 @@ export const SERVICE_CHANNELS = {
 // Local browser channels are scoped to the current GUI and never address a Core browser session.
 // 本地浏览器通道限定于当前 GUI，绝不寻址 Core 浏览器会话。
 export const LOCAL_BROWSER_CHANNELS = {
+  // Resets native pages before a new workbench renderer mounts.
+  // 在新的工作台渲染界面挂载前重置原生页面。
+  initialize: 'vulcan:local-browser:initialize',
   // Selects the conversation whose native tabs this GUI window may display.
   // 选择此 GUI 窗口可显示其原生标签的会话。
   setOwner: 'vulcan:local-browser:set-owner',
@@ -24,12 +27,27 @@ export const LOCAL_BROWSER_CHANNELS = {
   // Navigates one existing temporary tab.
   // 导航一个已有临时标签。
   navigate: 'vulcan:local-browser:navigate',
+  // Executes a native history or loading action for one page.
+  // 为单个页面执行原生历史或加载操作。
+  history: 'vulcan:local-browser:history',
+  // Moves a tab to a sibling's position.
+  // 将标签移动到同级标签的位置。
+  move: 'vulcan:local-browser:move',
+  // Opens page DevTools in a detached window.
+  // 在独立窗口打开页面开发者工具。
+  openDeveloperTools: 'vulcan:local-browser:devtools',
+  // Opens the actual page URL in the default browser.
+  // 在默认浏览器打开实际页面地址。
+  openExternal: 'vulcan:local-browser:external',
   // Selects one existing temporary tab.
   // 选中一个已有临时标签。
   select: 'vulcan:local-browser:select',
   // Closes one existing temporary tab.
   // 关闭一个已有临时标签。
   close: 'vulcan:local-browser:close',
+  // Confirms and releases every native page owned by one conversation.
+  // 确认并释放一个会话持有的全部原生页面。
+  closeOwner: 'vulcan:local-browser:close-owner',
   // Updates the visible sidebar rectangle or hides the native view.
   // 更新可见侧栏矩形，或隐藏原生视图。
   viewport: 'vulcan:local-browser:viewport',

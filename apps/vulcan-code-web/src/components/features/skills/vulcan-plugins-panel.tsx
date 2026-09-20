@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
-import { getCoreBrowserRuntimeStatus } from "@/service/core-browser-service";
+import { CoreBrowserRuntimeControls } from "@/components/features/browser/CoreBrowserRuntimeControls";
 import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -152,9 +152,6 @@ export function VulcanPluginsPanel(props: {
   // environmentReadyByPlugin records the service-checked readiness of each exact plugin generation.
   // environmentReadyByPlugin 记录每个精确插件代次经服务检查后的就绪状态。
   const [environmentReadyByPlugin, setEnvironmentReadyByPlugin] = React.useState<Record<string, boolean>>({});
-  // coreBrowserReady is independent of the Playwright MCP package installed for the browser plugin.
-  // coreBrowserReady 独立于浏览器插件所安装的 Playwright MCP 包。
-  const [coreBrowserReady, setCoreBrowserReady] = React.useState<boolean | null>(null);
   // installTasksByPlugin reflects Core-owned work, including work started by another client.
   // installTasksByPlugin 反映 Core 持有的任务，包括其他客户端启动的任务。
   const [installTasksByPlugin, setInstallTasksByPlugin] = React.useState<Record<string, import("../../../service/skills-actions-service").PluginEnvironmentInstallTaskStatus>>({});
@@ -205,16 +202,6 @@ export function VulcanPluginsPanel(props: {
     () => props.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin"),
     [props.plugins],
   );
-  // Refresh the optional Core browser component when this catalog view mounts or changes.
-  // 此目录视图挂载或变化时刷新可选 Core 浏览器组件状态。
-  React.useEffect(() => {
-    if (!vulcanPlugins.some((plugin) => plugin.id === "vulcan-browser")) return;
-    let active = true;
-    void getCoreBrowserRuntimeStatus()
-      .then((status) => { if (active) setCoreBrowserReady(status.ready); })
-      .catch(() => { if (active) setCoreBrowserReady(null); });
-    return () => { active = false; };
-  }, [vulcanPlugins]);
   // Refresh readiness when the committed plugin catalog changes; stale responses cannot replace a newer view.
   // 已提交插件目录变化时刷新就绪状态；过期响应不能覆盖较新的视图。
   React.useEffect(() => {
@@ -761,10 +748,13 @@ export function VulcanPluginsPanel(props: {
                 </div>
                 <p>{localizedCapability}</p>
                 <span className="agent-definition-row-path">{plugin.id}</span>
-                {plugin.id === "vulcan-browser" ? <div className="text-xs" role="status">
+                {plugin.id === "vulcan-browser" ? <div className="space-y-2 text-xs">
+                  <div>
                   {locale.startsWith("zh")
-                    ? `Playwright MCP 依赖：${environmentReadyByPlugin[plugin.id] === true ? "已安装" : environmentReadyByPlugin[plugin.id] === false ? "缺失或已损坏" : "检查中"}；Core 浏览器组件：${coreBrowserReady === true ? "已找到" : coreBrowserReady === false ? "缺失或不可用" : "状态未知"}`
-                    : `Playwright MCP dependencies: ${environmentReadyByPlugin[plugin.id] === true ? "installed" : environmentReadyByPlugin[plugin.id] === false ? "missing or damaged" : "checking"}; Core browser component: ${coreBrowserReady === true ? "found" : coreBrowserReady === false ? "missing or unavailable" : "unknown"}`}
+                    ? `Playwright MCP 依赖：${environmentReadyByPlugin[plugin.id] === true ? "已安装" : environmentReadyByPlugin[plugin.id] === false ? "缺失或已损坏" : "检查中"}`
+                    : `Playwright MCP dependencies: ${environmentReadyByPlugin[plugin.id] === true ? "installed" : environmentReadyByPlugin[plugin.id] === false ? "missing or damaged" : "checking"}`}
+                  </div>
+                  <CoreBrowserRuntimeControls />
                 </div> : null}
                 {plugin.diagnostics.length > 0 ? <details className="vulcan-plugin-component-details text-[var(--vcn-content-warning)]">
                   <summary>{locale.startsWith("zh") ? "查看插件诊断" : "View plugin diagnostics"}</summary>

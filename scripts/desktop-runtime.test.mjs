@@ -7,7 +7,7 @@ import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageRelativePath, verifyPackagedLayout } from './desktop-runtime.mjs';
+import { packageRelativePath, verifyPackagedLayout, retainedChromiumPackage } from './desktop-runtime.mjs';
 
 test('rejects an isolated distribution root outside generated target artifacts', () => {
   const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
@@ -140,6 +140,30 @@ async function createReleaseFixture({ chromium = true } = {}) {
 async function removeFixture(root) {
   await rm(root, { recursive: true, force: true });
 }
+
+test('rebuild without a Chromium source retains the verified existing package', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify({ ...releaseLayout(), platform: process.platform, architecture: process.arch }));
+  assert.equal(await retainedChromiumPackage(root), fixtureLayout.chromiumExecutable);
+  await verifyPackagedLayout(fixtureLayout, root);
+});
+
+test('a damaged retained browser fails before any package is removed', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify({ ...releaseLayout(), platform: process.platform, architecture: process.arch }));
+  await writeFile(path.join(root, fixtureLayout.chromiumExecutable), 'truncated');
+  await assert.rejects(retainedChromiumPackage(root), /size changed/);
+});
+
+test('a fresh distribution needs no implicit browser download', async (t) => {
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  assert.equal(await retainedChromiumPackage(root), null);
+  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify(releaseLayout(false)));
+  assert.equal(await retainedChromiumPackage(root), null);
+});
 
 test('accepts a complete package layout', async (t) => {
   const root = await createFixture();

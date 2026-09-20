@@ -32,10 +32,6 @@
   --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
 }
 
-.diff-plain-rendered-window pre[data-diff]:hover [data-code]::-webkit-scrollbar-thumb {
-  background-color: var(--diffs-bg-context);
-}
-
 .diff-plain-rendered-window pre[data-diff][data-diff-type="split"][data-overflow="scroll"] {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -91,19 +87,7 @@
 
 .diff-plain-rendered-window pre[data-diff] [data-code]::-webkit-scrollbar {
   width: 0;
-  height: 6px;
-}
-
-.diff-plain-rendered-window pre[data-diff] [data-code]::-webkit-scrollbar-track,
-.diff-plain-rendered-window pre[data-diff] [data-code]::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-.diff-plain-rendered-window pre[data-diff] [data-code]::-webkit-scrollbar-thumb {
-  border: 1px solid transparent;
-  border-radius: 3px;
-  background-color: transparent;
-  background-clip: content-box;
+  height: var(--scrollbar-size);
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-gutter] {

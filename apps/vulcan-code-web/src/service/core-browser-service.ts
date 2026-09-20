@@ -30,6 +30,27 @@ export interface CoreBrowserSession {
 // CoreBrowserRuntimeStatus 区分可选 Core 浏览器组件与插件运行依赖。
 export interface CoreBrowserRuntimeStatus {
   ready: boolean;
+  // Recovery capability and diagnostic are reported by the owning Core host.
+  // 恢复能力及诊断由所属 Core 宿主报告。
+  canInstall: boolean;
+  diagnostic: string | null;
+  // Installation remains queryable after the initiating view closes.
+  // 发起界面关闭后，安装仍可查询。
+  installation: CoreBrowserInstallTask | null;
+}
+
+// CoreBrowserInstallTask identifies one deduplicated background installation attempt.
+// CoreBrowserInstallTask 标识去重后的后台安装尝试。
+export interface CoreBrowserInstallTask {
+  taskId: string;
+  state: "running" | "succeeded" | "failed";
+  error: string | null;
+}
+
+// installCoreBrowserRuntime starts explicit recovery; returns the Core-owned task immediately.
+// installCoreBrowserRuntime 启动显式恢复；立即返回 Core 持有的任务。
+export function installCoreBrowserRuntime(): Promise<CoreBrowserInstallTask> {
+  return serviceClient.request<CoreBrowserInstallTask>("browser.runtime.install", {});
 }
 
 // getCoreBrowserRuntimeStatus reads Core-wide browser component readiness without a conversation.

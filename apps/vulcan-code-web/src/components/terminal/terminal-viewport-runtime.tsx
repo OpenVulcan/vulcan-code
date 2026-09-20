@@ -55,6 +55,9 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       lineHeight: 1.15,
       rows: fixedGrid?.rows,
       scrollback: 10_000,
+      // xterm 6 derives its native slider width from the overview ruler width.
+      // xterm 6 从概览标尺宽度取得原生滑块宽度。
+      overviewRuler: { width: 6, showTopBorder: false, showBottomBorder: false },
       // Keep the emulator palette independent of application light/dark surfaces.
       // 保持模拟器色板独立于应用浅色和深色页面。
       theme: {

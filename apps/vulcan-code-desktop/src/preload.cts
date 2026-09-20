@@ -34,12 +34,24 @@ const CLIPBOARD_CHANNELS = {
 } as const;
 
 const LOCAL_BROWSER_CHANNELS = {
+  // Matches the main-process initialization channel.
+  // 与主进程初始化通道一致。
+  initialize: 'vulcan:local-browser:initialize',
   setOwner: 'vulcan:local-browser:set-owner',
   snapshot: 'vulcan:local-browser:snapshot',
   open: 'vulcan:local-browser:open',
   navigate: 'vulcan:local-browser:navigate',
+  // Native page actions mirror the main-process allowlist.
+  // 原生页面操作与主进程允许列表一致。
+  history: 'vulcan:local-browser:history',
+  move: 'vulcan:local-browser:move',
+  openDeveloperTools: 'vulcan:local-browser:devtools',
+  openExternal: 'vulcan:local-browser:external',
   select: 'vulcan:local-browser:select',
   close: 'vulcan:local-browser:close',
+  // Matches the confirmed conversation-wide close operation.
+  // 与经确认的会话级全部关闭操作一致。
+  closeOwner: 'vulcan:local-browser:close-owner',
   viewport: 'vulcan:local-browser:viewport',
   changed: 'vulcan:local-browser:changed',
 } as const;
@@ -131,12 +143,30 @@ const service = {
 // localBrowser exposes only tab operations and sidebar geometry, never native WebContents objects.
 // localBrowser 只暴露标签操作与侧栏几何，不暴露原生 WebContents 对象。
 const localBrowser = {
+  // closeOwner resolves true after confirmation and page destruction; false means cancellation.
+  // closeOwner 在确认并销毁页面后返回 true；false 表示取消。
+  closeOwner: (ownerSessionId: string, locale: string): Promise<boolean> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.closeOwner, ownerSessionId, locale),
+  // initialize releases pages left by the previous renderer; resolves after reset.
+  // initialize 释放上一个渲染界面遗留的页面；重置后完成。
+  initialize: (): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.initialize),
   // setOwner selects one conversation's native tabs within this GUI window.
   // setOwner 在此 GUI 窗口内选择一个会话的原生标签。
   setOwner: (ownerSessionId: string | null): Promise<unknown> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.setOwner, ownerSessionId),
   snapshot: (): Promise<unknown> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.snapshot),
   open: (url: string): Promise<string> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.open, url),
   navigate: (id: string, url: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.navigate, id, url),
+  // history forwards an exact page id and navigation action; resolves after dispatch.
+  // history 转发精确页面标识与导航操作；派发后完成。
+  history: (id: string, action: 'back' | 'forward' | 'reload' | 'stop'): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.history, id, action),
+  // move forwards source and destination tab ids; resolves after reordering.
+  // move 转发源标签与目标标签标识；排序后完成。
+  move: (id: string, targetId: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.move, id, targetId),
+  // openDeveloperTools opens the given page's detached inspector; resolves after dispatch.
+  // openDeveloperTools 打开指定页面的独立检查器；派发后完成。
+  openDeveloperTools: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.openDeveloperTools, id),
+  // openExternal uses the given page's native URL; resolves after the OS request.
+  // openExternal 使用指定页面的原生地址；操作系统请求后完成。
+  openExternal: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.openExternal, id),
   select: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.select, id),
   close: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.close, id),
   viewport: (rect: unknown): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.viewport, rect),

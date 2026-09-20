@@ -24,11 +24,6 @@
   background: #111318;
 }
 
-.terminal-viewport .xterm-viewport {
-  scrollbar-color: var(--muted-foreground) transparent;
-  scrollbar-width: thin;
-}
-
 .terminal-viewport .xterm-screen canvas {
   image-rendering: auto;
 }
@@ -207,8 +202,6 @@
   padding: 7px 5px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: var(--muted-foreground) transparent;
-  scrollbar-width: thin;
 }
 
 .project-terminal-compact-session-button {
@@ -312,8 +305,6 @@
   padding: 5px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: var(--muted-foreground) transparent;
-  scrollbar-width: thin;
 }
 
 .project-terminal-session-row {

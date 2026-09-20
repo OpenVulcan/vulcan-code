@@ -240,7 +240,7 @@
 }
 
 .vcn-sidebar-inset .chat-grid {
-  --console-scrollbar-gutter: 18px;
+  --console-scrollbar-gutter: var(--scrollbar-size);
   --composer-default-height: 108px;
   position: relative;
   min-height: 0;

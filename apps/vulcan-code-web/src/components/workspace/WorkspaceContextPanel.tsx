@@ -457,6 +457,7 @@ function WorkspaceContextTabBar(props: {
         />
       ) : null}
       <WorkspaceContextAddMenu
+        tabs={props.tabs}
         aiBrowserAvailable={props.aiBrowserAvailable}
         localBrowserAvailable={props.localBrowserAvailable}
         onOpenTab={props.onOpenTab}
@@ -617,6 +618,9 @@ function WorkspaceContextTabSwitcher(props: {
 // WorkspaceContextAddMenu renders the fixed plus menu for opening more tabs.
 // WorkspaceContextAddMenu 渲染用于打开更多页签的固定加号菜单。
 function WorkspaceContextAddMenu(props: {
+  // Open tabs determine which singleton entries remain available.
+  // 已打开页签决定哪些单实例入口仍然可用。
+  tabs: WorkspaceContextTabItem[];
   // Whether this GUI can open its own local browser page.
   // 此 GUI 是否可以打开自己的本地浏览器页面。
   localBrowserAvailable: boolean;
@@ -628,6 +632,12 @@ function WorkspaceContextAddMenu(props: {
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
   const { t } = useI18n();
+  // availableKinds excludes existing singletons; file pages always keep their multi-tab entry.
+  // availableKinds 排除已经存在的单实例；文件页面始终保留多标签入口。
+  const availableKinds = (["review", "memory", "local-browser", "browser"] as const).filter((kind) =>
+    !props.tabs.some((tab) => tab.kind === kind)
+    && (kind !== "local-browser" || props.localBrowserAvailable)
+    && (kind !== "browser" || props.aiBrowserAvailable));
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -638,11 +648,8 @@ function WorkspaceContextAddMenu(props: {
       <DropdownMenuContent align="start" className="context-dynamic-add-menu">
         <DropdownMenuLabel>{t("workspaceContext.openPage")}</DropdownMenuLabel>
         <WorkspaceContextOpenMenuItem kind="files" onOpenTab={props.onOpenTab} />
-        <DropdownMenuSeparator />
-        <WorkspaceContextOpenMenuItem kind="review" onOpenTab={props.onOpenTab} />
-        <WorkspaceContextOpenMenuItem kind="memory" onOpenTab={props.onOpenTab} />
-        {props.localBrowserAvailable ? <WorkspaceContextOpenMenuItem kind="local-browser" onOpenTab={props.onOpenTab} /> : null}
-        {props.aiBrowserAvailable ? <WorkspaceContextOpenMenuItem kind="browser" onOpenTab={props.onOpenTab} /> : null}
+        {availableKinds.length > 0 && <DropdownMenuSeparator />}
+        {availableKinds.map((kind) => <WorkspaceContextOpenMenuItem key={kind} kind={kind} onOpenTab={props.onOpenTab} />)}
       </DropdownMenuContent>
     </DropdownMenu>
   );

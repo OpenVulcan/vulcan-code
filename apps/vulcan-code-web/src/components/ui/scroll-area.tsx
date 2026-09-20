@@ -26,6 +26,10 @@ function ScrollArea({
   )
 }
 
+// ScrollBar renders a transparent six-pixel rail for the requested orientation.
+// ScrollBar 为请求的方向渲染透明的六像素轨道。
+// Props are forwarded to Radix; returns the rail and its draggable thumb.
+// 属性转交给 Radix；返回轨道及可拖动滑块。
 function ScrollBar({
   className,
   orientation = "vertical",
@@ -37,14 +41,14 @@ function ScrollBar({
       data-orientation={orientation}
       orientation={orientation}
       className={cn(
-        "flex touch-none p-px transition-colors select-none data-horizontal:h-2.5 data-horizontal:flex-col data-horizontal:border-t data-horizontal:border-t-transparent data-vertical:h-full data-vertical:w-2.5 data-vertical:border-l data-vertical:border-l-transparent",
+        "flex touch-none bg-transparent p-0 transition-colors select-none data-horizontal:h-[6px] data-horizontal:flex-col data-vertical:h-full data-vertical:w-[6px]",
         className
       )}
       {...props}
     >
       <ScrollAreaPrimitive.ScrollAreaThumb
         data-slot="scroll-area-thumb"
-        className="relative flex-1 rounded-full bg-border"
+        className="relative flex-1 rounded-full bg-[var(--scrollbar-thumb)] hover:bg-[var(--scrollbar-thumb-hover)]"
       />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   )

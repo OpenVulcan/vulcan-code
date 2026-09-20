@@ -85,9 +85,16 @@ export interface ElectronLocalBrowserTab {
   // url is the current top-level page address.
   // url 是当前顶层页面地址。
   url: string;
+  // faviconUrl is supplied by Electron's native favicon event; null selects the default icon.
+  // faviconUrl 来自 Electron 原生图标事件；为空时显示默认图标。
+  faviconUrl: string | null;
   // loading reports native navigation activity.
   // loading 报告原生导航活动。
   loading: boolean;
+  // Native navigation history determines control availability.
+  // 原生导航历史决定控件是否可用。
+  canGoBack: boolean;
+  canGoForward: boolean;
 }
 
 // ElectronLocalBrowserSnapshot is the native temporary-tab projection.
@@ -122,11 +129,17 @@ export interface ElectronLocalBrowserViewport {
   // visible is false while a workbench modal is open or the panel is hidden.
   // visible 在工作台模态框打开或面板隐藏时为 false。
   visible: boolean;
+  // An omitted or null size fills the panel; an explicit CSS size is fitted inside it.
+  // 未提供或为空的尺寸填充面板；明确的 CSS 尺寸在面板内适配显示。
+  deviceSize?: { width: number; height: number } | null;
 }
 
 // ElectronLocalBrowserBridge exposes tab operations without WebContents or Core credentials.
 // ElectronLocalBrowserBridge 公开标签操作，不公开 WebContents 或 Core 凭据。
 export interface ElectronLocalBrowserBridge {
+  // initialize clears old native pages before the workbench mounts; resolves after cleanup.
+  // initialize 在工作台挂载前清除旧原生页面；清理完成后返回。
+  initialize: () => Promise<void>;
   // setOwner shows only tabs associated with one conversation in this GUI window.
   // setOwner 仅显示此 GUI 窗口中属于一个会话的标签。
   setOwner: (ownerSessionId: string | null) => Promise<ElectronLocalBrowserSnapshot>;
@@ -139,12 +152,27 @@ export interface ElectronLocalBrowserBridge {
   // navigate changes one existing local tab's address.
   // navigate 更改一个已有本地标签的地址。
   navigate: (id: string, url: string) => Promise<void>;
+  // Executes one native navigation action for id; resolves after dispatch.
+  // 为 id 执行一次原生导航操作；派发后完成。
+  history: (id: string, action: 'back' | 'forward' | 'reload' | 'stop') => Promise<void>;
+  // Moves id to targetId's position without recreating either page; resolves after moving.
+  // 将 id 移动到 targetId 的位置，不重建页面；移动后完成。
+  move: (id: string, targetId: string) => Promise<void>;
+  // Opens id's inspector in a separate native window; resolves after opening.
+  // 在独立原生窗口打开 id 的检查器；打开后完成。
+  openDeveloperTools: (id: string) => Promise<void>;
+  // Opens id's actual HTTP(S) URL in the system browser; resolves after the OS request.
+  // 在系统浏览器打开 id 的实际 HTTP(S) 地址；操作系统请求后完成。
+  openExternal: (id: string) => Promise<void>;
   // select displays one existing local tab.
   // select 显示一个已有本地标签。
   select: (id: string) => Promise<void>;
   // close destroys one local tab.
   // close 销毁一个本地标签。
   close: (id: string) => Promise<void>;
+  // Confirms closing ownerSessionId's pages in locale; resolves true only after destruction.
+  // 使用 locale 确认关闭 ownerSessionId 的页面；销毁完成后才返回 true。
+  closeOwner: (ownerSessionId: string, locale: string) => Promise<boolean>;
   // viewport updates or hides the native sidebar view.
   // viewport 更新或隐藏侧栏中的原生视图。
   viewport: (rect: ElectronLocalBrowserViewport | null) => Promise<void>;
@@ -248,7 +276,7 @@ export function readElectronLocalBrowserBridge(): ElectronLocalBrowserBridge | n
   const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
   const bridge = api?.localBrowser;
   if (!bridge) return null;
-  const methods = ["setOwner", "snapshot", "open", "navigate", "select", "close", "viewport", "subscribeChanged"];
+  const methods = ["initialize", "setOwner", "snapshot", "open", "navigate", "history", "move", "openDeveloperTools", "openExternal", "select", "close", "closeOwner", "viewport", "subscribeChanged"];
   return methods.every((method) => typeof (bridge as unknown as Record<string, unknown>)[method] === "function")
     ? bridge : null;
 }

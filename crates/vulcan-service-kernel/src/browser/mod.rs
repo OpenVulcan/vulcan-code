@@ -6,6 +6,8 @@ mod ai_tools;
 mod ai_tools_acceptance;
 mod automation_grant;
 pub mod host;
+mod runtime_install;
+pub use runtime_install::{BrowserRuntimeInstaller, BrowserRuntimeInstallTask, BrowserRuntimeStatus};
 
 pub(crate) use ai_tools::native_browser_runtime;
 pub(crate) use ai_tools::prepare_browser_mcp_bindings;
@@ -569,6 +571,9 @@ pub struct BrowserManager {
     /// Runtime configuration required to start hosts.
     /// 启动宿主所需的运行时配置。
     host_config: Arc<Mutex<Option<BrowserHostRuntimeConfig>>>,
+    /// Shared installer and queryable recovery state.
+    /// 共享安装器及可查询恢复状态。
+    runtime_maintenance: Arc<Mutex<runtime_install::BrowserRuntimeMaintenance>>,
     /// Serialized AI-to-MCP connection state keyed by trusted conversation identity.
     /// 按可信会话身份索引的串行化 AI 至 MCP 连接状态。
     ai_connections: Arc<
@@ -911,6 +916,7 @@ impl BrowserManager {
             blocking_gate: Arc::new(tokio::sync::Semaphore::new(BROWSER_MAX_BLOCKING_CALLS)),
             hosts: Arc::new(Mutex::new(BTreeMap::new())),
             host_config: Arc::new(Mutex::new(None)),
+            runtime_maintenance: Arc::new(Mutex::new(Default::default())),
             ai_connections: Arc::new(Mutex::new(BTreeMap::new())),
             ai_drain_closed: Arc::new(AtomicBool::new(false)),
             ai_transition_gate: Arc::new(tokio::sync::RwLock::new(())),
@@ -926,6 +932,7 @@ impl BrowserManager {
             blocking_gate: Arc::new(tokio::sync::Semaphore::new(BROWSER_MAX_BLOCKING_CALLS)),
             hosts: Arc::new(Mutex::new(BTreeMap::new())),
             host_config: Arc::new(Mutex::new(None)),
+            runtime_maintenance: Arc::new(Mutex::new(Default::default())),
             ai_connections: Arc::new(Mutex::new(BTreeMap::new())),
             ai_drain_closed: Arc::new(AtomicBool::new(false)),
             ai_transition_gate: Arc::new(tokio::sync::RwLock::new(())),

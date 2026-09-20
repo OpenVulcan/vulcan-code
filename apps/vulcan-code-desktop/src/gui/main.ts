@@ -6,7 +6,7 @@
 // GUI 只拥有窗口与原生集成。它启动或复用独立 Core 服务、等待真实业务就绪，并且在关闭窗口时
 // 绝不停止该服务。
 
-import { BrowserWindow, Notification, app, clipboard, ipcMain, shell } from 'electron';
+import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 
 import {
@@ -319,12 +319,38 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     (snapshot) => window.webContents.send(LOCAL_BROWSER_CHANNELS.changed, snapshot),
   );
   window.on('close', () => localBrowser.dispose());
+  handle(LOCAL_BROWSER_CHANNELS.initialize, () => localBrowser.initialize());
   handle(LOCAL_BROWSER_CHANNELS.setOwner, (_event, ownerSessionId: string | null) => localBrowser.setOwner(ownerSessionId));
   handle(LOCAL_BROWSER_CHANNELS.snapshot, () => localBrowser.snapshot());
   handle(LOCAL_BROWSER_CHANNELS.open, (_event, url: string) => localBrowser.open(url));
   handle(LOCAL_BROWSER_CHANNELS.navigate, (_event, id: string, url: string) => localBrowser.navigate(id, url));
+  handle(LOCAL_BROWSER_CHANNELS.history, (_event, id: string, action: 'back' | 'forward' | 'reload' | 'stop') => localBrowser.history(id, action));
+  handle(LOCAL_BROWSER_CHANNELS.move, (_event, id: string, targetId: string) => localBrowser.move(id, targetId));
+  handle(LOCAL_BROWSER_CHANNELS.openDeveloperTools, (_event, id: string) => localBrowser.openDeveloperTools(id));
+  handle(LOCAL_BROWSER_CHANNELS.openExternal, (_event, id: string) => localBrowser.openExternal(id));
   handle(LOCAL_BROWSER_CHANNELS.select, (_event, id: string) => localBrowser.select(id));
   handle(LOCAL_BROWSER_CHANNELS.close, (_event, id: string) => localBrowser.close(id));
+  // Native modal confirmation stays above embedded WebContentsViews and defaults to cancellation.
+  // 原生模态确认始终位于内嵌 WebContentsView 之上，并默认选择取消。
+  handle(LOCAL_BROWSER_CHANNELS.closeOwner, (_event, ownerSessionId: string, locale: string) =>
+    localBrowser.closeOwner(ownerSessionId, async (count) => {
+      // chinese selects user-facing confirmation copy only.
+      // chinese 仅选择面向用户的确认文案。
+      const chinese = locale === 'zh-CN';
+      // result is the user's explicit decision for this owning GUI window.
+      // result 是用户对当前所属 GUI 窗口作出的明确选择。
+      const result = await dialog.showMessageBox(window, {
+        type: 'question',
+        title: chinese ? '关闭内置浏览器' : 'Close built-in browser',
+        message: chinese ? `当前有 ${count} 个正在访问的页面，是否全部关闭？` : `${count} pages are open. Close all of them?`,
+        detail: chinese ? '全部关闭将释放这些网页占用的资源，然后关闭内置浏览器页签。' : 'This releases the resources used by these pages and then closes the browser tab.',
+        buttons: chinese ? ['取消', '全部关闭'] : ['Cancel', 'Close all'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return result.response === 1;
+    }));
   handle(LOCAL_BROWSER_CHANNELS.viewport, (_event, viewport: LocalBrowserViewport | null) =>
     localBrowser.setViewport(viewport));
   // The shared handler guard limits DevTools activation to this workbench's trusted main frame.
@@ -333,7 +359,7 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     if (window.isDestroyed()) {
       throw new Error('The workbench window is no longer available.');
     }
-    window.webContents.openDevTools({ mode: 'right', activate: true });
+    window.webContents.openDevTools({ mode: 'detach', activate: true });
   });
   handle(WINDOW_COMMAND_CHANNELS.minimize, () => {
     window.minimize();

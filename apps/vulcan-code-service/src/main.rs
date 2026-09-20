@@ -9,6 +9,7 @@
 #[cfg(all(target_os = "windows", debug_assertions, feature = "desktop-tray"))]
 mod debug_console;
 mod desktop_integration;
+mod browser_runtime_install;
 #[cfg(feature = "desktop-tray")]
 mod desktop_notifications;
 mod launch;

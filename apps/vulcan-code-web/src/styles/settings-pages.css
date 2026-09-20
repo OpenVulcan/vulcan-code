@@ -429,7 +429,6 @@
   overflow-x: auto;
   overflow-y: hidden;
   border-radius: 0;
-  scrollbar-width: thin;
 }
 
 .settings-model-route-tab {
