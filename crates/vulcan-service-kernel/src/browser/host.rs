@@ -608,6 +608,10 @@ pub struct BrowserPageRecord {
     /// Last observed page URL, for display only.
     /// 最近观察到的页面地址，仅用于展示。
     pub url: String,
+    /// Last Chromium target title; absent until host metadata arrives.
+    /// 最新 Chromium 目标标题；宿主元数据到达前为空。
+    #[serde(default)]
+    pub title: Option<String>,
     /// Page identity that opened this page, when one did.
     /// 打开本页面的页面标识（如有）。
     pub opener_page_id: Option<String>,
@@ -651,7 +655,10 @@ impl BrowserPageRegistry {
             if let Some(page) = self.pages.get_mut(page_id) {
                 // A navigation changes the URL but must never change the page identity.
                 // 导航会改变地址，但绝不改变页面标识。
-                page.url = String::from(url);
+                if page.url != url {
+                    page.title = None;
+                    page.url = String::from(url);
+                }
             }
             return page_id.clone();
         }
@@ -663,6 +670,7 @@ impl BrowserPageRegistry {
                 page_id: page_id.clone(),
                 target_id: String::from(target_id),
                 url: String::from(url),
+                title: None,
                 opener_page_id: None,
                 host_generation: self.host_generation,
             },
@@ -693,6 +701,22 @@ impl BrowserPageRegistry {
     /// 将一个 Core 页面标识解析为其当前宿主目标。
     pub fn target_for_page(&self, page_id: &str) -> Option<&BrowserPageRecord> {
         self.pages.get(page_id)
+    }
+
+    /// Updates URL and title for a registered target; returns false for a destroyed or unknown target.
+    /// 更新已登记目标的地址与标题；目标已销毁或未知时返回 false。
+    /// `target_id`, `url`, and `title` are the same Chromium target metadata snapshot.
+    /// `target_id`、`url` 和 `title` 来自同一份 Chromium 目标元数据快照。
+    pub fn update_metadata(&mut self, target_id: &str, url: &str, title: &str) -> bool {
+        let Some(page_id) = self.target_index.get(target_id) else {
+            return false;
+        };
+        let Some(page) = self.pages.get_mut(page_id) else {
+            return false;
+        };
+        page.url = String::from(url);
+        page.title = Some(String::from(title));
+        true
     }
 
     /// Removes a destroyed host target from both page indexes.
@@ -1200,8 +1224,8 @@ impl BrowserHostProcessHandle for SystemBrowserHostProcess {
     }
 }
 
-/// Spawner that starts the shared desktop runtime as one browser host.
-/// 将共享桌面运行时作为浏览器宿主启动的启动器。
+/// Spawner that starts the independent Node runtime as one browser host.
+/// 将独立 Node 运行时作为浏览器宿主启动的启动器。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemBrowserHostSpawner;
 
@@ -1222,6 +1246,17 @@ impl BrowserHostSpawner for SystemBrowserHostSpawner {
         &self,
         plan: &BrowserHostLaunchPlan,
     ) -> Result<Box<dyn BrowserHostProcessHandle>, String> {
+        // CREATE_NO_WINDOW cannot safely inherit a Windows console stderr handle. Give Node
+        // a real file handle whose lifetime is independent of the Core console and GUI.
+        // CREATE_NO_WINDOW 无法安全继承 Windows 控制台的 stderr 句柄。为 Node 提供真实文件句柄，
+        // 使其生命周期独立于 Core 控制台与 GUI，避免慢截图日志触发 EBADF 并终止宿主。
+        let diagnostics_path = plan.control_directory.join("browser-host-stderr.log");
+        let diagnostics = std::fs::File::create(&diagnostics_path).map_err(|error| {
+            format!(
+                "failed to create browser host diagnostics {}: {error}",
+                diagnostics_path.display()
+            )
+        })?;
         // Core starts the declared Node runtime, independently of the GUI's Electron process.
         // Core 启动已声明的 Node 运行时，与 GUI 的 Electron 进程独立。
         let mut command = std::process::Command::new(&plan.executable);
@@ -1232,9 +1267,7 @@ impl BrowserHostSpawner for SystemBrowserHostSpawner {
             // 保持既有鉴权控制通道独立于进程标准输入输出。
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            // Standard error stays inherited so real host diagnostics reach the service log.
-            // 标准错误保持继承，使真实宿主诊断进入服务日志。
-            .stderr(std::process::Stdio::inherit());
+            .stderr(std::process::Stdio::from(diagnostics));
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -1242,6 +1275,8 @@ impl BrowserHostSpawner for SystemBrowserHostSpawner {
             // 后台浏览器不应弹出额外 Node 控制台窗口。
             command.creation_flags(0x08000000);
         }
+        // The child owns its inherited file handle even after this local Command is dropped.
+        // 即使本地 Command 被销毁，子进程仍拥有继承的文件句柄。
         let child = command.spawn().map_err(|error| {
             format!(
                 "failed to start the browser host {}: {error}",
@@ -1703,6 +1738,12 @@ mod tests {
         let mut registry = BrowserPageRegistry::new(1);
         let first = registry.adopt_target("target-a", "https://example.test/same");
         let second = registry.adopt_target("target-b", "https://example.test/same");
+        assert!(registry.update_metadata("target-a", "https://example.test/same", "First title"));
+        assert!(registry.update_metadata("target-b", "https://example.test/same", "Second title"));
+        assert_eq!(
+            registry.target_for_page(&first).unwrap().title.as_deref(),
+            Some("First title")
+        );
         assert_ne!(
             first, second,
             "two pages showing the same URL must be two distinct pages"
@@ -1710,6 +1751,16 @@ mod tests {
         // Navigating keeps the page identity while its URL changes.
         // 导航保留页面标识，同时地址发生变化。
         let again = registry.adopt_target("target-a", "https://example.test/other");
+        assert_eq!(registry.target_for_page(&first).unwrap().title, None);
+        assert_eq!(
+            registry.target_for_page(&second).unwrap().title.as_deref(),
+            Some("Second title")
+        );
+        assert!(registry.update_metadata(
+            "target-a",
+            "https://example.test/other",
+            "Updated title"
+        ));
         assert_eq!(again, first, "navigation must not change the page identity");
         assert_eq!(
             registry
@@ -1731,6 +1782,7 @@ mod tests {
         assert!(registry.target_for_page(&first).is_none());
         assert_eq!(registry.pages().len(), 1);
         assert!(registry.remove_target("target-a").is_none());
+        assert!(!registry.update_metadata("target-a", "https://example.test/other", "Late title"));
     }
 
     /// Verifies an opened page keeps its opener relation.
@@ -1989,5 +2041,70 @@ mod tests {
             .expect("adopt");
         assert_eq!(document.control_port, 50001);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Exercises real hidden Node stderr writes and verifies their independent file lifetime.
+    /// 验证真实隐藏 Node 的 stderr 写入及日志文件的独立生命周期。
+    /// Requires the packaged Node; returns normally only after every diagnostic is retained.
+    /// 要求已打包的 Node；仅在全部诊断保留且子进程正常退出后返回。
+    #[test]
+    #[cfg(windows)]
+    #[ignore = "requires the packaged Node runtime"]
+    fn real_hidden_node_retains_diagnostics_without_console_handles() {
+        // The runtime layout is authoritative; no executable path or version is guessed.
+        // 运行时布局是权威来源，不猜测可执行文件路径或版本。
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = std::env::var_os("VULCAN_W08_ASSET_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| repository.join("output"));
+        let layout: Value = serde_json::from_slice(
+            &std::fs::read(output.join("runtime-layout.json")).expect("read runtime layout"),
+        )
+        .expect("decode runtime layout");
+        // The probe outlives spawn(), writes more than a pipe buffer, and then writes asynchronously.
+        // 探针在 spawn() 返回后继续运行，写入超过管道缓冲区的数据，再异步写入。
+        let temporary = tempfile::tempdir().expect("isolated diagnostic probe");
+        let script = temporary.path().join("diagnostic-probe.cjs");
+        std::fs::write(&script, r#"
+const { writeSync } = require('node:fs');
+for (let index = 0; index < 4096; index++) writeSync(2, '[vulcan-chromium-host] slow page.capture\n');
+setTimeout(() => process.stderr.write('diagnostics-complete\n'), 100);
+"#).expect("write real Node stderr probe");
+        // The same production spawner must supply a usable handle with CREATE_NO_WINDOW.
+        // 必须由相同的生产启动器在 CREATE_NO_WINDOW 下提供可用句柄。
+        let plan = BrowserHostLaunchPlan {
+            executable: output.join(layout["browserHostExecutable"].as_str().expect("Node path")),
+            entry: script,
+            chromium_executable: output.join(
+                layout["chromiumExecutable"]
+                    .as_str()
+                    .expect("Chromium path"),
+            ),
+            session_id: String::from("diagnostic-probe"),
+            host_generation: String::from("1"),
+            user_data_directory: temporary.path().to_path_buf(),
+            control_directory: temporary.path().to_path_buf(),
+            control_secret: String::from("unused-probe-secret"),
+            initial_url: String::from("about:blank"),
+        };
+        let mut child = SystemBrowserHostSpawner
+            .spawn(&plan)
+            .expect("start hidden Node");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(code) = child.try_wait().expect("poll hidden Node") {
+                assert_eq!(code, 0, "diagnostic writes must not terminate Node");
+                break;
+            }
+            if Instant::now() >= deadline {
+                child.kill();
+                panic!("hidden Node stalled while writing diagnostics");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let diagnostics = std::fs::read_to_string(temporary.path().join("browser-host-stderr.log"))
+            .expect("read retained diagnostics");
+        assert_eq!(diagnostics.matches("slow page.capture").count(), 4096);
+        assert!(diagnostics.ends_with("diagnostics-complete\n"));
     }
 }

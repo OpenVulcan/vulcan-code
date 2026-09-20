@@ -1,8 +1,11 @@
 import * as React from "react";
-import { Download, Globe2, RefreshCw, X } from "lucide-react";
+import { ArrowRight, Download, Globe2, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { CoreBrowserRuntimeControls } from "./CoreBrowserRuntimeControls";
+import { useBrowserFrameRate } from "./use-browser-frame-rate";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n } from "@/i18n";
 import {
@@ -106,6 +109,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // pages is the selected session's current page registry.
   // pages 是选定会话当前的页面注册表。
   const [pages, setPages] = React.useState<CoreBrowserPage[]>([]);
+  // viewedPages remembers each browser's last displayed page, independently of AI ownership.
+  // viewedPages 记录每个浏览器最后显示的页面，与 AI 控制权无关。
+  const viewedPages = React.useRef(new Map<string, CoreBrowserPage>());
   // downloads are path-free records from the selected Core session.
   // downloads 是选定 Core 会话提供的不含路径的记录。
   const [downloads, setDownloads] = React.useState<CoreBrowserDownload[]>([]);
@@ -121,6 +127,23 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // selectedPageId is this observer's page choice, not the AI's automation target.
   // selectedPageId 是本观察端的页面选择，而非 AI 的自动化目标。
   const [selectedPageId, setSelectedPageId] = React.useState<string | null>(null);
+  // fps counts received frames for this exact selection, never the cumulative sequence number.
+  // fps 统计此精确选择的接收帧率，绝不使用累计序号。
+  const { fps, recordFrame } = useBrowserFrameRate(props.ownerSessionId, selectedSessionId, selectedPageId);
+  // Auxiliary controls open explicitly so the page keeps the available panel area.
+  // 辅助控件按需展开，让页面占据可用面板区域。
+  const [showViewport, setShowViewport] = React.useState(false);
+  const [showTextInput, setShowTextInput] = React.useState(false);
+  const [showDownloads, setShowDownloads] = React.useState(false);
+  const [showRuntime, setShowRuntime] = React.useState(false);
+  // closeRequest freezes the confirmed browser/page identity even when polls update the selection.
+  // closeRequest 冻结待确认的浏览器、页面身份，避免轮询变更选择后关错目标。
+  const [closeRequest, setCloseRequest] = React.useState<{ session: CoreBrowserSession; page: CoreBrowserPage | null; label: string } | null>(null);
+  // closing and closePending prevent duplicate destructive requests while keeping errors in the dialog.
+  // closing 和 closePending 阻止重复关闭请求，并让错误保留在确认框内。
+  const [closing, setClosing] = React.useState(false);
+  const closePending = React.useRef(false);
+  const [closeError, setCloseError] = React.useState<string | null>(null);
   // lease holds this UI's in-memory control grant, when acquired.
   // lease 保存本界面获取的内存控制授权。
   const [lease, setLease] = React.useState<CoreBrowserLease | null>(null);
@@ -232,6 +255,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // selectedPage is the exact Core page currently observed here.
   // selectedPage 是此处观察的精确 Core 页面。
   const selectedPage = pages.find((page) => page.pageId === selectedPageId) ?? null;
+  // visibleSessions includes failed browsers so their diagnostics remain reachable.
+  // visibleSessions 保留故障浏览器，让诊断信息仍可访问。
+  const visibleSessions = sessions.filter((session) => session.status === "running" || session.status === "crashed");
   // ownsControl is true only while this UI retains the selected session's secret.
   // ownsControl 仅在本界面保有选定会话凭据时为真。
   const ownsControl = Boolean(lease && lease.session.sessionId === selectedSessionId);
@@ -272,6 +298,10 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       selectionIntentSequence.current += 1;
       setLease(null);
       setSessions([]);
+      setCloseRequest(null);
+      setCloseError(null);
+      setClosing(false);
+      viewedPages.current.clear();
       setSelectedSessionId(null);
       setAddress("about:blank");
       setTextInput("");
@@ -295,6 +325,10 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   }, [props.ownerSessionId, selectedSessionId, selectedPageId]);
 
   React.useLayoutEffect(() => {
+    if (selectedSessionId && selectedPage) viewedPages.current.set(selectedSessionId, selectedPage);
+  }, [selectedSessionId, selectedPage]);
+
+  React.useLayoutEffect(() => {
     // Clear the old browser before paint so a changed selection never displays its metadata.
     // 在绘制前清空旧浏览器，避免切换选择后显示其元数据。
     pendingPointerMove.current = null;
@@ -303,6 +337,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     setDownloads([]);
     setDialogs([]);
     setFileChoosers([]);
+    setAddress("about:blank");
     setPollErrors({ sessions: null, pages: null, downloads: null, fileChoosers: null, dialogs: null });
     setSelectedPageId(null);
   }, [props.ownerSessionId, selectedSessionId]);
@@ -351,8 +386,11 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     setPollErrors((current) => current.sessions === null ? current : { ...current, sessions: null });
     // Preserve the selected crashed browser so its failure cannot disappear with the live frame.
     // 保留选中的崩溃浏览器，避免其故障随实时画面一起消失。
-    setSelectedSessionId((current) => current && next.some((session) => session.sessionId === current && (session.status === "running" || session.status === "crashed"))
-      ? current : null);
+    // A sole browser has no tab strip, so connect it directly without acquiring control.
+    // 唯一浏览器不显示标签栏，因此直接连接观察，但不获取控制权。
+    const available = next.filter((session) => session.status === "running" || session.status === "crashed");
+    setSelectedSessionId((current) => current && available.some((session) => session.sessionId === current)
+      ? current : available.length === 1 ? available[0].sessionId : null);
   }, [props.ownerSessionId]);
 
   // refreshPages updates one selected session's page identity list.
@@ -366,8 +404,14 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     appliedPageSequence.current = requestSequence;
     setPages(next);
     setPollErrors((current) => current.pages === null ? current : { ...current, pages: null });
-    setSelectedPageId((current) => current && next.some((page) => page.pageId === current)
-      ? current : next[0]?.pageId ?? null);
+    setSelectedPageId((current) => {
+      // Restore only an identity still present in this exact browser's authoritative page list.
+      // 仅恢复仍存在于此精确浏览器权威页面列表中的身份。
+      const remembered = viewedPages.current.get(sessionId);
+      if (current && next.some((page) => page.pageId === current)) return current;
+      if (remembered && next.some((page) => page.pageId === remembered.pageId)) return remembered.pageId;
+      return next[0]?.pageId ?? null;
+    });
   }, [props.ownerSessionId]);
 
   React.useEffect(() => {
@@ -510,7 +554,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     setDialogText(dialogs.find((dialog) => dialog.pageId === selectedPageId)?.defaultPrompt ?? "");
   }, [dialogs.map((dialog) => dialog.dialogId).join("|"), selectedPageId]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (selectedPage && document.activeElement !== addressRef.current) {
       setAddress(selectedPage.url || "about:blank");
     }
@@ -557,6 +601,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             }
             imageUrlRef.current = blobUrl;
             frameRef.current = nextFrame;
+            recordFrame();
             setFrame(nextFrame);
             setImageUrl(blobUrl);
           },
@@ -615,7 +660,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       setImageUrl(null);
       setFrame(null);
     };
-  }, [props.ownerSessionId, selectedPageId, selectedSessionId]);
+  }, [props.ownerSessionId, selectedPageId, selectedSessionId, recordFrame]);
 
   React.useEffect(() => {
     if (!lease || lease.session.ownerSessionId !== props.ownerSessionId) {
@@ -1119,56 +1164,130 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     }
   }
 
-  // closeSession explicitly ends the selected Core browser context.
-  // closeSession 明确结束所选 Core 浏览器上下文。
+  // closeSession closes the exact confirmed page or browser; no arguments, resolves after Core confirms.
+  // closeSession 关闭精确确认的页面或浏览器；无参数，Core 确认后完成。
   async function closeSession(): Promise<void> {
-    if (!selectedSessionId || !selectedSession) {
-      return;
-    }
-    const sessionId = selectedSessionId;
+    if (!closeRequest || closePending.current || closeRequest.session.ownerSessionId !== props.ownerSessionId) return;
+    const { session, page } = closeRequest;
+    const sessionId = session.sessionId;
+    closePending.current = true;
+    setClosing(true);
+    setCloseError(null);
     // closingLease is acquired only for this explicit close when the user is currently observing.
     // closingLease 仅在用户明确关闭且当前只观察时临时获取。
-    let closingLease = lease?.session.sessionId === sessionId ? lease : null;
+    let closingLease = leaseRef.current?.session.sessionId === sessionId ? leaseRef.current : null;
     let acquiredForClose = false;
     try {
       if (!closingLease) {
         closingLease = await requestCoreBrowser<CoreBrowserLease>(props.ownerSessionId,
-          selectedSession.leaseState === "free" ? "browser.lease.acquire" : "browser.lease.takeover", {
+          session.leaseState === "free" ? "browser.lease.acquire" : "browser.lease.takeover", {
             sessionId,
             holder: holderId.current,
           });
         acquiredForClose = true;
       }
-      if (!isCurrentSession(sessionId)) return;
-      await requestCoreBrowser(props.ownerSessionId, "browser.session.close", {
+      if (!isCurrentOwner()) return;
+      if (closingLease.session.hostGeneration !== session.hostGeneration) throw new Error("Browser restarted; review the page before closing it.");
+      await requestCoreBrowser(props.ownerSessionId, page ? "browser.page.close" : "browser.session.close", {
         sessionId,
         leaseSecret: closingLease.leaseSecret,
+        ...(page ? { pageId: page.pageId } : {}),
       });
-      if (!isCurrentSession(sessionId)) return;
-      leaseRef.current = null;
-      setLease(null);
-      setSelectedSessionId(null);
-      setSelectedPageId(null);
+      if (!isCurrentOwner()) return;
+      if (!page) {
+        viewedPages.current.delete(sessionId);
+        if (isCurrentSession(sessionId)) {
+          leaseRef.current = null;
+          setLease(null);
+          setSelectedSessionId(null);
+          setSelectedPageId(null);
+        }
+      } else if (isCurrentSession(sessionId)) {
+        await refreshPages(sessionId);
+      }
       await refreshSessions();
-      if (isCurrentOwner()) setError(null);
+      if (isCurrentOwner()) { setError(null); setCloseRequest(null); }
     } catch (failure) {
-      if (isCurrentSession(sessionId)) setError(String(failure));
+      if (isCurrentOwner()) setCloseError(String(failure));
     } finally {
       if (acquiredForClose && closingLease) {
-        void requestCoreBrowser(props.ownerSessionId, "browser.lease.release", {
+        await requestCoreBrowser(props.ownerSessionId, "browser.lease.release", {
           sessionId,
           leaseSecret: closingLease.leaseSecret,
         }).catch(() => undefined);
       }
+      closePending.current = false;
+      if (isCurrentOwner()) setClosing(false);
     }
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto bg-background p-3" aria-label={chinese ? "AI 浏览器" : "AI browser"}>
-      <CoreBrowserRuntimeControls />
-      <div className="flex items-center justify-between gap-2 border-b pb-2">
-        <div className="flex min-w-0 items-center gap-2"><Globe2 size={17} /><strong>{chinese ? "AI 浏览器" : "AI Browser"}</strong></div>
-        <Button type="button" size="icon" variant="ghost" aria-label={chinese ? "刷新浏览器列表" : "Refresh browser list"} onClick={() => {
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-2 overflow-hidden bg-background p-2" aria-label={chinese ? "AI 浏览器" : "AI browser"}>
+      <CoreBrowserRuntimeControls compact={!showRuntime} />
+      <div hidden={visibleSessions.length <= 1} data-browser-instance-row className="shrink-0">
+        <div className="min-w-0 flex-1" hidden={visibleSessions.length <= 1} role="tablist" aria-label={chinese ? "活跃的 AI 浏览器" : "Active AI browsers"}>
+          <div className="flex items-center gap-1 overflow-x-auto">
+          {visibleSessions.map((session, index) => {
+            // The browser label is its displayed page, never the last AI navigation URL.
+            // 浏览器标签取其显示页面，绝不使用最后一次 AI 导航地址。
+            const displayedPage = session.sessionId === selectedSessionId && selectedPage ? selectedPage : viewedPages.current.get(session.sessionId);
+            const label = displayedPage ? displayedPage.title || browserTabTitle(displayedPage.url) : `${chinese ? "浏览器" : "Browser"} ${index + 1}`;
+            return <div key={session.sessionId} className={`context-dynamic-tab max-w-44 shrink-0 ${selectedSessionId === session.sessionId ? "active" : ""}`}>
+              <span className="context-dynamic-tab-icon"><Globe2 size={12} /></span>
+              <button type="button" role="tab" data-browser-session-id={session.sessionId} aria-selected={selectedSessionId === session.sessionId}
+                className="context-dynamic-tab-label" title={label} onClick={() => void selectSession(session.sessionId)}>
+                <span>{label}{session.status === "crashed" ? (chinese ? " · 异常退出" : " · Crashed") : null}</span>
+              </button>
+              <button type="button" className="context-dynamic-tab-close" aria-label={`${chinese ? "关闭浏览器" : "Close browser"}: ${label}`}
+                onClick={() => { setCloseError(null); setCloseRequest({ session, page: null, label }); }}><X size={10} /></button>
+            </div>;
+          })}
+          </div>
+        </div>
+      </div>
+      {selectedSession ? (
+        <>
+          {selectedSession.status === "crashed" ? <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">
+            {chinese ? "Playwright 浏览器进程异常退出，当前页面已不可用。异常状态已保留，可继续会话并重新打开浏览器。" : "The Playwright browser host exited unexpectedly. This page is unavailable. You can continue the conversation and open a new browser."}
+          </p> : null}
+          {selectedSession.blockedReason ? <p className="shrink-0 text-xs text-destructive">{selectedSession.blockedReason}</p> : null}
+          <div hidden={pages.length <= 1} className="shrink-0" role="tablist" aria-label={chinese ? "浏览器页面" : "Browser pages"}>
+            <div className="flex items-center gap-1 overflow-x-auto">
+            {pages.map((page) => (
+              <div key={page.pageId} className={`context-dynamic-tab max-w-44 shrink-0 ${page.pageId === selectedPageId ? "active" : ""}`}>
+                <span className="context-dynamic-tab-icon"><Globe2 size={12} /></span>
+                <button type="button" role="tab" data-browser-page-id={page.pageId} aria-selected={page.pageId === selectedPageId}
+                  className="context-dynamic-tab-label" title={page.title || page.url} onClick={() => {
+                    if (page.pageId === selectedPageId) return;
+                    for (const key of heldKeys.current) queueInput("key", { type: "up", key });
+                    heldKeys.current.clear();
+                    const held = heldPointer.current;
+                    if (held) queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
+                    heldPointer.current = null;
+                    setSelectedPageId(page.pageId);
+                  }}><span>{page.title || browserTabTitle(page.url)}</span></button>
+                <button type="button" className="context-dynamic-tab-close" aria-label={`${chinese ? "关闭页面" : "Close page"}: ${page.title || browserTabTitle(page.url)}`}
+                  onClick={() => { setCloseError(null); setCloseRequest({ session: selectedSession, page, label: page.title || browserTabTitle(page.url) }); }}><X size={10} /></button>
+              </div>
+            ))}
+            </div>
+          </div>
+        </>
+      ) : null}
+      <div className="flex min-w-0 shrink-0 items-center gap-1">
+        <div className="min-w-0 flex-1">{selectedSession ? <form className="flex min-w-0 items-center gap-1" onSubmit={(event) => void navigate(event)}>
+            <input ref={addressRef} className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-xs" value={address}
+              onChange={(event) => setAddress(event.target.value)} aria-label={chinese ? "页面地址" : "Page URL"} />
+            <Button type="submit" size="icon" variant="ghost" className="h-7 w-7 shrink-0" title={chinese ? "前往" : "Go"} aria-label={chinese ? "前往" : "Go"} disabled={!ownsControl || !selectedPage}><ArrowRight size={14} /></Button>
+            <Button type="button" size="icon" variant={ownsControl ? "secondary" : "ghost"} className="h-7 w-7 shrink-0"
+              disabled={selectedSession.status !== "running" || selectedSession.leaseState === "blocked"}
+              title={ownsControl ? (chinese ? "交还控制权" : "Release control") : selectedSession.leaseState === "free" ? (chinese ? "取得控制权" : "Take control") : (chinese ? "明确接管" : "Take over")}
+              onClick={() => void (ownsControl ? releaseControl() : acquireControl())}>
+              {ownsControl ? <MousePointer2 size={14} /> : <Hand size={14} />}<span className="sr-only">{ownsControl ? (chinese ? "交还控制权" : "Release control") : selectedSession.leaseState === "free" ? (chinese ? "取得控制权" : "Take control") : (chinese ? "明确接管" : "Take over")}</span>
+            </Button>
+            <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label={chinese ? "调整视口" : "Resize viewport"} title={chinese ? "调整视口" : "Resize viewport"} aria-pressed={showViewport} onClick={() => setShowViewport((shown) => !shown)}><MonitorSmartphone size={14} /></Button>
+          </form> : null}</div>
+        <Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label={chinese ? "刷新浏览器列表" : "Refresh browser list"} title={chinese ? "刷新浏览器列表" : "Refresh browser list"} onClick={() => {
           // requestSequence keeps an old manual refresh failure from replacing a newer list.
           // requestSequence 防止旧的手动刷新失败覆盖更新的列表。
           const requestSequence = sessionRequestSequence.current + 1;
@@ -1181,61 +1300,22 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             }
           });
         }}>
-          <RefreshCw size={15} />
+          <RefreshCw size={13} />
         </Button>
-      </div>
-      <div className="flex gap-1 overflow-x-auto border-b pb-1" role="tablist" aria-label={chinese ? "活跃的 AI 浏览器" : "Active AI browsers"}>
-        {sessions.filter((session) => session.status === "running" || session.status === "crashed").map((session, index) => (
-          <button key={session.sessionId} type="button" role="tab" data-browser-session-id={session.sessionId}
-            aria-selected={selectedSessionId === session.sessionId}
-            className={`max-w-44 shrink-0 truncate rounded-t-md border border-b-0 px-3 py-1.5 text-xs ${selectedSessionId === session.sessionId ? "bg-muted font-medium text-foreground" : "bg-background text-muted-foreground"}`}
-            title={session.currentUrl ?? session.sessionId}
-            onClick={() => void selectSession(session.sessionId)}>
-            {browserTabTitle(session.currentUrl) === "about:blank" ? `${chinese ? "浏览器" : "Browser"} ${index + 1}` : browserTabTitle(session.currentUrl)}
-            {session.status === "crashed" ? (chinese ? " · 异常退出" : " · Crashed") : null}
-          </button>
-        ))}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild><Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label={chinese ? "浏览器菜单" : "Browser menu"}><MoreHorizontal size={14} /></Button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => setShowRuntime((shown) => !shown)}><Settings2 size={14} />{chinese ? "浏览器组件状态" : "Browser component status"}</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={!selectedSession || !selectedPage} onSelect={() => { if (selectedSession && selectedPage) { setCloseError(null); setCloseRequest({ session: selectedSession, page: selectedPage, label: selectedPage.title || browserTabTitle(selectedPage.url) }); } }}><X size={14} />{chinese ? "关闭当前页面" : "Close current page"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!selectedSession} onSelect={() => { if (selectedSession) { setCloseError(null); setCloseRequest({ session: selectedSession, page: null, label: selectedPage ? selectedPage.title || browserTabTitle(selectedPage.url) : (chinese ? "AI 浏览器" : "AI browser") }); } }} className="text-destructive"><X size={14} />{chinese ? "关闭浏览器" : "Close browser"}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       {selectedSession ? (
         <>
-          {selectedSession.status === "crashed" ? <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">
-            {chinese ? "Playwright 浏览器进程异常退出，当前页面已不可用。异常状态已保留，可继续会话并重新打开浏览器。" : "The Playwright browser host exited unexpectedly. This page is unavailable. You can continue the conversation and open a new browser."}
-          </p> : null}
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>{selectedSession.status === "crashed" ? (chinese ? "画面已中断" : "View interrupted") : streamStatus === "connected" ? (chinese ? "实时画面" : "Live view") : (chinese ? "正在连接画面" : "Connecting view")}</span>
-            {selectedSession.blockedReason ? <span className="text-destructive">{selectedSession.blockedReason}</span> : null}
-            {ownsControl ? (
-              <Button type="button" size="sm" variant="outline" onClick={() => void releaseControl()}>{chinese ? "交还控制权" : "Release control"}</Button>
-            ) : selectedSession.status === "running" ? (
-              <Button type="button" size="sm" variant="outline" onClick={() => void acquireControl()} disabled={selectedSession.leaseState === "blocked"}>
-                {selectedSession.leaseState === "free" ? (chinese ? "取得控制权" : "Take control") : (chinese ? "明确接管" : "Take over")}
-              </Button>
-            ) : null}
-            <Button type="button" size="sm" variant="ghost" onClick={() => void closeSession()}><X size={14} />{chinese ? "关闭浏览器" : "Close browser"}</Button>
-          </div>
-          <div className="flex items-center gap-1 overflow-x-auto border-b" role="tablist" aria-label={chinese ? "浏览器页面" : "Browser pages"}>
-            {pages.map((page) => (
-              <button key={page.pageId} type="button" role="tab" data-browser-page-id={page.pageId} aria-selected={page.pageId === selectedPageId}
-                className={`max-w-44 shrink-0 truncate rounded-t-md border border-b-0 px-3 py-1.5 text-xs ${page.pageId === selectedPageId ? "bg-muted text-foreground" : "bg-background text-muted-foreground"}`}
-                title={page.url} onClick={() => {
-                  if (page.pageId === selectedPageId) return;
-                  for (const key of heldKeys.current) queueInput("key", { type: "up", key });
-                  heldKeys.current.clear();
-                  // Releasing the old page's pointer before selection prevents a stranded drag.
-                  // 切换选择前释放旧页面的指针，避免拖拽被遗留。
-                  const held = heldPointer.current;
-                  if (held) queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
-                  heldPointer.current = null;
-                  setSelectedPageId(page.pageId);
-                }}>
-                {browserTabTitle(page.url)}
-              </button>
-            ))}
-          </div>
-          <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void navigate(event)}>
-            <input ref={addressRef} className="min-w-52 flex-1 rounded border bg-background px-3 py-2 text-sm" value={address}
-              onChange={(event) => setAddress(event.target.value)} aria-label={chinese ? "页面地址" : "Page URL"} />
-            <Button type="submit" size="sm" disabled={!ownsControl || !selectedPage}>{chinese ? "前往" : "Go"}</Button>
+          {showViewport ? <div className="flex shrink-0 items-center justify-center gap-2 text-xs text-muted-foreground">
+            <span>{chinese ? "页面尺寸" : "Page size"}</span>
             <Select disabled={!ownsControl}
               value={selectedSession.viewportSize ? `${selectedSession.viewportSize.width}x${selectedSession.viewportSize.height}` : "1280x800"}
               onValueChange={(value) => void resizeViewport(value)}>
@@ -1248,9 +1328,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                 <SelectItem value="390x844">390×844</SelectItem>
               </SelectContent>
             </Select>
-          </form>
+          </div> : null}
           {error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
-          <div className="flex min-h-[360px] flex-1 items-center justify-center overflow-hidden rounded border bg-neutral-900">
+          <div data-browser-viewport className="relative flex min-h-0 min-w-0 w-full flex-1 basis-0 items-center justify-center overflow-hidden rounded bg-muted/20">
             {imageUrl && selectedPage ? (
               <div ref={projectionRef} className={`relative h-full w-full outline-none ${ownsControl ? "cursor-crosshair touch-none" : "cursor-default"}`}
                 role="img" aria-label={chinese ? "Core 浏览器实时页面" : "Live Core browser page"} tabIndex={ownsControl ? 0 : -1}
@@ -1278,7 +1358,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                 }}>
                 <img className="pointer-events-none h-full w-full object-contain" src={imageUrl} alt="" draggable={false} />
               </div>
-            ) : <span className="text-sm text-white/70">{chinese ? "正在等待浏览器画面…" : "Waiting for browser frame…"}</span>}
+            ) : <span className="text-xs text-muted-foreground">{selectedSession.status === "crashed" ? (chinese ? "画面已中断" : "View interrupted") : (chinese ? "正在等待浏览器画面…" : "Waiting for browser frame…")}</span>}
           </div>
           {dialogs.filter((dialog) => dialog.pageId === selectedPageId).map((dialog) => (
             <div key={dialog.dialogId} role="alertdialog" className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
@@ -1298,20 +1378,24 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               <input type="file" disabled={!ownsControl} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
             </label>
           ))}
-          {frame ? <details className="text-xs text-muted-foreground"><summary>{chinese ? "画面信息" : "View details"}</summary>
-            {selectedPage?.pageId} · {frame.width}×{frame.height} · #{frame.sequence} · {selectedSession.leaseState}
-          </details> : null}
-          <div className="flex flex-wrap items-center gap-2">
-            <input className="min-w-52 flex-1 rounded border bg-background px-3 py-2 text-sm" value={textInput}
+          <div className="flex h-6 shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate">{selectedSession.status === "crashed" ? (chinese ? "画面已中断" : "View interrupted") : streamStatus === "connected" ? (ownsControl ? (chinese ? "手动控制" : "Manual control") : (chinese ? "实时画面" : "Live view")) : (chinese ? "正在连接画面" : "Connecting view")}</span>
+            <span className="tabular-nums" title={chinese ? "最近 2 秒接收的画面帧率；静止画面可能为 0" : "Received frames over the last 2 seconds; a static page may report 0"}>{fps.toFixed(1)} FPS</span>
+            <Button type="button" size="icon" variant="ghost" className="h-6 w-6" title={chinese ? "发送文字（支持输入法）" : "Send text with IME"} aria-label={chinese ? "文字输入" : "Text input"} aria-pressed={showTextInput} onClick={() => setShowTextInput((shown) => !shown)}><Keyboard size={13} /></Button>
+            <Button type="button" size="icon" variant="ghost" className="relative h-6 w-6" title={chinese ? `下载（${downloads.length}）` : `Downloads (${downloads.length})`} aria-label={chinese ? "下载列表" : "Download list"} aria-pressed={showDownloads} onClick={() => setShowDownloads((shown) => !shown)}><Download size={13} />{downloads.length ? <span className="absolute -right-1 -top-1 text-[9px]">{downloads.length}</span> : null}</Button>
+          </div>
+          {showTextInput ? <div className="flex shrink-0 items-center gap-2">
+            <input className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-xs" value={textInput}
               onChange={(event) => setTextInput(event.target.value)} placeholder={chinese ? "输入文字（支持中文输入法）" : "Type text to send"}
               aria-label={chinese ? "发送到页面的文字" : "Text to send to page"} />
             <Button type="button" size="sm" disabled={!ownsControl || !frame || !textInput}
               onClick={() => { queueInput("text", { text: textInput }); setTextInput(""); }}>
               {chinese ? "发送文字" : "Send text"}
             </Button>
-          </div>
+          </div> : null}
           {downloads.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 text-xs" aria-label={chinese ? "浏览器下载" : "Browser downloads"}>
+            <div hidden={!showDownloads} className="max-h-32 shrink-0 overflow-auto text-xs" aria-label={chinese ? "浏览器下载" : "Browser downloads"}>
+              <div className="flex flex-wrap items-center gap-2">
               <span>{chinese ? "下载" : "Downloads"}</span>
               {downloads.map((download) => (
                 <Button key={download.downloadId} type="button" size="sm" variant="outline"
@@ -1319,6 +1403,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                   <Download size={14} />{download.fileName} · {download.status}
                 </Button>
               ))}
+              </div>
             </div>
           ) : null}
         </>
@@ -1327,6 +1412,25 @@ export function BrowserArea(props: { ownerSessionId: string }) {
         : (chinese ? "当前会话没有活跃的 AI 浏览器。AI 创建后会显示在这里。" : "No active AI browser in this conversation. One will appear here when AI creates it.")}</p>}
       {!selectedSession && error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
       {Object.values(pollErrors).some(Boolean) ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{Object.values(pollErrors).find(Boolean)}</div> : null}
+      <AlertDialog open={closeRequest !== null} onOpenChange={(open) => { if (!open && !closePending.current) setCloseRequest(null); }}>
+        {closeRequest ? <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{closeRequest?.page ? (chinese ? "关闭页面？" : "Close page?") : (chinese ? "关闭浏览器？" : "Close browser?")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {closeRequest?.page
+                ? (chinese ? `确定关闭“${closeRequest.label}”？未保存的页面内容将丢失。` : `Close “${closeRequest.label}”? Unsaved page changes will be lost.`)
+                : (chinese ? `确定关闭“${closeRequest?.label}”及其中的全部页面？这会释放浏览器资源。` : `Close “${closeRequest?.label}” and all its pages? This releases the browser resources.`)}
+              {closeRequest?.session.leaseState === "held" && lease?.session.sessionId !== closeRequest.session.sessionId
+                ? (chinese ? " 如有 AI 正在操作，将先接管控制权再关闭。" : " Active automation will be taken over before closing.") : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {closeError ? <p role="alert" className="text-xs text-destructive">{closeError}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={closing}>{chinese ? "取消" : "Cancel"}</AlertDialogCancel>
+            <Button type="button" variant="destructive" disabled={closing} onClick={() => void closeSession()}>{closing ? (chinese ? "正在关闭…" : "Closing…") : (chinese ? "确认关闭" : "Confirm close")}</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent> : null}
+      </AlertDialog>
     </div>
   );
 }

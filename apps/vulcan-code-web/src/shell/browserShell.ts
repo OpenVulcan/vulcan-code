@@ -33,8 +33,8 @@ export class BrowserShellClient implements ShellClient {
     return Notification.permission;
   }
 
-  // requestNotificationPermission delegates to the browser only after a settings-page user action.
-  // requestNotificationPermission 仅在设置页用户操作后委托浏览器请求权限。
+  // requestNotificationPermission delegates to the browser; it owns prompt and gesture policy.
+  // requestNotificationPermission 委托浏览器申请，由浏览器决定弹框与用户手势策略。
   async requestNotificationPermission(): Promise<ShellNotificationPermission> {
     if (typeof Notification === "undefined") {
       return "unsupported";

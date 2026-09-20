@@ -89,6 +89,7 @@ async function createFixture() {
     fixtureLayout.serviceExecutable,
     fixtureLayout.desktopExecutable,
     fixtureLayout.desktopEntry,
+    'desktop/runtime/resources/app/preload.cjs',
     fixtureLayout.browserHostEntry,
     fixtureLayout.browserHostExecutable,
     fixtureLayout.chromiumExecutable,
@@ -147,6 +148,15 @@ test('accepts a complete package layout', async (t) => {
   const root = await createFixture();
   t.after(() => removeFixture(root));
   await verifyPackagedLayout(fixtureLayout, root);
+});
+
+test('rejects a GUI package that would lose its desktop bridge on reload', async (t) => {
+  // A valid GUI entry cannot compensate for a missing sandbox preload.
+  // 有效的 GUI 入口不能弥补缺失的沙箱预加载文件。
+  const root = await createFixture();
+  t.after(() => removeFixture(root));
+  await rm(path.join(root, 'desktop/runtime/resources/app/preload.cjs'));
+  await assert.rejects(verifyPackagedLayout(fixtureLayout, root), /Missing package input desktopPreload/);
 });
 
 test('writes portable manifest paths from Windows distribution paths', async (t) => {

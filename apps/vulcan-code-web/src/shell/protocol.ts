@@ -70,8 +70,8 @@ export interface ShellClient {
   // 返回当前本地通知权限，且不提示用户。
   getNotificationPermission(): Promise<ShellNotificationPermission>;
 
-  // Requests local notification permission from an explicit user action.
-  // 通过明确用户操作请求本地通知权限。
+  // Requests notification permission for enabled startup or an explicit user action.
+  // 在已启用的启动流程或明确用户操作时请求通知权限。
   requestNotificationPermission(): Promise<ShellNotificationPermission>;
 
   // Returns current host foreground, focus, and visibility state.

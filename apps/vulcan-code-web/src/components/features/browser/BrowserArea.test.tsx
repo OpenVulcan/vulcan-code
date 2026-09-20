@@ -78,6 +78,109 @@ it("normalizes browser addresses before Core navigation", () => {
   expect(() => coreBrowserAddress("file:///private.txt")).toThrow();
 });
 
+// Page switching replaces only the exact stream while keeping chrome and viewport nodes mounted.
+// 页面切换仅替换精确画面流，工具栏和视口节点保持挂载。
+it("hides singleton layers and keeps the displayed page title, address and viewport aligned", async () => {
+  // The old navigation projection deliberately disagrees with the actual displayed page.
+  // 旧导航投影故意与实际显示页面不同。
+  const session: CoreBrowserSession = {
+    sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running",
+    profileMode: "ephemeral", currentUrl: "https://stale.example/", leaseState: "free", blockedReason: null,
+    automationState: "detached", pageGeneration: "1", viewportGeneration: "1", controlEpoch: "1", hostGeneration: "1",
+    viewportSize: { width: 1280, height: 800 }, pageCount: 2, requiresExplicitReopen: false,
+  };
+  // pages are independent targets with authoritative titles from Chromium.
+  // pages 是 Chromium 提供权威标题的独立目标。
+  const pages: CoreBrowserPage[] = [
+    { pageId: "page-a", targetId: "target-a", url: "https://a.example/", title: "First page", openerPageId: null, hostGeneration: 1 },
+    { pageId: "page-b", targetId: "target-b", url: "https://b.example/", title: "Second page", openerPageId: null, hostGeneration: 1 },
+  ];
+  vi.mocked(listCoreBrowserSessions).mockResolvedValue([session]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue(pages);
+  await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  expect(host.querySelector<HTMLElement>('[aria-label="Active AI browsers"]')!.hidden).toBe(true);
+  expect(host.querySelector<HTMLElement>('[data-browser-instance-row]')!.hidden).toBe(true);
+  expect(host.querySelector<HTMLElement>('[aria-label="Browser pages"]')!.hidden).toBe(false);
+  expect(browserTabs()[0].title).toBe("First page");
+  // Save DOM identities to detect remounts, not just equivalent markup after a refresh.
+  // 保存 DOM 身份以检测重新挂载，而非仅比较刷新后的相似标记。
+  const viewport = host.querySelector('[data-browser-viewport]');
+  const address = host.querySelector<HTMLInputElement>('[aria-label="Page URL"]')!;
+  const form = address.closest('form');
+  const oldStream = vi.mocked(openCoreBrowserStream).mock.calls.at(-1)![3];
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-browser-page-id="page-b"]')!.click());
+  expect(host.querySelector('[data-browser-viewport]')).toBe(viewport);
+  expect(address.closest('form')).toBe(form);
+  expect(address.value).toBe("https://b.example/");
+  expect(browserTabs()[0].title).toBe("Second page");
+  expect(host.textContent).not.toContain("stale.example");
+  expect(vi.mocked(openCoreBrowserStream).mock.calls.at(-1)![2]).toBe("page-b");
+  await act(async () => oldStream.onError("late old page failure"));
+  expect(host.textContent).not.toContain("late old page failure");
+  expect(host.textContent).toContain("0.0 FPS");
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([pages[1]]);
+  // Remount an isolated owner to verify the single-page layer with a fresh authoritative list.
+  // 使用新归属重新挂载，验证最新权威列表下的单页面层隐藏。
+  await act(async () => root.render(<BrowserArea key="single" ownerSessionId="conversation-a" />));
+  expect(host.querySelector<HTMLElement>('[aria-label="Browser pages"]')!.hidden).toBe(true);
+});
+
+// Confirmation must precede acquiring control; only Core-confirmed closures remove the target.
+// 确认必须先于获取控制权；只有 Core 确认关闭后才能移除目标。
+it.each(["page", "browser", "refused-page"])("confirms %s closure and preserves other targets", async (kind) => {
+  // Session and page lists model Core's authoritative state, not optimistic UI deletion.
+  // 会话与页面列表模拟 Core 权威状态，而非界面乐观删除。
+  const session: CoreBrowserSession = {
+    sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running", profileMode: "ephemeral",
+    currentUrl: null, leaseState: "free", blockedReason: null, automationState: "detached",
+    pageGeneration: "1", viewportGeneration: "1", controlEpoch: "1", hostGeneration: "1",
+    viewportSize: { width: 1280, height: 800 }, pageCount: 2, requiresExplicitReopen: false,
+  };
+  let sessions = [session, { ...session, sessionId: "browser-b" }];
+  let pages: CoreBrowserPage[] = [
+    { pageId: "a", targetId: "a", url: "https://a.example/", title: "First page", openerPageId: null, hostGeneration: 1 },
+    { pageId: "b", targetId: "b", url: "https://b.example/", title: "Second page", openerPageId: null, hostGeneration: 1 },
+  ];
+  vi.mocked(listCoreBrowserSessions).mockImplementation(async () => sessions);
+  vi.mocked(listCoreBrowserPages).mockImplementation(async () => pages);
+  vi.mocked(requestCoreBrowser).mockImplementation(async (_owner, method) => {
+    if (method === "browser.lease.acquire") return { session: { ...session, leaseState: "held" }, leaseSecret: "close-secret", heartbeatIntervalMs: 5000 } as never;
+    if (method === "browser.page.close") {
+      if (kind === "refused-page") throw new Error("close refused");
+      pages = pages.slice(1);
+    }
+    if (method === "browser.session.close") sessions = sessions.slice(1);
+    return undefined as never;
+  });
+  await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  await selectBrowser();
+  // A close affordance belongs to the icon slot, outside the tab selection button.
+  // 关闭入口位于图标位置，与选择标签的按钮分离。
+  const trigger = host.querySelector<HTMLButtonElement>(`[aria-label="Close ${kind === "browser" ? "browser" : "page"}: First page"]`)!;
+  await act(async () => trigger.click());
+  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("First page");
+  expect(vi.mocked(requestCoreBrowser)).not.toHaveBeenCalled();
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Cancel")!.click());
+  expect(vi.mocked(requestCoreBrowser)).not.toHaveBeenCalled();
+  await act(async () => trigger.click());
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Confirm close")!;
+  await act(async () => { confirm.click(); confirm.click(); });
+  const closeMethod = kind === "browser" ? "browser.session.close" : "browser.page.close";
+  expect(vi.mocked(requestCoreBrowser).mock.calls.filter(call => call[1] === closeMethod)).toHaveLength(1);
+  expect(requestCoreBrowser).toHaveBeenCalledWith("conversation-a", closeMethod, {
+    sessionId: "browser-a", leaseSecret: "close-secret", ...(kind === "browser" ? {} : { pageId: "a" }),
+  });
+  if (kind === "refused-page") {
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("close refused");
+    expect(host.querySelector('[data-browser-page-id="a"]')).not.toBeNull();
+  } else {
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    if (kind === "page") expect(host.querySelector('[data-browser-page-id="a"]')).toBeNull();
+    else expect(host.querySelector('[data-browser-session-id="browser-a"]')).toBeNull();
+  }
+  expect(host.querySelector('[data-browser-session-id="browser-b"]')).not.toBeNull();
+});
+
 // A crashed host must remain selectable and show its blocked state instead of vanishing.
 // 崩溃宿主必须保持可选择并展示阻塞状态，而不是消失。
 it("keeps a crashed Playwright browser visible with an explicit diagnostic", async () => {
@@ -353,7 +456,7 @@ it("clears the previous conversation's browser projection before the new owner r
     owner === "conversation-b" ? newList : Promise.resolve([sessionA]));
   vi.mocked(listCoreBrowserSessions).mockResolvedValueOnce([sessionA]);
   vi.mocked(listCoreBrowserSessions).mockImplementationOnce(() => oldList);
-  vi.mocked(listCoreBrowserPages).mockResolvedValue([{
+  vi.mocked(listCoreBrowserPages).mockImplementation(async (owner) => owner === "conversation-b" ? [] : [{
     pageId: "page-a", targetId: "target-a", url: "https://conversation-a.example/",
     openerPageId: null, hostGeneration: 1,
   }]);
@@ -371,8 +474,8 @@ it("clears the previous conversation's browser projection before the new owner r
   await act(async () => resolveOldList([sessionA]));
   expect(browserTabs()).toHaveLength(0);
   await act(async () => resolveNewList([sessionB]));
-  await vi.waitFor(() => expect(browserTabs()[0]?.title).toBe(sessionB.sessionId));
-  expect(browserTabs()[0].title).not.toBe(sessionA.sessionId);
+  await vi.waitFor(() => expect(browserTabs()[0]?.dataset.browserSessionId).toBe(sessionB.sessionId));
+  expect(host.textContent).not.toContain("conversation-a.example");
 });
 
 it("releases a control grant that arrives after its conversation is replaced", async () => {

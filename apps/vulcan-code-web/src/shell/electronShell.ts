@@ -58,8 +58,8 @@ export class ElectronShellClient implements ShellClient {
     return this.bridge.getNotificationPermission();
   }
 
-  // requestNotificationPermission delegates to the native host after an explicit user action.
-  // requestNotificationPermission 仅在明确用户操作后委托原生宿主请求权限。
+  // requestNotificationPermission delegates enabled startup and settings requests to the host.
+  // requestNotificationPermission 将已启用的启动申请与设置申请交给原生宿主。
   async requestNotificationPermission(): Promise<ShellNotificationPermission> {
     if (!this.bridge) {
       return "unsupported";

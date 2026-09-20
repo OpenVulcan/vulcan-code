@@ -7,7 +7,9 @@ mod ai_tools_acceptance;
 mod automation_grant;
 pub mod host;
 mod runtime_install;
-pub use runtime_install::{BrowserRuntimeInstaller, BrowserRuntimeInstallTask, BrowserRuntimeStatus};
+pub use runtime_install::{
+    BrowserRuntimeInstallTask, BrowserRuntimeInstaller, BrowserRuntimeStatus,
+};
 
 pub(crate) use ai_tools::native_browser_runtime;
 pub(crate) use ai_tools::prepare_browser_mcp_bindings;
@@ -1758,6 +1760,30 @@ impl BrowserManager {
             .and_then(|value| value.as_str())
             .unwrap_or_default();
         match event.kind.as_str() {
+            // Metadata belongs to one page, never to whichever browser page navigated last.
+            // 元数据属于一个页面，不能用浏览器中最后导航的页面覆盖其他页面。
+            "pageMetadataChanged" => {
+                let title = event
+                    .payload
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| String::from(BROWSER_ERROR_INVALID_REQUEST))?;
+                if target_id.is_empty() || url.is_empty() {
+                    return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
+                }
+                let mut state = self
+                    .inner
+                    .lock()
+                    .map_err(|error| format!("failed to lock browser manager: {error}"))?;
+                let session = state
+                    .sessions
+                    .get_mut(session_id)
+                    .ok_or_else(|| String::from(BROWSER_ERROR_UNKNOWN_SESSION))?;
+                Ok(session
+                    .supervision
+                    .pages_mut()
+                    .update_metadata(target_id, url, title))
+            }
             // A new host target becomes a Core page with a stable identity.
             // 新的宿主目标成为具有稳定标识的 Core 页面。
             "pageCreated" => {
@@ -2527,6 +2553,47 @@ impl BrowserManager {
         session.projection.page_generation = session.projection.page_generation.wrapping_add(1);
         session.queued_inputs.clear();
         Ok(session.projection.clone())
+    }
+
+    /// Closes `page_id` in `session_id` with the current `lease_secret`; returns the remaining pages.
+    /// 使用当前 `lease_secret` 关闭 `session_id` 中的 `page_id`；返回剩余页面。
+    pub fn close_page_on_host(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        lease_secret: &str,
+    ) -> Result<Vec<BrowserPageRecord>, String> {
+        let gate = self.dispatch_gate(session_id)?;
+        let _dispatch = gate
+            .lock()
+            .map_err(|error| format!("failed to lock browser dispatch: {error}"))?;
+        self.sync_host_events(session_id)?;
+        let target_id = self.authorized_page_target(session_id, page_id, lease_secret)?;
+        match self.request_host(
+            session_id,
+            "page.close",
+            serde_json::json!({ "targetId": target_id }),
+        )? {
+            BrowserHostRequestOutcome::Completed(result)
+                if result.get("targetId").and_then(|value| value.as_str())
+                    == Some(target_id.as_str())
+                    && result.get("closed").and_then(|value| value.as_bool()) == Some(true) => {}
+            BrowserHostRequestOutcome::Failed { code, message } => {
+                return Err(format!("{code}: {message}"));
+            }
+            // An uncertain close must block further writes rather than remove a tab optimistically.
+            // 关闭结果不确定时阻止后续写入，不能乐观移除标签。
+            _ => {
+                self.mark_operation_unconfirmed(session_id, "page.close")?;
+                return Err(String::from(BROWSER_ERROR_LEASE_BLOCKED));
+            }
+        }
+        let pages = self.list_pages(session_id)?;
+        if pages.iter().any(|page| page.page_id == page_id) {
+            self.mark_operation_unconfirmed(session_id, "page.close")?;
+            return Err(String::from(BROWSER_ERROR_LEASE_BLOCKED));
+        }
+        Ok(pages)
     }
 
     /// Resolves a page target only for the holder of the current, unblocked lease.
@@ -4777,6 +4844,22 @@ pub async fn service_browser_page_create(
         .await
 }
 
+/// Closes the request's exact page through the lease-gated host; returns remaining Core pages.
+/// 经租约校验的宿主关闭请求中的精确页面；返回剩余 Core 页面。
+/// `state` owns the browser manager; `request` identifies the browser, page and current lease.
+/// `state` 持有浏览器管理器；`request` 标识浏览器、页面与当前租约。
+pub async fn service_browser_page_close(
+    state: SharedServiceBridgeState,
+    request: BrowserPageCloseRequest,
+) -> Result<Vec<BrowserPageRecord>, String> {
+    let manager = browser_manager_from_state(&state)?;
+    manager
+        .run_blocking_host_write(&request.session_id.clone(), "page.close", move |manager| {
+            manager.close_page_on_host(&request.session_id, &request.page_id, &request.lease_secret)
+        })
+        .await
+}
+
 /// Hides the local host windows of one Core browser session without ending the session.
 /// 隐藏某个 Core 浏览器会话的宿主本地窗口而不结束该会话。
 ///
@@ -5951,6 +6034,22 @@ pub struct BrowserPageCreateRequest {
     /// Initial URL for the new page.
     /// 新页面的初始地址。
     pub url: String,
+}
+
+/// Identifies an exact page and the control grant authorizing its closure.
+/// 标识精确页面及授权关闭它的控制凭据。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserPageCloseRequest {
+    /// Stable Core browser identity.
+    /// 稳定的 Core 浏览器身份。
+    pub session_id: String,
+    /// Stable page identity within this browser.
+    /// 此浏览器内的稳定页面身份。
+    pub page_id: String,
+    /// Current control lease secret.
+    /// 当前控制租约凭据。
+    pub lease_secret: String,
 }
 
 /// Hides the local host windows of one Core browser session.
@@ -9171,6 +9270,23 @@ mod tests {
         assert_eq!(after.len(), 1, "navigation must not create a second page");
         assert_eq!(after[0].page_id, before.page_id);
         assert_eq!(after[0].url, "https://example.test/second");
+        // Title changes on the same URL (including SPA updates) keep the exact page identity.
+        // 同地址的标题变化（包括 SPA 更新）保持精确页面身份。
+        emit_fake_host_events(
+            &manager,
+            &session.session_id,
+            vec![(
+                "pageMetadataChanged",
+                json!({
+                    "targetId": "21", "url": "https://example.test/second", "title": "Updated SPA title"
+                }),
+            )],
+        );
+        let titled = manager
+            .list_pages(&session.session_id)
+            .expect("titled pages");
+        assert_eq!(titled[0].page_id, before.page_id);
+        assert_eq!(titled[0].title.as_deref(), Some("Updated SPA title"));
     }
 
     /// Verifies unknown host event kinds are ignored rather than treated as failures.

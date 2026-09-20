@@ -9,8 +9,16 @@
   padding-bottom: 4px;
 }
 
+/* Keep the enabled state and refresh action in one centered, non-shrinking control group. */
+/* 将启用状态与刷新操作保持在同一组居中且不收缩的控件内。 */
+.vce-settings-heading .project-settings-heading-actions {
+  align-self: center;
+  gap: 12px;
+}
+
 .vce-settings-enabled {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   padding-right: 12px;

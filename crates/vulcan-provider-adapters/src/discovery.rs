@@ -2690,6 +2690,12 @@ fn openrouter_effective_output_limit(
         .top_provider
         .as_ref()
         .and_then(|provider| provider.max_completion_tokens)?;
+    // Dedicated media discovery must preserve reported limits without applying a chat window.
+    // 专用媒体模型的发现结果保留原始限制，不套用文本会话窗口进行收敛。
+    let evidence = openrouter_capability_evidence(model);
+    if evidence.supports_text_input == Some(false) || evidence.supports_text_output == Some(false) {
+        return Some(output_limit);
+    }
     Some(context_limit.map_or(output_limit, |limit| output_limit.min(limit)))
 }
 

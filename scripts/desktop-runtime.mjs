@@ -127,6 +127,10 @@ export async function verifyPackagedLayout(layout, distributionRoot = output) {
       throw new Error(`Invalid package input ${name} ${relative}: expected a ${kind}.`);
     }
   }
+  // gui/main.js loads its sandbox preload from the application root on every navigation.
+  // gui/main.js 每次导航都从应用根目录加载沙箱预加载文件；缺失时客户端会丢失窗口控制。
+  const desktopPreload = path.posix.join(path.posix.dirname(layout.desktopEntry), '..', 'preload.cjs');
+  await verifyPackageEntry('desktopPreload', desktopPreload, 'file', distributionRoot);
   if (layout.profile === 'release') await verifyReleaseAssets(layout, distributionRoot);
 }
 
@@ -357,6 +361,9 @@ async function main() {
   await run(process.execPath, [path.join(desktop, 'node_modules/typescript/bin/tsc'), '-b'], { cwd: desktop });
   await access(path.join(desktop, 'node_modules/electron/dist'));
   await access(path.join(repository, 'apps/vulcan-code-web/dist'));
+  // Validate the compiled bridge before replacing any existing GUI files.
+  // 替换现有 GUI 文件前先验证编译出的桥接文件。
+  await access(path.join(desktop, 'dist/preload.cjs'));
   if (profile === 'release') {
     for (const relative of ['resources', 'plugins', 'lua_runtime', 'tools']) {
       await verifyPackageEntry(relative, relative, 'directory', output);
@@ -423,6 +430,9 @@ async function main() {
     });
   }
   await cp(path.join(desktop, 'dist/gui'), path.join(appRoot, 'gui'), { recursive: true });
+  // Sandboxed Electron needs this CommonJS entry beside gui/, even though the app uses ESM.
+  // 即使应用使用 ESM，沙箱 Electron 仍需要位于 gui/ 同级目录的 CommonJS 预加载入口。
+  await cp(path.join(desktop, 'dist/preload.cjs'), path.join(appRoot, 'preload.cjs'));
   await writeFile(path.join(appRoot, 'desktop-entry.js'), "import './gui/main.js';\n");
   // Browser code and dependencies live outside Electron's resources and cannot load its Chromium.
   // 浏览器代码与依赖位于 Electron 资源目录之外，不会加载其 Chromium。

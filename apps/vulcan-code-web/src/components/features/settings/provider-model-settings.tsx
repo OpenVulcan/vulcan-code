@@ -484,8 +484,10 @@ export function ModelListSettingsArea() {
                       <div className="settings-model-title-line">
                         <strong title={displayName}>{displayName}</strong>
                       </div>
-                      <span className="settings-model-id" title={modelId}>{modelId}</span>
+                      {/* Keep identity and capability metadata together on the second line.
+                          将模型标识和能力摘要放在同一条第二行内。 */}
                       <div className="settings-model-catalog-meta">
+                        <span className="settings-model-id" title={modelId}>{modelId}</span>
                         <ProviderModelModalitySummary model={representative} additionalModels={inventory.catalogModels.slice(1)} extensionCapabilities={inventory.extensionCapabilities} />
                         <span>
                           {t("settings.models.availableCredentials")

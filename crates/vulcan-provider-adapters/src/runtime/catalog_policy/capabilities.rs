@@ -145,28 +145,36 @@ pub(super) fn clamp_output_limit_to_context_window(
     }
 }
 
-/// Reports whether token-window limits apply to text output or an unresolved output contract.
-/// 判断文本输出或尚未明确输出类型的契约是否需要令牌窗口限制。
+/// Reports whether a model needs the generic text-conversation token window.
+/// 判断模型是否需要通用文本会话令牌窗口。
 ///
 /// # Parameters
 /// 参数
-/// `capabilities` and `evidence` are the resolved contract and explicit output-modality facts.
-/// `capabilities` 与 `evidence` 是最终契约和明确的输出模态事实。
+/// `capabilities` and `evidence` are the resolved operation contract and input/output facts.
+/// `capabilities` 与 `evidence` 是最终操作契约和输入输出事实。
 ///
 /// # Returns
 /// 返回值
-/// `false` only for models explicitly limited to non-text output resources.
-/// 仅对明确只输出非文本资源的模型返回 `false`。
+/// `false` for explicitly non-conversational media models; unresolved models retain validation.
+/// 明确的非会话媒体模型返回 `false`；能力未明确的模型继续校验。
 fn requires_text_token_limits(
     capabilities: &ModelCapabilities,
     evidence: &ModelCapabilityEvidence,
 ) -> bool {
-    if model_supports_text_conversation(capabilities) || evidence.supports_text_output == Some(true)
-    {
+    if model_supports_text_conversation(capabilities) {
         return true;
     }
-    if evidence.supports_text_output == Some(false) {
+    // Transcription produces text but does not accept a text conversation context. Either
+    // explicitly absent text direction excludes that model from generic conversation limits.
+    // 转写会产生文本，但不接收文本会话上下文；任一方向明确不支持文本时，不适用通用会话限制。
+    if evidence.supports_text_input == Some(false)
+        || evidence.supports_text_output == Some(false)
+        || capabilities.operations == [AiOperation::SpeechTranscribe]
+    {
         return false;
+    }
+    if evidence.supports_text_output == Some(true) {
+        return true;
     }
     // Without upstream output evidence, only explicit media-generation operations establish
     // non-text output. An empty or mixed operation contract remains token-limited.
@@ -204,6 +212,9 @@ pub(super) fn clamp_catalog_output_limits_to_context_window(catalog: &mut Connec
             // discovered output modalities; an explicit variant fact remains authoritative.
             // 协议变体可能省略输出证据而继承模型的发现模态；明确的变体事实仍具有优先级。
             let mut evidence = variant.capability_evidence.clone();
+            if evidence.supports_text_input.is_none() {
+                evidence.supports_text_input = model.capability_evidence.supports_text_input;
+            }
             if evidence.supports_text_output.is_none() {
                 evidence.supports_text_output = model.capability_evidence.supports_text_output;
             }
@@ -223,17 +234,16 @@ pub(super) fn clamp_catalog_output_limits_to_context_window(catalog: &mut Connec
 ///
 /// # Returns
 /// 返回值
-/// Success when text-output limits are positive or the model explicitly outputs only media.
-/// 文本输出限制均为正数，或模型明确仅输出媒体时返回成功。
+/// Success when applicable conversation limits are positive or a dedicated media model is exempt.
+/// 适用的会话限制均为正数，或专用媒体模型不适用该限制时返回成功。
 pub(in crate::runtime) fn validate_resolved_model_capability_limits(
     connection_id: &str,
     model_id: &str,
     capabilities: &ModelCapabilities,
     evidence: &ModelCapabilityEvidence,
 ) -> Result<(), String> {
-    // Media-only output does not consume a text completion window; upstream zero token metadata
-    // must not remove an otherwise usable image, audio, or video generator from account catalogs.
-    // 纯媒体输出不消耗文本补全窗口；上游的零令牌元数据不能移除可用的图片、音频或视频生成模型。
+    // Dedicated media operations use their own parameter limits, not a conversation window.
+    // 专用媒体操作使用各自的参数限制，不使用通用会话窗口。
     if !requires_text_token_limits(capabilities, evidence) {
         return Ok(());
     }

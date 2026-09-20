@@ -65,6 +65,9 @@ export interface CoreBrowserPage {
   pageId: string;
   targetId: string;
   url: string;
+  // A title is absent until Chromium reports metadata (including an older running Core during update).
+  // Chromium 报告元数据前标题为空；更新期间仍在运行的旧 Core 也可能尚未提供标题。
+  title?: string | null;
   openerPageId: string | null;
   hostGeneration: number;
 }
@@ -284,7 +287,9 @@ export async function openCoreBrowserStream(
         if (update.kind === "error") {
           callbacks.onError(update.message ?? "Browser stream failed.");
         } else {
-          callbacks.onState(update.mode ?? "connected");
+          // Snapshot/resume are delivery modes on an already connected socket, not connection states.
+          // snapshot/resume 是已连接套接字上的传送模式，不是连接状态。
+          callbacks.onState("connected");
         }
       } else if (event.data instanceof ArrayBuffer) {
         callbacks.onFrame(decodeCoreBrowserFrame(event.data));

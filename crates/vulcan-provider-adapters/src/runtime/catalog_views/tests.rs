@@ -281,6 +281,88 @@ fn openrouter_account_starts_with_signed_models_and_can_select_discovery() {
     );
 }
 
+/// Verifies dedicated media discovery survives catalog publication without chat-limit diagnostics.
+/// 验证专用媒体发现结果经过目录发布后不产生会话限制诊断。
+#[test]
+fn dedicated_media_models_skip_conversation_limits_through_catalog_projection() {
+    // These exact models reproduce the three dedicated media kinds shown by settings.
+    // 这些精确模型覆盖设置页中出现的三种专用媒体类型。
+    let (runtime, mut configuration) = two_account_runtime();
+    // The fixture uses declared modalities rather than inferring capabilities from model names.
+    // 夹具使用明确模态，不根据模型名称推断能力。
+    let cases = [
+        ("google/veo-3.1", vec!["text", "image"], vec!["video"]),
+        ("minimax/speech-2.8-turbo", vec!["text"], vec!["audio"]),
+        ("openai/whisper-large-v3-turbo", vec!["audio"], vec!["text"]),
+    ];
+    // records preserve zero context and a positive completion fact to detect unwanted clamping.
+    // records 保留零上下文与正数输出事实，以检测不应发生的收敛。
+    let records = cases
+        .iter()
+        .map(|(id, input, output)| {
+            configuration.set_connection_model_enabled("one", id, true);
+            serde_json::json!({
+                "id": id, "context_length": 0,
+                "architecture": {"input_modalities": input, "output_modalities": output},
+                "top_provider": {"context_length": 0, "max_completion_tokens": 4096}
+            })
+        })
+        .collect::<Vec<_>>();
+    // discovered follows the production parser and exact per-protocol evidence projection.
+    // discovered 使用生产解析器及精确的逐协议证据投影。
+    let mut discovered = with_protocol_variants(
+        parse_openrouter_model_catalog("one", 2, &serde_json::json!({"data": records}).to_string())
+            .expect("dedicated media records should parse"),
+        &[OPENAI_CHAT_PROFILE_ID],
+    );
+    for model in &mut discovered.models {
+        assert_eq!(model.capabilities.output_limit, Some(4096));
+        for variant in model.protocol_variants.values_mut() {
+            variant.capability_evidence = model.capability_evidence.clone();
+        }
+    }
+    install_source_catalog(&runtime, discovered);
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("media catalog should publish");
+    // settings exercises the same management snapshot consumed by the model-list UI.
+    // settings 覆盖模型列表界面实际使用的管理快照。
+    let settings = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("settings should resolve");
+    for (id, _, _) in cases {
+        // model must remain enabled with original limits and without conversation eligibility.
+        // model 必须保持启用及原始限制，且不获得会话资格。
+        let model = settings.catalogs["one"]
+            .models
+            .iter()
+            .find(|model| model.id == id)
+            .expect("enabled dedicated media model must remain available");
+        assert_eq!(model.capabilities.context_limit, Some(0));
+        assert_eq!(model.capabilities.output_limit, Some(4096));
+        assert!(!model_supports_text_conversation(&model.capabilities));
+        assert!(
+            crate::model_capability_limit_issue(
+                "one",
+                id,
+                &model.capabilities,
+                &model.capability_evidence
+            )
+            .is_none()
+        );
+        assert_eq!(
+            settings.source_catalogs["one"]
+                .models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap()
+                .capabilities
+                .output_limit,
+            Some(4096)
+        );
+    }
+}
+
 /// Verifies zero token metadata does not quarantine a media-only model or alter source evidence.
 /// 验证零令牌元数据不会隔离纯媒体模型，也不会改写来源证据。
 #[test]

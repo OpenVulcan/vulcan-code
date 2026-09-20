@@ -11,7 +11,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 use vulcan_agent_runtime::mcp::{
     McpRuntimeAccess, McpRuntimeToolAllowlist, McpRuntimeToolBinding, McpServerConfig,
@@ -59,7 +59,7 @@ fn start_page_fixture() -> (String, Arc<AtomicBool>, std::thread::JoinHandle<()>
                         "Owner browser fixture"
                     };
                     let body = format!(
-                        "<!doctype html><html><head><title>Vulcan W08</title></head><body><h1>{heading}</h1><button onclick=\"document.querySelector('#status').textContent='Clicked'\">Click here</button><p id=\"status\">Ready</p></body></html>"
+                        "<!doctype html><html><head><title>Vulcan W08</title></head><body><h1>{heading}</h1><button style=\"position:absolute;left:16px;top:96px;width:120px;height:32px\" onclick=\"document.querySelector('#status').textContent='Clicked'\">Click here</button><p id=\"status\">Ready</p></body></html>"
                     );
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -533,6 +533,25 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
     call(&snapshot, owner, serde_json::json!({})).await;
     tokio::time::sleep(Duration::from_secs(31)).await;
     call(&navigate, owner, serde_json::json!({"url": &page_url})).await;
+    // Chromium title metadata must reach Core independently of the manual navigation projection.
+    // Chromium 标题元数据必须独立于手动导航投影到达 Core。
+    let title_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let pages = manager
+            .list_pages(&first.session_id)
+            .expect("page title metadata");
+        if pages
+            .iter()
+            .any(|page| page.url == page_url && page.title.as_deref() == Some("Vulcan W08"))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < title_deadline,
+            "Chromium title did not reach Core: {pages:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let first_snapshot = text_content(&call(&snapshot, owner, serde_json::json!({})).await);
     let reference = first_snapshot
         .split("button \"Click here\" [ref=")
@@ -876,6 +895,153 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         .release_lease(&stranger_browser.session_id, &stranger_lease)
         .expect("release stranger lease");
     assert_grant_refused(&stranger_grant.endpoint);
+    // After normal AI retirement, the real manual input path must still reach the same page.
+    // AI 正常结束后，真实手动输入路径必须仍能操作同一页面。
+    let (_, manual_lease) = manager
+        .acquire_lease(&stranger_browser.session_id, "w08-manual-controller", None)
+        .expect("take manual control after AI turn");
+    let manual_page = manager
+        .list_pages(&stranger_browser.session_id)
+        .expect("retained manual pages")
+        .into_iter()
+        .find(|page| page.url == format!("{page_url}?stranger"))
+        .expect("same previously navigated page");
+    // The fixed fixture button bounds above define this click, independently of screenshot scaling.
+    // 上方固定的测试按钮边界定义此次点击坐标，不依赖截图缩放。
+    for (sequence, event_type) in [(1, "down"), (2, "up")] {
+        let projection = manager
+            .session_projection(&stranger_browser.session_id)
+            .expect("current input generations");
+        let input = manager.dispatch_host_input(
+            &stranger_browser.session_id, &manual_page.page_id, &manual_lease,
+            projection.page_generation, projection.viewport_generation,
+            super::BrowserInputEvent {
+                sequence: sequence.to_string(),
+                kind: String::from("pointer"),
+                payload: serde_json::json!({"type": event_type, "button": "left", "x": 40, "y": 110}),
+            },
+        ).expect("manual click reaches host");
+        assert_eq!(input.outcome, super::BrowserInputOutcome::Applied);
+    }
+    let manual_capture = manager
+        .request_host(
+            &stranger_browser.session_id,
+            "page.capture",
+            serde_json::json!({"targetId": manual_page.target_id}),
+        )
+        .expect("capture after manual click");
+    assert!(
+        matches!(manual_capture, super::BrowserHostRequestOutcome::Completed(ref frame)
+        if frame["byteLength"].as_u64().is_some_and(|size| size > 0))
+    );
+    manager
+        .release_lease(&stranger_browser.session_id, &manual_lease)
+        .expect("release manual control");
+    // Reattach AI to verify the manual DOM change rather than merely an accepted input response.
+    // 重新挂接 AI 验证手动操作造成的 DOM 变化，而非仅验证输入接受应答。
+    let (_, resumed_lease) = manager
+        .acquire_lease(&stranger_browser.session_id, "w08-resumed-ai", None)
+        .expect("resume AI control");
+    let resumed_connection = Uuid::new_v4().to_string();
+    let resumed_grant = manager
+        .open_automation_gateway(
+            &stranger_browser.session_id,
+            &stranger.to_string(),
+            &resumed_lease,
+            &resumed_connection,
+        )
+        .expect("resumed AI grant");
+    let resumed_config = plugin_conversation_mcp_server_config(
+        &plugins,
+        "vulcan-browser",
+        "playwright",
+        &OsPluginMcpSecretStore,
+        &stranger.to_string(),
+        &resumed_grant.endpoint,
+    )
+    .expect("resumed MCP config");
+    access
+        .open_ordered_owned_stdio_partition(
+            "vulcan-browser",
+            generation,
+            stranger,
+            vec![resumed_config],
+        )
+        .await
+        .expect("resume official MCP");
+    assert!(
+        text_content(
+            &call(
+                &tool(&access, generation, stranger, "browser_snapshot"),
+                stranger,
+                serde_json::json!({})
+            )
+            .await
+        )
+        .contains("Clicked")
+    );
+    access
+        .shutdown_owned_stdio_partition("vulcan-browser", generation, stranger)
+        .expect("retire resumed MCP");
+    manager
+        .revoke_automation_gateway(
+            &stranger_browser.session_id,
+            &stranger.to_string(),
+            &resumed_connection,
+        )
+        .expect("retire resumed grant");
+    manager
+        .release_lease(&stranger_browser.session_id, &resumed_lease)
+        .expect("release resumed AI");
+    // Closing a page requires a fresh manual lease and removes its real target, not just a UI tab.
+    // 关闭页面需要新手动租约，并移除真实目标，而非仅隐藏界面标签。
+    let (_, closing_lease) = manager
+        .acquire_lease(&stranger_browser.session_id, "w08-close-page", None)
+        .expect("acquire page close control");
+    assert!(
+        manager
+            .close_page_on_host(
+                &stranger_browser.session_id,
+                &manual_page.page_id,
+                "invalid-lease"
+            )
+            .is_err()
+    );
+    let remaining = manager
+        .close_page_on_host(
+            &stranger_browser.session_id,
+            &manual_page.page_id,
+            &closing_lease,
+        )
+        .expect("close real Core page");
+    assert!(
+        !remaining
+            .iter()
+            .any(|page| page.page_id == manual_page.page_id)
+    );
+    let host_pages = manager
+        .request_host(
+            &stranger_browser.session_id,
+            "page.list",
+            serde_json::json!({}),
+        )
+        .expect("remaining real targets");
+    assert!(
+        matches!(host_pages, super::BrowserHostRequestOutcome::Completed(ref result)
+        if result["pages"].as_array().unwrap().iter().all(|page| page["targetId"] != manual_page.target_id))
+    );
+    manager
+        .release_lease(&stranger_browser.session_id, &closing_lease)
+        .expect("release closing lease");
+    assert!(
+        !temp
+            .path()
+            .join("profiles/control")
+            .join(&stranger_browser.session_id)
+            .join("browser-host-crash.json")
+            .exists(),
+        "manual takeover must not crash the host"
+    );
     manager
         .close_session(&stranger_browser.session_id)
         .expect("close stranger browser");

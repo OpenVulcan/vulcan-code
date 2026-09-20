@@ -60,8 +60,8 @@ export interface ElectronDesktopBridge {
   // Returns whether the host can present local notifications without prompting.
   // 返回宿主能否在不提示用户的情况下展示本地通知。
   getNotificationPermission: () => Promise<ShellNotificationPermission>;
-  // Requests local notification permission from an explicit user action.
-  // 通过明确用户操作请求本地通知权限。
+  // Requests notification permission for enabled startup or an explicit user action.
+  // 在已启用的启动流程或明确用户操作时请求通知权限。
   requestNotificationPermission: () => Promise<ShellNotificationPermission>;
   // Presents one localized local notification through the native host.
   // 通过原生宿主展示一条已本地化的本地通知。

@@ -27,6 +27,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "browser.viewport.set",
     "browser.pages.list",
     "browser.page.create",
+    "browser.page.close",
     "browser.page.capture",
     "browser.upload.stage",
     "browser.upload.attach",
@@ -125,6 +126,9 @@ pub(super) async fn dispatch(
         "browser.session.close" => rpc_json_result(
             crate::browser::service_browser_session_close(state, parse_param(params, method)?)
                 .await,
+        ),
+        "browser.page.close" => rpc_json_result(
+            crate::browser::service_browser_page_close(state, parse_param(params, method)?).await,
         ),
         "browser.session.navigate" => rpc_json_result(
             crate::browser::service_browser_session_navigate(state, parse_param(params, method)?)

@@ -9,6 +9,7 @@ import type net from 'node:net';
 import { chromium, type BrowserContext, type CDPSession, type Dialog, type FileChooser, type Page } from 'playwright-core';
 import { PlaywrightProxy } from './playwright-proxy.js';
 import { monitorHostCrash } from './crash-report.js';
+import { observePageTitle } from './page-title.js';
 // Report the actual pinned driver, including when running an isolated packaged host.
 // 报告实际锁定驱动版本，包括运行隔离打包宿主时。
 const runtimeVersion = `chromium-playwright-${createRequire(import.meta.url)('playwright-core/package.json').version}`;
@@ -42,7 +43,7 @@ const MAX_STARTUP_EVENTS = 256;
 /** 此实现确实支持的 Chromium 宿主能力。 */
 const CAPABILITIES = [
   'playwright-endpoint-on-demand', 'automation.proxy', 'loopback-control', 'page.create', 'page.navigate',
-  'page.list', 'page.events', 'viewport.set', 'window.hide', 'download.capture',
+  'page.list', 'page.close', 'page.events', 'viewport.set', 'window.hide', 'download.capture',
   'dialog.control', 'file-chooser.intercept',
 ];
 
@@ -181,6 +182,9 @@ class ChromiumHost {
   /** 每个已登记 Chromium 目标实际发生的主框架导航次数。 */
   private readonly navigationEpochs = new Map<string, number>();
   private readonly ids = new Map<Page, string>();
+  /** Preserve a new document's title when its binding runs before target registration completes. */
+  /** 新文档绑定早于目标登记完成时，保留其标题。 */
+  private readonly pageTitles = new WeakMap<Page, { title: string; url: string }>();
   private readonly registrations = new Map<Page, Promise<string>>();
   private readonly cdpSessions = new Map<string, CDPSession>();
   private readonly buffered: BrowserHostEvent[] = [];
@@ -316,6 +320,10 @@ class ChromiumHost {
     await cdp.send('Page.enable');
     cdp.on('Page.javascriptDialogClosed', () => this.clearDialog(targetId, 'closed'));
     if (page.url() !== 'about:blank') this.emit('pageNavigated', { targetId, url: page.url() });
+    // A popup may report its initial title before registration; publish only its current document.
+    // 弹窗可能在登记前报告初始标题；仅发布它当前文档的数据。
+    const metadata = this.pageTitles.get(page);
+    if (metadata && metadata.url === page.url()) this.emit('pageMetadataChanged', { targetId, ...metadata });
     return targetId;
   }
 
@@ -677,6 +685,14 @@ class ChromiumHost {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
           return this.answer(request, { targetId: request.params.targetId, url: page.url() });
         }
+        case 'page.close': {
+          // Only Core's resolved target is closed; no active-page or URL fallback is permitted.
+          // 仅关闭 Core 解析的目标，不使用活动页或地址兜底。
+          const page = this.page(request.params.targetId);
+          if (!page) return this.answer(request, 'Page target is unavailable.', 'invalid_request');
+          await page.close();
+          return this.answer(request, { targetId: request.params.targetId, closed: true });
+        }
         case 'page.list': return this.answer(request, { pages: [...this.pages].map(([targetId, page]) => ({ targetId, url: page.url(), visible: false })) });
         case 'window.hide': return this.answer(request, { hidden: 0, alreadyHeadless: true });
         case 'viewport.set': {
@@ -853,12 +869,28 @@ class ChromiumHost {
           await route.continue();
         }
       });
+      // Headless Target metadata does not reliably track document.title. Observe the document itself.
+      // 无头 Target 元数据不能可靠跟踪 document.title，因此直接观察文档。
+      const browser = this.context.browser();
+      if (!browser) throw new Error('Persistent Chromium context did not expose its browser owner.');
+      await this.context.exposeBinding('__vulcanReportPageTitle', ({ page, frame }, title: unknown, url: unknown) => {
+        if (frame !== page.mainFrame() || typeof title !== 'string' || typeof url !== 'string') return;
+        // Reject old-document callbacks and never adopt a target solely from page-provided metadata.
+        // 拒绝旧文档回调，绝不仅凭页面提供的元数据纳入新目标。
+        const targetId = this.ids.get(page);
+        if (page.isClosed() || url !== page.url()) return;
+        this.pageTitles.set(page, { title, url });
+        if (!targetId) return;
+        this.emit('pageMetadataChanged', { targetId, url, title });
+      });
+      await this.context.addInitScript(observePageTitle);
       this.context.on('page', page => void this.register(page).catch(error => diagnostic(`page registration failed: ${String(error)}`)));
       const initial = this.context.pages()[0] ?? await this.context.newPage();
       await this.register(initial);
+      // The initial about:blank document predates addInitScript; later pages initialize automatically.
+      // 初始 about:blank 文档早于 addInitScript；后续页面会自动初始化。
+      await initial.evaluate(observePageTitle);
       if (this.options.initialUrl !== 'about:blank') await initial.goto(this.options.initialUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
-      const browser = this.context.browser();
-      if (!browser) throw new Error('Persistent Chromium context did not expose its browser owner.');
       this.playwrightProxy = new PlaywrightProxy(browser);
       await writeControlDiscovery(this.options.controlDirectory, {
         schemaVersion: BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION,

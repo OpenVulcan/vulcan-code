@@ -5,6 +5,65 @@ use super::super::test_support::apply_model_catalog_overlays;
 use super::*;
 use crate::runtime::test_support::catalog;
 
+/// Ensures transcription skips chat limits while mixed conversational models stay guarded.
+/// 确保转写跳过会话限制，同时保留混合会话模型的校验。
+#[test]
+fn transcription_does_not_use_conversation_token_limits() {
+    // Exercise both discovered modality evidence and an explicitly declared operation.
+    // 同时覆盖发现模态证据与显式操作声明两种来源。
+    for (operations, evidence) in [
+        (
+            Vec::new(),
+            ModelCapabilityEvidence {
+                supports_text_input: Some(false),
+                supports_text_output: Some(true),
+                ..ModelCapabilityEvidence::default()
+            },
+        ),
+        (
+            vec![AiOperation::SpeechTranscribe],
+            ModelCapabilityEvidence::default(),
+        ),
+    ] {
+        // A positive output limit must survive an irrelevant zero context window unchanged.
+        // 有效输出上限必须保持原值，不被无关的零上下文窗口收敛。
+        let mut capabilities = ModelCapabilities {
+            operations,
+            context_limit: Some(0),
+            output_limit: Some(4096),
+            ..ModelCapabilities::default()
+        };
+        clamp_output_limit_to_context_window(&mut capabilities, &evidence);
+        assert_eq!(capabilities.output_limit, Some(4096));
+        assert!(
+            validate_resolved_model_capability_limits(
+                "one",
+                "transcribe",
+                &capabilities,
+                &evidence
+            )
+            .is_ok()
+        );
+        capabilities.output_limit = Some(0);
+        assert!(
+            validate_resolved_model_capability_limits(
+                "one",
+                "transcribe",
+                &capabilities,
+                &evidence
+            )
+            .is_ok()
+        );
+        capabilities
+            .operations
+            .push(AiOperation::ConversationRespond);
+        assert!(
+            validate_resolved_model_capability_limits("one", "mixed", &capabilities, &evidence)
+                .is_err()
+        );
+    }
+}
+
 /// Verifies zero token metadata is irrelevant only to explicitly media-only output.
 /// 验证零令牌元数据仅对明确的纯媒体输出无关。
 #[test]

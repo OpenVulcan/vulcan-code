@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
+import { createServer } from 'node:http';
 
 // The supplied root must be a fully packaged distribution, independent of source dependencies.
 // 给定根目录必须是完整发行物，与源码依赖独立。
@@ -35,6 +36,15 @@ let stderr = '';
 child.stderr.on('data', chunk => { stderr += chunk; });
 let socket;
 const pending = new Map();
+// Metadata is observed on the real host channel, including same-URL document.title changes.
+// 在真实宿主通道观察元数据，包括同地址的 document.title 变化。
+const metadata = [];
+const fixture = createServer((_request, response) => {
+  response.setHeader('content-type', 'text/html; charset=utf-8');
+  response.end('<title>Initial title</title><h1>Local fixture</h1><script>setTimeout(()=>document.title="Updated title",250)</script>');
+});
+fixture.listen(0, '127.0.0.1');
+await once(fixture, 'listening');
 // Keep an owned MCP process per test turn, independent of the browser host process.
 // 每轮测试保留一个独占 MCP 进程，与浏览器宿主进程独立。
 let mcp;
@@ -70,6 +80,7 @@ try {
   });
   socket.on('data', chunk => {
     for (const message of decoder.push(chunk)) {
+      if (message.kind === 'pageMetadataChanged') metadata.push(message.payload);
       const waiter = pending.get(message.requestId);
       if (waiter) {
         pending.delete(message.requestId);
@@ -89,6 +100,14 @@ try {
   await request('page.create', { url: 'about:blank' });
   const { pages } = await request('page.list');
   assert.ok(pages.length >= 2);
+  // Wait for the browser's own title event, rather than deriving labels from an address.
+  // 等待浏览器自身的标题事件，不从地址推导标题。
+  const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`;
+  await request('page.navigate', { targetId: pages[0].targetId, url: fixtureUrl });
+  for (let attempt = 0; attempt < 100 && !metadata.some(item => item.title === 'Updated title'); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.ok(metadata.some(item => item.targetId === pages[0].targetId && item.url === fixtureUrl && item.title === 'Updated title'), JSON.stringify(metadata));
   const frame = await request('page.capture', { targetId: pages[0].targetId });
   assert.equal(frame.mimeType, 'image/jpeg');
   assert.ok(frame.byteLength > 0);
@@ -151,12 +170,22 @@ try {
   }
   capturing = false;
   await captures;
+  // Closing one exact page preserves the other targets and the host process.
+  // 关闭一个精确页面，其他目标与宿主进程保持存在。
+  const closed = await request('page.close', { targetId: pages[1].targetId });
+  assert.equal(closed.closed, true);
+  const remaining = (await request('page.list')).pages;
+  assert.equal(remaining.length, pages.length - 1);
+  assert.ok(remaining.every(page => page.targetId !== pages[1].targetId));
+  assert.equal((await request('host.ping')).pid, child.pid);
   await request('host.shutdown');
   if (child.exitCode === null) await once(child, 'exit');
   assert.equal(child.exitCode, 0, stderr);
   console.log(JSON.stringify({ result: 'passed', runtimeVersion: discovery.runtimeVersion, pages: pages.length, screenshotBytes: frame.byteLength, host: layout.browserHostExecutable, electronStarted: false }));
 } finally {
   clearTimeout(deadline);
+  fixture.closeAllConnections();
+  fixture.close();
   if (mcp && mcp.exitCode === null) { mcp.kill(); await once(mcp, 'exit'); }
   socket?.destroy();
   if (child.exitCode === null) { child.kill(); await once(child, 'exit'); }

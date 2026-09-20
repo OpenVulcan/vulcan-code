@@ -63,6 +63,38 @@ function testSettledEvent(): ConversationRunSettledEvent {
 }
 
 describe("NotificationCoordinator", () => {
+  it.each(["granted", "denied", "default", "error"] as const)("requests enabled notifications on each startup after %s", async (result) => {
+    // preferences persist intent across clients without persisting permission outcomes.
+    // preferences 跨客户端保存启用意图，不保存权限申请结果。
+    const preferences = defaultNotificationPreferences();
+    preferences.channels.local.enabled = true;
+    // shell exposes deterministic authorization and activation boundaries.
+    // shell 提供确定的授权及激活边界。
+    const shell = new NotificationTestShell();
+    // request records each client startup regardless of the preceding permission outcome.
+    // request 记录每次客户端启动申请，不受上次权限结果影响。
+    const request = vi.spyOn(shell, "requestNotificationPermission");
+    if (result === "error") request.mockRejectedValue(new Error("permission request failed"));
+    else request.mockResolvedValue(result);
+    // Each coordinator represents a new client; concurrent mounts share one authorization request.
+    // 每个协调器代表新客户端；并发挂载共享一次授权请求。
+    for (let startup = 0; startup < 2; startup++) {
+      // coordinator restores the same enabled preference for this startup.
+      // coordinator 在本次启动恢复同一启用偏好。
+      const coordinator = new NotificationCoordinator(shell, [], () => preferences);
+      // outcomes collect both calls, including rejected authorization promises.
+      // outcomes 收集两个调用结果，包括被拒绝的授权 Promise。
+      const outcomes = await Promise.allSettled([coordinator.start(), coordinator.start()]);
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(result === "error" ? ["rejected", "rejected"] : ["fulfilled", "fulfilled"]);
+      expect(request).toHaveBeenCalledTimes(startup + 1);
+      expect(preferences.channels.local.enabled).toBe(true);
+    }
+    preferences.channels.local.enabled = false;
+    await new NotificationCoordinator(shell, [], () => preferences).start();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(shell.activationSubscriptionAttempts).toBe(3);
+  });
+
   it("retries activation subscription after a transient startup failure", async () => {
     // shell fails exactly one activation subscription attempt.
     // shell 精确失败一次激活订阅尝试。

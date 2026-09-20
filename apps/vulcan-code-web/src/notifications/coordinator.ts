@@ -76,6 +76,9 @@ export class NotificationCoordinator {
   // activationStartPromise shares one in-flight or completed shell activation subscription.
   // activationStartPromise 共享一个进行中或已完成的壳激活订阅。
   private activationStartPromise: Promise<void> | null = null;
+  // permissionStartPromise deduplicates mounts in this client lifetime, never across restarts.
+  // permissionStartPromise 仅合并本次客户端生命周期内的挂载，不跨重启保存。
+  private permissionStartPromise: Promise<void> | null = null;
 
   // constructor creates a coordinator with the current shell and explicit endpoint registry.
   // constructor 使用当前壳与显式端点注册表创建协调器。
@@ -98,9 +101,38 @@ export class NotificationCoordinator {
     }
   }
 
-  // start subscribes once to optional shell activation without blocking application startup.
-  // start 单次订阅可选壳激活事件，且不阻塞应用启动。
+  // start requests enabled notifications and subscribes to activation independently.
+  // start 独立发起已启用通知的权限申请与激活订阅。
+  // Parameters: none. Returns when both startup actions settle, rejecting actionable failures.
+  // 参数：无。返回值：两项启动操作完成后结束，失败时向调用者报告。
   async start(): Promise<void> {
+    await Promise.all([this.requestStartupPermission(), this.subscribeToActivation()]);
+  }
+
+  // requestStartupPermission uses saved intent, never a previous grant or denial, as its gate.
+  // requestStartupPermission 以已保存的启用意图为门控，不以前次授权或拒绝结果为门控。
+  // Parameters: none. Returns after this client's shell authorization request completes.
+  // 参数：无。返回值：当前客户端壳的授权请求完成后结束。
+  private async requestStartupPermission(): Promise<void> {
+    if (!this.loadPreferences().channels.local.enabled || !this.shell.getNotificationCapability().supported) return;
+    if (this.permissionStartPromise) return this.permissionStartPromise;
+    // request is local to this coordinator; creating the next client always requests again.
+    // request 仅属于当前协调器；下次创建客户端始终重新请求。
+    const request = this.shell.requestNotificationPermission().then(() => undefined);
+    this.permissionStartPromise = request;
+    try {
+      await request;
+    } catch (error) {
+      if (this.permissionStartPromise === request) this.permissionStartPromise = null;
+      throw error;
+    }
+  }
+
+  // subscribeToActivation subscribes once without coupling delivery routing to authorization.
+  // subscribeToActivation 单次订阅激活事件，不将投递导航与授权结果耦合。
+  // Parameters: none. Returns after subscription succeeds; failures allow a later retry.
+  // 参数：无。返回值：订阅成功后结束；失败允许后续重试。
+  private async subscribeToActivation(): Promise<void> {
     if (!this.shell.subscribeNotificationActivation) {
       return;
     }

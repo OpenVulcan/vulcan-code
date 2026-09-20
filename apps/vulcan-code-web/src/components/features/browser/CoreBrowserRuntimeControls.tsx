@@ -5,9 +5,9 @@ import { getCoreBrowserRuntimeStatus, installCoreBrowserRuntime, type CoreBrowse
 
 // CoreBrowserRuntimeControls exposes installation, repair and actionable failure details.
 // CoreBrowserRuntimeControls 提供安装、修复及可操作的失败详情。
-// Takes no props; returns controls for the Core-owned runtime, independent of GUI browser tabs.
-// 无参数；返回 Core 自有运行时控件，独立于 GUI 浏览器标签。
-export function CoreBrowserRuntimeControls() {
+// compact hides a healthy status while keeping installation failures actionable; returns runtime controls.
+// compact 隐藏健康状态并保留可操作的安装故障；返回运行时控件。
+export function CoreBrowserRuntimeControls({ compact = false }: { compact?: boolean }) {
   // locale controls visible copy, while status always comes from the owning Core.
   // locale 控制显示文案，status 始终来自所属 Core。
   const { locale } = useI18n();
@@ -60,6 +60,9 @@ export function CoreBrowserRuntimeControls() {
   // busy covers the request handshake and the independent Core background worker.
   // busy 覆盖请求握手及独立 Core 后台工作。
   const busy = starting || status?.installation?.state === "running";
+  // A background readiness check must not add and remove a temporary toolbar row.
+  // 后台就绪检查不得临时插入再移除工具栏行。
+  if (compact && !busy && !error && (!status || (status.ready && !status.diagnostic && !status.installation?.error))) return null;
   return <div className="space-y-2 text-xs">
     <div className="flex flex-wrap items-center gap-2">
       <span role="status">{busy

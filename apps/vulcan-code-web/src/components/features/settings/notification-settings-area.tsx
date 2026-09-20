@@ -219,7 +219,7 @@ export function NotificationSettingsArea() {
   return <section className="settings-preferences-page settings-detail-panel notification-settings-page">
     <section className="settings-preferences-section">
       <div className="settings-preference-row">
-        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("在当前客户端开启时申请通知权限；下次打开时恢复设置并读取权限。", "Enabling requests permission in this client; reopening restores the setting and reads permission.")}</p></div>
+        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("开启后，每次启动当前客户端都会申请通知权限；关闭后停止自动申请。网页版使用浏览器通知权限。", "When enabled, each client startup requests notification permission; disabling stops automatic requests. Web clients use browser notification permission.")}</p></div>
         <Switch aria-label={t("settings.notifications.localChannel")} checked={enabled}
           disabled={!capability.supported || busy} onCheckedChange={(checked) => void changeEnabled(checked)} />
       </div>
@@ -234,6 +234,7 @@ export function NotificationSettingsArea() {
         <Button type="button" size="sm" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{text("发送测试通知", "Send test notification")}</Button>
       </div>
       {enabled && (permission === "default" || permission === "denied" || permissionError) && capability.supported ? <div className="settings-card-actions">
+        {permission !== "default" ? <Button type="button" variant="outline" disabled={busy} onClick={() => void requestPermission()}>{text("申请通知权限", "Request permission")}</Button> : null}
         <Button type="button" variant="outline" disabled={busy} onClick={() => void (permission === "default" ? requestPermission() : recheckPermission())}>
           {permission === "default" ? text("申请通知权限", "Request permission") : text("重新检查权限", "Recheck permission")}
         </Button>

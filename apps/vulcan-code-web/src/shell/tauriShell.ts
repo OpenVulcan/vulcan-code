@@ -77,8 +77,8 @@ export class TauriShellClient implements ShellClient {
     return granted === null ? "default" : granted ? "granted" : "denied";
   }
 
-  // requestNotificationPermission requests native authorization from an explicit settings action.
-  // requestNotificationPermission 通过明确设置操作请求原生授权。
+  // requestNotificationPermission requests native authorization at enabled startup or from settings.
+  // requestNotificationPermission 在已启用的启动流程或设置操作时请求原生授权。
   async requestNotificationPermission(): Promise<ShellNotificationPermission> {
     // permission returns the current native registration and OS authorization result.
     // permission 返回当前原生注册和操作系统授权结果。

@@ -231,8 +231,10 @@
   font-size: 15px;
 }
 
-.project-settings-heading span,
-.project-settings-summary span {
+/* Description spacing must not leak into nested controls such as switch thumbs. */
+/* 说明文字间距不能影响开关滑块等嵌套控件。 */
+.project-settings-heading > div > span,
+.project-settings-summary > div > span {
   display: block;
   margin-top: 3px;
   color: var(--muted-foreground);

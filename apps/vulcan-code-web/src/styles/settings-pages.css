@@ -927,6 +927,9 @@
 }
 
 .settings-model-catalog-heading > :first-child { text-align: left; }
+/* Two content lines share compact padding while controls remain vertically centered. */
+/* 两行内容共用紧凑内边距，右侧控件保持垂直居中。 */
+.settings-model-catalog-row { padding-block: 9px; }
 .settings-model-catalog-row + .settings-model-catalog-row { border-top: 1px solid var(--border); }
 .settings-model-catalog-row .settings-model-title-line { display: block; }
 .settings-model-catalog-row .settings-model-title-line strong {
@@ -939,21 +942,22 @@
 }
 
 .settings-model-catalog-row .settings-model-id {
+  flex: 1 1 auto;
   max-width: 100%;
   font-size: 11px;
 }
 
 .settings-model-catalog-meta {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
   color: var(--muted-foreground);
   font-size: 11px;
-  margin-top: 3px;
-  overflow-wrap: anywhere;
 }
 
-.settings-model-catalog-meta > span + span { border-left: 1px solid var(--border); padding-left: 10px; }
+.settings-model-catalog-meta > span:last-child { flex: 0 0 auto; white-space: nowrap; border-left: 1px solid var(--border); padding-left: 10px; }
+.settings-model-catalog-meta .settings-model-modality-summary { margin-left: 0; }
 .settings-model-purpose-cell { display: flex; align-items: center; justify-content: center; color: var(--muted-foreground); min-width: 0; }
 .settings-model-extension-cell { flex-direction: column; gap: 5px; }
 .settings-model-extension-toggle { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
