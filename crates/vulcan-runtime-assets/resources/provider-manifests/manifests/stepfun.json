@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "stepfun",
-  "revision": 2,
-  "published_at": "2026-09-19T13:06:23Z",
+  "revision": 3,
+  "published_at": "2026-09-20T13:05:47Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -58,6 +58,10 @@
           {
             "model_id": "step-3.5-flash",
             "display_name": "Step 3.5 Flash"
+          },
+          {
+            "model_id": "step-5-preview",
+            "display_name": "Step 5 Preview"
           }
         ]
       },
@@ -113,6 +117,170 @@
         {
           "credential_profile_id": "plan-key",
           "display_name": "Step Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "account_usage_query": "unsupported",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "step-3.7-flash",
+            "display_name": "Step 3.7 Flash"
+          },
+          {
+            "model_id": "step-3.5-flash-2603",
+            "display_name": "Step 3.5 Flash 2603"
+          },
+          {
+            "model_id": "step-3.5-flash",
+            "display_name": "Step 3.5 Flash"
+          },
+          {
+            "model_id": "step-5-preview",
+            "display_name": "Step 5 Preview"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+                "image/gif"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 60,
+              "reference_policy": "any"
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 1,
+              "reference_policy": "any"
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "stepfun.chat.sampling.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "international-api",
+      "display_name": "StepFun International API",
+      "kind": "conversation",
+      "base_url": "https://api.stepfun.ai/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "International API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "account_usage_query": "unsupported",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "step-3.7-flash",
+            "display_name": "Step 3.7 Flash"
+          },
+          {
+            "model_id": "step-3.5-flash-2603",
+            "display_name": "Step 3.5 Flash 2603"
+          },
+          {
+            "model_id": "step-3.5-flash",
+            "display_name": "Step 3.5 Flash"
+          },
+          {
+            "model_id": "step-5-preview",
+            "display_name": "Step 5 Preview"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+                "image/gif"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 60,
+              "reference_policy": "any",
+              "upload_channel_refs": [
+                "international-api.image-file"
+              ]
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 1,
+              "reference_policy": "any",
+              "upload_channel_refs": [
+                "international-api.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "stepfun.chat.sampling.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "international-step-plan",
+      "display_name": "Step Plan International",
+      "kind": "conversation",
+      "base_url": "https://api.stepfun.ai/step_plan/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "plan-key",
+          "display_name": "International Step Plan API Key",
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "account_usage_query": "unsupported",
@@ -369,9 +537,7 @@
       "rule_id": "step-5-preview",
       "display_name": "Step 5 Preview",
       "scope": {
-        "service_entry_ids": [
-          "step-plan"
-        ],
+        "service_entry_ids": [],
         "credential_profile_ids": []
       },
       "matcher": {
@@ -387,19 +553,24 @@
           "conversation_respond"
         ],
         "input_resources": [
-          "image"
+          "image",
+          "video"
         ],
         "output_resources": [],
+        "structured_output": "json_schema",
         "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
         "context_limit": 1000000,
-        "model_parameters": [],
-        "evidence_revision": "stepfun.step-5-preview-observed.2026-09-19"
+        "output_limit": 64000,
+        "evidence_revision": "stepfun.step-5-preview-model-docs.2026-09-20"
       },
-      "request_profile_refs": [],
-      "provenance_ref": "https://artificialanalysis.ai/models/step-5"
+      "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-5-preview"
     }
   ],
   "usage_profiles": [],
@@ -477,6 +648,57 @@
         "purpose": "storage"
       },
       "reference_encoding": "template"
+    },
+    {
+      "upload_channel_id": "international-api.image-file",
+      "description": "Upload one local image through the international StepFun Files API for Chat image understanding.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.stepfun.ai",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif"
+      ],
+      "max_bytes": 128000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/id",
+      "response_id_encoding": "string",
+      "reference_template": "stepfile://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "storage"
+      },
+      "reference_encoding": "template"
+    },
+    {
+      "upload_channel_id": "international-api.video-file",
+      "description": "Upload one local MP4 through the international StepFun Files API for Chat video understanding.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.stepfun.ai",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "video/mp4"
+      ],
+      "max_bytes": 128000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/id",
+      "response_id_encoding": "string",
+      "reference_template": "stepfile://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "storage"
+      },
+      "reference_encoding": "template"
     }
   ],
   "operations": [],
@@ -513,8 +735,24 @@
         "note": "Official 256K context statement for Step 3.7 Flash and Step 3.5 Flash 2603."
       },
       {
-        "url": "https://artificialanalysis.ai/models/step-5",
-        "note": "Independent direct evaluation identifies Step 5 Preview as a reasoning model with text and image inputs and a 1M-token context; the exact Plan model ID comes from the user-provided Step Plan account screenshot, not from public documentation."
+        "url": "https://platform.stepfun.com/docs/zh/guides/models/step-5-preview",
+        "note": "Official Step 5 Preview model ID, 1M context, 64K output, image and video inputs, JSON Schema support, and low/medium/high reasoning levels for the China region."
+      },
+      {
+        "url": "https://platform.stepfun.ai/docs/en/guides/models/step-5-preview",
+        "note": "Official international Step 5 Preview specifications matching the China model."
+      },
+      {
+        "url": "https://platform.stepfun.ai/docs/en/step-plan/integrations/reasoning-api",
+        "note": "Official international Step Plan Chat endpoint and supported model IDs."
+      },
+      {
+        "url": "https://platform.stepfun.ai/docs/en/api-reference/chat/chat-completion-create",
+        "note": "Official international standard Chat endpoint, request fields, and Step 5 Preview examples."
+      },
+      {
+        "url": "https://platform.stepfun.ai/docs/en/api-reference/files/create",
+        "note": "Official international standard API multipart Files endpoint and storage purpose for image and video understanding."
       }
     ]
   }
