@@ -38,7 +38,11 @@ pub(crate) async fn settle_admitted_submission_failure(
                 "Submission failure cannot settle a running execution; new input must remain queued.",
             ));
         }
-        register_session_terminal_persistence_owner(&mut guard, session_id, terminal_owner)?;
+        register_session_terminal_persistence_owner(
+            &mut guard,
+            session_id,
+            terminal_owner.clone(),
+        )?;
     }
     let terminal_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),

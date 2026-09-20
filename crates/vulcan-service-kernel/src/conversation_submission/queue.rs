@@ -1,13 +1,17 @@
 //! Existing-session submission queue decision and commit.
 //! 已有会话提交排队决策与提交。
 
-use vulcan_agent_runtime::attachment_asset_index::release_staged_attachment_ref;
+use vulcan_agent_runtime::attachment_asset_index::{
+    acquire_staged_attachment_ref, release_staged_attachment_ref, transfer_staged_attachment_ref,
+};
 use vulcan_core::types::ConversationAttachment;
 use vulcan_session_core::v1::{EnqueueInputDisposition, EnqueueInputReceipt};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::*;
-use crate::pending_prompts::dispatch_queued_pending_prompt_hook;
+use crate::pending_prompts::{
+    dispatch_queued_pending_prompt_hook, pending_prompt_attachment_staging_scope,
+};
 use crate::session_runtime_registry_v1::{SessionConditionalMutationReceipt, SessionHandle};
 use crate::{AgentRuntimeBridge, webui_trace};
 
@@ -57,6 +61,45 @@ pub(crate) struct ExistingSubmissionQueueInput {
     /// Service-entry timestamp used by queued-return latency diagnostics.
     /// 排队返回延迟诊断使用的服务入口时间戳。
     pub(crate) submit_total_started_at: i128,
+}
+
+/// Transfers a committed queue item's managed assets before releasing its composer owner.
+/// 在释放输入框所有者之前转交已提交队列项的托管资产。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the exact asset index, `session_id` and `client_action_id` identify
+/// the durable queue owner, `currently_queued` distinguishes a queued input from a directly
+/// scheduled turn, and `attachments` with `draft_scope` identify the original composer lease.
+/// `workspace_path` 选择精确资产索引，`session_id` 与 `client_action_id` 标识可靠队列所有者，
+/// `currently_queued` 区分排队输入和直接调度的回合，`attachments` 与 `draft_scope` 标识原输入框租约。
+///
+/// # Returns
+/// 返回值
+/// Success after the ownership handoff, or an explicit error that retains the composer owner if
+/// the queue owner could not be acquired.
+/// 所有权转交后返回成功；若队列所有者无法取得租约则返回明确错误并保留输入框所有者。
+fn transfer_committed_queue_attachment_lease(
+    workspace_path: &str,
+    session_id: SessionId,
+    client_action_id: &str,
+    currently_queued: bool,
+    attachments: &[ConversationAttachment],
+    draft_scope: Option<&str>,
+) -> Result<(), String> {
+    let draft_scope = draft_scope.filter(|scope| !scope.trim().is_empty());
+    if currently_queued {
+        let queue_scope = pending_prompt_attachment_staging_scope(session_id, client_action_id)?;
+        if let Some(draft_scope) = draft_scope {
+            transfer_staged_attachment_ref(workspace_path, draft_scope, &queue_scope, attachments)?;
+        } else {
+            acquire_staged_attachment_ref(workspace_path, &queue_scope, attachments)?;
+        }
+    }
+    if !currently_queued && let Some(draft_scope) = draft_scope {
+        release_staged_attachment_ref(workspace_path, draft_scope, attachments)?;
+    }
+    Ok(())
 }
 
 /// Durably commits one existing-session queue input and verifies the exact stored payload.
@@ -232,6 +275,10 @@ fn submission_admission_ack(
 /// `workspace_snapshot` 是待发送通道规则使用的已水合提交工作区。
 /// `submission_session_id` identifies the existing target, or `None` for a draft conversation.
 /// `submission_session_id` 标识已有目标；草稿会话为 `None`。
+/// `v1_handle` is the exact durable session owner whose document is the sole queue occupancy
+/// authority; an existing session without it can never be judged immediately admissible.
+/// `v1_handle` 是精确可靠会话 owner，其文档是唯一的队列占用权威；缺少它的已有会话
+/// 绝不能被判定为可即时提交。
 ///
 /// # Returns
 /// # 返回值
@@ -241,6 +288,7 @@ pub(crate) fn evaluate_existing_submission_queue(
     state: &SharedServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
     submission_session_id: Option<Uuid>,
+    v1_handle: Option<&Arc<SessionHandle>>,
 ) -> Result<ExistingSubmissionQueueDecision, String> {
     // session_id exists only for submissions targeting an already materialized conversation.
     // session_id 仅在提交目标为已物化会话时存在。
@@ -253,9 +301,32 @@ pub(crate) fn evaluate_existing_submission_queue(
     // active_state_started_at isolates the shared-state lookup portion of the gate.
     // active_state_started_at 隔离闸门中的共享状态查询部分。
     let active_state_started_at = current_unix_millis_value();
+    // durable_queue_started_at isolates the authoritative V1 queue occupancy read.
+    // durable_queue_started_at 隔离权威 V1 队列占用读取部分。
+    let durable_queue_started_at = current_unix_millis_value();
+    // has_queued_inputs is read from the exact V1 session document. A missing compatibility
+    // mirror can never make a non-empty durable queue look empty and unlock an immediate
+    // admission that would violate V1 FIFO order.
+    // has_queued_inputs 读取自精确 V1 会话文档。兼容镜像缺失绝不能让非空可靠队列看起来为空，
+    // 从而放行违反 V1 FIFO 顺序的即时准入。
+    let has_queued_inputs = match v1_handle {
+        Some(handle) => handle
+            .read(|document| !document.metadata.input_state.queued_inputs.is_empty())
+            .map_err(|error| format!("failed to read durable V1 queue occupancy: {error}"))?,
+        None => {
+            return Err(format!(
+                "existing session `{session_id}` submission requires its exact V1 document authority"
+            ));
+        }
+    };
+    webui_trace_if_slow(
+        "submit_prompt_durable_queue_check_slow",
+        durable_queue_started_at,
+        format!("session={session_id} has_queued_inputs={has_queued_inputs}"),
+    );
     // activity reads the stream owner and authoritative kernel turn from one revision.
     // activity 从同一版本读取活动流所有者与权威内核回合。
-    let (has_active_stream_task, has_active_kernel_turn, pending_prompt_ui_state) = {
+    let (has_active_stream_task, has_active_kernel_turn) = {
         // guard keeps both activity diagnostics on one authoritative service-state revision.
         // guard 使两个活动诊断保持在同一个权威服务状态版本上。
         let guard = state
@@ -264,10 +335,6 @@ pub(crate) fn evaluate_existing_submission_queue(
         (
             guard.active_stream_tasks.contains_key(&session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
-            guard
-                .pending_prompt_process_mirrors
-                .get(&session_id)
-                .map(|mirror| mirror.ui_state.clone()),
         )
     };
     webui_trace_if_slow(
@@ -291,7 +358,7 @@ pub(crate) fn evaluate_existing_submission_queue(
     let should_queue = session_has_blocking_system_prompt_work(
         workspace_snapshot,
         session_id,
-        pending_prompt_ui_state.as_ref(),
+        has_queued_inputs,
         has_active_stream_task,
         has_active_kernel_turn,
         has_precheck_progress,
@@ -369,6 +436,24 @@ pub(crate) fn queue_existing_submission(
         } => Some(scheduled_turn_id.value().to_string()),
     };
     if !durable_receipt.changed {
+        // A duplicate admission can be the first opportunity to finish a lease handoff that
+        // failed after the original V1 commit. Only a still-queued row may regain queue ownership.
+        // 重复准入可能是原 V1 提交后租约转交失败的首次修复机会；仅仍在队列中的记录可重新取得队列所有权。
+        if currently_queued {
+            if let Err(error) = transfer_committed_queue_attachment_lease(
+                &workspace_path,
+                session_id,
+                client_submission_id.as_str(),
+                true,
+                &attachments,
+                attachment_draft_scope.as_deref(),
+            ) {
+                webui_trace(
+                    "queued_attachment_lease_handoff_retry_failed",
+                    format!("session={session_id} error={error}"),
+                );
+            }
+        }
         let (revision, run_phase) = current_queued_submission_ack_state(state, session_id)?;
         webui_submit_trace(
             "submit_prompt_admission_idempotent",
@@ -394,19 +479,18 @@ pub(crate) fn queue_existing_submission(
             durable_receipt.revision
         ),
     );
-    let attachments_for_draft_release = attachments.clone();
-    let attachment_draft_scope_for_release = attachment_draft_scope.clone();
-    if let Some(draft_scope) = attachment_draft_scope_for_release
-        .as_deref()
-        .filter(|scope| !scope.trim().is_empty())
-        && let Err(error) = release_staged_attachment_ref(
-            &workspace_path,
-            draft_scope,
-            &attachments_for_draft_release,
-        )
-    {
+    // The durable V1 queue owns this handoff even when its process-local UI mirror later fails.
+    // 即使进程内 UI 镜像随后失败，可靠 V1 队列仍持有这次所有权转交。
+    if let Err(error) = transfer_committed_queue_attachment_lease(
+        &workspace_path,
+        session_id,
+        client_submission_id.as_str(),
+        currently_queued,
+        &attachments,
+        attachment_draft_scope.as_deref(),
+    ) {
         webui_trace(
-            "queued_composer_attachment_draft_release_failed",
+            "queued_attachment_lease_handoff_failed_after_v1_commit",
             format!("session={session_id} error={error}"),
         );
     }
@@ -509,4 +593,140 @@ pub(crate) fn queue_existing_submission(
         true,
         None,
     ))
+}
+
+#[cfg(test)]
+mod attachment_lease_tests {
+    use super::*;
+    use vulcan_agent_runtime::{
+        attachment_asset_index::load_attachment_asset_record_for_attachment,
+        attachment_assets::{attachment_descriptor_from_mime_type, stage_attachment_bytes},
+    };
+
+    /// A committed queue keeps its asset when the composer owner is released.
+    /// 已提交队列在输入框所有者释放后仍保留其资产。
+    #[test]
+    fn committed_queue_acquires_lease_before_releasing_composer() {
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let descriptor =
+            attachment_descriptor_from_mime_type("image/png").expect("supported image attachment");
+        let attachment = stage_attachment_bytes(
+            &workspace_path,
+            &descriptor,
+            "queued.png",
+            None,
+            &[1, 2, 3, 4],
+        )
+        .expect("stage managed attachment");
+        let draft_scope = "composer-draft:conversation:queued-test";
+        acquire_staged_attachment_ref(
+            &workspace_path,
+            draft_scope,
+            std::slice::from_ref(&attachment),
+        )
+        .expect("composer owns staged asset");
+        let session_id = SessionId::new_v4();
+        transfer_committed_queue_attachment_lease(
+            &workspace_path,
+            session_id,
+            "same-action",
+            true,
+            std::slice::from_ref(&attachment),
+            Some(draft_scope),
+        )
+        .expect("queue takes ownership before composer release");
+        let record = load_attachment_asset_record_for_attachment(&attachment)
+            .expect("queue still owns the indexed asset");
+        assert_eq!(
+            record.staging_refs,
+            vec![format!("pending-prompt:v2:{session_id}:same-action")]
+        );
+        assert!(std::path::Path::new(&attachment.local_path).is_file());
+    }
+
+    /// A rejected queue identity never releases the existing composer owner.
+    /// 队列身份无效时绝不释放已有输入框所有者。
+    #[test]
+    fn failed_queue_acquisition_retains_composer_lease() {
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let descriptor =
+            attachment_descriptor_from_mime_type("image/png").expect("supported image attachment");
+        let attachment = stage_attachment_bytes(
+            &workspace_path,
+            &descriptor,
+            "retained.png",
+            None,
+            &[4, 3, 2, 1],
+        )
+        .expect("stage managed attachment");
+        let draft_scope = "composer-draft:conversation:retained-test";
+        acquire_staged_attachment_ref(
+            &workspace_path,
+            draft_scope,
+            std::slice::from_ref(&attachment),
+        )
+        .expect("composer owns staged asset");
+        assert!(
+            transfer_committed_queue_attachment_lease(
+                &workspace_path,
+                SessionId::new_v4(),
+                "invalid\naction",
+                true,
+                std::slice::from_ref(&attachment),
+                Some(draft_scope),
+            )
+            .is_err()
+        );
+        let record = load_attachment_asset_record_for_attachment(&attachment)
+            .expect("composer asset remains indexed");
+        assert_eq!(record.staging_refs, vec![draft_scope]);
+        assert!(std::path::Path::new(&attachment.local_path).is_file());
+    }
+
+    /// One missing asset rejects the whole transfer before changing another asset's owner.
+    /// 一项缺失资产会在改变其他资产所有者之前拒绝整次转交。
+    #[test]
+    fn queue_transfer_validates_all_assets_before_publishing() {
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let descriptor =
+            attachment_descriptor_from_mime_type("image/png").expect("supported image attachment");
+        let attachment = stage_attachment_bytes(
+            &workspace_path,
+            &descriptor,
+            "valid.png",
+            None,
+            &[8, 7, 6, 5],
+        )
+        .expect("stage managed attachment");
+        let draft_scope = "composer-draft:queue-atomic-reject";
+        acquire_staged_attachment_ref(
+            &workspace_path,
+            draft_scope,
+            std::slice::from_ref(&attachment),
+        )
+        .expect("composer owns staged asset");
+        let mut missing = attachment.clone();
+        missing.asset_id = Some(String::from("missing-index-record"));
+
+        assert!(
+            transfer_committed_queue_attachment_lease(
+                &workspace_path,
+                SessionId::new_v4(),
+                "atomic-reject",
+                true,
+                &[attachment.clone(), missing],
+                Some(draft_scope),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            load_attachment_asset_record_for_attachment(&attachment)
+                .expect("original asset must remain indexed")
+                .staging_refs,
+            vec![String::from(draft_scope)]
+        );
+    }
 }

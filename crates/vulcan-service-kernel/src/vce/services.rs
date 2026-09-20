@@ -481,8 +481,11 @@ pub(crate) async fn service_update_vce_project_settings(
     let project_id = stable_project_id(&request.project_id)?;
     let persist_lock = webui_workspace_persist_lock();
     let persist_guard = persist_lock.lock().await;
-    // Hold the existing publication transaction through authoritative snapshot replacement, not runtime drain.
-    // 持有现有发布事务直到权威快照替换，不跨运行时排空持有。
+    // Hold the publication transaction through authoritative snapshot replacement, not runtime drain
+    // and never across the full workbench refresh: that refresh performs workspace I/O and would
+    // otherwise block unrelated public-AI configuration mutations while it runs.
+    // 持有发布事务直到权威快照替换，不跨运行时排空持有，也绝不跨越完整工作台刷新：
+    // 该刷新执行工作区 I/O，否则会在其执行期间阻塞无关的公共 AI 配置变更。
     let publication_guard = crate::begin_public_ai_configuration_transaction().await;
     let (project, host_runtime) = {
         let guard = state
@@ -543,11 +546,16 @@ pub(crate) async fn service_update_vce_project_settings(
         }
         current.vce = next.clone();
     }
+    // Release the process-wide configuration transaction and the workspace persist lock before the
+    // fallible full workbench refresh: durable CAS and the authoritative snapshot replacement are
+    // already committed, while a slow refresh must not block unrelated configuration mutations.
+    // 在可能失败的完整工作台刷新前释放进程级配置事务与工作区持久化锁：
+    // 持久化比较交换与权威快照替换已经提交，慢速刷新不应阻塞无关配置变更。
+    drop(publication_guard);
+    drop(persist_guard);
     refresh_workbench_snapshot(state.clone())
         .await
         .map_err(|error| format!("VCE 设置已保存，但工作台刷新失败：{error}"))?;
-    drop(publication_guard);
-    drop(persist_guard);
     let reconcile_error = reconcile_vce_project(&state, &project_id).await.err();
     commit_and_emit_project_settings_changed_delta(
         &app,

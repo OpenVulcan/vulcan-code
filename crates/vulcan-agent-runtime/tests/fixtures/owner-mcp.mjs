@@ -1,7 +1,12 @@
 // Read newline-delimited JSON-RPC messages from the host-owned stdio connection.
 // 从宿主持有的标准输入输出连接读取逐行 JSON-RPC 消息。
 import { createInterface } from 'node:readline';
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
+
+// An optional marker records every real process start for lifecycle tests.
+// 可选标记记录每次真实进程启动，供生命周期测试计数。
+const processMarker = process.env.VULCAN_MCP_PROCESS_MARKER;
+if (processMarker) appendFileSync(processMarker, `${process.pid}\n`, 'utf8');
 
 // The fixture exposes one tool whose owner argument must be hidden from the model.
 // 本夹具暴露一个工具，其所有者参数必须对模型隐藏。
@@ -23,6 +28,11 @@ const readPageTool = {
 // 回答单个 MCP 请求，并保留原始参数以供进程级断言。
 async function handleRequest(request) {
   if (request.method === 'initialize') {
+    if (process.env.VULCAN_MCP_STALL_INITIALIZE === '1') {
+      // This pause tests cancellation before transport initialization returns to its owner.
+      // 此停顿测试传输初始化返回所有者之前的取消行为。
+      await new Promise((resolve) => setTimeout(resolve, 30_000));
+    }
     return {
       protocolVersion: request.params.protocolVersion,
       capabilities: { tools: {} },
@@ -30,6 +40,16 @@ async function handleRequest(request) {
     };
   }
   if (request.method === 'tools/list') {
+    if (process.env.VULCAN_MCP_DISCOVERY_MARKER) {
+      // The marker proves the first tool discovery reached the real child before cancellation.
+      // 该标记证明首次工具发现在取消前已到达真实子进程。
+      writeFileSync(process.env.VULCAN_MCP_DISCOVERY_MARKER, `${process.pid}\n`, 'utf8');
+    }
+    if (process.env.VULCAN_MCP_STALL_DISCOVERY === '1') {
+      // A bounded stall lets cancellation tests interrupt a real initialized child.
+      // 有界停顿允许取消测试中断真实的已初始化子进程。
+      await new Promise((resolve) => setTimeout(resolve, 30_000));
+    }
     return { tools: [readPageTool] };
   }
   if (request.method === 'tools/call') {

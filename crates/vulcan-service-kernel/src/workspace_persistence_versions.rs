@@ -47,12 +47,25 @@ pub(crate) fn cached_luaskills_catalog_from_state(
         .unwrap_or_else(empty_luaskills_catalog)
 }
 
-/// Returns the cached MCP catalog without querying the MCP runtime on hot paths.
-/// 在热路径上返回缓存的 MCP 目录，避免查询 MCP 运行时。
-pub(crate) fn cached_mcp_catalog_from_state(state: &ServiceBridgeState) -> TauriMcpRuntimeCatalog {
+/// Projects the WebUI MCP catalog from the single authoritative Agent MCP runtime.
+/// 从唯一权威的 Agent MCP 运行时投影 WebUI MCP 目录。
+///
+/// The service owns no MCP transport of its own, so every UI surface reads the same extension
+/// generation the AI tool loop invokes. Before the agent runtime exists the catalog stays empty
+/// instead of querying a second runtime.
+/// 服务不持有自己的 MCP 传输，因此每个界面表面读取的都是 AI 工具循环调用的同一个扩展代次。
+/// 代理运行时存在之前，目录保持为空，而不是去查询第二套运行时。
+pub(crate) fn mcp_runtime_catalog_from_state(
+    state: &ServiceBridgeState,
+) -> TauriMcpRuntimeCatalog {
     state
-        .cached_mcp_catalog
-        .clone()
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| {
+            vulcan_service_runtime::mcp_bridge::mcp_runtime_catalog_from_access(
+                &agent_runtime.extension_generation.mcp_runtime(),
+            )
+        })
         .unwrap_or_else(empty_mcp_catalog)
 }
 

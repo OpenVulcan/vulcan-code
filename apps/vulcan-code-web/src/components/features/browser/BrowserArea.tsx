@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Download, Globe2, Plus, RefreshCw, X } from "lucide-react";
+import { Download, Globe2, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -54,6 +54,38 @@ interface HeldBrowserPointer {
 // BrowserPollSource identifies independently refreshed Core browser metadata.
 // BrowserPollSource 标识独立刷新的 Core 浏览器元数据来源。
 type BrowserPollSource = "sessions" | "pages" | "downloads" | "fileChoosers" | "dialogs";
+
+// coreBrowserAddress turns a human-entered domain into the complete URL required by Core.
+// coreBrowserAddress 将用户输入的域名转为 Core 契约要求的完整地址。
+// input is the address bar text; returns an HTTP(S) URL or about:blank, or throws a visible error.
+// input 是地址栏文本；返回 HTTP(S) 地址或 about:blank，非法输入则抛出可见错误。
+export function coreBrowserAddress(input: string): string {
+  const value = input.trim();
+  if (value === "about:blank") return value;
+  if (!value) throw new Error("Enter a website address.");
+  const loopback = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::|\/|$)/i.test(value);
+  const complete = /^https?:\/\//i.test(value) ? value : /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+    ? value : `${loopback ? "http" : "https"}://${value}`;
+  const url = new URL(complete);
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) {
+    throw new Error("Only HTTP and HTTPS website addresses can be opened.");
+  }
+  return url.href;
+}
+
+// browserTabTitle presents a compact origin label while the full URL remains in the tooltip.
+// browserTabTitle 显示紧凑站点名称，完整地址仍保留在提示中。
+// url is one Core-reported page URL; returns a safe plain-text tab label.
+// url 是 Core 报告的页面地址；返回安全的纯文本页签文案。
+function browserTabTitle(url: string | null): string {
+  if (!url || url === "about:blank") return "about:blank";
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || url;
+  } catch {
+    return url;
+  }
+}
 
 // BrowserArea lets any WebUI client observe and control a Core-owned browser page.
 // BrowserArea 让任意 WebUI 客户端观察和控制 Core 拥有的浏览器页面。
@@ -114,9 +146,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   const [pollErrors, setPollErrors] = React.useState<Record<BrowserPollSource, string | null>>({
     sessions: null, pages: null, downloads: null, fileChoosers: null, dialogs: null,
   });
-  // busy disables repeated session or page creation while Core is responding.
-  // busy 在 Core 应答期间禁止重复创建会话或页面。
-  const [busy, setBusy] = React.useState(false);
   // holderId is this UI instance's stable, nonpersistent control identity.
   // holderId 是本界面实例稳定但不持久化的控制身份。
   const holderId = React.useRef(`webui:${crypto.randomUUID()}`);
@@ -195,9 +224,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // pendingLeaseRelease lets overlapping browser-tab clicks await one exact Core release.
   // pendingLeaseRelease 让重叠的浏览器页签点击等待同一次精确的 Core 授权释放。
   const pendingLeaseRelease = React.useRef<{ ownerSessionId: string; promise: Promise<void> } | null>(null);
-  // busyOperationSequence prevents an abandoned operation from clearing a newer busy state.
-  // busyOperationSequence 防止被放弃的操作清除后续操作的忙碌状态。
-  const busyOperationSequence = React.useRef(0);
 
   // selectedSession is the latest Core projection for this UI choice.
   // selectedSession 是本界面所选对象的最新 Core 投影。
@@ -243,9 +269,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       heldPointer.current = null;
       pendingPointerMove.current = null;
       selectionIntentSequence.current += 1;
-      busyOperationSequence.current += 1;
       setLease(null);
-      setBusy(false);
       setSessions([]);
       setSelectedSessionId(null);
       setAddress("about:blank");
@@ -272,8 +296,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   React.useLayoutEffect(() => {
     // Clear the old browser before paint so a changed selection never displays its metadata.
     // 在绘制前清空旧浏览器，避免切换选择后显示其元数据。
-    busyOperationSequence.current += 1;
-    setBusy(false);
     pendingPointerMove.current = null;
     heldPointer.current = null;
     setPages([]);
@@ -317,14 +339,17 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   const refreshSessions = React.useCallback(async () => {
     const requestSequence = ++sessionRequestSequence.current;
     const next = await listCoreBrowserSessions(props.ownerSessionId);
+    if (next.some((session) => session.ownerSessionId !== props.ownerSessionId)) {
+      throw new Error("Core browser list contains a different conversation owner.");
+    }
     if (ownerSessionRef.current !== props.ownerSessionId
       || requestSequence <= appliedSessionSequence.current
       || requestSequence <= failedSessionSequence.current) return;
     appliedSessionSequence.current = requestSequence;
     setSessions(next);
     setPollErrors((current) => current.sessions === null ? current : { ...current, sessions: null });
-    setSelectedSessionId((current) => current && next.some((session) => session.sessionId === current)
-      ? current : next.find((session) => session.status === "running")?.sessionId ?? null);
+    setSelectedSessionId((current) => current && next.some((session) => session.sessionId === current && session.status === "running")
+      ? current : null);
   }, [props.ownerSessionId]);
 
   // refreshPages updates one selected session's page identity list.
@@ -619,7 +644,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       // 关闭 GUI 只释放其租约；Core 浏览器会话继续存活。
       componentMounted.current = false;
       selectionIntentSequence.current += 1;
-      busyOperationSequence.current += 1;
       const current = leaseRef.current;
       // Revoke local input eligibility before an asynchronous release reaches Core.
       // 异步释放到达 Core 前，先撤销本地输入资格。
@@ -684,30 +708,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     setSelectedSessionId(sessionId);
     setSelectedPageId(null);
     setError(null);
-  }
-
-  // createSession asks Core to start a new background host and returns its stable identity.
-  // createSession 请求 Core 启动新后台宿主并返回其稳定身份。
-  async function createSession(): Promise<void> {
-    // operation prevents an old conversation's completion from changing this panel's busy state.
-    // operation 防止旧会话的完成结果修改当前面板的忙碌状态。
-    const operation = ++busyOperationSequence.current;
-    // selectionIntent preserves an explicit tab choice made while creation is pending.
-    // selectionIntent 保留建会话等待期间用户明确做出的页签选择。
-    const selectionIntent = selectionIntentSequence.current;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await requestCoreBrowser<CoreBrowserSession>(props.ownerSessionId, "browser.session.create", { profileMode: "ephemeral" });
-      if (!isCurrentOwner()) return;
-      await refreshSessions();
-      if (!isCurrentOwner()) return;
-      if (selectionIntent === selectionIntentSequence.current) await selectSession(created.sessionId);
-    } catch (failure) {
-      if (isCurrentOwner()) setError(String(failure));
-    } finally {
-      if (isCurrentOwner() && operation === busyOperationSequence.current) setBusy(false);
-    }
   }
 
   // acquireControl takes a free lease or explicitly takes over another holder.
@@ -965,22 +965,33 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     if (!lease || !selectedSessionId || !selectedPageId) {
       return;
     }
-    projectionSuspended.current = true;
-    requiredFrame.current = null;
-    frameRef.current = null;
-    setFrame(null);
-    setImageUrl(null);
-    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
-    imageUrlRef.current = null;
+    // destination must be validated before hiding the current frame; a bare domain gets HTTPS.
+    // destination 必须在隐藏当前画面前完成校验；无协议域名自动补全 HTTPS。
+    let destination: string;
+    try {
+      destination = coreBrowserAddress(address);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      return;
+    }
+    setAddress(destination);
     try {
       const updated = await requestCoreBrowser<CoreBrowserSession>(props.ownerSessionId, "browser.session.navigate", {
         sessionId: selectedSessionId,
         pageId: selectedPageId,
         leaseSecret: lease.leaseSecret,
-        url: address,
+        url: destination,
       });
       if (!isCurrentPage(selectedSessionId, selectedPageId)) return;
+      // Keep the old image until Core confirms the navigation; only then wait for its new generation.
+      // Core 确认导航前保留旧画面；确认后才等待新代次，失败时不会闪成空白。
+      projectionSuspended.current = true;
       requiredFrame.current = { pageGeneration: updated.pageGeneration, viewportGeneration: updated.viewportGeneration };
+      frameRef.current = null;
+      setFrame(null);
+      setImageUrl(null);
+      if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+      imageUrlRef.current = null;
       setSessions((current) => current.map((session) => session.sessionId === updated.sessionId ? updated : session));
       await refreshPages(selectedSessionId);
       if (!isCurrentPage(selectedSessionId, selectedPageId)) return;
@@ -988,37 +999,8 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       if (isCurrentPage(selectedSessionId, selectedPageId)) setError(null);
     } catch (failure) {
       if (isCurrentPage(selectedSessionId, selectedPageId)) {
-        projectionSuspended.current = false;
         setError(String(failure));
       }
-    }
-  }
-
-  // createPage asks the current host to add one page under the current lease.
-  // createPage 请求当前宿主在当前租约下新增一个页面。
-  async function createPage(): Promise<void> {
-    if (!lease || !selectedSessionId) {
-      return;
-    }
-    // operation prevents a previous page creation from clearing a later busy state.
-    // operation 防止先前建页操作清除较新操作的忙碌状态。
-    const operation = ++busyOperationSequence.current;
-    setBusy(true);
-    try {
-      const existing = new Set(pages.map((page) => page.pageId));
-      const updated = await requestCoreBrowser<CoreBrowserPage[]>(props.ownerSessionId, "browser.page.create", {
-        sessionId: selectedSessionId,
-        leaseSecret: lease.leaseSecret,
-        url: "about:blank",
-      });
-      if (!isCurrentSession(selectedSessionId)) return;
-      setPages(updated);
-      setSelectedPageId(updated.find((page) => !existing.has(page.pageId))?.pageId ?? selectedPageId);
-      setError(null);
-    } catch (failure) {
-      if (isCurrentSession(selectedSessionId)) setError(String(failure));
-    } finally {
-      if (isCurrentSession(selectedSessionId) && operation === busyOperationSequence.current) setBusy(false);
     }
   }
 
@@ -1137,15 +1119,29 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // closeSession explicitly ends the selected Core browser context.
   // closeSession 明确结束所选 Core 浏览器上下文。
   async function closeSession(): Promise<void> {
-    if (!selectedSessionId || !lease) {
+    if (!selectedSessionId || !selectedSession) {
       return;
     }
+    const sessionId = selectedSessionId;
+    // closingLease is acquired only for this explicit close when the user is currently observing.
+    // closingLease 仅在用户明确关闭且当前只观察时临时获取。
+    let closingLease = lease?.session.sessionId === sessionId ? lease : null;
+    let acquiredForClose = false;
     try {
+      if (!closingLease) {
+        closingLease = await requestCoreBrowser<CoreBrowserLease>(props.ownerSessionId,
+          selectedSession.leaseState === "free" ? "browser.lease.acquire" : "browser.lease.takeover", {
+            sessionId,
+            holder: holderId.current,
+          });
+        acquiredForClose = true;
+      }
+      if (!isCurrentSession(sessionId)) return;
       await requestCoreBrowser(props.ownerSessionId, "browser.session.close", {
-        sessionId: selectedSessionId,
-        leaseSecret: lease.leaseSecret,
+        sessionId,
+        leaseSecret: closingLease.leaseSecret,
       });
-      if (!isCurrentSession(selectedSessionId)) return;
+      if (!isCurrentSession(sessionId)) return;
       leaseRef.current = null;
       setLease(null);
       setSelectedSessionId(null);
@@ -1153,19 +1149,22 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       await refreshSessions();
       if (isCurrentOwner()) setError(null);
     } catch (failure) {
-      if (isCurrentSession(selectedSessionId)) setError(String(failure));
+      if (isCurrentSession(sessionId)) setError(String(failure));
+    } finally {
+      if (acquiredForClose && closingLease) {
+        void requestCoreBrowser(props.ownerSessionId, "browser.lease.release", {
+          sessionId,
+          leaseSecret: closingLease.leaseSecret,
+        }).catch(() => undefined);
+      }
     }
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4" aria-label={chinese ? "Core 浏览器" : "Core browser"}>
-      <div className="flex flex-wrap items-center gap-2">
-        <Globe2 size={18} />
-        <strong>{chinese ? "Core 浏览器" : "Core Browser"}</strong>
-        <Button type="button" size="sm" onClick={() => void createSession()} disabled={busy}>
-          <Plus size={14} />{chinese ? "新建会话" : "New session"}
-        </Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => {
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto bg-background p-3" aria-label={chinese ? "AI 浏览器" : "AI browser"}>
+      <div className="flex items-center justify-between gap-2 border-b pb-2">
+        <div className="flex min-w-0 items-center gap-2"><Globe2 size={17} /><strong>{chinese ? "AI 浏览器" : "AI Browser"}</strong></div>
+        <Button type="button" size="icon" variant="ghost" aria-label={chinese ? "刷新浏览器列表" : "Refresh browser list"} onClick={() => {
           // requestSequence keeps an old manual refresh failure from replacing a newer list.
           // requestSequence 防止旧的手动刷新失败覆盖更新的列表。
           const requestSequence = sessionRequestSequence.current + 1;
@@ -1178,25 +1177,24 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             }
           });
         }}>
-          <RefreshCw size={14} />{chinese ? "刷新" : "Refresh"}
+          <RefreshCw size={15} />
         </Button>
       </div>
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label={chinese ? "浏览器会话" : "Browser sessions"}>
-        {sessions.filter((session) => session.status !== "closed").map((session) => (
-          <button key={session.sessionId} type="button" role="tab"
+      <div className="flex gap-1 overflow-x-auto border-b pb-1" role="tablist" aria-label={chinese ? "活跃的 AI 浏览器" : "Active AI browsers"}>
+        {sessions.filter((session) => session.status === "running").map((session, index) => (
+          <button key={session.sessionId} type="button" role="tab" data-browser-session-id={session.sessionId}
             aria-selected={selectedSessionId === session.sessionId}
-            className={`rounded border px-3 py-1 text-xs ${selectedSessionId === session.sessionId ? "bg-primary text-primary-foreground" : "bg-background"}`}
+            className={`max-w-44 shrink-0 truncate rounded-t-md border border-b-0 px-3 py-1.5 text-xs ${selectedSessionId === session.sessionId ? "bg-muted font-medium text-foreground" : "bg-background text-muted-foreground"}`}
+            title={session.currentUrl ?? session.sessionId}
             onClick={() => void selectSession(session.sessionId)}>
-            {session.sessionId.slice(0, 8)} · {session.status} · {session.pageCount}
+            {browserTabTitle(session.currentUrl) === "about:blank" ? `${chinese ? "浏览器" : "Browser"} ${index + 1}` : browserTabTitle(session.currentUrl)}
           </button>
         ))}
       </div>
       {selectedSession ? (
         <>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span>{chinese ? "控制权" : "Control"}: {selectedSession.leaseState}</span>
-            <span>{chinese ? "宿主" : "Host"}: {selectedSession.status}</span>
-            <span>{chinese ? "观察流" : "Stream"}: {streamStatus}</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{streamStatus === "connected" ? (chinese ? "实时画面" : "Live view") : (chinese ? "正在连接画面" : "Connecting view")}</span>
             {selectedSession.blockedReason ? <span className="text-destructive">{selectedSession.blockedReason}</span> : null}
             {ownsControl ? (
               <Button type="button" size="sm" variant="outline" onClick={() => void releaseControl()}>{chinese ? "交还控制权" : "Release control"}</Button>
@@ -1205,12 +1203,12 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                 {selectedSession.leaseState === "free" ? (chinese ? "取得控制权" : "Take control") : (chinese ? "明确接管" : "Take over")}
               </Button>
             ) : null}
-            <Button type="button" size="sm" variant="outline" disabled={!ownsControl} onClick={() => void closeSession()}><X size={14} />{chinese ? "关闭会话" : "Close session"}</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => void closeSession()}><X size={14} />{chinese ? "关闭浏览器" : "Close browser"}</Button>
           </div>
-          <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label={chinese ? "浏览器页面" : "Browser pages"}>
+          <div className="flex items-center gap-1 overflow-x-auto border-b" role="tablist" aria-label={chinese ? "浏览器页面" : "Browser pages"}>
             {pages.map((page) => (
-              <button key={page.pageId} type="button" role="tab" aria-selected={page.pageId === selectedPageId}
-                className={`max-w-56 truncate rounded border px-2 py-1 text-xs ${page.pageId === selectedPageId ? "bg-accent" : "bg-background"}`}
+              <button key={page.pageId} type="button" role="tab" data-browser-page-id={page.pageId} aria-selected={page.pageId === selectedPageId}
+                className={`max-w-44 shrink-0 truncate rounded-t-md border border-b-0 px-3 py-1.5 text-xs ${page.pageId === selectedPageId ? "bg-muted text-foreground" : "bg-background text-muted-foreground"}`}
                 title={page.url} onClick={() => {
                   if (page.pageId === selectedPageId) return;
                   for (const key of heldKeys.current) queueInput("key", { type: "up", key });
@@ -1222,12 +1220,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                   heldPointer.current = null;
                   setSelectedPageId(page.pageId);
                 }}>
-                {page.pageId} · {page.url || "about:blank"}
+                {browserTabTitle(page.url)}
               </button>
             ))}
-            <Button type="button" size="sm" variant="outline" disabled={!ownsControl || busy} onClick={() => void createPage()}>
-              <Plus size={14} />{chinese ? "新页面" : "New page"}
-            </Button>
           </div>
           <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void navigate(event)}>
             <input ref={addressRef} className="min-w-52 flex-1 rounded border bg-background px-3 py-2 text-sm" value={address}
@@ -1246,6 +1241,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               </SelectContent>
             </Select>
           </form>
+          {error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
           <div className="flex min-h-[360px] flex-1 items-center justify-center overflow-hidden rounded border bg-neutral-900">
             {imageUrl && selectedPage ? (
               <div ref={projectionRef} className={`relative h-full w-full outline-none ${ownsControl ? "cursor-crosshair touch-none" : "cursor-default"}`}
@@ -1294,7 +1290,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               <input type="file" disabled={!ownsControl} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
             </label>
           ))}
-          {frame ? <div className="text-xs text-muted-foreground">{selectedPage?.pageId} · {frame.width}×{frame.height} · #{frame.sequence}</div> : null}
+          {frame ? <details className="text-xs text-muted-foreground"><summary>{chinese ? "画面信息" : "View details"}</summary>
+            {selectedPage?.pageId} · {frame.width}×{frame.height} · #{frame.sequence} · {selectedSession.leaseState}
+          </details> : null}
           <div className="flex flex-wrap items-center gap-2">
             <input className="min-w-52 flex-1 rounded border bg-background px-3 py-2 text-sm" value={textInput}
               onChange={(event) => setTextInput(event.target.value)} placeholder={chinese ? "输入文字（支持中文输入法）" : "Type text to send"}
@@ -1316,8 +1314,11 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             </div>
           ) : null}
         </>
-      ) : <p className="text-sm text-muted-foreground">{chinese ? "创建会话后，浏览器在 Core 后台运行；当前窗口只观察和控制它。" : "Create a session to run a Core-owned browser in the background."}</p>}
-      {error || Object.values(pollErrors).some(Boolean) ? <div role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error ?? Object.values(pollErrors).find(Boolean)}</div> : null}
+      ) : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">{sessions.some((session) => session.status === "running")
+        ? (chinese ? "选择上方浏览器后连接实时画面。" : "Select a browser above to connect to its live view.")
+        : (chinese ? "当前会话没有活跃的 AI 浏览器。AI 创建后会显示在这里。" : "No active AI browser in this conversation. One will appear here when AI creates it.")}</p>}
+      {!selectedSession && error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
+      {Object.values(pollErrors).some(Boolean) ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{Object.values(pollErrors).find(Boolean)}</div> : null}
     </div>
   );
 }

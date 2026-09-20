@@ -1,21 +1,5 @@
 use super::*;
 
-/// Builds one minimal visible V1 queue projection row.
-/// 构建一条最小可见 V1 队列投影行。
-fn test_panel_entry(id: &str) -> PendingPromptPanelEntry {
-    PendingPromptPanelEntry {
-        id: id.to_string(),
-        prompt: format!("prompt-{id}"),
-        hidden_model_guidance: None,
-        preview: format!("prompt-{id}"),
-        attachments: Vec::new(),
-        model_reference: None,
-        runtime_options: PendingPromptRuntimeOptions::default(),
-        state: PendingPromptPanelEntryState::Ready,
-        created_at: String::from("1000"),
-    }
-}
-
 /// Verifies isolated Provider retry attachments retain their request-local delivery decision.
 /// 验证隔离的 Provider 重试附件会保留其单次请求局部传输决策。
 #[test]
@@ -51,17 +35,12 @@ fn provider_retry_attachment_round_trip_retains_delivery_mode() {
     assert!(canonical_value.get("delivery_mode").is_none());
 }
 
-/// Verifies the visible V1 queue projection keeps later submissions on the admission lane.
-/// 验证可见 V1 队列投影会让后续提交继续进入准入通道。
+/// Verifies the durable V1 queue occupancy keeps later submissions on the admission lane.
+/// 验证可靠的 V1 队列占用会让后续提交继续进入准入通道。
 #[test]
-fn pending_prompt_lane_busy_includes_visible_v1_projection() {
-    let ui_state = SessionTranscriptUiState {
-        pending_prompt_panel_queue: vec![test_panel_entry("a")],
-        ..SessionTranscriptUiState::default()
-    };
-
+fn pending_prompt_lane_busy_includes_durable_v1_queue_occupancy() {
     assert!(pending_prompt_lane_is_busy(
-        &ui_state,
+        true,
         PendingPromptBusyLaneContext {
             dispatch: PendingPromptDispatchContext {
                 has_running_subagents: false,
@@ -84,7 +63,7 @@ fn pending_prompt_lane_busy_includes_active_provider_phase() {
         crate::SessionRunPhase::ToolRunning,
     ] {
         assert!(pending_prompt_lane_is_busy(
-            &SessionTranscriptUiState::default(),
+            false,
             PendingPromptBusyLaneContext {
                 dispatch: PendingPromptDispatchContext {
                     has_running_subagents: false,
@@ -103,7 +82,7 @@ fn pending_prompt_lane_busy_includes_active_provider_phase() {
 #[test]
 fn pending_prompt_lane_busy_ignores_stale_preparing_without_precheck() {
     assert!(!pending_prompt_lane_is_busy(
-        &SessionTranscriptUiState::default(),
+        false,
         PendingPromptBusyLaneContext {
             dispatch: PendingPromptDispatchContext {
                 has_running_subagents: false,

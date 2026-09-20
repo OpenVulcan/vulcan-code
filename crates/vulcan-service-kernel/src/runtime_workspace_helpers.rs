@@ -292,7 +292,7 @@ pub(crate) fn runtime_parts_from_state(
         .clone()
         .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
     let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-    let mcp_catalog = cached_mcp_catalog_from_state(&guard);
+    let mcp_catalog = mcp_runtime_catalog_from_state(&guard);
     Ok((
         controller_runtime,
         agent_runtime,

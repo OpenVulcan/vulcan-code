@@ -178,7 +178,7 @@ pub(crate) struct SessionTurnAdmissionReservation {
 
 /// Exact in-process owner that keeps one session closed while terminal state is being persisted.
 /// 在终态持久化期间保持单个会话关闭的精确进程内所有者。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SessionTerminalPersistenceOwner {
     /// A registered stream task accepted or synthesized the terminal boundary.
     /// 已注册流任务接纳或合成了终态边界。
@@ -192,6 +192,60 @@ pub(crate) enum SessionTerminalPersistenceOwner {
     /// A conversation Stop transaction owns teardown, retry refreeze, and durable stopped-state settlement.
     /// 会话 Stop 事务持有拆除、重试重冻与可靠停止状态结算。
     RunStop(Uuid),
+    /// A pending settlement rebuilt from the durable V1 document after a restart.
+    /// 重启后从可靠 V1 文档重建的待结算项。
+    RecoveredSettlement {
+        /// Exact original owner generation identity recorded in the durable settlement intent.
+        /// 可靠结算意图中记录的精确原始所有者代际身份。
+        generation: String,
+    },
+}
+
+/// Retains the exact fallback data while a terminal owner has not yet persisted its intent.
+/// 在终态所有者尚未持久化意图时保留精确的回退数据。
+#[derive(Debug, Clone)]
+pub(crate) struct TerminalPreIntentRepair {
+    /// Exact owner generation that may retry this boundary.
+    /// 获准重试该边界的精确所有者代际。
+    pub(crate) owner_generation: String,
+    /// Original stable terminal reason selected by the failed stream.
+    /// 失败流选择的原始稳定终态原因。
+    pub(crate) reason_code: &'static str,
+    /// Original safe failure detail retained only for this process-local retry.
+    /// 仅为当前进程内重试保留的原始安全失败详情。
+    pub(crate) redacted_detail: Option<String>,
+}
+
+impl SessionTerminalPersistenceOwner {
+    /// Returns the stable durable identity of this exact owner generation.
+    /// 返回该精确所有者代际的稳定可靠身份。
+    ///
+    /// The identity is recorded in the durable terminal settlement intent, so a
+    /// rebuild after restart and an idempotent retry can recognize the exact
+    /// original boundary without guessing.
+    /// 该身份会写入可靠终态结算意图，使重启后的重建与幂等重试都能识别精确的原始
+    /// 边界而无需猜测。
+    pub(crate) fn owner_generation(&self) -> String {
+        match self {
+            Self::StreamTask(task_id) => format!("stream-task:{task_id}"),
+            Self::KernelGeneration(generation) => format!("kernel-generation:{generation}"),
+            Self::PromptPreparation(owner_id) => format!("prompt-preparation:{owner_id}"),
+            Self::RunStop(owner_id) => format!("run-stop:{owner_id}"),
+            Self::RecoveredSettlement { generation } => generation.clone(),
+        }
+    }
+
+    /// Returns the stable diagnostic label for traces and user-facing diagnostics.
+    /// 返回用于追踪与用户可见诊断的稳定标签。
+    pub(crate) const fn diagnostic_label(&self) -> &'static str {
+        match self {
+            Self::StreamTask(_) => "stream task terminal settlement",
+            Self::KernelGeneration(_) => "kernel generation terminal settlement",
+            Self::PromptPreparation(_) => "prompt preparation terminal settlement",
+            Self::RunStop(_) => "conversation stop terminal settlement",
+            Self::RecoveredSettlement { .. } => "recovered terminal settlement",
+        }
+    }
 }
 
 /// Project-level scope serialized against lifecycle transitions and prompt submissions.
@@ -372,12 +426,6 @@ pub struct ServiceBridgeState {
     /// Cached LuaSkills catalog captured during startup or explicit refresh.
     /// 启动或显式刷新时捕获的 LuaSkills 目录缓存。
     pub(crate) cached_luaskills_catalog: Option<TauriLuaSkillsCatalog>,
-    /// Long-lived MCP runtime handle.
-    /// 长生命周期 MCP 运行时句柄。
-    pub(crate) mcp_runtime: Option<TauriMcpRuntimeHandle>,
-    /// Cached MCP catalog captured during startup or explicit refresh.
-    /// 启动或显式刷新时捕获的 MCP 目录缓存。
-    pub(crate) cached_mcp_catalog: Option<TauriMcpRuntimeCatalog>,
     /// Long-lived injected provider-manifest sync service; RPCs reuse this instance instead of
     /// constructing empty-key/None-URL services per call (plan §R7.13).
     /// 长生命周期注入的供应商清单同步服务；RPC 复用该实例，而不是每次调用构造空密钥/
@@ -416,6 +464,9 @@ pub struct ServiceBridgeState {
     /// 当前正在把已接纳终态提交到可靠存储的精确流所有者。
     pub(crate) session_terminal_persistence_owners:
         BTreeMap<SessionId, SessionTerminalPersistenceOwner>,
+    /// Exact pre-intent terminal retries for owners retained after an early failure.
+    /// 早期失败后保留的所有者对应的精确意图前终态重试。
+    pub(crate) terminal_pre_intent_repairs: BTreeMap<SessionId, TerminalPreIntentRepair>,
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
@@ -514,6 +565,12 @@ impl SessionTerminalPersistenceOwnerGuard {
         })
     }
 
+    /// Returns the stable durable generation identity of the adopted owner.
+    /// 返回已接管所有者的稳定可靠代际身份。
+    pub(crate) fn owner_generation(&self) -> String {
+        self.owner.owner_generation()
+    }
+
     /// Explicitly opens session admission after terminal settlement reaches a safe boundary.
     /// 在终态结算达到安全边界后显式开放会话准入。
     ///
@@ -526,8 +583,7 @@ impl SessionTerminalPersistenceOwnerGuard {
     /// # 返回值
     /// Success only when the same marker was removed; mismatches remain fail-closed.
     /// 仅在同一标记被移除时返回成功；不匹配情况保持失败关闭。
-    pub(crate) fn release(mut self) -> Result<(), String> {
-        // guard recovers poisoned state only for exact owner-qualified admission cleanup.
+    pub(crate) fn release(mut self) -> Result<(), String> {        // guard recovers poisoned state only for exact owner-qualified admission cleanup.
         // guard 仅为带精确所有者限定的准入清理恢复中毒状态。
         let mut guard =
             lock_service_state_for_admission_cleanup(&self.state, "terminal-persistence owner");
@@ -609,9 +665,9 @@ pub(crate) fn register_session_terminal_persistence_owner(
 pub(crate) fn rollback_session_terminal_persistence_owner(
     state: &mut ServiceBridgeState,
     session_id: SessionId,
-    owner: SessionTerminalPersistenceOwner,
+    owner: &SessionTerminalPersistenceOwner,
 ) -> bool {
-    if state.session_terminal_persistence_owners.get(&session_id) != Some(&owner) {
+    if state.session_terminal_persistence_owners.get(&session_id) != Some(owner) {
         return false;
     }
     state
@@ -1138,7 +1194,7 @@ where
             if let Some(owner) = guard
                 .session_terminal_persistence_owners
                 .get(&session_id)
-                .copied()
+                .cloned()
             {
                 return Err(
                     ActiveStreamTaskRegistrationError::TerminalPersistenceInFlight { owner },
@@ -1276,13 +1332,13 @@ where
 /// WebUI 工作区持久化使用的进程级共享闸门。
 static WEBUI_WORKSPACE_PERSIST_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
-/// Returns the shared async persistence gate used by every WebUI workspace write.
-/// 返回所有 WebUI 工作区写入共用的异步持久化闸门。
+/// Returns the shared async gate for workspace mutations that explicitly participate in it.
+/// 返回显式参与该闸门的工作区变更所共用的异步闸门。
 ///
 /// # Returns
 /// 返回值
-/// A shared mutex that serializes SQLite-backed workspace writes.
-/// 用于串行化 SQLite 工作区写入的共享互斥锁。
+/// A shared mutex for participating project and workspace lifecycle transactions.
+/// 返回供参与其中的项目与工作区生命周期事务使用的共享互斥锁。
 pub(crate) fn webui_workspace_persist_lock() -> Arc<tokio::sync::Mutex<()>> {
     WEBUI_WORKSPACE_PERSIST_LOCK
         .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))

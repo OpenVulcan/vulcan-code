@@ -4,6 +4,28 @@ use super::*;
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。
 const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Host-owned per-partition readiness timeout for one plugin MCP partition.
+/// 单个插件 MCP 分区使用的宿主持有就绪超时。
+///
+/// Every plugin partition waits with its own identical deadline, and the waits run concurrently,
+/// so a slow or offline server can never add its deadline to the next partition.
+/// 每个插件分区使用各自相同的期限等待，且这些等待并发执行，
+/// 因此慢或离线服务器无法把自己的等待时间叠加到下一个分区。
+const MCP_PARTITION_READINESS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Maximum simultaneous transport starts across user, plugin, and browser MCP partitions.
+/// 用户、插件与浏览器 MCP 分区同时启动传输的最大数量。
+const MCP_MAX_CONCURRENT_TRANSPORT_STARTS: usize = 4;
+
+/// Returns the process-wide fair start gate without limiting already-connected servers.
+/// 返回进程级公平启动门，不限制已经连接的服务器数量。
+fn mcp_transport_startup_semaphore() -> &'static tokio::sync::Semaphore {
+    static STARTUP_SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> =
+        std::sync::OnceLock::new();
+    STARTUP_SEMAPHORE
+        .get_or_init(|| tokio::sync::Semaphore::new(MCP_MAX_CONCURRENT_TRANSPORT_STARTS))
+}
+
 /// Process-local monotonic catalog identity; it contains no configuration or credential material.
 /// 进程内单调目录身份，不包含配置或凭据内容。
 static MCP_INSPECTION_GENERATION: std::sync::atomic::AtomicU64 =
@@ -279,6 +301,23 @@ impl McpRuntimeHandle {
 
     /// Calls one MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用单个 MCP 工具。
+    ///
+    /// Every rejection carries one stable machine-readable code followed by concise English text:
+    /// the model must classify the failure by code, and any localized UI copy is derived from the
+    /// code instead of the transport wording.
+    /// 每个拒绝都携带一个稳定机器可读编码，后接简明英文说明：模型必须按编码分类失败，
+    /// 任何本地化界面文案都由编码派生，而不是传输层措辞。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `tool_id` is the exact qualified host-facing identifier and `args` is the complete argument object.
+    /// `tool_id` 是精确的限定宿主侧标识；`args` 是完整参数对象。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The remote tool result, or one coded failure for an unknown tool, a disconnected server,
+    /// or a rejected remote invocation.
+    /// 返回远端工具结果；或针对未知工具、已断开服务器、被拒绝的远端调用返回一条带编码失败。
     pub async fn call_tool_by_id(
         &self,
         tool_id: &str,
@@ -290,11 +329,13 @@ impl McpRuntimeHandle {
             .into_iter()
             .find(|tool| tool.qualified_name() == tool_id)
         else {
-            return Err(format!("未找到 MCP 工具 `{tool_id}`。"));
+            return Err(format!(
+                "mcp_tool_not_found: no MCP tool matches `{tool_id}` in the current runtime catalog"
+            ));
         };
         let Some(transport) = self.transport_for_server(descriptor.server_id()) else {
             return Err(format!(
-                "MCP 服务器 `{}` 当前未连接，无法调用工具 `{}`。",
+                "mcp_server_disconnected: MCP server `{}` is not connected; tool `{}` was not invoked",
                 descriptor.server_id(),
                 descriptor.tool_name()
             ));
@@ -304,9 +345,8 @@ impl McpRuntimeHandle {
             .await
             .map_err(|error| {
                 format!(
-                    "MCP 工具 `{}` 调用失败：{}。",
+                    "mcp_tool_invocation_failed: MCP tool `{}` failed: {error}",
                     descriptor.tool_name(),
-                    error
                 )
             })
     }
@@ -538,8 +578,60 @@ pub(super) async fn bootstrap_mcp_runtime(
     Ok(McpRuntimeHandle { inner })
 }
 
+/// Owns unpublished MCP runtimes until their access generation is published.
+/// 在访问代次发布前持有尚未发布的 MCP 运行时。
+pub(super) struct McpRuntimeStartupGuard {
+    /// Candidate handles that must stop if startup fails or its future is cancelled.
+    /// 启动失败或 Future 被取消时必须停止的候选句柄。
+    runtimes: Vec<McpRuntimeHandle>,
+    /// Whether publication transferred lifetime ownership to a runtime access generation.
+    /// 发布是否已把生命周期所有权转交给运行时访问代次。
+    published: bool,
+}
+
+impl McpRuntimeStartupGuard {
+    /// Creates an empty unpublished-runtime owner.
+    /// 创建一个空的未发布运行时所有者。
+    pub(super) fn new() -> Self {
+        Self {
+            runtimes: Vec::new(),
+            published: false,
+        }
+    }
+
+    /// Tracks one started runtime before the next cancellation point.
+    /// 在下一个取消点之前跟踪一个已启动运行时。
+    pub(super) fn track(&mut self, runtime: &McpRuntimeHandle) {
+        self.runtimes.push(runtime.clone());
+    }
+
+    /// Transfers lifecycle ownership to the published access generation.
+    /// 将生命周期所有权转交给已发布的访问代次。
+    pub(super) fn mark_published(&mut self) {
+        self.published = true;
+    }
+}
+
+impl Drop for McpRuntimeStartupGuard {
+    /// Stops every unpublished candidate even when its startup future is cancelled.
+    /// 即使启动 Future 被取消，也会停止每个未发布的候选运行时。
+    fn drop(&mut self) {
+        if !self.published {
+            for runtime in &self.runtimes {
+                runtime.shutdown();
+            }
+        }
+    }
+}
+
 /// Boots one stable MCP runtime access surface from source-neutral server definitions.
 /// 根据中立服务器定义引导一个稳定 MCP 运行时访问面。
+///
+/// The user partition never blocks startup, and every plugin partition is booted first and then
+/// waited on concurrently with its own host-owned deadline. Failures are reported for the first
+/// failing partition in stable key order after every started partition has been shut down.
+/// 用户分区从不阻塞启动；每个插件分区先完成引导，再以各自宿主持有期限并发等待。
+/// 在全部已启动分区被关闭后，按稳定键顺序报告第一个失败分区。
 pub async fn bootstrap_mcp_runtime_access(
     servers: Vec<McpServerConfig>,
 ) -> Result<McpRuntimeAccess, String> {
@@ -552,29 +644,73 @@ pub async fn bootstrap_mcp_runtime_access(
             .push(server);
     }
     let mut partitions = BTreeMap::<String, McpRuntimeHandle>::new();
+    // startup_guard closes already-started partitions when the bootstrap future is cancelled.
+    // startup_guard 在引导 Future 被取消时关闭已经启动的分区。
+    let mut startup_guard = McpRuntimeStartupGuard::new();
     for (partition_key, partition_servers) in grouped {
         match bootstrap_mcp_runtime(partition_servers).await {
             Ok(runtime) => {
-                if partition_key.starts_with("plugin:")
-                    && let Err(error) = runtime.wait_until_ready(Duration::from_secs(15)).await
-                {
-                    runtime.shutdown();
-                    for existing_runtime in partitions.values() {
-                        existing_runtime.shutdown();
-                    }
-                    return Err(error);
-                }
+                startup_guard.track(&runtime);
                 partitions.insert(partition_key, runtime);
             }
-            Err(error) => {
-                for runtime in partitions.values() {
-                    runtime.shutdown();
-                }
-                return Err(error);
+            Err(error) => return Err(error),
+        }
+    }
+    // plugin_keys lists every plugin partition in stable key order for deterministic reporting.
+    // plugin_keys 按稳定键顺序列出全部插件分区，使失败报告顺序确定。
+    let plugin_keys = partitions
+        .keys()
+        .filter(|partition_key| partition_key.starts_with("plugin:"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if plugin_keys.is_empty() {
+        let access = McpRuntimeAccess::new(overview, partitions);
+        startup_guard.mark_published();
+        return Ok(access);
+    }
+    // readiness_waits runs every plugin partition readiness check concurrently so one slow or
+    // offline server cannot add its own deadline to the next partition.
+    // readiness_waits 并发执行每个插件分区就绪检查，使单个慢或离线服务器
+    // 无法把自己的等待时间叠加到下一个分区。
+    let mut readiness_waits = tokio::task::JoinSet::new();
+    for partition_key in &plugin_keys {
+        let runtime = partitions
+            .get(partition_key)
+            .expect("bootstrapped plugin partition must exist before its readiness wait")
+            .clone();
+        let owned_partition_key = partition_key.clone();
+        readiness_waits.spawn(async move {
+            let readiness = runtime
+                .wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT)
+                .await;
+            (owned_partition_key, readiness)
+        });
+    }
+    // failures keeps every rejection keyed by partition so the first stable key is reported.
+    // failures 以分区为键保留全部拒绝结果，从而报告第一个稳定键。
+    let mut failures = BTreeMap::<String, String>::new();
+    while let Some(joined_readiness) = readiness_waits.join_next().await {
+        match joined_readiness {
+            Ok((partition_key, Ok(()))) => {
+                debug_assert!(plugin_keys.contains(&partition_key));
+            }
+            Ok((partition_key, Err(error))) => {
+                failures.insert(partition_key, error);
+            }
+            Err(join_error) => {
+                failures.insert(
+                    format!("plugin-partition-readiness-task:{join_error}"),
+                    format!("MCP plugin partition readiness task failed: {join_error}"),
+                );
             }
         }
     }
-    Ok(McpRuntimeAccess::new(overview, partitions))
+    if let Some((_, error)) = failures.into_iter().next() {
+        return Err(error);
+    }
+    let access = McpRuntimeAccess::new(overview, partitions);
+    startup_guard.mark_published();
+    Ok(access)
 }
 
 /// Replaces only the user-configured MCP runtime partition while retaining plugin partitions.
@@ -639,11 +775,17 @@ pub async fn replace_plugin_mcp_runtime_partition(
     }
     let overview = configured_mcp_registry_overview(servers.clone());
     let runtime = bootstrap_mcp_runtime(servers).await?;
-    if let Err(error) = runtime.wait_until_ready(Duration::from_secs(15)).await {
-        runtime.shutdown();
+    let mut startup_guard = McpRuntimeStartupGuard::new();
+    startup_guard.track(&runtime);
+    if let Err(error) = runtime
+        .wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT)
+        .await
+    {
         return Err(error);
     }
-    Ok(current.with_replaced_plugin_partition(plugin_id, generation, overview, runtime))
+    let access = current.with_replaced_plugin_partition(plugin_id, generation, overview, runtime);
+    startup_guard.mark_published();
+    Ok(access)
 }
 
 /// Starts, validates, and fully stops one isolated plugin MCP partition without publishing it.
@@ -679,9 +821,13 @@ pub async fn validate_plugin_mcp_runtime_partition(
     // runtime remains isolated from every published MCP access generation.
     // runtime 与所有已发布 MCP 访问代次保持隔离。
     let runtime = bootstrap_mcp_runtime(servers).await?;
+    let mut startup_guard = McpRuntimeStartupGuard::new();
+    startup_guard.track(&runtime);
     // validation_result preserves readiness failure while teardown still runs unconditionally.
     // validation_result 保留就绪失败，同时无条件执行拆除。
-    let validation_result = runtime.wait_until_ready(Duration::from_secs(15)).await;
+    let validation_result = runtime
+        .wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT)
+        .await;
     runtime.shutdown();
     // shutdown_result proves local processes released staging files before installation continues.
     // shutdown_result 证明本地进程已在安装继续前释放暂存文件。
@@ -814,6 +960,19 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 Vec::new(),
             );
 
+            // The permit covers initialize and the first complete tools/list validation;
+            // healthy long-lived connections release it before optional capability refresh.
+            // 许可覆盖初始化与首次完整 tools/list 校验；健康长连接在可选能力刷新前释放它。
+            let startup_permit = tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    shutdown_server_runtime_state(&inner, &server.id).await;
+                    break;
+                }
+                permit = mcp_transport_startup_semaphore().acquire() => {
+                    permit.expect("the process-wide MCP startup semaphore is never closed")
+                }
+            };
+
             let transport_result = tokio::select! {
                 _ = shutdown_rx.changed() => {
                     shutdown_server_runtime_state(&inner, &server.id).await;
@@ -836,19 +995,19 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                     })?
                 } => result,
             };
-
             let transport = match transport_result {
                 Ok(transport) => transport,
                 Err(error) => {
-                    if record_server_failure_and_should_stop(
+                    let should_stop = record_server_failure_and_should_stop(
                         &inner,
                         &server,
                         &mut consecutive_failures,
                         None,
                         error,
                     )
-                    .await
-                    {
+                    .await;
+                    drop(startup_permit);
+                    if should_stop {
                         return;
                     }
                     if wait_for_retry_or_shutdown(
@@ -864,16 +1023,31 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 }
             };
 
-            if let Err(error) = refresh_server_tools(&inner, &server, transport.clone()).await {
-                if record_server_failure_and_should_stop(
+            // Discovery still owns an unpublished transport, so shutdown must interrupt
+            // tools/list and explicitly close that exact candidate before returning.
+            // 工具发现仍持有尚未发布的传输，因此关闭必须中断 tools/list 并在返回前明确关闭该候选者。
+            let tools_result = tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    shutdown_server_runtime_state_with_transport(
+                        &inner,
+                        &server.id,
+                        Some(transport.clone()),
+                    ).await;
+                    return;
+                }
+                result = refresh_server_tools(&inner, &server, transport.clone()) => result,
+            };
+            if let Err(error) = tools_result {
+                let should_stop = record_server_failure_and_should_stop(
                     &inner,
                     &server,
                     &mut consecutive_failures,
                     Some(transport.clone()),
                     error,
                 )
-                .await
-                {
+                .await;
+                drop(startup_permit);
+                if should_stop {
                     return;
                 }
                 if wait_for_retry_or_shutdown(
@@ -887,8 +1061,15 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 }
                 continue;
             }
+            drop(startup_permit);
 
-            refresh_server_optional_capabilities(&inner, &server, transport.clone()).await;
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    shutdown_server_runtime_state(&inner, &server.id).await;
+                    return;
+                }
+                _ = refresh_server_optional_capabilities(&inner, &server, transport.clone()) => {}
+            }
 
             // connectedAt distinguishes a stable connection from a short-lived crash loop.
             // connectedAt 用于区分稳定连接与短生命周期崩溃循环。
@@ -905,19 +1086,34 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
 
                 match event {
                     Ok(McpTransportEvent::ToolsChanged) => {
-                        if let Err(error) =
-                            refresh_server_tools(&inner, &server, transport.clone()).await
-                        {
+                        let tools_result = tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                shutdown_server_runtime_state(&inner, &server.id).await;
+                                return;
+                            }
+                            result = refresh_server_tools(&inner, &server, transport.clone()) => result,
+                        };
+                        if let Err(error) = tools_result {
                             clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
                             break;
                         }
-                        refresh_server_optional_capabilities(&inner, &server, transport.clone())
-                            .await;
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                shutdown_server_runtime_state(&inner, &server.id).await;
+                                return;
+                            }
+                            _ = refresh_server_optional_capabilities(&inner, &server, transport.clone()) => {}
+                        }
                     }
                     Ok(McpTransportEvent::PromptsChanged)
                     | Ok(McpTransportEvent::ResourcesChanged) => {
-                        refresh_server_optional_capabilities(&inner, &server, transport.clone())
-                            .await;
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                shutdown_server_runtime_state(&inner, &server.id).await;
+                                return;
+                            }
+                            _ = refresh_server_optional_capabilities(&inner, &server, transport.clone()) => {}
+                        }
                     }
                     Ok(McpTransportEvent::Disconnected { reason }) => {
                         clear_server_runtime_state(&inner, &server.id, None, Some(reason)).await;
@@ -1523,8 +1719,30 @@ async fn clear_server_runtime_state(
 /// `inner` owns the transport and snapshot while `server_id` selects the exact server task.
 /// `inner` 持有传输与快照，`server_id` 选择精确服务器任务。
 async fn shutdown_server_runtime_state(inner: &Arc<McpRuntimeInner>, server_id: &str) {
+    shutdown_server_runtime_state_with_transport(inner, server_id, None).await;
+}
+
+/// Stops a server and also owns a transport that may not yet be in the published map.
+/// 停止服务器，同时持有可能尚未进入已发布映射的传输。
+///
+/// # Parameters
+/// 参数
+/// `inner` owns runtime state, `server_id` identifies the server, and `unpublished_transport`
+/// retains the exact setup candidate when shutdown wins during discovery.
+/// `inner` 持有运行时状态，`server_id` 标识服务器，`unpublished_transport`
+/// 在发现阶段关闭先到达时保留精确的设置候选者。
+///
+/// # Returns
+/// 返回值
+/// Returns only after bounded transport teardown and stopped-state publication.
+/// 仅在有限传输拆除及已停止状态发布后返回。
+async fn shutdown_server_runtime_state_with_transport(
+    inner: &Arc<McpRuntimeInner>,
+    server_id: &str,
+    unpublished_transport: Option<Arc<dyn McpTransport>>,
+) {
     let (recent_logs, shutdown_error) =
-        remove_and_shutdown_server_transport(inner, server_id, None).await;
+        remove_and_shutdown_server_transport(inner, server_id, unpublished_transport).await;
     update_server_status(
         inner,
         server_id,
@@ -1824,8 +2042,236 @@ mod optional_capability_tests {
     use async_trait::async_trait;
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
     use tokio::sync::broadcast;
     use vulcan_mcp_runtime::{McpRuntimeError, McpToolSchema};
+
+    /// Verifies aborting an unpublished startup future requests shutdown for every tracked runtime.
+    /// 验证中止未发布的启动 Future 会请求关闭所有已跟踪的运行时。
+    #[tokio::test]
+    async fn cancelled_startup_shuts_down_unpublished_runtime() {
+        let runtime = McpRuntimeHandle {
+            inner: empty_runtime_inner(),
+        };
+        let shutdown = runtime.inner.shutdown_tx.subscribe();
+        let mut startup_guard = McpRuntimeStartupGuard::new();
+        startup_guard.track(&runtime);
+        let pending_startup = tokio::spawn(async move {
+            let _startup_guard = startup_guard;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        pending_startup.abort();
+        pending_startup
+            .await
+            .expect_err("startup should be cancelled");
+        assert!(
+            *shutdown.borrow(),
+            "unpublished runtime must receive shutdown"
+        );
+    }
+
+    /// Waits for one exact Windows test child to disappear from the process table.
+    /// 等待一个精确的 Windows 测试子进程从进程表消失。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `pid` is the process identity written by the isolated MCP fixture.
+    /// `pid` 是隔离 MCP 夹具写出的进程身份。
+    #[cfg(windows)]
+    async fn wait_for_windows_mcp_child_exit(pid: u32, phase: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                // Process-table inspection is blocking and must not starve the current-thread
+                // Tokio runtime responsible for the cancellation and child cleanup tasks.
+                // 进程表检查会阻塞，不能饿死负责取消与子进程清理的单线程 Tokio 运行时。
+                let output = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("tasklist")
+                        .args(["/FO", "CSV", "/NH", "/FI", &format!("PID eq {pid}")])
+                        .output()
+                        .expect("Windows tasklist should inspect the exact child pid")
+                })
+                .await
+                .expect("Windows process inspection task should finish");
+                assert!(output.status.success(), "tasklist should complete");
+                if !String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("real MCP child must exit after shutdown during {phase}"));
+    }
+
+    /// One real stdio configuration starts one child and stops it with its runtime generation.
+    /// 一份真实 stdio 配置只启动一个子进程，并随运行时代次关闭该进程。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn user_stdio_bootstrap_starts_one_real_child_and_clears_it() {
+        std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .expect("Node.js is required by this workspace test environment");
+        let fixture = tempfile::tempdir().expect("isolated MCP process marker");
+        let marker = fixture.path().join("starts.txt");
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("owner-mcp.mjs");
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::UserConfigured,
+            id: String::from("real-stdio-count"),
+            name: String::from("Real stdio count"),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: String::from("node"),
+                args: vec![script.to_string_lossy().into_owned()],
+                cwd: None,
+                env: BTreeMap::from([(
+                    String::from("VULCAN_MCP_PROCESS_MARKER"),
+                    marker.to_string_lossy().into_owned(),
+                )]),
+                env_passthrough: Vec::new(),
+                inherit_environment: true,
+            },
+        };
+        let access = bootstrap_mcp_runtime_access(vec![server])
+            .await
+            .expect("one user server should bootstrap");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let inspections = access.server_inspections();
+                if inspections.iter().any(|inspection| {
+                    inspection.state.id == "real-stdio-count"
+                        && inspection.state.status == McpRuntimeServerStatus::Connected
+                        && inspection.tools.iter().any(|tool| tool.name == "read_page")
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("real MCP child should connect and discover its tool");
+        let process_ids =
+            std::fs::read_to_string(&marker).expect("real child should publish its startup marker");
+        let process_ids = process_ids.lines().collect::<Vec<_>>();
+        assert_eq!(
+            process_ids.len(),
+            1,
+            "one configuration must launch one child"
+        );
+        let pid = process_ids[0]
+            .parse::<u32>()
+            .expect("startup marker should be a process id");
+        access.shutdown();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if access.server_states().iter().any(|state| {
+                    state.id == "real-stdio-count"
+                        && state.status == McpRuntimeServerStatus::Stopped
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("real MCP runtime should report stopped");
+        wait_for_windows_mcp_child_exit(pid, "normal shutdown").await;
+    }
+
+    /// Cancelling either initialize or discovery after child launch tears down the process.
+    /// 子进程启动后无论在初始化还是目录发现阶段取消，都会清理该进程。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cancelled_plugin_bootstrap_clears_real_child() {
+        std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .expect("Node.js is required by this workspace test environment");
+        let fixture = tempfile::tempdir().expect("isolated MCP process marker");
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("owner-mcp.mjs");
+        for (phase, stall_variable) in [
+            ("initialize", "VULCAN_MCP_STALL_INITIALIZE"),
+            ("discovery", "VULCAN_MCP_STALL_DISCOVERY"),
+        ] {
+            let marker = fixture.path().join(format!("cancelled-{phase}-starts.txt"));
+            let discovery_marker = fixture
+                .path()
+                .join(format!("cancelled-{phase}-discovery.txt"));
+            let server = McpServerConfig {
+                source: crate::mcp::config::McpServerSource::Plugin {
+                    plugin_id: format!("cancelled-real-child-{phase}"),
+                    generation: 1,
+                },
+                id: format!("cancelled-real-child-server-{phase}"),
+                name: format!("Cancelled real child {phase}"),
+                enabled: true,
+                transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                    command: String::from("node"),
+                    args: vec![script.to_string_lossy().into_owned()],
+                    cwd: None,
+                    env: BTreeMap::from([
+                        (
+                            String::from("VULCAN_MCP_PROCESS_MARKER"),
+                            marker.to_string_lossy().into_owned(),
+                        ),
+                        (
+                            String::from("VULCAN_MCP_DISCOVERY_MARKER"),
+                            discovery_marker.to_string_lossy().into_owned(),
+                        ),
+                        (String::from(stall_variable), String::from("1")),
+                    ]),
+                    env_passthrough: Vec::new(),
+                    inherit_environment: true,
+                },
+            };
+            let pending = tokio::spawn(bootstrap_mcp_runtime_access(vec![server]));
+            let pid = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Ok(marker_text) = std::fs::read_to_string(&marker)
+                        && let Some(pid_text) = marker_text.lines().next()
+                    {
+                        break pid_text.parse::<u32>().expect("real child pid marker");
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("real child should launch before cancellation");
+            if phase == "discovery" {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !discovery_marker.is_file() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("real child must enter tools/list before cancellation");
+                assert_eq!(
+                    mcp_transport_startup_semaphore().available_permits(),
+                    MCP_MAX_CONCURRENT_TRANSPORT_STARTS - 1,
+                    "first tool discovery must retain its startup permit"
+                );
+            }
+            pending.abort();
+            pending
+                .await
+                .expect_err("plugin bootstrap should be cancelled");
+            wait_for_windows_mcp_child_exit(pid, phase).await;
+            let starts =
+                std::fs::read_to_string(&marker).expect("startup marker should remain readable");
+            assert_eq!(
+                starts.lines().count(),
+                1,
+                "cancelled partition must not restart"
+            );
+        }
+    }
 
     /// Test transport that records every explicit shutdown request.
     /// 记录每次显式关闭请求的测试传输。
@@ -1836,6 +2282,17 @@ mod optional_capability_tests {
         /// Event channel required by the transport contract.
         /// 传输契约要求的事件通道。
         event_tx: broadcast::Sender<McpTransportEvent>,
+    }
+
+    /// Test transport whose remote tool invocation always fails.
+    /// 远端工具调用始终失败的测试传输。
+    struct FailingToolTransport {
+        /// Event channel required by the transport contract.
+        /// 传输契约要求的事件通道。
+        event_tx: broadcast::Sender<McpTransportEvent>,
+        /// Deterministic transport failure surfaced to the caller.
+        /// 呈现给调用方的确定性传输失败。
+        failure: String,
     }
 
     #[async_trait]
@@ -1870,6 +2327,264 @@ mod optional_capability_tests {
         async fn call_tool(&self, _name: &str, _args: Value) -> Result<Value, McpRuntimeError> {
             panic!("metadata inspection must never execute tools")
         }
+    }
+
+    #[async_trait]
+    impl McpTransport for FailingToolTransport {
+        /// Returns the deterministic test endpoint identifier.
+        /// 返回确定性的测试端点标识。
+        fn endpoint(&self) -> &str {
+            "test://failing-tool"
+        }
+
+        /// Returns an empty valid tool list for this failure fixture.
+        /// 为该失败夹具返回空的有效工具列表。
+        async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
+            Ok(Vec::new())
+        }
+
+        /// Subscribes to the fixture event channel.
+        /// 订阅夹具事件通道。
+        fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent> {
+            self.event_tx.subscribe()
+        }
+
+        /// Accepts one explicit host-owned teardown.
+        /// 接纳一次宿主持有的显式拆除。
+        async fn shutdown(&self) -> Result<(), McpRuntimeError> {
+            Ok(())
+        }
+
+        /// Fails with the deterministic transport failure under test.
+        /// 以测试中的确定性传输失败返回错误。
+        async fn call_tool(&self, _name: &str, _args: Value) -> Result<Value, McpRuntimeError> {
+            Err(McpRuntimeError::transport(self.failure.clone()))
+        }
+    }
+
+    /// Test transport whose tool invocation answers after one deterministic delay.
+    /// 工具调用在确定性延迟后返回的测试传输。
+    struct SlowToolTransport {
+        /// Event channel required by the transport contract.
+        /// 传输契约要求的事件通道。
+        event_tx: broadcast::Sender<McpTransportEvent>,
+        /// Deterministic per-invocation delay.
+        /// 确定性的单次调用延迟。
+        delay: Duration,
+        /// Number of calls currently inside the remote transport.
+        /// 当前进入远端传输的调用数量。
+        active_calls: Arc<AtomicUsize>,
+        /// Highest observed number of concurrent remote calls.
+        /// 已观察到的远端并发调用峰值。
+        peak_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl McpTransport for SlowToolTransport {
+        /// Returns the deterministic test endpoint identifier.
+        /// 返回确定性的测试端点标识。
+        fn endpoint(&self) -> &str {
+            "test://slow-tool"
+        }
+
+        /// Returns an empty valid tool list for this fixture.
+        /// 为该夹具返回空的有效工具列表。
+        async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
+            Ok(Vec::new())
+        }
+
+        /// Subscribes to the fixture event channel.
+        /// 订阅夹具事件通道。
+        fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent> {
+            self.event_tx.subscribe()
+        }
+
+        /// Accepts one explicit host-owned teardown.
+        /// 接纳一次宿主持有的显式拆除。
+        async fn shutdown(&self) -> Result<(), McpRuntimeError> {
+            Ok(())
+        }
+
+        /// Answers after the deterministic delay.
+        /// 在确定性延迟后返回结果。
+        async fn call_tool(&self, _name: &str, _args: Value) -> Result<Value, McpRuntimeError> {
+            let active = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_calls.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(self.delay).await;
+            self.active_calls.fetch_sub(1, Ordering::SeqCst);
+            Ok(json!({"ok": true}))
+        }
+    }
+
+    /// Verifies concurrent owner-scoped tools are not serialized by the revocation gate.
+    /// 验证并发所有者范围工具不会被撤销闸门串行化。
+    ///
+    /// The controller executes one tool batch in parallel, so the owner gate must cover only the
+    /// revocation check: four concurrent 40 ms calls must cost about one call, not four.
+    /// 控制器并行执行同一批工具，因此所有者闸门只能覆盖撤销检查：
+    /// 四次并发 40 ms 调用的耗时必须约等于一次，而不是四次。
+    #[tokio::test]
+    async fn concurrent_owner_scoped_mcp_tools_run_in_parallel() {
+        // server identifies one plugin partition so the owner lease can be registered.
+        // server 标识一个插件分区，以便注册所有者租约。
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::Plugin {
+                plugin_id: String::from("parallel"),
+                generation: 5,
+            },
+            id: String::from("parallel:browser"),
+            name: String::from("Parallel Browser"),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: String::from("unused"),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                env_passthrough: Vec::new(),
+                inherit_environment: false,
+            },
+        };
+        let mut inner = empty_runtime_inner();
+        Arc::get_mut(&mut inner)
+            .expect("unique parallel owner fixture")
+            .registry = McpServerRegistry::new(vec![server.clone()]);
+        let mut snapshot = initial_server_snapshot(&server);
+        snapshot.status = McpRuntimeServerStatus::Connected;
+        snapshot.tools.push(McpRuntimeToolDescriptor::new(
+            "parallel:browser",
+            "read_page",
+            "Read page",
+            json!({"type":"object"}),
+        ));
+        *inner
+            .snapshot
+            .write()
+            .expect("parallel owner snapshot lock") = McpRuntimeSnapshot {
+            servers: BTreeMap::from([(server.id.clone(), snapshot)]),
+        };
+        let (events, _) = broadcast::channel(1);
+        inner
+            .transports
+            .write()
+            .expect("parallel owner transport lock")
+            .insert(
+                server.id.clone(),
+                Arc::new(SlowToolTransport {
+                    event_tx: events,
+                    delay: Duration::from_millis(40),
+                    active_calls: Arc::new(AtomicUsize::new(0)),
+                    peak_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+            );
+
+        let runtime = McpRuntimeHandle { inner };
+        let access = McpRuntimeAccess::new(runtime.overview(), BTreeMap::new());
+        let owner = crate::model::SessionId::from_u128(77);
+        let key = McpRuntimeOwnedPartitionKey::try_new("parallel", 5, owner)
+            .expect("valid owner partition key");
+        let partition = access.register_owned_stdio_partition_for_test(key, runtime);
+        let bindings = partition
+            .available_tool_bindings_filtered(&McpRuntimeToolAllowlist::default())
+            .expect("owner tools should be queryable");
+
+        // single measures one isolated owner-scoped invocation.
+        // single 测量一次孤立的所有者范围调用。
+        let single_started = Instant::now();
+        bindings[0]
+            .invoke_for_owner(owner, json!({}))
+            .await
+            .expect("single owner call");
+        let single_elapsed = single_started.elapsed();
+        // concurrent issues four owner-scoped calls at once through the same binding.
+        // concurrent 通过同一绑定同时发起四次所有者范围调用。
+        let concurrent_started = Instant::now();
+        let joined = futures_util::future::join_all([
+            bindings[0].invoke_for_owner(owner, json!({})),
+            bindings[0].invoke_for_owner(owner, json!({})),
+            bindings[0].invoke_for_owner(owner, json!({})),
+            bindings[0].invoke_for_owner(owner, json!({})),
+        ])
+        .await;
+        let concurrent_elapsed = concurrent_started.elapsed();
+        assert!(joined.iter().all(|result| result.is_ok()));
+        assert!(
+            concurrent_elapsed < single_elapsed * 2,
+            "concurrent owner-scoped calls must not be serialized by the revocation gate"
+        );
+    }
+
+    /// Verifies an ordered owner partition never overlaps remote page operations.
+    /// 验证有序所有者分区不会使远端页面操作重叠。
+    #[tokio::test]
+    async fn ordered_owner_scoped_mcp_tools_keep_one_remote_call_at_a_time() {
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::Plugin {
+                plugin_id: String::from("ordered"),
+                generation: 5,
+            },
+            id: String::from("ordered:browser"),
+            name: String::from("Ordered Browser"),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: String::from("unused"),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                env_passthrough: Vec::new(),
+                inherit_environment: false,
+            },
+        };
+        let mut inner = empty_runtime_inner();
+        Arc::get_mut(&mut inner)
+            .expect("unique ordered owner fixture")
+            .registry = McpServerRegistry::new(vec![server.clone()]);
+        let mut snapshot = initial_server_snapshot(&server);
+        snapshot.status = McpRuntimeServerStatus::Connected;
+        snapshot.tools.push(McpRuntimeToolDescriptor::new(
+            "ordered:browser",
+            "navigate",
+            "Navigate page",
+            json!({"type":"object"}),
+        ));
+        *inner.snapshot.write().expect("ordered owner snapshot lock") = McpRuntimeSnapshot {
+            servers: BTreeMap::from([(server.id.clone(), snapshot)]),
+        };
+        let (events, _) = broadcast::channel(1);
+        let active_calls = Arc::new(AtomicUsize::new(0));
+        let peak_calls = Arc::new(AtomicUsize::new(0));
+        inner
+            .transports
+            .write()
+            .expect("ordered owner transport lock")
+            .insert(
+                server.id.clone(),
+                Arc::new(SlowToolTransport {
+                    event_tx: events,
+                    delay: Duration::from_millis(15),
+                    active_calls: Arc::clone(&active_calls),
+                    peak_calls: Arc::clone(&peak_calls),
+                }),
+            );
+        let runtime = McpRuntimeHandle { inner };
+        let access = McpRuntimeAccess::new(runtime.overview(), BTreeMap::new());
+        let owner = crate::model::SessionId::from_u128(78);
+        let key = McpRuntimeOwnedPartitionKey::try_new("ordered", 5, owner)
+            .expect("valid ordered owner key");
+        let partition =
+            access.register_owned_stdio_partition_with_ordering_for_test(key, runtime, true);
+        let bindings = partition
+            .available_tool_bindings_filtered(&McpRuntimeToolAllowlist::default())
+            .expect("ordered owner tool should be queryable");
+        let joined = futures_util::future::join_all([
+            bindings[0].invoke_for_owner(owner, json!({})),
+            bindings[0].invoke_for_owner(owner, json!({})),
+            bindings[0].invoke_for_owner(owner, json!({})),
+            bindings[0].invoke_for_owner(owner, json!({})),
+        ])
+        .await;
+        assert!(joined.iter().all(|result| result.is_ok()));
+        assert_eq!(active_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(peak_calls.load(Ordering::SeqCst), 1);
     }
 
     /// Verifies full schemas, real connectivity, and metadata-only reads on an isolated transport.
@@ -1964,6 +2679,84 @@ mod optional_capability_tests {
                 .expect_err("disconnected reads must not connect")
                 .contains("尚未连接")
         );
+    }
+
+    /// Verifies every AI-visible MCP call failure carries one stable machine code and English text.
+    /// 验证每条 AI 可见 MCP 调用失败都携带稳定机器编码与英文说明。
+    #[tokio::test]
+    async fn ai_visible_mcp_call_failures_use_stable_codes_and_english_text() {
+        // server and inner stay process-free so the three rejection branches are deterministic.
+        // server 与 inner 保持无进程状态，使三个拒绝分支保持确定性。
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::UserConfigured,
+            id: String::from("coded"),
+            name: String::from("Coded"),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: String::from("unused"),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                env_passthrough: Vec::new(),
+                inherit_environment: false,
+            },
+        };
+        let mut inner = empty_runtime_inner();
+        Arc::get_mut(&mut inner).expect("unique fixture").registry =
+            McpServerRegistry::new(vec![server.clone()]);
+        let mut snapshot = initial_server_snapshot(&server);
+        snapshot.status = McpRuntimeServerStatus::Connected;
+        snapshot.tools.push(McpRuntimeToolDescriptor::new(
+            "coded",
+            "run",
+            "Run",
+            json!({"type":"object"}),
+        ));
+        inner
+            .snapshot
+            .write()
+            .expect("snapshot lock")
+            .servers
+            .insert(server.id.clone(), snapshot);
+        let handle = McpRuntimeHandle { inner };
+
+        let unknown_tool_error = handle
+            .call_tool_by_id("coded/missing", json!({}))
+            .await
+            .expect_err("an unknown tool must fail closed");
+        assert!(unknown_tool_error.starts_with("mcp_tool_not_found:"));
+        assert!(unknown_tool_error.contains("coded/missing"));
+
+        // A connected server without any live transport keeps its own distinct rejection code.
+        // 已连接但没有任何活动传输的服务器保持各自独立的拒绝编码。
+        let disconnected_error = handle
+            .call_tool_by_id("coded/run", json!({}))
+            .await
+            .expect_err("a missing transport must fail closed");
+        assert!(disconnected_error.starts_with("mcp_server_disconnected:"));
+        assert!(disconnected_error.contains("coded"));
+
+        // A rejected remote invocation preserves the transport reason behind its own code.
+        // 被拒绝的远端调用在自己的编码之后保留传输层原因。
+        let (event_tx, _) = broadcast::channel(1);
+        handle
+            .inner
+            .transports
+            .write()
+            .expect("transport lock")
+            .insert(
+                server.id.clone(),
+                Arc::new(FailingToolTransport {
+                    event_tx,
+                    failure: String::from("tools/call(stdio): remote rejected"),
+                }),
+            );
+        let invocation_error = handle
+            .call_tool_by_id("coded/run", json!({}))
+            .await
+            .expect_err("a rejected remote invocation must fail closed");
+        assert!(invocation_error.starts_with("mcp_tool_invocation_failed:"));
+        assert!(invocation_error.contains("tools/call(stdio): remote rejected"));
     }
 
     /// Builds empty shared MCP runtime state for deterministic teardown tests.
@@ -2273,7 +3066,7 @@ mod optional_capability_tests {
             .invoke_for_owner(owner, json!({}))
             .await
             .expect_err("replacement catalog intentionally has no tools");
-        assert!(following_replacement_error.contains("未找到 MCP 工具"));
+        assert!(following_replacement_error.contains("mcp_tool_not_found"));
         let strict_replacement_error = bindings[0]
             .invoke_for_owner(owner, json!({}))
             .await
@@ -2337,7 +3130,7 @@ mod optional_capability_tests {
             .invoke_owned_stdio_tool("fixture", 11, owner, "fixture:browser/read_page", json!({}))
             .await
             .expect_err("current replacement lease must resolve its own catalog");
-        assert!(current_lease_error.contains("未找到 MCP 工具"));
+        assert!(current_lease_error.contains("mcp_tool_not_found"));
         replacement
             .shutdown()
             .expect("shutdown replacement owner partition");
@@ -2600,6 +3393,47 @@ mod optional_capability_tests {
         )
         .expect_err("invalid output meta-schema must fail");
         assert!(invalid_output_error.contains("output schema is invalid"));
+    }
+
+    /// Verifies plugin partitions are waited on concurrently so offline servers cannot stack deadlines.
+    /// 验证插件分区并发等待，使离线服务器无法叠加等待期限。
+    ///
+    /// Three offline plugin partitions each own one launch deadline; a serial implementation would
+    /// spend three deadlines, while the bounded-concurrent implementation spends only one.
+    /// 三个离线插件分区各自持有一个启动期限；串行实现会消耗三个期限，
+    /// 而有界并发实现只消耗一个期限。
+    #[tokio::test(start_paused = true)]
+    async fn plugin_partition_readiness_waits_are_concurrent_without_stacked_deadlines() {
+        // offline_servers uses three distinct plugin partitions so every source key is independent.
+        // offline_servers 使用三个不同插件分区，使每个来源键相互独立。
+        let offline_servers = (0..3)
+            .map(|index| McpServerConfig {
+                source: crate::mcp::config::McpServerSource::Plugin {
+                    plugin_id: format!("concurrent-{index}"),
+                    generation: 1,
+                },
+                id: format!("concurrent-server-{index}"),
+                name: format!("Concurrent {index}"),
+                enabled: true,
+                transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                    command: String::from("must-not-launch"),
+                    args: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    env_passthrough: Vec::new(),
+                    inherit_environment: false,
+                },
+            })
+            .collect::<Vec<_>>();
+        let started = tokio::time::Instant::now();
+        let error = bootstrap_mcp_runtime_access(offline_servers)
+            .await
+            .expect_err("offline plugin partitions must fail readiness");
+        assert!(error.contains("readiness timed out"));
+        assert!(
+            started.elapsed() < MCP_PARTITION_READINESS_TIMEOUT * 2,
+            "three concurrent plugin partitions must spend one deadline, not three"
+        );
     }
 
     /// Verifies isolated plugin validation accepts an empty exact partition and rejects foreign sources before launch.

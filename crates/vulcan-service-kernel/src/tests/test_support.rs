@@ -6,7 +6,9 @@ use super::*;
 use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
 use vulcan_agent_runtime::agent_runtime::task_runtime::TestSubagentRegistryEntrySeed;
 use vulcan_session_core::v1::document::{FlushCandidate, SessionDocument};
-use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
+use vulcan_workspace_store::workspace_store::{
+    SessionV1FlushResult, SessionV1StorageError, SessionV1StoreError,
+};
 
 /// In-memory durable backend used by service tests that only exercise V1 projections.
 /// 供仅验证 V1 投影的服务测试使用的内存可靠后端。
@@ -40,12 +42,12 @@ impl SessionPersistenceBackend for TestSessionV1ProjectionBackend {
 /// 在服务测试状态中注册一份精确 V1 文档。
 ///
 /// # Parameters
-/// 参数
+/// # 参数
 /// `state` owns the process registry, `session_id` is the exact identity, and `document` is the authoritative snapshot.
 /// `state` 持有进程注册表，`session_id` 是精确身份，`document` 是权威快照。
 ///
 /// # Returns
-/// 返回值
+/// # 返回值
 /// Returns the unique registered session handle.
 /// 返回唯一已注册的会话句柄。
 pub(super) fn register_test_session_v1_document(
@@ -57,6 +59,91 @@ pub(super) fn register_test_session_v1_document(
         session_id,
         document,
         Arc::new(TestSessionV1ProjectionBackend),
+    );
+    state
+        .session_runtime_registry
+        .register(handle.clone())
+        .expect("test V1 session should register");
+    handle
+}
+
+/// In-memory durable backend that fails a scripted set of flush attempts.
+/// 按脚本集合失败指定刷新尝试的内存可靠后端。
+///
+/// Tests use it to model a store that fails the dangerous terminal write and then recovers, so one
+/// controlled retry must settle the exact same turn exactly once.
+/// 测试用它建模先失败危险终态写入、随后恢复的存储，使一次受控重试必须把同一回合恰好结算一次。
+struct TestSessionV1ScriptedFlushBackend {
+    /// 1-based flush attempt numbers that must fail.
+    /// 必须失败的、以 1 为起点的刷新尝试序号。
+    failed_attempts: std::collections::BTreeSet<usize>,
+    /// Number of flush attempts already consumed.
+    /// 已经消耗的刷新尝试次数。
+    flush_count: std::sync::atomic::AtomicUsize,
+}
+
+impl SessionPersistenceBackend for TestSessionV1ScriptedFlushBackend {
+    /// Fails exactly the scripted flush attempts and accepts every other candidate.
+    /// 仅失败脚本指定的刷新尝试，接纳其他全部候选。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `candidate` is the exact V1 flush candidate produced by the session owner.
+    /// `candidate` 是会话 owner 产生的精确 V1 flush 候选。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One injected storage failure for a scripted attempt, otherwise a successful receipt.
+    /// 脚本指定尝试返回注入的存储失败，否则返回成功回执。
+    fn flush(
+        &self,
+        candidate: &FlushCandidate,
+    ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+        let attempt = self
+            .flush_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if self.failed_attempts.contains(&attempt) {
+            return Err(SessionV1StorageError::io(
+                std::path::PathBuf::from("scripted-v1-test-store"),
+                format!("injected storage failure on attempt {attempt}"),
+            )
+            .into());
+        }
+        Ok(SessionV1FlushResult {
+            written_file_count: candidate.dirty.len(),
+            published_metadata: Some(candidate.metadata.clone()),
+        })
+    }
+}
+
+/// Registers one exact V1 document whose store fails the given flush attempts.
+/// 注册一份其存储在给定刷新尝试时失败的精确 V1 文档。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the process registry, `session_id` is the exact identity, `document` is the
+/// authoritative snapshot, and `failed_attempts` lists the 1-based flush attempts that must fail.
+/// `state` 持有进程注册表；`session_id` 是精确身份；`document` 是权威快照；
+/// `failed_attempts` 列出必须失败的、以 1 为起点的刷新尝试。
+///
+/// # Returns
+/// 返回值
+/// Returns the unique registered session handle backed by the scripted store.
+/// 返回由脚本存储支撑的唯一已注册会话句柄。
+pub(super) fn register_test_session_v1_document_with_scripted_flush_failures(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    document: SessionDocument,
+    failed_attempts: std::collections::BTreeSet<usize>,
+) -> Arc<SessionHandle> {
+    let handle = SessionHandle::with_backend(
+        session_id,
+        document,
+        Arc::new(TestSessionV1ScriptedFlushBackend {
+            failed_attempts,
+            flush_count: std::sync::atomic::AtomicUsize::new(0),
+        }),
     );
     state
         .session_runtime_registry
@@ -290,8 +377,6 @@ pub(crate) fn test_service_state_with_parent_session(
         luaskills_runtime: None,
         host_database_providers: None,
         cached_luaskills_catalog: None,
-        mcp_runtime: None,
-        cached_mcp_catalog: None,
         provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
@@ -303,6 +388,7 @@ pub(crate) fn test_service_state_with_parent_session(
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_terminal_persistence_owners: BTreeMap::new(),
+        terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_runtime_registry: Default::default(),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),

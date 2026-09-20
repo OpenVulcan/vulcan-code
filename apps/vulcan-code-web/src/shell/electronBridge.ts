@@ -93,6 +93,9 @@ export interface ElectronLocalBrowserTab {
 // ElectronLocalBrowserSnapshot is the native temporary-tab projection.
 // ElectronLocalBrowserSnapshot 是原生临时标签投影。
 export interface ElectronLocalBrowserSnapshot {
+  // ownerSessionId names the conversation whose tabs this GUI window is projecting.
+  // ownerSessionId 指明此 GUI 窗口正在投影哪个会话的标签。
+  ownerSessionId: string | null;
   // activeId selects the page shown in the sidebar.
   // activeId 选择侧栏中显示的页面。
   activeId: string | null;
@@ -124,6 +127,9 @@ export interface ElectronLocalBrowserViewport {
 // ElectronLocalBrowserBridge exposes tab operations without WebContents or Core credentials.
 // ElectronLocalBrowserBridge 公开标签操作，不公开 WebContents 或 Core 凭据。
 export interface ElectronLocalBrowserBridge {
+  // setOwner shows only tabs associated with one conversation in this GUI window.
+  // setOwner 仅显示此 GUI 窗口中属于一个会话的标签。
+  setOwner: (ownerSessionId: string | null) => Promise<ElectronLocalBrowserSnapshot>;
   // snapshot returns the current client-local tabs.
   // snapshot 返回当前客户端本地标签。
   snapshot: () => Promise<ElectronLocalBrowserSnapshot>;
@@ -242,7 +248,7 @@ export function readElectronLocalBrowserBridge(): ElectronLocalBrowserBridge | n
   const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
   const bridge = api?.localBrowser;
   if (!bridge) return null;
-  const methods = ["snapshot", "open", "navigate", "select", "close", "viewport", "subscribeChanged"];
+  const methods = ["setOwner", "snapshot", "open", "navigate", "select", "close", "viewport", "subscribeChanged"];
   return methods.every((method) => typeof (bridge as unknown as Record<string, unknown>)[method] === "function")
     ? bridge : null;
 }

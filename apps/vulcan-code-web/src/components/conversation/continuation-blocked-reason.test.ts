@@ -34,6 +34,8 @@ describe("conversation continuation blocked reason", () => {
       ERR_CONVERSATION_CONTINUE_MODEL_SELECTION_MISMATCH: "conversation.continuation.blocked.routeChanged",
       ERR_CONVERSATION_CONTINUE_CANNOT_CREATE_SESSION: "conversation.continuation.blocked.conversationUnavailable",
       ERR_CONVERSATION_CONTINUE_SESSION_BUSY: "conversation.continuation.blocked.sessionBusy",
+      ERR_TERMINAL_SETTLEMENT_REPAIR_REQUIRED:
+        "conversation.continuation.blocked.terminalSettlementRepair",
     } as const;
 
     for (const [error, key] of Object.entries(serviceErrors)) {
@@ -65,5 +67,16 @@ describe("conversation continuation blocked reason", () => {
       "ERR_CONVERSATION_CONTINUE_ACK_MISMATCH",
       continuationReasonTestTranslator,
     )).toBeNull();
+  });
+
+  it("localizes the durable terminal settlement rejection carried by admission errors", () => {
+    // settlementError keeps the stable code prefix and the exact service diagnostic identity.
+    // settlementError 保留稳定编码前缀与精确的服务诊断身份。
+    const settlementError =
+      "ERR_TERMINAL_SETTLEMENT_REPAIR_REQUIRED: session=8f14e45f-ceea-467a-9f0e-1d2b3c4d5e6f error=failed to persist V1 stream failure";
+    expect(conversationContinuationBlockedReasonTextFromError(
+      settlementError,
+      continuationReasonTestTranslator,
+    )).toBe("translated:conversation.continuation.blocked.terminalSettlementRepair");
   });
 });

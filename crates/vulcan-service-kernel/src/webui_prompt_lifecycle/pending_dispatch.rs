@@ -4,8 +4,9 @@
 use super::*;
 use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
 use crate::pending_prompt_services::{
-    commit_pending_prompt_attachment_lease_transition, pending_prompt_action_id,
-    pending_prompt_attachment_transition, pending_prompt_queue_identity,
+    pending_prompt_action_id, pending_prompt_attachment_workspace_path,
+    pending_prompt_queue_identity,
+    reconcile_pending_prompt_attachment_leases,
     rebuild_pending_prompt_panel_from_v1,
 };
 use crate::session_goal_lifecycle::{current_v1_goal_unix_millis, session_v1_handle_from_state};
@@ -46,11 +47,19 @@ pub(crate) async fn service_insert_pending_prompt(
     let client_action_id = pending_prompt_action_id(&entry_id)?;
     let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
     let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
-    let attachment_transition =
-        pending_prompt_attachment_transition(&state, selected_session_id, &entry_id)?;
+    let attachment_workspace_path =
+        pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     handle
         .promote_queued_input_to_pending_turn(identity, current_v1_goal_unix_millis()?)
         .map_err(|error| format!("把 V1 待发送消息插入当前回合失败：{error}"))?;
+    // The V1 promotion is already durable; later panel failures cannot retain its queue lease.
+    // V1 提升已可靠提交；后续面板故障不能保留该队列租约。
+    reconcile_pending_prompt_attachment_leases(
+        handle.as_ref(),
+        selected_session_id,
+        &attachment_workspace_path,
+    )
+    .map_err(|error| format!("待发送消息已提升到 V1 当前回合，但附件清理待重试：{error}"))?;
     let locator = handle
         .storage_locator()
         .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
@@ -64,9 +73,6 @@ pub(crate) async fn service_insert_pending_prompt(
         &project_directory,
         &catalog,
     )?;
-    if let Some(transition) = attachment_transition {
-        commit_pending_prompt_attachment_lease_transition(transition);
-    }
     emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     Ok(true)
 }

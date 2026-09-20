@@ -319,6 +319,7 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     (snapshot) => window.webContents.send(LOCAL_BROWSER_CHANNELS.changed, snapshot),
   );
   window.on('close', () => localBrowser.dispose());
+  handle(LOCAL_BROWSER_CHANNELS.setOwner, (_event, ownerSessionId: string | null) => localBrowser.setOwner(ownerSessionId));
   handle(LOCAL_BROWSER_CHANNELS.snapshot, () => localBrowser.snapshot());
   handle(LOCAL_BROWSER_CHANNELS.open, (_event, url: string) => localBrowser.open(url));
   handle(LOCAL_BROWSER_CHANNELS.navigate, (_event, id: string, url: string) => localBrowser.navigate(id, url));

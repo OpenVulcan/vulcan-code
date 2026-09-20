@@ -506,6 +506,27 @@ pub enum DomainError {
         /// 违规的回合 id。
         turn_id: u64,
     },
+    /// A terminal settlement intent targets a different session than its document.
+    /// 一条终态结算意图指向的会话与其文档不同。
+    TerminalSettlementSessionMismatch {
+        /// Exact session id owned by the document.
+        /// 文档持有的精确会话 id。
+        session_id: String,
+    },
+    /// One exact terminal settlement record is missing from the document.
+    /// 文档中缺失一条精确终态结算记录。
+    TerminalSettlementMissing {
+        /// Requested settlement id.
+        /// 请求的结算身份。
+        settlement_id: String,
+    },
+    /// A different unfinished terminal settlement already owns the session.
+    /// 另一条尚未完成的终态结算已经持有该会话。
+    TerminalSettlementConflict {
+        /// Existing unfinished settlement id.
+        /// 既有未完成结算身份。
+        settlement_id: String,
+    },
 }
 
 impl DomainError {
@@ -806,6 +827,17 @@ impl fmt::Display for DomainError {
             Self::TurnClosureMismatch { turn_id } => write!(
                 formatter,
                 "turn {turn_id} has a duplicate or mis-ordered closure sequence"
+            ),
+            Self::TerminalSettlementSessionMismatch { session_id } => write!(
+                formatter,
+                "terminal settlement intent targets a different session than `{session_id}`"
+            ),
+            Self::TerminalSettlementMissing { settlement_id } => {
+                write!(formatter, "terminal settlement `{settlement_id}` is missing")
+            }
+            Self::TerminalSettlementConflict { settlement_id } => write!(
+                formatter,
+                "terminal settlement `{settlement_id}` is still unfinished"
             ),
         }
     }

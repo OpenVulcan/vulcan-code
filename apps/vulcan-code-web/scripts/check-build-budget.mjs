@@ -54,6 +54,33 @@ function findSingleAsset(assetNames, prefix, suffix) {
   return matches[0]
 }
 
+// collectStaticImportFiles returns each JavaScript file needed before the selected entries render.
+// collectStaticImportFiles 返回所选入口渲染前必须加载的每一份 JavaScript 文件。
+// Parameters: manifest is Vite's emitted import graph; entryKeys names the boot and workbench entries.
+// 参数：manifest 是 Vite 产出的导入图；entryKeys 指定启动与工作台入口。
+// Returns unique static-import files; dynamic imports remain deferred.
+// 返回去重后的静态导入文件；动态导入仍属于延迟资源。
+export function collectStaticImportFiles(manifest, entryKeys) {
+  // visited prevents a shared dependency from being counted twice.
+  // visited 防止共享依赖重复计数。
+  const visited = new Set()
+  // files owns the emitted JavaScript paths that really load with these entries.
+  // files 保存确实随这些入口加载的 JavaScript 产物路径。
+  const files = new Set()
+  // visit follows only Vite's static imports and rejects a missing manifest edge.
+  // visit 只沿 Vite 的静态导入边遍历，并拒绝缺失的清单边。
+  function visit(key) {
+    if (visited.has(key)) return
+    visited.add(key)
+    const entry = manifest[key]
+    if (!entry) throw new Error(`Build manifest is missing static import ${key}.`)
+    if (entry.file.endsWith(".js")) files.add(entry.file)
+    for (const dependency of entry.imports ?? []) visit(dependency)
+  }
+  for (const key of entryKeys) visit(key)
+  return [...files].sort()
+}
+
 // collectBuildMeasurements reads the current production output without relying on hashed filenames.
 // collectBuildMeasurements 在不依赖哈希文件名的情况下读取当前生产构建输出。
 export async function collectBuildMeasurements(distDirectory = join(webRoot, "dist")) {
@@ -72,9 +99,26 @@ export async function collectBuildMeasurements(distDirectory = join(webRoot, "di
   if (!bootMatch) {
     throw new Error("Production index.html does not contain a module entry asset.")
   }
-  // deferredJavaScriptNames excludes the boot and workbench entries for the independent deferred ceiling.
-  // deferredJavaScriptNames 为独立延迟分块上限排除启动与工作台入口。
-  const deferredJavaScriptNames = assetNames.filter((name) => name.endsWith(".js") && name !== bootMatch[1] && !name.startsWith("WorkbenchApp-"))
+  // manifest records the actual Vite static graph, including both eagerly imported locale chunks.
+  // manifest 记录真实的 Vite 静态导入图，包括当前两份预加载语言分块。
+  const manifest = JSON.parse(await readFile(join(distDirectory, ".vite", "manifest.json"), "utf8"))
+  const workbenchAsset = findSingleAsset(assetNames, "WorkbenchApp-", ".js")
+  const workbenchKeys = Object.keys(manifest).filter((key) => manifest[key].file === `assets/${workbenchAsset}`)
+  if (workbenchKeys.length !== 1 || manifest["index.html"]?.file !== `assets/${bootMatch[1]}`) {
+    throw new Error("Build manifest does not identify the exact boot and workbench entries.")
+  }
+  // initialFiles is the complete synchronous graph once the ready workbench mounts.
+  // initialFiles 是就绪工作台挂载时完整的同步导入图。
+  const initialFiles = collectStaticImportFiles(manifest, ["index.html", workbenchKeys[0]])
+  // initialSizes measures each unique emitted file rather than trusting chunk-local size alone.
+  // initialSizes 对每份去重的产物测量体积，而非仅信任单个分块大小。
+  const initialSizes = await Promise.all(initialFiles.map((file) => measureFile(join(distDirectory, file))))
+  // initialFileNames separates genuine dynamic chunks from the already-loaded graph.
+  // initialFileNames 将真正的动态分块与已经加载的资源图分开。
+  const initialFileNames = new Set(initialFiles.map((file) => file.replace(/^assets\//, "")))
+  // deferredJavaScriptNames excludes every initial static dependency for the deferred ceiling.
+  // deferredJavaScriptNames 为延迟分块上限排除全部首屏静态依赖。
+  const deferredJavaScriptNames = assetNames.filter((name) => name.endsWith(".js") && !initialFileNames.has(name))
   // deferredMeasurements contains exact raw sizes used to find the largest deferred chunk.
   // deferredMeasurements 包含用于查找最大延迟分块的精确原始大小。
   const deferredMeasurements = await Promise.all(deferredJavaScriptNames.map(async (name) => ({ name, ...(await stat(join(assetsDirectory, name))) })))
@@ -83,7 +127,12 @@ export async function collectBuildMeasurements(distDirectory = join(webRoot, "di
   const largestDeferred = deferredMeasurements.sort((left, right) => right.size - left.size)[0]
   return {
     bootEntry: await measureFile(join(assetsDirectory, bootMatch[1])),
-    workbench: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "WorkbenchApp-", ".js"))),
+    workbench: await measureFile(join(assetsDirectory, workbenchAsset)),
+    initialWorkbenchJavaScript: {
+      raw: initialSizes.reduce((total, size) => total + size.raw, 0),
+      gzip: initialSizes.reduce((total, size) => total + size.gzip, 0),
+      assetCount: initialFiles.length,
+    },
     workbenchCss: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "WorkbenchApp-", ".css"))),
     projectIconLucideCatalog: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "project-icon-catalog-lucide-", ".js"))),
     projectIconMaterialCatalog: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "project-icon-catalog-material-", ".js"))),
@@ -105,7 +154,7 @@ async function runBuildBudgetCheck() {
   // failures 包含每个超限或缺失的预算维度。
   const failures = evaluateBuildBudget(measurements, budgets)
   for (const [name, measurement] of Object.entries(measurements)) {
-    process.stdout.write(`${name}: raw=${measurement.raw}${measurement.gzip === undefined ? "" : ` gzip=${measurement.gzip}`}${measurement.name ? ` asset=${measurement.name}` : ""}\n`)
+    process.stdout.write(`${name}: raw=${measurement.raw}${measurement.gzip === undefined ? "" : ` gzip=${measurement.gzip}`}${measurement.assetCount === undefined ? "" : ` assets=${measurement.assetCount}`}${measurement.name ? ` asset=${measurement.name}` : ""}\n`)
   }
   if (failures.length > 0) {
     throw new Error(`WebUI build budget failed:\n- ${failures.join("\n- ")}`)

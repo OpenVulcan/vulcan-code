@@ -139,7 +139,7 @@ pub(super) async fn handle_finished_stream_event(
             if let Err(error) = register_session_terminal_persistence_owner(
                 &mut guard,
                 finished_session_id,
-                terminal_persistence_owner_id,
+                terminal_persistence_owner_id.clone(),
             ) {
                 eprintln!(
                     "[webui-service] finish stream terminal-persistence registration failed: session={finished_session_id} task_id={active_stream_task_id} error={error}"
@@ -163,7 +163,7 @@ pub(super) async fn handle_finished_stream_event(
                 let _ = rollback_session_terminal_persistence_owner(
                     &mut guard,
                     finished_session_id,
-                    terminal_persistence_owner_id,
+                    &terminal_persistence_owner_id,
                 );
             }
             removed_entry

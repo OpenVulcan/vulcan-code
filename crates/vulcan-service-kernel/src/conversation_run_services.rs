@@ -314,6 +314,11 @@ async fn service_stop_conversation_run_owned(
         "stop_conversation_requested",
         format!("session={target_session_id} mode={mode:?}"),
     );
+    // A durable terminal settlement from an earlier stream keeps the session closed; one controlled
+    // idempotent retry lets a recovered store complete it before Stop owns the terminal boundary.
+    // 早期流留下的可靠终态结算让会话保持关闭；Stop 持有终态边界前，一次受控幂等重试
+    // 让恢复后的存储完成该结算。
+    ensure_session_terminal_settlement_settled(&state, target_session_id).await?;
     let preflight_running_subagent_task_states = {
         let mut guard = state
             .lock()
@@ -360,7 +365,7 @@ async fn service_stop_conversation_run_owned(
         register_session_terminal_persistence_owner(
             &mut guard,
             target_session_id,
-            terminal_persistence_owner,
+            terminal_persistence_owner.clone(),
         )?;
         (active_task, had_active_kernel_turn)
     };

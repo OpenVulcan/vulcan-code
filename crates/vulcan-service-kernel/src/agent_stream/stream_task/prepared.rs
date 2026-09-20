@@ -73,7 +73,7 @@ pub(crate) fn commit_prepared_stream_failure(
             if let Err(error) = register_session_terminal_persistence_owner(
                 &mut guard,
                 session_id,
-                terminal_persistence_owner,
+                terminal_persistence_owner.clone(),
             ) {
                 eprintln!(
                     "[webui-service] {failure_context} terminal-persistence registration failed: session={session_id} task={active_stream_task_id} error={error}"
@@ -103,7 +103,7 @@ pub(crate) fn commit_prepared_stream_failure(
                 let _ = rollback_session_terminal_persistence_owner(
                     &mut guard,
                     session_id,
-                    terminal_persistence_owner,
+                    &terminal_persistence_owner,
                 );
                 eprintln!(
                     "[webui-service] {failure_context} exact stream owner disappeared inside terminal transaction: session={session_id} task={active_stream_task_id}"

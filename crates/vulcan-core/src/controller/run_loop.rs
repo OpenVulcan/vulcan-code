@@ -18,6 +18,42 @@ fn malformed_tool_correction_already_used(snapshot: &ConversationSnapshot) -> bo
     false
 }
 
+/// Builds the explicit typed failure for one repeated malformed tool-call argument batch.
+/// 为一次重复的非法工具调用参数批次构建显式的类型化失败。
+///
+/// The failure carries the exact repeated tool identity and the decoder reason so the terminal is
+/// audit-grade across Controller, Agent, durable session state, and WebUI projection.
+/// 失败携带精确的重复工具身份与解码原因，使终态在 Controller、Agent、可靠会话状态及
+/// WebUI 投影之间具备可审计性。
+///
+/// # Parameters
+/// 参数
+/// `identity` optionally retains the first repeated tool name and its decoder reason; without it the
+/// failure stays a stable protocol error that never names an unknown tool.
+/// `identity` 可选保留首个重复工具名称及其解码原因；缺失时失败仍为稳定的协议错误，
+/// 不会命名未知工具。
+///
+/// # Returns
+/// 返回值
+/// The typed tool-protocol failure that must close the user turn without a successful final.
+/// 返回必须结束用户回合且不得产生成功 Final 的类型化工具协议失败。
+fn build_repeated_malformed_tool_protocol_failure(
+    identity: Option<&(String, String)>,
+) -> CoreError {
+    // toolName and decoderReason keep the observable identity of the repeated malformed call.
+    // toolName 与 decoderReason 保留被重复提交的非法调用的可观测身份。
+    let (tool_name, reason) = match identity {
+        Some((tool_name, reason)) => (tool_name.as_str(), reason.as_str()),
+        None => ("unknown", "the Provider did not report a decoder reason"),
+    };
+    CoreError::ToolProtocolFailure {
+        tool_name: tool_name.to_string(),
+        message: format!(
+            "tool_argument_parse_failure_exhausted: the Provider emitted invalid arguments for tool `{tool_name}` twice in one user turn and only one automatic correction round is allowed. Tool `{tool_name}` was not executed. Decoder reason: {reason}",
+        ),
+    }
+}
+
 impl VulcanCoreController {
     /// Reconciles a retained tool batch, appends exactly one result per original call, and resumes the Provider loop.
     /// 协调已保留工具批次，为每条原始调用精确追加一个结果，然后恢复 Provider 循环。
@@ -363,6 +399,14 @@ impl VulcanCoreController {
             let malformed_arguments_observed = requests
                 .iter()
                 .any(|request| request.argument_parse_error.is_some());
+            // malformedToolIdentity retains the exact repeated tool identity and decoder reason for the typed protocol failure.
+            // malformedToolIdentity 保留重复提交的精确工具身份与解码原因，用于类型化协议失败。
+            let malformed_tool_identity = requests.iter().find_map(|request| {
+                request
+                    .argument_parse_error
+                    .as_ref()
+                    .map(|reason| (request.tool_name.clone(), reason.clone()))
+            });
             let results = match self.execute_tool_batch(executor, policy, requests).await {
                 Ok(results) => results,
                 Err(error) => {
@@ -376,17 +420,13 @@ impl VulcanCoreController {
             }
             if malformed_arguments_observed {
                 if malformed_tool_correction_used {
-                    self.phase = ControllerPhase::Completed;
-                    self.push_final_event(
-                        provider_turns_executed,
-                        tool_calls_processed,
-                        Some(assistant_message_id.as_str()),
+                    // toolProtocolFailure is the explicit typed terminal for a second malformed tool-argument batch.
+                    // toolProtocolFailure 是第二个非法工具参数批次的显式类型化终态。
+                    let error = build_repeated_malformed_tool_protocol_failure(
+                        malformed_tool_identity.as_ref(),
                     );
-                    return Ok(ControllerRunResult {
-                        provider_turns_executed,
-                        tool_calls_processed,
-                        final_assistant_message_id: Some(assistant_message_id),
-                    });
+                    self.mark_failed(error.to_string());
+                    return Err(error);
                 }
                 malformed_tool_correction_used = true;
             }
@@ -685,6 +725,14 @@ impl VulcanCoreController {
             let malformed_arguments_observed = requests
                 .iter()
                 .any(|request| request.argument_parse_error.is_some());
+            // malformedToolIdentity retains the exact repeated tool identity and decoder reason for the typed protocol failure.
+            // malformedToolIdentity 保留重复提交的精确工具身份与解码原因，用于类型化协议失败。
+            let malformed_tool_identity = requests.iter().find_map(|request| {
+                request
+                    .argument_parse_error
+                    .as_ref()
+                    .map(|reason| (request.tool_name.clone(), reason.clone()))
+            });
             let results = match self.execute_tool_batch(executor, policy, requests).await {
                 Ok(results) => results,
                 Err(error) => {
@@ -701,17 +749,13 @@ impl VulcanCoreController {
             on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             if malformed_arguments_observed {
                 if malformed_tool_correction_used {
-                    self.phase = ControllerPhase::Completed;
-                    self.push_final_event(
-                        provider_turns_executed,
-                        tool_calls_processed,
-                        Some(assistant_message_id.as_str()),
+                    // toolProtocolFailure is the explicit typed terminal for a second malformed tool-argument batch.
+                    // toolProtocolFailure 是第二个非法工具参数批次的显式类型化终态。
+                    let error = build_repeated_malformed_tool_protocol_failure(
+                        malformed_tool_identity.as_ref(),
                     );
-                    return Ok(ControllerRunResult {
-                        provider_turns_executed,
-                        tool_calls_processed,
-                        final_assistant_message_id: Some(assistant_message_id),
-                    });
+                    self.mark_failed(error.to_string());
+                    return Err(error);
                 }
                 malformed_tool_correction_used = true;
             }

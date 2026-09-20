@@ -117,6 +117,10 @@ fn idle_existing_session_submission_starts_immediately() {
     // service_state owns the idle kernel registry and retained workspace.
     // service_state 持有空闲内核注册表与保留工作区。
     let service_state = test_service_state_with_parent_session(session_id);
+    // durable_handle is the exact V1 document authority with an empty durable queue.
+    // durable_handle 是可靠队列为空的精确 V1 文档权威。
+    let durable_handle =
+        queue_v1_test_handle(session_id, Arc::new(QueueRecordingBackend::default()));
     // workspace_snapshot is the exact hydrated base observed by the queue decision.
     // workspace_snapshot 是排队决策观察的精确已水合基础。
     let workspace_snapshot = service_state
@@ -129,8 +133,13 @@ fn idle_existing_session_submission_starts_immediately() {
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     // provider_configuration supplies provider-specific pending-lane behavior.
     assert_eq!(
-        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id),)
-            .expect("idle queue decision"),
+        evaluate_existing_submission_queue(
+            &state,
+            &workspace_snapshot,
+            Some(session_id),
+            Some(&durable_handle),
+        )
+        .expect("idle queue decision"),
         ExistingSubmissionQueueDecision::StartImmediately
     );
 }
@@ -157,6 +166,10 @@ fn active_kernel_turn_routes_submission_to_existing_session_queue() {
     let mut service_state = test_service_state_with_parent_session(session_id);
     start_webui_session_kernel_user_turn(&mut service_state, session_id, "turn-a")
         .expect("kernel turn should start");
+    // durable_handle is the exact V1 document authority with an empty durable queue.
+    // durable_handle 是可靠队列为空的精确 V1 文档权威。
+    let durable_handle =
+        queue_v1_test_handle(session_id, Arc::new(QueueRecordingBackend::default()));
     // workspace_snapshot is the hydrated base consumed by shared pending-lane rules.
     // workspace_snapshot 是共享待发送通道规则消费的已水合基础。
     let workspace_snapshot = service_state
@@ -169,8 +182,13 @@ fn active_kernel_turn_routes_submission_to_existing_session_queue() {
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     // provider_configuration supplies provider-specific pending-lane behavior.
     assert_eq!(
-        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id),)
-            .expect("active queue decision"),
+        evaluate_existing_submission_queue(
+            &state,
+            &workspace_snapshot,
+            Some(session_id),
+            Some(&durable_handle),
+        )
+        .expect("active queue decision"),
         ExistingSubmissionQueueDecision::Queue { session_id }
     );
 }
@@ -185,6 +203,10 @@ async fn active_stream_owner_routes_submission_to_existing_session_queue() {
     // service_state starts without a kernel turn so the stream-only race is covered.
     // service_state 不启动内核回合，以覆盖仅活动流存在的竞态。
     let service_state = test_service_state_with_parent_session(session_id);
+    // durable_handle is the exact V1 document authority with an empty durable queue.
+    // durable_handle 是可靠队列为空的精确 V1 文档权威。
+    let durable_handle =
+        queue_v1_test_handle(session_id, Arc::new(QueueRecordingBackend::default()));
     // workspace_snapshot is the exact retained state observed by queue admission.
     // workspace_snapshot 是排队 admission 观察到的精确保留状态。
     let workspace_snapshot = service_state
@@ -209,8 +231,13 @@ async fn active_stream_owner_routes_submission_to_existing_session_queue() {
     .expect("active stream owner should register");
 
     assert_eq!(
-        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id),)
-            .expect("stream-owner queue decision"),
+        evaluate_existing_submission_queue(
+            &state,
+            &workspace_snapshot,
+            Some(session_id),
+            Some(&durable_handle),
+        )
+        .expect("stream-owner queue decision"),
         ExistingSubmissionQueueDecision::Queue { session_id }
     );
 
@@ -324,6 +351,79 @@ fn v1_queue_commit_preserves_resource_order_and_is_idempotent() {
     assert_eq!(persisted_order, ordered_resource_ids);
 }
 
+/// Verifies a durable V1 queue occupancy forces queue admission even when no process mirror exists.
+/// 验证即使不存在进程镜像，可靠的 V1 队列占用也会强制进入排队准入。
+///
+/// A missing or broken compatibility mirror can never make a non-empty durable queue look empty,
+/// so a later submission still queues behind the exact durable FIFO order.
+/// 缺失或损坏的兼容镜像绝不能让非空可靠队列看起来为空，因此后续提交仍排在可靠的 FIFO 顺序之后。
+#[test]
+fn durable_v1_queue_occupancy_queues_submission_without_process_mirror() {
+    // session_id identifies the conversation whose durable queue already owns one input.
+    // session_id 标识可靠队列已持有一条输入的会话。
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    // submission is durably admitted before the decision under test runs.
+    // submission 在被测决策运行前已可靠准入。
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("durable-queue-occupancy-action").expect("client action"),
+        "durably queued prompt",
+        Vec::new(),
+    );
+    commit_existing_submission_v1_queue(&handle, &submission, 10)
+        .expect("durable V1 queue admission should commit");
+    // service_state intentionally retains no process mirror for this session.
+    // service_state 有意不为该会话保留任何进程镜像。
+    let service_state = test_service_state_with_parent_session(session_id);
+    assert!(service_state.pending_prompt_process_mirrors.is_empty());
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+    assert_eq!(
+        evaluate_existing_submission_queue(
+            &state,
+            &workspace_snapshot,
+            Some(session_id),
+            Some(&handle),
+        )
+        .expect("durable queue decision"),
+        ExistingSubmissionQueueDecision::Queue { session_id }
+    );
+    assert_eq!(
+        handle
+            .read(|document| document.metadata.input_state.queued_inputs.len())
+            .expect("durable queue should remain readable"),
+        1
+    );
+}
+
+/// Verifies an existing session submission without its exact V1 document authority fails closed.
+/// 验证缺少精确 V1 文档权威的已有会话提交会失败关闭而不是放行即时准入。
+#[test]
+fn existing_session_submission_without_v1_authority_fails_closed() {
+    // session_id identifies the existing conversation targeted by the submission.
+    // session_id 标识提交目标的已有会话。
+    let session_id = SessionId::new_v4();
+    let service_state = test_service_state_with_parent_session(session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+    let error =
+        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id), None)
+            .expect_err("a missing durable authority must not unlock immediate admission");
+
+    assert!(error.contains("V1 document authority"));
+}
+
 /// Verifies a repeated committed browser action cannot duplicate its process mirror or Hook dispatch.
 /// 验证重复的已提交浏览器动作无法重复创建进程镜像或 Hook 分发。
 #[test]
@@ -385,6 +485,94 @@ fn queue_service_idempotent_retry_does_not_duplicate_process_mirror_or_hook() {
     assert_eq!(
         hook_runtime.active_turn_id(session_id),
         Some(first_hook_turn_id.as_str())
+    );
+}
+
+/// A duplicate durable admission repairs a queue lease that failed after the first commit.
+/// 重复的可靠准入会修复首次提交后失败的队列租约转交。
+#[test]
+fn idempotent_queue_retry_repairs_failed_asset_handoff() {
+    use vulcan_agent_runtime::attachment_asset_index::{
+        acquire_staged_attachment_ref, load_attachment_asset_record_for_attachment,
+    };
+    use vulcan_agent_runtime::attachment_assets::{
+        attachment_descriptor_from_mime_type, stage_attachment_bytes,
+    };
+
+    let workspace = tempfile::tempdir().expect("isolated attachment workspace");
+    let wrong_workspace = tempfile::tempdir().expect("isolated missing-index workspace");
+    let workspace_path = workspace.path().to_string_lossy().into_owned();
+    let descriptor =
+        attachment_descriptor_from_mime_type("image/png").expect("image attachment descriptor");
+    let attachment = stage_attachment_bytes(
+        &workspace_path,
+        &descriptor,
+        "retry.png",
+        None,
+        &[1, 2, 3, 4],
+    )
+    .expect("managed asset staging");
+    let draft_scope = "composer-draft:queue-retry";
+    acquire_staged_attachment_ref(
+        &workspace_path,
+        draft_scope,
+        std::slice::from_ref(&attachment),
+    )
+    .expect("composer owns the staged asset");
+
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("queue-asset-retry-action").expect("valid action"),
+        "queued with an asset",
+        Vec::new(),
+    );
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+    let agent_runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let queue_input = |path: String| ExistingSubmissionQueueInput {
+        v1_handle: Arc::clone(&handle),
+        v1_submission: submission.clone(),
+        session_id,
+        workspace_path: path,
+        hidden_model_guidance: None,
+        attachments: vec![attachment.clone()],
+        attachment_draft_scope: Some(String::from(draft_scope)),
+        reasoning_effort: None,
+        model_selection: None,
+        submit_total_started_at: current_unix_millis_value(),
+    };
+
+    queue_existing_submission(
+        &app,
+        &state,
+        &agent_runtime,
+        queue_input(wrong_workspace.path().to_string_lossy().into_owned()),
+    )
+    .expect("V1 queue remains committed despite first asset-index failure");
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        load_attachment_asset_record_for_attachment(&attachment)
+            .expect("composer must retain asset after failed handoff")
+            .staging_refs,
+        vec![String::from(draft_scope)]
+    );
+
+    let acknowledgement =
+        queue_existing_submission(&app, &state, &agent_runtime, queue_input(workspace_path))
+            .expect("idempotent retry should repair the asset handoff");
+    assert!(acknowledgement.queued);
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        load_attachment_asset_record_for_attachment(&attachment)
+            .expect("repaired queue must own asset")
+            .staging_refs,
+        vec![format!(
+            "pending-prompt:v2:{session_id}:queue-asset-retry-action"
+        )]
     );
 }
 

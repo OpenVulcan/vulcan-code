@@ -321,6 +321,10 @@ fn build_child_command(
     }
     command.envs(env);
     apply_windows_no_window(&mut command);
+    // The command-level drop guard stops a child if initialize is cancelled before rmcp
+    // returns a transport to the runtime owner.
+    // 命令级析构保护在 initialize 返回传输给运行时所有者之前被取消时终止子进程。
+    command.kill_on_drop(true);
     command
 }
 

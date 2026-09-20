@@ -68,6 +68,9 @@ vulcan-workspace-store.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
+# Enables deterministic virtual time so a host-owned deadline test never spends real seconds.
+# 启用确定性虚拟时间，使宿主持有期限测试不必消耗真实秒数。
+tokio = { workspace = true, features = ["test-util"] }
 # Enables the explicit staged-source seam for immutable catalog activation tests.
 # 为不可变目录激活测试启用显式暂存来源接缝。
 vulcan-provider-adapters = { workspace = true, features = ["test-support"] }

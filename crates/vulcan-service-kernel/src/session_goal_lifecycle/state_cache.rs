@@ -21,10 +21,15 @@ use vulcan_workbench_model::{
 };
 
 use super::*;
+use crate::pending_prompt_services::reconcile_pending_prompt_attachment_leases;
 use crate::pending_prompts::pending_prompt_process_mirror_from_v1_queued_inputs;
 use crate::session_runtime_registry_v1::SessionHandle;
 use crate::session_v1_lifecycle::get_or_load_session_v1;
-use crate::{PendingPromptProcessMirror, current_unix_millis_value};
+use crate::terminal_settlement_service::rebuild_pending_terminal_settlement_owner;
+use crate::{
+    PendingPromptProcessMirror, composer_attachment_workspace_path_from_snapshot,
+    current_unix_millis_value, webui_trace,
+};
 use vulcan_workspace_store::workspace_store::{
     MISSING_RESOURCE_PLACEHOLDER, ProjectResourceCatalog, ResourceCatalogEntry,
     load_project_resource_catalog, locate_session_v1_storage,
@@ -286,6 +291,23 @@ pub(crate) async fn session_v1_handle_from_state(
         .map_err(|error| format!("加载 V1 会话 `{session_id}` 失败：{error}"))
 }
 
+/// Loads one V1 session handle and re-arms any durable terminal settlement owner it still reports.
+/// 加载一个 V1 会话句柄，并重新武装其仍然报告的可靠终态结算 owner。
+///
+/// Once a settlement intent is durable, restart re-arms its admission block from the document;
+/// one controlled retry can then settle the exact turn idempotently. A failure before that intent
+/// becomes durable has only the separate process-local repair path.
+/// 结算意图可靠落盘后，重启会从文档重新武装其准入阻塞；一次受控重试即可幂等结算精确回合。
+/// 意图落盘前的失败仅有独立的进程内修复路径。
+pub(crate) async fn session_v1_handle_from_state_with_settlement_rebuild(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Arc<SessionHandle>, String> {
+    let handle = session_v1_handle_from_state(state, session_id).await?;
+    rebuild_pending_terminal_settlement_owner(state, session_id, handle.as_ref());
+    Ok(handle)
+}
+
 /// Returns the already-hydrated V1 session handle without consulting legacy state or storage.
 /// 返回已完成 hydration 的 V1 会话句柄，不读取旧状态或存储。
 ///
@@ -502,6 +524,35 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
         None
     } else {
         let handle = session_v1_handle_from_state(state, selected_session_id).await?;
+        let has_pending_release = handle
+            .read(|document| {
+                !document
+                    .metadata
+                    .input_state
+                    .pending_staging_release_actions
+                    .is_empty()
+            })
+            .map_err(|error| format!("读取 V1 队列附件释放状态失败：{error}"))?;
+        if has_pending_release {
+            let attachment_workspace_path = composer_attachment_workspace_path_from_snapshot(
+                refreshed_snapshot,
+                None,
+                Some(&selected_session_id.to_string()),
+            );
+            let attachment_reconcile = attachment_workspace_path.and_then(|workspace_path| {
+                reconcile_pending_prompt_attachment_leases(
+                    handle.as_ref(),
+                    selected_session_id,
+                    &workspace_path,
+                )
+            });
+            if let Err(error) = attachment_reconcile {
+                webui_trace(
+                    "pending_prompt_attachment_lease_reconcile_failed",
+                    format!("session={selected_session_id} error={error}"),
+                );
+            }
+        }
         let projection = handle
             .read(|document| session_v1_runtime_projection(document, selected_session_id))
             .map_err(|error| format!("读取 V1 会话配置投影失败：{error}"))?;

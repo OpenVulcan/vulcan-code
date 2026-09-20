@@ -165,7 +165,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             String::from("service is still starting; controller runtime is not ready")
         })?;
         let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-        let mcp_catalog = cached_mcp_catalog_from_state(&guard);
+        let mcp_catalog = mcp_runtime_catalog_from_state(&guard);
         let logs = guard.startup.recent_logs.clone();
         let active_kernel_sessions = active_kernel_session_ids(&guard);
         let preserved_workspace_run_state = capture_preserved_workspace_run_state(

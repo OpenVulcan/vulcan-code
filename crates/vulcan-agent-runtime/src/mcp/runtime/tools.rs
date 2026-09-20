@@ -303,8 +303,11 @@ struct McpRuntimePartitionLease {
     /// Monotonic revocation latch checked before every owner-scoped invocation.
     /// 在每次所有者范围调用前检查的单调撤销锁存位。
     revoked: AtomicBool,
-    /// Serializes owner-scoped calls so a revocation check cannot be bypassed by a queued call.
-    /// 串行化所有者范围调用，避免排队调用绕过撤销检查。
+    /// Whether calls sharing this exact owner partition must keep arrival order.
+    /// 共享该精确所有者分区的调用是否必须保持到达顺序。
+    ordered_calls: bool,
+    /// Serializes the owner-scoped revocation check so a queued call cannot bypass it.
+    /// 串行化所有者范围撤销检查，避免排队调用绕过该检查。
     owner_call_gate: Option<Arc<tokio::sync::Mutex<()>>>,
 }
 
@@ -352,17 +355,23 @@ impl McpRuntimePartitionLease {
             runtime,
             owner_key: None,
             revoked: AtomicBool::new(false),
+            ordered_calls: false,
             owner_call_gate: None,
         }
     }
 
     /// Wraps one independently booted runtime in a session-owned lease.
     /// 将一个独立引导的运行时包装为会话拥有的租约。
-    fn new_owned(runtime: McpRuntimeHandle, owner_key: McpRuntimeOwnedPartitionKey) -> Self {
+    fn new_owned(
+        runtime: McpRuntimeHandle,
+        owner_key: McpRuntimeOwnedPartitionKey,
+        ordered_calls: bool,
+    ) -> Self {
         Self {
             runtime,
             owner_key: Some(owner_key),
             revoked: AtomicBool::new(false),
+            ordered_calls,
             owner_call_gate: Some(Arc::new(tokio::sync::Mutex::new(()))),
         }
     }
@@ -404,8 +413,14 @@ impl McpRuntimePartitionLease {
         Ok(())
     }
 
-    /// Invokes one tool only after acquiring the owner gate and rechecking revocation.
-    /// 仅在取得所有者闸门并重新检查撤销状态后调用单个工具。
+    /// Invokes one tool after a revocation check that queued calls cannot bypass.
+    /// 在排队调用无法绕过的撤销检查之后调用单个工具。
+    ///
+    /// Browser page tools retain the gate through the remote call to preserve page-operation
+    /// order. Independent tools release it after the revocation check and remain parallel.
+    /// A call admitted before revocation may still complete or observe transport teardown.
+    /// 浏览器页面工具在远端调用期间保持闸门以维护页面操作顺序；独立工具在撤销校验后
+    /// 释放闸门并继续并行。撤销前已获准的调用仍可能完成或观察到传输拆除。
     async fn call_tool_for_owner(
         &self,
         owner_session_id: SessionId,
@@ -417,8 +432,15 @@ impl McpRuntimePartitionLease {
                 "MCP tool binding is not scoped to a session owner",
             ));
         };
-        let _gate = owner_call_gate.lock().await;
+        // Ordered page tools retain the fair gate through the remote call; independent tools
+        // release it after the revocation check and remain parallel.
+        // 有序页面工具在远端调用期间保持公平闸门；独立工具在撤销校验后释放闸门并继续并行。
+        let gate = owner_call_gate.lock().await;
         self.require_owner(owner_session_id)?;
+        if self.ordered_calls {
+            return self.runtime.call_tool_by_id(tool_id, args).await;
+        }
+        drop(gate);
         self.runtime.call_tool_by_id(tool_id, args).await
     }
 }
@@ -662,20 +684,59 @@ impl McpRuntimeAccess {
         owner_session_id: SessionId,
         servers: Vec<McpServerConfig>,
     ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        self.open_owned_stdio_partition_with_ordering(
+            plugin_id,
+            generation,
+            owner_session_id,
+            servers,
+            false,
+        )
+        .await
+    }
+
+    /// Opens a session-owned stdio partition whose page operations execute in arrival order.
+    /// 打开一个按到达顺序执行页面操作的会话自有 stdio 分区。
+    pub async fn open_ordered_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        self.open_owned_stdio_partition_with_ordering(
+            plugin_id,
+            generation,
+            owner_session_id,
+            servers,
+            true,
+        )
+        .await
+    }
+
+    /// Opens or reuses one owner partition with an explicit tool ordering contract.
+    /// 按显式工具顺序契约打开或复用一个所有者分区。
+    async fn open_owned_stdio_partition_with_ordering(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        servers: Vec<McpServerConfig>,
+        ordered_calls: bool,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
         let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
         validate_owned_stdio_partition(&key, &servers)?;
         self.ensure_owner_plugin_admission(plugin_id)?;
 
-        if self.active_owned_stdio_lease(&key).is_some() {
-            return Ok(McpRuntimeOwnedStdioPartition {
-                access: self.clone(),
-                key,
-            });
+        if let Some(existing) = self.active_owned_stdio_lease(&key) {
+            if existing.ordered_calls != ordered_calls {
+                return Err(String::from("owned MCP partition call ordering cannot change while active"));
+            }
+            return Ok(McpRuntimeOwnedStdioPartition { access: self.clone(), key });
         }
 
         let runtime = bootstrap_owned_stdio_runtime(servers).await?;
 
-        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone()));
+        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone(), ordered_calls));
         let mut replaced_lease = None;
         let installed = {
             // Keep the lifecycle gate locked while publishing the lease so a disable that
@@ -700,6 +761,12 @@ impl McpRuntimeAccess {
                     replaced_lease = registry.insert(key.clone(), Arc::clone(&new_lease));
                     true
                 } else {
+                    if existing.ordered_calls != ordered_calls {
+                        new_lease.revoke();
+                        return Err(String::from(
+                            "owned MCP partition call ordering cannot change while active",
+                        ));
+                    }
                     false
                 }
             } else {
@@ -732,11 +799,50 @@ impl McpRuntimeAccess {
         owner_session_id: SessionId,
         servers: Vec<McpServerConfig>,
     ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        self.replace_owned_stdio_partition_with_ordering(
+            plugin_id,
+            generation,
+            owner_session_id,
+            servers,
+            false,
+        )
+        .await
+    }
+
+    /// Replaces one owner partition with ordered page operations after readiness succeeds.
+    /// 在就绪成功后以有序页面操作替换一个所有者分区。
+    pub async fn replace_ordered_owned_stdio_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
+        self.replace_owned_stdio_partition_with_ordering(
+            plugin_id,
+            generation,
+            owner_session_id,
+            servers,
+            true,
+        )
+        .await
+    }
+
+    /// Replaces one ready owner partition under an explicit tool ordering contract.
+    /// 按显式工具顺序契约替换一个就绪的所有者分区。
+    async fn replace_owned_stdio_partition_with_ordering(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        owner_session_id: SessionId,
+        servers: Vec<McpServerConfig>,
+        ordered_calls: bool,
+    ) -> Result<McpRuntimeOwnedStdioPartition, String> {
         let key = McpRuntimeOwnedPartitionKey::try_new(plugin_id, generation, owner_session_id)?;
         validate_owned_stdio_partition(&key, &servers)?;
         self.ensure_owner_plugin_admission(plugin_id)?;
         let runtime = bootstrap_owned_stdio_runtime(servers).await?;
-        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone()));
+        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone(), ordered_calls));
         // The gate remains held through replacement publication, so disable cannot race a
         // completed bootstrap into installing a new owner partition after revocation.
         // 替换发布期间持续持有闸门，避免停用在撤销后又竞态安装新的所有者分区。
@@ -1087,7 +1193,19 @@ impl McpRuntimeAccess {
         key: McpRuntimeOwnedPartitionKey,
         runtime: McpRuntimeHandle,
     ) -> McpRuntimeOwnedStdioPartition {
-        let lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone()));
+        self.register_owned_stdio_partition_with_ordering_for_test(key, runtime, false)
+    }
+
+    /// Installs a prebuilt owner runtime with explicit call ordering for concurrency tests.
+    /// 为并发测试安装带显式调用顺序契约的预构建所有者运行时。
+    #[cfg(test)]
+    pub(super) fn register_owned_stdio_partition_with_ordering_for_test(
+        &self,
+        key: McpRuntimeOwnedPartitionKey,
+        runtime: McpRuntimeHandle,
+        ordered_calls: bool,
+    ) -> McpRuntimeOwnedStdioPartition {
+        let lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone(), ordered_calls));
         if let Some(previous) = self
             .owned_stdio_partitions
             .lock()
@@ -1382,10 +1500,14 @@ async fn bootstrap_owned_stdio_runtime(
     servers: Vec<McpServerConfig>,
 ) -> Result<McpRuntimeHandle, String> {
     let runtime = super::handle::bootstrap_mcp_runtime(servers).await?;
+    // startup_guard closes the unpublished child when this readiness wait is cancelled.
+    // startup_guard 在这次就绪等待被取消时关闭尚未发布的子进程。
+    let mut startup_guard = super::handle::McpRuntimeStartupGuard::new();
+    startup_guard.track(&runtime);
     if let Err(error) = runtime.wait_until_ready(Duration::from_secs(15)).await {
-        runtime.shutdown();
         return Err(error);
     }
+    startup_guard.mark_published();
     Ok(runtime)
 }
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react"
 import { createRoot } from "react-dom/client"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
 import type { LicenseBody, LicenseCatalog } from "@/service/licenses-service"
 import { AboutLicensesSettingsArea, collectLicenseDependencies } from "./about-licenses-settings-area"
@@ -21,6 +21,27 @@ const fixture: LicenseCatalog = {
   ] }],
 }
 
+// duplicateFixture gives one package identity two original bodies, which is the only way the
+// variant selector appears; every other dependency keeps exactly one body.
+// duplicateFixture 让一个包身份拥有两份原始正文，这是正文变体选择器出现的唯一前提；
+// 其余依赖仍各自只有一份正文。
+function duplicateFixture(): LicenseCatalog {
+  const group = structuredClone(fixture.licenses[0])
+  group.sections[1].dependencies.push(group.sections[0].dependencies[0])
+  return { ...fixture, licenses: [group] }
+}
+
+// JSDOM lacks the scroll plumbing requested by the real Radix select.
+// JSDOM 缺少真实 Radix 选择器请求的滚动能力。
+const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView")
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() })
+})
+afterAll(() => {
+  if (scrollDescriptor) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollDescriptor)
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView")
+})
+
 // mount renders the actual shared controls and returns a cleanup function.
 // mount 渲染真实共享控件，并返回清理函数。
 async function mount() {
@@ -31,12 +52,40 @@ async function mount() {
   return { host, async dispose() { await act(async () => root.unmount()); host.remove() } }
 }
 
-// button finds visible buttons by their exact text in the synthetic surface.
-// button 按精确文本查找合成界面中的可见按钮。
-function button(host: HTMLElement, label: string): HTMLButtonElement {
+// button finds visible buttons by their exact text in the requested surface.
+// button 在请求的界面范围内按精确文本查找可见按钮。
+// The dialog surface is portaled to the document body, so callers pass the matching root.
+// 弹窗表面挂载到 document.body 门户，调用方因此传入相应根节点。
+function button(host: ParentNode, label: string): HTMLButtonElement {
   const element = [...host.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)
   if (!element) throw new Error(`Missing button: ${label}`)
   return element
+}
+
+// openDependencyView clicks one dependency row's view control, which owns the lazy body read.
+// openDependencyView 点击某依赖行的查看控件，懒加载正文读取由该控件触发。
+async function openDependencyView(host: HTMLElement, row: number) {
+  const views = [...host.querySelectorAll("button")].filter((entry) => entry.textContent?.trim() === "View")
+  if (views.length <= row) throw new Error(`Missing view control for dependency row ${row}`)
+  await act(async () => views[row].click())
+}
+
+// chooseBodyVariant opens the real shared variant select and picks one exact body option.
+// chooseBodyVariant 打开真实共享正文变体选择器，并选择一个精确正文选项。
+async function chooseBodyVariant(label: string) {
+  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Select original body"]')
+  if (!trigger) throw new Error("Missing original body variant selector")
+  await act(async () => trigger.click())
+  const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
+  const option = options.find((entry) => entry.textContent?.trim().startsWith(label))
+  if (!option) throw new Error(`Missing original body option: ${label}`)
+  await act(async () => option.click())
+}
+
+// licenseBody reads the dialog body element that owns the original license text.
+// licenseBody 读取持有原始许可证文本的弹窗正文元素。
+function licenseBody(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("pre.settings-license-body")
 }
 
 beforeEach(() => {
@@ -55,14 +104,27 @@ describe("license catalog browsing", () => {
     expect(dependencies[0].sectionIds).toEqual(["a", "b"])
   })
 
-  it("loads only one original body and changes it through the dependency association", async () => {
+  it("reads an original body only after a dependency view is opened", async () => {
     const view = await mount()
+    expect(view.host.querySelectorAll("tbody tr")).toHaveLength(2)
+    expect(service.body).not.toHaveBeenCalled()
+    expect(licenseBody()).toBeNull()
+    await openDependencyView(view.host, 0)
     expect(service.body).toHaveBeenCalledTimes(1)
     expect(service.body).toHaveBeenCalledWith("a", "revision")
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-a")
-    await act(async () => button(view.host, "Body 2").click())
+    expect(licenseBody()?.textContent).toBe("original-a")
+    await view.dispose()
+  })
+
+  it("changes the painted body through the associated variant of one dependency", async () => {
+    service.catalog.mockResolvedValueOnce(duplicateFixture())
+    const view = await mount()
+    await openDependencyView(view.host, 0)
+    expect(licenseBody()?.textContent).toBe("original-a")
+    await chooseBodyVariant("Body 2")
     expect(service.body).toHaveBeenLastCalledWith("b", "revision")
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-b")
+    expect(licenseBody()?.textContent).toBe("original-b")
+    expect(service.body).toHaveBeenCalledTimes(2)
     await view.dispose()
   })
 
@@ -85,7 +147,8 @@ describe("license catalog browsing", () => {
     expect(view.host.querySelector('[role="alert"]')?.textContent).toContain("missing generated index")
     await act(async () => button(view.host, "Reload").click())
     expect(view.host.querySelector('[role="alert"]')).toBeNull()
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-a")
+    await openDependencyView(view.host, 0)
+    expect(licenseBody()?.textContent).toBe("original-a")
     await view.dispose()
   })
 
@@ -96,17 +159,19 @@ describe("license catalog browsing", () => {
     service.catalog.mockResolvedValueOnce(unknownCatalog)
     const view = await mount()
     expect(view.host.querySelector("h3")?.textContent).toBe("Unknown license")
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-a")
+    await openDependencyView(view.host, 0)
+    expect(licenseBody()?.textContent).toBe("original-a")
     await view.dispose()
   })
 
   it("shows a failed body read and retries only that selected body", async () => {
     service.body.mockRejectedValueOnce(new Error("mismatched license revision"))
     const view = await mount()
-    expect(view.host.querySelector('[role="alert"]')?.textContent).toContain("mismatched license revision")
-    await act(async () => button(view.host, "Retry reading").click())
+    await openDependencyView(view.host, 0)
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("mismatched license revision")
+    await act(async () => button(document.body, "Retry reading").click())
     expect(service.catalog).toHaveBeenCalledTimes(1)
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-a")
+    expect(licenseBody()?.textContent).toBe("original-a")
     await view.dispose()
   })
 
@@ -126,11 +191,14 @@ describe("license catalog browsing", () => {
   it("does not paint a late body response over a newer dependency selection", async () => {
     let resolveFirst!: (body: LicenseBody) => void
     service.body.mockImplementationOnce(() => new Promise<LicenseBody>((resolve) => { resolveFirst = resolve }))
+    service.catalog.mockResolvedValueOnce(duplicateFixture())
     const view = await mount()
-    await act(async () => button(view.host, "Body 2").click())
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-b")
+    await openDependencyView(view.host, 0)
+    expect(licenseBody()).toBeNull()
+    await chooseBodyVariant("Body 2")
+    expect(licenseBody()?.textContent).toBe("original-b")
     await act(async () => resolveFirst({ section_id: "a", text: "stale-body" }))
-    expect(view.host.querySelector("pre")?.textContent).toBe("original-b")
+    expect(licenseBody()?.textContent).toBe("original-b")
     await view.dispose()
   })
 })

@@ -27,6 +27,9 @@ export interface LocalBrowserTab {
 // LocalBrowserSnapshot names the selected GUI-local tab and its sibling tabs.
 // LocalBrowserSnapshot 标识选中的 GUI 本地标签及其同级标签。
 export interface LocalBrowserSnapshot {
+  // ownerSessionId identifies the conversation represented by this window-local snapshot.
+  // ownerSessionId 标识此窗口本地快照所代表的会话。
+  ownerSessionId: string | null;
   // activeId is null when no temporary page remains.
   // activeId 在没有临时页面时为 null。
   activeId: string | null;
@@ -58,6 +61,9 @@ export interface LocalBrowserViewport {
 // LocalBrowserEntry owns one native view and its current user-facing metadata.
 // LocalBrowserEntry 持有一个原生视图及其当前面向用户的元数据。
 interface LocalBrowserEntry {
+  // ownerSessionId binds this native page to one conversation in this GUI window.
+  // ownerSessionId 将此原生页面绑定到该 GUI 窗口中的一个会话。
+  ownerSessionId: string;
   // view has no preload, Node access, or Core automation connection.
   // view 没有预加载、Node 权限或 Core 自动化连接。
   view: WebContentsView;
@@ -75,12 +81,18 @@ export class LocalBrowserManager {
   // activeId selects the one native page that may be visible in the sidebar.
   // activeId 选择唯一可在侧栏显示的原生页面。
   private activeId: string | null = null;
+  // currentOwnerSessionId is the conversation whose local tabs are visible in this window.
+  // currentOwnerSessionId 是此窗口当前可见本地标签所属的会话。
+  private currentOwnerSessionId: string | null = null;
+  // activeIdByOwner remembers each conversation's last selected local tab.
+  // activeIdByOwner 记住每个会话最后选中的本地标签。
+  private readonly activeIdByOwner = new Map<string, string>();
   // viewport is cleared when the sidebar unmounts or a modal covers it.
   // viewport 在侧栏卸载或模态框覆盖时清除。
   private viewport: LocalBrowserViewport | null = null;
-  // partition ensures all temporary tabs share only their own in-memory browser context.
-  // partition 使所有临时标签仅共享各自的内存浏览器上下文。
-  private readonly partition = `vulcan-local-browser-${randomUUID()}`;
+  // ownerPartitions shares in-memory website state only among tabs of the same conversation.
+  // ownerPartitions 仅让同一会话的标签共享内存中的网页状态。
+  private readonly ownerPartitions = new Map<string, string>();
 
   // Constructor blocks the workbench and exact Core origins inside untrusted temporary pages.
   // 构造函数阻止不受信任的临时页面访问工作台及精确的 Core 来源。
@@ -90,11 +102,22 @@ export class LocalBrowserManager {
     private readonly window: BrowserWindow,
     private readonly blockedOrigins: ReadonlySet<string>,
     private readonly onChanged: (snapshot: LocalBrowserSnapshot) => void,
-  ) {
-    const browserSession = session.fromPartition(this.partition);
+  ) {}
+
+  // partitionForOwner creates one sandboxed, non-persistent browser session per conversation.
+  // partitionForOwner 为每个会话创建独立、沙箱化且不落盘的浏览器会话。
+  // ownerSessionId identifies the conversation; returns its window-local Electron partition.
+  // ownerSessionId 标识会话；返回该窗口内专属的 Electron 分区。
+  private partitionForOwner(ownerSessionId: string): string {
+    const existing = this.ownerPartitions.get(ownerSessionId);
+    if (existing) return existing;
+    const partition = `vulcan-local-browser-${randomUUID()}`;
+    const browserSession = session.fromPartition(partition);
     browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     browserSession.setPermissionCheckHandler(() => false);
     browserSession.on('will-download', (event) => event.preventDefault());
+    this.ownerPartitions.set(ownerSessionId, partition);
+    return partition;
   }
 
   // snapshot returns immutable, serializable tab metadata for the renderer.
@@ -102,7 +125,27 @@ export class LocalBrowserManager {
   // Returns the active id and tab list without any WebContents references.
   // 返回活动标识及标签列表，不包含任何 WebContents 引用。
   snapshot(): LocalBrowserSnapshot {
-    return { activeId: this.activeId, tabs: [...this.tabs.values()].map(({ tab }) => ({ ...tab })) };
+    return { ownerSessionId: this.currentOwnerSessionId, activeId: this.activeId, tabs: [...this.tabs.values()]
+      .filter((entry) => entry.ownerSessionId === this.currentOwnerSessionId)
+      .map(({ tab }) => ({ ...tab })) };
+  }
+
+  // setOwner changes the displayed conversation without moving or destroying its native tabs.
+  // setOwner 切换显示的会话，不迁移也不销毁其原生标签。
+  // ownerSessionId is a persisted conversation id or null; returns only that owner's tabs.
+  // ownerSessionId 是持久会话标识或空值；仅返回该归属的标签。
+  setOwner(ownerSessionId: string | null): LocalBrowserSnapshot {
+    if (ownerSessionId !== null && (typeof ownerSessionId !== 'string' || ownerSessionId.trim() !== ownerSessionId || !ownerSessionId)) {
+      throw new Error('Invalid local browser conversation owner.');
+    }
+    this.currentOwnerSessionId = ownerSessionId;
+    const remembered = ownerSessionId ? this.activeIdByOwner.get(ownerSessionId) : null;
+    this.activeId = remembered && this.tabs.get(remembered)?.ownerSessionId === ownerSessionId
+      ? remembered : [...this.tabs.entries()].find(([, entry]) => entry.ownerSessionId === ownerSessionId)?.[0] ?? null;
+    this.viewport = null;
+    this.layout();
+    this.emit();
+    return this.snapshot();
   }
 
   // open creates a sandboxed tab and selects it after validating one HTTP destination.
@@ -110,6 +153,15 @@ export class LocalBrowserManager {
   // url is a user-entered or popup target; returns the new tab's opaque GUI-local id.
   // url 是用户输入或弹窗目标；返回新标签在 GUI 内的不透明标识。
   open(url: string): string {
+    if (!this.currentOwnerSessionId) throw new Error('Select a conversation before opening a local browser tab.');
+    return this.openForOwner(this.currentOwnerSessionId, url);
+  }
+
+  // openForOwner preserves the originating conversation when an untrusted page opens a popup.
+  // openForOwner 在不受信任页面打开弹窗时保留发起页面的会话归属。
+  // ownerSessionId is the fixed creator; url is the requested destination; returns one local id.
+  // ownerSessionId 是固定创建者；url 是目标地址；返回一个本地标识。
+  private openForOwner(ownerSessionId: string, url: string): string {
     const destination = this.normalizeUrl(url);
     if (this.tabs.size >= MAX_LOCAL_BROWSER_TABS) {
       throw new Error('The local browser has reached its tab limit.');
@@ -117,7 +169,7 @@ export class LocalBrowserManager {
     const id = randomUUID();
     const view = new WebContentsView({
       webPreferences: {
-        partition: this.partition,
+        partition: this.partitionForOwner(ownerSessionId),
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
@@ -125,13 +177,13 @@ export class LocalBrowserManager {
       },
     });
     const tab: LocalBrowserTab = { id, title: destination, url: destination, loading: true };
-    const entry: LocalBrowserEntry = { view, tab };
+    const entry: LocalBrowserEntry = { ownerSessionId, view, tab };
     this.tabs.set(id, entry);
     this.window.contentView.addChildView(view);
     view.setVisible(false);
     view.webContents.setWindowOpenHandler(({ url: popupUrl }) => {
       try {
-        this.open(popupUrl);
+        this.openForOwner(ownerSessionId, popupUrl);
       } catch {
         // Non-HTTP and internal workbench popups have no temporary-browser destination.
         // 非 HTTP 或内部工作台弹窗在临时浏览器中没有可用目标。
@@ -149,7 +201,7 @@ export class LocalBrowserManager {
     view.webContents.on('page-title-updated', (_event, title) => this.update(id, { title }));
     view.webContents.on('did-start-loading', () => this.update(id, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.update(id, { loading: false }));
-    this.select(id);
+    if (ownerSessionId === this.currentOwnerSessionId) this.select(id);
     void view.webContents.loadURL(destination).catch(() => this.update(id, { loading: false }));
     return id;
   }
@@ -159,7 +211,7 @@ export class LocalBrowserManager {
   // id selects a GUI-local tab; url is the new HTTP destination.
   // id 选择 GUI 本地标签；url 是新的 HTTP 目标。
   navigate(id: string, url: string): void {
-    const entry = this.requireTab(id);
+    const entry = this.requireCurrentTab(id);
     const destination = this.normalizeUrl(url);
     void entry.view.webContents.loadURL(destination).catch(() => this.update(id, { loading: false }));
   }
@@ -169,8 +221,9 @@ export class LocalBrowserManager {
   // id is the GUI-local tab to select.
   // id 是要选中的 GUI 本地标签。
   select(id: string): void {
-    this.requireTab(id);
+    this.requireCurrentTab(id);
     this.activeId = id;
+    this.activeIdByOwner.set(this.currentOwnerSessionId!, id);
     this.layout();
     this.emit();
   }
@@ -180,11 +233,15 @@ export class LocalBrowserManager {
   // id is the exact GUI-local tab to release.
   // id 是要释放的精确 GUI 本地标签。
   close(id: string): void {
-    const entry = this.requireTab(id);
+    const entry = this.requireCurrentTab(id);
     this.window.contentView.removeChildView(entry.view);
     entry.view.webContents.close();
     this.tabs.delete(id);
-    if (this.activeId === id) this.activeId = this.tabs.keys().next().value ?? null;
+    if (this.activeId === id) {
+      this.activeId = [...this.tabs.entries()].find(([, candidate]) => candidate.ownerSessionId === this.currentOwnerSessionId)?.[0] ?? null;
+      if (this.activeId) this.activeIdByOwner.set(this.currentOwnerSessionId!, this.activeId);
+      else this.activeIdByOwner.delete(this.currentOwnerSessionId!);
+    }
     this.layout();
     this.emit();
   }
@@ -213,7 +270,15 @@ export class LocalBrowserManager {
   // dispose releases every GUI-local page before the owning window closes.
   // dispose 在所属窗口关闭前释放全部 GUI 本地页面。
   dispose(): void {
-    for (const id of [...this.tabs.keys()]) this.close(id);
+    for (const { view } of this.tabs.values()) {
+      this.window.contentView.removeChildView(view);
+      view.webContents.close();
+    }
+    this.tabs.clear();
+    this.ownerPartitions.clear();
+    this.activeIdByOwner.clear();
+    this.activeId = null;
+    this.currentOwnerSessionId = null;
     this.viewport = null;
   }
 
@@ -227,14 +292,31 @@ export class LocalBrowserManager {
     return entry;
   }
 
+  // requireCurrentTab prevents renderer actions from reaching another conversation's local tab.
+  // requireCurrentTab 阻止渲染器动作访问另一会话的本地标签。
+  // id selects a tab; returns it only when it belongs to the selected conversation.
+  // id 选择标签；仅当其属于当前会话时返回该标签。
+  private requireCurrentTab(id: string): LocalBrowserEntry {
+    const entry = this.requireTab(id);
+    if (entry.ownerSessionId !== this.currentOwnerSessionId) throw new Error('Local browser tab belongs to another conversation.');
+    return entry;
+  }
+
   // normalizeUrl accepts only HTTP(S) or the inert initial blank page outside internal origins.
   // normalizeUrl 仅接受 HTTP(S) 或内部来源之外的惰性初始空白页面。
   // input is the requested address; returns its canonical navigable URL.
   // input 是请求地址；返回其规范化的可导航 URL。
   private normalizeUrl(input: string): string {
     const value = input.trim();
-    const parsed = new URL(value === 'about:blank' || /^[a-z][a-z\d+.-]*:/i.test(value)
-      ? value : `https://${value}`);
+    // loopback keeps local development servers reachable without an explicit HTTP scheme.
+    // loopback 让未输入 HTTP 协议的本机开发服务仍可访问。
+    const loopback = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::|\/|$)/i.test(value);
+    // complete preserves explicit destinations before the existing origin policy checks them.
+    // complete 保留显式目标地址，再交给原有来源策略校验。
+    const complete = value === 'about:blank' || /^https?:\/\//i.test(value)
+      || /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+      ? value : `${loopback ? 'http' : 'https'}://${value}`;
+    const parsed = new URL(complete);
     if (!this.isAllowedUrl(parsed.href)) throw new Error('This address is unavailable in the local browser.');
     return parsed.href;
   }
@@ -261,7 +343,7 @@ export class LocalBrowserManager {
     const entry = this.tabs.get(id);
     if (!entry) return;
     Object.assign(entry.tab, patch);
-    this.emit();
+    if (entry.ownerSessionId === this.currentOwnerSessionId) this.emit();
   }
 
   // layout hides every inactive page and clips the selected page to the visible sidebar.

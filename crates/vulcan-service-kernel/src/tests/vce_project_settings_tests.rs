@@ -92,6 +92,145 @@ async fn project_persistence_rows(
     ]
 }
 
+/// Verifies the VCE settings save does not hold the process-wide public-AI configuration transaction
+/// across the full workbench refresh.
+/// 验证 VCE 设置保存不会在完整工作台刷新期间持有进程级公共 AI 配置事务。
+///
+/// A concurrent configuration-domain probe measures every wait for the transaction lock while one
+/// save runs; the durable CAS and snapshot replacement may hold it, but the fallible full refresh
+/// must stay outside so unrelated settings mutations are never blocked for its duration.
+/// 并发配置域探针测量一次保存期间对事务锁的每次等待；持久化比较交换与快照替换可以持锁，
+/// 但可能失败的完整刷新必须留在锁外，避免无关设置变更被其时长阻塞。
+#[test]
+fn vce_settings_save_keeps_public_ai_transaction_out_of_the_workbench_refresh() {
+    use std::time::Instant;
+
+    // WAIT_BOUND_US keeps this assertion generous: the refreshed write is small, while a leaked
+    // transaction lock measured about 147 ms on the same fixture.
+    // WAIT_BOUND_US 保持宽松断言：本次刷新的写入量很小，
+    // 而同一夹具下泄漏事务锁实测约 147 ms。
+    const WAIT_BOUND_US: u128 = 20_000;
+
+    let executor = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .expect("vce settings transaction executor"),
+    );
+    let storage = TestHostRuntimeRoot::new(uuid::Uuid::new_v4());
+    executor.block_on(async {
+        let controller = storage.attached_host_runtime_handle().await;
+        vulcan_workspace_store::data_plane::prepare_application_schema_for_test(&controller)
+            .await
+            .expect("private application schema");
+        let (state, _runtime, _configuration) = configured_state();
+        let source = storage.data_root().join("transaction-source");
+        let project = TaskProjectSummary::new(
+            "transaction-project",
+            "Transaction project",
+            source.display().to_string(),
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        );
+        persist_new_project(controller.clone(), &project)
+            .await
+            .expect("seed transaction row");
+        let snapshot = load_workspace_index_snapshot(controller.clone())
+            .await
+            .expect("real workspace");
+        let factory = VceDataPlaneFactory::bootstrap(&controller)
+            .await
+            .expect("private VCE factory");
+        let manager = vce::VceRuntimeManager::new(
+            Arc::clone(
+                &state
+                    .lock()
+                    .expect("state")
+                    .agent_runtime
+                    .as_ref()
+                    .expect("registered AI")
+                    .internal_ai_port,
+            ),
+            factory,
+            ServiceEventEmitter::new(Vec::new()),
+            vce::vce_publication_authority(&state),
+        );
+        let center = crate::workspace_watcher::WorkspaceWatcherCenter::new().expect("physical watcher");
+        let watcher = vce::VceWatcherService::new(
+            &center,
+            manager.clone(),
+            ServiceEventEmitter::new(Vec::new()),
+            executor.clone(),
+        );
+        {
+            let mut guard = state.lock().expect("state");
+            guard.controller_runtime = Some(controller.clone());
+            guard.workspace_snapshot = Some(snapshot);
+            guard.service_runtime = Some(executor.clone());
+            guard.vce_runtime = Some(manager);
+            guard.vce_watcher = Some(watcher);
+        }
+        // probe continuously acquires the process-wide transaction lock and records every wait.
+        // probe 持续获取进程级事务锁，并记录每次等待时长。
+        let stop_probe = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_signal = std::sync::Arc::clone(&stop_probe);
+        let probe = tokio::spawn(async move {
+            let mut samples: Vec<u128> = Vec::new();
+            while !stop_signal.load(std::sync::atomic::Ordering::Acquire) {
+                let started = Instant::now();
+                let guard = crate::begin_public_ai_configuration_transaction().await;
+                samples.push(started.elapsed().as_micros());
+                drop(guard);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            samples
+        });
+        let result = vce::service_update_vce_project_settings(
+            ServiceEventEmitter::new(Vec::new()),
+            state.clone(),
+            VceProjectSettingsUpdateRequest {
+                project_id: project.id.clone(),
+                expected_revision: project.vce.revision,
+                settings: editable_settings(&project.vce),
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "settings save must succeed under the probe");
+        stop_probe.store(true, std::sync::atomic::Ordering::Release);
+        let mut samples = probe.await.expect("probe join");
+        assert!(!samples.is_empty(), "probe must observe the transaction lock");
+        samples.sort_unstable();
+        assert!(
+            samples[samples.len() - 1] < WAIT_BOUND_US,
+            "the public AI transaction must not cover the workbench refresh: worst wait was {} us",
+            samples[samples.len() - 1]
+        );
+        // The durable save and its in-memory authority must still be complete and isolated from the peer.
+        // 持久化保存及其内存权威必须仍然完整，并与对照组项目隔离。
+        let persisted = saved_project(&controller, &project.id).await.vce;
+        assert_eq!(persisted.revision, project.vce.revision.saturating_add(1));
+        assert_eq!(persisted.enabled, project.vce.enabled);
+        assert_eq!(
+            state
+                .lock()
+                .expect("state")
+                .workspace_snapshot
+                .as_ref()
+                .expect("workspace")
+                .task_projects
+                .iter()
+                .find(|item| item.id == project.id)
+                .expect("in-memory project")
+                .vce,
+            persisted
+        );
+    });
+}
+
 /// Verify a rejected semantic-settings insert cannot commit its owning project independently.
 /// 验证被拒绝的语义设置插入不能使所属项目独立提交。
 /// No arguments or return value; all SQL, failure injection, and rows belong to a private controller.

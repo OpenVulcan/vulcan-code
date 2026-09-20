@@ -1341,7 +1341,7 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
             register_session_terminal_persistence_owner(
                 &mut guard,
                 session_id,
-                terminal_persistence_owner,
+                terminal_persistence_owner.clone(),
             )?;
             stop_webui_session_kernel_generation(&mut guard, session_id);
             return Err(format!(
@@ -1353,7 +1353,7 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
     register_session_terminal_persistence_owner(
         &mut guard,
         session_id,
-        terminal_persistence_owner,
+        terminal_persistence_owner.clone(),
     )?;
     stop_webui_session_kernel_generation(&mut guard, session_id);
     // workspace_snapshot starts from the kernel-stopped authoritative state mirrored by the same lock.

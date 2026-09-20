@@ -9,7 +9,9 @@ import {
   systemProviderEditableOverrides,
 } from "@/components/features/settings/direct-provider-model-settings"
 import type { CustomProviderModelRow } from "@/components/features/settings/custom-provider-models-state"
-import { translations, type TranslationKey } from "@/i18n-messages"
+import { zhCNTranslations } from "@/i18n-messages.zh-CN"
+import { enUSTranslations } from "@/i18n-messages.en-US"
+import type { TranslationKey } from "@/i18n-messages"
 
 // rowWithCapabilities creates the exact minimal merged row required by direct settings projection tests.
 // rowWithCapabilities 创建直接设置投影测试所需的精确最小合并行。
@@ -186,7 +188,7 @@ describe("direct provider model settings", () => {
       "settings.customModels.effortMax",
     ]
 
-    expect(keys.map((key) => translations["zh-CN"][key])).toEqual([
+    expect(keys.map((key) => zhCNTranslations[key])).toEqual([
       "关闭（none）",
       "最小（minimal）",
       "低（low）",
@@ -195,7 +197,7 @@ describe("direct provider model settings", () => {
       "超高（xhigh）",
       "最大（max）",
     ])
-    expect(keys.map((key) => translations["en-US"][key])).toEqual([
+    expect(keys.map((key) => enUSTranslations[key])).toEqual([
       "Off",
       "Minimal",
       "Low",
@@ -204,7 +206,7 @@ describe("direct provider model settings", () => {
       "Extra high",
       "Maximum",
     ])
-    expect(translations["zh-CN"]["settings.customModels.effortAdaptive"]).toBe("自动（adaptive）")
+    expect(zhCNTranslations["settings.customModels.effortAdaptive"]).toBe("自动（adaptive）")
   })
 
   it("treats collection order as equal while retaining every owned scalar difference", () => {

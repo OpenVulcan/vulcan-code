@@ -65,13 +65,16 @@ export function selectConversationRightPluginMounts(
 const WORKSPACE_CONTEXT_PANEL_TRANSITION_MS = 220;
 // WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH stores the initial docked context panel width.
 // WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH 保存停靠上下文面板的初始宽度。
-const WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH = 420;
+export const WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH = 420;
 // WORKSPACE_CONTEXT_PANEL_MIN_WIDTH stores the smallest manual docked panel width.
 // WORKSPACE_CONTEXT_PANEL_MIN_WIDTH 保存停靠面板手动调整时的最小宽度。
 const WORKSPACE_CONTEXT_PANEL_MIN_WIDTH = 320;
-// WORKSPACE_CONTEXT_PANEL_MAX_WIDTH stores the largest manual docked panel width.
-// WORKSPACE_CONTEXT_PANEL_MAX_WIDTH 保存停靠面板手动调整时的最大宽度。
-const WORKSPACE_CONTEXT_PANEL_MAX_WIDTH = 640;
+// WORKSPACE_CONVERSATION_RESERVED_WIDTH preserves the 800px reading column, 72px padding, and 50px reasoning overflow.
+// WORKSPACE_CONVERSATION_RESERVED_WIDTH 保留 800px 阅读列、72px 内边距与 50px 思考内容外伸空间。
+export const WORKSPACE_CONVERSATION_RESERVED_WIDTH = 800 + 36 * 2 + 50;
+// WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH matches the dock separator's CSS width.
+// WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH 与停靠分隔条的 CSS 宽度一致。
+export const WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH = 9;
 
 // DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
 // DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
@@ -127,6 +130,12 @@ export function WorkspaceResizableBody(props: {
   // Active right context panel tab id.
   // 当前活动的右侧上下文面板页签标识。
   contextPanelActiveTabId: string | null;
+  // Whether the selected conversation currently owns a running AI browser.
+  // 当前会话是否持有正在运行的 AI 浏览器。
+  aiBrowserAvailable: boolean;
+  // Whether this client supports the independent GUI-local browser.
+  // 当前客户端是否支持独立的 GUI 本地浏览器。
+  localBrowserAvailable: boolean;
   // Monotonic request id used to focus the review panel on uncommitted changes.
   // 用于让审核面板聚焦未提交变更的单调请求标识。
   reviewFocusRequest: WorkspaceReviewFocusRequest;
@@ -190,6 +199,9 @@ export function WorkspaceResizableBody(props: {
   // Opens or focuses one right context tab kind.
   // 打开或聚焦一个右侧上下文页签类型。
   onOpenContextTab: (kind: WorkspaceContextTabKind) => void;
+  // Routes a normal webpage click from the current conversation into this GUI's local browser.
+  // 将当前会话中的普通网页点击导入此 GUI 的本地浏览器。
+  onConversationLinkClickCapture?: (event: React.MouseEvent<HTMLElement>) => void;
   // Closes one right context tab.
   // 关闭一个右侧上下文页签。
   onCloseContextTab: (tabId: string) => void;
@@ -288,7 +300,7 @@ export function WorkspaceResizableBody(props: {
   // Observe the actual layout bound so the accessible maximum matches both resize input methods.
   // 观察实际布局边界，使无障碍最大值与两种缩放输入一致。
   const dockedLayoutRef = React.useRef<HTMLDivElement | null>(null);
-  const [dockedPanelMaximum, setDockedPanelMaximum] = React.useState(WORKSPACE_CONTEXT_PANEL_MAX_WIDTH);
+  const [dockedPanelMaximum, setDockedPanelMaximum] = React.useState(WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH);
   React.useEffect(() => {
     let frameId: number | null = null;
     let timeoutId: number | null = null;
@@ -350,12 +362,12 @@ export function WorkspaceResizableBody(props: {
 
   // maximumDockedWidth applies the same actual container bound to pointer and keyboard resizing.
   // maximumDockedWidth 为指针和键盘缩放应用相同的实际容器边界。
-  // Parameters: element belongs to the docked shell. Returns its usable panel maximum in CSS pixels, bounded by the global limits.
-  // 参数：element 属于停靠外壳。返回以 CSS 像素计的可用面板上限，并遵守全局界限。
+  // Parameters: element belongs to the docked shell. Returns the width after preserving the conversation, reasoning gutter, and separator.
+  // 参数：element 属于停靠外壳。返回保留会话区、思考留白与分隔条后的右侧可用宽度。
   const maximumDockedWidth = React.useCallback((element: HTMLElement): number => Math.max(
     WORKSPACE_CONTEXT_PANEL_MIN_WIDTH,
-    Math.min(WORKSPACE_CONTEXT_PANEL_MAX_WIDTH,
-      (element.closest(".workspace-resizable-body-shell")?.getBoundingClientRect().width ?? window.innerWidth) - 800 - 9),
+    (element.closest(".workspace-resizable-body-shell")?.getBoundingClientRect().width ?? window.innerWidth)
+      - WORKSPACE_CONVERSATION_RESERVED_WIDTH - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
   ), []);
   React.useLayoutEffect(() => {
     const element = dockedLayoutRef.current;
@@ -462,10 +474,18 @@ export function WorkspaceResizableBody(props: {
   // conversationRightPluginMounts target the selected conversation's right-side context surface.
   // conversationRightPluginMounts 指向所选会话的右侧上下文界面。
   const conversationRightPluginMounts = selectConversationRightPluginMounts(props.workbench.plugins);
+  // aiBrowserMount is rendered inside its own context tab instead of below the context home.
+  // aiBrowserMount 在独立上下文页签内渲染，而不附着在上下文首页下方。
+  const aiBrowserMount = conversationRightPluginMounts.find(({ plugin, mount }) =>
+    plugin.id === "vulcan-browser" && mount.id === "core-browser");
+  // otherPluginMounts retain the existing placement for unrelated plugin contributions.
+  // otherPluginMounts 保留无关插件贡献原有的挂载位置。
+  const otherPluginMounts = conversationRightPluginMounts.filter(({ plugin, mount }) =>
+    plugin.id !== "vulcan-browser" || mount.id !== "core-browser");
   // mainContent keeps the body content shape identical with or without a side panel.
   // mainContent 保持有无侧边面板时主体内容结构一致。
   const mainContent = (
-    <section className="workspace-main-shell">
+    <section className="workspace-main-shell" onClickCapture={props.onConversationLinkClickCapture}>
       {props.children}
       {workspaceMainPluginMounts.length > 0 ? (
         <div className="workspace-plugin-main-mounts">
@@ -559,6 +579,17 @@ export function WorkspaceResizableBody(props: {
           >
             <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
             <WorkspaceContextPanel
+              aiBrowserAvailable={props.aiBrowserAvailable && Boolean(aiBrowserMount)}
+              localBrowserAvailable={props.localBrowserAvailable}
+              aiBrowserPanel={aiBrowserMount && props.aiBrowserAvailable && props.selectedConversationId ? (
+                <DynamicPluginMountPanel
+                  key={`${aiBrowserMount.plugin.id}:${aiBrowserMount.mount.id}:${props.selectedConversationId}`}
+                  mount={aiBrowserMount.mount}
+                  plugin={aiBrowserMount.plugin}
+                  workspacePath={selectedWorkspacePath}
+                  conversationId={props.selectedConversationId}
+                />
+              ) : null}
               activeTabId={props.contextPanelActiveTabId}
               floating={renderedRightPanelFloating}
               reviewFocusRequest={props.reviewFocusRequest}
@@ -594,10 +625,10 @@ export function WorkspaceResizableBody(props: {
               onOpenGitCommitAction={props.onOpenGitCommitAction}
             />
             </React.Suspense>
-            {conversationRightPluginMounts.length > 0 ? (
+            {otherPluginMounts.length > 0 ? (
               <div className="conversation-plugin-right-mounts">
                 <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
-                  {conversationRightPluginMounts.map(({ plugin, mount }) => (
+                  {otherPluginMounts.map(({ plugin, mount }) => (
                     <DynamicPluginMountPanel
                       key={`${plugin.id}:${mount.id}:${props.selectedConversationId ?? "none"}`}
                       mount={mount}

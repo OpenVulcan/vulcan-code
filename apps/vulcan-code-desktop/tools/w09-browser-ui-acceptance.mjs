@@ -1113,9 +1113,17 @@ try {
     }));
     throw error;
   }
-  // browserPanel proves the enabled manifest mount renders inside the selected persisted conversation.
-  // browserPanel 证明已启用清单挂载在选定持久会话内部渲染。
-  const browserPanel = page.locator('.conversation-plugin-right-mounts [aria-label="Core 浏览器"], .conversation-plugin-right-mounts [aria-label="Core browser"]').first();
+  // The native browser is a fixed GUI capability, even before the AI browser plugin creates a Core session.
+  // 原生浏览器是 GUI 的固定能力，即使 AI 浏览器插件尚未创建 Core 会话也应出现。
+  await page.locator('.context-launcher-card').filter({ hasText: '内置浏览器' }).waitFor({ timeout: 10_000 });
+  assert.equal(await page.locator('.context-launcher-card').filter({ hasText: 'AI 浏览器' }).count(), 0);
+  // The Core browser belongs to AI; creating it must open this conversation's dedicated right tab.
+  // Core 浏览器归 AI 所有；创建后必须打开此会话专属的右侧页签。
+  const initialBrowser = await rpc('browser.session.create', { profileMode: 'ephemeral' }, acceptedConversationId);
+  assert.equal(initialBrowser.status, 'running');
+  // browserPanel proves the enabled manifest mount renders only inside the browser tab.
+  // browserPanel 证明启用的插件挂载只在浏览器页签内部渲染。
+  const browserPanel = page.locator('.context-tab-content.browser-tab-content [aria-label="AI 浏览器"], .context-tab-content.browser-tab-content [aria-label="AI browser"]').first();
   try {
     await browserPanel.waitFor({ timeout: 20_000 });
   } catch (error) {
@@ -1129,7 +1137,7 @@ try {
         runtimeState: liveBrowserPlugin.runtimeState,
         uiMounts: liveBrowserPlugin.extension?.uiMounts,
       } : null,
-      rightMounts: await page.locator('.conversation-plugin-right-mounts').allInnerTexts(),
+      contextTabs: await page.locator('.context-dynamic-tab-strip').allInnerTexts(),
       alerts: await page.getByRole('alert').allInnerTexts(),
       statuses: await page.getByRole('status').allInnerTexts(),
       selectedConversationId: acceptedConversationId,
@@ -1175,9 +1183,26 @@ try {
   }, 5_000);
   assert.deepEqual(await gui.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].getBounds()), windowBeforeSeparator);
-  // Restore the panel width so later browser controls retain their normal layout.
-  // 恢复面板宽度，使后续浏览器控件保持正常布局。
+  // Expand to the actual maximum to verify that resizing retains the default reading column and reasoning gutter.
+  // 拉到实际最大值，验证拖拽保留默认阅读列与思考留白。
   await separator.press('End');
+  // The wide window must permit more than the former 640px cap while retaining 922px of conversation space.
+  // 宽窗口须突破旧的 640px 上限，同时保留 922px 会话空间。
+  const expandedDockWidth = Number(await separator.getAttribute('aria-valuenow'));
+  assert.ok(expandedDockWidth > 640, JSON.stringify({ expandedDockWidth }));
+  await until(async () => {
+    // panelWidth is the remaining conversation pane after the right panel reaches its real limit.
+    // panelWidth 是右侧面板达到真实上限后剩余的会话区宽度。
+    const panelWidth = await page.locator('.workspace-main-panel').first()
+      .evaluate((element) => element.getBoundingClientRect().width);
+    // readingWidth confirms the default 800px reading column did not reflow.
+    // readingWidth 确认默认的 800px 阅读列没有发生重新排版。
+    const readingWidth = await page.locator('.workspace-main-panel .conversation-scroll-content').first()
+      .evaluate((element) => element.getBoundingClientRect().width);
+    assert.ok(Math.abs(panelWidth - 922) <= 2 && Math.abs(readingWidth - 800) <= 1,
+      JSON.stringify({ panelWidth, readingWidth, expandedDockWidth }));
+    return readingWidth;
+  }, 5_000);
   await gui.evaluate(({ BrowserWindow }, bounds) =>
     BrowserWindow.getAllWindows()[0].setBounds(bounds), originalSeparatorTestBounds);
   // Use a real project PTY so dragging selectable terminal text cannot masquerade as native window dragging.
@@ -1247,7 +1272,7 @@ try {
     });
   }
   }
-  await browserPanel.getByRole('button', { name: /新建会话|New session/ }).click();
+  await browserPanel.locator(`[data-browser-session-id="${initialBrowser.sessionId}"]`).click();
   try {
     await browserPanel.getByRole('button', { name: /取得控制权|Take control/ }).waitFor({ timeout: 20_000 });
   } catch (error) {
@@ -1461,19 +1486,29 @@ try {
   // 保留首个归属会话的 Core 浏览器，以验证两个会话切换时的界面隔离。
   // The local tab is a separate Electron WebContentsView with no workbench preload or Core owner.
   // 本地标签是独立的 Electron WebContentsView，不带工作台预加载或 Core 归属。
-  const pluginMount = page.locator('.conversation-plugin-right-mounts').first();
+  // pluginMount is the current conversation's right browser tab, opened by a conversation link.
+  // pluginMount 是当前会话中由会话链接打开的右侧浏览器页签。
+  const pluginMount = page.locator('.context-tab-content.browser-tab-content').first();
   try {
-    await pluginMount.getByRole('button', { name: /本地浏览器|Local Browser/ }).waitFor({ timeout: 5_000 });
+    await page.evaluate((url) => {
+      const conversation = document.querySelector('.workspace-main-shell');
+      if (!conversation) throw new Error('Conversation content is unavailable.');
+      const link = document.createElement('a');
+      link.href = url;
+      link.textContent = 'W09 local browser link';
+      link.dataset.w09LocalBrowserLink = 'true';
+      conversation.append(link);
+    }, fixtureUrl);
+    await page.locator('[data-w09-local-browser-link="true"]').click();
+    await pluginMount.getByRole('textbox', { name: /本地浏览地址|Local browser address/ }).waitFor({ timeout: 5_000 });
   } catch (error) {
     console.error('Local browser panel:', JSON.stringify({
       browserPanelText: await browserPanel.innerText().catch(() => '<unmounted>'),
-      rightMounts: await page.locator('.conversation-plugin-right-mounts').allInnerTexts(),
-      targetPluginHasLocalTab: (await readFile(path.join(assetRoot, 'plugins/vulcan-browser/ui/index.mjs'), 'utf8'))
-        .includes('localBrowserLabel'),
+      rightPanel: await pluginMount.innerText().catch(() => '<unmounted>'),
+      nativeBridgeAvailable: await page.evaluate(() => typeof window.vulcanDesktop?.localBrowser?.setOwner === 'function'),
     }));
     throw error;
   }
-  await pluginMount.getByRole('button', { name: /本地浏览器|Local Browser/ }).click();
   await pluginMount.getByRole('textbox', { name: /本地浏览地址|Local browser address/ }).fill(fixtureUrl);
   await pluginMount.getByRole('button', { name: /打开地址|Open address/ }).click();
   const localBrowser = await until(async () => {
@@ -1617,9 +1652,21 @@ try {
   }));
   assert.equal(navigationWindowState.count, 1);
   assert.equal(navigationWindowState.workbenchUrl, page.url());
-  // The AI/Core tab remains a separate projection after the local page was opened.
-  // 打开本地页面之后，AI/Core 标签仍是独立投影。
-  await pluginMount.getByRole('button', { name: /AI 浏览器|AI Browser/ }).click();
+  // The local and AI browsers are separate right tabs; selecting AI must retain its Core projection.
+  // 本地与 AI 浏览器是独立的右侧页签；切回 AI 时仍须保留 Core 投影。
+  await page.locator('.context-dynamic-tab-strip [role="tab"]').filter({ hasText: /AI 浏览器|AI Browser/ }).click();
+  try {
+    await browserPanel.waitFor({ timeout: 20_000 });
+  } catch (error) {
+    console.error('AI browser tab after leaving the local page:', JSON.stringify({
+      rightToggle: await page.getByRole('button', { name: /打开右侧面板|关闭右侧面板|Open right panel|Close right panel/ })
+        .getAttribute('aria-pressed').catch(() => null),
+      contextTabs: await page.locator('.context-dynamic-tab-strip').allInnerTexts(),
+      browserTabs: await page.locator('[data-browser-session-id]').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('data-browser-session-id'))),
+      bodyTail: (await page.locator('body').innerText()).slice(-2000),
+    }));
+    throw error;
+  }
   await until(async () => {
     const running = (await rpc('browser.session.list', {}, acceptedConversationId))
       .filter((session) => session.status === 'running');
@@ -1627,6 +1674,91 @@ try {
     assert.equal(running[0].sessionId, browserBinding.session.sessionId);
     return true;
   }, 10_000);
+  // A second browser client must discover the same Core browser without receiving GUI-local tabs.
+  // 第二个网页客户端须发现同一个 Core 浏览器，同时不能获得 GUI 本地标签。
+  const beforeOtherConversation = await rpc('workbench.snapshot');
+  await rpcResponse('service_submit_conversation_prompt', {
+    clientSubmissionId: `w09-other-owner-${Date.now()}`,
+    projectId: project.id,
+    conversationId: null,
+    draftSlotKey: `new:${project.id}`,
+    prompt: 'W09 browser owner isolation fixture',
+    ...(cloneModelConfig ? { modelSelection: {
+      providerId: 'w09-ui-fixture-unavailable', modelId: 'w09-ui-fixture-unavailable',
+      connectionId: 'w09-ui-fixture-unavailable',
+    } } : {}),
+  });
+  // otherConversationId identifies the durable owner with no Core browser.
+  // otherConversationId 标识没有 Core 浏览器的持久化第二会话。
+  const otherConversationId = await until(async () => {
+    const snapshot = await rpc('workbench.snapshot');
+    const created = snapshot.conversations.filter((conversation) =>
+      !beforeOtherConversation.conversations.some((previous) => previous.id === conversation.id));
+    assert.equal(created.length, 1, JSON.stringify(created));
+    return created[0].id;
+  }, 20_000);
+  assert.deepEqual(await rpc('browser.session.list', {}, otherConversationId), []);
+  // passiveWebBrowser is a second client; it is never the GUI's local-browser owner.
+  // passiveWebBrowser 是第二个客户端，绝不持有 GUI 本地浏览器。
+  const passiveWebBrowser = await chromium.launch({
+    headless: true, executablePath: path.join(assetRoot, ...runtimeLayout.chromiumExecutable.split('/')),
+  });
+  let passiveWebAcceptance;
+  try {
+    const context = await passiveWebBrowser.newContext({ viewport: { width: 1280, height: 800 } });
+    const webPage = await context.newPage();
+    await webPage.goto(`${discovery.baseUrl}/?service=${encodeURIComponent(discovery.baseUrl)}`);
+    await webPage.locator('.conversation-tree-button')
+      .filter({ hasText: 'W09 browser UI persistent conversation fixture' }).first().click();
+    const webPanel = webPage.locator('.context-tab-content.browser-tab-content [aria-label="AI 浏览器"], .context-tab-content.browser-tab-content [aria-label="AI browser"]').first();
+    await webPanel.waitFor({ timeout: 25_000 });
+    const webTab = webPanel.locator(`[data-browser-session-id="${browserBinding.session.sessionId}"]`);
+    await webTab.waitFor({ timeout: 20_000 });
+    assert.equal(await webTab.getAttribute('aria-selected'), 'false');
+    assert.equal(await webPage.getByRole('button', { name: /内置浏览器|Local Browser/ }).count(), 0);
+    await webTab.click();
+    await webPanel.getByRole('img', { name: /Core 浏览器实时页面|Live Core browser page/ })
+      .locator('img').waitFor({ timeout: 25_000 });
+    // A second Core browser must appear in both clients while their selected tabs stay independent.
+    // 第二个 Core 浏览器须同时出现在两个客户端，且各自选中的标签保持独立。
+    // desktopFirstTab identifies the original Core browser in the GUI observer.
+    // desktopFirstTab 标识 GUI 观察端的原始 Core 浏览器。
+    const desktopFirstTab = browserPanel.locator(`[data-browser-session-id="${browserBinding.session.sessionId}"]`);
+    await desktopFirstTab.click();
+    // sharedSecond is a second Core-owned session created without involving a model.
+    // sharedSecond 是无需模型参与而创建的第二个 Core 托管会话。
+    const sharedSecond = await rpc('browser.session.create', { profileMode: 'ephemeral' }, acceptedConversationId);
+    // desktopSecondTab and webSecondTab are independent client views of one Core identity.
+    // desktopSecondTab 与 webSecondTab 是同一个 Core 身份在两端的独立视图。
+    const desktopSecondTab = browserPanel.locator(`[data-browser-session-id="${sharedSecond.sessionId}"]`);
+    const webSecondTab = webPanel.locator(`[data-browser-session-id="${sharedSecond.sessionId}"]`);
+    await desktopSecondTab.waitFor({ timeout: 20_000 });
+    await webSecondTab.waitFor({ timeout: 20_000 });
+    await webSecondTab.click();
+    assert.equal(await webSecondTab.getAttribute('aria-selected'), 'true');
+    assert.equal(await desktopFirstTab.getAttribute('aria-selected'), 'true');
+    await webPanel.getByRole('button', { name: /关闭浏览器|Close browser/ }).click();
+    await until(async () => {
+      const closed = (await rpc('browser.session.list', {}, acceptedConversationId))
+        .find((session) => session.sessionId === sharedSecond.sessionId);
+      assert.equal(closed?.status, 'closed', JSON.stringify(closed));
+      return true;
+    }, 20_000);
+    await desktopSecondTab.waitFor({ state: 'detached', timeout: 20_000 });
+    await webPage.locator('.conversation-tree-button')
+      .filter({ hasText: 'W09 browser owner isolation fixture' }).first().click();
+    await until(async () => {
+      assert.equal(await webPage.locator(`[data-browser-session-id="${browserBinding.session.sessionId}"]`).count(), 0);
+      return true;
+    }, 20_000);
+    passiveWebAcceptance = { sharedCoreBrowser: browserBinding.session.sessionId,
+      defaultDisconnected: true, localBrowserAbsent: true, foreignConversationHidden: true,
+      secondBrowserShared: sharedSecond.sessionId, independentTabSelection: true,
+      webCloseObservedByDesktop: true };
+  } finally {
+    await passiveWebBrowser.close();
+  }
+  await conversationRow.click();
   // With copied debug credentials, ask the actual configured model to drive browser tools itself.
   // 当已复制 debug 凭据时，要求真实配置的模型亲自调用浏览器工具。
   let aiAcceptance = null;
@@ -1955,18 +2087,18 @@ try {
       });
       assert.equal(changedBrowserSettings.actionTimeoutMs, '9000');
     }
-    const switchedPanel = page.locator('.conversation-plugin-right-mounts [aria-label="Core 浏览器"], .conversation-plugin-right-mounts [aria-label="Core browser"]').first();
+    const switchedPanel = page.locator('.context-tab-content.browser-tab-content [aria-label="AI 浏览器"], .context-tab-content.browser-tab-content [aria-label="AI browser"]').first();
     await until(async () => {
-      const visible = await switchedPanel.innerText();
-      assert.ok(visible.includes(aiBrowser.sessionId.slice(0, 8)), visible);
-      assert.ok(!visible.includes(browserBinding.session.sessionId.slice(0, 8)), visible);
+      const ids = await switchedPanel.locator('[data-browser-session-id]').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('data-browser-session-id')));
+      assert.ok(ids.includes(aiBrowser.sessionId), JSON.stringify(ids));
+      assert.ok(!ids.includes(browserBinding.session.sessionId), JSON.stringify(ids));
       return true;
     }, 20_000);
     await conversationRow.click();
     await until(async () => {
-      const visible = await switchedPanel.innerText();
-      assert.ok(visible.includes(browserBinding.session.sessionId.slice(0, 8)), visible);
-      assert.ok(!visible.includes(aiBrowser.sessionId.slice(0, 8)), visible);
+      const ids = await switchedPanel.locator('[data-browser-session-id]').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('data-browser-session-id')));
+      assert.ok(ids.includes(browserBinding.session.sessionId), JSON.stringify(ids));
+      assert.ok(!ids.includes(aiBrowser.sessionId), JSON.stringify(ids));
       return true;
     }, 20_000);
     // Leave the AI-owned conversation selected for compact clients without a visible tree.
@@ -2000,12 +2132,9 @@ try {
           await conversation.waitFor({ timeout: 25_000 });
           await conversation.click();
         }
-        const toggle = webPage.getByRole('button', {
-          name: /打开右侧面板|关闭右侧面板|Open right panel|Close right panel/,
-        });
-        await toggle.click();
-        const panel = webPage.locator('.conversation-plugin-right-mounts [aria-label="Core 浏览器"], .conversation-plugin-right-mounts [aria-label="Core browser"]').first();
+        const panel = webPage.locator('.context-tab-content.browser-tab-content [aria-label="AI 浏览器"], .context-tab-content.browser-tab-content [aria-label="AI browser"]').first();
         await panel.waitFor({ timeout: 25_000 });
+        await panel.locator(`[data-browser-session-id="${aiBrowser.sessionId}"]`).click();
         try {
           await panel.getByRole('img', { name: /Core 浏览器实时页面|Live Core browser page/ })
             .waitFor({ timeout: 25_000 });
@@ -2016,14 +2145,10 @@ try {
           const pages = await rpc('browser.pages.list', { sessionId: aiBrowser.sessionId }, aiConversationId);
           throw new Error(`${client.name} Core frame absent: ${JSON.stringify({ projection, pages, tools: aiAcceptance.tools, panel: await panel.innerText() })}`, { cause: error });
         }
-        assert.ok((await panel.innerText()).includes(aiBrowser.sessionId.slice(0, 8)));
-        await webPage.locator('.conversation-plugin-right-mounts')
-          .getByRole('button', { name: /本地浏览器|Local Browser/ }).click();
-        await webPage.getByRole('textbox', { name: /本地浏览地址|Local browser address/ }).fill(fixtureUrl);
-        const directLink = webPage.getByRole('link', { name: /直接打开链接|Open link directly/ });
-        assert.equal(await directLink.getAttribute('href'), fixtureUrl);
+        assert.equal(await panel.locator(`[data-browser-session-id="${aiBrowser.sessionId}"]`).count(), 1);
+        assert.equal(await webPage.getByRole('button', { name: /内置浏览器|Local Browser/ }).count(), 0);
         webAcceptance.push({ client: client.name, coreBrowserId: aiBrowser.sessionId,
-          projectionVisible: true, localBrowserLink: true, desktopWindowControls: false });
+          projectionVisible: true, localBrowserUnavailable: true, desktopWindowControls: false });
       } finally {
         await browserContext.close();
       }
@@ -2156,10 +2281,10 @@ try {
       return second;
     }, 20_000);
     assert.equal(secondOwnedBrowser.sessionId, createdAdditionalBrowser.sessionId);
-    await browserPanel.getByRole('button', { name: /刷新|Refresh/ }).first().click();
-    const desktopTabs = browserPanel.getByRole('tablist', { name: /浏览器会话|Browser sessions/ });
-    const firstDesktopTab = desktopTabs.getByRole('tab', { name: new RegExp(browserBinding.session.sessionId.slice(0, 8)) });
-    const secondDesktopTab = desktopTabs.getByRole('tab', { name: new RegExp(secondOwnedBrowser.sessionId.slice(0, 8)) });
+    await browserPanel.getByRole('button', { name: /刷新浏览器列表|Refresh browser list/ }).click();
+    const desktopTabs = browserPanel.getByRole('tablist', { name: /活跃的 AI 浏览器|Active AI browsers/ });
+    const firstDesktopTab = desktopTabs.locator(`[data-browser-session-id="${browserBinding.session.sessionId}"]`);
+    const secondDesktopTab = desktopTabs.locator(`[data-browser-session-id="${secondOwnedBrowser.sessionId}"]`);
     await firstDesktopTab.waitFor({ timeout: 15_000 });
     await secondDesktopTab.waitFor({ timeout: 15_000 });
     await firstDesktopTab.click();
@@ -2172,34 +2297,26 @@ try {
       await sharedClientPage.goto(`${discovery.baseUrl}/?service=${encodeURIComponent(discovery.baseUrl)}`);
       await sharedClientPage.locator('.conversation-tree-button')
         .filter({ hasText: 'W09 browser UI persistent conversation fixture' }).first().click();
-      await sharedClientPage.getByRole('button', {
-        name: /打开右侧面板|关闭右侧面板|Open right panel|Close right panel/,
-      }).click();
-      const sharedPanel = sharedClientPage.locator('.conversation-plugin-right-mounts [aria-label="Core 浏览器"], .conversation-plugin-right-mounts [aria-label="Core browser"]').first();
+      const sharedPanel = sharedClientPage.locator('.context-tab-content.browser-tab-content [aria-label="AI 浏览器"], .context-tab-content.browser-tab-content [aria-label="AI browser"]').first();
       await sharedPanel.waitFor({ timeout: 20_000 });
-      await sharedPanel.getByRole('button', { name: /刷新|Refresh/ }).first().click();
-      const sharedTabs = sharedPanel.getByRole('tablist', { name: /浏览器会话|Browser sessions/ });
-      const firstSharedTab = sharedTabs.getByRole('tab', { name: new RegExp(browserBinding.session.sessionId.slice(0, 8)) });
-      const secondSharedTab = sharedTabs.getByRole('tab', { name: new RegExp(secondOwnedBrowser.sessionId.slice(0, 8)) });
+      await sharedPanel.getByRole('button', { name: /刷新浏览器列表|Refresh browser list/ }).click();
+      const sharedTabs = sharedPanel.getByRole('tablist', { name: /活跃的 AI 浏览器|Active AI browsers/ });
+      const firstSharedTab = sharedTabs.locator(`[data-browser-session-id="${browserBinding.session.sessionId}"]`);
+      const secondSharedTab = sharedTabs.locator(`[data-browser-session-id="${secondOwnedBrowser.sessionId}"]`);
       await firstSharedTab.waitFor({ timeout: 20_000 });
       await secondSharedTab.waitFor({ timeout: 20_000 });
       await firstSharedTab.click();
       assert.equal(await firstSharedTab.getAttribute('aria-selected'), 'true');
       await secondSharedTab.click();
       assert.equal(await secondSharedTab.getAttribute('aria-selected'), 'true');
-      await sharedPanel.getByRole('button', { name: /取得控制权|Take control/ }).click();
-      await until(async () => {
-        assert.equal(await sharedPanel.getByRole('button', { name: /关闭会话|Close session/ }).isEnabled(), true);
-        return true;
-      }, 10_000);
-      await sharedPanel.getByRole('button', { name: /关闭会话|Close session/ }).click();
+      await sharedPanel.getByRole('button', { name: /关闭浏览器|Close browser/ }).click();
       await until(async () => {
         const closed = (await rpc('browser.session.list', {}, acceptedConversationId))
           .find((session) => session.sessionId === secondOwnedBrowser.sessionId);
         assert.equal(closed?.status, 'closed', JSON.stringify(closed));
         return true;
       }, 15_000);
-      await browserPanel.getByRole('button', { name: /刷新|Refresh/ }).first().click();
+      await browserPanel.getByRole('button', { name: /刷新浏览器列表|Refresh browser list/ }).click();
       await secondDesktopTab.waitFor({ state: 'detached', timeout: 15_000 });
       await firstDesktopTab.waitFor({ timeout: 15_000 });
       multiClientBrowserAcceptance = {
@@ -2440,7 +2557,7 @@ try {
   assert.equal(disabledPlugin?.enabled, false);
   assert.equal(disabledPlugin?.runtimeState, 'disabled');
   await until(async () => {
-    assert.equal(await page.locator('.conversation-plugin-right-mounts').count(), 0);
+    assert.equal(await page.locator('.context-tab-content.browser-tab-content [aria-label="AI 浏览器"], .context-tab-content.browser-tab-content [aria-label="AI browser"]').count(), 0);
     return true;
   }, 10_000);
   const firstOwnerAfterDisable = await rpc('browser.session.list', {}, acceptedConversationId);
@@ -2685,6 +2802,7 @@ try {
     shellSecretRedactionAcceptance,
     sensitiveDataAudit,
     multiClientBrowserAcceptance,
+    passiveWebAcceptance,
     crossOwnerProtectedMethodCount,
     crossOwnerDownloadAcceptance,
     webAcceptance,

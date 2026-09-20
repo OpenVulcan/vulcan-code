@@ -16,6 +16,8 @@ const continuationBlockedReasonKeys: Readonly<Record<string, TranslationKey>> = 
   ERR_CONVERSATION_CONTINUE_MODEL_SELECTION_MISMATCH: "conversation.continuation.blocked.routeChanged",
   ERR_CONVERSATION_CONTINUE_CANNOT_CREATE_SESSION: "conversation.continuation.blocked.conversationUnavailable",
   ERR_CONVERSATION_CONTINUE_SESSION_BUSY: "conversation.continuation.blocked.sessionBusy",
+  ERR_TERMINAL_SETTLEMENT_REPAIR_REQUIRED:
+    "conversation.continuation.blocked.terminalSettlementRepair",
 };
 
 // Selects the localized key for one current V1 continuation rejection.

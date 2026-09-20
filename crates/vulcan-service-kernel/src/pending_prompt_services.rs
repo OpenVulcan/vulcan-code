@@ -1,9 +1,10 @@
 //! WebUI pending prompt queue RPC service handlers.
 //! WebUI 待发送提示词队列 RPC 服务处理器。
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
-use vulcan_agent_runtime::attachment_asset_index::release_staged_attachment_ref;
+use vulcan_agent_runtime::attachment_asset_index::release_staged_attachment_scopes;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_service_api::{PendingPromptEditOutcome, PendingPromptSummary, ServiceEventEmitter};
 use vulcan_session_core::v1::config::QueuedInputIdentity;
@@ -25,57 +26,83 @@ use super::session_goal_lifecycle::{
 use super::session_runtime_registry_v1::SessionHandle;
 use super::{
     SessionId, SharedServiceBridgeState, composer_attachment_summary_from_core,
+    composer_attachment_workspace_path_from_snapshot,
     emit_pending_prompts_changed_delta, parse_session_id, selected_session_id_from_state,
-    webui_trace, workspace_path_for_session,
 };
 
-/// Describes one attachment-owner transition committed with a pending-queue snapshot mutation.
-/// 描述一次与待发送队列快照变更共同提交的附件所有者迁移。
-pub(crate) struct PendingPromptAttachmentLeaseTransition {
-    /// Authoritative workspace path owning the managed asset index.
-    /// 持有托管资产索引的权威工作区路径。
-    workspace_path: String,
-    /// Queue owner released only after the snapshot mutation is retained.
-    /// 仅在快照变更被保留后释放的队列所有者。
-    committed_release_scope: String,
-    /// Canonical attachments governed by both sides of the transition.
-    /// 由迁移两侧共同管辖的规范附件集合。
-    attachments: Vec<ConversationAttachment>,
-}
-
-/// Releases one exact attachment-owner scope and retains failures as diagnostics.
-/// 释放一个精确附件所有者作用域，并把失败保留为诊断。
+/// Resolves the same project attachment root used at queue admission.
+/// 解析队列准入时使用的同一项目附件根目录。
 ///
 /// # Parameters
 /// 参数
-/// `workspace_path`, `scope`, and `attachments` identify the exact durable lease; `phase` labels
-/// the commit or rollback side.
-/// `workspace_path`、`scope` 与 `attachments` 标识精确持久租约；`phase` 标记提交或回滚侧。
-fn release_pending_prompt_attachment_lease_scope(
-    workspace_path: &str,
-    scope: &str,
-    attachments: &[ConversationAttachment],
-    phase: &str,
-) {
-    if let Err(error) = release_staged_attachment_ref(workspace_path, scope, attachments) {
-        webui_trace(
-            "pending_prompt_attachment_lease_release_failed",
-            format!("scope={scope} phase={phase} error={error}"),
-        );
-    }
+/// `state` owns the current workspace snapshot and `session_id` selects its exact project.
+/// `state` 持有当前工作区快照，`session_id` 选择其精确项目。
+///
+/// # Returns
+/// 返回值
+/// The authoritative attachment path, or an explicit missing-owner error.
+/// 返回权威附件路径，或明确的所有者缺失错误。
+pub(crate) fn pending_prompt_attachment_workspace_path(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<String, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    composer_attachment_workspace_path_from_snapshot(
+        snapshot,
+        None,
+        Some(&session_id.to_string()),
+    )
 }
 
-/// Commits one queue-to-next-owner transition after the snapshot store succeeds.
-/// 在快照存储成功后提交一次队列到下一所有者的迁移。
-pub(crate) fn commit_pending_prompt_attachment_lease_transition(
-    transition: PendingPromptAttachmentLeaseTransition,
-) {
-    release_pending_prompt_attachment_lease_scope(
-        &transition.workspace_path,
-        &transition.committed_release_scope,
-        &transition.attachments,
-        "commit",
-    );
+/// Retries only V1-recorded queue attachment releases after a session is loaded.
+/// 会话载入后仅重试 V1 已记录的队列附件释放。
+///
+/// # Parameters
+/// 参数
+/// `handle` owns the durable pending actions, `session_id` namespaces their leases, and
+/// `workspace_path` is the authoritative attachment root used when those leases were acquired.
+/// `handle` 持有可靠的待清理动作，`session_id` 划定租约作用域，`workspace_path` 是取得租约时
+/// 使用的权威附件根目录。
+///
+/// # Returns
+/// 返回值
+/// Success after index release and durable acknowledgement, or an explicit retryable error.
+/// 在索引释放和可靠确认后返回成功，否则返回明确的可重试错误。
+pub(crate) fn reconcile_pending_prompt_attachment_leases(
+    handle: &SessionHandle,
+    session_id: SessionId,
+    workspace_path: &str,
+) -> Result<(), String> {
+    let pending = handle
+        .read(|document| {
+            document
+                .metadata
+                .input_state
+                .pending_staging_release_actions
+                .clone()
+        })
+        .map_err(|error| format!("读取 V1 队列附件释放意图失败：{error}"))?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let scopes = pending
+        .iter()
+        .map(|action| pending_prompt_attachment_staging_scope(session_id, action.as_str()))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    release_staged_attachment_scopes(workspace_path, &scopes)
+        .map_err(|error| format!("重试 V1 队列附件租约释放失败：{error}"))?;
+    for action in pending {
+        handle
+            .acknowledge_queued_staging_release(action, current_v1_goal_unix_millis()?)
+            .map_err(|error| format!("确认 V1 队列附件租约释放失败：{error}"))?;
+    }
+    Ok(())
 }
 
 /// Parses one visible queue entry id as the authoritative browser action identity.
@@ -98,41 +125,6 @@ pub(crate) fn pending_prompt_queue_identity(
     identity.ok_or_else(|| format!("没有找到待发送消息 `{}`。", client_action_id.as_str()))
 }
 
-/// Captures the transient queue attachment lease that may be released after V1 commit.
-/// 捕获可在 V1 提交后释放的瞬时队列附件租约。
-pub(crate) fn pending_prompt_attachment_transition(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    entry_id: &str,
-) -> Result<Option<PendingPromptAttachmentLeaseTransition>, String> {
-    let guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let Some(entry) = guard
-        .pending_prompt_process_mirrors
-        .get(&session_id)
-        .and_then(|mirror| {
-            mirror
-                .ui_state
-                .pending_prompt_panel_queue
-                .iter()
-                .find(|entry| entry.id == entry_id)
-        })
-        .cloned()
-    else {
-        return Ok(None);
-    };
-    let workspace_path = guard
-        .workspace_snapshot
-        .as_ref()
-        .map(|workspace| workspace_path_for_session(workspace, session_id))
-        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-    Ok(Some(PendingPromptAttachmentLeaseTransition {
-        workspace_path,
-        committed_release_scope: pending_prompt_attachment_staging_scope(&entry.id)?,
-        attachments: entry.attachments,
-    }))
-}
 
 /// Rebuilds only the visible queue panel from authoritative V1 metadata.
 /// 仅从权威 V1 metadata 重建可见队列面板。
@@ -228,10 +220,14 @@ fn pending_prompt_summary_from_durable_draft(
 /// 构建已提交编辑结果，并把每项提交后投影故障保留为一条警告。
 fn committed_pending_prompt_edit_outcome(
     entry: PendingPromptSummary,
+    attachment_release: Result<(), String>,
     panel_projection: Result<bool, String>,
     delta_projection: Result<u64, String>,
 ) -> PendingPromptEditOutcome {
     let mut projection_warnings = Vec::new();
+    if let Err(error) = attachment_release {
+        projection_warnings.push(format!("清理已处置消息的附件租约失败：{error}"));
+    }
     if let Err(error) = panel_projection {
         projection_warnings.push(format!("刷新队列投影失败：{error}"));
     }
@@ -277,8 +273,8 @@ pub(super) async fn service_edit_pending_prompt(
     let client_action_id = pending_prompt_action_id(&entry_id)?;
     let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
     let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
-    let attachment_transition =
-        pending_prompt_attachment_transition(&state, selected_session_id, &entry_id)?;
+    let attachment_workspace_path =
+        pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     let locator = handle
         .storage_locator()
         .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
@@ -305,6 +301,12 @@ pub(super) async fn service_edit_pending_prompt(
         &attachments,
         created_at_ms,
     );
+    let attachment_release =
+        reconcile_pending_prompt_attachment_leases(
+            handle.as_ref(),
+            selected_session_id,
+            &attachment_workspace_path,
+        );
     // The durable move is already committed. Projection failure must not disguise it as a pre-commit error.
     // 持久移动已经提交；投影失败不能伪装成提交前错误。
     let panel_projection = rebuild_pending_prompt_panel_from_v1(
@@ -314,12 +316,10 @@ pub(super) async fn service_edit_pending_prompt(
         &project_directory,
         &catalog,
     );
-    if let Some(transition) = attachment_transition {
-        commit_pending_prompt_attachment_lease_transition(transition);
-    }
     let delta_projection = emit_pending_prompts_changed_delta(&app, &state, selected_session_id);
     Ok(committed_pending_prompt_edit_outcome(
         summary,
+        attachment_release,
         panel_projection,
         delta_projection,
     ))
@@ -350,11 +350,19 @@ pub(super) async fn service_remove_pending_prompt(
     let client_action_id = pending_prompt_action_id(&entry_id)?;
     let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
     let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
-    let attachment_transition =
-        pending_prompt_attachment_transition(&state, selected_session_id, &entry_id)?;
+    let attachment_workspace_path =
+        pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     let receipt = handle
         .remove_queued_input(identity, current_v1_goal_unix_millis()?)
         .map_err(|error| format!("移除 V1 待发送消息失败：{error}"))?;
+    // The V1 removal is already durable; display projection must not skip the exact lease release.
+    // V1 移除已可靠提交；显示投影失败不能跳过精确租约释放。
+    reconcile_pending_prompt_attachment_leases(
+        handle.as_ref(),
+        selected_session_id,
+        &attachment_workspace_path,
+    )
+    .map_err(|error| format!("待发送消息已从 V1 队列移除，但附件清理待重试：{error}"))?;
     let locator = handle
         .storage_locator()
         .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
@@ -368,9 +376,6 @@ pub(super) async fn service_remove_pending_prompt(
         &project_directory,
         &catalog,
     )?;
-    if let Some(transition) = attachment_transition {
-        commit_pending_prompt_attachment_lease_transition(transition);
-    }
     emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     Ok(receipt.changed)
 }
@@ -473,6 +478,10 @@ pub(super) async fn service_reorder_pending_prompts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_support::TestHostRuntimeRoot;
+    use vulcan_agent_runtime::attachment_assets::resolve_managed_attachment_root;
+    use vulcan_session_core::v1::document::ClientInputSubmission;
+    use vulcan_workspace_store::workspace_store::load_session_v1_full;
 
     /// A durable edit remains a successful typed outcome when both local projections fail afterwards.
     /// 持久编辑完成后即使两个本地投影均失败，也仍返回成功的强类型结果。
@@ -488,12 +497,92 @@ mod tests {
         };
         let outcome = committed_pending_prompt_edit_outcome(
             entry.clone(),
+            Err(String::from("lease unavailable")),
             Err(String::from("panel unavailable")),
             Err(String::from("delta unavailable")),
         );
         assert_eq!(outcome.entry, entry);
         let warning = outcome.projection_warning.expect("controlled warning");
+        assert!(warning.contains("lease unavailable"));
         assert!(warning.contains("panel unavailable"));
         assert!(warning.contains("delta unavailable"));
+    }
+
+    /// A failed asset-index read retains the V1 release intent for a later exact retry.
+    /// 资产索引读取失败时保留 V1 释放意图，供后续精确重试。
+    #[test]
+    fn failed_lease_release_retries_and_durably_acknowledges() {
+        let session_id = SessionId::new_v4();
+        let fixture = TestHostRuntimeRoot::new(session_id);
+        let locator = fixture.v1_storage_locator();
+        let action = ClientActionId::try_new("shared-action").expect("bounded action");
+        let document = load_session_v1_full(&locator)
+            .expect("load valid fixture document")
+            .document;
+        let handle = SessionHandle::new(session_id, locator.clone(), document);
+        let queued = handle
+            .enqueue_input(
+                ClientInputSubmission::new(action.clone(), "queued attachment repair", Vec::new()),
+                2,
+            )
+            .expect("persist actual queue admission")
+            .value;
+        handle
+            .remove_queued_input(
+                QueuedInputIdentity {
+                    client_action_id: action.clone(),
+                    input_id: queued.input_id,
+                },
+                3,
+            )
+            .expect("persist queue resolution and release intent together");
+        drop(handle);
+        let pending_document = load_session_v1_full(&locator)
+            .expect("restart from the persisted pending release")
+            .document;
+        assert!(pending_document
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&action));
+        let handle = SessionHandle::new(session_id, locator.clone(), pending_document);
+        let workspace = tempfile::tempdir().expect("isolated attachment workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let index_directory = resolve_managed_attachment_root(&workspace_path).join("index");
+        std::fs::create_dir_all(&index_directory).expect("create isolated asset index");
+        let index_path = index_directory.join("assets.json");
+        std::fs::write(&index_path, b"invalid json").expect("inject unreadable asset index");
+
+        assert!(reconcile_pending_prompt_attachment_leases(
+            handle.as_ref(),
+            session_id,
+            &workspace_path,
+        )
+        .is_err());
+        assert!(handle
+            .read(|document| document
+                .metadata
+                .input_state
+                .pending_staging_release_actions
+                .contains(&action))
+            .expect("read retained repair intent"));
+
+        std::fs::remove_file(&index_path).expect("restore readable asset index");
+        reconcile_pending_prompt_attachment_leases(handle.as_ref(), session_id, &workspace_path)
+            .expect("retry should release and acknowledge");
+        assert!(handle
+            .read(|document| document
+                .metadata
+                .input_state
+                .pending_staging_release_actions
+                .is_empty())
+            .expect("read acknowledged intent"));
+        let reloaded = load_session_v1_full(&locator).expect("reload durable V1 session");
+        assert!(reloaded
+            .document
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .is_empty());
     }
 }

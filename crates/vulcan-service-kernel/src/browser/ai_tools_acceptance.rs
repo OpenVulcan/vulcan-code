@@ -467,7 +467,7 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
     )
     .expect("materialize discovery template and install plugin dependencies");
     access
-        .open_owned_stdio_partition("vulcan-browser", generation, owner, vec![template])
+        .open_ordered_owned_stdio_partition("vulcan-browser", generation, owner, vec![template])
         .await
         .expect("start official Playwright MCP discovery process");
 
@@ -619,7 +619,7 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
     )
     .expect("materialize stranger plugin declaration");
     access
-        .open_owned_stdio_partition(
+        .open_ordered_owned_stdio_partition(
             "vulcan-browser",
             generation,
             stranger,

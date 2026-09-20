@@ -12,6 +12,9 @@ export const SERVICE_CHANNELS = {
 // Local browser channels are scoped to the current GUI and never address a Core browser session.
 // 本地浏览器通道限定于当前 GUI，绝不寻址 Core 浏览器会话。
 export const LOCAL_BROWSER_CHANNELS = {
+  // Selects the conversation whose native tabs this GUI window may display.
+  // 选择此 GUI 窗口可显示其原生标签的会话。
+  setOwner: 'vulcan:local-browser:set-owner',
   // Returns the current native temporary-tab projection.
   // 返回当前原生临时标签投影。
   snapshot: 'vulcan:local-browser:snapshot',

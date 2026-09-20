@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 
 use vulcan_agent_runtime::{
-    attachment_asset_index::{acquire_staged_attachment_ref, release_staged_attachment_ref},
     provider_config::{ProviderConfigurationFile, ReasoningEffortLevel},
 };
 use vulcan_core::types::ConversationAttachment;
@@ -17,7 +16,7 @@ use vulcan_workbench_model::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
     PendingPromptRuntimeOptions, PendingSessionPromptSource, SessionId, SessionRuntimeStateEntry,
-    SessionTranscriptUiState, pending_prompt_lane_is_busy,
+    pending_prompt_lane_is_busy,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
@@ -89,10 +88,15 @@ pub(super) fn dispatch_queued_pending_prompt_hook(
 
 /// Returns whether a submitted prompt must enter the visible queue instead of starting immediately.
 /// 判断提交的提示词是否必须进入可见队列而不是立即启动。
+///
+/// The durable V1 queue occupancy (`has_queued_inputs`) is read from the exact session document
+/// before this call; no process-local compatibility mirror participates in admission.
+/// 可靠的 V1 队列占用（`has_queued_inputs`）在调用前读取自精确会话文档；准入判断不读取任何
+/// 进程内兼容镜像。
 pub(super) fn session_has_blocking_system_prompt_work(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
-    pending_prompt_ui_state: Option<&SessionTranscriptUiState>,
+    has_queued_inputs: bool,
     has_active_stream_task: bool,
     has_active_run: bool,
     has_precheck_progress: bool,
@@ -107,9 +111,8 @@ pub(super) fn session_has_blocking_system_prompt_work(
     }
     let dispatch_context =
         webui_pending_prompt_dispatch_context(workspace_snapshot, session_id, has_active_run);
-    let empty_pending_prompt_ui_state = SessionTranscriptUiState::default();
     pending_prompt_lane_is_busy(
-        pending_prompt_ui_state.unwrap_or(&empty_pending_prompt_ui_state),
+        has_queued_inputs,
         PendingPromptBusyLaneContext {
             dispatch: dispatch_context,
             has_precheck_progress,
@@ -151,10 +154,10 @@ pub(super) fn webui_pending_prompt_dispatch_context(
 ///
 /// # Returns
 /// 返回值
-/// Returns Hook facts after the process mirror has accepted the row, or an explicit mirror/lease
-/// error. This function never writes `SessionRuntimeStateEntry`.
-/// 在进程镜像接纳该行后返回 Hook 事实，或明确的镜像/租约错误；该函数绝不写入
-/// `SessionRuntimeStateEntry`。
+/// Returns Hook facts after the process mirror has accepted the row, or an explicit mirror error.
+/// This function never changes V1 authority, asset leases, or `SessionRuntimeStateEntry`.
+/// 在进程镜像接纳该行后返回 Hook 事实，或明确的镜像错误；该函数绝不修改 V1 权威、
+/// 资产租约或 `SessionRuntimeStateEntry`。
 pub(super) fn enqueue_webui_pending_prompt_from_submission(
     service_state: &mut ServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
@@ -188,44 +191,29 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
             reasoning_effort,
         )?,
     );
-    let queue_scope = pending_prompt_attachment_staging_scope(&entry.id)?;
-    acquire_staged_attachment_ref(workspace_path, &queue_scope, &entry.attachments)?;
-    match enqueue_webui_pending_prompt_panel_entry(
+    enqueue_webui_pending_prompt_panel_entry(
         &mut service_state.pending_prompt_process_mirrors,
         session_id,
         project_id,
         workspace_path,
-        entry.clone(),
-    ) {
-        Ok(event) => Ok(event),
-        Err(error) => {
-            // queueLeaseRollback prevents a failed queue admission from retaining an invisible asset owner.
-            // queueLeaseRollback 防止失败的队列准入保留不可见的资产所有者。
-            if let Err(rollback_error) =
-                release_staged_attachment_ref(workspace_path, &queue_scope, &entry.attachments)
-            {
-                return Err(format!(
-                    "{error}; failed to roll back pending attachment lease: {rollback_error}"
-                ));
-            }
-            Err(error)
-        }
-    }
+        entry,
+    )
 }
 
-/// Builds the deterministic transient attachment owner for one visible pending-prompt row.
-/// 为一条可见待发送提示词行构建确定性的瞬时附件所有者。
+/// Builds the deterministic session-scoped attachment owner for one pending-prompt row.
+/// 为一条待发送提示词行构建确定性的会话级附件所有者。
 ///
 /// # Parameters
 /// 参数
-/// `panel_entry_id` is the stable visible queue-row identifier.
-/// `panel_entry_id` 是稳定的可见队列行标识。
+/// `session_id` owns the queue and `panel_entry_id` is the stable visible row identifier.
+/// `session_id` 持有队列，`panel_entry_id` 是稳定的可见行标识。
 ///
 /// # Returns
 /// 返回值
 /// The internal-only asset-index scope, or an explicit invalid-identity error.
 /// 返回仅供内部资产索引使用的作用域，或明确的身份无效错误。
 pub(super) fn pending_prompt_attachment_staging_scope(
+    session_id: SessionId,
     panel_entry_id: &str,
 ) -> Result<String, String> {
     if panel_entry_id.chars().any(char::is_control) {
@@ -239,7 +227,7 @@ pub(super) fn pending_prompt_attachment_staging_scope(
             "Pending prompt attachment owner identity is invalid.",
         ));
     }
-    Ok(format!("pending-prompt:v1:{panel_entry_id}"))
+    Ok(format!("pending-prompt:v2:{session_id}:{panel_entry_id}"))
 }
 
 /// Builds one WebUI-originated visible pending prompt entry.
@@ -632,13 +620,19 @@ mod tests {
     /// 验证一条可见待发送行只会映射到一个稳定的瞬时资产所有者。
     #[test]
     fn pending_prompt_attachment_scope_is_deterministic() {
+        let session_id = SessionId::new_v4();
+        let other_session_id = SessionId::new_v4();
         assert_eq!(
-            pending_prompt_attachment_staging_scope(" row-a ")
+            pending_prompt_attachment_staging_scope(session_id, " row-a ")
                 .expect("bounded row identity should be valid"),
-            "pending-prompt:v1:row-a"
+            format!("pending-prompt:v2:{session_id}:row-a")
         );
-        assert!(pending_prompt_attachment_staging_scope("").is_err());
-        assert!(pending_prompt_attachment_staging_scope("row\na").is_err());
+        assert_ne!(
+            pending_prompt_attachment_staging_scope(session_id, "row-a"),
+            pending_prompt_attachment_staging_scope(other_session_id, "row-a")
+        );
+        assert!(pending_prompt_attachment_staging_scope(session_id, "").is_err());
+        assert!(pending_prompt_attachment_staging_scope(session_id, "row\na").is_err());
     }
 
     /// Verifies pending prompt previews collapse whitespace without changing visible words.

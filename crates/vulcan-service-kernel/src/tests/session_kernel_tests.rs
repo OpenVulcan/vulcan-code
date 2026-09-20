@@ -780,8 +780,12 @@ fn terminal_persistence_owner_requires_explicit_release_before_kernel_start() {
     // service_state begins idle so the terminal marker is the sole admission blocker.
     // service_state 初始为空闲状态，使终态标记成为唯一准入阻塞项。
     let mut service_state = test_service_state_with_parent_session(session_id);
-    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
-        .expect("terminal owner should register");
+    register_session_terminal_persistence_owner(
+        &mut service_state,
+        session_id,
+        terminal_owner.clone(),
+    )
+    .expect("terminal owner should register");
     // state exposes the same owner table to the guard and kernel admission gate.
     // state 向守卫与 kernel 准入闸门暴露同一所有者表。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
@@ -791,7 +795,7 @@ fn terminal_persistence_owner_requires_explicit_release_before_kernel_start() {
     let unreleased_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),
         session_id,
-        terminal_owner,
+        terminal_owner.clone(),
     )
     .expect("registered owner should be adoptable");
     drop(unreleased_guard);
@@ -813,7 +817,7 @@ fn terminal_persistence_owner_requires_explicit_release_before_kernel_start() {
     let releasing_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),
         session_id,
-        terminal_owner,
+        terminal_owner.clone(),
     )
     .expect("retained owner should remain adoptable");
     releasing_guard
@@ -2014,8 +2018,12 @@ async fn active_stream_registration_rejects_terminal_persistence_owner() {
     // service_state contains no active stream, making terminal persistence the sole registry blocker.
     // service_state 不含活动流，使终态持久化成为唯一注册表阻塞项。
     let mut service_state = test_service_state_with_parent_session(session_id);
-    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
-        .expect("terminal owner should register");
+    register_session_terminal_persistence_owner(
+        &mut service_state,
+        session_id,
+        terminal_owner.clone(),
+    )
+    .expect("terminal owner should register");
     // state exposes the protected registry to the production registration gate.
     // state 向生产登记闸门暴露受保护注册表。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
@@ -2664,10 +2672,11 @@ fn preparation_failure_boundary_holds_terminal_owner_until_explicit_release() {
                         && record.body.contains("controlled preparation failure")
                 })
         );
-        let owner = *guard
+        let owner = guard
             .session_terminal_persistence_owners
             .get(&session_id)
-            .expect("terminal persistence owner");
+            .expect("terminal persistence owner")
+            .clone();
         assert!(matches!(
             owner,
             SessionTerminalPersistenceOwner::PromptPreparation(_)
@@ -2718,8 +2727,12 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
     let mut service_state = test_service_state_with_parent_session(session_id);
     let handle = register_test_session_v1_document(&mut service_state, session_id, document);
     let first_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
-    register_session_terminal_persistence_owner(&mut service_state, session_id, first_owner)
-        .expect("first terminal owner should register");
+    register_session_terminal_persistence_owner(
+        &mut service_state,
+        session_id,
+        first_owner.clone(),
+    )
+    .expect("first terminal owner should register");
     let state = Arc::new(Mutex::new(service_state));
     let first_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),
@@ -2797,8 +2810,12 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
     let second_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
     {
         let mut guard = state.lock().expect("second terminal owner should register");
-        register_session_terminal_persistence_owner(&mut guard, session_id, second_owner)
-            .expect("second terminal owner should register exactly");
+        register_session_terminal_persistence_owner(
+            &mut guard,
+            session_id,
+            second_owner.clone(),
+        )
+        .expect("second terminal owner should register exactly");
     }
     let second_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),
@@ -2817,12 +2834,25 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
         )
         .await
     );
+    // The repeated settlement adds only the metadata-only intent pair (begin + resolve) and never
+    // writes the exact same terminal failure fact a second time.
+    // 重复结算仅追加元数据专用的意图对（begin + resolve），绝不会第二次写入同一终态失败事实。
     assert_eq!(
         handle
             .read(SessionDocument::memory_revision)
             .expect("idempotent V1 revision should remain readable"),
-        first_revision
+        first_revision + 2
     );
+    let terminal_fact_count = handle
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .filter(|event| matches!(&event.event, EventBody::TurnStats(_)))
+                .count()
+        })
+        .expect("V1 terminal facts should remain readable");
+    assert_eq!(terminal_fact_count, 1);
     let mut guard = state
         .lock()
         .expect("replacement admission should be inspectable");
@@ -3113,8 +3143,12 @@ async fn post_terminal_failure_persists_error_without_rewriting_completed_api() 
     // terminal_owner keeps new input fail-closed until the later host failure is durable.
     // terminal_owner 在后续宿主失败可靠落盘前保持新输入失败关闭。
     let terminal_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
-    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
-        .expect("terminal owner should register");
+    register_session_terminal_persistence_owner(
+        &mut service_state,
+        session_id,
+        terminal_owner.clone(),
+    )
+    .expect("terminal owner should register");
     // state exposes the same session and owner to terminal settlement.
     // state 向终态结算暴露同一会话与 owner。
     let state = Arc::new(Mutex::new(service_state));
@@ -3269,8 +3303,12 @@ async fn finished_active_api_failure_persists_exact_error_and_reopens_admission(
     // terminal_owner is the exact stream owner permitted to release admission after durability.
     // terminal_owner 是持久化完成后获准释放准入的精确流 owner。
     let terminal_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
-    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
-        .expect("terminal owner should register");
+    register_session_terminal_persistence_owner(
+        &mut service_state,
+        session_id,
+        terminal_owner.clone(),
+    )
+    .expect("terminal owner should register");
     // state exposes the shared service registry to the asynchronous persistence boundary.
     // state 向异步持久化边界暴露共享服务注册表。
     let state = Arc::new(Mutex::new(service_state));

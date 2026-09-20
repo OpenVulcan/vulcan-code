@@ -1,0 +1,521 @@
+{
+  "schema_version": "vulcan.provider-manifest.v2",
+  "provider_id": "stepfun",
+  "revision": 2,
+  "published_at": "2026-09-19T13:06:23Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "openai-chat-completions.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [
+      "multipart_file"
+    ],
+    "required_transformers": [
+      "copy_request_field"
+    ]
+  },
+  "display": {
+    "name": "阶跃星辰 StepFun",
+    "category": "official",
+    "credential_directory_visibility": "configured_only"
+  },
+  "services": [
+    {
+      "service_entry_id": "official-api",
+      "display_name": "StepFun API",
+      "kind": "conversation",
+      "base_url": "https://api.stepfun.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "account_usage_query": "unsupported",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "step-3.7-flash",
+            "display_name": "Step 3.7 Flash"
+          },
+          {
+            "model_id": "step-3.5-flash-2603",
+            "display_name": "Step 3.5 Flash 2603"
+          },
+          {
+            "model_id": "step-3.5-flash",
+            "display_name": "Step 3.5 Flash"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+                "image/gif"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 60,
+              "reference_policy": "any",
+              "upload_channel_refs": [
+                "api.image-file"
+              ]
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 1,
+              "reference_policy": "any",
+              "upload_channel_refs": [
+                "api.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "stepfun.chat.sampling.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "step-plan",
+      "display_name": "Step Plan",
+      "kind": "conversation",
+      "base_url": "https://api.stepfun.com/step_plan/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "plan-key",
+          "display_name": "Step Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "account_usage_query": "unsupported",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "step-3.7-flash",
+            "display_name": "Step 3.7 Flash"
+          },
+          {
+            "model_id": "step-3.5-flash-2603",
+            "display_name": "Step 3.5 Flash 2603"
+          },
+          {
+            "model_id": "step-3.5-flash",
+            "display_name": "Step 3.5 Flash"
+          },
+          {
+            "model_id": "step-5-preview",
+            "display_name": "Step 5 Preview"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+                "image/gif"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 60,
+              "reference_policy": "any"
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4"
+              ],
+              "max_bytes": 128000000,
+              "max_count": 1,
+              "reference_policy": "any"
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "stepfun.chat.sampling.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": [
+      "openai-chat-completions.v1"
+    ],
+    "selected_protocol": "openai-chat-completions.v1",
+    "capabilities": {
+      "operations": [
+        "conversation_respond"
+      ],
+      "input_resources": [],
+      "output_resources": [],
+      "reasoning": "unknown",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [],
+      "provider_native_tools": [],
+      "model_parameters": [
+        {
+          "id": "sampling.temperature",
+          "display_name": "Temperature",
+          "description": "Controls sampling randomness from 0 through 2; the provider default is 0.5 and omission preserves that default.",
+          "schema": {
+            "type": "decimal",
+            "minimum": "0",
+            "maximum": "2"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "openai-chat-completions.v1"
+          ],
+          "evidence_revision": "stepfun.chat-api.2026-09-19"
+        },
+        {
+          "id": "sampling.top_p",
+          "display_name": "Top P",
+          "description": "Controls nucleus sampling probability mass; the provider default is 0.9 and omission preserves that default.",
+          "schema": {
+            "type": "decimal",
+            "minimum": "0",
+            "maximum": "1"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "openai-chat-completions.v1"
+          ],
+          "evidence_revision": "stepfun.chat-api.2026-09-19"
+        },
+        {
+          "id": "sampling.frequency_penalty",
+          "display_name": "Frequency Penalty",
+          "description": "Penalizes repeated tokens from -2 through 2; the provider default is 0 and omission preserves that default.",
+          "schema": {
+            "type": "decimal",
+            "minimum": "-2",
+            "maximum": "2"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "openai-chat-completions.v1"
+          ],
+          "evidence_revision": "stepfun.chat-api.2026-09-19"
+        }
+      ],
+      "evidence_revision": "stepfun.chat-api.2026-09-19"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "step-3.7-flash",
+      "display_name": "Step 3.7 Flash",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "step-3.7-flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image",
+          "video"
+        ],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "context_limit": 256000,
+        "evidence_revision": "stepfun.model-docs.2026-09-19"
+      },
+      "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash"
+    },
+    {
+      "rule_id": "step-3.5-flash-2603",
+      "display_name": "Step 3.5 Flash 2603",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "step-3.5-flash-2603"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "high"
+        ],
+        "context_limit": 256000,
+        "evidence_revision": "stepfun.model-docs.2026-09-19"
+      },
+      "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash"
+    },
+    {
+      "rule_id": "step-3.5-flash",
+      "display_name": "Step 3.5 Flash",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "step-3.5-flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 256000,
+        "evidence_revision": "stepfun.model-docs.2026-09-19"
+      },
+      "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash"
+    },
+    {
+      "rule_id": "step-5-preview",
+      "display_name": "Step 5 Preview",
+      "scope": {
+        "service_entry_ids": [
+          "step-plan"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "step-5-preview"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [],
+        "context_limit": 1000000,
+        "model_parameters": [],
+        "evidence_revision": "stepfun.step-5-preview-observed.2026-09-19"
+      },
+      "request_profile_refs": [],
+      "provenance_ref": "https://artificialanalysis.ai/models/step-5"
+    }
+  ],
+  "usage_profiles": [],
+  "request_profiles": [
+    {
+      "profile_id": "stepfun.chat.sampling.v1",
+      "description": "Project documented StepFun Chat sampling controls that are not host-native fields.",
+      "payload": {
+        "profile_id": "stepfun.chat.sampling.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "copy_request_field",
+            "path": "/top_p",
+            "field": "model_parameters.sampling.top_p"
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/frequency_penalty",
+            "field": "model_parameters.sampling.frequency_penalty"
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "upload_channels": [
+    {
+      "upload_channel_id": "api.image-file",
+      "description": "Upload one local image through the standard StepFun Files API for Chat image understanding.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.stepfun.com",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif"
+      ],
+      "max_bytes": 128000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/id",
+      "response_id_encoding": "string",
+      "reference_template": "stepfile://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "storage"
+      },
+      "reference_encoding": "template"
+    },
+    {
+      "upload_channel_id": "api.video-file",
+      "description": "Upload one local MP4 through the standard StepFun Files API for Chat video understanding.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.stepfun.com",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "video/mp4"
+      ],
+      "max_bytes": 128000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/id",
+      "response_id_encoding": "string",
+      "reference_template": "stepfile://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "storage"
+      },
+      "reference_encoding": "template"
+    }
+  ],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api",
+        "note": "Official Step Plan Chat endpoint, supported model IDs, and reasoning controls; the Plan Files endpoint is not declared."
+      },
+      {
+        "url": "https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash",
+        "note": "Official 256K context, image and video inputs, and low/medium/high reasoning levels for Step 3.7 Flash."
+      },
+      {
+        "url": "https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash",
+        "note": "Official 256K context and text-only behavior for Step 3.5 Flash, and low/high reasoning levels for the 2603 variant."
+      },
+      {
+        "url": "https://platform.stepfun.com/docs/zh/api-reference/chat/chat-completion-create",
+        "note": "Official Chat request fields, response format, usage shape, and separate API and Plan endpoints."
+      },
+      {
+        "url": "https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash-quickstart",
+        "note": "Official image and video Chat blocks and stepfile URL usage for the standard API."
+      },
+      {
+        "url": "https://platform.stepfun.com/docs/zh/api-reference/files/create",
+        "note": "Official standard API multipart Files endpoint and storage purpose for image and video understanding."
+      },
+      {
+        "url": "https://platform.stepfun.com/docs/zh/guides/models/overview",
+        "note": "Official 256K context statement for Step 3.7 Flash and Step 3.5 Flash 2603."
+      },
+      {
+        "url": "https://artificialanalysis.ai/models/step-5",
+        "note": "Independent direct evaluation identifies Step 5 Preview as a reasoning model with text and image inputs and a 1M-token context; the exact Plan model ID comes from the user-provided Step Plan account screenshot, not from public documentation."
+      }
+    ]
+  }
+}

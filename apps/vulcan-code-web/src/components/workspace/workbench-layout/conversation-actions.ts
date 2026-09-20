@@ -242,7 +242,19 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     }
     const errorMessage = nextError instanceof Error ? nextError.message : String(nextError);
     if (!errorMessage.startsWith("submission_cancelled:")) {
-      toast.error(errorMessage);
+      // blockedSettlementReason localizes a durable terminal settlement that still blocks admission;
+      // an unreadable or unsettled boundary must never reach the user as a raw machine diagnostic.
+      // blockedSettlementReason 本地化仍然阻塞准入的可靠终态结算；
+      // 无法读取或未完成的边界绝不能以原始机器诊断的形式暴露给用户。
+      const blockedSettlementReason = conversationContinuationBlockedReasonTextFromError(
+        errorMessage,
+        translate,
+      );
+      toast.error(
+        blockedSettlementReason
+          ? `${translate("conversation.continuation.blocked")}${translate("global.labelSeparator")}${blockedSettlementReason}`
+          : errorMessage,
+      );
     }
     return false;
   } finally {

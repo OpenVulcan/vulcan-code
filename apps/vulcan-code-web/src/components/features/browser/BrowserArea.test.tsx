@@ -16,7 +16,7 @@ import {
   type CoreBrowserSession,
   type CoreBrowserStreamCallbacks,
 } from "@/service/core-browser-service";
-import { BrowserArea } from "./BrowserArea";
+import { BrowserArea, coreBrowserAddress } from "./BrowserArea";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US" }) }));
 vi.mock("@/service/core-browser-service", () => ({
@@ -53,6 +53,82 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+});
+
+// browserTabs reads the rendered browser choices without opening a projection implicitly.
+// browserTabs 读取可选浏览器列表，不隐式打开投影。
+function browserTabs(): HTMLButtonElement[] {
+  return [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"][aria-label="Active AI browsers"] [role="tab"]')];
+}
+
+// selectBrowser makes the explicit viewer choice required by the new disconnected default.
+// selectBrowser 执行新默认未连接状态下所需的明确观察选择。
+// index is the Core list position; returns after the click has settled.
+// index 是 Core 列表位置；在点击完成后返回。
+async function selectBrowser(index = 0): Promise<void> {
+  await vi.waitFor(() => expect(browserTabs().length).toBeGreaterThan(index));
+  await act(async () => browserTabs()[index].click());
+}
+
+it("normalizes browser addresses before Core navigation", () => {
+  expect(coreBrowserAddress("www.baidu.com")).toBe("https://www.baidu.com/");
+  expect(coreBrowserAddress("localhost:5173/test")).toBe("http://localhost:5173/test");
+  expect(coreBrowserAddress("http://127.0.0.1:61449/")).toBe("http://127.0.0.1:61449/");
+  expect(() => coreBrowserAddress("file:///private.txt")).toThrow();
+});
+
+it("sends a bare domain through the address bar as an HTTPS Core navigation", async () => {
+  // session is a running Core browser owned by the visible conversation.
+  // session 是归属当前可见会话的运行中 Core 浏览器。
+  const session: CoreBrowserSession = {
+    sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running",
+    profileMode: "ephemeral", currentUrl: "https://old.example/", leaseState: "free", blockedReason: null,
+    automationState: "detached", pageGeneration: "1", viewportGeneration: "1",
+    viewportSize: { width: 1280, height: 800 }, controlEpoch: "1", hostGeneration: "1",
+    pageCount: 1, requiresExplicitReopen: false,
+  };
+  // page is the existing target whose address bar will be edited by the user.
+  // page 是用户即将修改地址的现有页面目标。
+  const page: CoreBrowserPage = {
+    pageId: "page-a", targetId: "target-a", url: "https://old.example/",
+    openerPageId: null, hostGeneration: 1,
+  };
+  // heldSession is the Core-confirmed lease projection after acquisition.
+  // heldSession 是取得租约后 Core 确认的控制权投影。
+  const heldSession: CoreBrowserSession = { ...session, leaseState: "held", controlEpoch: "2" };
+  // held tracks the actual transition observed by Core list polling.
+  // held 跟踪 Core 列表轮询能观察到的真实授权转换。
+  let held = false;
+  vi.mocked(listCoreBrowserSessions).mockImplementation(async () => [held ? heldSession : session]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([page]);
+  vi.mocked(requestCoreBrowser).mockImplementation((_owner, method) => {
+    if (method === "browser.lease.acquire") {
+      held = true;
+      return Promise.resolve({ session: heldSession, leaseSecret: "lease-a", heartbeatIntervalMs: 5000 } as never);
+    }
+    if (method === "browser.session.navigate") {
+      return Promise.resolve({ ...session, currentUrl: "https://www.baidu.com/", pageGeneration: "2" } as never);
+    }
+    return Promise.resolve(undefined as never);
+  });
+
+  await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  await selectBrowser();
+  await vi.waitFor(() => expect(host.querySelector('[data-browser-page-id="page-a"]')).not.toBeNull());
+  const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control"))!;
+  await act(async () => acquire.click());
+  await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false));
+  const address = host.querySelector<HTMLInputElement>('input[aria-label="Page URL"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(address, "www.baidu.com");
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => address.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
+    "conversation-a", "browser.session.navigate", expect.objectContaining({
+      sessionId: "browser-a", pageId: "page-a", url: "https://www.baidu.com/",
+    }),
+  ));
 });
 
 it("ignores a previous browser's page response after selecting another browser", async () => {
@@ -94,11 +170,13 @@ it("ignores a previous browser's page response after selecting another browser",
     }]));
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  expect(vi.mocked(listCoreBrowserPages)).not.toHaveBeenCalled();
+  await selectBrowser(0);
   await vi.waitFor(() => expect(vi.mocked(listCoreBrowserPages)).toHaveBeenCalledWith("conversation-a", sessionA.sessionId));
   // tabs are rendered in the Core list order, so the second tab selects B.
   // tabs 按 Core 列表顺序渲染，因此第二个标签选择 B。
-  await act(async () => (host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')[1] as HTMLButtonElement).click());
-  await vi.waitFor(() => expect(host.textContent).toContain(pageB.url));
+  await selectBrowser(1);
+  await vi.waitFor(() => expect(host.textContent).toContain("browser-b.example"));
   await vi.waitFor(() => expect(host.textContent).toContain("browser-b.txt"));
   await act(async () => resolveOldPages([{
     pageId: "page-a", targetId: "target-a", url: "https://browser-a.example/",
@@ -108,9 +186,9 @@ it("ignores a previous browser's page response after selecting another browser",
     downloadId: "download-a", sessionId: sessionA.sessionId, pageId: "page-a",
     fileName: "browser-a.txt", status: "completed", byteLength: 1, sha256: null,
   }]));
-  expect(host.textContent).toContain(pageB.url);
+  expect(host.textContent).toContain("browser-b.example");
   expect(host.textContent).toContain("browser-b.txt");
-  expect(host.textContent).not.toContain("https://browser-a.example/");
+  expect(host.textContent).not.toContain("browser-a.example");
   expect(host.textContent).not.toContain("browser-a.txt");
 });
 
@@ -138,14 +216,14 @@ it("keeps the newer browser list when an older refresh finishes last", async () 
   vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(1));
+  await vi.waitFor(() => expect(browserTabs()).toHaveLength(1));
   // refresh is the panel's explicit list request, independent of the page stream.
   // refresh 是面板显式发出的列表请求，与页面流无关。
-  const refresh = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement;
+  const refresh = host.querySelector<HTMLButtonElement>('[aria-label="Refresh browser list"]')!;
   await act(async () => { refresh.click(); refresh.click(); });
-  await vi.waitFor(() => expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(2));
+  await vi.waitFor(() => expect(browserTabs()).toHaveLength(2));
   await act(async () => resolveOldList([sessionA]));
-  expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(2);
+  expect(browserTabs()).toHaveLength(2);
 });
 
 it("does not display an older refresh failure after a newer browser list succeeds", async () => {
@@ -172,15 +250,15 @@ it("does not display an older refresh failure after a newer browser list succeed
   vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(1));
+  await vi.waitFor(() => expect(browserTabs()).toHaveLength(1));
   // Refresh twice to establish a newer accepted result before the old request fails.
   // 连续刷新两次，使旧请求失败前已经存在更新的有效结果。
-  const refresh = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement;
+  const refresh = host.querySelector<HTMLButtonElement>('[aria-label="Refresh browser list"]')!;
   await act(async () => { refresh.click(); refresh.click(); });
-  await vi.waitFor(() => expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(2));
+  await vi.waitFor(() => expect(browserTabs()).toHaveLength(2));
   await act(async () => rejectOldList(new Error("stale list failure")));
   expect(host.textContent).not.toContain("stale list failure");
-  expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(2);
+  expect(browserTabs()).toHaveLength(2);
 });
 
 it("keeps a newer browser-list failure visible when an older success arrives last", async () => {
@@ -210,17 +288,17 @@ it("keeps a newer browser-list failure visible when an older success arrives las
   vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(1));
+  await vi.waitFor(() => expect(browserTabs()).toHaveLength(1));
   // refresh issues requests in the same order as the Core list mock.
   // refresh 按 Core 列表模拟请求的顺序发出调用。
-  const refresh = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement;
+  const refresh = host.querySelector<HTMLButtonElement>('[aria-label="Refresh browser list"]')!;
   await act(async () => { refresh.click(); refresh.click(); });
   await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).toContain("newer list failure"));
   await act(async () => resolveOldList([sessionA, sessionB]));
-  expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(1);
+  expect(browserTabs()).toHaveLength(1);
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("newer list failure");
   await act(async () => refresh.click());
-  await vi.waitFor(() => expect(host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')).toHaveLength(2));
+  await vi.waitFor(() => expect(browserTabs()).toHaveLength(2));
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -259,19 +337,20 @@ it("clears the previous conversation's browser projection before the new owner r
   }]);
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.textContent).toContain("https://conversation-a.example/"));
+  await selectBrowser();
+  await vi.waitFor(() => expect(host.textContent).toContain("conversation-a.example"));
   // refresh starts the previous owner's second request before the prop changes.
   // refresh 在属性切换前启动旧归属的第二次请求。
-  const refresh = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement;
+  const refresh = host.querySelector<HTMLButtonElement>('[aria-label="Refresh browser list"]')!;
   await act(async () => refresh.click());
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-b" />));
-  expect(host.textContent).not.toContain("aaaaaaaa");
-  expect(host.textContent).not.toContain("https://conversation-a.example/");
+  expect(browserTabs()).toHaveLength(0);
+  expect(host.textContent).not.toContain("conversation-a.example");
   await act(async () => resolveOldList([sessionA]));
-  expect(host.textContent).not.toContain("aaaaaaaa");
+  expect(browserTabs()).toHaveLength(0);
   await act(async () => resolveNewList([sessionB]));
-  await vi.waitFor(() => expect(host.textContent).toContain("bbbbbbbb"));
-  expect(host.textContent).not.toContain("aaaaaaaa");
+  await vi.waitFor(() => expect(browserTabs()[0]?.title).toBe(sessionB.sessionId));
+  expect(browserTabs()[0].title).not.toBe(sessionA.sessionId);
 });
 
 it("releases a control grant that arrives after its conversation is replaced", async () => {
@@ -297,7 +376,7 @@ it("releases a control grant that arrives after its conversation is replaced", a
     method === "browser.lease.acquire" ? pendingLease as Promise<never> : Promise.resolve(undefined as never));
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.textContent).toContain("aaaaaaaa"));
+  await selectBrowser();
   // acquire starts the exact old-owner request before the React prop changes.
   // acquire 在 React 属性变化前启动精确的旧归属请求。
   const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
@@ -307,7 +386,7 @@ it("releases a control grant that arrives after its conversation is replaced", a
   await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
     "conversation-a", "browser.lease.release", { sessionId: sessionA.sessionId, leaseSecret: "old-owner-secret" },
   ));
-  expect(host.textContent).not.toContain("aaaaaaaa");
+  expect(browserTabs()).toHaveLength(0);
   expect(host.textContent).not.toContain("Release control");
 });
 
@@ -333,7 +412,7 @@ it("releases a control grant that arrives after the browser panel unmounts", asy
     method === "browser.lease.acquire" ? pendingAcquire as Promise<never> : Promise.resolve(undefined as never));
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.textContent).toContain("aaaaaaaa"));
+  await selectBrowser();
   const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
   await act(async () => acquire.click());
   await act(async () => root.render(<></>));
@@ -373,7 +452,7 @@ it("releases an already-held browser grant under its original owner on conversat
   });
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.textContent).toContain("aaaaaaaa"));
+  await selectBrowser();
   const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
   await act(async () => acquire.click());
   await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
@@ -381,7 +460,7 @@ it("releases an already-held browser grant under its original owner on conversat
   await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
     "conversation-a", "browser.lease.release", { sessionId: freeSession.sessionId, leaseSecret: "held-owner-secret" },
   ));
-  expect(host.textContent).not.toContain("aaaaaaaa");
+  expect(browserTabs()).toHaveLength(0);
   expect(host.textContent).not.toContain("Release control");
 });
 
@@ -419,11 +498,11 @@ it("shares one pending lease release across rapid browser-tab choices", async ()
   });
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-  await vi.waitFor(() => expect(host.textContent).toContain("cccccccc"));
+  await selectBrowser();
   const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
   await act(async () => acquire.click());
   await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
-  const tabs = [...host.querySelectorAll('[role="tablist"][aria-label="Browser sessions"] [role="tab"]')] as HTMLButtonElement[];
+  const tabs = browserTabs();
   await act(async () => { tabs[1].click(); tabs[2].click(); });
   expect(vi.mocked(requestCoreBrowser).mock.calls.filter(([, method]) => method === "browser.lease.release")).toHaveLength(1);
   await act(async () => finishRelease());
@@ -477,7 +556,8 @@ it("sends a held key's release to the previous page when the user changes page t
   URL.revokeObjectURL = vi.fn();
   try {
     await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-    await vi.waitFor(() => expect(host.textContent).toContain("https://a.example/"));
+    await selectBrowser();
+    await vi.waitFor(() => expect(host.textContent).toContain("a.example"));
     const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
     await act(async () => acquire.click());
     await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
@@ -489,7 +569,7 @@ it("sends a held key's release to the previous page when the user changes page t
     const image = host.querySelector('[role="img"][aria-label="Live Core browser page"]') as HTMLDivElement;
     await act(async () => image.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })));
     const pageB = [...host.querySelectorAll('[role="tablist"][aria-label="Browser pages"] [role="tab"]')]
-      .find((tab) => tab.textContent?.includes("page-b")) as HTMLButtonElement;
+      .find((tab) => tab.textContent?.includes("b.example")) as HTMLButtonElement;
     await act(async () => pageB.click());
     await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
       "conversation-a", "browser.input.dispatch", expect.objectContaining({

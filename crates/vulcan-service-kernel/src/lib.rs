@@ -219,7 +219,7 @@ mod skill_catalog_projection;
 mod skills_services;
 mod state;
 mod subagent_event_ingest;
-mod subagent_panels;
+mod terminal_settlement_service;mod subagent_panels;
 mod subagent_workspace_mutation;
 pub(crate) mod vce;
 mod vmm;
@@ -360,6 +360,7 @@ use skills_services::*;
 pub use state::ServiceShellHost;
 pub use state::SharedServiceBridgeState;
 use state::*;
+use terminal_settlement_service::*;
 use subagent_event_ingest::*;
 use subagent_panels::*;
 use subagent_workspace_mutation::*;
@@ -402,7 +403,7 @@ use workspace_persistence_versions::*;
 use workspace_session_queries::*;
 
 use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
-use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
+use vulcan_service_runtime::mcp_bridge::TauriMcpRuntimeCatalog;
 
 /// Creates the initial shared service state used by any host shell.
 /// 创建任意宿主壳使用的初始共享服务状态。
@@ -448,8 +449,6 @@ pub fn create_service_bridge_state(
         luaskills_runtime: None,
         host_database_providers: None,
         cached_luaskills_catalog: None,
-        mcp_runtime: None,
-        cached_mcp_catalog: None,
         provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
@@ -461,6 +460,7 @@ pub fn create_service_bridge_state(
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_terminal_persistence_owners: BTreeMap::new(),
+        terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_runtime_registry: Arc::new(Default::default()),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),

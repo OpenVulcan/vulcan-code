@@ -19,8 +19,8 @@ import {
   WorkbenchLayout,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout";
-import { I18nProvider, normalizeLocaleCode } from "@/i18n";
-import { translations, type LocaleCode, type TranslationKey } from "@/i18n-messages";
+import { I18nProvider, normalizeLocaleCode, readLocaleMessage } from "@/i18n";
+import type { LocaleCode, TranslationKey } from "@/i18n-messages";
 import { notificationCoordinator } from "@/notifications/coordinator";
 import { isDesktopShutdownDialogRuntime } from "@/shell/runtime";
 import type { NotificationIntentV1, NotificationText } from "@/notifications/types";
@@ -858,8 +858,12 @@ function webuiAppLocale(value: string | null | undefined): LocaleCode {
 
 // webuiAppTranslation reads one localized app-shell label outside the i18n provider.
 // webuiAppTranslation 在 i18n provider 外读取单个本地化应用外壳文案。
+//
+// The catalogs are resolved synchronously from the per-language modules, so this reader observes
+// exactly the same labels the shell shows.
+// 文案目录由各语言模块同步解析，因此该读取器看到与外壳完全一致的文案。
 function webuiAppTranslation(locale: LocaleCode, key: TranslationKey): string {
-  return translations[locale][key] ?? translations["zh-CN"][key];
+  return readLocaleMessage(locale, key);
 }
 
 // resolveNotificationText localizes one platform-neutral intent immediately before shell delivery.

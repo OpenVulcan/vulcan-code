@@ -87,6 +87,30 @@ function addSection(sections: V1ToolDomainSection[], title: string, value: ToolJ
   if (value !== undefined) sections.push({ title, value, markdown });
 }
 
+/** Chinese UI copy for each stable MCP failure code retained by the runtime.
+ * 运行时保留的每个稳定 MCP 失败编码对应的中文界面文案。 */
+const MCP_FAILURE_LABELS: Record<string, string> = {
+  mcp_tool_not_found: "MCP 工具不存在",
+  mcp_server_disconnected: "MCP 服务器未连接",
+  mcp_tool_invocation_failed: "MCP 工具调用失败",
+};
+
+/** Translates one stable MCP failure code into Chinese UI copy while retaining machine code and detail.
+ * 将稳定 MCP 失败编码翻译为中文界面文案，同时保留机器编码与英文详情。
+ * Parameter error is the canonical tool error text; returns localized text or the original value.
+ * 参数 error 是规范工具错误文本；返回本地化文本，或原值。 */
+function localizeMcpFailure(error: string): string {
+  // separator splits the stable machine code from its concise English diagnostic.
+  // separator 把稳定机器编码与其简明英文诊断分开。
+  const separator = error.indexOf(": ");
+  if (separator <= 0) return error;
+  const code = error.slice(0, separator);
+  const label = MCP_FAILURE_LABELS[code];
+  if (label === undefined) return error;
+  const detail = error.slice(separator + 2).trim();
+  return `${label}（${code}）${detail === "" ? "" : `：${detail}`}`;
+}
+
 /** Selects declared fields verbatim while leaving all other facts in raw details.
  * 原样选择声明字段，同时将其他事实保留在原始详情。
  * Parameters object and keys identify known members; returns an object of present fields only.
@@ -120,7 +144,7 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent): V1ToolDoma
     // failure is the canonical tool_error host payload created by the bridge.
     // failure 是桥接创建的规范 tool_error 宿主载荷。
     const failure = hostPayload(tool.output, "tool_error");
-    diagnostic = failure === null ? (typeof result === "string" ? result : "工具执行失败，请查看原始详情。") : textField(failure, "error");
+    diagnostic = failure === null ? (typeof result === "string" ? result : "工具执行失败，请查看原始详情。") : localizeMcpFailure(textField(failure, "error"));
   }
 
   switch (tool.tool_name) {

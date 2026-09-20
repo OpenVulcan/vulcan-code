@@ -550,6 +550,54 @@ where
                             }
                             break;
                         }
+                        if let CoreError::ToolProtocolFailure { tool_name, message } = &error {
+                            // toolProtocolAbort closes every active tool request stream with the exact protocol failure label.
+                            // toolProtocolAbort 以精确的协议失败标签关闭每个活动工具请求流。
+                            abort_active_tool_request_streams(
+                                &task_sender,
+                                &mut active_tool_request_streams,
+                                "tool_argument_parse_failure_exhausted",
+                            );
+                            let last_successful_provider_usage =
+                                controller.last_successful_provider_usage().cloned();
+                            let final_delta = core_snapshot_to_session_conversation_state(
+                                controller.snapshot(),
+                            )
+                            .map(|conversation_state| {
+                                ProviderStreamDelta::FinalConversationState(
+                                    conversation_state,
+                                    last_successful_provider_usage,
+                                )
+                            });
+                            // A still-active physical request is durably failed here; an already
+                            // completed request keeps its original terminal, while the following
+                            // stream error marks the logical turn as failed.
+                            // 仍活动的物理请求在此可靠标记失败；已完成的请求保留原终态，
+                            // 后续流错误则把逻辑回合标记为失败。
+                            if let Err(persist_error) = send_durable_request_failure(
+                                &task_sender,
+                                physical_request_active,
+                                false,
+                                0,
+                                completed_retries,
+                                0,
+                                String::from("tool_argument_parse_failure_exhausted"),
+                                None,
+                            )
+                            .await
+                            {
+                                let _ = task_sender.send(Err(persist_error));
+                                break;
+                            }
+                            // finalDelta follows the durable failure so the exact protocol diagnosis survives projection.
+                            // finalDelta 位于可靠失败之后，使精确协议诊断在投影后仍然保留。
+                            let _ = task_sender.send(final_delta);
+                            let _ = task_sender.send(Err(format!(
+                                "{}工具协议失败：工具 `{}` 连续两次收到无效参数，本回合已明确失败。{message}",
+                                provider_label, tool_name
+                            )));
+                            break;
+                        }
                         if provider_failure_requires_context_compaction(
                             &error,
                             unsafe_delta_seen,
@@ -833,7 +881,8 @@ fn structured_provider_failure(
         | CoreError::ContextCompactionPolicyRefreshRequired { .. }
         | CoreError::ProviderRouteSwitchRequired { .. }
         | CoreError::ToolFailure { .. }
-        | CoreError::ToolDurabilityFailure { .. } => None,
+        | CoreError::ToolDurabilityFailure { .. }
+        | CoreError::ToolProtocolFailure { .. } => None,
     }
 }
 

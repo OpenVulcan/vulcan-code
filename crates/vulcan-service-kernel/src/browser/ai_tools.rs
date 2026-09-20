@@ -829,7 +829,7 @@ impl CoreNativeBrowserRuntime {
             let config = Self::server_config(environment, &owner, DISCOVERY_ENDPOINT)?;
             let partition = environment
                 .mcp_runtime
-                .open_owned_stdio_partition(
+                .open_ordered_owned_stdio_partition(
                     BROWSER_PLUGIN_ID,
                     environment.plugin_generation,
                     owner_session_id,
@@ -960,7 +960,7 @@ impl CoreNativeBrowserRuntime {
         };
         if let Err(partition_error) = environment
             .mcp_runtime
-            .replace_owned_stdio_partition(
+            .replace_ordered_owned_stdio_partition(
                 BROWSER_PLUGIN_ID,
                 environment.plugin_generation,
                 owner_session_id,

@@ -123,8 +123,11 @@ pub struct PendingPromptBusyLaneContext {
 ///
 /// # Parameters
 /// 参数
-/// `ui_state` is the session-scoped queue state.
-/// `ui_state` 是会话级队列状态。
+/// `has_queued_inputs` reports whether the exact session still owns durable V1 queued inputs; it is
+/// the sole queue occupancy authority and is always read from the V1 session document, never from a
+/// process-local compatibility mirror.
+/// `has_queued_inputs` 表示当前会话是否仍持有可靠的 V1 排队输入；它是唯一的队列占用权威，
+/// 必须始终读取自 V1 会话文档，而不是进程内兼容镜像。
 /// `context` contains UI-specific runtime facts collected by the caller.
 /// `context` 包含调用方收集的界面专属运行态事实。
 ///
@@ -133,7 +136,7 @@ pub struct PendingPromptBusyLaneContext {
 /// `true` when a submitted prompt must enter the visible pending queue.
 /// 当提交的提示词必须进入可见待发送队列时返回 `true`。
 pub fn pending_prompt_lane_is_busy(
-    ui_state: &SessionTranscriptUiState,
+    has_queued_inputs: bool,
     context: PendingPromptBusyLaneContext,
 ) -> bool {
     context.dispatch.has_active_run
@@ -142,7 +145,7 @@ pub fn pending_prompt_lane_is_busy(
             && context.has_precheck_progress)
         || context.dispatch.run_phase == Some(crate::SessionRunPhase::MemoryRecall)
         || context.dispatch.has_active_compaction
-        || !ui_state.pending_prompt_panel_queue.is_empty()
+        || has_queued_inputs
 }
 
 /// 参数

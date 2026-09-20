@@ -1,12 +1,24 @@
 import * as React from "react"
 import { UiTextProvider } from "@/components/ui/ui-text"
 import {
-  translations,
   type LocaleCode,
   type TranslationKey,
 } from "@/i18n-messages"
+import { enUSTranslations } from "@/i18n-messages.en-US"
+import { zhCNTranslations } from "@/i18n-messages.zh-CN"
 
 export type { LocaleCode, TranslationKey } from "@/i18n-messages"
+
+// localeMessages resolves each supported language from its own module.
+// localeMessages 从各自模块解析每种受支持语言。
+//
+// Dedicated chunks change and cache independently, but both static imports are fetched when the
+// workbench loads; the build budget measures that complete eager graph.
+// 独立分块可分别变化和缓存，但工作台加载时两份静态导入都会被获取；构建预算测量完整预加载图。
+const localeMessages: Record<LocaleCode, Record<TranslationKey, string>> = {
+  "zh-CN": zhCNTranslations,
+  "en-US": enUSTranslations,
+}
 
 // I18nContextValue exposes the active language and translation helpers.
 // I18nContextValue 暴露当前语言与翻译辅助函数。
@@ -26,8 +38,6 @@ interface I18nContextValue {
 // I18nContext 保存 WebUI 本地化状态。
 const I18nContext = React.createContext<I18nContextValue | null>(null)
 
-// initialLocale returns the persisted language or a browser-derived default.
-// initialLocale 返回持久化语言或从浏览器推导出的默认语言。
 // normalizeLocaleCode validates one persisted or service-provided locale code.
 // normalizeLocaleCode 校验单个持久化或服务提供的语言代码。
 export function normalizeLocaleCode(value: string | null | undefined): LocaleCode | null {
@@ -42,6 +52,22 @@ export function normalizeLocaleCode(value: string | null | undefined): LocaleCod
 function initialLocale(serviceLocale: string | null | undefined): LocaleCode {
   return normalizeLocaleCode(serviceLocale)
     ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US")
+}
+
+// readLocaleMessage reads one localized app-shell label outside the i18n provider.
+// readLocaleMessage 在 i18n provider 外读取单个本地化应用外壳文案。
+//
+// # Parameters
+// 参数
+// `locale` selects the language and `key` is the stable text key.
+// `locale` 选择语言，`key` 是稳定文本键。
+//
+// # Returns
+// 返回值
+// The localized label, or its simplified Chinese fallback when the language lacks one.
+// 返回本地化文案；该语言缺失时返回其中简体中文回退。
+export function readLocaleMessage(locale: LocaleCode, key: TranslationKey): string {
+  return localeMessages[locale][key] ?? localeMessages["zh-CN"][key]
 }
 
 // I18nProvider owns the WebUI language state.
@@ -70,7 +96,7 @@ function I18nProvider(props: {
   }, [])
   // t translates one stable key using the current language.
   // t 使用当前语言翻译单个稳定键。
-  const t = React.useCallback((key: TranslationKey) => translations[locale][key] ?? translations["zh-CN"][key], [locale])
+  const t = React.useCallback((key: TranslationKey) => localeMessages[locale][key] ?? localeMessages["zh-CN"][key], [locale])
   // value memoizes the provider payload to avoid unnecessary shell rerenders.
   // value 缓存 provider 载荷，避免外壳不必要重渲染。
   const value = React.useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t])

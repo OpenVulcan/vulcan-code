@@ -18,6 +18,8 @@ use test_support::*;
 
 mod active_session_state_tests;
 mod capability_metadata_tests;
+mod mcp_catalog_projection_tests;
+mod terminal_settlement_tests;
 
 /// Verifies that status reads retain the Core generation used by tray discovery checks.
 /// 验证状态读取保留托盘发现校验使用的同一个 Core 代次。

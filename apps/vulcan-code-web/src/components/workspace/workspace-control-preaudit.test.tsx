@@ -57,6 +57,7 @@ function contextProps(): WorkspaceContextPanelProps {
   // rejectUnused 对意外传输调用直接失败，不返回虚构成功。
   const rejectUnused = async (): Promise<never> => { throw new Error("Unexpected audit IO"); };
   return { workbench, selectedDraftConversation: null, selectedConversationId: "parent",
+    localBrowserAvailable: false,
     tabs: ["task-a", "task-b"].map(id => ({ id, kind: "subagent", title: id, subagentParentConversationId: "parent", subagentTaskId: id, createdAt: 0 })), activeTabId: "task-a",
     reviewFocusRequest: { sequence: 0, repositoryKey: null }, onOpenContextTab: vi.fn(), onCloseContextTab: vi.fn(), onActivateContextTab: vi.fn(), onFileTabTitleChange: vi.fn(),
     onStopCommandSession: rejectUnused, onStopSubagentTask: rejectUnused, onCloseSubagentTask: rejectUnused, onOpenSubagentPanel: rejectUnused,
@@ -122,6 +123,22 @@ it("navigates context tabs with arrows and boundary keys and omits unimplemented
   expect(host.textContent).not.toContain("Ctrl+");
 });
 
+it("shows the built-in browser entry only for a capable GUI without requiring the AI browser plugin", async () => {
+  const props = contextProps();
+  // The empty plugin catalog proves the local browser card is a built-in GUI entry.
+  // 空插件目录证明本地浏览器卡片是 GUI 内置入口。
+  expect(props.workbench.plugins).toEqual([]);
+  await render(<WorkspaceContextPanel {...props} localBrowserAvailable tabs={[]} activeTabId={null} />);
+  const localBrowserCard = Array.from(host.querySelectorAll<HTMLButtonElement>(".context-launcher-card"))
+    .find(button => button.textContent?.includes("内置浏览器"));
+  expect(localBrowserCard).toBeDefined();
+  expect(host.textContent).not.toContain("AI 浏览器");
+  await act(async () => localBrowserCard!.click());
+  expect(props.onOpenContextTab).toHaveBeenCalledExactlyOnceWith("local-browser");
+  await render(<WorkspaceContextPanel {...props} tabs={[]} activeTabId={null} />);
+  expect(host.textContent).not.toContain("内置浏览器");
+});
+
 it.each(["stop", "close"] as const)("retains %s failure, prevents duplicate requests, and isolates a different task tab", async kind => {
   const props = contextProps();
   // rejectAction releases a delayed failure only after repeated native clicks.
@@ -144,17 +161,17 @@ it.each(["stop", "close"] as const)("retains %s failure, prevents duplicate requ
 });
 
 it("resizes the dock with keyboard and releases pointer listeners after cancellation", async () => {
-  // A narrow dock leaves 591px after the real 800px content and 9px handle reservations.
-  // 窄停靠容器在保留真实 800px 正文和 9px 手柄后剩余 591px。
+  // A narrow dock leaves 469px after the reading column, padding, reasoning gutter, and handle.
+  // 窄停靠容器保留阅读列、内边距、思考留白和手柄后，剩余 469px。
   vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1400, bottom: 900, width: 1400, height: 900, toJSON: () => ({}) });
   const context = contextProps();
   const props: React.ComponentProps<typeof WorkspaceResizableBody> = { ...context, selectedDraftConversation: null, contextPanelTabs: [], contextPanelActiveTabId: null,
-    rightPanelOpen: true, rightPanelFloating: false, startup: browserFallbackStartup, children: <div>Body</div>,
+    aiBrowserAvailable: false, rightPanelOpen: true, rightPanelFloating: false, startup: browserFallbackStartup, children: <div>Body</div>,
     onFileContextTabTitleChange: vi.fn(), onConversationMenuAction: vi.fn(), onToggleRightPanel: vi.fn(), onToggleLeftPanel: vi.fn(), onTrace: vi.fn() };
   await render(<WorkspaceResizableBody {...props} />);
   const handle = host.querySelector<HTMLElement>('[role="separator"]')!;
   expect(handle.tabIndex).toBe(0);
-  expect(handle.getAttribute("aria-valuemax")).toBe("591");
+  expect(handle.getAttribute("aria-valuemax")).toBe("469");
   await act(async () => handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
   expect(handle.getAttribute("aria-valuenow")).toBe("440");
   await act(async () => handle.dispatchEvent(new MouseEvent("pointerdown", { button: 0, clientX: 900, bubbles: true })));
@@ -164,11 +181,26 @@ it("resizes the dock with keyboard and releases pointer listeners after cancella
   await act(async () => window.dispatchEvent(new MouseEvent("pointermove", { clientX: 850 })));
   expect(handle.getAttribute("aria-valuenow")).toBe("460");
   await act(async () => handle.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
-  expect(handle.getAttribute("aria-valuenow")).toBe("591");
+  expect(handle.getAttribute("aria-valuenow")).toBe("469");
   await act(async () => handle.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
   expect(handle.getAttribute("aria-valuenow")).toBe("320");
   await render(<WorkspaceResizableBody {...props} rightPanelOpen={false} />);
   expect(host.querySelector("#workspaceContext")?.hasAttribute("inert")).toBe(true);
+});
+
+it("lets a wide right dock consume whitespace without shrinking the conversation and reasoning gutter", async () => {
+  // The 1800px shell can allocate 869px right after reserving 922px of conversation and the handle.
+  // 1800px 外壳保留 922px 会话区与手柄后，可为右侧分配 869px。
+  vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1800, bottom: 900, width: 1800, height: 900, toJSON: () => ({}) });
+  const context = contextProps();
+  const props: React.ComponentProps<typeof WorkspaceResizableBody> = { ...context, selectedDraftConversation: null, contextPanelTabs: [], contextPanelActiveTabId: null,
+    aiBrowserAvailable: false, rightPanelOpen: true, rightPanelFloating: false, startup: browserFallbackStartup, children: <div>Body</div>,
+    onFileContextTabTitleChange: vi.fn(), onConversationMenuAction: vi.fn(), onToggleRightPanel: vi.fn(), onToggleLeftPanel: vi.fn(), onTrace: vi.fn() };
+  await render(<WorkspaceResizableBody {...props} />);
+  const handle = host.querySelector<HTMLElement>('[role="separator"]')!;
+  expect(handle.getAttribute("aria-valuemax")).toBe("869");
+  await act(async () => handle.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(handle.getAttribute("aria-valuenow")).toBe("869");
 });
 
 it("does not report copied file content when the host clipboard rejects", async () => {

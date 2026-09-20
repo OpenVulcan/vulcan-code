@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ExternalLink, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowRight, ExternalLink, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
@@ -13,21 +13,38 @@ import {
 // localBrowserAddress 校验明确的 HTTP 目标，不向页面授予工作台访问权限。
 // input is the user's address; returns a canonical URL or throws a visible validation error.
 // input 是用户地址；返回规范 URL，或抛出可见的校验错误。
-function localBrowserAddress(input: string): string {
+export function localBrowserAddress(input: string): string {
   const value = input.trim();
   if (!value) throw new Error("Enter a website address.");
-  const url = new URL(/^[a-z][a-z\d+.-]*:/i.test(value) ? value : `https://${value}`);
+  // loopback selects HTTP for development servers without requiring a typed scheme.
+  // loopback 让未输入协议的本机开发服务使用 HTTP。
+  const loopback = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::|\/|$)/i.test(value);
+  // complete preserves explicit HTTP(S) addresses and exposes other schemes to validation.
+  // complete 保留显式 HTTP(S) 地址，并把其他协议交给后续校验。
+  const complete = /^https?:\/\//i.test(value) ? value : /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+    ? value : `${loopback ? "http" : "https"}://${value}`;
+  const url = new URL(complete);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Only HTTP and HTTPS websites can be opened here.");
   }
   return url.href;
 }
 
+// localBrowserTabLabel bounds untrusted page titles without losing the full hover title.
+// localBrowserTabLabel 限制不受信任页面标题的显示长度，同时保留悬停时的完整标题。
+// value is the native title or URL and chinese selects the locale; returns a compact tab label.
+// value 是原生标题或地址，chinese 选择语言；返回紧凑的标签文案。
+export function localBrowserTabLabel(value: string, chinese: boolean): string {
+  const title = value.trim() === "about:blank" ? (chinese ? "新标签页" : "New tab") : value.trim();
+  const characters = Array.from(title);
+  return characters.length > 24 ? `${characters.slice(0, 23).join("")}…` : title;
+}
+
 // ClientBrowserArea gives this client a temporary browser unrelated to Core-owned AI pages.
 // ClientBrowserArea 为本客户端提供与 Core 自有 AI 页面无关的临时浏览器。
 // Returns an embedded native view in Electron or a deliberate new-tab link in ordinary WebUI.
 // 在 Electron 中返回内嵌原生视图，在普通 WebUI 中返回明确的新标签链接。
-export function ClientBrowserArea() {
+export function ClientBrowserArea(props: { ownerSessionId: string }) {
   // locale controls only visible labels, not navigation or trust boundaries.
   // locale 仅控制可见文案，不改变导航或信任边界。
   const { locale } = useI18n();
@@ -39,7 +56,10 @@ export function ClientBrowserArea() {
   const bridge = React.useMemo(readElectronLocalBrowserBridge, []);
   // snapshot is the current GUI-local tab list, never a Core session list.
   // snapshot 是当前 GUI 本地标签列表，绝不是 Core 会话列表。
-  const [snapshot, setSnapshot] = React.useState<ElectronLocalBrowserSnapshot>({ activeId: null, tabs: [] });
+  const [snapshot, setSnapshot] = React.useState<ElectronLocalBrowserSnapshot>({ ownerSessionId: null, activeId: null, tabs: [] });
+  // ownerReady allows tab actions only after the native manager switches to this conversation.
+  // ownerReady 仅在原生管理器切换到当前会话后允许操作标签。
+  const [ownerReady, setOwnerReady] = React.useState(false);
   // address is edited by this client before an explicit navigation action.
   // address 由本客户端编辑，并仅在明确导航操作后使用。
   const [address, setAddress] = React.useState("");
@@ -57,13 +77,28 @@ export function ClientBrowserArea() {
     if (!bridge) return;
     let cancelled = false;
     let changeRevision = 0;
-    const unsubscribe = bridge.subscribeChanged((next) => {
-      changeRevision += 1;
-      if (!cancelled) setSnapshot(next);
-    });
-    const requestedRevision = changeRevision;
-    void bridge.snapshot().then((initial) => {
-      if (!cancelled && changeRevision === requestedRevision) setSnapshot(initial);
+    // unsubscribe is installed only after Core has selected this window's conversation owner.
+    // unsubscribe 仅在原生端选中此窗口的会话归属后安装。
+    let unsubscribe = () => {};
+    setOwnerReady(false);
+    void bridge.setOwner(props.ownerSessionId).then(async (initial) => {
+      if (cancelled) return;
+      if (initial.ownerSessionId !== props.ownerSessionId) throw new Error("Local browser switched to a different conversation.");
+      setSnapshot(initial);
+      unsubscribe = bridge.subscribeChanged((next) => {
+        changeRevision += 1;
+        if (!cancelled && next.ownerSessionId === props.ownerSessionId) setSnapshot(next);
+      });
+      // requestedRevision stops a delayed snapshot from replacing a newer native event.
+      // requestedRevision 防止迟到的快照覆盖较新的原生事件。
+      const requestedRevision = changeRevision;
+      // latest fills the narrow gap between owner selection and event subscription.
+      // latest 补上切换归属与订阅事件之间的短暂空档。
+      const latest = await bridge.snapshot();
+      if (cancelled) return;
+      if (latest.ownerSessionId !== props.ownerSessionId) throw new Error("Local browser switched to a different conversation.");
+      if (changeRevision === requestedRevision) setSnapshot(latest);
+      setOwnerReady(true);
     }).catch((reason: unknown) => {
       if (!cancelled) setError(String(reason));
     });
@@ -72,7 +107,7 @@ export function ClientBrowserArea() {
       unsubscribe();
       void bridge.viewport(null);
     };
-  }, [bridge]);
+  }, [bridge, props.ownerSessionId]);
 
   // activeTab is this GUI's selected temporary page, not the selected AI automation target.
   // activeTab 是当前 GUI 选中的临时页面，不是 AI 自动化目标。
@@ -145,6 +180,7 @@ export function ClientBrowserArea() {
     try {
       const url = localBrowserAddress(address);
       setError(null);
+      if (bridge && !ownerReady) return;
       if (bridge) {
         if (snapshot.activeId) await bridge.navigate(snapshot.activeId, url);
         else await bridge.open(url);
@@ -157,27 +193,31 @@ export function ClientBrowserArea() {
   }
 
   return <div className="flex h-full min-h-0 flex-col gap-2 p-2">
-    {bridge && <div className="flex min-h-8 gap-1 overflow-x-auto" aria-label={chinese ? "本地浏览标签" : "Local browser tabs"}>
+    {bridge && <div className="flex min-h-8 gap-1 overflow-x-auto" role="tablist" aria-label={chinese ? "本地浏览标签" : "Local browser tabs"}>
       {snapshot.tabs.map((tab) => <div key={tab.id} className="flex max-w-44 shrink-0 items-center rounded border">
         <Button type="button" variant={tab.id === snapshot.activeId ? "secondary" : "ghost"} size="sm"
-          className="min-w-0 flex-1 truncate" title={tab.title || tab.url}
+          role="tab" aria-selected={tab.id === snapshot.activeId} className="min-w-0 flex-1 truncate" title={tab.title || tab.url}
+          disabled={!ownerReady}
           onClick={() => void bridge.select(tab.id).catch((reason: unknown) => setError(String(reason)))}>
-          {tab.loading ? "… " : ""}{tab.title || tab.url}
+          <span className="max-w-28 truncate">{tab.loading ? "… " : ""}{localBrowserTabLabel(tab.title || tab.url, chinese)}</span>
         </Button>
         <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
           aria-label={chinese ? "关闭本地标签" : "Close local tab"}
+          disabled={!ownerReady}
           onClick={() => void bridge.close(tab.id).catch((reason: unknown) => setError(String(reason)))}><X className="h-3 w-3" /></Button>
       </div>)}
       <Button type="button" variant="outline" size="icon" className="h-8 w-8 shrink-0"
         aria-label={chinese ? "新建本地标签" : "New local tab"}
+        disabled={!ownerReady}
         onClick={() => void bridge.open("about:blank").catch((reason: unknown) => setError(String(reason)))}><Plus className="h-4 w-4" /></Button>
     </div>}
     <form onSubmit={(event) => void submit(event)} className="flex items-center gap-1">
       <input ref={addressInput} value={address} onChange={(event) => setAddress(event.target.value)}
         aria-label={chinese ? "本地浏览地址" : "Local browser address"}
         placeholder="https://example.com" className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-sm" />
-      <Button type="submit" variant="outline" size="sm" aria-label={chinese ? "打开地址" : "Open address"}>
-        {bridge ? <RefreshCw className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
+      <Button type="submit" variant="outline" size="sm" disabled={Boolean(bridge) && !ownerReady}
+        aria-label={chinese ? "打开地址" : "Open address"}>
+        {bridge ? <ArrowRight className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
       </Button>
     </form>
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}

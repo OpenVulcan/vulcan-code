@@ -33,7 +33,10 @@ pub use budget::{
     ProviderRequestBudgetEvidence, ProviderRequestContextBreakdown, ProviderRequestTextMeasurement,
     ProviderUsageBudgetAnchor, latest_provider_usage_budget_anchor,
 };
-pub use config::{DraftState, MetadataDocument, ModeConfig, QueuedInputIdentity, SessionConfig};
+pub use config::{
+    DraftState, MetadataDocument, ModeConfig, QueuedInputIdentity, SessionConfig,
+    TerminalSettlementRecord, TerminalSettlementState,
+};
 pub use context::{
     CompactionNode, CompactionsDocument, LockedBaselineProjection, LockedBaselineSegmentInput,
     LockedPromptTarget, LockedSource, LockedSourceKind, RuntimeDocument,

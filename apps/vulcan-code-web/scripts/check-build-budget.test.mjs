@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { evaluateBuildBudget } from "./check-build-budget.mjs"
+import { collectStaticImportFiles, evaluateBuildBudget } from "./check-build-budget.mjs"
 
 describe("evaluateBuildBudget", () => {
   // Verifies measurements at or below every limit pass.
@@ -20,5 +20,35 @@ describe("evaluateBuildBudget", () => {
   // 验证缺失的必要资产不能静默通过。
   it("reports missing assets", () => {
     assert.deepEqual(evaluateBuildBudget({}, { workbench: { raw: 100 } }), ["workbench: asset not found"])
+  })
+})
+
+describe("collectStaticImportFiles", () => {
+  // The initial graph counts eager catalogs once while excluding optional feature chunks.
+  // 首屏导入图对预加载语言目录只计一次，并排除可选功能分块。
+  it("includes both eager locale catalogs and excludes dynamic imports", () => {
+    const manifest = {
+      "index.html": { file: "assets/index.js" },
+      "src/app/WorkbenchApp.tsx": {
+        file: "assets/WorkbenchApp.js",
+        imports: ["index.html", "_zh.js", "_en.js"],
+        dynamicImports: ["src/optional.tsx"],
+      },
+      "_zh.js": { file: "assets/i18n-messages.zh-CN.js" },
+      "_en.js": { file: "assets/i18n-messages.en-US.js" },
+      "src/optional.tsx": { file: "assets/optional.js" },
+    }
+    assert.deepEqual(collectStaticImportFiles(manifest, ["index.html", "src/app/WorkbenchApp.tsx"]), [
+      "assets/WorkbenchApp.js",
+      "assets/i18n-messages.en-US.js",
+      "assets/i18n-messages.zh-CN.js",
+      "assets/index.js",
+    ])
+  })
+
+  // A broken manifest edge must fail the budget instead of silently undercounting.
+  // 断裂的清单边必须使预算失败，不能静默少计。
+  it("rejects missing static imports", () => {
+    assert.throws(() => collectStaticImportFiles({ "index.html": { file: "assets/index.js", imports: ["missing"] } }, ["index.html"]), /missing static import/)
   })
 })

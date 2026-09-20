@@ -1376,6 +1376,34 @@ impl SessionHandle {
         )
     }
 
+    /// Durably acknowledges one exact queue attachment release after index cleanup succeeds.
+    /// 在索引清理成功后可靠确认一条精确的队列附件释放。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `client_action_id` selects the persisted release intent and `now_ms` dates the mutation.
+    /// `client_action_id` 选择持久释放意图，`now_ms` 记录变更时间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The changed or idempotent durable receipt, or an explicit storage error.
+    /// 返回已变化或幂等的可靠回执，或明确的存储错误。
+    pub(crate) fn acknowledge_queued_staging_release(
+        &self,
+        client_action_id: ClientActionId,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<()>, SessionRuntimeError> {
+        self.mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                document
+                    .acknowledge_queued_staging_release(&client_action_id, now_ms)
+                    .map(session_change_from_idempotent)
+            },
+        )
+    }
+
     /// Durably publishes one complete exact FIFO queue order.
     /// 可靠发布一份完整且精确的 FIFO 队列顺序。
     pub(crate) fn reorder_queued_inputs(

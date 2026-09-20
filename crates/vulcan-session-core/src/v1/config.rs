@@ -10,6 +10,7 @@
 //! 转录、恢复副本或统计账本。
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use vulcan_ai_contract::ContextCompactionWindowNodeId;
 
 use crate::v1::ids::{ClientActionId, PendingInputId, ResourceId, Seq, TurnId};
@@ -700,6 +701,63 @@ pub struct InputState {
     /// 未来回合的排队输入。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued_inputs: Vec<QueuedInput>,
+    /// Resolved queue actions whose transient attachment owners still require durable release.
+    /// 队列已处置、瞬时附件所有者仍需可靠释放的动作身份。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pending_staging_release_actions: BTreeSet<ClientActionId>,
+    /// Durable terminal settlement intent, present only while one exact terminal boundary has not finished settling.
+    /// 可靠终态结算意图；仅当一个精确终态边界尚未完成结算时存在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_settlement: Option<TerminalSettlementRecord>,
+}
+
+/// Recoverable state of one durable terminal settlement.
+/// 一次可靠终态结算的可恢复状态。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalSettlementState {
+    /// The settlement intent is durable and its terminal write has not succeeded yet.
+    /// 结算意图已可靠落盘，其终态写入尚未成功。
+    #[default]
+    Pending,
+    /// A terminal write failed and the exact session needs an explicit controlled retry.
+    /// 终态写入失败，该精确会话需要一次显式受控重试。
+    RepairRequired,
+}
+
+/// Durable, recoverable settlement intent for one exact terminal boundary.
+/// 一个精确终态边界的可靠可恢复结算意图。
+///
+/// The intent is written before the dangerous terminal persistence phase, so an
+/// interrupted process restart never has to guess whether the terminal fact
+/// landed: the document itself carries the pending settlement and keeps the
+/// session closed until an idempotent retry resolves it.
+/// 该意图在危险的终态持久化阶段之前写入，因此被中断的进程重启绝不需猜测终态
+/// 是否落盘：文档自身携带待结算项，并在幂等重试完成前保持会话关闭。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalSettlementRecord {
+    /// Stable diagnostic identity of this settlement intent.
+    /// 本结算意图的稳定诊断身份。
+    pub settlement_id: String,
+    /// Exact session owning the settlement.
+    /// 持有本次结算的精确会话。
+    pub session_id: String,
+    /// Exact logical turn whose terminal fact is being settled.
+    /// 正在结算终态事实的精确逻辑回合。
+    pub turn_id: TurnId,
+    /// Exact in-process terminal-persistence owner generation identity.
+    /// 精确的进程内终态持久化所有者代际身份。
+    pub owner_generation: String,
+    /// Current recoverable settlement state.
+    /// 当前可恢复结算状态。
+    pub state: TerminalSettlementState,
+    /// Stable redacted failure identity used by the idempotent retry.
+    /// 幂等重试使用的稳定脱敏失败标识。
+    pub reason_code: String,
+    /// Last settlement update time in Unix milliseconds.
+    /// 最后结算更新时间(Unix 毫秒)。
+    pub updated_at_ms: i64,
 }
 
 /// One physical segment row of the current generation split map.

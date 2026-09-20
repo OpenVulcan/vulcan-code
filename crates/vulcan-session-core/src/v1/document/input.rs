@@ -344,6 +344,17 @@ pub(super) fn validate_client_action_history(
         if let Some(parameters) = &queued.parameters {
             parameters.validate_pending(&queued.resource_ids)?;
         }
+        // A live queue owner may never also be scheduled for attachment release.
+        // 仍在队列中的所有者绝不能同时进入附件释放待办。
+        if metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&queued.client_action_id)
+        {
+            return Err(DomainError::InvalidQueuedInputOrder {
+                field: "pending_staging_release_action_still_queued",
+            });
+        }
     }
     let mut metadata_ids = BTreeSet::new();
     for client_action_id in metadata
@@ -1401,6 +1412,10 @@ impl SessionDocument {
         let mut staged_metadata = self.metadata.clone();
         staged_metadata.input_state.queued_inputs.remove(index);
         staged_metadata.input_state.draft = draft.clone();
+        staged_metadata
+            .input_state
+            .pending_staging_release_actions
+            .insert(identity.client_action_id.clone());
         self.id_allocator = staged_allocator;
         self.metadata = staged_metadata;
         self.events.extend(staged_events);
@@ -1463,6 +1478,10 @@ impl SessionDocument {
         )?;
         let mut staged_metadata = self.metadata.clone();
         staged_metadata.input_state.queued_inputs.remove(index);
+        staged_metadata
+            .input_state
+            .pending_staging_release_actions
+            .insert(identity.client_action_id.clone());
         self.id_allocator = staged_allocator;
         self.metadata = staged_metadata;
         self.events.extend(staged_events);
@@ -1550,6 +1569,10 @@ impl SessionDocument {
         staged_metadata.input_state.queued_inputs.remove(index);
         staged_metadata
             .input_state
+            .pending_staging_release_actions
+            .insert(identity.client_action_id.clone());
+        staged_metadata
+            .input_state
             .pending_in_turn_inputs
             .push(PendingInTurnInput {
                 parameters: queued.parameters,
@@ -1576,6 +1599,36 @@ impl SessionDocument {
                 resolution_seq,
             },
         ))
+    }
+
+    /// Acknowledges one queue attachment release only after its asset-index transaction succeeds.
+    /// 仅在资产索引事务成功后确认一条队列附件释放。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `client_action_id` selects the exact persisted release intent; `now_ms` dates its removal.
+    /// `client_action_id` 选择精确的持久释放意图，`now_ms` 记录移除时间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether the durable metadata changed, or a validation error.
+    /// 返回可靠元数据是否变化，或校验错误。
+    pub fn acknowledge_queued_staging_release(
+        &mut self,
+        client_action_id: &ClientActionId,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<()>, DomainError> {
+        validate_timestamp("updated_at_ms", now_ms)?;
+        if !self
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .remove(client_action_id)
+        {
+            return Ok(IdempotentMutation::Idempotent(()));
+        }
+        self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
+        Ok(IdempotentMutation::Committed(()))
     }
 
     /// Resolves the exact durable queue identity owned by one client action.

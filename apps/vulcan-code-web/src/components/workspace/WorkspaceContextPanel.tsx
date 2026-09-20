@@ -7,6 +7,7 @@ import {
   Brain,
   ChevronsDown,
   Folder,
+  Globe2,
   GitPullRequest,
   Plus,
   Search,
@@ -78,9 +79,16 @@ const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
   return { default: module.WorkspaceFilesPanelHost };
 });
 
+// LazyClientBrowserArea mounts this window's conversation-scoped page only while its right tab is active.
+// LazyClientBrowserArea 仅在当前会话的右侧页签激活时挂载此窗口的本地网页。
+const LazyClientBrowserArea = React.lazy(async () => {
+  const module = await import("@/components/features/browser/ClientBrowserArea");
+  return { default: module.ClientBrowserArea };
+});
+
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
-export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent";
+export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent" | "browser" | "local-browser";
 
 // WorkspaceContextTabKind identifies one dynamic right context tab type.
 // WorkspaceContextTabKind 标识一个动态右侧上下文页签类型。
@@ -137,6 +145,15 @@ export interface WorkspaceDraftConversationSelection {
 // WorkspaceContextPanelProps describes the right-side workspace context panel boundary.
 // WorkspaceContextPanelProps 描述右侧工作区上下文面板边界。
 export interface WorkspaceContextPanelProps {
+  // Whether this client has a complete native local-browser bridge.
+  // 当前客户端是否具备完整的原生本地浏览器桥。
+  localBrowserAvailable: boolean;
+  // Whether the selected conversation has an active Core browser to display.
+  // 当前会话是否有可显示的活跃 Core 浏览器。
+  aiBrowserAvailable?: boolean;
+  // Browser plugin content for this exact conversation, mounted only on its tab.
+  // 仅在当前会话浏览器页签挂载的浏览器插件内容。
+  aiBrowserPanel?: React.ReactNode;
   // Current draft conversation selection when the selected route is not persisted yet.
   // 当前路由尚未持久化时对应的草稿会话选择。
   selectedDraftConversation: WorkspaceDraftConversationSelection | null;
@@ -287,11 +304,17 @@ export interface WorkspaceContextPanelProps {
 // Parameters: props supplies the selected route, ordered tabs and typed service callbacks. Returns the context workspace.
 // 参数：props 提供选中路由、有序页签及强类型服务回调。返回上下文工作区。
 export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
+  // visibleTabs keeps AI pages tied to live Core sessions and local pages tied to this GUI bridge.
+  // visibleTabs 使 AI 页面只随活跃 Core 会话显示，本地页面只随当前 GUI 桥显示。
+  const visibleTabs = React.useMemo(() => props.tabs.filter((tab) =>
+    (tab.kind !== "browser" || props.aiBrowserAvailable === true)
+    && (tab.kind !== "local-browser" || props.localBrowserAvailable)),
+  [props.aiBrowserAvailable, props.localBrowserAvailable, props.tabs]);
   // activeTab stores the currently visible opened tab.
   // activeTab 保存当前可见的已打开页签。
   const activeTab = React.useMemo(
-    () => props.tabs.find((tab) => tab.id === props.activeTabId) ?? props.tabs[0] ?? null,
-    [props.activeTabId, props.tabs],
+    () => visibleTabs.find((tab) => tab.id === props.activeTabId) ?? visibleTabs[0] ?? null,
+    [props.activeTabId, visibleTabs],
   );
   // tabRefs stores DOM nodes for quick scroll-to-tab navigation.
   // tabRefs 保存用于快速滚动定位页签的 DOM 节点。
@@ -339,7 +362,9 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
         <div className="context-dynamic-workspace">
           <WorkspaceContextTabBar
             activeTabId={activeTab.id}
-            tabs={props.tabs}
+            tabs={visibleTabs}
+            aiBrowserAvailable={props.aiBrowserAvailable === true}
+            localBrowserAvailable={props.localBrowserAvailable}
             tabRefs={tabRefs}
             onActivateTab={props.onActivateContextTab}
             onCloseTab={(tab) => {
@@ -364,7 +389,11 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
           />
         </div>
       ) : (
-        <WorkspaceContextLauncher onOpenTab={props.onOpenContextTab} />
+        <WorkspaceContextLauncher
+          aiBrowserAvailable={props.aiBrowserAvailable === true}
+          localBrowserAvailable={props.localBrowserAvailable}
+          onOpenTab={props.onOpenContextTab}
+        />
       )}
     </aside>
   );
@@ -375,6 +404,12 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
 // Parameters: props supplies tab order, active identity, DOM references and callbacks. Returns the navigable tab strip.
 // 参数：props 提供页签顺序、活动身份、DOM 引用和回调。返回可导航的页签栏。
 function WorkspaceContextTabBar(props: {
+  // Whether this GUI can open its own local browser page.
+  // 此 GUI 是否可以打开自己的本地浏览器页面。
+  localBrowserAvailable: boolean;
+  // Whether the browser page can be opened from the add menu.
+  // 浏览器页面是否可从新增菜单打开。
+  aiBrowserAvailable: boolean;
   // Opened tabs in visual order.
   // 按视觉顺序排列的已打开页签。
   tabs: WorkspaceContextTabItem[];
@@ -421,7 +456,11 @@ function WorkspaceContextTabBar(props: {
           onActivateTab={props.onActivateTab}
         />
       ) : null}
-      <WorkspaceContextAddMenu onOpenTab={props.onOpenTab} />
+      <WorkspaceContextAddMenu
+        aiBrowserAvailable={props.aiBrowserAvailable}
+        localBrowserAvailable={props.localBrowserAvailable}
+        onOpenTab={props.onOpenTab}
+      />
       <div className="context-dynamic-tab-strip" role="tablist" onKeyDown={handleTabKeyDown}>
         {props.tabs.map((tab) => (
           <WorkspaceContextTabButton
@@ -578,6 +617,12 @@ function WorkspaceContextTabSwitcher(props: {
 // WorkspaceContextAddMenu renders the fixed plus menu for opening more tabs.
 // WorkspaceContextAddMenu 渲染用于打开更多页签的固定加号菜单。
 function WorkspaceContextAddMenu(props: {
+  // Whether this GUI can open its own local browser page.
+  // 此 GUI 是否可以打开自己的本地浏览器页面。
+  localBrowserAvailable: boolean;
+  // Whether the current conversation owns a running AI browser.
+  // 当前会话是否持有正在运行的 AI 浏览器。
+  aiBrowserAvailable: boolean;
   // Opens one tab kind.
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
@@ -596,6 +641,8 @@ function WorkspaceContextAddMenu(props: {
         <DropdownMenuSeparator />
         <WorkspaceContextOpenMenuItem kind="review" onOpenTab={props.onOpenTab} />
         <WorkspaceContextOpenMenuItem kind="memory" onOpenTab={props.onOpenTab} />
+        {props.localBrowserAvailable ? <WorkspaceContextOpenMenuItem kind="local-browser" onOpenTab={props.onOpenTab} /> : null}
+        {props.aiBrowserAvailable ? <WorkspaceContextOpenMenuItem kind="browser" onOpenTab={props.onOpenTab} /> : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -623,11 +670,17 @@ function WorkspaceContextOpenMenuItem(props: {
 // WorkspaceContextLauncher renders the empty right-panel entry cards.
 // WorkspaceContextLauncher 渲染右侧面板空状态入口卡片。
 function WorkspaceContextLauncher(props: {
+  // Whether this GUI can open its own local browser page.
+  // 此 GUI 是否可以打开自己的本地浏览器页面。
+  localBrowserAvailable: boolean;
+  // Whether the current conversation owns a running AI browser.
+  // 当前会话是否持有正在运行的 AI 浏览器。
+  aiBrowserAvailable: boolean;
   // Opens one tab kind.
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   return (
     <div className="context-launcher">
       <WorkspaceContextLauncherCard
@@ -648,6 +701,18 @@ function WorkspaceContextLauncher(props: {
         title={t("contextPanel.memory")}
         onOpenTab={props.onOpenTab}
       />
+      {props.localBrowserAvailable ? <WorkspaceContextLauncherCard
+        description={locale === "zh-CN" ? "浏览当前会话中的网页" : "Browse pages in this conversation"}
+        kind="local-browser"
+        title={locale === "zh-CN" ? "内置浏览器" : "Local Browser"}
+        onOpenTab={props.onOpenTab}
+      /> : null}
+      {props.aiBrowserAvailable ? <WorkspaceContextLauncherCard
+        description={locale === "zh-CN" ? "查看当前会话中 AI 打开的网页" : "View pages opened by AI in this conversation"}
+        kind="browser"
+        title={locale === "zh-CN" ? "AI 浏览器" : "AI Browser"}
+        onOpenTab={props.onOpenTab}
+      /> : null}
     </div>
   );
 }
@@ -706,6 +771,18 @@ function WorkspaceContextTabContent(args: {
   const handleFileTabTitleChange = React.useCallback((title: string) => {
     onFileTabTitleChange(activeTabId, title);
   }, [activeTabId, onFileTabTitleChange]);
+
+  if (args.activeTab.kind === "browser") {
+    return <div className="context-tab-content browser-tab-content">{args.props.aiBrowserPanel}</div>;
+  }
+
+  if (args.activeTab.kind === "local-browser") {
+    return <div className="context-tab-content browser-tab-content">
+      {args.props.selectedConversationId ? <React.Suspense fallback={null}>
+        <LazyClientBrowserArea key={args.props.selectedConversationId} ownerSessionId={args.props.selectedConversationId} />
+      </React.Suspense> : null}
+    </div>;
+  }
 
   if (args.activeTab.kind === "review") {
     return (
@@ -1125,6 +1202,9 @@ function WorkspaceSubagentEmptyState(props: {
 // workspaceContextTabIcon returns the icon used for one tab kind.
 // workspaceContextTabIcon 返回单个页签类型使用的图标。
 function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): React.ReactNode {
+  if (kind === "browser" || kind === "local-browser") {
+    return <Globe2 size={size} />;
+  }
   if (kind === "subagent") {
     return <Bot size={size} />;
   }

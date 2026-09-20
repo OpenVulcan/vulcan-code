@@ -22,6 +22,7 @@ import openCodeGoIcon from "@/assets/provider-icons/provider-opencode-go.svg"
 import openRouterIcon from "@/assets/provider-icons/provider-openrouter.svg"
 import qiniuIcon from "@/assets/provider-icons/provider-qiniu.svg"
 import qwenIcon from "@/assets/provider-icons/provider-qwen.svg"
+import stepFunIcon from "@/assets/provider-icons/provider-stepfun.svg"
 import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
 import tokenRhythmIcon from "@/assets/provider-icons/provider-tokenrhythm.svg"
 import vertexIcon from "@/assets/provider-icons/provider-vertex.svg"
@@ -51,6 +52,7 @@ export type ProviderIconKey =
   | "openrouter"
   | "qwen"
   | "qiniu"
+  | "stepfun"
   | "tavily"
   | "tokenrhythm"
   | "vertex"
@@ -107,6 +109,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
+  stepfun: { light: stepFunIcon, themeSurface: true, transparent: true, monochrome: true },
   tavily: { light: tavilyIcon, monochrome: true, transparent: true },
   tokenrhythm: { light: tokenRhythmIcon, monochrome: true, transparent: true },
   vertex: { light: vertexIcon },
@@ -134,6 +137,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   openrouter: "openrouter",
   qwen: "qwen",
   qiniu: "qiniu",
+  stepfun: "stepfun",
   tavily: "tavily",
   tokenrhythm: "tokenrhythm",
   vertex: "vertex",

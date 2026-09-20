@@ -411,8 +411,8 @@ fn malformed_provider_arguments_return_tool_error_without_executor_dispatch() {
     });
 }
 
-/// Verifies a second malformed tool call ends the user turn instead of opening another correction round.
-/// 验证第二次格式错误的工具调用会结束用户回合，而不是再次开启纠错轮。
+/// Verifies a second malformed tool call ends the user turn with an explicit tool-protocol failure.
+/// 验证第二次格式错误的工具调用以显式工具协议失败结束用户回合。
 #[test]
 fn malformed_provider_arguments_allow_only_one_model_correction_round() {
     let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
@@ -455,7 +455,7 @@ fn malformed_provider_arguments_allow_only_one_model_correction_round() {
             VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
                 .expect("valid core conversation snapshot");
 
-        let result = controller
+        let error = controller
             .run_user_turn_streaming(
                 &adapter,
                 &executor,
@@ -463,10 +463,26 @@ fn malformed_provider_arguments_allow_only_one_model_correction_round() {
                 "Apply the requested edit.",
             )
             .await
-            .expect("the second malformed tool call should end cleanly");
+            .expect_err("a repeated malformed tool call must fail the user turn");
 
-        assert_eq!(result.provider_turns_executed, 2);
-        assert_eq!(result.tool_calls_processed, 2);
+        // The failure is typed, carries the repeated tool identity, and marks the controller failed.
+        // 失败是类型化的、携带重复工具身份，并把控制器标记为失败。
+        assert!(matches!(
+            error,
+            CoreError::ToolProtocolFailure { ref tool_name, ref message }
+                if tool_name == "file_edit"
+                    && message.contains("tool_argument_parse_failure_exhausted")
+                    && message.contains("invalid JSON second")
+        ));
+        assert_eq!(controller.phase(), ControllerPhase::Failed);
+        // No successful final event may exist for a turn closed by the tool-protocol failure.
+        // 由工具协议失败结束的回合不得存在任何成功 Final 事件。
+        assert!(
+            controller
+                .events()
+                .iter()
+                .all(|event| !matches!(event.kind, CoreEventKind::Final))
+        );
         assert_eq!(adapter.built_requests().len(), 2);
         assert!(executor.executed_requests().is_empty());
         let rejected_results = controller
@@ -482,6 +498,183 @@ fn malformed_provider_arguments_allow_only_one_model_correction_round() {
             })
             .count();
         assert_eq!(rejected_results, 2);
+    });
+}
+
+/// Verifies the non-streaming loop reports the same typed tool-protocol failure for repeated malformed arguments.
+/// 验证非流式循环对重复非法参数报告同一类型化工具协议失败。
+#[test]
+fn malformed_provider_arguments_fail_non_streaming_turn_with_typed_protocol_failure() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let malformed_response = |suffix: &str| ProviderTurnResponse {
+            assistant_text: String::new(),
+            assistant_reasoning: String::new(),
+            provider_message_id: Some(format!("response-invalid-{suffix}")),
+            provider_message_state: None,
+            tool_calls: vec![ConversationToolCall {
+                id: format!("item-invalid-{suffix}"),
+                tool_call_id: Some(format!("call-invalid-{suffix}")),
+                tool_name: String::from("file_edit"),
+                arguments: Value::Null,
+                argument_parse_error: Some(format!("invalid JSON {suffix}")),
+            }],
+            continuation: None,
+            usage: None,
+        };
+        let adapter = MockProviderAdapter::new(vec![
+            malformed_response("first"),
+            malformed_response("second"),
+            ProviderTurnResponse {
+                assistant_text: String::from("unexpected third Provider turn"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("response-unexpected-third")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        ]);
+        let executor = MockToolExecutor::new();
+        let mut controller =
+            VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let error = controller
+            .run_user_turn(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "Apply the requested edit.",
+            )
+            .await
+            .expect_err("the non-streaming loop must fail the repeated malformed batch");
+
+        assert!(matches!(
+            error,
+            CoreError::ToolProtocolFailure { ref tool_name, .. } if tool_name == "file_edit"
+        ));
+        assert_eq!(controller.phase(), ControllerPhase::Failed);
+        assert_eq!(adapter.built_requests().len(), 2);
+        assert!(executor.executed_requests().is_empty());
+    });
+}
+
+/// Verifies one malformed call in a mixed batch never blocks or replays its executable sibling.
+/// 验证混合批次中的一条非法调用不会阻塞或重放其可执行兄弟调用。
+#[test]
+fn mixed_malformed_batch_preserves_order_without_replaying_tool_calls() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // mixedResponse pairs one executable call with one non-executable call in Provider order.
+        // mixedResponse 以 Provider 顺序配对一条可执行调用与一条不可执行调用。
+        let mixed_response = |suffix: &str| ProviderTurnResponse {
+            assistant_text: String::new(),
+            assistant_reasoning: String::new(),
+            provider_message_id: Some(format!("response-mixed-{suffix}")),
+            provider_message_state: None,
+            tool_calls: vec![
+                ConversationToolCall {
+                    id: format!("item-ok-{suffix}"),
+                    tool_call_id: Some(format!("call-ok-{suffix}")),
+                    tool_name: String::from("file_read"),
+                    arguments: json!({"path": "src/main.rs"}),
+                    argument_parse_error: None,
+                },
+                ConversationToolCall {
+                    id: format!("item-invalid-{suffix}"),
+                    tool_call_id: Some(format!("call-invalid-{suffix}")),
+                    tool_name: String::from("file_edit"),
+                    arguments: Value::Null,
+                    argument_parse_error: Some(format!("invalid JSON {suffix}")),
+                },
+            ],
+            continuation: None,
+            usage: None,
+        };
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (Vec::new(), mixed_response("first")),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("retry the edit"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("response-mixed-second")),
+                    provider_message_state: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("item-edit-retry"),
+                        tool_call_id: Some(String::from("call-edit-retry")),
+                        tool_name: String::from("file_edit"),
+                        arguments: json!({"path": "src/main.rs"}),
+                        argument_parse_error: None,
+                    }],
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("the edit is complete"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("response-mixed-final")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
+        let executor = MockToolExecutor::new();
+        let mut controller =
+            VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let result = controller
+            .run_user_turn_streaming(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "Read the file then edit it.",
+            )
+            .await
+            .expect("one malformed call must stay inside the tool loop with its valid sibling");
+
+        assert_eq!(result.provider_turns_executed, 3);
+        // tool_calls_processed covers the two calls of the mixed batch plus the single corrected edit.
+        // tool_calls_processed 覆盖混合批次的两条调用加上随后纠正的那一次编辑。
+        assert_eq!(result.tool_calls_processed, 3);
+        // Every tool result keeps its exact original Provider order for both mixed batches.
+        // 两个混合批次的每条工具结果都保持其精确的原始 Provider 顺序。
+        let tool_call_order = controller
+            .snapshot()
+            .messages
+            .iter()
+            .filter_map(|message| match &message.payload {
+                ConversationPayload::ToolResult { tool_call_id, .. } => {
+                    tool_call_id.clone()
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tool_call_order,
+            vec![
+                "call-ok-first".to_string(),
+                "call-invalid-first".to_string(),
+                "call-edit-retry".to_string(),
+            ]
+        );
+        // Only the valid sibling executed once per mixed batch; the malformed call never reached the host executor.
+        // 每个混合批次中只有可执行兄弟调用执行一次；非法调用从未到达宿主执行器。
+        assert_eq!(
+            executor
+                .executed_requests()
+                .iter()
+                .map(|request| request.tool_call_id.clone())
+                .collect::<Vec<_>>(),
+            vec!["call-ok-first".to_string(), "call-edit-retry".to_string()]
+        );
     });
 }
 

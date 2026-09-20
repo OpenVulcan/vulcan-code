@@ -283,6 +283,12 @@
   padding: 6px 8px 8px;
 }
 
+.context-tab-content.browser-tab-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
 .context-tab-content.subagent-tab-content {
   display: flex;
   padding: 0;

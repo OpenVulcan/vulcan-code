@@ -34,6 +34,9 @@ use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_e
 pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
+use vulcan_session_core::v1::{
+    DomainError, TerminalSettlementRecord, TerminalSettlementState, TurnId,
+};
 
 /// Maximum persistence attempts for one terminal execution-failure boundary.
 /// 单个执行失败终态边界允许的最大持久化尝试次数。
@@ -172,8 +175,46 @@ mod rejected_provider_boundary_tests {
 pub(crate) async fn persist_v1_execution_failure_boundary(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
-    reason_code: &'static str,
+    reason_code: &str,
     redacted_detail: Option<String>,
+) -> Result<(), String> {
+    persist_v1_execution_failure_boundary_for_turn(
+        task_state,
+        session_id,
+        reason_code,
+        redacted_detail,
+        None,
+    )
+    .await
+}
+
+/// Persists a failure boundary only for the recorded turn when an exact turn is supplied.
+/// 提供精确回合时，仅为所记录回合持久化失败边界。
+///
+/// `expected_turn_id` is checked inside the durable mutation, so a changed active turn cannot
+/// slip between an earlier read and the write. A dirty in-memory terminal fact from a failed
+/// flush is allowed to retry the same turn without writing another fact.
+/// `expected_turn_id` 在可靠变更内部校验，防止先前读取与写入之间活动回合变化；
+/// 失败刷写留下的内存终态事实可对同一回合重试，而不会再写一条事实。
+///
+/// # Parameters
+/// 参数
+/// `task_state` selects the registered V1 owner; `session_id` identifies its conversation;
+/// `reason_code` and `redacted_detail` describe the failed boundary; `expected_turn_id`, when
+/// present, binds the mutation to one exact logical turn.
+/// `task_state` 选择已注册的 V1 所有者；`session_id` 标识会话；`reason_code` 与
+/// `redacted_detail` 描述失败边界；存在 `expected_turn_id` 时变更绑定到精确逻辑回合。
+///
+/// # Returns
+/// 返回值
+/// Success only after durable closure, or an explicit storage or turn-identity failure.
+/// 仅在可靠闭合后返回成功；否则返回明确的存储或回合身份错误。
+pub(crate) async fn persist_v1_execution_failure_boundary_for_turn(
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    reason_code: &str,
+    redacted_detail: Option<String>,
+    expected_turn_id: Option<TurnId>,
 ) -> Result<(), String> {
     let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
         task_state, session_id,
@@ -182,6 +223,9 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
     // 失败或取消构建者可能仅留下已完成结果工作线程；在闭合本回合前结算它们。
     let _preparation_settlement = handle.acquire_request_preparation_settlement().await;
     let now_ms = current_v1_unix_millis()?;
+    // owned_reason_code gives the retry closure its own exact reason identity without borrowing the caller slice.
+    // owned_reason_code 让重试闭包持有自己的精确原因身份，而不借用调用方切片。
+    let owned_reason_code = reason_code.to_string();
     // attempt retries only a physical store failure; the first in-memory mutation is idempotent,
     // and the retry flushes that same dirty revision without creating another failure fact.
     // attempt 仅重试物理存储失败；首次内存变更具备幂等性，重试只会刷写同一脏修订，
@@ -190,6 +234,9 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
         // attempt_detail gives the blocking mutation closure ownership of the exact same error.
         // attempt_detail 让阻塞变更闭包持有完全相同的错误详情。
         let attempt_detail = redacted_detail.clone();
+        // attempt_reason_code is the exact reason identity consumed by this single attempt closure.
+        // attempt_reason_code 是本次尝试闭包消费的精确原因身份。
+        let attempt_reason_code = owned_reason_code.clone();
         // persistence_result keeps the structured storage category available for safe retry policy.
         // persistence_result 保留结构化存储类别，以便执行安全的重试策略。
         let persistence_result = handle
@@ -198,9 +245,22 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
                 crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
                 crate::session_runtime_registry_v1::SessionFlushReason::DisplayBoundary,
                 move |document| {
+                    if let Some(expected_turn_id) = expected_turn_id {
+                        match document.active_turn().map(|turn| turn.turn_id) {
+                            Some(actual_turn_id) if actual_turn_id == expected_turn_id => {}
+                            Some(actual_turn_id) => {
+                                return Err(DomainError::TurnIdentityMismatch {
+                                    expected: expected_turn_id.value(),
+                                    actual: actual_turn_id.value(),
+                                });
+                            }
+                            None if document.turn_has_terminal_fact(expected_turn_id) => {}
+                            None => return Err(DomainError::NoActiveTurn),
+                        }
+                    }
                     Ok(
                         if document.fail_execution_boundary_and_close_turn(
-                            reason_code,
+                            &attempt_reason_code,
                             attempt_detail.as_deref(),
                             now_ms,
                         )? {
@@ -262,34 +322,167 @@ pub(crate) async fn settle_stream_terminal_authority(
     redacted_detail: Option<String>,
     terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
 ) -> bool {
-    // A missing or insufficient ApiStats requires the same V1 owner to append a permanent error before admission reopens.
-    // ApiStats 缺失或不足时，重新开放准入前必须由同一 V1 owner 追加永久错误。
-    let terminal_state_persisted = if v1_terminal_authority_persisted {
-        true
-    } else {
-        match persist_v1_execution_failure_boundary(
-            task_state,
-            session_id,
-            fallback_reason_code,
-            redacted_detail,
-        )
-        .await
-        {
-            Ok(()) => true,
-            Err(error) => {
-                eprintln!(
-                    "[webui-service] stream fallback terminal persistence failed: session={session_id} reason={fallback_reason_code} error={error}"
-                );
-                false
-            }
+    // A sufficient durable Provider terminal leaves no dangerous phase, so the exact owner may reopen admission directly.
+    // 充分的可靠 Provider 终态不留下危险阶段，因此精确 owner 可以直接重新开放准入。
+    if v1_terminal_authority_persisted {
+        return release_settled_terminal_persistence_owner(terminal_persistence_owner, session_id);
+    }
+    let owner_generation = terminal_persistence_owner.owner_generation();
+    // The exact fallback survives failures before the V1 intent can be constructed.
+    // 精确回退信息跨越 V1 意图构建前的失败而保留。
+    if let Err(error) = crate::terminal_settlement_service::retain_terminal_pre_intent_repair(
+        task_state,
+        session_id,
+        crate::state::TerminalPreIntentRepair {
+            owner_generation: owner_generation.clone(),
+            reason_code: fallback_reason_code,
+            redacted_detail: redacted_detail.clone(),
+        },
+    ) {
+        eprintln!(
+            "[webui-service] stream terminal pre-intent repair unavailable: session={session_id} error={error}"
+        );
+        return false;
+    }
+    let handle = match crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+        task_state, session_id,
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] stream terminal settlement owner unavailable: session={session_id} generation={owner_generation} error={error}"
+            );
+            drop(terminal_persistence_owner);
+            return false;
         }
     };
-    if !terminal_state_persisted {
-        // An uncertain durable write remains fail-closed by deliberately retaining the exact owner.
-        // 可靠写入结果不确定时会有意保留精确 owner，从而保持失败关闭。
+    let now_ms = match current_v1_unix_millis() {
+        Ok(now_ms) => now_ms,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] stream terminal settlement timestamp unavailable: session={session_id} error={error}"
+            );
+            drop(terminal_persistence_owner);
+            return false;
+        }
+    };
+    // settlement_turn_id is the exact logical turn whose terminal fact the dangerous phase must close.
+    // settlement_turn_id 是危险阶段必须闭合终态事实的精确逻辑回合。
+    let settlement_turn_id = match handle
+        .read(|document| document.active_turn().map(|turn| turn.turn_id))
+    {
+        Ok(Some(turn_id)) => turn_id,
+        Ok(None) => {
+            // No open turn remains, so the fallback write cannot create a second terminal fact.
+            // 已无开放回合，回退写入不可能产生第二条终态事实。
+            let released =
+                release_settled_terminal_persistence_owner(terminal_persistence_owner, session_id);
+            if released {
+                crate::terminal_settlement_service::clear_terminal_pre_intent_repair(
+                    task_state,
+                    session_id,
+                    &owner_generation,
+                );
+            }
+            return released;
+        }
+        Err(error) => {
+            eprintln!(
+                "[webui-service] stream terminal settlement turn read failed: session={session_id} error={error}"
+            );
+            drop(terminal_persistence_owner);
+            return false;
+        }
+    };
+    let settlement_id = terminal_settlement_id(session_id, &owner_generation);
+    let intent = TerminalSettlementRecord {
+        settlement_id: settlement_id.clone(),
+        session_id: session_id.to_string(),
+        turn_id: settlement_turn_id,
+        owner_generation,
+        state: TerminalSettlementState::Pending,
+        reason_code: fallback_reason_code.to_string(),
+        updated_at_ms: now_ms,
+    };
+    // The recoverable intent is durable before the dangerous phase; an unwritable intent keeps the
+    // exact owner closed instead of leaving an undecidable boundary behind.
+    // 可恢复意图先于危险阶段落盘；意图无法写入时保持精确 owner 关闭，而不是留下无法判定的边界。
+    if let Err(error) = persist_terminal_settlement_intent(
+        &handle,
+        TerminalSettlementIntentTransition::Begin {
+            record: intent.clone(),
+        },
+    )
+    .await
+    {
+        eprintln!(
+            "[webui-service] stream terminal settlement intent could not be written: session={session_id} settlement={settlement_id} error={error}"
+        );
         drop(terminal_persistence_owner);
         return false;
     }
+    crate::terminal_settlement_service::clear_terminal_pre_intent_repair(
+        task_state,
+        session_id,
+        &intent.owner_generation,
+    );
+    match persist_v1_execution_failure_boundary_for_turn(
+        task_state,
+        session_id,
+        fallback_reason_code,
+        redacted_detail,
+        Some(settlement_turn_id),
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(error) => {
+            // The exact settlement stays durably pending and explicitly requires a controlled retry.
+            // 精确结算保持可靠待处理，并显式需要一次受控重试。
+            if let Err(mark_error) = persist_terminal_settlement_intent(
+                &handle,
+                TerminalSettlementIntentTransition::MarkRepairRequired {
+                    settlement_id: settlement_id.clone(),
+                },
+            )
+            .await
+            {
+                eprintln!(
+                    "[webui-service] stream terminal settlement repair mark failed: session={session_id} settlement={settlement_id} error={mark_error}"
+                );
+            }
+            eprintln!(
+                "[webui-service] stream fallback terminal persistence failed: session={session_id} reason={fallback_reason_code} error={error}"
+            );
+            drop(terminal_persistence_owner);
+            return false;
+        }
+    }
+    // Only a durably resolved intent authorizes releasing the exact owner.
+    // 只有可靠结算的意图才授权释放精确 owner。
+    if let Err(error) = persist_terminal_settlement_intent(
+        &handle,
+        TerminalSettlementIntentTransition::Resolve {
+            settlement_id: settlement_id.clone(),
+        },
+    )
+    .await
+    {
+        eprintln!(
+            "[webui-service] stream terminal settlement resolution failed: session={session_id} settlement={settlement_id} error={error}"
+        );
+        drop(terminal_persistence_owner);
+        return false;
+    }
+    release_settled_terminal_persistence_owner(terminal_persistence_owner, session_id)
+}
+
+/// Releases one exact owner after its durable terminal fact and settlement intent are settled.
+/// 在可靠终态事实与结算意图均已落场后释放一个精确 owner。
+fn release_settled_terminal_persistence_owner(
+    terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
+    session_id: SessionId,
+) -> bool {
     match terminal_persistence_owner.release() {
         Ok(()) => true,
         Err(error) => {
@@ -330,7 +523,7 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
     let terminal_persistence_guard = match SessionTerminalPersistenceOwnerGuard::adopt_registered(
         task_state.clone(),
         session_id,
-        terminal_persistence_owner,
+        terminal_persistence_owner.clone(),
     ) {
         Ok(guard) => guard,
         Err(error) => {

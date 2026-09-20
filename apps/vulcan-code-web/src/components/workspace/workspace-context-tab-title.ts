@@ -8,6 +8,12 @@ import type { WorkspaceContextTabKind } from "@/components/workspace/WorkspaceCo
 // Returns: the translated title or an English fallback when no translator is supplied.
 // 返回值：返回翻译后的标题；未提供翻译器时返回英文默认标题。
 export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t?: (key: TranslationKey) => string): string {
+  if (kind === "local-browser") {
+    return t ? t("workspaceContext.localBrowser") : "Local Browser";
+  }
+  if (kind === "browser") {
+    return t ? `AI ${t("area.browser")}` : "AI Browser";
+  }
   if (kind === "subagent") {
     return t ? t("conversation.subagent.schedule") : "Subagent";
   }

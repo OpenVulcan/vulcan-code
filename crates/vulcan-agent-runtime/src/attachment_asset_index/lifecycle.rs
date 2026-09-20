@@ -227,6 +227,181 @@ pub fn release_staged_attachment_ref(
     update_staged_attachment_refs(workspace_path, scope, attachments, false)
 }
 
+/// Releases one transient staging scope directly from the durable asset index without callers
+/// having to reconstruct the exact attachment payload that acquired it.
+/// 直接从持久资产索引释放一个瞬时暂存作用域，调用方无需重建获取该作用域时的精确附件载荷。
+///
+/// The index itself records every asset held under one scope, so queue owners that only retain a
+/// durable scope identity (for example `pending-prompt:v1:{client_action_id}`) can release their
+/// lease after a V1 commit even when every process-local projection is unavailable.
+/// 索引自身记录每个作用域下持有的全部资产，因此只持有可靠作用域身份的队列所有者（例如
+/// `pending-prompt:v1:{client_action_id}`）即使在所有进程内投影均不可用时也能在 V1 提交后释放租约。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the authoritative project attachment index and `scope` is the exact
+/// transient staging owner to release.
+/// `workspace_path` 选择权威项目附件索引；`scope` 是要释放的精确瞬时暂存所有者。
+///
+/// # Returns
+/// 返回值
+/// Whether the durable index changed, or one explicit lock/read/write error.
+/// 返回持久索引是否发生变化，或一条明确的加锁、读取或写入错误。
+pub fn release_staged_attachment_scope(workspace_path: &str, scope: &str) -> Result<bool, String> {
+    release_staged_attachment_scopes(workspace_path, &BTreeSet::from([scope.to_string()]))
+}
+
+/// Transfers exact managed attachments between two staging owners in one durable index write.
+/// 在一次持久索引写入中，把精确托管附件从一个暂存所有者转交给另一个。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the project index, `from_scope` is the existing draft owner,
+/// `to_scope` is the new queue owner, and `attachments` identifies the exact managed assets.
+/// `workspace_path` 选择项目索引，`from_scope` 是原草稿所有者，`to_scope` 是新队列所有者，
+/// `attachments` 标识精确的托管资产。
+///
+/// # Returns
+/// 返回值
+/// Whether the index changed; an error leaves both ownership changes unpublished.
+/// 返回索引是否改变；发生错误时两项所有权变更均不发布。
+pub fn transfer_staged_attachment_ref(
+    workspace_path: &str,
+    from_scope: &str,
+    to_scope: &str,
+    attachments: &[ConversationAttachment],
+) -> Result<bool, String> {
+    let from_scope = from_scope.trim();
+    let to_scope = to_scope.trim();
+    if from_scope.is_empty() || to_scope.is_empty() || from_scope == to_scope {
+        return Err(String::from(
+            "attachment staging transfer requires two distinct nonempty scopes",
+        ));
+    }
+    let asset_ids = collect_attachment_asset_ids(attachments)?;
+    if asset_ids.is_empty() {
+        return Ok(false);
+    }
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+        format!(
+            "failed to lock attachment index transaction `{}`: {error}",
+            asset_root.display()
+        )
+    })?;
+    let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
+    ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "转交暂存附件租约")?;
+    let mut changed = false;
+    for record in document
+        .assets
+        .iter_mut()
+        .filter(|record| asset_ids.contains(&record.asset_id))
+    {
+        // The destination is added before the source is removed in memory, and neither change
+        // is visible to another transaction until the complete document is published.
+        // 在内存中先加入目标再移除来源；完整文档发布前，其他事务都看不到这两项变化。
+        if !record.staging_refs.iter().any(|scope| scope == to_scope) {
+            record.staging_refs.push(to_scope.to_string());
+            changed = true;
+        }
+        let previous_len = record.staging_refs.len();
+        record.staging_refs.retain(|scope| scope != from_scope);
+        let removed_draft_media = record.draft_media.remove(from_scope).is_some();
+        if record.staging_refs.len() != previous_len || removed_draft_media {
+            changed = true;
+        }
+    }
+    if changed {
+        save_attachment_asset_index_document(&asset_root, &document)?;
+    }
+    Ok(changed)
+}
+
+/// Releases an exact set of transient staging owners in one durable index transaction.
+/// 在一次持久化索引事务中释放一组精确的瞬时暂存所有者。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the project index and `scopes` contains the exact owner identities.
+/// `workspace_path` 选择项目索引，`scopes` 包含精确的所有者身份。
+///
+/// # Returns
+/// 返回值
+/// Whether the index changed, or an explicit transaction failure.
+/// 返回索引是否变化，或明确的事务失败。
+pub fn release_staged_attachment_scopes(
+    workspace_path: &str,
+    scopes: &BTreeSet<String>,
+) -> Result<bool, String> {
+    let scopes = scopes
+        .iter()
+        .map(|scope| scope.trim())
+        .filter(|scope| !scope.is_empty())
+        .collect::<BTreeSet<_>>();
+    if scopes.is_empty() {
+        return Ok(false);
+    }
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    // transaction_lock serializes these scope releases with every other mutation of the exact index.
+    // transaction_lock 使这些作用域释放与当前精确索引的全部其他变更串行化。
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    // transaction_guard spans the complete load, scope removal, orphan deletion, and publication.
+    // transaction_guard 覆盖完整的读取、作用域移除、孤儿删除与发布。
+    let transaction_guard = transaction_lock.lock().map_err(|error| {
+        format!(
+            "failed to lock attachment index transaction `{}`: {error}",
+            asset_root.display()
+        )
+    })?;
+    let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
+    let mut changed = false;
+    // persisted_during_discard tracks whether orphan deletion already saved all scope removals.
+    // persisted_during_discard 记录孤儿删除是否已经保存全部作用域移除。
+    let mut persisted_during_discard = false;
+    // released_asset_ids collects only assets that actually retained the scope so orphan deletion
+    // cannot discard unrelated assets that simply have no references.
+    // released_asset_ids 只收集确实持有该作用域的资产，避免孤儿删除误删只是没有引用的无关资产。
+    let mut released_asset_ids = BTreeSet::new();
+    for record in &mut document.assets {
+        let previous_len = record.staging_refs.len();
+        let previous_draft_media_len = record.draft_media.len();
+        record
+            .staging_refs
+            .retain(|entry| !scopes.contains(entry.as_str()));
+        record
+            .draft_media
+            .retain(|entry, _| !scopes.contains(entry.as_str()));
+        if record.staging_refs.len() != previous_len
+            || record.draft_media.len() != previous_draft_media_len
+        {
+            released_asset_ids.insert(record.asset_id.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        let removable_indices = document
+            .assets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (released_asset_ids.contains(&record.asset_id)
+                    && !attachment_record_has_refs(record)
+                    && !transaction_guard.source_is_held(&record.asset_id))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        for index in removable_indices.into_iter().rev() {
+            discard_attachment_record_at(&asset_root, &mut document, index)?;
+            persisted_during_discard = true;
+        }
+        if !persisted_during_discard {
+            save_attachment_asset_index_document(&asset_root, &document)?;
+        }
+    }
+    Ok(changed)
+}
+
 /// Replaces one transient staging scope with the exact managed attachment set owned by its draft.
 /// 使用所属草稿持有的精确托管附件集合替换一个瞬时暂存作用域。
 ///
@@ -282,6 +457,10 @@ pub fn reconcile_staged_attachment_ref_scope(
             (false, true) => {
                 record.staging_refs.retain(|entry| entry != scope);
                 record.draft_media.remove(scope);
+                released_asset_ids.insert(record.asset_id.clone());
+                changed = true;
+            }
+            (false, false) if record.draft_media.remove(scope).is_some() => {
                 released_asset_ids.insert(record.asset_id.clone());
                 changed = true;
             }
@@ -368,15 +547,20 @@ pub fn promote_staged_attachment_to_message_ref(
             record.message_ids.push(message_id.to_string());
             changed = true;
         }
-        if !released_staging_scopes.is_empty() && !record.staging_refs.is_empty() {
+        if !released_staging_scopes.is_empty() {
             let previous_len = record.staging_refs.len();
+            // previous_draft_media_len ensures metadata-only cleanup is persisted too.
+            // previous_draft_media_len 确保仅清理元数据的变更也会持久化。
+            let previous_draft_media_len = record.draft_media.len();
             record
                 .staging_refs
                 .retain(|scope| !released_staging_scopes.contains(scope.as_str()));
             record
                 .draft_media
                 .retain(|scope, _| !released_staging_scopes.contains(scope.as_str()));
-            if record.staging_refs.len() != previous_len {
+            if record.staging_refs.len() != previous_len
+                || record.draft_media.len() != previous_draft_media_len
+            {
                 changed = true;
             }
         }
@@ -561,8 +745,11 @@ pub(super) fn update_staged_attachment_refs(
         } else {
             let previous_len = record.staging_refs.len();
             record.staging_refs.retain(|existing| existing != scope);
-            record.draft_media.remove(scope);
-            if record.staging_refs.len() != previous_len {
+            // Draft upload metadata can outlive its staging ref after a partial prior update;
+            // removing that metadata is itself a durable index mutation.
+            // 部分先前更新后草稿上传元数据可能比暂存引用存活更久；删除该元数据本身也是持久索引变更。
+            let removed_draft_media = record.draft_media.remove(scope).is_some();
+            if record.staging_refs.len() != previous_len || removed_draft_media {
                 changed = true;
             }
         }

@@ -237,6 +237,7 @@ async function runDesktopSuite(selected, testRoot, record) {
       await first.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
       // opened stores the exact GUI-local tabs created by this isolated test.
       // opened 保存此隔离测试创建的精确 GUI 本地标签。
+      await page.evaluate(() => window.vulcanDesktop.localBrowser.setOwner('capacity-conversation'));
       const opened = [];
       for (let index = 0; index < 16; index += 1) {
         opened.push(await page.evaluate(() => window.vulcanDesktop.localBrowser.open('about:blank')));
@@ -261,8 +262,55 @@ async function runDesktopSuite(selected, testRoot, record) {
         await page.evaluate((tabId) => window.vulcanDesktop.localBrowser.close(tabId), id);
       }
       assert.equal(await countNativeViews(), 0);
+      // A second conversation in the same GUI sees an empty local list and cannot select A's tab.
+      // 同一 GUI 内的第二会话只看到自己的空列表，也不能选择 A 的标签。
+      const conversationATab = await page.evaluate(() => window.vulcanDesktop.localBrowser.open('about:blank'));
+      // A second GUI attached to the same Core and conversation still starts with no native tabs.
+      // 第二个 GUI 即使连接同一 Core、同一会话，原生标签也必须从空列表开始。
+      second = await launchGui('gui-second', discovery.baseUrl);
+      const secondPage = await until(async () => {
+        const current = second.windows()[0];
+        assert.ok(current);
+        await current.locator('.workspace-sidebar-feature-button').first().waitFor({ timeout: 1000 });
+        return current;
+      });
+      await second.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
+      const secondWindowEmpty = await secondPage.evaluate(() => window.vulcanDesktop.localBrowser.setOwner('capacity-conversation'));
+      assert.equal(secondWindowEmpty.ownerSessionId, 'capacity-conversation');
+      assert.deepEqual(secondWindowEmpty.tabs, []);
+      const secondWindowTab = await secondPage.evaluate(() => window.vulcanDesktop.localBrowser.open('about:blank'));
+      assert.deepEqual((await page.evaluate(() => window.vulcanDesktop.localBrowser.snapshot())).tabs.map((tab) => tab.id), [conversationATab]);
+      assert.deepEqual((await secondPage.evaluate(() => window.vulcanDesktop.localBrowser.snapshot())).tabs.map((tab) => tab.id), [secondWindowTab]);
+      await secondPage.evaluate((id) => window.vulcanDesktop.localBrowser.close(id), secondWindowTab);
+      const conversationBEmpty = await page.evaluate(() => window.vulcanDesktop.localBrowser.setOwner('capacity-conversation-b'));
+      assert.equal(conversationBEmpty.ownerSessionId, 'capacity-conversation-b');
+      assert.deepEqual(conversationBEmpty.tabs, []);
+      await assert.rejects(page.evaluate((id) => window.vulcanDesktop.localBrowser.select(id), conversationATab),
+        /another conversation/);
+      const conversationBTab = await page.evaluate(() => window.vulcanDesktop.localBrowser.open('about:blank'));
+      assert.deepEqual((await page.evaluate(() => window.vulcanDesktop.localBrowser.snapshot())).tabs.map((tab) => tab.id), [conversationBTab]);
+      // A conversation's website cookie must not reach another conversation in the same GUI.
+      // 同一 GUI 中一个会话的网页 Cookie 不得进入另一个会话。
+      const isolatedStorage = await first.evaluate(async ({ BrowserWindow }) => {
+        const views = BrowserWindow.getAllWindows()[0].contentView.children;
+        if (views.length !== 2) throw new Error('Expected one native tab for each conversation.');
+        const origin = 'https://local-browser-isolation.invalid/';
+        await views[0].webContents.session.cookies.set({ url: origin, name: 'owner', value: 'first' });
+        const firstCookies = await views[0].webContents.session.cookies.get({ url: origin });
+        const secondCookies = await views[1].webContents.session.cookies.get({ url: origin });
+        await views[0].webContents.session.cookies.remove(origin, 'owner');
+        return { first: firstCookies.some((cookie) => cookie.value === 'first'), second: secondCookies.length };
+      });
+      assert.deepEqual(isolatedStorage, { first: true, second: 0 });
+      assert.deepEqual((await page.evaluate(() => window.vulcanDesktop.localBrowser.setOwner('capacity-conversation'))).tabs.map((tab) => tab.id), [conversationATab]);
+      await page.evaluate((id) => window.vulcanDesktop.localBrowser.close(id), conversationATab);
+      await page.evaluate(() => window.vulcanDesktop.localBrowser.setOwner('capacity-conversation-b'));
+      await page.evaluate((id) => window.vulcanDesktop.localBrowser.close(id), conversationBTab);
+      assert.equal(await countNativeViews(), 0);
       record.cases.push({ id: 'LOCAL_BROWSER_CAPACITY', status: 'passed', detail: {
-        limit: 16, rejectedOverflow: true, slotReused: true, nativeViewsAfterCleanup: 0,
+        limit: 16, rejectedOverflow: true, slotReused: true, conversationIsolation: true, guiWindowIsolation: true,
+        conversationStorageIsolation: true,
+        nativeViewsAfterCleanup: 0,
       } });
     } else {
       const windowState = () => first.evaluate(({ BrowserWindow }) => ({

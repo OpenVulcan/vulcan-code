@@ -8,6 +8,7 @@ use super::{
     load_attachment_asset_record_for_attachment, parse_attachment_cleanup_cutoff_date,
     preview_attachment_cleanup, promote_staged_attachment_to_message_ref,
     reconcile_staged_attachment_ref_scope, record_staged_attachment, release_staged_attachment_ref,
+    release_staged_attachment_scope, release_staged_attachment_scopes,
     resolve_attachment_replay_status, save_attachment_asset_index_document,
 };
 use crate::attachment_assets::{
@@ -374,6 +375,123 @@ fn staging_refs_protect_assets_until_release() {
 
     assert!(load_attachment_asset_record_for_attachment(&attachment).is_none());
     assert!(!std::path::Path::new(&attachment.local_path).exists());
+    let _ = std::fs::remove_dir_all(&workspace_directory);
+}
+
+/// Verifies one scope release derives its exact asset set from the durable index without caller payloads.
+/// 验证单个作用域释放从持久索引推导精确资产集合，且不需要调用方提供载荷。
+///
+/// Durable queue owners retain only a scope identity, so the release must consult the index records
+/// themselves instead of a process-local mirror holding the original attachment payload.
+/// 可靠队列所有者只保留作用域身份，因此释放必须查询索引记录本身，而不是持有原始附件载荷的进程内镜像。
+#[test]
+fn release_staged_attachment_scope_releases_durable_scope_without_payload() {
+    let workspace_directory = unique_workspace_directory();
+    let workspace_path = workspace_directory.to_string_lossy();
+    let attachment = build_test_attachment(
+        &workspace_directory,
+        "diagram.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    let timestamp = current_attachment_timestamp_parts();
+    record_staged_attachment(workspace_path.as_ref(), &attachment, &timestamp)
+        .expect("staged attachment should record");
+    // queue_scope is the durable pending-prompt lease identity used after a V1 queue commit.
+    // queue_scope 是 V1 队列提交后使用的可靠待发送提示词租约身份。
+    let queue_scope = "pending-prompt:v1:client-action-1";
+    // retained_scope is an unrelated durable owner that must survive the queue release.
+    // retained_scope 是必须在队列释放后保留的无关可靠所有者。
+    let retained_scope = "message-owned:v1:message-1";
+    acquire_staged_attachment_ref(
+        workspace_path.as_ref(),
+        queue_scope,
+        std::slice::from_ref(&attachment),
+    )
+    .expect("queue staging scope should acquire");
+    acquire_staged_attachment_ref(
+        workspace_path.as_ref(),
+        retained_scope,
+        std::slice::from_ref(&attachment),
+    )
+    .expect("unrelated durable owner should acquire");
+
+    assert!(
+        release_staged_attachment_scope(workspace_path.as_ref(), queue_scope)
+            .expect("queue scope should release")
+    );
+    assert!(
+        !release_staged_attachment_scope(workspace_path.as_ref(), queue_scope)
+            .expect("repeated queue scope release should stay idempotent")
+    );
+    assert!(
+        !release_staged_attachment_scope(
+            workspace_path.as_ref(),
+            "pending-prompt:v1:unknown-action"
+        )
+        .expect("unknown scope release should be a durable no-op")
+    );
+
+    let asset_root = resolve_managed_attachment_root(workspace_path.as_ref());
+    let document = load_attachment_asset_index_document(&asset_root)
+        .expect("asset index should remain readable");
+    let record = document
+        .assets
+        .iter()
+        .find(|record| record.asset_id == attachment.asset_id.as_deref().unwrap())
+        .expect("unrelated durable owner should retain the record");
+    assert_eq!(record.staging_refs, vec![String::from(retained_scope)]);
+    assert!(std::path::Path::new(&attachment.local_path).is_file());
+    let _ = std::fs::remove_dir_all(&workspace_directory);
+}
+
+/// Verifies batch cleanup cannot release another session's lease with the same action id.
+/// 验证批量清理不会释放另一会话同名动作所持有的租约。
+#[test]
+fn batch_release_keeps_other_session_with_same_action_id() {
+    let workspace_directory = unique_workspace_directory();
+    let workspace_path = workspace_directory.to_string_lossy();
+    let attachment = build_test_attachment(
+        &workspace_directory,
+        "shared-action.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    record_staged_attachment(
+        workspace_path.as_ref(),
+        &attachment,
+        &current_attachment_timestamp_parts(),
+    )
+    .expect("staged attachment should record");
+    let first_scope = "pending-prompt:v2:session-a:shared-action";
+    let second_scope = "pending-prompt:v2:session-b:shared-action";
+    for scope in [first_scope, second_scope] {
+        acquire_staged_attachment_ref(
+            workspace_path.as_ref(),
+            scope,
+            std::slice::from_ref(&attachment),
+        )
+        .expect("session lease should acquire");
+    }
+    let released = std::collections::BTreeSet::from([first_scope.to_string()]);
+    assert!(
+        release_staged_attachment_scopes(workspace_path.as_ref(), &released)
+            .expect("first session release should succeed")
+    );
+    assert!(
+        !release_staged_attachment_scopes(workspace_path.as_ref(), &released)
+            .expect("repeated release should be idempotent")
+    );
+    let document = load_attachment_asset_index_document(&resolve_managed_attachment_root(
+        workspace_path.as_ref(),
+    ))
+    .expect("asset index should remain readable");
+    let record = document
+        .assets
+        .iter()
+        .find(|record| record.asset_id == attachment.asset_id.as_deref().unwrap())
+        .expect("second session still owns the asset");
+    assert_eq!(record.staging_refs, vec![second_scope]);
     let _ = std::fs::remove_dir_all(&workspace_directory);
 }
 

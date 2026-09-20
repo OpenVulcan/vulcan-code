@@ -18,6 +18,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "apikeyfun" })).toBe("apikeyfun")
     expect(resolveProviderIconKey({ providerId: "claudeapi" })).toBe("claudeapi")
     expect(resolveProviderIconKey({ providerId: "qiniu" })).toBe("qiniu")
+    expect(resolveProviderIconKey({ providerId: "stepfun" })).toBe("stepfun")
     expect(resolveProviderIconKey({ providerId: "fennoai" })).toBe("fennoai")
     expect(resolveProviderIconKey({ providerId: "code0" })).toBe("code0")
     expect(resolveProviderIconKey({ providerId: "commandcode" })).toBe("commandcode")
@@ -57,6 +58,19 @@ describe("provider icon library", () => {
     const markup = renderToStaticMarkup(<ProviderIcon providerId="tokenrhythm" />)
 
     expect(markup).toContain('data-provider-icon="tokenrhythm"')
+    expect(markup).toContain("dark:invert")
+  })
+
+  // StepFun's white supplied artwork uses a contrasting tile and dark-theme inversion.
+  // 阶跃星辰提供的白色图标使用对比底板，并在暗色主题下反色保持可见。
+  it("renders StepFun artwork on contrasting theme surfaces", () => {
+    // markup is the exact server-rendered StepFun icon element.
+    // markup 是服务端渲染得到的阶跃星辰图标元素。
+    const markup = renderToStaticMarkup(<ProviderIcon providerId="stepfun" />)
+
+    expect(markup).toContain('data-provider-icon="stepfun"')
+    expect(markup).toContain("bg-black")
+    expect(markup).toContain("dark:bg-white")
     expect(markup).toContain("dark:invert")
   })
 

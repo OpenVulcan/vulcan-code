@@ -38,7 +38,13 @@ import {
 } from "@/components/ui/tooltip";
 import {
   WorkspaceResizableBody,
+  selectConversationRightPluginMounts,
+  WORKSPACE_CONVERSATION_RESERVED_WIDTH,
+  WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,
+  WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
 } from "@/components/workspace/workspace-resizable-body";
+import { listCoreBrowserSessions } from "@/service/core-browser-service";
+import { readElectronLocalBrowserBridge } from "@/shell/electronBridge";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/WorkspaceContextPanel";
@@ -210,6 +216,16 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // contextTabState exposes the state snapshot for the current render.
   // contextTabState 暴露当前渲染使用的状态快照。
   const contextTabState = contextTabStateEntry.state;
+  // aiBrowserState is the last owner-scoped live Core browser listing observed by this client.
+  // aiBrowserState 是本客户端最后一次观察到的、按归属限定的 Core 浏览器实时列表。
+  const [aiBrowserState, setAiBrowserState] = React.useState<{ owner: string | null; ids: string[] }>({ owner: null, ids: [] });
+  // observedBrowserIds remembers each conversation's live browsers without reopening a manually closed panel on return.
+  // observedBrowserIds 记住各会话的活跃浏览器，避免返回会话时重新打开用户手动关闭的面板。
+  const observedBrowserIds = React.useRef(new Map<string, Set<string>>());
+  // aiBrowserPluginEnabled gates discovery and UI on the actual enabled plugin mount.
+  // aiBrowserPluginEnabled 以真实启用的插件挂载点限定发现与界面。
+  const aiBrowserPluginEnabled = React.useMemo(() => selectConversationRightPluginMounts(props.workbench.plugins)
+    .some(({ plugin, mount }) => plugin.id === "vulcan-browser" && mount.id === "core-browser"), [props.workbench.plugins]);
   // reviewFocusRequest increments whenever chat tools ask the review panel to show uncommitted changes.
   // reviewFocusRequest 在会话工具要求审核面板显示未提交变更时递增。
   const [reviewFocusRequest, setReviewFocusRequest] = React.useState<WorkspaceReviewFocusRequest>({
@@ -270,6 +286,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // hasSelectedChatConversation is true only for an existing persisted conversation surface.
   // hasSelectedChatConversation 仅在当前界面是已存在的持久化会话时为真。
   const hasSelectedChatConversation = props.mainView === "chat" && !routeDraftConversation && Boolean(props.selectedConversationId);
+  // aiBrowserAvailable never carries a previous conversation's browser into the selected route.
+  // aiBrowserAvailable 绝不会把上一会话的浏览器带入当前路由。
+  const aiBrowserAvailable = aiBrowserPluginEnabled && aiBrowserState.owner === props.selectedConversationId
+    && aiBrowserState.ids.length > 0;
+  // localBrowserAvailable follows this GUI window's native capability, independent of plugins and Core sessions.
+  // localBrowserAvailable 取决于此 GUI 窗口的原生能力，与插件和 Core 会话无关。
+  const localBrowserAvailable = readElectronLocalBrowserBridge() !== null;
   // selectedChatProject resolves the selected persisted conversation project for Git review summaries.
   // selectedChatProject 解析当前持久化会话所属项目以加载 Git 审查摘要。
   const selectedChatProject = hasSelectedChatConversation && props.selectedConversation?.projectId
@@ -506,12 +529,104 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     const width = shellRef.current?.getBoundingClientRect().width ?? 0;
     const expandedLeftWidth = 288;
     const collapsedLeftWidth = 46;
-    const preferredRightWidth = 480;
-    const handleWidth = 9;
     const leftWidth = sidebar.isMobile ? 0 : sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
-    setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
+    setRightPanelFloating(width > 0 && width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
+      - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH < WORKSPACE_CONVERSATION_RESERVED_WIDTH);
     setRightPanelOpen(true);
   }, [notifyConversationLayoutWillChange, sidebar.isMobile, sidebar.open]);
+
+  // selectedConversationForLocalLinks rejects a link request after navigation changes its owner.
+  // selectedConversationForLocalLinks 在会话切换后拒绝旧会话的链接请求。
+  const selectedConversationForLocalLinks = React.useRef(props.selectedConversationId);
+  selectedConversationForLocalLinks.current = props.selectedConversationId;
+  // openConversationLinkInLocalBrowser keeps normal webpage clicks in this GUI and this conversation.
+  // openConversationLinkInLocalBrowser 将普通网页点击限定在当前 GUI 与当前会话的浏览器中。
+  const openConversationLinkInLocalBrowser = React.useCallback((event: React.MouseEvent<HTMLElement>): void => {
+    if (!hasSelectedChatConversation || !props.selectedConversationId || !localBrowserAvailable
+      || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey
+      || event.shiftKey || event.altKey || !(event.target instanceof Element)) return;
+    const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
+    // Resource links are Core-owned downloads and previews, not navigable conversation websites.
+    // 资源链接是 Core 管理的下载与预览，不属于会话中的网页导航。
+    if (!anchor || !event.currentTarget.contains(anchor) || anchor.hasAttribute("download")
+      || anchor.closest(".conversation-v1-resource")) return;
+    let destination: URL;
+    try {
+      destination = new URL(anchor.href);
+    } catch {
+      return;
+    }
+    if ((destination.protocol !== "http:" && destination.protocol !== "https:")
+      || destination.origin === window.location.origin) return;
+    const owner = props.selectedConversationId;
+    const bridge = readElectronLocalBrowserBridge();
+    if (!bridge) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void (async () => {
+      await bridge.setOwner(owner);
+      if (selectedConversationForLocalLinks.current !== owner) return;
+      await bridge.open(destination.href);
+      if (selectedConversationForLocalLinks.current !== owner) return;
+      setContextTabStateEntry((current) => current.cacheKey === contextTabCacheKey
+        ? { ...current, state: openWorkspaceContextTab(current.state, "local-browser", t) } : current);
+      openRightContextPanel();
+    })().catch((error: unknown) => {
+      toast.error(`${locale === "zh-CN" ? "无法在内置浏览器打开链接" : "Could not open link in local browser"}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, [contextTabCacheKey, hasSelectedChatConversation, localBrowserAvailable, locale,
+    openRightContextPanel, props.selectedConversationId, t]);
+  React.useEffect(() => {
+    if (!hasSelectedChatConversation || !props.selectedConversationId || !aiBrowserPluginEnabled) {
+      setAiBrowserState({ owner: null, ids: [] });
+      return;
+    }
+    // owner and cancelled bind every asynchronous result to the exact visible conversation.
+    // owner 与 cancelled 将每次异步结果绑定到精确的当前可见会话。
+    const owner = props.selectedConversationId;
+    let cancelled = false;
+    let polling = false;
+    // failureLogged keeps normal Core restarts from flooding the GUI console every poll.
+    // failureLogged 防止正常重启 Core 时每轮轮询都刷满 GUI 控制台。
+    let failureLogged = false;
+    const refresh = async (): Promise<void> => {
+      if (polling) return;
+      polling = true;
+      try {
+        const sessions = await listCoreBrowserSessions(owner);
+        if (cancelled) return;
+        failureLogged = false;
+        if (sessions.some((session) => session.ownerSessionId !== owner)) {
+          throw new Error("Core browser list contains a different conversation owner.");
+        }
+        const ids = sessions.filter((session) => session.status === "running").map((session) => session.sessionId);
+        setAiBrowserState((current) => current.owner === owner && current.ids.length === ids.length
+          && current.ids.every((id, index) => id === ids[index]) ? current : { owner, ids });
+        const previous = observedBrowserIds.current.get(owner) ?? new Set<string>();
+        const newlyCreated = ids.some((id) => !previous.has(id));
+        observedBrowserIds.current.set(owner, new Set(ids));
+        if (ids.length === 0) {
+          setContextTabStateEntry((current) => current.cacheKey === contextTabCacheKey
+            && current.state.tabs.some((tab) => tab.id === "browser")
+            ? { ...current, state: closeWorkspaceContextTab(current.state, "browser") } : current);
+        } else if (newlyCreated) {
+          setContextTabStateEntry((current) => current.cacheKey === contextTabCacheKey
+            ? { ...current, state: openWorkspaceContextTab(current.state, "browser", t) } : current);
+          openRightContextPanel();
+        }
+      } catch (error) {
+        if (!cancelled && !failureLogged) {
+          failureLogged = true;
+          console.warn("Failed to refresh conversation browser list", error);
+        }
+      } finally {
+        polling = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 1500);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [aiBrowserPluginEnabled, contextTabCacheKey, hasSelectedChatConversation, openRightContextPanel, props.selectedConversationId, t]);
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -1240,13 +1355,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       previousShellWidthRef.current = width;
       const expandedLeftWidth = 288;
       const collapsedLeftWidth = 46;
-      const preferredRightWidth = 480;
-      const handleWidth = 9;
       const leftWidth = sidebar.isMobile ? 0 : sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
-      const dockedPanelFits = width - leftWidth - preferredRightWidth - handleWidth >= 800;
+      const dockedPanelFits = width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
+        - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH >= WORKSPACE_CONVERSATION_RESERVED_WIDTH;
       const shouldFloatRightPanel = effectiveRightPanelOpen && !dockedPanelFits;
-      const dockedRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
-      const shellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
+      const dockedRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
+      const shellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
       const mainWidth = width - leftWidth - dockedRightWidth - shellGaps;
       if (effectiveRightPanelOpen) {
         if (rightPanelFloating !== shouldFloatRightPanel) {
@@ -1269,8 +1383,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         return;
       }
       if (leftAutoCollapsed && !sidebar.open) {
-        const restoredRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
-        const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
+        const restoredRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
+        const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
         const restoredMainWidth = width - expandedLeftWidth - restoredRightWidth - restoredShellGaps;
         if (restoredMainWidth >= 800) {
           notifyConversationLayoutWillChange();
@@ -1523,6 +1637,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       />
       <SidebarInset className="workspace-inset">
         <WorkspaceResizableBody
+          aiBrowserAvailable={aiBrowserAvailable}
+          localBrowserAvailable={localBrowserAvailable}
           conversationNavigationPhase={props.mainView === "chat" ? props.conversationNavigation?.phase ?? null : null}
           conversationNavigationShowLoading={props.mainView === "chat" && props.conversationNavigation?.showLoading === true}
           rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
@@ -1551,6 +1667,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onCloseContextTab={closeContextTab}
           onFileContextTabTitleChange={updateFileContextTabTitle}
           onOpenContextTab={openContextTab}
+          onConversationLinkClickCapture={props.mainView === "chat" ? openConversationLinkInLocalBrowser : undefined}
           onOpenSubagentPanel={handleOpenSubagentPanel}
           onStopSubagentTask={props.onStopSubagentTask}
           onCloseSubagentTask={props.onCloseSubagentTask}

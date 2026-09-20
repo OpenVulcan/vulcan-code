@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { translations } from "@/i18n-messages";
+import { zhCNTranslations } from "@/i18n-messages.zh-CN";
 import { parseConversationBlocks } from "./conversation-transcript-parser";
 import { parseSystemProviderError } from "./conversation-system-error-card";
 
@@ -40,7 +40,7 @@ describe("V1 branch request configuration presentation", () => {
     const presentation = projectConversationBranchPresentationV1("session-request-config", [{
       seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
       event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "stream_finished_without_v1_api_terminal", redacted_detail: "Original request preparation failed." },
-    }], EMPTY_RESOURCES, (key) => translations["zh-CN"][key]);
+    }], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
     const error = parseSystemProviderError(presentation.messages[0]!.body)!;
     expect(error.message).toBe("Original request preparation failed.");
     expect(error.dispatchOutcome).toBe("unknown");
@@ -55,7 +55,7 @@ describe("V1 branch request configuration presentation", () => {
     const presentation = projectConversationBranchPresentationV1("session-request-config", [{
       seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
       event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "stream_finished_without_v1_api_terminal", redacted_detail: detail },
-    }], EMPTY_RESOURCES, (key) => translations["zh-CN"][key]);
+    }], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
     expect(presentation.messages[0]!.body).toBe(detail);
     expect(parseSystemProviderError(presentation.messages[0]!.body)?.modelId).toBe("model-a");
     expect(parseConversationBlocks(presentation.messages[0]!)[0]?.kind).toBe("notice");
@@ -66,7 +66,7 @@ describe("V1 branch request configuration presentation", () => {
     const presentation = projectConversationBranchPresentationV1("session-request-config", [{
       seq: 1, turn_id: null, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
       event: {kind: "display_note", notice_kind: "goal_status", severity: "info", reason_code: "goal_resumed"},
-    }], EMPTY_RESOURCES, (key) => translations["zh-CN"][key]);
+    }], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
     const message = presentation.messages[0]!;
     expect(message.body).toContain("目标已恢复");
     expect(message.body).not.toContain("goal_resumed");

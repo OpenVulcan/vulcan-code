@@ -110,4 +110,16 @@ describe("V1 domain results from actual runtime contracts", () => {
     failed.status = "failed";
     expect(resolveV1ToolDomainPresentation(failed).diagnostic).toBe("Precise failure");
   });
+
+  it("translates each stable MCP failure code into Chinese UI copy while retaining code and detail", () => {
+    const mcpFailure = (error: string): string | null => {
+      const failed = event("mcp_file_edit", {}, `Tool \`mcp_file_edit\` failed.\nReason: ${error}`, { kind: "tool_error", payload: { error, details: { code: "mcp" } } });
+      failed.status = "failed";
+      return resolveV1ToolDomainPresentation(failed).diagnostic;
+    };
+    expect(mcpFailure("mcp_tool_not_found: no MCP tool matches `server/read` in the current runtime catalog")).toBe("MCP 工具不存在（mcp_tool_not_found）：no MCP tool matches `server/read` in the current runtime catalog");
+    expect(mcpFailure("mcp_server_disconnected: MCP server `server` is not connected; tool `read` was not invoked")).toBe("MCP 服务器未连接（mcp_server_disconnected）：MCP server `server` is not connected; tool `read` was not invoked");
+    expect(mcpFailure("mcp_tool_invocation_failed: MCP tool `read` failed: tools/call(stdio): timeout")).toBe("MCP 工具调用失败（mcp_tool_invocation_failed）：MCP tool `read` failed: tools/call(stdio): timeout");
+    expect(mcpFailure("Precise failure")).toBe("Precise failure");
+  });
 });

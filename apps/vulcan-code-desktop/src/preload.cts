@@ -34,6 +34,7 @@ const CLIPBOARD_CHANNELS = {
 } as const;
 
 const LOCAL_BROWSER_CHANNELS = {
+  setOwner: 'vulcan:local-browser:set-owner',
   snapshot: 'vulcan:local-browser:snapshot',
   open: 'vulcan:local-browser:open',
   navigate: 'vulcan:local-browser:navigate',
@@ -130,6 +131,9 @@ const service = {
 // localBrowser exposes only tab operations and sidebar geometry, never native WebContents objects.
 // localBrowser 只暴露标签操作与侧栏几何，不暴露原生 WebContents 对象。
 const localBrowser = {
+  // setOwner selects one conversation's native tabs within this GUI window.
+  // setOwner 在此 GUI 窗口内选择一个会话的原生标签。
+  setOwner: (ownerSessionId: string | null): Promise<unknown> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.setOwner, ownerSessionId),
   snapshot: (): Promise<unknown> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.snapshot),
   open: (url: string): Promise<string> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.open, url),
   navigate: (id: string, url: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.navigate, id, url),

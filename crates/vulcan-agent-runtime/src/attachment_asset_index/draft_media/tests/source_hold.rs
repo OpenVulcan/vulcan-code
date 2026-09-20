@@ -3,6 +3,137 @@
 
 use super::*;
 
+/// Queue handoff removes draft provenance together with its lease in one durable index publication.
+/// 队列交接在一次持久索引发布中同时移除草稿来源信息及其租约。
+#[test]
+fn queue_transfer_removes_draft_media_with_source_lease() -> Result<(), Box<dyn std::error::Error>>
+{
+    let draft_scope = "composer-draft:v1:new:queue-transfer";
+    let queue_scope = "pending-prompt:v1:queue-transfer";
+    let (workspace, attachment) = fixture(draft_scope)?;
+    record_attachment_draft_media(&attachment, draft_scope, upload_origin(&attachment)?)?;
+    let root = resolve_asset_root_from_attachment(&attachment).ok_or("asset root")?;
+
+    assert!(transfer_staged_attachment_ref(
+        &workspace.path().to_string_lossy(),
+        draft_scope,
+        queue_scope,
+        std::slice::from_ref(&attachment),
+    )?);
+    let reloaded = load_attachment_asset_index_document(&root)?;
+    assert_eq!(reloaded.assets[0].staging_refs, [queue_scope]);
+    assert!(reloaded.assets[0].draft_media.is_empty());
+    Ok(())
+}
+
+/// A stale draft-media entry without its staging ref is still removed durably on scope release.
+/// 暂存引用已缺失的陈旧草稿媒体条目仍会在释放作用域时可靠删除。
+#[test]
+fn release_scope_persists_draft_media_only_removal() -> Result<(), Box<dyn std::error::Error>> {
+    let scope = "composer-draft:v1:new:metadata-only";
+    let (workspace, attachment) = fixture(scope)?;
+    record_attachment_draft_media(&attachment, scope, upload_origin(&attachment)?)?;
+    let root = resolve_asset_root_from_attachment(&attachment).ok_or("asset root")?;
+    let mut document = load_attachment_asset_index_document(&root)?;
+    document.assets[0].staging_refs.clear();
+    document.assets[0]
+        .session_ids
+        .push(String::from("session-a"));
+    document.assets[0]
+        .message_ids
+        .push(String::from("message-a"));
+    save_attachment_asset_index_document(&root, &document)?;
+
+    assert!(release_staged_attachment_ref(
+        &workspace.path().to_string_lossy(),
+        scope,
+        std::slice::from_ref(&attachment),
+    )?);
+    let reloaded = load_attachment_asset_index_document(&root)?;
+    assert!(reloaded.assets[0].draft_media.is_empty());
+    assert_eq!(reloaded.assets[0].message_ids, ["message-a"]);
+    Ok(())
+}
+
+/// A metadata-only stale draft owner releases its otherwise unreferenced managed bytes.
+/// 仅剩元数据的过期草稿所有者会释放已无其他引用的托管字节。
+#[test]
+fn release_scope_discards_unreferenced_draft_media_only_asset()
+-> Result<(), Box<dyn std::error::Error>> {
+    let scope = "composer-draft:v1:new:metadata-orphan";
+    let (workspace, attachment) = fixture(scope)?;
+    record_attachment_draft_media(&attachment, scope, upload_origin(&attachment)?)?;
+    let root = resolve_asset_root_from_attachment(&attachment).ok_or("asset root")?;
+    let mut document = load_attachment_asset_index_document(&root)?;
+    document.assets[0].staging_refs.clear();
+    save_attachment_asset_index_document(&root, &document)?;
+
+    assert!(release_staged_attachment_scope(
+        &workspace.path().to_string_lossy(),
+        scope,
+    )?);
+    assert!(
+        load_attachment_asset_index_document(&root)?
+            .assets
+            .is_empty()
+    );
+    assert!(!std::path::Path::new(&attachment.local_path).exists());
+    Ok(())
+}
+
+/// Replacing a draft with an empty attachment set also discards stale provenance without a staging ref.
+/// 将草稿附件集合替换为空时，即使暂存引用缺失，也会丢弃过期来源信息。
+#[test]
+fn reconcile_scope_discards_unreferenced_draft_media_only_asset()
+-> Result<(), Box<dyn std::error::Error>> {
+    let scope = "composer-draft:v1:new:reconcile-metadata-orphan";
+    let (workspace, attachment) = fixture(scope)?;
+    record_attachment_draft_media(&attachment, scope, upload_origin(&attachment)?)?;
+    let root = resolve_asset_root_from_attachment(&attachment).ok_or("asset root")?;
+    let mut document = load_attachment_asset_index_document(&root)?;
+    document.assets[0].staging_refs.clear();
+    save_attachment_asset_index_document(&root, &document)?;
+
+    assert!(reconcile_staged_attachment_ref_scope(
+        &workspace.path().to_string_lossy(),
+        scope,
+        &[],
+    )?);
+    assert!(
+        load_attachment_asset_index_document(&root)?
+            .assets
+            .is_empty()
+    );
+    assert!(!std::path::Path::new(&attachment.local_path).exists());
+    Ok(())
+}
+
+/// Message promotion clears stale draft provenance even if its staging lease was already absent.
+/// 消息提升即使遇到已缺失的暂存租约，也会清理过期草稿来源信息。
+#[test]
+fn promotion_removes_draft_media_without_staging_ref() -> Result<(), Box<dyn std::error::Error>> {
+    let scope = "composer-draft:v1:new:promote-metadata-only";
+    let (workspace, attachment) = fixture(scope)?;
+    record_attachment_draft_media(&attachment, scope, upload_origin(&attachment)?)?;
+    let root = resolve_asset_root_from_attachment(&attachment).ok_or("asset root")?;
+    let mut document = load_attachment_asset_index_document(&root)?;
+    document.assets[0].staging_refs.clear();
+    save_attachment_asset_index_document(&root, &document)?;
+
+    promote_staged_attachment_to_message_ref(
+        &workspace.path().to_string_lossy(),
+        "session-a",
+        "message-a",
+        std::slice::from_ref(&attachment),
+        &[scope.to_owned()],
+    )?;
+    let reloaded = load_attachment_asset_index_document(&root)?;
+    assert_eq!(reloaded.assets[0].message_ids, ["message-a"]);
+    assert!(reloaded.assets[0].draft_media.is_empty());
+    assert!(std::path::Path::new(&attachment.local_path).exists());
+    Ok(())
+}
+
 /// Releasing the physical owner never deletes bytes already promoted to a durable message reference.
 /// 释放实体所有者绝不删除已经提升为持久消息引用的字节。
 #[test]

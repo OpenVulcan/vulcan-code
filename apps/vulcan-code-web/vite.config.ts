@@ -10,8 +10,8 @@ import { configDefaults } from "vitest/config";
 // VULCAN_DEV_WEBUI_ORIGIN 是获准读取服务发现令牌的精确调试工作台来源。
 const VULCAN_DEV_WEBUI_ORIGIN = "http://127.0.0.1:17601";
 
-// Configure the Vite app used by the Tauri desktop shell.
-// 配置 Tauri 桌面壳使用的 Vite 应用。
+// Configure the Vite app served by Core and loaded by the desktop shell.
+// 配置由 Core 提供页面并供桌面壳加载的 Vite 应用。
 export default defineConfig(({ mode }) => {
   // isRelease selects the packaged release behavior where no Vite server is needed.
   // isRelease 选择无需 Vite 服务端的打包 release 行为。
@@ -30,6 +30,28 @@ export default defineConfig(({ mode }) => {
     clearScreen: false,
     worker: {
       format: "es",
+    },
+    build: {
+      // manifest exposes the actual static import graph for the first-workbench budget.
+      // manifest 暴露真实静态导入图，供首屏工作台资源预算核算。
+      manifest: true,
+      rollupOptions: {
+        output: {
+          // localeCatalogChunk gives each catalog a separate cache identity; both remain static
+          // imports today and the initial-workbench graph budget counts both downloads.
+          // localeCatalogChunk 为每种文案目录提供独立缓存身份；当前两者仍是静态导入，
+          // 首次工作台导入图预算会把两份下载都计入。
+          manualChunks(id) {
+            if (id.includes("i18n-messages.zh-CN")) {
+              return "i18n-messages.zh-CN";
+            }
+            if (id.includes("i18n-messages.en-US")) {
+              return "i18n-messages.en-US";
+            }
+            return undefined;
+          },
+        },
+      },
     },
     test: {
       // The full-workbench audit requires its isolated transport aliases and dedicated Vitest configuration.

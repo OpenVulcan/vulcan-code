@@ -314,12 +314,13 @@ fn start_webui_session_kernel_turn_with_admission(
     kind: ActiveTurnKind,
     allowed_reservation_id: Option<Uuid>,
 ) -> Result<(), String> {
-    if state
+    if let Some(owner) = state
         .session_terminal_persistence_owners
-        .contains_key(&session_id)
+        .get(&session_id)
     {
         return Err(format!(
-            "Session `{session_id}` is committing its terminal state; a new runtime kernel turn cannot start"
+            "Session `{session_id}` is committing its terminal state ({}); a new runtime kernel turn cannot start",
+            owner.diagnostic_label()
         ));
     }
     match (

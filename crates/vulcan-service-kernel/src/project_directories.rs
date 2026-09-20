@@ -296,17 +296,26 @@ pub async fn service_add_project_from_path(
     // persist_lock serializes project restoration and creation decisions.
     // persist_lock 串行化项目恢复与创建决策。
     let persist_lock = webui_workspace_persist_lock();
-    // persist_guard protects the retained snapshot decision and its resulting project-row mutation.
-    // persist_guard 保护保留快照决策及其结果项目行变更。
+    // persist_guard protects the durable index decision and its resulting project-row mutation.
+    // persist_guard 保护持久索引决策及其结果项目行变更。
     let persist_guard = persist_lock.lock().await;
-    let workspace_snapshot = state
+    state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .workspace_snapshot
-        .clone()
+        .as_ref()
         .ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+    // workspace_snapshot is reloaded from the durable index so a cancelled prior refresh cannot
+    // make a persisted project look absent and cause a duplicate path or project identity.
+    // workspace_snapshot 从持久索引重载，避免先前刷新被取消后把已落盘项目误判为不存在，
+    // 从而产生重复路径或项目身份。
+    let workspace_snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+            controller_runtime.clone(),
+        )
+        .await?;
 
     if workspace_snapshot
         .task_projects
@@ -395,12 +404,43 @@ pub async fn service_add_project_from_path(
     );
     vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
         .await?;
+    // The project row and its workbench membership must publish before releasing the workspace
+    // writer lock. VMM binding may await a remote service and must not block unrelated projects.
+    // 项目行及工作台成员关系必须在释放工作区写锁前发布；VMM 绑定可能等待远端服务，
+    // 不应阻塞无关项目。
+    // Keep only the publication outcome; the full snapshot can be large and is rebuilt after binding.
+    // 仅保留发布结果；完整快照可能很大，并且绑定完成后会重新构建。
+    let initial_refresh_result = refresh_workbench_snapshot(state.clone()).await.map(|_| ());
+    if initial_refresh_result.is_err() {
+        // A failed full projection must still retain the already-durable project membership.
+        // Otherwise a concurrent settings writer could act on a stale in-memory project list.
+        // 全量投影失败时仍需保留已落盘的项目成员关系，否则并发设置写入者可能依据过时的
+        // 内存项目列表操作。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let retained = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        if !retained
+            .task_projects
+            .iter()
+            .any(|candidate| candidate.id == project.id)
+        {
+            retained.task_projects.push(project.clone());
+        }
+    }
+    drop(persist_guard);
+    #[cfg(test)]
+    tests::pause_before_project_binding_for_test().await;
     // Memory binding is intentionally non-fatal: the durable VulcanCode project remains created and
     // the response carries an explicit retry notice when VMM binding fails.
     // 记忆绑定有意采用非致命语义：VMM 绑定失败时，持久化的 VulcanCode 项目仍创建成功，响应携带明确重试通知。
     let project_binding_notice = crate::vmm::bind_new_vulcan_project_to_vmm(&state, &project).await;
-    // refresh_result publishes the new project before another project-row writer proceeds.
-    // refresh_result 在其他项目行写入者继续前发布新项目。
+    // Reacquire the writer lock before the final refresh so an intervening project publication
+    // cannot be rolled back or omitted from the response after a slow VMM binding.
+    // 最终刷新前重新获取写锁，避免缓慢的 VMM 绑定期间插入的项目发布被回滚或在响应中遗漏。
+    let persist_guard = persist_lock.lock().await;
     let refresh_result = refresh_workbench_snapshot(state.clone())
         .await
         .map(|mut workbench| {
@@ -408,7 +448,13 @@ pub async fn service_add_project_from_path(
             workbench
         });
     drop(persist_guard);
-    refresh_result.map(Some)
+    match (initial_refresh_result, refresh_result) {
+        (_, Ok(workbench)) => Ok(Some(workbench)),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(initial_error), Err(final_error)) => Err(format!(
+            "项目已创建，但首次工作台发布失败：{initial_error}；绑定后重试仍失败：{final_error}"
+        )),
+    }
 }
 
 /// Normalizes one project path by resolving it when the host filesystem allows it.
@@ -498,9 +544,47 @@ fn slugify_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::{Arc, Mutex};
+
+    use tokio::sync::Notify;
 
     use super::*;
+    use crate::tests::test_support::{
+        TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+    };
     use vulcan_workbench_model::SessionId;
+
+    tokio::task_local! {
+        /// Holds a deterministic pause at the real project-binding boundary for one test task.
+        /// 为单个测试任务在真实项目绑定边界保留确定性暂停点。
+        static PROJECT_BINDING_PAUSE: Arc<ProjectBindingPause>;
+    }
+
+    /// Coordinates one delayed binding without changing any production VMM configuration.
+    /// 在不修改生产 VMM 配置的情况下协调一次延迟绑定。
+    #[derive(Default)]
+    struct ProjectBindingPause {
+        /// Signals that the first add request reached the binding boundary.
+        /// 通知首个新增请求到达绑定边界。
+        entered: Notify,
+        /// Releases the first add request after the concurrent request has completed.
+        /// 在并发请求完成后释放首个新增请求。
+        release: Notify,
+    }
+
+    /// Pauses only the task that explicitly installed the binding test scope.
+    /// 仅暂停明确安装绑定测试作用域的任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns after the test releases the binding boundary, or immediately outside the scope.
+    /// 测试释放绑定边界后返回；不在该作用域时立即返回。
+    pub(super) async fn pause_before_project_binding_for_test() {
+        if let Ok(pause) = PROJECT_BINDING_PAUSE.try_with(Arc::clone) {
+            pause.entered.notify_one();
+            pause.release.notified().await;
+        }
+    }
 
     /// Builds an empty workspace snapshot for project id generation tests.
     /// 构建用于项目标识生成测试的空工作区快照。
@@ -586,5 +670,160 @@ mod tests {
             &workspace_snapshot,
             "missing-project"
         ));
+    }
+
+    /// Verifies a slow VMM binding cannot block a second real project create or hide its result.
+    /// 验证缓慢的 VMM 绑定不会阻塞第二次真实项目创建，也不会隐藏其结果。
+    #[tokio::test]
+    async fn project_binding_wait_releases_workspace_writer_and_preserves_both_projects() {
+        // root owns the isolated V1 and APP storage used by the production project path.
+        // root 持有生产项目入口使用的隔离 V1 与 APP 存储。
+        let session_id = SessionId::new_v4();
+        let root = TestHostRuntimeRoot::new(session_id);
+        let controller = root.attached_host_runtime_handle().await;
+        vulcan_workspace_store::data_plane::prepare_application_schema_for_test(&controller)
+            .await
+            .expect("isolated application schema");
+        // existing_project makes the indexed session's owner resolvable during both refreshes.
+        // existing_project 使索引会话的所属项目在两次刷新期间都可解析。
+        let existing_path = root.data_root().join("existing-project");
+        std::fs::create_dir_all(&existing_path).expect("existing project directory");
+        let existing_project = TaskProjectSummary::new(
+            "v1-test-project",
+            "Existing project",
+            existing_path.display().to_string(),
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        );
+        vulcan_workspace_store::workspace_store::persist_new_project(
+            controller.clone(),
+            &existing_project,
+        )
+        .await
+        .expect("persist indexed session owner");
+        // workspace comes from the same durable index used by the service, not an invented list.
+        // workspace 来自服务使用的同一持久索引，而不是编造的列表。
+        let workspace = vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+            controller.clone(),
+        )
+        .await
+        .expect("load initial project index");
+        // initial_workspace later simulates a retained projection from before both durable adds.
+        // initial_workspace 稍后模拟两次持久新增之前保留的过时投影。
+        let initial_workspace = workspace.clone();
+        let mut service = test_service_state_with_parent_session(session_id);
+        // A deliberately unavailable native manager exercises the real non-fatal binding notice.
+        // 故意缺席的原生管理器用于验收真实的非致命绑定通知。
+        let mut agent = test_agent_runtime_bridge();
+        agent.provider_configuration.vmm.enabled = Some(true);
+        agent.provider_configuration.vmm.backend_mode = Some(vulcan_vmm::VmmBackendMode::Native);
+        service.agent_runtime = Some(agent);
+        service.controller_runtime = Some(controller.clone());
+        service.workspace_snapshot = Some(workspace);
+        let state = Arc::new(Mutex::new(service));
+        // first_path and second_path are distinct real directories beneath the private root.
+        // first_path 与 second_path 是私有根目录下两个不同的真实目录。
+        let first_path = root.data_root().join("first-project");
+        let second_path = root.data_root().join("second-project");
+        std::fs::create_dir_all(&first_path).expect("first project directory");
+        std::fs::create_dir_all(&second_path).expect("second project directory");
+        // Only the first request pauses; a JoinSet aborts it if an assertion fails.
+        // 仅首个请求暂停；断言失败时 JoinSet 会中止该请求。
+        let pause = Arc::new(ProjectBindingPause::default());
+        let mut pending = tokio::task::JoinSet::new();
+        pending.spawn(PROJECT_BINDING_PAUSE.scope(
+            pause.clone(),
+            service_add_project_from_path(state.clone(), first_path.clone()),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(30), pause.entered.notified())
+            .await
+            .expect("first project reaches VMM binding boundary");
+        // The first project is already visible before its VMM binding may finish.
+        // 首个项目在其 VMM 绑定完成前已经可见。
+        let first_published = state
+            .lock()
+            .expect("retained workspace state")
+            .workspace_snapshot
+            .as_ref()
+            .expect("published workspace")
+            .task_projects
+            .iter()
+            .any(|project| task_project_matches_path(project, &first_path.display().to_string()));
+        assert!(first_published);
+        // The second real service call must finish while the first binder remains paused.
+        // 首个绑定仍暂停时，第二次真实服务调用必须完成。
+        let second_response = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            service_add_project_from_path(state.clone(), second_path.clone()),
+        )
+        .await
+        .expect("second create must not wait for first VMM binding")
+        .expect("second create")
+        .expect("second workbench");
+        assert_eq!(second_response.projects.len(), 3);
+        assert_eq!(
+            second_response
+                .vmm_memory
+                .project_binding_notice
+                .as_ref()
+                .map(|notice| notice.status.as_str()),
+            Some("failed")
+        );
+        pause.release.notify_one();
+        let first_response = pending
+            .join_next()
+            .await
+            .expect("first project task")
+            .expect("first project task must not panic")
+            .expect("first create")
+            .expect("first workbench");
+        assert_eq!(first_response.projects.len(), 3);
+        assert_eq!(
+            first_response
+                .vmm_memory
+                .project_binding_notice
+                .as_ref()
+                .map(|notice| notice.status.as_str()),
+            Some("failed")
+        );
+        // A stale retained projection must not make an already persisted path create a new row.
+        // 过时的保留投影不能让已持久化路径再次创建新项目行。
+        state
+            .lock()
+            .expect("retained workspace state")
+            .workspace_snapshot = Some(initial_workspace);
+        let retry_response = service_add_project_from_path(state.clone(), first_path.clone())
+            .await
+            .expect("retry known durable project")
+            .expect("retry workbench");
+        assert_eq!(retry_response.projects.len(), 3);
+        // Read the durable index again to prove both projects survived publication interleaving.
+        // 再次读取持久索引，证明两个项目在发布交错后均已保留。
+        let durable =
+            vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(controller)
+                .await
+                .expect("load final project index");
+        assert_eq!(durable.task_projects.len(), 3);
+        assert!(
+            durable
+                .task_projects
+                .iter()
+                .any(|project| task_project_matches_path(
+                    project,
+                    &first_path.display().to_string()
+                ))
+        );
+        assert!(
+            durable
+                .task_projects
+                .iter()
+                .any(|project| task_project_matches_path(
+                    project,
+                    &second_path.display().to_string()
+                ))
+        );
     }
 }

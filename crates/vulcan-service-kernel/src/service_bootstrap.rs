@@ -701,7 +701,7 @@ fn run_service_bootstrap(
                 (
                     "mcp",
                     StartupStepStatus::Running,
-                    "正在并行初始化服务 MCP Runtime 与插件 Hook 运行时",
+                    "正在初始化 Agent MCP Runtime 与插件 Hook 运行时",
                 ),
                 (
                     "plugins",
@@ -717,40 +717,10 @@ fn run_service_bootstrap(
         )
     });
 
-    // mcp_started_at measures the complete MCP runtime bootstrap call.
-    // mcp_started_at 测量完整的 MCP Runtime 引导调用。
-    let mcp_started_at = start_bootstrap_stage("mcp");
-    let mcp_runtime = runtime
-        .block_on(vulcan_service_runtime::mcp_bridge::bootstrap_mcp_runtime(
-            provider_configuration.clone(),
-        ))
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "mcp",
-                "MCP Runtime",
-                format!("MCP Runtime 初始化失败：{error}"),
-            )
-        })?;
-    let mcp_catalog = mcp_runtime.catalog();
-    trace_bootstrap_stage(
-        "mcp",
-        mcp_started_at,
-        format!(
-            "configured={} connected={} tools={}",
-            mcp_catalog.configured_server_count,
-            mcp_catalog.connected_server_count,
-            mcp_catalog.tool_count
-        ),
-    );
-    logs.push(format!(
-        "[webui-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
-        mcp_catalog.enabled_server_count,
-        mcp_catalog.configured_server_count,
-        mcp_catalog.connected_server_count,
-        mcp_catalog.tool_count,
-        mcp_catalog.prompt_count,
-        mcp_catalog.resource_count
-    ));
+    // The service owns no second MCP transport: the single Agent MCP runtime below is the only
+    // runtime authority, and its catalog is projected for the UI after it is bootstrapped.
+    // 服务不持有第二套 MCP 传输：下方唯一的 Agent MCP 运行时是唯一运行时权威，
+    // 其目录在引导完成后为界面投影。
     update_startup(
         state,
         event_emitter,
@@ -775,7 +745,11 @@ fn run_service_bootstrap(
                         luaskills_step_status.clone(),
                         luaskills_step_message.as_str(),
                     ),
-                    ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
+                    (
+                        "mcp",
+                        StartupStepStatus::Running,
+                        "正在初始化 Agent MCP Runtime",
+                    ),
                     (
                         "plugins",
                         StartupStepStatus::Running,
@@ -982,6 +956,9 @@ fn run_service_bootstrap(
             },
         )?,
     );
+    // mcp_started_at measures the single Agent MCP runtime bootstrap and its catalog projection.
+    // mcp_started_at 测量唯一的 Agent MCP 运行时引导及其目录投影。
+    let mcp_started_at = start_bootstrap_stage("mcp");
     let agent_mcp_runtime = runtime
         .block_on(bootstrap_mcp_runtime_access(mcp_server_configs))
         .map_err(|error| {
@@ -991,6 +968,31 @@ fn run_service_bootstrap(
                 format!("Agent MCP Runtime 初始化失败：{error}"),
             )
         })?;
+    // mcp_catalog is projected from the single Agent MCP runtime, so the WebUI, settings, and AI
+    // tool catalog always share one generation and one set of child processes.
+    // mcp_catalog 从唯一的 Agent MCP 运行时投影，使 WebUI、设置与 AI 工具目录
+    // 始终共享同一代次与同一组子进程。
+    let mcp_catalog =
+        vulcan_service_runtime::mcp_bridge::mcp_runtime_catalog_from_access(&agent_mcp_runtime);
+    trace_bootstrap_stage(
+        "mcp",
+        mcp_started_at,
+        format!(
+            "configured={} connected={} tools={}",
+            mcp_catalog.configured_server_count,
+            mcp_catalog.connected_server_count,
+            mcp_catalog.tool_count
+        ),
+    );
+    logs.push(format!(
+        "[webui-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
+        mcp_catalog.enabled_server_count,
+        mcp_catalog.configured_server_count,
+        mcp_catalog.connected_server_count,
+        mcp_catalog.tool_count,
+        mcp_catalog.prompt_count,
+        mcp_catalog.resource_count
+    ));
     let vmm_hook_runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
     let mut conversation_hook_runtime = ConversationHookRuntime::new();
     register_builtin_vmm_hooks(
@@ -1701,8 +1703,6 @@ fn run_service_bootstrap(
         guard.knowledge_runtime = Some(knowledge_runtime);
         guard.luaskills_runtime = luaskills_runtime;
         guard.cached_luaskills_catalog = Some(luaskills_catalog);
-        guard.mcp_runtime = Some(mcp_runtime);
-        guard.cached_mcp_catalog = Some(mcp_catalog);
         workbench
     };
     // Initial configuration publication is complete; later navigation acquires its own scoped guard.

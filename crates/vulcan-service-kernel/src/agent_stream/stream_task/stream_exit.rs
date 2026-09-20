@@ -140,7 +140,7 @@ pub(crate) fn handle_stream_task_exit(
     if let Err(error) = register_session_terminal_persistence_owner(
         &mut guard,
         session_id,
-        terminal_persistence_owner,
+        terminal_persistence_owner.clone(),
     ) {
         eprintln!(
             "[webui-service] early stream termination terminal-persistence registration failed: session={session_id} reason={early_termination_label} error={error}"
@@ -170,7 +170,7 @@ pub(crate) fn handle_stream_task_exit(
         let _ = rollback_session_terminal_persistence_owner(
             &mut guard,
             session_id,
-            terminal_persistence_owner,
+            &terminal_persistence_owner,
         );
         eprintln!(
             "[webui-service] early stream termination exact owner disappeared inside terminal transaction: session={session_id} task={active_stream_task_id}"

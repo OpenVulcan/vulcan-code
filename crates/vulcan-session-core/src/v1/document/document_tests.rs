@@ -18,6 +18,7 @@ mod persistence;
 mod provider_source;
 mod selection;
 mod subagent;
+mod terminal_settlement;
 mod tools;
 mod turns;
 mod user_prompt;

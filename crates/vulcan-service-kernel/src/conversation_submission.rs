@@ -62,6 +62,7 @@ use super::{
     session_has_blocking_system_prompt_work, session_process_public_ai_selection,
     spawn_service_task, start_exact_v1_queued_turn, start_reserved_webui_session_kernel_user_turn,
     start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
+    ensure_session_terminal_settlement_settled,
     webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
     webui_trace_if_slow, webui_vmm_runtime_readiness,
 };
@@ -2376,6 +2377,13 @@ async fn service_start_conversation_execution(
     // submission_session_id is the existing identity used by retained-state and hydration lookups.
     // submission_session_id 是保留状态与水合查找使用的已有会话身份。
     let submission_session_id = submission_target.existing_session_id();
+    // A durable terminal settlement left by an earlier stream keeps the exact session closed; one
+    // controlled idempotent retry runs before admission so a recovered store can complete it.
+    // 早期流留下的可靠终态结算会让精确会话保持关闭；准入前执行一次受控幂等重试，
+    // 使恢复后的存储能够完成结算。
+    if let Some(session_id) = submission_session_id {
+        ensure_session_terminal_settlement_settled(&state, session_id).await?;
+    }
     if let Some(draft_slot_key) = draft_slot_key.as_deref() {
         crate::attachments::composer_attachment_draft_scope_for_owner(
             draft_slot_key,
@@ -2640,7 +2648,14 @@ async fn service_start_conversation_execution(
         .map(composer_attachment_summary_to_provider_core)
         .collect::<Result<Vec<_>, _>>()?;
     if let ExistingSubmissionQueueDecision::Queue { session_id } =
-        evaluate_existing_submission_queue(&state, &workspace_snapshot, submission_session_id)?
+        evaluate_existing_submission_queue(
+            &state,
+            &workspace_snapshot,
+            submission_session_id,
+            existing_submission_v1_authority
+                .as_ref()
+                .map(|authority| &authority.handle),
+        )?
     {
         if submission_mode.is_continuation() {
             return Err(String::from("ERR_CONVERSATION_CONTINUE_SESSION_BUSY"));
