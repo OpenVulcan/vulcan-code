@@ -104,7 +104,9 @@ export function mergeWorkbenchSnapshot(
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     pendingPromptsByConversation: incoming.pendingPromptsByConversation ?? current.pendingPromptsByConversation ?? [],
     pendingQuestions: incoming.pendingQuestions ?? current.pendingQuestions ?? [],
-    sessionAddonsByConversation: incoming.sessionAddonsByConversation ?? current.sessionAddonsByConversation ?? [],
+    sessionAddonsByConversation: incoming.sessionAddonsByConversation?.map((entry) => options.allowServiceRevisionReset
+      ? entry : retainNewerLifetimeUsage(current.sessionAddonsByConversation ?? [], entry))
+      ?? current.sessionAddonsByConversation ?? [],
     sessionVmmPoliciesByConversation: incoming.sessionVmmPoliciesByConversation ?? current.sessionVmmPoliciesByConversation ?? [],
     contextInjectionByConversation: mergeContextInjectionByConversation(
       current.contextInjectionByConversation ?? [],
@@ -207,12 +209,33 @@ function upsertPendingPromptsForConversation(
   return entry.pendingPrompts.length > 0 ? [...next, entry] : next;
 }
 
-// upsertSessionAddonsForConversation upserts or removes one session addon projection.
-// upsertSessionAddonsForConversation 写入或删除单个会话附属投影。
+// Retains newer usage from current entries while accepting other incoming addon fields.
+// 从当前条目保留较新用量，同时接纳其他传入附属字段。
+// Parameters identify retained and incoming projections; returns the monotonic incoming entry.
+// 参数标识保留与传入投影；返回用量单调的传入条目。
+function retainNewerLifetimeUsage(
+  current: SessionAddonsChangedDelta[],
+  entry: SessionAddonsChangedDelta,
+): SessionAddonsChangedDelta {
+  // Preserve the newer resident usage while allowing other addon fields to change.
+  // 保留较新的驻留用量，同时允许其他附属状态变化。
+  const previousUsage = current.find((candidate) => candidate.conversationId === entry.conversationId)?.sessionProviderUsage;
+  const incomingUsage = entry.sessionProviderUsage;
+  if (previousUsage?.lifetime && incomingUsage?.lifetime
+    && previousUsage.lifetime.rootSessionId === incomingUsage.lifetime.rootSessionId
+    && previousUsage.lifetime.revision > incomingUsage.lifetime.revision) {
+    return { ...entry, sessionProviderUsage: previousUsage };
+  }
+  return entry;
+}
+
+// Upserts or removes one session addon projection while retaining newer usage.
+// 写入或删除单个会话附属投影，同时保留较新用量。
 function upsertSessionAddonsForConversation(
   current: SessionAddonsChangedDelta[],
   entry: SessionAddonsChangedDelta,
 ): SessionAddonsChangedDelta[] {
+  entry = retainNewerLifetimeUsage(current, entry);
   const next = current.filter((candidate) => candidate.conversationId !== entry.conversationId);
   const hasAddon = Boolean(
     entry.sessionGoal

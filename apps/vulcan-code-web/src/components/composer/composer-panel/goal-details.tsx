@@ -10,10 +10,10 @@ export function ComposerGoalDetails({ goal }: { goal: SessionGoalSummary }) {
   const { t, locale } = useI18n();
   // usage excludes cache hits and does not double-count reasoning already contained in output.
   // usage 排除缓存命中，不重复计算已包含在输出中的思考用量。
-  const usage = goal.inputTokens + goal.outputTokens;
+  const usage = goal.tokensUsed;
   // budgetText belongs exclusively to the hover card, never the compact objective strip.
   // budgetText 仅属于悬浮卡，不再占用紧凑目标条。
-  const budgetText = goal.tokenBudget != null
+  const budgetText = goal.usageKnown === false ? (locale === "zh-CN" ? "用量未知" : "Usage unknown") : goal.tokenBudget != null
     ? `${formatCompactGoalTokenCount(usage)} / ${formatCompactGoalTokenCount(goal.tokenBudget)}`
     : formatCompactGoalTokenCount(usage);
   // metrics pair related counters in the same structure as the existing turn-statistics card.
@@ -28,7 +28,7 @@ export function ComposerGoalDetails({ goal }: { goal: SessionGoalSummary }) {
   const input = goal.inputTokens + goal.cachedInputTokens;
   // cachePercent preserves the distinction between no samples and a real zero hit rate.
   // cachePercent 区分尚无样本与真实的零命中率。
-  const cachePercent = input > 0 ? goal.cachedInputTokens / input * 100 : null;
+  const cachePercent = goal.usageKnown !== false && input > 0 ? goal.cachedInputTokens / input * 100 : null;
   return <>
     <div className="composer-goal-details-objective">{goal.objective}</div>
     <div className="context-usage-card-header">
@@ -36,13 +36,13 @@ export function ComposerGoalDetails({ goal }: { goal: SessionGoalSummary }) {
     </div>
     <dl className="composer-goal-details-metrics">
       {metrics.map(([label, value]) => <div className="turn-stats-metric" key={label}>
-        <dt>{label}</dt><dd>{formatFullGoalTokenCount(value, locale)}</dd>
+        <dt>{label}</dt><dd>{goal.usageKnown === false ? "—" : formatFullGoalTokenCount(value, locale)}</dd>
       </div>)}
     </dl>
     <div className="turn-stats-cache-summary">
       <div className="turn-stats-metric-row">
         <div className="turn-stats-metric">
-          <span>{t("composer.goal.tooltip.total")}</span><strong>{formatFullGoalTokenCount(goal.totalTokens, locale)}</strong>
+          <span>{t("composer.goal.tooltip.total")}</span><strong>{goal.usageKnown === false ? "—" : formatFullGoalTokenCount(goal.totalTokens, locale)}</strong>
         </div>
         <div className="turn-stats-metric">
           <span>{t("composer.goal.cacheHit")}</span><strong>{cachePercent === null ? "—" : `${cachePercent.toFixed(1)}%`}</strong>

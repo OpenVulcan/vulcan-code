@@ -321,9 +321,9 @@ it("keeps missing cumulative usage compact without replacing it with the last ca
       cumulativeUsage: { inputTokens: 100 }, lastUsage: { totalTokens: 500 } }}
     contextCompactionWindowNodes={[]} selectedNodeId={null} modelContextLimit={950_000} onNodeChange={vi.fn()} />);
   await act(async () => host.querySelector<HTMLButtonElement>('.context-usage-control')!.click());
-  expect(document.querySelector('.context-usage-provider-metric:last-child strong')?.textContent).toBe("-");
+  expect(document.querySelector('.context-usage-tooltip')?.textContent).toContain("Lifetime usage unavailable");
   expect(document.querySelector('.context-usage-cache-row strong')?.textContent).toBe("-");
-  expect(document.querySelector('.context-usage-provider-metric:last-child [tabindex="0"]')?.getAttribute("aria-label")).toBe("conversation.process.providerUsageUnknown");
+  expect(document.querySelector('.context-usage-tooltip')?.textContent).not.toContain("500");
 });
 
 it("retains an invalid saved node and lets the user restore the exact model default", async () => {

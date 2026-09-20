@@ -13,6 +13,25 @@ use vulcan_session_core::v1::document::PlanModeTransitionInput;
 use vulcan_session_core::v1::document::SessionDocument;
 use vulcan_session_core::v1::event::{EventBody, SystemContextOperation};
 
+/// Publishes the root usage projection after a terminal or tool increment.
+/// 在终态或工具增量后发布根用量投影。
+/// Errors are logged independently from Provider execution and global request statistics.
+/// 错误独立记录，不影响 Provider 执行和全局请求统计。
+pub(crate) fn emit_lifetime_usage_changed(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+) {
+    // Children notify their root so inactive child panels share the same aggregate revision.
+    // 子会话通知根，使非活动子面板共享同一个累计版本。
+    let result = handle
+        .lifetime_usage_root_id()
+        .and_then(|root| emit_session_addons_changed_delta(app, state, root).map(|_| ()));
+    if let Err(error) = result {
+        eprintln!("[session-usage] publish: {error}");
+    }
+}
+
 /// 会话当前处于计划模式时返回计划模式开发者提示段。
 pub(crate) fn session_plan_context_for_prompt_from_state(
     _app: &ServiceEventEmitter,
@@ -399,9 +418,11 @@ pub(crate) fn emit_session_addons_changed_delta(
     session_id: SessionId,
 ) -> Result<SessionAddonsChangedResponse, String> {
     let conversation_id = session_id.to_string();
-    let session_provider_usage = registered_session_v1_handle_from_state(state, session_id)?
-        .read(session_provider_usage_summary_from_v1_document)
-        .map_err(|error| format!("读取 V1 Provider 用量投影失败：{error}"))??;
+    let usage_handle = registered_session_v1_handle_from_state(state, session_id)?;
+    let fresh_goal = crate::session_goal_lifecycle::session_goal_summary_from_v1_handle(
+        &usage_handle,
+        session_id,
+    )?;
     let (event, response) = {
         let mut guard = state
             .lock()
@@ -418,7 +439,11 @@ pub(crate) fn emit_session_addons_changed_delta(
                 }
             },
         );
-        let session_goal = guard.session_goal_summaries.get(&session_id).cloned();
+        // Read the resident aggregate inside projection serialization so concurrent notifications cannot regress it.
+        // 在投影串行化区间读取驻留累计，避免并发通知使累计显示倒退。
+        let session_provider_usage =
+            Some(session_provider_usage_summary_from_v1_handle(&usage_handle));
+        let session_goal = fresh_goal;
         let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
         let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
         let provider_vmm_layer = guard

@@ -26,6 +26,7 @@ mod provider_api_trace;
 mod provider_usage;
 mod resource_catalog;
 mod session_index_v1;
+mod session_usage;
 mod session_v1;
 mod session_v1_store;
 mod session_vmm_v1;
@@ -60,6 +61,8 @@ pub use resource_catalog::{
     project_resource_catalog_path, project_resource_locator, resolve_project_resource,
     resolve_project_resource_source,
 };
+pub use session_usage::load_session_lifetime_usage_with_goal_baseline;
+pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage};
 #[cfg(feature = "test-support")]
 pub use session_v1_store::create_session_v1_storage_fixture;
 pub use session_v1_store::{

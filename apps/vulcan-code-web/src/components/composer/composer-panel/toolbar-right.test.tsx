@@ -115,8 +115,8 @@ describe("composer toolbar primary action", () => {
       sessionProviderUsage,
     });
 
-    expect(markup).toContain("Total requests: 2");
-    expect(markup).toContain("Total tokens: 35.04M");
+    expect(markup).toContain('aria-label="Context capacity"');
+    expect(markup).not.toContain("Total tokens: 35.04M");
   });
 
   it("formats Provider request and token counts with compact units", () => {

@@ -105,7 +105,7 @@ fn turn_stats_aggregate_direct_and_subagent() -> Result<(), DomainError> {
         source_assistant_text_seq,
     })?;
     assert!(matches!(
-        doc.append_subagent_return_with_stats(input, T0 + 2)?,
+        doc.append_subagent_return(input, T0 + 2)?,
         IdempotentMutation::Committed(_)
     ));
     doc.close_turn(TurnOutcome::Completed, 5, T0 + 3)?;
@@ -118,15 +118,14 @@ fn turn_stats_aggregate_direct_and_subagent() -> Result<(), DomainError> {
         })
         .expect("turn stats must exist");
     assert_eq!(stats.buckets.direct.api_call_count, 1);
-    assert_eq!(stats.buckets.subagent.api_call_count, 2);
-    assert_eq!(stats.buckets.total.api_call_count, 3);
-    assert_eq!(stats.buckets.subagent.unknown_usage_api_call_count, 1);
-    assert_eq!(stats.buckets.total.unknown_usage_api_call_count, 1);
-    assert_eq!(stats.buckets.subagent.tool_call_count, 1);
-    assert_eq!(stats.buckets.total.tool_call_count, 1);
-    assert_eq!(stats.buckets.total.usage.input_tokens, None);
-    assert_eq!(stats.buckets.total.usage.output_tokens, None);
-    assert_eq!(stats.buckets.total.subagent_return_count, 1);
+    assert_eq!(
+        stats.buckets.subagent,
+        crate::v1::stats::StatBucket::default()
+    );
+    assert_eq!(stats.buckets.total, stats.buckets.direct);
+    assert_eq!(stats.buckets.total.api_call_count, 1);
+    assert_eq!(stats.buckets.total.usage.input_tokens, Some(10));
+    assert_eq!(stats.buckets.total.usage.output_tokens, Some(20));
     assert_eq!(stats_turn_id, Some(turn_id));
     Ok(())
 }
@@ -521,21 +520,29 @@ fn goal_budget_exhaustion_and_successor_recovery_are_exactly_once() -> Result<()
     )?;
     exhausted.append_assistant_text(api, "done", AssistantSemanticStatus::Completed, T0 + 2)?;
     complete_ok(&mut exhausted, api, None, T0 + 3)?;
-    let transition = exhausted.complete_turn_and_select_successor(turn, T0 + 4)?;
+    exhausted.metadata.mode.goal.usage_baseline = Some(Default::default());
+    // The child contributes before returning any content to the parent.
+    // 子会话在向父会话返回任何内容之前就贡献用量。
+    let current_usage = crate::v1::lifetime_usage::GoalUsageSnapshot {
+        main: crate::v1::lifetime_usage::SessionUsageBucket::from_api(
+            &usage(10, 10),
+            &ApiTimings::default(),
+        )
+        .unwrap(),
+        children: crate::v1::lifetime_usage::SessionUsageBucket::from_api(
+            &usage(5, 5),
+            &ApiTimings::default(),
+        )
+        .unwrap(),
+    };
+    let transition =
+        exhausted.complete_turn_with_lifetime_usage(turn, T0 + 4, Some(&current_usage))?;
     assert_eq!(transition.successor, TurnSuccessor::None);
     assert_eq!(
         exhausted.metadata.mode.goal.state,
         GoalState::BudgetExhausted
     );
-    let cache = exhausted
-        .metadata
-        .mode
-        .goal
-        .budget_cache
-        .as_ref()
-        .expect("known persisted usage must build a cache");
-    assert_eq!(cache.total_tokens, 30);
-    assert_eq!(cache.covered_until_seq, transition.completed_turn_final_seq);
+    assert!(exhausted.metadata.mode.goal.budget_cache.is_none());
 
     let restored = SessionDocument::from_parts(
         exhausted.metadata.clone(),

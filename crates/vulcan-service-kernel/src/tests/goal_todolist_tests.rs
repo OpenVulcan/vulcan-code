@@ -277,6 +277,7 @@ fn session_todolist_summary_counts_completed_items() {
 #[test]
 fn goal_continuation_prompt_keeps_codex_audit_details() {
     let prompt = render_goal_continuation_context(&SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-1"),
         objective: String::from("完成目标模式"),
@@ -314,6 +315,7 @@ fn goal_continuation_prompt_keeps_codex_audit_details() {
 #[test]
 fn goal_execution_context_binds_prompt_to_goal_identity() {
     let goal = SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-bound-to-run"),
         objective: String::from("验证目标身份绑定"),
@@ -396,6 +398,7 @@ async fn provider_request_goal_binding_survives_same_execution_stop() {
 #[test]
 fn goal_context_attaches_only_to_the_exact_creation_boundary() {
     let goal = SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-delivery-boundary"),
         objective: String::from("验证目标投递边界"),
@@ -496,6 +499,7 @@ fn mailbox_goal_context_attaches_to_concrete_agent_message_payloads() {
     // goal provides one active version whose marker is initially absent from history.
     // goal 提供一个其标记最初不在历史中的活动版本。
     let goal = SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-mailbox-delivery"),
         objective: String::from("验证 mailbox 目标投递"),
@@ -600,6 +604,7 @@ fn mailbox_goal_context_attaches_to_concrete_agent_message_payloads() {
 #[test]
 fn goal_turn_usage_is_append_only_and_omits_zero_usage() {
     let mut goal = SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-usage"),
         objective: String::from("验证追加式用量"),
@@ -648,6 +653,7 @@ fn goal_turn_usage_is_append_only_and_omits_zero_usage() {
 #[test]
 fn goal_objective_updated_prompt_supersedes_previous_goal() {
     let prompt = render_goal_objective_updated_context(&SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-1"),
         objective: String::from("完成修改后的目标"),
@@ -682,6 +688,7 @@ fn goal_objective_updated_prompt_supersedes_previous_goal() {
 #[test]
 fn goal_budget_limited_prompt_waits_for_user_resume() {
     let prompt = render_goal_budget_limited_context(&SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-budget"),
         objective: String::from("完成预算测试"),
@@ -713,6 +720,7 @@ fn goal_budget_limited_prompt_waits_for_user_resume() {
 #[test]
 fn budget_limited_goal_is_not_regular_prompt_context() {
     let goal = SessionGoalSummary {
+        usage_known: true,
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-budget"),
         objective: String::from("完成预算测试"),

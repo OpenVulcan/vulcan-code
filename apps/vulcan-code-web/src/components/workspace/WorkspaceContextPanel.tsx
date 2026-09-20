@@ -1,4 +1,5 @@
 import React from "react";
+import { ChildLifetimeUsageChip } from "@/components/conversation/session-lifetime-usage";
 import { useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { toast } from "sonner";
 import {
@@ -924,6 +925,10 @@ function WorkspaceSubagentPanel(args: {
   // task stores the current backend task row when it is still present in the snapshot.
   // task 保存快照中仍存在时的当前后端任务行。
   const task = taskId ? navigation?.tasks?.find((candidate) => candidate.taskId === taskId) ?? null : null;
+  // Retained root addons keep this child accurate when another main conversation is selected.
+  // 保留的根附属状态使当前子会话在选中其他主会话时仍保持准确。
+  const rootUsage = args.props.workbench.sessionAddonsByConversation
+    ?.find((entry) => entry.conversationId === parentConversationId)?.sessionProviderUsage?.lifetime;
   // taskRunning records whether the backend still allows stopping this task.
   // taskRunning 记录后端是否仍允许停止该任务。
   const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
@@ -1055,7 +1060,9 @@ function WorkspaceSubagentPanel(args: {
   }
 
   return (
-    <div className="workspace-subagent-panel">
+    <div className="workspace-subagent-panel relative pt-10">
+      <ChildLifetimeUsageChip bucket={rootUsage?.rootSessionId === parentConversationId
+        ? rootUsage.childrenBySessionId[taskId]?.usage : undefined} />
       {transcriptOwner.error && transcriptHasEvents ? (
         <div className="workspace-subagent-error-inline" role="alert">
           <Bot size={16} />

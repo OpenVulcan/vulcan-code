@@ -463,6 +463,12 @@ export interface SessionProviderUsageCallSummary {
 // SessionProviderUsageSummary carries live physical Provider accounting for one conversation.
 // SessionProviderUsageSummary 携带单个会话的实时物理 Provider 统计。
 export interface SessionProviderUsageSummary {
+  /** Resident root lifetime counters, separated by owner.
+   * 按所有者分离的常驻根生命周期计数。 */
+  lifetime?: import("./session-lifetime-usage").SessionLifetimeUsage | null;
+  /** Explicit availability error.
+   * 明确的不可用原因。 */
+  lifetimeError?: string | null;
   // Number of physical Provider requests dispatched.
   // 已分发的物理 Provider 请求数量。
   providerCallCount: number;

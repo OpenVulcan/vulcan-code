@@ -219,9 +219,6 @@ pub(crate) struct SessionSubagentReturnDispatchAuthority {
     /// Provider-visible subagent return seq.
     /// Provider 可见的子代理回流 seq。
     pub(crate) return_seq: Seq,
-    /// Adjacent UiOnly inclusive-statistics seq.
-    /// 相邻的 UiOnly 包容性统计 seq。
-    pub(crate) stats_seq: Seq,
     /// Exact child session identity.
     /// 精确子会话身份。
     pub(crate) child_session_id: String,
@@ -247,58 +244,39 @@ pub(crate) fn subagent_return_dispatch_authority_from_v1_handle(
 ) -> Result<SessionSubagentReturnDispatchAuthority, String> {
     handle
         .read(|document| {
-            let turn = document.active_turn().ok_or_else(|| {
-                String::from("The subagent return has no authoritative open parent V1 Turn.")
-            })?;
+            // Validate the persisted content identity before resuming the parent.
+            // 恢复父会话之前校验已持久化的内容身份。
+            let turn = document
+                .active_turn()
+                .ok_or("The subagent return has no open parent Turn.")?;
             if turn.closed || turn.turn_id != receipt.parent_turn_id {
                 return Err(String::from(
-                    "The subagent return no longer belongs to the authoritative open parent V1 Turn.",
+                    "The subagent return no longer belongs to the open parent Turn.",
                 ));
             }
-            let return_event = document
+            let record = document
                 .events()
                 .iter()
                 .find(|event| event.seq == receipt.return_seq)
-                .ok_or_else(|| String::from("The subagent return seq is missing."))?;
-            let stats_event = document
-                .events()
-                .iter()
-                .find(|event| event.seq == receipt.stats_seq)
-                .ok_or_else(|| String::from("The subagent return statistics seq is missing."))?;
-            if return_event.turn_id != Some(receipt.parent_turn_id)
-                || stats_event.turn_id != Some(receipt.parent_turn_id)
-                || receipt.return_seq.value().checked_add(1) != Some(receipt.stats_seq.value())
-            {
+                .ok_or("The subagent return seq is missing.")?;
+            let EventBody::SubagentReturn(returned) = &record.event else {
                 return Err(String::from(
-                    "The subagent return receipt does not name one adjacent atomic V1 event pair.",
-                ));
-            }
-            let EventBody::SubagentReturn(returned) = &return_event.event else {
-                return Err(String::from(
-                    "The subagent return receipt does not point to a V1 subagent-return event.",
+                    "The receipt does not point to a subagent return.",
                 ));
             };
-            let EventBody::SubagentReturnStats(stats) = &stats_event.event else {
-                return Err(String::from(
-                    "The subagent return receipt does not point to V1 subagent-return statistics.",
-                ));
-            };
-            if returned.child_session_id != receipt.child_session_id
+            if record.turn_id != Some(receipt.parent_turn_id)
+                || returned.child_session_id != receipt.child_session_id
                 || returned.child_task_id != receipt.child_task_id
                 || returned.child_turn_stats_seq != receipt.child_turn_stats_seq
                 || returned.source_assistant_text_seq != receipt.source_assistant_text_seq
-                || stats.child_session_id != receipt.child_session_id
-                || stats.child_task_id != receipt.child_task_id
-                || stats.child_turn_stats_seq != receipt.child_turn_stats_seq
             {
                 return Err(String::from(
-                    "The subagent return event pair differs from its durable receipt.",
+                    "The subagent return differs from its durable receipt.",
                 ));
             }
             Ok(SessionSubagentReturnDispatchAuthority {
                 parent_turn_id: receipt.parent_turn_id,
                 return_seq: receipt.return_seq,
-                stats_seq: receipt.stats_seq,
                 child_session_id: receipt.child_session_id.clone(),
                 child_task_id: receipt.child_task_id.clone(),
                 source_assistant_text_seq: receipt.source_assistant_text_seq,
@@ -1046,7 +1024,6 @@ async fn prepare_webui_pending_prompt(
                 &SubagentReturnReceipt {
                     parent_turn_id: expected_subagent_authority.parent_turn_id,
                     return_seq: expected_subagent_authority.return_seq,
-                    stats_seq: expected_subagent_authority.stats_seq,
                     child_session_id: expected_subagent_authority.child_session_id.clone(),
                     child_task_id: expected_subagent_authority.child_task_id.clone(),
                     child_turn_stats_seq: expected_subagent_authority.child_turn_stats_seq,

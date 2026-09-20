@@ -47,6 +47,7 @@ use vulcan_workspace_store::workspace_store::{
     flush_session_v1_candidate, load_session_v1_full, publish_edit_session_v1,
 };
 
+mod lifetime_usage;
 mod request_preparation;
 pub(crate) use request_preparation::SessionPhysicalPreparation;
 
@@ -83,8 +84,8 @@ pub(crate) enum SessionFlushReason {
     /// One logical Turn reached its unique terminal statistics.
     /// 一个逻辑回合到达唯一终态统计。
     TurnCompleted,
-    /// One durable child return and its complete inclusive statistics entered the parent Turn.
-    /// 一条可靠子代理回流及其完整包容性统计进入父回合。
+    /// One durable child return without numeric usage entered the parent Turn.
+    /// 一条可靠子代理回流，不附带数字用量进入父回合。
     SubagentReturned,
     /// Runtime and compaction pointers changed atomically.
     /// runtime 与压缩指针发生原子变更。
@@ -886,6 +887,9 @@ struct SessionLivePublisher {
 /// Unique mutable owner and serialized physical writer for one V1 session.
 /// 单个 V1 会话的唯一可变所有者与串行物理写入器。
 pub(crate) struct SessionHandle {
+    /// Root-shared aggregate initialized only during the session loading lifecycle.
+    /// 仅在会话加载生命周期初始化的根共享累计。
+    lifetime_usage: std::sync::OnceLock<Result<Arc<lifetime_usage::SessionUsageOwner>, String>>,
     /// Stable application session identity.
     /// 稳定的应用会话身份。
     session_id: SessionId,
@@ -953,6 +957,7 @@ impl SessionHandle {
                 locator: locator.clone(),
             }),
             locator: Some(locator),
+            lifetime_usage: std::sync::OnceLock::new(),
             provider_api_trace_store: Some(provider_api_trace_store),
             live_event_publisher: Mutex::new(None),
             continuation_dispatch_notify: Notify::new(),
@@ -985,6 +990,7 @@ impl SessionHandle {
             physical_request_preparation: Arc::new(AsyncMutex::new(())),
             backend,
             locator: None,
+            lifetime_usage: lifetime_usage::test_usage_owner(session_id),
             provider_api_trace_store: None,
             live_event_publisher: Mutex::new(None),
             continuation_dispatch_notify: Notify::new(),
@@ -2193,6 +2199,9 @@ impl SessionHandle {
         now_ms: i64,
     ) -> Result<SessionConditionalMutationReceipt<SuccessfulTurnSettlement>, SessionRuntimeError>
     {
+        // Read accounting inside the document transaction; accounting never locks documents.
+        // 在文档事务中读取统计；统计模块永不获取文档锁。
+        let usage_handle = self.clone();
         self.clone()
             .mutate_durable_if_changed_async(
                 SessionMutationAdmission::ExistingTurn,
@@ -2210,7 +2219,11 @@ impl SessionHandle {
                         .map(|turn| turn.turn_id)
                         .ok_or(DomainError::NoActiveTurn)?;
                     document
-                        .complete_turn_and_select_successor(expected_turn_id, now_ms)
+                        .complete_turn_with_lifetime_usage(
+                            expected_turn_id,
+                            now_ms,
+                            usage_handle.goal_usage_snapshot().ok().as_ref(),
+                        )
                         .map(|transition| {
                             SessionMutationChange::Changed(SuccessfulTurnSettlement::Completed(
                                 transition,
@@ -2221,8 +2234,8 @@ impl SessionHandle {
             .await
     }
 
-    /// Durably appends one exact child return and its complete inclusive statistics to the parent.
-    /// 把一条精确子代理回流及其完整包容性统计可靠追加到父会话。
+    /// Durably appends one exact child return without numeric usage to the parent.
+    /// 把一条精确子代理回流，不附带数字用量可靠追加到父会话。
     ///
     /// # Parameters / 参数
     ///
@@ -2235,7 +2248,7 @@ impl SessionHandle {
     ///
     /// The committed or idempotently replayed parent receipt after durable publication.
     /// 可靠发布后已提交或幂等重放的父级回执。
-    pub(crate) fn append_subagent_return_with_stats(
+    pub(crate) fn append_subagent_return(
         &self,
         input: SubagentReturnInput,
         now_ms: i64,
@@ -2245,7 +2258,7 @@ impl SessionHandle {
             SessionFlushReason::SubagentReturned,
             move |document| {
                 document
-                    .append_subagent_return_with_stats(input, now_ms)
+                    .append_subagent_return(input, now_ms)
                     .map(session_change_from_idempotent)
             },
         )

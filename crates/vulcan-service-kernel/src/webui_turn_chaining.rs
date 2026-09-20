@@ -464,7 +464,7 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
             let active_api_turn = document.active_api().map(|api| api.turn_id);
             let already_dispatched = document.events().iter().any(|event| {
                 event.turn_id == Some(receipt.parent_turn_id)
-                    && event.seq.value() > receipt.stats_seq.value()
+                    && event.seq.value() > receipt.return_seq.value()
                     && matches!(event.event, EventBody::ApiStarted(_))
             });
             (active_api_turn, already_dispatched)
@@ -480,10 +480,9 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
             webui_trace(
                 "subagent_return_waits_for_owning_parent_api_terminal",
                 format!(
-                    "session={session_id} turn={} return_seq={} stats_seq={}",
+                    "session={session_id} turn={} return_seq={}",
                     receipt.parent_turn_id.value(),
-                    receipt.return_seq.value(),
-                    receipt.stats_seq.value()
+                    receipt.return_seq.value()
                 ),
             );
             return Ok(false);
@@ -511,7 +510,7 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
         .read(|document| {
             document.events().iter().any(|event| {
                 event.turn_id == Some(receipt.parent_turn_id)
-                    && event.seq.value() > receipt.stats_seq.value()
+                    && event.seq.value() > receipt.return_seq.value()
                     && matches!(event.event, EventBody::ApiStarted(_))
             })
         })

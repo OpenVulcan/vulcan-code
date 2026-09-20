@@ -170,10 +170,7 @@ pub(super) fn build_subagent_mailbox_payload(
         "prompt": invocation.prompt,
         "result_text": result_text,
         "error_text": error_text,
-        "provider_turns_executed": outcome.map(|value| value.provider_turns_executed).unwrap_or(0),
-        "tool_calls_processed": outcome.map(|value| value.tool_calls_processed).unwrap_or(0),
         "final_assistant_message_id": outcome.and_then(|value| value.final_assistant_message_id.clone()),
-        "usage_segments": outcome.map(|value| value.usage_segments.as_slice()).unwrap_or(&[]),
     })
 }
 

@@ -62,44 +62,20 @@ fn subagent_return_includes_unreturned_stopped_turn_and_timing() -> Result<(), D
         },
         None,
     )?;
-    assert_eq!(input.totals.api_call_count, 2);
-    assert_eq!(input.totals.usage.output_tokens, Some(12));
-    let timing = input.totals.output_timing.as_ref().unwrap();
-    assert_eq!(
-        (
-            timing.request_count,
-            timing.first_token_latency_ms,
-            timing.output_duration_ms
-        ),
-        (2, 4, 12)
-    );
-    assert_eq!(
-        (timing.total_request_duration_ms, timing.output_tokens),
-        (16, 12)
-    );
     let mut parent = SessionDocument::new("parent", "project", "parent", T0);
     parent.submit_root_input_fixture("delegate", vec![], T0)?;
-    parent.append_subagent_return_with_stats(input.clone(), T0 + 200)?;
-    assert!(
-        !parent
-            .append_subagent_return_with_stats(input, T0 + 201)?
-            .changed()
-    );
+    parent.append_subagent_return(input.clone(), T0 + 200)?;
+    assert!(!parent.append_subagent_return(input, T0 + 201)?.changed());
     let buckets = parent.aggregate_turn_buckets(
         parent.active_turn().unwrap().turn_id,
         parent.active_turn().unwrap().start_seq,
     )?;
-    assert_eq!(buckets.total.api_call_count, 2);
-    assert_eq!(
-        buckets.total.output_timing.unwrap().first_token_latency_ms,
-        4
-    );
-    // Automatic parent guidance must receive the same additive evidence as wait-agent feedback.
-    // 父会话自动引导必须收到与等待智能体反馈相同的可累加证据。
+    assert_eq!(buckets.total.api_call_count, 0);
+    assert!(buckets.total.output_timing.is_none());
     let projected = crate::v1::projection::project_provider_items(parent.events(), None, &[])?;
     assert!(projected.iter().any(|item| matches!(item,
         crate::v1::projection::ProjectedItem::SubagentReturnText { text }
-            if text.contains("\"first_token_latency_ms\":4") && text.contains("\"api_call_count\":2")
+            if text == "result"
     )));
     Ok(())
 }
@@ -116,13 +92,10 @@ fn subagent_return_round_trips_and_exact_retry_is_idempotent() -> Result<(), Dom
     })?;
     assert_eq!(input.child_session_id, "child-session");
     assert_eq!(input.content, "final child result");
-    assert_eq!(input.totals.api_call_count, 2);
-    assert_eq!(input.totals.unknown_usage_api_call_count, 1);
-    assert_eq!(input.totals.tool_call_count, 1);
 
     let mut parent = new_document();
     let parent_turn = parent.submit_root_input_fixture("delegate", Vec::new(), T0)?;
-    let committed = parent.append_subagent_return_with_stats(input.clone(), T0 + 1)?;
+    let committed = parent.append_subagent_return(input.clone(), T0 + 1)?;
     assert!(committed.changed());
     let receipt = committed.into_value();
     assert_eq!(receipt.parent_turn_id, parent_turn);
@@ -139,7 +112,7 @@ fn subagent_return_round_trips_and_exact_retry_is_idempotent() -> Result<(), Dom
     )?;
     assert_eq!(covered.pending_subagent_return_dispatch()?, None);
     let revision_after_commit = parent.memory_revision();
-    let repeated = parent.append_subagent_return_with_stats(input.clone(), T0 + 2)?;
+    let repeated = parent.append_subagent_return(input.clone(), T0 + 2)?;
     assert!(!repeated.changed());
     assert_eq!(repeated.into_value(), receipt);
     assert_eq!(parent.memory_revision(), revision_after_commit);
@@ -153,7 +126,7 @@ fn subagent_return_round_trips_and_exact_retry_is_idempotent() -> Result<(), Dom
         parent.events.clone(),
     )?;
     let restored_revision = restored.memory_revision();
-    let replayed = restored.append_subagent_return_with_stats(input, T0 + 3)?;
+    let replayed = restored.append_subagent_return(input, T0 + 3)?;
     assert!(!replayed.changed());
     assert_eq!(replayed.into_value(), receipt);
     assert_eq!(restored.memory_revision(), restored_revision);
@@ -167,10 +140,10 @@ fn subagent_return_round_trips_and_exact_retry_is_idempotent() -> Result<(), Dom
             _ => None,
         })
         .expect("turn stats must exist");
-    assert_eq!(turn_stats.buckets.subagent.api_call_count, 2);
-    assert_eq!(turn_stats.buckets.subagent.unknown_usage_api_call_count, 1);
-    assert_eq!(turn_stats.buckets.subagent.tool_call_count, 1);
-    assert_eq!(turn_stats.buckets.subagent.subagent_return_count, 1);
+    assert_eq!(turn_stats.buckets.subagent.api_call_count, 0);
+    assert_eq!(turn_stats.buckets.subagent.unknown_usage_api_call_count, 0);
+    assert_eq!(turn_stats.buckets.subagent.tool_call_count, 0);
+    assert_eq!(turn_stats.buckets.subagent.subagent_return_count, 0);
     assert_eq!(turn_stats.buckets.total.usage.input_tokens, None);
     assert_eq!(turn_stats.buckets.total.usage.output_tokens, None);
     Ok(())
@@ -197,7 +170,7 @@ fn subagent_return_after_parent_completion_opens_durable_successor() -> Result<(
     parent.close_turn(TurnOutcome::Completed, 1, T0 + 1)?;
     let original_events = parent.events.clone();
     let receipt = parent
-        .append_subagent_return_with_stats(input.clone(), T0 + 2)?
+        .append_subagent_return(input.clone(), T0 + 2)?
         .into_value();
     assert_ne!(receipt.parent_turn_id, original_turn);
     assert_eq!(
@@ -254,11 +227,7 @@ fn subagent_return_after_parent_completion_opens_durable_successor() -> Result<(
     )?;
     restored.close_turn(TurnOutcome::Completed, 1, T0 + 3)?;
     let after_completion = restored.clone();
-    assert!(
-        !restored
-            .append_subagent_return_with_stats(input, T0 + 4)?
-            .changed()
-    );
+    assert!(!restored.append_subagent_return(input, T0 + 4)?.changed());
     assert_eq!(restored, after_completion);
     assert_eq!(
         restored
@@ -320,21 +289,21 @@ fn subagent_return_distinguishes_multiple_child_completions() -> Result<(), Doma
     let mut parent = new_document();
     parent.submit_root_input_fixture("delegate and follow up", Vec::new(), T0)?;
     let first = parent
-        .append_subagent_return_with_stats(first_input.clone(), T0 + 15)?
+        .append_subagent_return(first_input.clone(), T0 + 15)?
         .into_value();
     let second = parent
-        .append_subagent_return_with_stats(second_input.clone(), T0 + 16)?
+        .append_subagent_return(second_input.clone(), T0 + 16)?
         .into_value();
     assert_eq!(first.parent_turn_id, second.parent_turn_id);
     assert_ne!(first.return_seq, second.return_seq);
     assert!(
         !parent
-            .append_subagent_return_with_stats(first_input, T0 + 17)?
+            .append_subagent_return(first_input, T0 + 17)?
             .changed()
     );
     assert!(
         !parent
-            .append_subagent_return_with_stats(second_input, T0 + 18)?
+            .append_subagent_return(second_input, T0 + 18)?
             .changed()
     );
     advance_fixture_durable(&mut parent)?;
@@ -394,12 +363,12 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
 
     let mut parent = new_document();
     parent.submit_root_input_fixture("delegate", Vec::new(), T0)?;
-    parent.append_subagent_return_with_stats(input.clone(), T0 + 1)?;
+    parent.append_subagent_return(input.clone(), T0 + 1)?;
     let mut drifted = input.clone();
     drifted.content.push_str(" changed");
     let before_drift = parent.clone();
     assert!(matches!(
-        parent.append_subagent_return_with_stats(drifted, T0 + 2),
+        parent.append_subagent_return(drifted, T0 + 2),
         Err(DomainError::ImmutableFieldMutation {
             entity: "subagent_return",
             ..
@@ -408,10 +377,13 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
     assert_eq!(parent, before_drift);
 
     let mut broken_events = parent.events.clone();
-    assert!(matches!(
-        broken_events.pop().map(|event| event.event),
-        Some(EventBody::SubagentReturnStats(_))
-    ));
+    // A historical paired return must still reject its missing statistics partner.
+    // 历史成对回流仍须拒绝缺失的统计配对。
+    if let EventBody::SubagentReturn(returned) = &mut broken_events.last_mut().unwrap().event {
+        returned.content_only = false;
+    } else {
+        panic!("content return expected");
+    }
     assert!(matches!(
         SessionDocument::from_parts(
             parent.metadata.clone(),
@@ -428,9 +400,9 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
     let mut wrong_visibility = parent.events.clone();
     let stats_event = wrong_visibility
         .iter_mut()
-        .find(|event| matches!(&event.event, EventBody::SubagentReturnStats(_)))
-        .expect("subagent stats event");
-    stats_event.visibility = EventVisibility::Provider;
+        .find(|event| matches!(&event.event, EventBody::SubagentReturn(_)))
+        .expect("subagent return event");
+    stats_event.visibility = EventVisibility::UiOnly;
     assert!(matches!(
         SessionDocument::from_parts(
             parent.metadata.clone(),
@@ -450,7 +422,7 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
     exhausted.id_allocator = IdAllocator::from_frontier(next_local_id, next_seq + 1);
     let before_exhausted = exhausted.clone();
     assert!(matches!(
-        exhausted.append_subagent_return_with_stats(input, T0 + 3),
+        exhausted.append_subagent_return(input, T0 + 3),
         Err(DomainError::SequenceViolation { .. })
     ));
     assert_eq!(exhausted, before_exhausted);

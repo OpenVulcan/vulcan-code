@@ -357,6 +357,7 @@ fn golden_subagent_return() {
         9,
         1,
         EventBody::SubagentReturn(SubagentReturnEvent {
+            content_only: false,
             child_session_id: "child-1".to_string(),
             child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
             content: "summary: done".to_string(),
@@ -412,6 +413,7 @@ fn subagent_return_reload_rejects_missing_identity_source_and_non_final_status()
         9,
         1,
         EventBody::SubagentReturn(SubagentReturnEvent {
+            content_only: false,
             child_session_id: "child-1".to_string(),
             child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
             content: "summary: done".to_string(),

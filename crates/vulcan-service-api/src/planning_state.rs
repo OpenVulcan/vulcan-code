@@ -185,6 +185,10 @@ pub struct SessionGoalWorkTime {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionGoalSummary {
+    /// Whether Goal budget usage is known from the lifetime baseline difference.
+    /// Goal 预算用量是否能由生命周期基线差值确定。
+    #[serde(default)]
+    pub usage_known: bool,
     /// Stable session identifier that owns this goal.
     /// 拥有该目标的稳定会话标识。
     pub session_id: String,

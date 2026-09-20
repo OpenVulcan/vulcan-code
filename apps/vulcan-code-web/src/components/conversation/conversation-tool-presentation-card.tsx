@@ -70,7 +70,6 @@ import {
   type ProviderToolTextPresentation,
   type SubagentOrchestrationAgent,
   type SubagentOrchestrationPresentation,
-  type SubagentUsageSummary,
   type ToolPresentation,
   type ToolPresentationDisplayState,
 } from "@/components/conversation/conversation-tool-presentations";
@@ -1876,11 +1875,6 @@ function SubagentOrchestrationPresentationCard(props: {
   // canExpand prevents empty status rows from opening an empty detail area.
   // canExpand 避免空状态列表行展开出空详情区域。
   const canExpand = subagentPresentationHasExpandableDetail(hydratedPresentation);
-  // waitUsageSummary keeps consumed wait_agent child usage visible before expansion.
-  // waitUsageSummary 让 wait_agent 已消费的子智能体消耗在展开前也可见。
-  const waitUsageSummary = hydratedPresentation.operation === "wait"
-    ? subagentPresentationUsageSummary(hydratedPresentation)
-    : null;
   // status is limited to request formation and active execution.
   // status 仅限请求构造与正在执行阶段。
   const status = activeToolStatusLabel(
@@ -1909,11 +1903,6 @@ function SubagentOrchestrationPresentationCard(props: {
           )
         ) : null}
       </button>
-      {waitUsageSummary ? (
-        <div className="subagent-orchestration-compact-usage">
-          <SubagentUsageChip summary={waitUsageSummary} t={t} />
-        </div>
-      ) : null}
       <ConversationMeasuredCollapse collapseId={`subagent:${presentation.id}`} expanded={canExpand && expanded}>
         <SubagentOrchestrationDetail presentation={hydratedPresentation} t={t} />
       </ConversationMeasuredCollapse>
@@ -2136,70 +2125,12 @@ function SubagentOrchestrationAgentRow(props: {
       {props.agent.debugSummary ? (
         <SubagentInlineTextLine label={props.t("conversation.subagent.detail.debug")} text={props.agent.debugSummary} />
       ) : null}
-      {props.agent.usageSummary ? (
-        <SubagentUsageChip summary={props.agent.usageSummary} t={props.t} />
-      ) : null}
       {props.agent.result ? (
         <pre className="subagent-orchestration-text">{compactSubagentText(props.agent.result)}</pre>
       ) : (
         <div className="subagent-orchestration-empty">{props.t("conversation.subagent.detail.noResult")}</div>
       )}
     </div>
-  );
-}
-
-// SubagentUsageChip renders one compact child-agent usage row.
-// SubagentUsageChip 渲染一条紧凑子智能体消耗统计行。
-function SubagentUsageChip(props: {
-  // Aggregated child-agent usage.
-  // 聚合后的子智能体消耗。
-  summary: SubagentUsageSummary;
-  // Translation helper.
-  // 翻译辅助函数。
-  t: (key: TranslationKey) => string;
-}) {
-  // summaryText is shared by the compact trigger and its accessible label.
-  // summaryText 由紧凑触发器及其无障碍标签共享。
-  const summaryText = subagentUsageSummaryText(props.summary, props.t);
-  // Locale and shared metric rows match the turn-statistics card without inventing unavailable token fields.
-  // 语言及共用统计行与轮次统计卡一致，不虚构当前没有的 Token 字段。
-  const { locale } = useI18n();
-  const zh = locale === "zh-CN";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-      <div
-        aria-label={summaryText}
-        className="subagent-orchestration-usage"
-        data-subagent-usage-tooltip="true"
-        tabIndex={0}
-      >
-        <Bot aria-hidden="true" size={13} />
-        <span>{summaryText}</span>
-      </div>
-      </TooltipTrigger>
-      {/* The shared portal escapes measured tool folds and clamps the floating card to the viewport. */}
-      {/* 共享 Portal 避开工具测量折叠的裁切，并将浮动卡限制在视口内。 */}
-      <TooltipContent className="context-usage-tooltip subagent-orchestration-usage-tooltip" side="top" align="start" collisionPadding={12} showArrow={false}>
-        <div className="context-usage-card-header turn-stats-card-header">
-          <strong>{props.t("conversation.subagent.detail.usage")}</strong>
-        </div>
-        <div className="turn-stats-metric-grid">
-          <TurnStatsMetricRow
-            leftLabel={zh ? "总请求次数" : "Requests"}
-            leftValue={formatTurnStatsNumber(props.summary.providerCallCount, locale)}
-            rightLabel={zh ? "工具调用次数" : "Tool calls"}
-            rightValue={formatTurnStatsNumber(props.summary.toolCallCount, locale)}
-          />
-          <TurnStatsMetricRow
-            leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
-            leftValue={formatTurnStatsNumber(props.summary.cachedInputTokens, locale)}
-            rightLabel={zh ? "合计 Tokens" : "Total tokens"}
-            rightValue={formatTurnStatsNumber(props.summary.totalTokens, locale)}
-          />
-        </div>
-      </TooltipContent>
-    </Tooltip>
   );
 }
 
@@ -2353,72 +2284,6 @@ function subagentWaitStatusText(
     return t("conversation.subagent.detail.waitCompleted");
   }
   return t("conversation.subagent.detail.waitPending");
-}
-
-// subagentUsageSummaryText formats child-agent usage without regular-turn group labels.
-// subagentUsageSummaryText 格式化不带常规回合分组文案的子智能体消耗。
-function subagentUsageSummaryText(
-  // Aggregated child-agent usage.
-  // 聚合后的子智能体消耗。
-  summary: SubagentUsageSummary,
-  // Translation helper.
-  // 翻译辅助函数。
-  t: (key: TranslationKey) => string,
-): string {
-  const parts = [
-    formatSubagentUsageTranslation(t("conversation.stats.providerCalls"), summary.providerCallCount),
-    formatSubagentUsageTranslation(t("conversation.stats.toolCalls"), summary.toolCallCount),
-  ];
-  if (summary.totalTokens > 0) {
-    parts.push(formatSubagentUsageTranslation(t("conversation.stats.totalTokens"), summary.totalTokens));
-  }
-  if (summary.cachedInputTokens > 0) {
-    parts.push(formatSubagentUsageTranslation(t("conversation.stats.cachedTokensCompact"), summary.cachedInputTokens));
-  }
-  return parts.join(" · ");
-}
-
-// subagentPresentationUsageSummary aggregates visible child-agent usage rows.
-// subagentPresentationUsageSummary 聚合可见子智能体行的消耗统计。
-function subagentPresentationUsageSummary(
-  // Presentation model.
-  // 展示模型。
-  presentation: SubagentOrchestrationPresentation,
-): SubagentUsageSummary | null {
-  const summary: SubagentUsageSummary = {
-    providerCallCount: 0,
-    toolCallCount: 0,
-    totalTokens: 0,
-    cachedInputTokens: 0,
-  };
-  for (const agent of presentation.agents) {
-    if (!agent.usageSummary) {
-      continue;
-    }
-    summary.providerCallCount += agent.usageSummary.providerCallCount;
-    summary.toolCallCount += agent.usageSummary.toolCallCount;
-    summary.totalTokens += agent.usageSummary.totalTokens;
-    summary.cachedInputTokens += agent.usageSummary.cachedInputTokens;
-  }
-  return summary.providerCallCount > 0
-    || summary.toolCallCount > 0
-    || summary.totalTokens > 0
-    || summary.cachedInputTokens > 0
-    ? summary
-    : null;
-}
-
-// formatSubagentUsageTranslation injects a count into a simple i18n template.
-// formatSubagentUsageTranslation 向简单国际化模板注入数量。
-function formatSubagentUsageTranslation(
-  // Template containing the count placeholder.
-  // 包含数量占位符的模板。
-  template: string,
-  // Count value to inject.
-  // 需要注入的数量。
-  count: number,
-): string {
-  return template.replaceAll("{count}", String(count));
 }
 
 // compactSubagentText limits inline subagent text to keep transcript rows light.

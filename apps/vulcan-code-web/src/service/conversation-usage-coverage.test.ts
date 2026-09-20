@@ -91,15 +91,16 @@ describe("view-only usage coverage", () => {
 
   // Aggregate timing remains weighted and does not disappear when child API details are unloaded.
   // 聚合计时保持加权，且不会因子代理 API 明细未加载而消失。
-  it("uses inclusive timing buckets without adding the returned child twice", () => {
+  it("uses own timing buckets even when historical inclusive timing differs", () => {
     const events = kimiPartialUsageEvents();
     const terminal = events[8].event;
     if (terminal.kind !== "turn_stats") throw new Error("fixture terminal");
-    terminal.buckets.total.output_timing = {
+    terminal.buckets.direct.output_timing = {
       total_request_count: 3, total_request_duration_ms: 7000,
       request_count: 3, request_duration_ms: 7000,
       first_token_latency_ms: 1000, output_duration_ms: 6000, output_tokens: 120,
     };
+    terminal.buckets.total.output_timing = { ...terminal.buckets.direct.output_timing, request_count: 99, output_tokens: 99999 };
     const timing = projectTurnUsageCoverage([events[8]]).get(9)!.outputTiming!;
     expect(timing.requestCount).toBe(3);
     expect(timing.firstTokenLatencyMs).toBe(1000);

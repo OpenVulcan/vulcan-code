@@ -68,6 +68,7 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
     // childHandle 在事件订阅开始前持有确定性的 root/TASK 子目录树。
     let child_handle = create_or_load_embedded_task_session_v1(&session_registry, execution_facts)
         .map_err(|error| error.to_string())?;
+    crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
     agent_runtime
         .task_runtime
         .expect_durable_task_return(task_id, &execution_id)?;
@@ -184,13 +185,14 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         }
         if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
             provider_telemetry_guard.forward(event);
+            crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
         }
     });
     Ok(())
 }
 
-/// Atomically returns one durable child final assistant and its complete statistics to the parent.
-/// 将一份可靠子会话最终 assistant 正文及其完整统计原子回流给父会话。
+/// Atomically returns durable child final content and its source identity to the parent.
+/// 将可靠子会话最终正文与来源身份原子回流给父会话。
 fn append_exact_v1_subagent_return(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
@@ -266,14 +268,13 @@ fn append_exact_v1_subagent_return(
         })
         .map_err(|error| format!("读取子会话 V1 回流事实失败：{error}"))??;
     let committed = parent_handle
-        .append_subagent_return_with_stats(input, current_v1_unix_millis()?)
+        .append_subagent_return(input, current_v1_unix_millis()?)
         .map_err(|error| format!("子代理 V1 回流提交失败：{error}"))?;
     webui_trace(
         "detached_subagent_v1_return_committed",
         format!(
-            "parent={parent_session_id} task={task_id} return_seq={} stats_seq={} revision={} changed={}",
+            "parent={parent_session_id} task={task_id} return_seq={} revision={} changed={}",
             committed.value.return_seq.value(),
-            committed.value.stats_seq.value(),
             committed.revision,
             committed.changed
         ),
@@ -374,36 +375,14 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             } else {
                 None
             };
-            if let Some(Ok(receipt)) = &v1_return_result {
-                let parent_handle = state
-                    .lock()
-                    .map_err(|error| error.to_string())?
-                    .session_runtime_registry
-                    .get(parent_session_id)
-                    .map_err(|error| error.to_string())?;
-                let statistics = parent_handle
-                    .read(|document| {
-                        document.events().iter().find_map(|record| {
-                            if record.seq != receipt.stats_seq {
-                                return None;
-                            }
-                            match &record.event {
-                                EventBody::SubagentReturnStats(stats) => Some(stats.totals.clone()),
-                                _ => None,
-                            }
-                        })
-                    })
-                    .map_err(|error| error.to_string())?
-                    .ok_or("The committed child statistics are missing.")?;
+            if let Some(Ok(_)) = &v1_return_result {
                 let metadata = event
                     .metadata
                     .as_ref()
                     .ok_or("The child return metadata is missing.")?;
-                let mut mailbox: vulcan_session_boundary::SubagentMailboxEvent =
+                let mailbox: vulcan_session_boundary::SubagentMailboxEvent =
                     serde_json::from_value(metadata["payload"]["subagent_mailbox_event"].clone())
                         .map_err(|error| error.to_string())?;
-                mailbox.payload["statistics"] =
-                    serde_json::to_value(statistics).map_err(|error| error.to_string())?;
                 agent_runtime
                     .task_runtime
                     .publish_durable_task_return(execution_id, mailbox)?;
@@ -422,7 +401,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     mailbox.kind = vulcan_session_boundary::SubagentMailboxEventKind::Failed;
                     mailbox.payload["status"] = serde_json::json!("failed");
                     mailbox.payload["error_text"] = serde_json::json!(format!(
-                        "Child return statistics could not be committed: {error}"
+                        "Child return content could not be committed: {error}"
                     ));
                     agent_runtime
                         .task_runtime
@@ -585,6 +564,11 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             // eventKind 与强类型生命周期在遥测消费信封前保留。
             let event_kind = event.kind;
             let v1_lifecycle = event.v1_lifecycle.clone();
+            // Consume the physical terminal before projection so failures do not create a second cancellation.
+            // 在投影前消费物理终态，避免失败再产生一次取消。
+            if event_kind == ProviderRequestTelemetryEventKind::Completed {
+                provider_telemetry_guard.observe_durable_boundary(&event);
+            }
             let v1_boundary_result = match (event_kind, v1_lifecycle) {
                 (
                     ProviderRequestTelemetryEventKind::Started,
@@ -592,8 +576,11 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                 ) => Err(ProviderV1SinkError::UnexpectedRequestStartDurabilityBoundary),
                 (
                     ProviderRequestTelemetryEventKind::Completed,
-                    Some(ProviderV1LifecycleFacts::ApiTerminal(facts)),
-                ) => provider_v1_sink.accept_terminal(facts).await.map(|_| ()),
+                    Some(ProviderV1LifecycleFacts::ApiTerminal(_)),
+                ) => provider_v1_sink
+                    .accept_telemetry_terminal(&event, app, state)
+                    .await
+                    .map(|_| ()),
                 (
                     ProviderRequestTelemetryEventKind::Dispatched,
                     Some(ProviderV1LifecycleFacts::TransportObserved(facts)),

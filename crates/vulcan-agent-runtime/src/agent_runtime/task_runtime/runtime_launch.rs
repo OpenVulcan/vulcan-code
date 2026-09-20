@@ -455,8 +455,6 @@ pub(super) fn task_execution_outcome_from_report(
         .iter()
         .filter(|event| matches!(event.kind, vulcan_core::types::CoreEventKind::ToolFinished))
         .count();
-    let usage_segments =
-        subagent_usage_segments_from_report(invocation, &report, tool_calls_processed);
     let snapshot = match report.conversation_state.as_ref() {
         Some(conversation_state) => build_core_conversation_snapshot(conversation_state)?,
         None => invocation.snapshot.clone(),
@@ -480,35 +478,6 @@ pub(super) fn task_execution_outcome_from_report(
         tool_calls_processed,
         final_output_text,
         execution_status: TaskExecutionStatus::Completed,
-        usage_segments,
+        usage_segments: Vec::new(),
     })
-}
-
-/// Builds the parent-turn usage segment represented by one terminal child-agent report.
-/// 根据一份终态子代理报告构建其所属父会话回合的用量分段。
-fn subagent_usage_segments_from_report(
-    invocation: &TaskExecutionRequest,
-    report: &ExecutionRunReport,
-    tool_calls_processed: usize,
-) -> Vec<SessionTurnUsageSegment> {
-    let provider_usage = report
-        .cumulative_successful_provider_usage
-        .as_ref()
-        .or(report.last_successful_provider_usage.as_ref());
-    let mut segment = SessionTurnUsageSegment::from_provider_usage(
-        SessionTurnUsageSegmentKind::SubagentTask,
-        report.provider_request_count,
-        provider_usage,
-    );
-    segment.trigger = Some(invocation.public_task_id.clone());
-    segment.tool_call_count = tool_calls_processed;
-    if let Some(preparation) = report.preparation.as_ref() {
-        segment.provider_id = Some(preparation.model_blueprint.provider_id.clone());
-        segment.model_id = Some(preparation.model_blueprint.model_id.clone());
-    }
-    if segment.provider_call_count == 0 && segment.tool_call_count == 0 && segment.total_tokens == 0
-    {
-        return Vec::new();
-    }
-    vec![segment]
 }

@@ -121,6 +121,9 @@ pub enum NativeGoalTerminalStatus {
 /// 通过原生工具领域端口返回的完整 V1 Goal 快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeGoalSnapshot {
+    /// Whether the current Goal budget usage is known.
+    /// 当前 Goal 预算用量是否已知。
+    pub usage_known: bool,
     /// Session identifier that owns the Goal.
     /// 拥有该 Goal 的会话标识。
     pub session_id: SessionId,
@@ -237,14 +240,14 @@ pub(crate) use registry::*;
 pub(crate) use shell_command::*;
 #[cfg(test)]
 pub(crate) use shell_session::*;
-mod goal;
 mod browser;
+mod goal;
 mod runtime_config;
 mod submit_plan;
 mod todolist;
 
-pub(crate) use goal::*;
 pub use browser::*;
+pub(crate) use goal::*;
 pub(crate) use runtime_config::*;
 pub(crate) use submit_plan::*;
 pub(crate) use todolist::*;

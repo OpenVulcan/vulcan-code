@@ -1761,15 +1761,5 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
     );
     assert_eq!(outcome.final_output_text, "done");
     assert_eq!(outcome.tool_calls_processed, 1);
-    assert_eq!(outcome.usage_segments.len(), 1);
-    let segment = &outcome.usage_segments[0];
-    assert_eq!(segment.kind, SessionTurnUsageSegmentKind::SubagentTask);
-    assert_eq!(segment.trigger.as_deref(), Some("agent-review"));
-    assert_eq!(segment.provider_call_count, 2);
-    assert_eq!(segment.tool_call_count, 1);
-    assert_eq!(segment.input_tokens, 220);
-    assert_eq!(segment.output_tokens, 55);
-    assert_eq!(segment.reasoning_tokens, 25);
-    assert_eq!(segment.total_tokens, 300);
-    assert_eq!(segment.cached_input_tokens, Some(80));
+    assert!(outcome.usage_segments.is_empty());
 }

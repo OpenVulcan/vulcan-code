@@ -148,6 +148,11 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     }
     if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
         provider_telemetry_guard.forward(event);
+        if let Err(error) =
+            crate::session_plan_runtime::emit_session_addons_changed_delta(app, state, session_id)
+        {
+            eprintln!("[session-usage] cancellation projection: {error}");
+        }
     }
     if let Some(error) = projection_error {
         return Err(error);
@@ -444,6 +449,9 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
             // lifecycle carries the only typed V1 request transition accepted by this session compaction.
             // lifecycle 携带当前会话压缩唯一接受的强类型 V1 请求转换。
             let lifecycle = event.v1_lifecycle.clone();
+            if event_kind == ProviderRequestTelemetryEventKind::Completed {
+                provider_telemetry_guard.observe_durable_boundary(&event);
+            }
             let v1_result: Result<(), String> = match (event_kind, lifecycle) {
                 (
                     ProviderRequestTelemetryEventKind::Started,
@@ -460,6 +468,11 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
                     ProviderRequestTelemetryEventKind::Completed,
                     Some(ProviderV1LifecycleFacts::ApiTerminal(facts)),
                 ) => {
+                    // Even an unusable summary consumed one physical API request.
+                    // 即使摘要不可用，也已经消耗了一次物理 API 请求。
+                    provider_v1_sink
+                        .record_telemetry_terminal(&event, app, state)
+                        .map_err(|error| error.to_string())?;
                     if facts.status == vulcan_session_core::v1::event::ApiCallStatus::Completed {
                         // normalizedSummary is the sole Provider-visible compaction summary persisted in V1.
                         // normalizedSummary 是 V1 中唯一持久化且 Provider 可见的压缩摘要。

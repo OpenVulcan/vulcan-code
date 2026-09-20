@@ -11,19 +11,17 @@ use super::{
     ActiveTurnState, IdempotentMutation, SessionDocument, TurnOrigin, client_action_conflict,
     validate_system_context_content, validate_timestamp,
 };
-use crate::v1::config::{GoalBudgetCache, GoalState};
+use crate::v1::config::GoalState;
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ApiCallStatus, ApiStatsEvent, AssistantSemanticStatus, ContinuationEligibility,
     ConversationEvent, EventBody, EventVisibility, ExecutionControlEvent, ExecutionControlKind,
-    SubagentReturnStatus, SystemContextEvent, SystemContextOperation, SystemContextScope,
-    SystemRoleHint, TurnBoundaryEvent, TurnOutcome, TurnStatsEvent, UserInputEvent,
-    UserInputSource,
+    SystemContextEvent, SystemContextOperation, SystemContextScope, SystemRoleHint,
+    TurnBoundaryEvent, TurnOutcome, TurnStatsEvent, UserInputEvent, UserInputSource,
 };
 use crate::v1::goal::{GoalStopReason, decide_goal_continuation};
 use crate::v1::ids::{ClientActionId, IdAllocator, PendingInputId, ResourceId, Seq, TurnId};
 use crate::v1::stats::{StatBucket, TurnStatBuckets};
-use std::collections::BTreeSet;
 
 /// One explicit request to resume the current unfinished logical Turn.
 /// 一次恢复当前未完成逻辑回合的显式请求。
@@ -637,6 +635,19 @@ impl SessionDocument {
         expected_turn_id: TurnId,
         now_ms: i64,
     ) -> Result<TurnCompletionTransition, DomainError> {
+        self.complete_turn_with_lifetime_usage(expected_turn_id, now_ms, None)
+    }
+
+    /// Closes a Turn using the current owner-scoped aggregate as the Goal accounting input.
+    /// 使用当前所有者范围累计作为 Goal 统计输入来闭合回合。
+    /// A missing snapshot keeps budget usage unknown; unbudgeted Goals can still continue.
+    /// 缺失快照使预算用量保持未知；没有预算的 Goal 仍可继续。
+    pub fn complete_turn_with_lifetime_usage(
+        &mut self,
+        expected_turn_id: TurnId,
+        now_ms: i64,
+        usage: Option<&crate::v1::lifetime_usage::GoalUsageSnapshot>,
+    ) -> Result<TurnCompletionTransition, DomainError> {
         let turn = self.require_open_turn()?.clone();
         if turn.turn_id != expected_turn_id {
             return Err(DomainError::TurnIdentityMismatch {
@@ -677,18 +688,14 @@ impl SessionDocument {
             validate_user_input(queued.text.clone(), &queued.resource_ids)?;
         }
 
-        let goal_budget = self.aggregate_goal_budget(now_ms)?;
-        let goal_stats = TurnStatsEvent {
-            start_seq: self.metadata.mode.goal.origin_seq.unwrap_or(turn.start_seq),
-            end_seq: self.last_seq()?,
-            outcome: TurnOutcome::Completed,
-            duration_ms: None,
-            buckets: goal_budget
-                .as_ref()
-                .map(|(_, buckets)| buckets.clone())
-                .unwrap_or_default(),
-        };
-        let decision = decide_goal_continuation(&self.metadata.mode.goal, &goal_stats);
+        // Lifetime differences include live descendants without copying their statistics into Turns.
+        // 生命周期差值包含正在运行的后代，无需将后代统计复制到回合。
+        let spent = usage.and_then(|current| {
+            current
+                .since(self.metadata.mode.goal.usage_baseline.as_ref()?)?
+                .known_budget()
+        });
+        let decision = decide_goal_continuation(&self.metadata.mode.goal, spent);
         let next_goal_state = match decision.reason {
             GoalStopReason::BudgetExhausted { .. } => Some(GoalState::BudgetExhausted),
             GoalStopReason::UnknownUsage => Some(GoalState::Blocked),
@@ -729,11 +736,7 @@ impl SessionDocument {
         completed_turn.closed = true;
         let mut staged_active_turn = Some(completed_turn);
         if staged_metadata.mode.goal.enabled {
-            staged_metadata.mode.goal.budget_cache =
-                goal_budget.map(|(cache, _)| GoalBudgetCache {
-                    covered_until_seq: completed_turn_final_seq,
-                    ..cache
-                });
+            staged_metadata.mode.goal.budget_cache = None;
             if let Some(state) = next_goal_state {
                 staged_metadata.mode.goal.state = state;
                 // Persist the stop boundary with the decision so working time can be replayed after restart.
@@ -925,8 +928,6 @@ impl SessionDocument {
         let mut direct_usages = Vec::new();
         let mut direct_api_count = 0u64;
         let mut direct_tool_count = 0u64;
-        let mut subagent_totals = Vec::new();
-        let mut counted_subagent_stats = BTreeSet::new();
         for event in turn_events
             .iter()
             .filter(|event| event.turn_id == Some(turn_id))
@@ -941,22 +942,13 @@ impl SessionDocument {
                 EventBody::ToolCall(_) => {
                     direct_tool_count += 1;
                 }
-                EventBody::SubagentReturnStats(return_stats)
-                    if return_stats.status == SubagentReturnStatus::Final
-                        && counted_subagent_stats.insert((
-                            return_stats.child_session_id.clone(),
-                            return_stats.child_turn_stats_seq,
-                        )) =>
-                {
-                    subagent_totals.push(&return_stats.totals);
-                }
                 _ => {}
             }
         }
         let mut direct =
             StatBucket::from_api_usages(direct_usages, direct_api_count, direct_tool_count, 0);
-        // Measure each physical call once and carry descendant timing through the same buckets.
-        // 每次物理调用只测量一次，并通过同一统计桶传递后代计时。
+        // Measure only physical calls owned by this document.
+        // 仅计量属于当前文档的物理请求。
         let timings: Vec<_> = turn_events
             .iter()
             .filter(|event| event.turn_id == Some(turn_id))
@@ -966,7 +958,6 @@ impl SessionDocument {
             })
             .collect();
         direct.output_timing = crate::v1::stats::ProviderOutputTiming::aggregate(&timings);
-        let subagent = StatBucket::from_subagent_returns(subagent_totals);
-        Ok(TurnStatBuckets::combine(direct, subagent))
+        Ok(TurnStatBuckets::combine(direct, StatBucket::default()))
     }
 }

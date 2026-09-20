@@ -98,6 +98,9 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
     ) -> Result<NativeGoalSnapshot, String> {
         let handle = registered_session_v1_handle_from_state(&self.state, session_id)?;
         let now_ms = current_v1_goal_unix_millis()?;
+        // Capture the baseline only after creation succeeds, in the same durable transaction.
+        // 仅在创建成功后，于同一持久化事务中记录基线。
+        let usage_handle = handle.clone();
         handle
             .mutate_durable_if_changed(
                 SessionMutationAdmission::MetadataOnly,
@@ -120,6 +123,8 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
                             now_ms,
                         )?)
                     };
+                    document.metadata.mode.goal.usage_baseline =
+                        usage_handle.goal_usage_snapshot().ok();
                     Ok(SessionMutationChange::Changed(
                         transition.is_some_and(|value| value.continuation_turn_id.is_some()),
                     ))
@@ -213,6 +218,7 @@ fn native_goal_snapshot_from_summary(
     summary: SessionGoalSummary,
 ) -> NativeGoalSnapshot {
     NativeGoalSnapshot {
+        usage_known: summary.usage_known,
         session_id,
         goal_id: summary.goal_id,
         objective: summary.objective,
@@ -378,8 +384,12 @@ fn save_session_goal_v1(
         move |document| {
             // save_goal owns create, update, and completed-generation replacement as one failure-atomic domain transaction.
             // save_goal 以单个失败原子领域事务统一拥有创建、更新及已完成代际替换。
+            let previous_origin = document.metadata.mode.goal.origin_seq;
             let transition =
                 document.save_goal(objective.clone(), token_budget, objective, now_ms)?;
+            if document.metadata.mode.goal.origin_seq != previous_origin {
+                document.metadata.mode.goal.usage_baseline = handle.goal_usage_snapshot().ok();
+            }
             Ok(match transition {
                 Some(transition) => {
                     SessionMutationChange::Changed(transition.continuation_turn_id.is_some())

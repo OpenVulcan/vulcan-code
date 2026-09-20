@@ -8,7 +8,7 @@ pub(super) fn publish_task_finished_to_parent(
     outcome: &TaskExecutionOutcome,
     detail: &str,
 ) {
-    let event = build_task_finished_parent_runtime_event_with_turn_stats(request, outcome, detail);
+    let event = build_task_finished_parent_runtime_event(request, outcome, detail);
     // A detached parent-event failure cannot propagate beyond the background owner.
     // 分离的父级事件失败无法越过后台所有者继续传播。
     if let Err(error) = task_runtime.publish_detached_task_event(
@@ -58,8 +58,8 @@ pub(super) fn publish_task_finished_to_parent_after_resume_decision(
     publish_task_finished_to_parent(task_runtime, request, outcome, detail);
 }
 
-/// Builds one completed parent event with an optional ledger-materialized child statistic.
-/// 构建一条可携带账本物化子统计的完成父事件。
+/// Builds one completed parent event carrying child content and lifecycle identity.
+/// 构建携带子任务正文与生命周期身份的父级完成事件。
 ///
 /// # Parameters
 /// 参数
@@ -69,14 +69,12 @@ pub(super) fn publish_task_finished_to_parent_after_resume_decision(
 /// `outcome` 保留旧版执行计数与结果内容。
 /// `detail` is the human-readable lifecycle explanation.
 /// `detail` 是人类可读的生命周期说明。
-/// `turn_stats` is the preferred inclusive ledger-derived contribution source.
-/// `turn_stats` 是首选的账本派生包容性贡献来源。
 ///
 /// # Returns
 /// 返回值
 /// Returns one DelegateFinished event ready for the exact parent runtime.
 /// 返回一条可投递给精确父运行时的 DelegateFinished 事件。
-fn build_task_finished_parent_runtime_event_with_turn_stats(
+fn build_task_finished_parent_runtime_event(
     request: &TaskExecutionRequest,
     outcome: &TaskExecutionOutcome,
     detail: &str,
@@ -84,11 +82,8 @@ fn build_task_finished_parent_runtime_event_with_turn_stats(
     let finished_payload = build_task_host_payload(
         request,
         outcome.execution_status.as_str(),
-        outcome.provider_turns_executed,
-        outcome.tool_calls_processed,
         outcome.final_assistant_message_id.as_deref(),
         outcome.final_output_text.as_str(),
-        outcome.usage_segments.as_slice(),
         current_unix_millis_text(),
     );
     build_task_delegate_runtime_event(
@@ -109,7 +104,7 @@ pub(super) fn publish_task_failure_to_parent(
     // The process-local mailbox owns wait_agent wake-up, while the detached event owns the visible parent timeline.
     // 进程内 mailbox 负责唤醒 wait_agent，分离事件负责父级时间线可见反馈。
     task_runtime.publish_task_failure_to_parent_mailbox(request, error);
-    let event = build_task_failure_parent_runtime_event_with_turn_stats(request, error);
+    let event = build_task_failure_parent_runtime_event(request, error);
     // A detached parent-event failure cannot propagate beyond the background owner.
     // 分离的父级事件失败无法越过后台所有者继续传播。
     if let Err(publish_error) = task_runtime.publish_detached_task_event(
@@ -171,20 +166,12 @@ pub(super) fn publish_task_failure_to_parent_after_resume_decision(
 /// 返回值
 /// Returns one DelegateFinished event that preserves failure accounting.
 /// 返回一条保留失败记账的 DelegateFinished 事件。
-fn build_task_failure_parent_runtime_event_with_turn_stats(
+fn build_task_failure_parent_runtime_event(
     request: &TaskExecutionRequest,
     error: &str,
 ) -> RuntimeEvent {
-    let finished_payload = build_task_host_payload(
-        request,
-        "failed",
-        0,
-        0,
-        None,
-        error,
-        &[],
-        current_unix_millis_text(),
-    );
+    let finished_payload =
+        build_task_host_payload(request, "failed", None, error, current_unix_millis_text());
     build_task_delegate_runtime_event(
         RuntimeEventKind::DelegateFinished,
         request,
@@ -358,11 +345,8 @@ pub(super) fn task_execution_visible_error(error: &str) -> &str {
 pub(super) fn build_task_host_payload(
     invocation: &TaskExecutionRequest,
     execution_status: &str,
-    provider_turns_executed: usize,
-    tool_calls_processed: usize,
     final_assistant_message_id: Option<&str>,
     result_text: &str,
-    usage_segments: &[SessionTurnUsageSegment],
     updated_at: String,
 ) -> Value {
     let task_status = task_session_status_from_execution_status_text(execution_status)
@@ -386,20 +370,8 @@ pub(super) fn build_task_host_payload(
     );
     if let Some(payload) = subagent_mailbox_event.payload.as_object_mut() {
         payload.insert(
-            String::from("provider_turns_executed"),
-            serde_json::json!(provider_turns_executed),
-        );
-        payload.insert(
-            String::from("tool_calls_processed"),
-            serde_json::json!(tool_calls_processed),
-        );
-        payload.insert(
             String::from("final_assistant_message_id"),
             serde_json::json!(final_assistant_message_id),
-        );
-        payload.insert(
-            String::from("usage_segments"),
-            serde_json::json!(usage_segments),
         );
     }
     json!({
@@ -415,11 +387,8 @@ pub(super) fn build_task_host_payload(
         "prompt": invocation.prompt.clone(),
         "description": invocation.description.clone(),
         "subagent": invocation.subagent.clone(),
-        "provider_turns_executed": provider_turns_executed,
-        "tool_calls_processed": tool_calls_processed,
         "final_assistant_message_id": final_assistant_message_id,
         "result": result_text,
-        "usage_segments": usage_segments,
         "updated_at": updated_at,
         "debug": subagent_runtime_debug_payload(&invocation.invocation_config),
         "subagent_mailbox_event": subagent_mailbox_event,

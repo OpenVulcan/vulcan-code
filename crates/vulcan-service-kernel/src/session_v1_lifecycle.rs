@@ -676,6 +676,7 @@ pub(crate) async fn create_and_register_root_session_v1(
     // its exact revision is marked durable.
     // handle 仅在文档完整发布且精确修订号标记为持久化后才变得可见。
     let handle = SessionHandle::new(session_id, created.locator, document);
+    handle.initialize_root_usage(true, now_ms);
     reservation
         .publish(handle)
         .map_err(SessionV1LifecycleError::from)
@@ -766,6 +767,7 @@ pub(crate) async fn create_or_get_forked_session_v1(
     let created = create_indexed_session_v1(controller, &storage_request).await?;
     let loaded = load_session_v1_full(&created.locator)?;
     let handle = SessionHandle::new(request.child_session_id, loaded.locator, loaded.document);
+    handle.initialize_root_usage(true, request.now_ms);
     validate_existing_fork_retry(
         &handle,
         &created.locator,
@@ -945,6 +947,9 @@ pub(crate) fn create_or_load_embedded_task_session_v1(
     let child_title = facts.display_title.clone();
     let child_prompt = facts.prompt.clone();
     let is_resumed = facts.is_resumed;
+    // Child usage shares the root file even when this child delegates further work.
+    // 即使该子会话继续委派工作，其用量也共享根文件。
+    let usage_parent_id = facts.parent_session_id;
     let initial_action_id = client_action_id.clone();
     let initial_prompt = child_prompt.clone();
     let handle = registry.get_or_load(child_session_id, move || {
@@ -1006,6 +1011,7 @@ pub(crate) fn create_or_load_embedded_task_session_v1(
         ))
     })?;
 
+    handle.bind_child_usage(root_handle.as_ref(), usage_parent_id, now_ms);
     if facts.is_resumed {
         submit_resumed_embedded_task_root_input(
             handle.as_ref(),
@@ -1056,6 +1062,7 @@ pub(crate) async fn get_or_load_session_v1(
                     "[webui-service] recovered persisted Goal event ownership: session={session_id}"
                 );
             }
+            handle.initialize_root_usage(false, 0);
             Ok(handle)
         })
         .map_err(SessionV1LifecycleError::from)

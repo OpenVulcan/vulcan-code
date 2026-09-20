@@ -108,6 +108,10 @@ pub struct GoalConfig {
     /// 可选预算加速缓存。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_cache: Option<GoalBudgetCache>,
+    /// Root lifetime counters captured when this Goal generation was created.
+    /// 创建当前 Goal 代际时记录的根会话生命周期累计。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_baseline: Option<crate::v1::lifetime_usage::GoalUsageSnapshot>,
 }
 
 /// Plan-mode configuration persisted inside `mode.plan`.

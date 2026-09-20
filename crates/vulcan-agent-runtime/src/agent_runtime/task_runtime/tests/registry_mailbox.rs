@@ -179,7 +179,7 @@ async fn agent_orchestration_info_rejects_include_disabled() {
 /// 验证 TaskRuntime 会在真实状态变化时发布 subagent mailbox 生命周期事件。
 #[tokio::test]
 async fn task_runtime_publishes_subagent_mailbox_events() {
-    // Exercise legacy delivery and V1 delivery gated by durable inclusive statistics.
+    // Exercise legacy delivery and V1 delivery gated by durable content returns.
     // 覆盖旧投递与等待可靠包容性统计的 V1 投递。
     for deferred in [false, true] {
         let task_runtime = TaskRuntime::new();
@@ -272,7 +272,7 @@ async fn task_runtime_publishes_subagent_mailbox_events() {
                 )
                 .await
                 .is_err(),
-                "completion must wait for its durable statistics"
+                "completion must wait for its durable content return"
             );
             assert!(
                 task_runtime
@@ -284,9 +284,9 @@ async fn task_runtime_publishes_subagent_mailbox_events() {
                     .unwrap()
                     .is_empty()
             );
-            // Publish the canonical cumulative facts instead of the last execution segment.
-            // 发布规范累计事实，替代最后一次执行片段。
-            let mut mailbox: SubagentMailboxEvent = serde_json::from_value(
+            // Publish the canonical content return without numeric accounting.
+            // 发布规范正文回流，不携带数字统计。
+            let mailbox: SubagentMailboxEvent = serde_json::from_value(
                 build_task_invocation_result(&invocation, &completed_outcome)
                     .host_result
                     .unwrap()
@@ -294,7 +294,6 @@ async fn task_runtime_publishes_subagent_mailbox_events() {
                     .clone(),
             )
             .unwrap();
-            mailbox.payload["statistics"] = json!({"api_call_count": 7, "output_timing": {"first_token_latency_ms": 1500, "output_duration_ms": 9000}});
             task_runtime
                 .publish_durable_task_return(&invocation.execution_id, mailbox.clone())
                 .unwrap();
@@ -328,14 +327,8 @@ async fn task_runtime_publishes_subagent_mailbox_events() {
         assert_eq!(events[0].payload["execution_id"], "test-execution");
         assert!(events[0].payload.get("agent_profile").is_none());
         assert_eq!(events[0].payload["result_text"], "review complete");
-        assert_eq!(events[0].payload["usage_segments"][0]["input_tokens"], 120);
-        assert_eq!(
-            events[0].payload["usage_segments"][0]["cached_input_tokens"],
-            40
-        );
-        if deferred {
-            assert_eq!(events[0].payload["statistics"]["api_call_count"], 7);
-        }
+        assert!(events[0].payload.get("usage_segments").is_none());
+        assert!(events[0].payload.get("statistics").is_none());
     }
 }
 
@@ -1881,9 +1874,10 @@ async fn wait_agent_returns_consumed_child_feedback() {
             .is_none()
     );
     let host_result = result.host_result.as_ref().expect("host result");
-    assert_eq!(
-        host_result.payload["agents"][0]["usage_segments"][0]["input_tokens"],
-        120
+    assert!(
+        host_result.payload["agents"][0]
+            .get("usage_segments")
+            .is_none()
     );
     assert!(result.model_output.to_string().contains("review complete"));
 
@@ -2388,12 +2382,10 @@ fn task_invocation_result_omits_embedded_conversation_state() {
         host_result.payload.get("conversation_state").is_none(),
         "new parent task metadata must not embed child transcripts"
     );
-    assert_eq!(
-        host_result.payload["usage_segments"][0]["input_tokens"],
-        120
-    );
-    assert_eq!(
-        host_result.payload["subagent_mailbox_event"]["payload"]["usage_segments"][0]["input_tokens"],
-        120
+    assert!(host_result.payload.get("usage_segments").is_none());
+    assert!(
+        host_result.payload["subagent_mailbox_event"]["payload"]
+            .get("usage_segments")
+            .is_none()
     );
 }

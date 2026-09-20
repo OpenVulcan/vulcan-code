@@ -171,16 +171,8 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         &resolved_config,
     );
     request.controller_config = Some(running_controller_config.clone());
-    let started_payload = build_task_host_payload(
-        &request,
-        "running",
-        0,
-        0,
-        None,
-        "",
-        &[],
-        current_unix_millis_text(),
-    );
+    let started_payload =
+        build_task_host_payload(&request, "running", None, "", current_unix_millis_text());
     // detachedStreamStartupGuard owns stream cleanup until the background finalizer is installed.
     // detachedStreamStartupGuard 在后台终态处理器安装前持有事件流清理责任。
     let detached_stream_startup_guard = DetachedTaskStreamStartupGuard::open(

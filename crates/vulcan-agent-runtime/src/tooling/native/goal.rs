@@ -60,7 +60,7 @@ struct GoalModelView {
     token_budget: Option<i64>,
     /// Accounted token usage for this goal.
     /// 当前目标已记账的 token 用量。
-    tokens_used: i64,
+    tokens_used: Option<i64>,
     /// Accounted wall-clock time in seconds.
     /// 当前目标已记账的墙钟时间秒数。
     time_used_seconds: i64,
@@ -468,7 +468,7 @@ fn goal_model_view(goal: &NativeGoalSnapshot) -> GoalModelView {
         objective: goal.objective.clone(),
         status: goal.status,
         token_budget: goal.token_budget,
-        tokens_used: goal.tokens_used,
+        tokens_used: goal.usage_known.then_some(goal.tokens_used),
         time_used_seconds: goal.time_used_seconds,
         created_at: goal.created_at_ms / 1_000,
         updated_at: goal.updated_at_ms / 1_000,
@@ -580,6 +580,9 @@ pub(crate) fn goal_response_value(
     include_completion_report: bool,
 ) -> Value {
     let remaining_tokens = goal.and_then(|goal| {
+        if !goal.usage_known {
+            return None;
+        }
         goal.token_budget
             .map(|budget| (budget - goal.tokens_used).max(0))
     });
@@ -637,8 +640,9 @@ fn goal_host_projection(goal: &NativeGoalSnapshot) -> Value {
         "objective": goal.objective,
         "status": goal.status,
         "tokenBudget": goal.token_budget,
-        "tokensUsed": goal.tokens_used,
-        "usageTokens": goal.tokens_used,
+        "usageKnown": goal.usage_known,
+        "tokensUsed": goal.usage_known.then_some(goal.tokens_used),
+        "usageTokens": goal.usage_known.then_some(goal.tokens_used),
         "inputTokens": goal.uncached_input_tokens,
         "cachedInputTokens": goal.cached_input_tokens,
         "outputTokens": goal.output_tokens,
@@ -661,6 +665,7 @@ mod goal_projection_tests {
         // goal carries distinct values so every projection field is independently observable.
         // goal 使用互不相同的数值，使每个投影字段均可独立观察。
         let goal = NativeGoalSnapshot {
+            usage_known: true,
             session_id: SessionId::new_v4(),
             goal_id: String::from("goal-token-projection"),
             objective: String::from("keep token details"),

@@ -931,6 +931,11 @@ fn spawn_agent_stream_task_with_restart_state(
                     // v1Lifecycle is cloned before the legacy telemetry handler consumes the event.
                     // v1Lifecycle 在旧遥测处理器消费事件前完成克隆。
                     let v1_lifecycle = event.v1_lifecycle.clone();
+                    // A received physical terminal must not become a second synthetic cancellation on sink failure.
+                    // 已收到的物理终态不能在 sink 失败时变成第二次合成取消。
+                    if event_kind == ProviderRequestTelemetryEventKind::Completed {
+                        provider_telemetry_guard.observe_durable_boundary(&event);
+                    }
                     if let Some(error) = rejected_provider_boundary_error(
                         &mut prepared_retry_checkpoint_error,
                         event_kind,
@@ -948,8 +953,11 @@ fn spawn_agent_stream_task_with_restart_state(
                             ) => Err(ProviderV1SinkError::UnexpectedRequestStartDurabilityBoundary),
                             (
                                 ProviderRequestTelemetryEventKind::Completed,
-                                Some(ProviderV1LifecycleFacts::ApiTerminal(facts)),
-                            ) => sink.accept_terminal(facts).await.map(|_| ()),
+                                Some(ProviderV1LifecycleFacts::ApiTerminal(_)),
+                            ) => sink
+                                .accept_telemetry_terminal(&event, &app, &task_state)
+                                .await
+                                .map(|_| ()),
                             (
                                 ProviderRequestTelemetryEventKind::Dispatched,
                                 Some(ProviderV1LifecycleFacts::TransportObserved(facts)),
@@ -1609,6 +1617,13 @@ fn spawn_agent_stream_task_with_restart_state(
         };
         if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
             provider_telemetry_guard.forward(event);
+            if let Err(error) = crate::session_plan_runtime::emit_session_addons_changed_delta(
+                &app,
+                &task_state,
+                session_id,
+            ) {
+                eprintln!("[session-usage] cancellation projection: {error}");
+            }
         }
         if transient_reasoning_status_active
             && let Err(error) = emit_transient_reasoning_status(&app, &task_state, session_id, None)

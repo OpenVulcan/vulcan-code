@@ -160,7 +160,7 @@ pub(super) fn build_wait_agent_tool_candidate(
             WAIT_AGENT_TOOL,
             WAIT_AGENT_TOOL,
             String::from(
-                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started. When present, statistics contains exact unreturned cumulative child usage, including prior stopped turns. Its output_timing contains summed request durations and paired measurements: average first-token latency is first_token_latency_ms / request_count; output speed is output_tokens * 1000 / output_duration_ms. Never divide by all API calls when only some calls have measured timing, and never add repeated feedback for the same execution twice.",
+                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started.",
             ),
             None,
             VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", WAIT_AGENT_TOOL),
@@ -1101,8 +1101,8 @@ pub(super) fn build_wait_agent_activity_tool_result(
     } else {
         wait_agent_activity_message(events)
     };
-    let event_summaries = wait_agent_event_summaries(events, false);
-    let host_event_summaries = wait_agent_event_summaries(events, true);
+    let event_summaries = wait_agent_event_summaries(events);
+    let host_event_summaries = wait_agent_event_summaries(events);
     let terminal_event_count = events
         .iter()
         .filter(|event| wait_agent_mailbox_event_is_terminal(event.kind))
@@ -1265,17 +1265,12 @@ fn wait_agent_activity_message(events: &[SubagentMailboxEvent]) -> (String, Stri
 /// 参数
 /// `events` are the mailbox events claimed by wait_agent.
 /// `events` 是被 `wait_agent` 认领的 mailbox 事件。
-/// `include_usage_segments` controls whether host-only child usage metadata is retained.
-/// `include_usage_segments` 控制是否保留仅供宿主使用的智能体用量元数据。
 ///
 /// # Returns
 /// 返回值
 /// JSON summaries that include exact child execution ids and feedback text when present.
 /// 返回包含精确子执行标识及可用反馈文本的 JSON 摘要。
-fn wait_agent_event_summaries(
-    events: &[SubagentMailboxEvent],
-    include_usage_segments: bool,
-) -> Vec<Value> {
+fn wait_agent_event_summaries(events: &[SubagentMailboxEvent]) -> Vec<Value> {
     events
         .iter()
         .map(|event| {
@@ -1297,7 +1292,7 @@ fn wait_agent_event_summaries(
             let result =
                 wait_agent_payload_text(&event.payload, &["result_text", "result", "message"]);
             let error = wait_agent_payload_text(&event.payload, &["error_text", "error"]);
-            let mut summary = json!({
+            let summary = json!({
                 "agent_id": public_id.clone().unwrap_or_else(|| event.child_thread_id.to_string()),
                 "subagent_task_id": event.child_thread_id.to_string(),
                 "execution_id": execution_id,
@@ -1309,16 +1304,6 @@ fn wait_agent_event_summaries(
                 "terminal": wait_agent_mailbox_event_is_terminal(event.kind),
                 "result_available": wait_agent_event_has_result_payload(&event.payload),
             });
-            if let Some(statistics) = event.payload.get("statistics") {
-                summary["statistics"] = statistics.clone();
-            }
-            if include_usage_segments
-                && let Some(usage_segments) = event.payload.get("usage_segments")
-                && usage_segments.is_array()
-                && let Some(summary_object) = summary.as_object_mut()
-            {
-                summary_object.insert(String::from("usage_segments"), usage_segments.clone());
-            }
             summary
         })
         .collect()

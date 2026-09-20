@@ -63,6 +63,11 @@ fn goal_lifecycle_transitions_publish_complete_fact_groups() -> Result<(), Domai
     assert_eq!(document.metadata.mode.goal.state, GoalState::Active);
     assert_eq!(document.events().len(), 2);
     assert_eq!(document.memory_revision(), baseline_revision + 1);
+    // Lifetime baselines survive definition and pause/resume transitions.
+    // 生命周期基线跨目标编辑与暂停恢复保持不变。
+    let mut usage_baseline = crate::v1::lifetime_usage::GoalUsageSnapshot::default();
+    usage_baseline.main.tool_call_count = 7;
+    document.metadata.mode.goal.usage_baseline = Some(usage_baseline.clone());
     assert_eq!(
         document.dirty_files().collect::<BTreeSet<_>>(),
         BTreeSet::from([DirtyFile::Metadata, DirtyFile::ActiveTail])
@@ -89,6 +94,10 @@ fn goal_lifecycle_transitions_publish_complete_fact_groups() -> Result<(), Domai
     assert_eq!(document.metadata.mode.goal.state, GoalState::Paused);
     document.resume_goal("goal two", Some(200), "goal resumed", T0 + 4)?;
     assert_eq!(document.metadata.mode.goal.state, GoalState::Active);
+    assert_eq!(
+        document.metadata.mode.goal.usage_baseline,
+        Some(usage_baseline)
+    );
     document.clear_goal("goal removed", T0 + 5)?;
     assert_eq!(document.metadata.mode.goal, GoalConfig::default());
     Ok(())

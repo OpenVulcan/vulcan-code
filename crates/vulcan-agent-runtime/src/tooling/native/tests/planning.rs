@@ -58,6 +58,7 @@ impl NativeGoalRuntime for NativeGoalRuntimeFixture {
             .transpose()
             .map_err(|error| format!("fixture Goal budget is out of range: {error}"))?;
         let goal = NativeGoalSnapshot {
+            usage_known: true,
             session_id,
             goal_id: String::from("v1-goal-1"),
             objective,
@@ -378,6 +379,7 @@ fn submit_plan_feedback_path_hides_windows_extended_prefix() {
 #[test]
 fn completed_goal_response_reports_structured_usage_instruction() {
     let goal = NativeGoalSnapshot {
+        usage_known: true,
         session_id: Uuid::new_v4(),
         goal_id: String::from("goal-1"),
         objective: String::from("完成目标模式"),
@@ -412,6 +414,7 @@ fn completed_goal_response_reports_structured_usage_instruction() {
 #[test]
 fn created_goal_response_includes_immediate_active_context() {
     let goal = NativeGoalSnapshot {
+        usage_known: true,
         session_id: Uuid::new_v4(),
         goal_id: String::from("goal-created-by-ai"),
         objective: String::from("连续执行并保持缓存"),

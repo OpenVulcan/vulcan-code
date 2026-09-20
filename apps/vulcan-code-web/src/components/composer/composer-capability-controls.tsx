@@ -1,4 +1,5 @@
 import React from "react";
+import { SessionLifetimeUsagePanel } from "@/components/conversation/session-lifetime-usage";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -139,36 +140,6 @@ export function ContextUsageOrb(props: {
   // providerUsage keeps session-level accounting out of repeated process headers.
   // providerUsage 将会话级统计从重复的过程标题中移出。
   const providerUsage = props.sessionProviderUsage;
-  // providerUsageTotal uses only the cumulative total derived from canonical V1 API facts.
-  // providerUsageTotal 仅使用从规范 V1 API 事实派生的累计总量。
-  const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens;
-  // The service projects the full session cohort, independent of the loaded transcript window.
-  // 服务投影完整会话样本组，不受已加载转录窗口范围影响。
-  const outputTiming = providerUsage?.outputTiming;
-  // Missing measurements remain unknown; unrelated output tokens never enter the denominator pair.
-  // 缺失测量保持未知；不将无关请求的输出 Token 混入配对计算。
-  const averageFirstToken = outputTiming && outputTiming.requestCount > 0
-    ? `${(outputTiming.firstTokenLatencyMs / outputTiming.requestCount / 1000).toFixed(3)} s` : "-";
-  // Session speed uses summed output tokens divided by the same cohort's summed output duration.
-  // 会话速度使用累计输出 Token 除以同一样本组的累计输出时长。
-  const averageOutputSpeed = outputTiming && outputTiming.outputDurationMs > 0
-    ? `${(outputTiming.outputTokens * 1000 / outputTiming.outputDurationMs).toFixed(1)} t/s` : "-";
-  // providerUsageUnknown keeps missing Provider usage explicit in the diagnostic row.
-  // providerUsageUnknown 在 Provider 用量缺失时保持诊断行显式可见。
-  const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
-  // providerUsageTitle exposes the one canonical session scope without synthetic branch or billing scopes.
-  // providerUsageTitle 展示唯一规范会话口径，不构造分支或计费统计口径。
-  const providerUsageTitle = providerUsage
-    ? t("conversation.process.providerUsageSession")
-        .replace("{calls}", formatCompactProviderCount(providerUsage.providerCallCount, "-"))
-        .replace("{tokens}", formatCompactProviderCount(providerUsageTotal, "-"))
-        .replace("{unknown}", String(providerUsage.unknownUsageCallCount))
-    : undefined;
-  // providerUsageAriaLabel exposes the two compact metrics through the capacity control.
-  // providerUsageAriaLabel 通过上下文容量控件公开两项紧凑统计。
-  const providerUsageAriaLabel = providerUsage
-    ? `${t("composer.contextUsage.totalRequests")}: ${formatCompactProviderCount(providerUsage.providerCallCount, "-")} · ${t("composer.contextUsage.totalTokens")}: ${formatCompactProviderCount(providerUsageTotal, "-")}`
-    : null;
   // selectedNode resolves the persisted id against the current backend projection.
   // selectedNode 根据当前后端投影解析持久化标识。
   const selectedNode = props.contextCompactionWindowNodes.find((node) => node.id === props.selectedNodeId) ?? null;
@@ -193,7 +164,6 @@ export function ContextUsageOrb(props: {
   const contextUsageAriaLabel = [
     title,
     selectedNode ? formatContextWindowNodeTokens(selectedNode.tokens) : null,
-    providerUsageAriaLabel,
   ].filter((value): value is string => Boolean(value)).join(" · ");
   const thresholdState = percent >= 100
     ? "full"
@@ -276,33 +246,7 @@ export function ContextUsageOrb(props: {
               hint={snapshot.cacheHitBasisPoints == null ? t("composer.contextUsage.noData") : undefined} />
           </strong>
         </div>
-        {providerUsage ? (
-          <div className="context-usage-provider-section" title={providerUsageTitle}>
-            <div className="context-usage-provider-row">
-              <div className="context-usage-provider-metric">
-                <span>{t("composer.contextUsage.totalRequests")}</span>
-                <strong>{formatCompactProviderCount(providerUsage.providerCallCount, "-")}</strong>
-              </div>
-              <div className="context-usage-provider-metric">
-                <span>{t("composer.contextUsage.totalTokens")}</span>
-                <strong><ContextUsageValue value={formatCompactProviderCount(providerUsageTotal, "-")}
-                  hint={providerUsageTotal == null ? providerUsageUnknown : undefined} /></strong>
-              </div>
-            </div>
-            <div className="context-usage-provider-row">
-              <div className="context-usage-provider-metric">
-                <span>{t("composer.contextUsage.averageFirstToken")}</span>
-                <strong><ContextUsageValue value={averageFirstToken}
-                  hint={outputTiming == null ? t("composer.contextUsage.noTiming") : undefined} /></strong>
-              </div>
-              <div className="context-usage-provider-metric">
-                <span>{t("composer.contextUsage.averageSpeed")}</span>
-                <strong><ContextUsageValue value={averageOutputSpeed}
-                  hint={outputTiming == null ? t("composer.contextUsage.noTiming") : undefined} /></strong>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        <SessionLifetimeUsagePanel usage={providerUsage?.lifetime} error={providerUsage?.lifetimeError} />
         <div className="context-usage-window-section">
           <span className="context-usage-window-title">{t("composer.contextWindow.title")}</span>
           <SegmentedControl

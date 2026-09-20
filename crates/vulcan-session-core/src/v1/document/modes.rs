@@ -3,18 +3,14 @@
 
 use super::persistence::DirtyFile;
 use super::{ActiveTurnState, SessionDocument, TurnOrigin, validate_system_context_content};
-use crate::v1::config::{
-    GoalBudgetCache, GoalConfig, GoalState, MAX_GOAL_OBJECTIVE_CHARS, MetadataDocument,
-};
+use crate::v1::config::{GoalConfig, GoalState, MAX_GOAL_OBJECTIVE_CHARS, MetadataDocument};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ConversationEvent, DisplayNoteEvent, DisplayNoticeKind, EventBody, EventVisibility,
-    NoticeSeverity, SubagentReturnStatus, SystemContextEvent, SystemContextOperation,
-    SystemContextScope, SystemRoleHint, ToolCallStatus, TurnOutcome,
+    NoticeSeverity, SystemContextEvent, SystemContextOperation, SystemContextScope, SystemRoleHint,
+    ToolCallStatus, TurnOutcome,
 };
 use crate::v1::ids::{IdAllocator, Seq, TurnId};
-use crate::v1::stats::{StatBucket, TurnStatBuckets, goal_budget_tokens};
-use std::collections::BTreeSet;
 
 /// Result of one atomic Goal configuration transition.
 /// 一次 Goal 配置原子转换的结果。
@@ -120,19 +116,26 @@ const fn goal_state_name(state: GoalState) -> &'static str {
     }
 }
 
-/// Returns zero for an empty budget scope and `None` for unknown usage.
-/// 对空预算作用域返回零，对未知用量返回 `None`。
-fn budget_tokens_or_zero(bucket: &StatBucket) -> Option<u64> {
-    if bucket.is_empty() {
-        Some(0)
-    } else {
-        goal_budget_tokens(bucket)
-    }
-}
-
 // Keep all mutations on the single authoritative document instance.
 // 所有修改仍作用于唯一权威文档实例。
 impl SessionDocument {
+    /// Installs a proven legacy baseline once and marks metadata dirty for durable publication.
+    /// 仅安装一次已证明旧基线，并标记元数据等待持久化。
+    /// Returns whether metadata changed; active and stopped Goal generations keep their identity.
+    /// 返回元数据是否变化；活动与停止的 Goal 代际均保持身份。
+    pub fn restore_goal_usage_baseline(
+        &mut self,
+        baseline: crate::v1::lifetime_usage::GoalUsageSnapshot,
+        now_ms: i64,
+    ) -> bool {
+        if !self.metadata.mode.goal.enabled || self.metadata.mode.goal.usage_baseline.is_some() {
+            return false;
+        }
+        self.metadata.mode.goal.usage_baseline = Some(baseline);
+        self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
+        true
+    }
+
     /// Starts a Goal auto-continue turn from a persisted goal-continuation
     /// system semantic, asserting exactly-once creation.
     /// 从持久化的 goal-continuation 系统语义启动 Goal 自动续跑回合，并保证
@@ -275,6 +278,7 @@ impl SessionDocument {
             origin_seq: Some(context_seq),
             state: GoalState::Active,
             budget_cache: None,
+            usage_baseline: None,
         };
         staged_metadata.updated_at_ms = staged_metadata.updated_at_ms.max(now_ms);
         if continuation_turn_id.is_some() {
@@ -405,6 +409,7 @@ impl SessionDocument {
             origin_seq: Some(context_seq),
             state: GoalState::Active,
             budget_cache: None,
+            usage_baseline: None,
         };
         staged_metadata.updated_at_ms = staged_metadata.updated_at_ms.max(now_ms);
         if continuation_turn_id.is_some() {
@@ -913,73 +918,6 @@ impl SessionDocument {
             &[notice_seq],
         );
         Ok(notice_seq)
-    }
-
-    /// Aggregates the enabled Goal budget solely from persisted statistics.
-    /// 仅从已持久化统计聚合已启用 Goal 的预算。
-    pub(super) fn aggregate_goal_budget(
-        &self,
-        now_ms: i64,
-    ) -> Result<Option<(GoalBudgetCache, TurnStatBuckets)>, DomainError> {
-        if !self.metadata.mode.goal.enabled {
-            return Ok(None);
-        }
-        let from_seq = self.metadata.mode.goal.origin_seq.map_or(1, Seq::value);
-        let mut direct_usages = Vec::new();
-        let mut direct_api_count = 0u64;
-        let mut direct_tool_count = 0u64;
-        let mut subagent_totals = Vec::new();
-        let mut counted_subagent_stats = BTreeSet::new();
-        for event in self
-            .events
-            .iter()
-            .filter(|event| event.seq.value() >= from_seq)
-        {
-            match &event.event {
-                // Every ApiStats persisted in this document is local work; nested work enters only through SubagentReturnStats.
-                // 当前文档持久化的每条 ApiStats 都是本地工作；嵌套工作仅通过 SubagentReturnStats 回流。
-                EventBody::ApiStats(api) => {
-                    direct_api_count += 1;
-                    direct_usages.push(&api.usage);
-                }
-                EventBody::ToolCall(_) => {
-                    direct_tool_count += 1;
-                }
-                EventBody::SubagentReturnStats(returned)
-                    if returned.status == SubagentReturnStatus::Final
-                        && counted_subagent_stats.insert((
-                            returned.child_session_id.clone(),
-                            returned.child_turn_stats_seq,
-                        )) =>
-                {
-                    subagent_totals.push(&returned.totals);
-                }
-                _ => {}
-            }
-        }
-        let direct =
-            StatBucket::from_api_usages(direct_usages, direct_api_count, direct_tool_count, 0);
-        let subagent = StatBucket::from_subagent_returns(subagent_totals);
-        let buckets = TurnStatBuckets::combine(direct, subagent);
-        let Some(direct_total_tokens) = budget_tokens_or_zero(&buckets.direct) else {
-            return Ok(None);
-        };
-        let Some(subagent_total_tokens) = budget_tokens_or_zero(&buckets.subagent) else {
-            return Ok(None);
-        };
-        let Some(total_tokens) = budget_tokens_or_zero(&buckets.total) else {
-            return Ok(None);
-        };
-        Ok(Some((
-            GoalBudgetCache {
-                covered_until_seq: self.last_seq()?,
-                direct_total_tokens,
-                subagent_total_tokens,
-                total_tokens,
-                updated_at_ms: now_ms,
-            },
-            buckets,
-        )))
     }
 
     /// Admits Goal creation while idle or inside its already-started native tool boundary.

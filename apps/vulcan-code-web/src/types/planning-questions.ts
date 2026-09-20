@@ -186,6 +186,9 @@ export type SessionGoalUserStatusUpdate = Extract<SessionGoalStatus, "active" | 
 // SessionGoalSummary describes the current persisted session goal.
 // SessionGoalSummary 描述当前持久化的会话目标。
 export interface SessionGoalSummary {
+  /** Whether the baseline difference proves the budget usage.
+   * 基线差值能否证明预算用量。 */
+  usageKnown?: boolean;
   // Session identifier that owns the goal.
   // 拥有该目标的会话标识。
   sessionId: string;

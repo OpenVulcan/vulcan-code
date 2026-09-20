@@ -803,6 +803,14 @@ pub struct SessionProviderOutputTiming {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionProviderUsageSummary {
+    /// Root-owned cumulative scopes, read from the resident usage owner.
+    /// 从常驻用量所有者读取的根级分范围累计。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<vulcan_session_core::v1::lifetime_usage::SessionLifetimeUsage>,
+    /// Explicit aggregate availability error, without failing conversation rendering.
+    /// 明确的累计不可用原因，不影响会话渲染。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime_error: Option<String>,
     /// Number of physical Provider requests dispatched for this session.
     /// 此会话已分发的物理 Provider 请求数量。
     pub provider_call_count: usize,

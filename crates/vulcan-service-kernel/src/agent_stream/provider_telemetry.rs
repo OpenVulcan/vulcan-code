@@ -10,6 +10,9 @@ use vulcan_hooks::{HookContext, HookScope};
 /// Drop-safe forwarding guard that guarantees an active request receives a cancelled terminal Hook.
 /// 支持安全丢弃的转发守卫，保证活动请求收到取消终态 Hook。
 pub(crate) struct ProviderTelemetryHookGuard {
+    /// Session registry for cancellation accounting; global API classification remains independent.
+    /// 用于取消统计的会话注册表；全局 API 分类保持独立。
+    usage_state: SharedServiceBridgeState,
     /// Protocol tracker that retains only the active request's redacted started payload.
     /// 仅保留活动请求脱敏开始载荷的协议跟踪器。
     cancellation: ProviderRequestTelemetryCancellationTracker,
@@ -33,6 +36,7 @@ impl ProviderTelemetryHookGuard {
         storage_runtime: Option<HostRuntimeHandle>,
     ) -> Self {
         let native_usage_storage = storage_runtime.clone();
+        let usage_state = state.clone();
         // sender and receiver form one bounded low-frequency Effect queue per execution stream.
         // sender 与 receiver 为每条执行流构成一个有界低频 Effect 队列。
         let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
@@ -48,6 +52,7 @@ impl ProviderTelemetryHookGuard {
             }
         });
         Self {
+            usage_state,
             cancellation: ProviderRequestTelemetryCancellationTracker::default(),
             sender,
         }
@@ -56,7 +61,22 @@ impl ProviderTelemetryHookGuard {
     /// Takes the synthetic cancelled terminal event for normal stream-exit handling.
     /// 取出合成的取消终态事件，供正常流退出路径处理。
     pub(crate) fn take_cancelled_event(&mut self) -> Option<ProviderRequestTelemetryEvent> {
-        self.cancellation.take_cancelled_event()
+        let event = self.cancellation.take_cancelled_event()?;
+        // The existing cancellation tracker yields this terminal once; no replay ledger is introduced.
+        // 既有取消跟踪器仅产生一次当前终态；不引入重放账本。
+        if let Some(vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts::ApiTerminal(terminal)) = &event.v1_lifecycle {
+            let handle = self.usage_state.lock().ok()
+                .and_then(|state| state.session_runtime_registry.get(event.session_id).ok());
+            if let Some(handle) = handle {
+                match vulcan_session_core::v1::lifetime_usage::SessionUsageBucket::from_api(
+                    &vulcan_session_core::v1::UsageSnapshot::default(), &terminal.timing,
+                ) {
+                    Ok(increment) => handle.record_lifetime_usage(&increment, terminal.completed_at_ms),
+                    Err(error) => eprintln!("[session-usage] cancellation: {error}"),
+                }
+            }
+        }
+        Some(event)
     }
 
     /// Records a replay-relevant semantic boundary observed by the owning service stream.
@@ -70,8 +90,8 @@ impl ProviderTelemetryHookGuard {
         self.cancellation.observe_semantic_output();
     }
 
-    /// Records one Provider lifecycle boundary only after its authoritative session state is durable.
-    /// 仅在权威会话状态可靠持久化后记录一条 Provider 生命周期边界。
+    /// Records a durable start or an observed physical terminal before semantic projection.
+    /// 记录已持久化的开始边界，或语义投影前已观测到的物理终态。
     ///
     /// # Parameters
     /// 参数
@@ -109,7 +129,7 @@ impl Drop for ProviderTelemetryHookGuard {
     /// Emits one synthetic cancelled terminal event when the consumer future is aborted or dropped.
     /// 当消费 Future 被中止或丢弃时发出一条合成取消终态事件。
     fn drop(&mut self) {
-        if let Some(event) = self.cancellation.take_cancelled_event()
+        if let Some(event) = self.take_cancelled_event()
             && self.sender.try_send(event).is_err()
         {
             eprintln!(

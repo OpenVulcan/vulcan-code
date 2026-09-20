@@ -1,5 +1,5 @@
-//! Durable child-return facts, exact statistics pairing, and idempotent delivery receipts.
-//! 可靠子任务返回事实、精确统计配对及幂等投递回执。
+//! Durable content returns, legacy statistics pairing, and idempotent delivery receipts.
+//! 可靠正文回流、旧版统计配对与幂等投递回执。
 
 use super::persistence::DirtyFile;
 use super::{
@@ -55,13 +55,10 @@ pub struct SubagentReturnInput {
     /// Exact child statistics fact paired with the returned content.
     /// 与返回正文配对的精确子任务统计事实。
     pub(super) child_turn_stats_seq: Seq,
-    /// Validated aggregate checked by internal ownership and idempotency tests.
-    /// 由内部归属与幂等测试核对的已校验聚合统计。
-    pub(super) totals: StatBucket,
 }
 
-/// Durable receipt for one atomic subagent content-and-statistics return.
-/// 一次原子子代理正文与统计回流的持久化 receipt。
+/// Durable receipt for one atomic subagent content return.
+/// 一次原子子代理正文回流的持久化 receipt。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentReturnReceipt {
     /// Parent open Turn receiving the return.
@@ -70,9 +67,6 @@ pub struct SubagentReturnReceipt {
     /// Provider-visible subagent content seq.
     /// Provider 可见子代理正文 seq。
     pub return_seq: Seq,
-    /// UiOnly inclusive statistics seq.
-    /// UiOnly 包容性统计 seq。
-    pub stats_seq: Seq,
     /// Exact child session identity.
     /// 精确子会话身份。
     pub child_session_id: String,
@@ -156,29 +150,42 @@ pub(super) fn validate_subagent_return_history(
     for (index, event) in events.iter().enumerate() {
         match &event.event {
             EventBody::SubagentReturn(returned) => {
-                let next = events
-                    .get(index + 1)
-                    .ok_or(DomainError::InvalidStatistics {
-                        field: "subagent_return_stats_pair",
-                    })?;
-                let EventBody::SubagentReturnStats(stats) = &next.event else {
-                    return Err(DomainError::InvalidStatistics {
-                        field: "subagent_return_stats_pair",
-                    });
-                };
-                if event.turn_id.is_none() || next.turn_id != event.turn_id {
-                    return Err(DomainError::InvalidStatistics {
-                        field: "subagent_return.parent_turn",
-                    });
-                }
-                if event.visibility != EventVisibility::Provider
-                    || next.visibility != EventVisibility::UiOnly
-                {
+                validate_exact_external_identity("child_session_id", &returned.child_session_id)?;
+                if event.visibility != EventVisibility::Provider {
                     return Err(DomainError::InvalidStatistics {
                         field: "subagent_return.visibility",
                     });
                 }
-                validate_subagent_return_pair(returned, stats)?;
+                if event.turn_id.is_none()
+                    || returned.source_from_seq > returned.source_to_seq
+                    || returned.source_to_seq != returned.child_turn_stats_seq
+                    || returned.source_assistant_text_seq < returned.source_from_seq
+                    || returned.source_assistant_text_seq > returned.source_to_seq
+                {
+                    return Err(DomainError::InvalidStatistics {
+                        field: "subagent_return.source_range",
+                    });
+                }
+                // Old returns still require the exact adjacent statistics pair.
+                // 旧回流仍要求精确相邻统计事件对。
+                if !returned.content_only {
+                    let next = events
+                        .get(index + 1)
+                        .ok_or(DomainError::InvalidStatistics {
+                            field: "subagent_return_stats_pair",
+                        })?;
+                    let EventBody::SubagentReturnStats(stats) = &next.event else {
+                        return Err(DomainError::InvalidStatistics {
+                            field: "subagent_return_stats_pair",
+                        });
+                    };
+                    if next.turn_id != event.turn_id || next.visibility != EventVisibility::UiOnly {
+                        return Err(DomainError::InvalidStatistics {
+                            field: "subagent_return.parent_turn",
+                        });
+                    }
+                    validate_subagent_return_pair(returned, stats)?;
+                }
                 if !identities.insert((
                     returned.child_session_id.clone(),
                     returned.child_task_id.clone(),
@@ -191,7 +198,8 @@ pub(super) fn validate_subagent_return_history(
             }
             EventBody::SubagentReturnStats(_)
                 if index > 0
-                    && matches!(&events[index - 1].event, EventBody::SubagentReturn(_)) => {}
+                    && matches!(&events[index - 1].event, EventBody::SubagentReturn(returned) if !returned.content_only) =>
+                {}
             EventBody::SubagentReturnStats(_) => {
                 return Err(DomainError::InvalidStatistics {
                     field: "subagent_return_stats_pair",
@@ -231,51 +239,22 @@ impl SessionDocument {
 
     /// Builds a return covering every unreturned closed turn, including stopped predecessors.
     /// 构建覆盖全部尚未回流的闭合回合的结果，包含此前停止的回合。
-    /// `after_seq` is the parent-owned coverage frontier; returns exact nonoverlapping totals.
-    /// `after_seq` 为父会话持有的覆盖前沿；返回精确且不重叠的统计总量。
+    /// `after_seq` is the parent-owned coverage frontier; returns an exact nonoverlapping source range.
+    /// `after_seq` 为父会话持有的覆盖前沿；返回精确且不重叠的来源范围。
     pub fn build_subagent_return_input_since(
         &self,
         request: SubagentReturnBuildRequest,
         after_seq: Option<Seq>,
     ) -> Result<SubagentReturnInput, DomainError> {
-        // Preserve exact final-body identity and durability validation from the canonical builder.
-        // 保留规范构建器的精确最终正文身份与可靠性校验。
         let mut input = self.build_subagent_return_input(request)?;
-        // The parent-owned frontier excludes every already returned source event.
-        // 父会话持有的前沿排除全部已经回流的源事件。
         let from = after_seq.map_or(1, |seq| seq.value() + 1);
         if from < self.resident_start_seq || from > input.source_from_seq.value() {
             return Err(DomainError::InvalidStatistics {
                 field: "child_unreturned_source_range",
             });
         }
-        // Recompute each closed turn from its API facts, including legacy timing checkpoints.
-        // 从 API 事实重算每个闭合回合，包含旧计时点。
-        let mut totals = Vec::new();
-        for event in self
-            .events
-            .iter()
-            .filter(|event| event.seq.value() >= from && event.seq <= input.source_to_seq)
-        {
-            if let EventBody::TurnStats(stats) = &event.event {
-                if stats.start_seq.value() < from {
-                    return Err(DomainError::InvalidStatistics {
-                        field: "child_unreturned_partial_turn",
-                    });
-                }
-                let turn_id = event.turn_id.ok_or(DomainError::InvalidStatistics {
-                    field: "child_unreturned_turn_id",
-                })?;
-                totals.push(self.aggregate_turn_buckets(turn_id, stats.start_seq)?.total);
-            }
-        }
-        input.totals = StatBucket::from_subagent_returns(&totals);
-        // These are turns of the same child, so merging them does not create extra child returns.
-        // 这些是同一子会话的回合，合并它们不产生额外子代理回流次数。
-        input.totals.subagent_return_count = totals
-            .iter()
-            .map(|bucket| bucket.subagent_return_count)
-            .sum();
+        // Preserve the source frontier without accumulating numeric usage.
+        // 保留来源前沿，不累计数字用量。
         input.source_from_seq = Seq::try_new(from)?;
         Ok(input)
     }
@@ -388,17 +367,16 @@ impl SessionDocument {
             source_from_seq: stats.start_seq,
             source_to_seq: stats.end_seq,
             child_turn_stats_seq: stats_event.seq,
-            totals: stats.buckets.total.clone(),
         })
     }
 
-    /// Atomically appends one final subagent body and its complete inclusive statistics.
-    /// 原子追加一份最终子代理正文及其完整包容性统计。
+    /// Atomically appends one final subagent body without numeric usage.
+    /// 原子追加一份最终子代理正文，不附带数字用量。
     /// Parameters: input contains exact durable child facts; now_ms is the parent observation time.
     /// 参数：input 包含精确可靠的子任务事实；now_ms 是父会话观测时间。
     /// Returns: the exact receipt, opening a return-owned successor only when no parent turn remains open.
     /// 返回值：精确回执；仅在父回合已结束时开启由回流拥有的后继。
-    pub fn append_subagent_return_with_stats(
+    pub fn append_subagent_return(
         &mut self,
         input: SubagentReturnInput,
         now_ms: i64,
@@ -407,14 +385,12 @@ impl SessionDocument {
             return Ok(IdempotentMutation::Idempotent(receipt));
         }
         if self.events.iter().any(|event| matches!(&event.event,
-            EventBody::SubagentReturn(returned) if returned.child_session_id == input.child_session_id
-                && returned.source_from_seq <= input.source_to_seq && input.source_from_seq <= returned.source_to_seq)) {
-            return Err(DomainError::InvalidStatistics { field: "subagent_return.overlapping_source_range" });
-        }
-        // A child may outlive its parent turn; its return is the successor's own root semantic.
-        // 子任务可能晚于父回合结束；回流自身就是后继回合的根语义。
+                EventBody::SubagentReturn(returned) if returned.child_session_id == input.child_session_id
+                    && returned.source_from_seq <= input.source_to_seq && input.source_from_seq <= returned.source_to_seq)) {
+                return Err(DomainError::InvalidStatistics { field: "subagent_return.overlapping_source_range" });
+            }
         let needs_turn = self.active_turn.as_ref().is_none_or(|turn| turn.closed);
-        self.ensure_transition_capacity(2, u64::from(needs_turn))?;
+        self.ensure_transition_capacity(1, u64::from(needs_turn))?;
         let returned = SubagentReturnEvent {
             child_session_id: input.child_session_id.clone(),
             child_task_id: input.child_task_id.clone(),
@@ -423,24 +399,15 @@ impl SessionDocument {
             source_from_seq: input.source_from_seq,
             source_to_seq: input.source_to_seq,
             child_turn_stats_seq: input.child_turn_stats_seq,
+            content_only: true,
         };
-        let stats = SubagentReturnStatsEvent {
-            child_session_id: input.child_session_id.clone(),
-            child_task_id: input.child_task_id.clone(),
-            child_turn_stats_seq: input.child_turn_stats_seq,
-            status: SubagentReturnStatus::Final,
-            totals: input.totals,
-        };
-        validate_subagent_return_pair(&returned, &stats)?;
         let mut staged_allocator = self.id_allocator;
-        // parent_turn_id is allocated in the same atomic transition as the return and statistics.
-        // parent_turn_id 与回流及统计在同一个原子事务中分配。
         let parent_turn_id = if needs_turn {
             TurnId::try_new(staged_allocator.next_local_id()?)?
         } else {
             self.require_open_turn()?.turn_id
         };
-        let mut staged_events = Vec::with_capacity(2);
+        let mut staged_events = Vec::with_capacity(1);
         let return_seq = self.stage_event(
             &mut staged_allocator,
             &mut staged_events,
@@ -449,15 +416,6 @@ impl SessionDocument {
             EventBody::SubagentReturn(returned),
             now_ms,
         )?;
-        let stats_seq = self.stage_event(
-            &mut staged_allocator,
-            &mut staged_events,
-            Some(parent_turn_id),
-            EventVisibility::UiOnly,
-            EventBody::SubagentReturnStats(stats),
-            now_ms,
-        )?;
-        let changed_event_seqs = vec![return_seq, stats_seq];
         self.id_allocator = staged_allocator;
         self.events.extend(staged_events);
         if needs_turn {
@@ -472,12 +430,11 @@ impl SessionDocument {
         self.bump_revision(
             &[DirtyFile::Metadata, DirtyFile::ActiveTail],
             now_ms,
-            &changed_event_seqs,
+            &[return_seq],
         );
         Ok(IdempotentMutation::Committed(SubagentReturnReceipt {
             parent_turn_id,
             return_seq,
-            stats_seq,
             child_session_id: input.child_session_id,
             child_task_id: input.child_task_id,
             child_turn_stats_seq: input.child_turn_stats_seq,
@@ -501,53 +458,28 @@ impl SessionDocument {
                     && matches!(&event.event, EventBody::ApiStarted(_)))
                 .then_some(event.seq)
             })
-            .max_by_key(|seq| seq.value());
-        let Some((return_index, return_event, returned)) = self
+            .max();
+        for event in self
             .events
             .iter()
-            .enumerate()
-            .filter_map(|(index, event)| match &event.event {
-                EventBody::SubagentReturn(returned)
-                    if event.turn_id == Some(active_turn.turn_id)
-                        && latest_api_started_seq
-                            .is_none_or(|started_seq| event.seq.value() > started_seq.value()) =>
-                {
-                    Some((index, event, returned))
-                }
-                _ => None,
-            })
-            .next_back()
-        else {
-            return Ok(None);
-        };
-        let stats_event =
-            self.events
-                .get(return_index + 1)
-                .ok_or(DomainError::InvalidStatistics {
-                    field: "subagent_return_stats_pair",
-                })?;
-        let EventBody::SubagentReturnStats(stats) = &stats_event.event else {
-            return Err(DomainError::InvalidStatistics {
-                field: "subagent_return_stats_pair",
-            });
-        };
-        validate_subagent_return_pair(returned, stats)?;
-        if return_event.turn_id != stats_event.turn_id
-            || return_event.seq.value().checked_add(1) != Some(stats_event.seq.value())
+            .rev()
+            .filter(|event| event.turn_id == Some(active_turn.turn_id))
         {
-            return Err(DomainError::InvalidStatistics {
-                field: "subagent_return_stats_pair",
-            });
+            if let EventBody::SubagentReturn(returned) = &event.event {
+                if latest_api_started_seq.is_some_and(|started| event.seq <= started) {
+                    return Ok(None);
+                }
+                return Ok(Some(SubagentReturnReceipt {
+                    parent_turn_id: active_turn.turn_id,
+                    return_seq: event.seq,
+                    child_session_id: returned.child_session_id.clone(),
+                    child_task_id: returned.child_task_id.clone(),
+                    child_turn_stats_seq: returned.child_turn_stats_seq,
+                    source_assistant_text_seq: returned.source_assistant_text_seq,
+                }));
+            }
         }
-        Ok(Some(SubagentReturnReceipt {
-            parent_turn_id: active_turn.turn_id,
-            return_seq: return_event.seq,
-            stats_seq: stats_event.seq,
-            child_session_id: returned.child_session_id.clone(),
-            child_task_id: returned.child_task_id.clone(),
-            child_turn_stats_seq: returned.child_turn_stats_seq,
-            source_assistant_text_seq: returned.source_assistant_text_seq,
-        }))
+        Ok(None)
     }
 
     /// Reconstructs one exact subagent return receipt without mutating the document.
@@ -557,18 +489,18 @@ impl SessionDocument {
         input: &SubagentReturnInput,
     ) -> Result<Option<SubagentReturnReceipt>, DomainError> {
         validate_exact_external_identity("child_session_id", &input.child_session_id)?;
-        validate_stat_bucket(&input.totals)?;
-        let matching_returns: Vec<&ConversationEvent> = self
+        let matching_returns: Vec<_> = self
             .events
             .iter()
-            .filter(|event| {
-                matches!(
-                    &event.event,
-                    EventBody::SubagentReturn(returned)
-                        if returned.child_session_id == input.child_session_id
-                            && returned.child_task_id == input.child_task_id
-                            && returned.child_turn_stats_seq == input.child_turn_stats_seq
-                )
+            .filter_map(|event| match &event.event {
+                EventBody::SubagentReturn(returned)
+                    if returned.child_session_id == input.child_session_id
+                        && returned.child_task_id == input.child_task_id
+                        && returned.child_turn_stats_seq == input.child_turn_stats_seq =>
+                {
+                    Some((event, returned))
+                }
+                _ => None,
             })
             .collect();
         if matching_returns.is_empty() {
@@ -579,34 +511,11 @@ impl SessionDocument {
                 field: "subagent_return_identity_unique",
             });
         }
-        let return_event = matching_returns[0];
-        // Delivery identity belongs to a child completion, not to the currently open parent turn.
-        // 投递身份属于一次子任务完成，而不属于当前开放的父回合。
-        let parent_turn_id = return_event.turn_id.ok_or(DomainError::InvalidStatistics {
-            field: "subagent_return.parent_turn",
-        })?;
-        let stats_event = self
-            .events
-            .iter()
-            .find(|event| event.seq.value() == return_event.seq.value() + 1)
-            .ok_or(DomainError::InvalidStatistics {
-                field: "subagent_return_stats_pair",
-            })?;
-        let EventBody::SubagentReturn(returned) = &return_event.event else {
-            unreachable!("matching return filter guarantees the event kind")
-        };
-        let EventBody::SubagentReturnStats(stats) = &stats_event.event else {
-            return Err(DomainError::InvalidStatistics {
-                field: "subagent_return_stats_pair",
-            });
-        };
-        validate_subagent_return_pair(returned, stats)?;
-        if returned.child_turn_stats_seq != input.child_turn_stats_seq
-            || returned.source_assistant_text_seq != input.source_assistant_text_seq
+        let (event, returned) = matching_returns[0];
+        if returned.source_assistant_text_seq != input.source_assistant_text_seq
             || returned.source_from_seq != input.source_from_seq
             || returned.source_to_seq != input.source_to_seq
             || returned.content != input.content
-            || stats.totals != input.totals
         {
             return Err(DomainError::ImmutableFieldMutation {
                 entity: "subagent_return",
@@ -614,9 +523,10 @@ impl SessionDocument {
             });
         }
         Ok(Some(SubagentReturnReceipt {
-            parent_turn_id,
-            return_seq: return_event.seq,
-            stats_seq: stats_event.seq,
+            parent_turn_id: event.turn_id.ok_or(DomainError::InvalidStatistics {
+                field: "subagent_return.parent_turn",
+            })?,
+            return_seq: event.seq,
             child_session_id: returned.child_session_id.clone(),
             child_task_id: returned.child_task_id.clone(),
             child_turn_stats_seq: returned.child_turn_stats_seq,

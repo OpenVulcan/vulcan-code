@@ -5,202 +5,37 @@ use super::*;
 use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
 use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
 use vulcan_service_api::{
-    ConversationAttentionSummary, ConversationSummary, SessionProviderOutputTiming,
-    SessionProviderUsageCallSummary, SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
+    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageSummary,
 };
-use vulcan_session_core::v1::{
-    AggregatedUsage, ApiCallStatus, ApiErrorCategory, ApiPurposeKind, ApiStatsEvent,
-    ConversationEvent, EventBody, SessionDocument, UsageSnapshot,
-};
-
-/// Projects authoritative V1 API facts into the browser-facing session summary.
-/// 将权威 V1 API 事实投影为浏览器侧会话摘要。
-///
-/// # Parameters
-/// 参数
-/// `document` contains the authoritative ordered V1 session event stream.
-/// `document` 包含权威且有序的 V1 会话事件流。
-///
-/// # Returns
-/// 返回值
-/// Returns `None` only when the V1 stream has no physical Provider API start fact.
-/// 仅当 V1 事件流中不存在物理 Provider API 启动事实时返回 `None`。
-pub(crate) fn session_provider_usage_summary_from_v1_document(
-    document: &SessionDocument,
-) -> Result<Option<SessionProviderUsageSummary>, String> {
-    let events = document.events();
-    // Child returns cover disjoint source ranges enforced by the V1 document domain.
-    // 子代理回流覆盖不重叠的源范围，由 V1 文档领域保证。
-    let child_totals: Vec<_> = events
-        .iter()
-        .filter_map(|event| match &event.event {
-            EventBody::SubagentReturnStats(stats) => Some(&stats.totals),
-            _ => None,
-        })
-        .collect();
-    let terminal_stats = events
-        .iter()
-        .filter_map(|event| match &event.event {
-            EventBody::ApiStats(stats) => Some(stats),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let starts = events
-        .iter()
-        .filter_map(|event| match &event.event {
-            EventBody::ApiStarted(started) => Some((event, started)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if starts.is_empty() {
-        return Ok(None);
+/// Projects the resident aggregate without scanning Turns or reading files.
+/// 直接投影常驻累计，不扫描回合或读取文件。
+/// The handle identifies the owner; failures remain an explicit UI availability message.
+/// 句柄标识所有者；失败保留为明确的界面不可用信息。
+pub(crate) fn session_provider_usage_summary_from_v1_handle(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+) -> SessionProviderUsageSummary {
+    // Keep the existing transport envelope while the new UI consumes separated lifetime scopes.
+    // 保留现有传输外壳，新界面使用分离的生命周期统计范围。
+    let (lifetime, lifetime_error) = match handle.lifetime_usage_snapshot() {
+        Ok(usage) => (Some(usage), None),
+        Err(error) => (None, Some(error)),
+    };
+    SessionProviderUsageSummary {
+        provider_call_count: lifetime
+            .as_ref()
+            .map_or(0, |usage| usage.main.request_count as usize),
+        unknown_usage_call_count: lifetime
+            .as_ref()
+            .map_or(0, |usage| usage.main.unknown_usage_count as usize),
+        usage_revision: lifetime.as_ref().map_or(0, |usage| usage.revision),
+        lifetime,
+        lifetime_error,
+        in_flight_call_count: 0,
+        last_usage: None,
+        cumulative_usage: None,
+        output_timing: None,
+        latest_call: None,
     }
-    let in_flight_call_count = starts
-        .iter()
-        .filter(|(_, started)| {
-            !terminal_stats
-                .iter()
-                .any(|stats| stats.api_call_id == started.api_call_id)
-        })
-        .count();
-    let unknown_usage_call_count = terminal_stats
-        .iter()
-        .filter(|stats| stats.usage.has_no_usage())
-        .count();
-    let last_usage = terminal_stats
-        .iter()
-        .rev()
-        .find(|stats| !stats.usage.has_no_usage())
-        .map(|stats| session_provider_usage_tokens(&stats.usage))
-        .transpose()?
-        .flatten();
-    let direct_usage = AggregatedUsage::aggregate(terminal_stats.iter().map(|stats| &stats.usage));
-    let cumulative_usage = (!terminal_stats.is_empty() || !child_totals.is_empty())
-        .then(|| {
-            AggregatedUsage::aggregate_aggregated(
-                (!terminal_stats.is_empty())
-                    .then_some(&direct_usage)
-                    .into_iter()
-                    .chain(child_totals.iter().map(|bucket| &bucket.usage)),
-            )
-        })
-        .map(|usage| aggregated_provider_usage_tokens(&usage))
-        .transpose()?
-        .flatten();
-    let latest_call = starts
-        .last()
-        .map(|(event, started)| {
-            let stats = terminal_stats
-                .iter()
-                .find(|stats| stats.api_call_id == started.api_call_id)
-                .copied();
-            session_provider_usage_call_summary(event, started.purpose, stats)
-        })
-        .transpose()?;
-    Ok(Some(SessionProviderUsageSummary {
-        provider_call_count: starts.len()
-            + child_totals
-                .iter()
-                .map(|bucket| bucket.api_call_count as usize)
-                .sum::<usize>(),
-        in_flight_call_count,
-        unknown_usage_call_count: unknown_usage_call_count
-            + child_totals
-                .iter()
-                .map(|bucket| bucket.unknown_usage_api_call_count as usize)
-                .sum::<usize>(),
-        last_usage,
-        cumulative_usage,
-        output_timing: session_provider_output_timing_with_children(
-            &terminal_stats,
-            &child_totals,
-        )?,
-        latest_call,
-        usage_revision: document.memory_revision(),
-    }))
-}
-
-/// Aggregates output tokens and timing from the same canonical terminal request cohort.
-/// 从同一组规范终态请求汇总输出 Token 与计时。
-/// `stats` contains session-owned API facts; returns no measurement when checkpoints are missing.
-/// `stats` 包含会话所属 API 事实；计时点缺失时不返回测量结果。
-/// Checked sums return an explicit error on overflow rather than publishing a distorted speed.
-/// 累加溢出时返回明确错误，避免发布失真的速度。
-fn session_provider_output_timing(
-    stats: &[&ApiStatsEvent],
-) -> Result<Option<SessionProviderOutputTiming>, String> {
-    // Keep measured tokens separate from session-wide usage containing unmeasured history.
-    // 将已测 Token 与包含未测历史的会话总用量分开保存。
-    let mut timing = SessionProviderOutputTiming::default();
-    for stats in stats {
-        // These optional checkpoints and output counts are defined by the V1 API contract.
-        // 这些可选计时点和输出计数由 V1 API 契约定义。
-        let (Some(start), Some(first), Some(end), Some(output)) = (
-            stats.timing.dispatched_at_ms,
-            stats.timing.first_token_at_ms,
-            stats.timing.completed_at_ms,
-            stats.usage.output_tokens,
-        ) else {
-            continue;
-        };
-        if first < start || end <= first {
-            continue;
-        }
-        // Ordered signed timestamps can span the entire u64 duration range without wrapping.
-        // 有序有符号时间戳可使用完整 u64 时长范围，避免相减回绕。
-        let first_latency = first.abs_diff(start);
-        let output_duration = end.abs_diff(first);
-        timing.request_count = timing
-            .request_count
-            .checked_add(1)
-            .ok_or("Session Provider timing request count overflow")?;
-        timing.first_token_latency_ms = timing
-            .first_token_latency_ms
-            .checked_add(first_latency)
-            .ok_or("Session Provider first-token latency overflow")?;
-        timing.output_duration_ms = timing
-            .output_duration_ms
-            .checked_add(output_duration)
-            .ok_or("Session Provider output duration overflow")?;
-        timing.output_tokens = timing
-            .output_tokens
-            .checked_add(output)
-            .ok_or("Session Provider measured output tokens overflow")?;
-    }
-    Ok((timing.request_count > 0).then_some(timing))
-}
-
-/// Adds child timing to the same measured cohort as direct session requests.
-/// 将子代理计时加入与本体请求相同的实测口径。
-/// Parameters contain disjoint API and child buckets; returns measured totals or an overflow error.
-/// 参数包含不重叠的 API 与子代理统计桶；返回实测总量或溢出错误。
-fn session_provider_output_timing_with_children(
-    stats: &[&ApiStatsEvent],
-    children: &[&vulcan_session_core::v1::stats::StatBucket],
-) -> Result<Option<SessionProviderOutputTiming>, String> {
-    let mut timing = session_provider_output_timing(stats)?.unwrap_or_default();
-    for child in children
-        .iter()
-        .filter_map(|bucket| bucket.output_timing.as_ref())
-    {
-        timing.request_count = timing
-            .request_count
-            .checked_add(child.request_count)
-            .ok_or("Session timing count overflow")?;
-        timing.first_token_latency_ms = timing
-            .first_token_latency_ms
-            .checked_add(child.first_token_latency_ms)
-            .ok_or("Session latency overflow")?;
-        timing.output_duration_ms = timing
-            .output_duration_ms
-            .checked_add(child.output_duration_ms)
-            .ok_or("Session output duration overflow")?;
-        timing.output_tokens = timing
-            .output_tokens
-            .checked_add(child.output_tokens)
-            .ok_or("Session output tokens overflow")?;
-    }
-    Ok((timing.request_count > 0).then_some(timing))
 }
 
 /// Projects every currently registered session without opening cold session storage.
@@ -220,182 +55,23 @@ pub(crate) fn session_provider_usage_summaries_from_v1_registry(
                 ));
             }
         };
-        let summary = handle
-            .read(session_provider_usage_summary_from_v1_document)
-            .map_err(|error| {
-                format!("failed to read V1 Provider usage events for session {session_id}: {error}")
-            })??;
-        if let Some(summary) = summary {
-            summaries.insert(session_id, summary);
-        }
+        summaries.insert(
+            session_id,
+            session_provider_usage_summary_from_v1_handle(&handle),
+        );
     }
     Ok(summaries)
 }
 
-/// Builds the latest physical API lifecycle projection from one V1 start/stats pair.
-/// 从一组 V1 启动与统计事实构建最近一次物理 API 生命周期投影。
-fn session_provider_usage_call_summary(
-    started_event: &ConversationEvent,
-    purpose: ApiPurposeKind,
-    stats: Option<&ApiStatsEvent>,
-) -> Result<SessionProviderUsageCallSummary, String> {
-    let started = match &started_event.event {
-        EventBody::ApiStarted(started) => started,
-        _ => {
-            return Err(String::from(
-                "V1 Provider usage projection received a non-api_started event.",
-            ));
-        }
-    };
-    Ok(SessionProviderUsageCallSummary {
-        provider_call_id: started.api_call_id.value().to_string(),
-        owner_kind: api_purpose_key(purpose).to_string(),
-        status: stats
-            .map(|stats| api_call_status_key(stats.status))
-            .unwrap_or("prepared")
-            .to_string(),
-        usage: stats
-            .map(|stats| session_provider_usage_tokens(&stats.usage))
-            .transpose()?
-            .flatten(),
-        started_at_ms: Some(started_event.created_at_ms),
-        completed_at_ms: stats.and_then(|stats| stats.timing.completed_at_ms),
-        error_category: stats
-            .and_then(|stats| stats.error.as_ref())
-            .map(|error| api_error_category_key(error.category).to_string()),
-        error_code: stats
-            .and_then(|stats| stats.error.as_ref())
-            .and_then(|error| error.error_code.clone()),
-    })
-}
-
-/// Applies live Provider API call counts to the selected session goal summary.
-/// 将实时 Provider API 调用数量应用到选中会话目标摘要。
+/// Preserves Goal-generation counters without replacing them with lifetime request counts.
+/// 保留 Goal 代际计数，不以生命周期请求次数覆盖。
 pub(crate) fn session_goal_summary_with_provider_usage(
     goal: Option<SessionGoalSummary>,
-    provider_usage: Option<&SessionProviderUsageSummary>,
+    _provider_usage: Option<&SessionProviderUsageSummary>,
 ) -> Option<SessionGoalSummary> {
-    goal.map(|mut goal| {
-        if let Some(provider_usage) = provider_usage {
-            goal.api_call_count = provider_usage.provider_call_count;
-        }
-        goal
-    })
-}
-
-/// Converts one internal usage snapshot to the stable WebUI token shape.
-/// 将内部用量快照转换为稳定的 WebUI Token 结构。
-fn session_provider_usage_tokens(
-    usage: &UsageSnapshot,
-) -> Result<Option<SessionProviderUsageTokenSummary>, String> {
-    let summary = SessionProviderUsageTokenSummary {
-        input_tokens: checked_provider_token(usage.input_tokens, "input_tokens")?,
-        uncached_input_tokens: checked_provider_token(
-            usage.uncached_input_tokens,
-            "uncached_input_tokens",
-        )?,
-        cached_input_tokens: checked_provider_token(usage.cache_read_tokens, "cache_read_tokens")?,
-        cache_creation_input_tokens: checked_provider_token(
-            usage.cache_write_tokens,
-            "cache_write_tokens",
-        )?,
-        output_tokens: checked_provider_token(usage.output_tokens, "output_tokens")?,
-        reasoning_tokens: checked_provider_token(usage.reasoning_tokens, "reasoning_tokens")?,
-        total_tokens: checked_provider_token(usage.total_tokens, "total_tokens")?,
-    };
-    Ok((summary.input_tokens.is_some()
-        || summary.uncached_input_tokens.is_some()
-        || summary.cached_input_tokens.is_some()
-        || summary.cache_creation_input_tokens.is_some()
-        || summary.output_tokens.is_some()
-        || summary.reasoning_tokens.is_some()
-        || summary.total_tokens.is_some())
-    .then_some(summary))
-}
-
-/// Converts aggregate V1 usage into the stable WebUI token shape.
-/// 将聚合后的 V1 用量转换为稳定的 WebUI Token 结构。
-fn aggregated_provider_usage_tokens(
-    usage: &AggregatedUsage,
-) -> Result<Option<SessionProviderUsageTokenSummary>, String> {
-    let summary = SessionProviderUsageTokenSummary {
-        input_tokens: checked_provider_token(usage.input_tokens, "input_tokens")?,
-        uncached_input_tokens: checked_provider_token(
-            usage.uncached_input_tokens,
-            "uncached_input_tokens",
-        )?,
-        cached_input_tokens: checked_provider_token(usage.cache_read_tokens, "cache_read_tokens")?,
-        cache_creation_input_tokens: checked_provider_token(
-            usage.cache_write_tokens,
-            "cache_write_tokens",
-        )?,
-        output_tokens: checked_provider_token(usage.output_tokens, "output_tokens")?,
-        reasoning_tokens: checked_provider_token(usage.reasoning_tokens, "reasoning_tokens")?,
-        total_tokens: checked_provider_token(usage.total_tokens, "total_tokens")?,
-    };
-    Ok((summary.input_tokens.is_some()
-        || summary.uncached_input_tokens.is_some()
-        || summary.cached_input_tokens.is_some()
-        || summary.cache_creation_input_tokens.is_some()
-        || summary.output_tokens.is_some()
-        || summary.reasoning_tokens.is_some()
-        || summary.total_tokens.is_some())
-    .then_some(summary))
-}
-
-/// Converts one JS-safe V1 token dimension into the host display width.
-/// 将一个 JS 安全的 V1 Token 维度转换为宿主显示宽度。
-fn checked_provider_token(
-    value: Option<u64>,
-    field: &'static str,
-) -> Result<Option<usize>, String> {
-    value
-        .map(|value| {
-            usize::try_from(value).map_err(|_| {
-                format!("V1 Provider usage field `{field}` exceeds the host display width.")
-            })
-        })
-        .transpose()
-}
-
-/// Returns the stable WebUI purpose key for one physical V1 API call.
-/// 返回一次物理 V1 API 调用的稳定 WebUI 用途键。
-fn api_purpose_key(purpose: ApiPurposeKind) -> &'static str {
-    match purpose {
-        ApiPurposeKind::MainGeneration => "main_generation",
-        ApiPurposeKind::RetryGeneration => "retry_generation",
-        ApiPurposeKind::Compaction => "compaction",
-        ApiPurposeKind::Continue => "continue",
-        ApiPurposeKind::Subagent => "subagent",
-    }
-}
-
-/// Returns the stable WebUI lifecycle key for one physical V1 API call.
-/// 返回一次物理 V1 API 调用的稳定 WebUI 生命周期键。
-fn api_call_status_key(status: ApiCallStatus) -> &'static str {
-    match status {
-        ApiCallStatus::Prepared => "prepared",
-        ApiCallStatus::Dispatched => "dispatched",
-        ApiCallStatus::InProgress => "in_progress",
-        ApiCallStatus::Completed => "succeeded",
-        ApiCallStatus::Failed => "failed",
-        ApiCallStatus::Cancelled => "cancelled",
-        ApiCallStatus::Interrupted => "interrupted",
-    }
-}
-
-/// Returns the stable WebUI error category for one redacted V1 API error.
-/// 返回一条脱敏 V1 API 错误的稳定 WebUI 分类。
-fn api_error_category_key(category: ApiErrorCategory) -> &'static str {
-    match category {
-        ApiErrorCategory::Provider => "provider",
-        ApiErrorCategory::Network => "network",
-        ApiErrorCategory::Auth => "auth",
-        ApiErrorCategory::Balance => "balance",
-        ApiErrorCategory::Protocol => "protocol",
-        ApiErrorCategory::Timeout => "timeout",
-        ApiErrorCategory::Unknown => "unknown",
-    }
+    // Goal counters already describe the delta since its own generation baseline.
+    // Goal 计数已经表示从自身代际基线开始的差值。
+    goal
 }
 
 /// Projects session todolist state into the WebUI snapshot.
@@ -1063,16 +739,6 @@ pub(crate) fn compact_panel_preview(content: &str) -> String {
 mod tests {
     use super::*;
     use vulcan_service_api::PendingPromptsChangedDelta;
-    use vulcan_session_core::v1::context::LockedBaselineProjection;
-    use vulcan_session_core::v1::document::{
-        ApiCompletion, ClientInputSubmission, PrepareAndStartApiInput,
-    };
-    use vulcan_session_core::v1::event::{
-        ApiEndReason, ApiRequestSnapshot, ApiTimings, ContinuationEligibility,
-        ProviderProjectionProof,
-    };
-    use vulcan_session_core::v1::ids::{ApiCallId, ClientActionId};
-    use vulcan_session_core::v1::projection::provider_visible_fingerprint;
     use vulcan_vmm::{ContextItem, VmmRecallBatch};
 
     /// Verifies memory visibility follows the exact global/project/session resolution, not either hook switch.
@@ -1110,131 +776,6 @@ mod tests {
             session_vmm_policy_summary_from_layers(&global, Some(&project), Some(&session));
         assert!(!summary.memory_enabled);
         assert!(summary.precheck_enabled);
-    }
-
-    /// Starts one deterministic physical V1 Provider API for session-panel tests.
-    /// 为会话面板测试启动一次确定性的 V1 物理 Provider API。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `document` is the authoritative V1 document and `now_ms` timestamps the start fact.
-    /// `document` 是权威 V1 文档，`now_ms` 为启动事实提供时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the allocated local API identity.
-    /// 返回已分配的本地 API 身份。
-    fn start_session_panel_api(document: &mut SessionDocument, now_ms: i64) -> ApiCallId {
-        let retained_from_seq = document.events().first().expect("root input event").seq;
-        let through_seq = document.events().last().expect("provider-visible tail").seq;
-        document
-            .prepare_and_start_api(PrepareAndStartApiInput {
-                purpose: ApiPurposeKind::MainGeneration,
-                request: ApiRequestSnapshot::new("provider", "model"),
-                request_budget_evidence:
-                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
-                projection: ProviderProjectionProof {
-                    segment_generation: document.segment_generation(),
-                    document_revision: document.memory_revision(),
-                    retained_from_seq,
-                    through_seq,
-                    fingerprint_sha256: provider_visible_fingerprint(
-                        document.events(),
-                        through_seq,
-                    )
-                    .expect("provider-visible fingerprint"),
-                },
-                locked_baseline: LockedBaselineProjection::empty(),
-                continuation_action_id: None,
-                now_ms,
-            })
-            .expect("start V1 Provider API")
-            .into_value()
-            .api_call_id
-    }
-
-    /// Completes one deterministic physical V1 Provider API with official usage.
-    /// 使用官方用量完成一次确定性的 V1 物理 Provider API。
-    fn complete_session_panel_api(
-        document: &mut SessionDocument,
-        api_call_id: ApiCallId,
-        total_tokens: u64,
-        now_ms: i64,
-    ) {
-        document
-            .complete_api_group(
-                api_call_id,
-                ApiCompletion {
-                    request: ApiRequestSnapshot::new("provider", "model"),
-                    usage: UsageSnapshot {
-                        total_tokens: Some(total_tokens),
-                        ..UsageSnapshot::default()
-                    },
-                    status: ApiCallStatus::Completed,
-                    end_reason: Some(ApiEndReason::CompletedSuccessfully),
-                    error: None,
-                    continuation_eligibility: ContinuationEligibility::Forbidden,
-                    timing: ApiTimings::default(),
-                    provider_source: None,
-                    completed_at_ms: now_ms,
-                },
-            )
-            .expect("complete V1 Provider API");
-    }
-
-    /// Verifies the panel derives counts and usage only from canonical V1 API facts.
-    /// 验证面板仅从规范 V1 API 事实派生调用计数与用量。
-    #[test]
-    fn provider_usage_summary_projects_canonical_v1_api_facts() {
-        let mut document = SessionDocument::new("session", "project", "title", 1);
-        document
-            .submit_root_input(
-                ClientInputSubmission::new(
-                    ClientActionId::try_new("provider-panel-root").expect("valid root action"),
-                    "root",
-                    Vec::new(),
-                ),
-                1,
-            )
-            .expect("root input")
-            .into_value();
-
-        let first_api = start_session_panel_api(&mut document, 2);
-        complete_session_panel_api(&mut document, first_api, 10, 3);
-        let second_api = start_session_panel_api(&mut document, 4);
-        complete_session_panel_api(&mut document, second_api, 20, 5);
-        let third_api = start_session_panel_api(&mut document, 6);
-
-        let summary = session_provider_usage_summary_from_v1_document(&document)
-            .expect("valid V1 usage projection")
-            .expect("started APIs should project usage");
-        assert_eq!(summary.provider_call_count, 3);
-        assert_eq!(summary.in_flight_call_count, 1);
-        assert_eq!(summary.unknown_usage_call_count, 0);
-        assert_eq!(
-            summary.last_usage.and_then(|usage| usage.total_tokens),
-            Some(20)
-        );
-        assert_eq!(
-            summary
-                .cumulative_usage
-                .and_then(|usage| usage.total_tokens),
-            Some(30)
-        );
-        assert_eq!(
-            summary
-                .latest_call
-                .as_ref()
-                .map(|call| call.provider_call_id.as_str()),
-            Some(third_api.value().to_string().as_str())
-        );
-        assert_eq!(
-            summary
-                .latest_call
-                .as_ref()
-                .map(|call| call.status.as_str()),
-            Some("prepared")
-        );
     }
 
     /// Verifies a pending-question registry failure cannot be projected as an empty request list.

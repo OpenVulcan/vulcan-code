@@ -1,4 +1,3 @@
-import { Bot } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -38,9 +37,9 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   // event owns exact totals; view-only coverage may additionally expose proven partial contributions.
   // event 持有精确总量；仅供视图的覆盖信息可额外展示已证明的部分贡献。
   const event = props.node.item.event;
-  // total is the authoritative inclusive bucket for this completed Turn.
-  // total 是当前已完成 Turn 的权威总计桶。
-  const total = event.buckets.total;
+  // total uses this session's own bucket, including when legacy history retains child totals.
+  // total 使用当前会话自身统计桶，包含仍保留子代理总量的旧历史。
+  const total = event.buckets.direct;
   // summary preserves the established compact API/tool count row.
   // summary 保留既有的紧凑 API/工具计数行。
   const summary = zh
@@ -91,7 +90,7 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
             <strong>{zh ? "本轮统计" : "Turn usage"}</strong>
             <span title={speed === null ? (zh ? "缺少配对的首 Token 时间与输出用量" : "Paired first-token timing and output usage are unavailable") : (zh ? `已测 ${timing?.requestCount} 次请求：输出 Token ÷ 首 Token 后累计输出时长，不含请求之间的工具等待` : `${timing?.requestCount} measured requests: output tokens divided by summed output duration after first token, excluding inter-request tool waits`)}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
           </div>
-          <TurnStatsUsageRows bucket={total} coverage={props.node.usage_coverage?.total} locale={locale}>
+          <TurnStatsUsageRows bucket={total} coverage={props.node.usage_coverage?.direct} locale={locale}>
             {timing !== undefined && timing.requestCount > 0 ? <>
               <TurnStatsMetricRow
                 leftLabel={zh ? "平均首 Token" : "Average first token"}
@@ -104,16 +103,7 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
               </div> : null}
             </> : null}
           </TurnStatsUsageRows>
-          <TurnStatsCacheSummary bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
-          {bucketHasFacts(event.buckets.subagent) ? (
-            <section className="turn-stats-subagent-section">
-              <div className="turn-stats-section-title">
-                <Bot aria-hidden="true" size={13} />
-                <span>{zh ? "子代理统计" : "Subagent usage"}</span>
-              </div>
-              <TurnStatsUsageRows bucket={event.buckets.subagent} coverage={props.node.usage_coverage?.subagent} locale={locale} />
-            </section>
-          ) : null}
+          <TurnStatsCacheSummary bucket={total} coverage={props.node.usage_coverage?.direct} locale={locale} />
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -259,21 +249,6 @@ function turnStatsIcon(outcome: "completed" | "abandoned" | "stopped"): string {
   if (outcome === "abandoned") return "!";
   if (outcome === "stopped") return "■";
   return "◔";
-}
-
-/** Reports whether one subagent bucket contains any persisted accounting fact.
- * 判断一个子代理统计桶是否包含任意持久化核算事实。
- *
- * @param bucket persisted subagent bucket.
- *               持久化子代理统计桶。
- * @returns true when a count or usage dimension is present.
- *          存在任意计数或用量维度时返回 true。 */
-function bucketHasFacts(bucket: StatBucket): boolean {
-  return bucket.api_call_count > 0
-    || bucket.unknown_usage_api_call_count > 0
-    || bucket.tool_call_count > 0
-    || bucket.subagent_return_count > 0
-    || Object.values(bucket.usage).some((value) => value !== undefined);
 }
 
 /** Formats one exact non-negative count in the active locale.

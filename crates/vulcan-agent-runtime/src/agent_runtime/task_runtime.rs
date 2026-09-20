@@ -26,7 +26,9 @@ use crate::agent_runtime::tool_runtime_bridge::{
     wait_runtime_event_projection_barrier,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::model::{SessionId, SessionTurnUsageSegment, SessionTurnUsageSegmentKind};
+#[cfg(test)]
+use crate::model::SessionTurnUsageSegmentKind;
+use crate::model::{SessionId, SessionTurnUsageSegment};
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
 use async_stream::stream;
 use futures_util::StreamExt;

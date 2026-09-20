@@ -1864,6 +1864,80 @@ impl ProviderV1StreamSink {
         Ok(())
     }
 
+    /// Consumes the same terminal telemetry used by global API statistics before Turn settlement.
+    /// 在 Turn 结算前消费与全局 API 统计相同的终态遥测。
+    /// Validates request ownership first; normalized usage is accumulated without waiting for tools.
+    /// 先校验请求归属；规范化用量无需等待工具即可累计。
+    pub(crate) fn record_telemetry_terminal(
+        &mut self,
+        event: &vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent,
+        app: &vulcan_service_api::ServiceEventEmitter,
+        state: &SharedServiceBridgeState,
+    ) -> Result<(), ProviderV1SinkError> {
+        use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
+        let Some(ProviderV1LifecycleFacts::ApiTerminal(terminal)) = event.v1_lifecycle.as_ref()
+        else {
+            return Err(ProviderV1SinkError::MissingTypedTerminalFacts);
+        };
+        let active = self
+            .active
+            .as_ref()
+            .ok_or(ProviderV1SinkError::RequestNotActive)?;
+        if active.request_facts != terminal.request_facts
+            || event.session_id != self.handle.session_id()
+        {
+            return Err(ProviderV1SinkError::RequestIdentityMismatch);
+        }
+        if active.pending_terminal.is_some() {
+            return Err(ProviderV1SinkError::TerminalAlreadyPending);
+        }
+        // Read the normalized typed envelope, never plugin JSON or a later Turn report.
+        // 读取规范化强类型信封，不读取插件 JSON 或后续 Turn 报告。
+        let usage = event.completed_usage.as_ref().map_or_else(
+            vulcan_session_core::v1::UsageSnapshot::default,
+            |usage| vulcan_session_core::v1::UsageSnapshot {
+                input_tokens: usage.input_tokens.map(|value| value as u64),
+                uncached_input_tokens: usage.uncached_input_tokens.map(|value| value as u64),
+                cache_read_tokens: usage.cached_input_tokens.map(|value| value as u64),
+                cache_write_tokens: usage.cache_creation_input_tokens.map(|value| value as u64),
+                output_tokens: usage.output_tokens.map(|value| value as u64),
+                reasoning_tokens: usage.reasoning_tokens.map(|value| value as u64),
+                total_tokens: usage.total_tokens.map(|value| value as u64),
+                audio_input_tokens: usage.audio_input_tokens.map(|value| value as u64),
+                audio_output_tokens: usage.audio_output_tokens.map(|value| value as u64),
+                billing_tier: None,
+            },
+        );
+        match vulcan_session_core::v1::lifetime_usage::SessionUsageBucket::from_api(
+            &usage,
+            &terminal.timing,
+        ) {
+            Ok(increment) => self
+                .handle
+                .record_lifetime_usage(&increment, terminal.completed_at_ms),
+            Err(error) => eprintln!("[session-usage] terminal: {error}"),
+        }
+        crate::session_plan_runtime::emit_lifetime_usage_changed(app, state, &self.handle);
+        Ok(())
+    }
+
+    /// Records terminal usage before any tool-free Turn settlement and then accepts its V1 facts.
+    /// 在无工具回合结算前记录终态用量，然后接纳其 V1 事实。
+    /// Returns the terminal outcome; accounting errors are separately reported by the owner.
+    /// 返回终态结果；统计错误由所有者单独报告。
+    pub(crate) async fn accept_telemetry_terminal(
+        &mut self,
+        event: &vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent,
+        app: &vulcan_service_api::ServiceEventEmitter,
+        state: &SharedServiceBridgeState,
+    ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
+        self.record_telemetry_terminal(event, app, state)?;
+        let Some(vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts::ApiTerminal(terminal)) = &event.v1_lifecycle else {
+            return Err(ProviderV1SinkError::MissingTypedTerminalFacts);
+        };
+        self.accept_terminal(terminal.clone()).await
+    }
+
     /// Accepts one typed API terminal and durably closes a tool-free group.
     /// 接纳一个强类型 API 终态，并可靠闭合无工具调用组。
     ///
@@ -1952,6 +2026,7 @@ impl ProviderV1StreamSink {
         // outcome is available only after persistence succeeds; failed boundaries must not publish lifecycle changes.
         // outcome 仅在持久化成功后可用；失败边界不得发布生命周期变更。
         let outcome = self.apply_tool_boundary(boundary, now_ms).await?;
+        crate::session_plan_runtime::emit_lifetime_usage_changed(app, state, &self.handle);
         // This projector owns only live resources and request progress, never legacy transcript persistence.
         // 此投影器仅拥有实时资源和请求进度，不负责旧转录持久化。
         // Keeping it inside the public V1 entry prevents callers' early returns from skipping close/spawn deltas.
@@ -2067,8 +2142,19 @@ impl ProviderV1StreamSink {
                 provider_source,
                 now_ms,
             )
-            .await?
-            .value;
+            .await?;
+        // The durable receipt distinguishes a new batch from an idempotent replay.
+        // 可靠回执区分新批次与幂等重放。
+        if prepared.changed {
+            self.handle.record_lifetime_usage(
+                &vulcan_session_core::v1::lifetime_usage::SessionUsageBucket {
+                    tool_call_count: prepared.value.tools.len() as u64,
+                    ..Default::default()
+                },
+                now_ms,
+            );
+        }
+        let prepared = prepared.value;
         if prepared.api_call_id != api_call_id || prepared.tools.len() != durable_requests.len() {
             return Err(ProviderV1SinkError::ToolBoundaryMismatch(String::from(
                 "prepared_tool_batch_receipt",
@@ -2473,6 +2559,37 @@ mod tests {
             )
             .expect("publish root turn");
         handle
+    }
+
+    /// Creates a real isolated storage owner for return paths that require full durable reads.
+    /// 为需要完整持久化读取的回流路径创建真实隔离存储所有者。
+    /// Returns the temporary directory guard and its published open-turn handle.
+    /// 返回临时目录守卫及已发布开放回合的句柄。
+    fn published_stored_open_turn() -> (tempfile::TempDir, Arc<SessionHandle>) {
+        let directory = tempfile::tempdir().unwrap();
+        let id = SessionId::new_v4();
+        let locator = vulcan_workspace_store::workspace_store::create_session_v1_storage_fixture(
+            directory.path(),
+            &id.to_string(),
+            1,
+        )
+        .unwrap();
+        let document = vulcan_workspace_store::workspace_store::load_session_v1_full(&locator)
+            .unwrap()
+            .document;
+        let handle = SessionHandle::new(id, locator, document);
+        handle.initialize_root_usage(false, 1);
+        handle
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("stored-input").unwrap(),
+                    "root",
+                    Vec::new(),
+                ),
+                2,
+            )
+            .unwrap();
+        (directory, handle)
     }
 
     /// Commits one exact prepared API and mirrors its durable receipt into the stream-local sink.
@@ -3630,7 +3747,7 @@ mod tests {
             .append_assistant_delta("parent still owns the API", 5)
             .expect("append parent assistant text");
         let appended_return = parent_handle
-            .append_subagent_return_with_stats(return_input, 12)
+            .append_subagent_return(return_input, 12)
             .expect("append child return to active parent Turn")
             .value;
         // parentTerminal ends after the child return and releases only the physical API.
@@ -3677,7 +3794,7 @@ mod tests {
 
         // parent_handle has already durably closed the initial user turn.
         // parent_handle 已经可靠关闭最初的用户回合。
-        let parent_handle = published_open_turn();
+        let (_parent_directory, parent_handle) = published_stored_open_turn();
         let mut parent_sink = ProviderV1StreamSink::new(
             Arc::clone(&parent_handle),
             Arc::new(ProjectResourceCatalogRegistry::default()),
@@ -3692,7 +3809,7 @@ mod tests {
             .unwrap();
         // child_sink retains the exact source receipt used by the production completion path.
         // child_sink 保留生产完成路径使用的精确来源回执。
-        let child_handle = published_open_turn();
+        let (_child_directory, child_handle) = published_stored_open_turn();
         let mut child_sink = ProviderV1StreamSink::new(
             Arc::clone(&child_handle),
             Arc::new(ProjectResourceCatalogRegistry::default()),
@@ -3756,10 +3873,24 @@ mod tests {
         let controller = controller_root.host_runtime_handle();
         let mut telemetry =
             ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+        // Mirror the production listener's publication gate and typed content mailbox.
+        // 复现生产监听器的发布门控与强类型正文邮箱。
+        runtime
+            .task_runtime
+            .expect_durable_task_return(child.task_id, "late-execution")
+            .unwrap();
+        let mailbox = vulcan_session_boundary::SubagentMailboxEvent {
+            parent_thread_id: parent_handle.session_id().into(),
+            parent_turn_id: None,
+            child_thread_id: child.task_id.into(),
+            kind: vulcan_session_boundary::SubagentMailboxEventKind::Completed,
+            timestamp_ms: 8,
+            payload: json!({"status":"completed","result_text":"LATE_CHILD_OK"}),
+        };
         let event = RuntimeEvent::new(RuntimeEventKind::DelegateFinished, "Child finished", "Completed").with_metadata(Some(json!({
             "kind": "subagent_task", "payload": {
                 "task_id": "late-child", "subagent_task_id": child.task_id.to_string(),
-                "execution_id": "late-execution", "execution_status": "completed", "subagent": "late-child", "result": "LATE_CHILD_OK"
+                "execution_id": "late-execution", "execution_status": "completed", "subagent": "late-child", "result": "LATE_CHILD_OK", "subagent_mailbox_event": mailbox
             }
         })));
         let handled = handle_webui_detached_subagent_task_event(
@@ -4001,22 +4132,109 @@ mod tests {
         assert!(!has_turn_stats);
     }
 
-    /// Verifies one Provider-ordered batch keeps each tool seq across all lifecycle updates.
-    /// 验证一个 Provider 有序批次在全部生命周期更新中保持每条工具 seq 不变。
+    /// Physical terminal accounting must precede the same request's Goal budget decision.
+    /// 物理终态累计必须先于同一次请求的 Goal 预算判断。
     #[tokio::test]
-    async fn tool_batch_persists_prepared_running_finished_and_unique_stats() {
+    async fn terminal_usage_precedes_goal_budget_decision() {
         let handle = published_open_turn();
+        handle
+            .mutate_durable_if_changed(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                |document| {
+                    document.create_goal("finish", Some(27), "finish", 2)?;
+                    document.metadata.mode.goal.usage_baseline = Some(Default::default());
+                    Ok(SessionMutationChange::Changed(()))
+                },
+            )
+            .unwrap();
+        let service_state =
+            crate::tests::test_support::test_service_state_with_parent_session(handle.session_id());
+        service_state
+            .session_runtime_registry
+            .register(Arc::clone(&handle))
+            .unwrap();
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        let app = crate::ServiceEventEmitter::new(Vec::new());
         let mut sink = ProviderV1StreamSink::new(
             Arc::clone(&handle),
             Arc::new(ProjectResourceCatalogRegistry::default()),
         );
         prepare_sink_request(&handle, &mut sink);
+        sink.append_assistant_delta("done", 6).unwrap();
+        let event = vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent {
+            kind: vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEventKind::Completed,
+            session_id: handle.session_id(), payload: json!({}),
+            completed_usage: Some(vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestCompletedUsage {
+                uncached_input_tokens: Some(20), output_tokens: Some(7), total_tokens: Some(27), ..Default::default()
+            }),
+            v1_lifecycle: Some(vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts::ApiTerminal(terminal_facts(0))),
+        };
+        sink.accept_telemetry_terminal(&event, &app, &state)
+            .await
+            .unwrap();
         assert_eq!(
-            sink.accept_terminal(terminal_facts(2))
+            handle
+                .lifetime_usage_snapshot()
+                .unwrap()
+                .main
+                .budget_tokens
+                .sum,
+            27
+        );
+        assert_eq!(
+            handle
+                .read(|document| document.metadata.mode.goal.state)
+                .unwrap(),
+            vulcan_session_core::v1::config::GoalState::BudgetExhausted
+        );
+        assert!(
+            handle
+                .read(|document| document.active_turn().is_some_and(|turn| turn.closed))
+                .unwrap()
+        );
+    }
+
+    /// Verifies one Provider-ordered batch keeps each tool seq across all lifecycle updates.
+    /// 验证一个 Provider 有序批次在全部生命周期更新中保持每条工具 seq 不变。
+    #[tokio::test]
+    async fn tool_batch_persists_prepared_running_finished_and_unique_stats() {
+        let handle = published_open_turn();
+        // Use physical terminal telemetry to prove accounting precedes deferred ApiStats.
+        // 使用物理请求终态遥测，验证累计早于延迟生成的 ApiStats。
+        let service_state =
+            crate::tests::test_support::test_service_state_with_parent_session(handle.session_id());
+        service_state
+            .session_runtime_registry
+            .register(Arc::clone(&handle))
+            .unwrap();
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        let app = crate::ServiceEventEmitter::new(Vec::new());
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&handle, &mut sink);
+        let terminal = vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent {
+            kind: vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEventKind::Completed,
+            session_id: handle.session_id(),
+            payload: json!({}),
+            completed_usage: Some(vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestCompletedUsage {
+                input_tokens: Some(20), uncached_input_tokens: Some(20), output_tokens: Some(7), total_tokens: Some(27), ..Default::default()
+            }),
+            v1_lifecycle: Some(vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts::ApiTerminal(terminal_facts(2))),
+        };
+        assert_eq!(
+            sink.accept_telemetry_terminal(&terminal, &app, &state)
                 .await
                 .expect("defer terminal"),
             ProviderV1TerminalOutcome::AwaitingTools
         );
+        let usage = handle.lifetime_usage_snapshot().unwrap();
+        assert_eq!(usage.main.request_count, 1);
+        assert_eq!(usage.main.total_tokens.sum, 27);
+        assert_eq!(usage.main.budget_tokens.sum, 27);
+        assert_eq!(usage.main.tool_call_count, 0);
         let first = recovery_request("tool-1", "shell_command", json!({"command": "echo one"}));
         let second = recovery_request("tool-2", "file_edit", json!({"path": "two.txt"}));
         sink.apply_tool_boundary(
@@ -4080,6 +4298,14 @@ mod tests {
                     })
                     .collect(),
             )
+        );
+        assert_eq!(
+            handle
+                .lifetime_usage_snapshot()
+                .unwrap()
+                .main
+                .tool_call_count,
+            2
         );
 
         for request in [&first, &second] {

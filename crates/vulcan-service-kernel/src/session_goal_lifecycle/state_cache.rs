@@ -1,7 +1,6 @@
 //! Session Goal V1 projection and retained WebUI cache helpers.
 //! 会话 Goal V1 投影与 WebUI 保留缓存辅助逻辑。
 
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -11,11 +10,7 @@ use vulcan_session_core::v1::config::{
     KnowledgeRetrievalMode, QueuedInput, VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::SessionDocument;
-use vulcan_session_core::v1::event::{EventBody, SubagentReturnStatus};
 use vulcan_session_core::v1::ids::{ResourceId, Seq, TurnId};
-use vulcan_session_core::v1::stats::{
-    AggregatedUsage, StatBucket, TurnStatBuckets, goal_budget_tokens,
-};
 use vulcan_workbench_model::{
     SessionKnowledgeLibrarySelection, SessionKnowledgeLibrarySelectionMode,
 };
@@ -93,7 +88,7 @@ fn session_v1_runtime_projection(
     session_id: SessionId,
 ) -> SessionV1RuntimeProjection {
     SessionV1RuntimeProjection {
-        goal_summary: session_goal_summary_from_document(document, session_id),
+        goal_summary: session_goal_summary_from_document(document, session_id, None),
         context_compaction_window_node_id: document
             .metadata
             .config
@@ -373,7 +368,13 @@ pub(crate) fn session_goal_summary_from_v1_handle(
     session_id: SessionId,
 ) -> Result<Option<SessionGoalSummary>, String> {
     handle
-        .read(|document| session_goal_summary_from_document(document, session_id))
+        .read(|document| {
+            session_goal_summary_from_document(
+                document,
+                session_id,
+                handle.goal_usage_snapshot().ok().as_ref(),
+            )
+        })
         .map_err(|error| format!("读取 V1 Goal 状态失败：{error}"))
 }
 
@@ -410,7 +411,11 @@ pub(crate) fn session_goal_dispatch_authority_from_v1_handle(
 ) -> Result<Option<SessionGoalDispatchAuthority>, String> {
     handle
         .read(|document| {
-            let summary = session_goal_summary_from_document(document, session_id)?;
+            let summary = session_goal_summary_from_document(
+                document,
+                session_id,
+                handle.goal_usage_snapshot().ok().as_ref(),
+            )?;
             if summary.status != SessionGoalStatus::Active {
                 return None;
             }
@@ -553,9 +558,11 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
                 );
             }
         }
-        let projection = handle
+        let mut projection = handle
             .read(|document| session_v1_runtime_projection(document, selected_session_id))
             .map_err(|error| format!("读取 V1 会话配置投影失败：{error}"))?;
+        projection.goal_summary =
+            session_goal_summary_from_v1_handle(&handle, selected_session_id)?;
         let process_mirror = if projection.queued_inputs.is_empty() {
             PendingPromptProcessMirror::default()
         } else {
@@ -617,104 +624,53 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
 fn session_goal_summary_from_document(
     document: &SessionDocument,
     session_id: SessionId,
+    current_usage: Option<&vulcan_session_core::v1::lifetime_usage::GoalUsageSnapshot>,
 ) -> Option<SessionGoalSummary> {
+    // Only Goal clock lifecycle facts remain event-derived; token accounting uses the frozen baseline.
+    // 仅 Goal 时钟生命周期仍来自事件；Token 统计使用冻结基线。
     let goal = &document.metadata.mode.goal;
     if !goal.enabled {
         return None;
     }
-    let from_seq = goal
-        .origin_seq
-        .map_or(1, vulcan_session_core::v1::ids::Seq::value);
-    let mut direct_usages = Vec::new();
-    let mut direct_api_count = 0u64;
-    let mut direct_tool_count = 0u64;
-    let mut subagent_samples = Vec::new();
-    let mut subagent_api_count = 0u64;
-    let mut counted_subagent_stats = BTreeSet::new();
-    // The goal clock covers active wall time, including tool execution and turn handoffs.
-    // 目标时钟覆盖活动墙钟时间，包括工具执行与回合交接。
+    let delta = current_usage.and_then(|current| current.since(goal.usage_baseline.as_ref()?));
+    let known_budget = delta.as_ref().and_then(|usage| usage.known_budget());
+    let usage = delta.unwrap_or_default();
     let work_time = vulcan_session_core::v1::goal::goal_work_time(document);
-    let mut updated_at_ms = document.metadata.updated_at_ms;
-    for event in document
-        .events()
-        .iter()
-        .filter(|event| event.seq.value() >= from_seq)
-    {
-        updated_at_ms = updated_at_ms.max(event.updated_at_ms);
-        match &event.event {
-            // Provider statistics physically stored in this document are always local goal work.
-            // 物理存储在当前文档中的 Provider 统计始终属于本地 Goal 工作。
-            EventBody::ApiStats(api) => {
-                direct_api_count = direct_api_count.saturating_add(1);
-                direct_usages.push(&api.usage);
-            }
-            EventBody::ToolCall(_) => {
-                direct_tool_count = direct_tool_count.saturating_add(1);
-            }
-            EventBody::SubagentReturnStats(returned)
-                if returned.status == SubagentReturnStatus::Final
-                    && counted_subagent_stats.insert((
-                        returned.child_session_id.clone(),
-                        returned.child_turn_stats_seq,
-                    )) =>
-            {
-                subagent_api_count =
-                    subagent_api_count.saturating_add(returned.totals.api_call_count);
-                subagent_samples.push(&returned.totals.usage);
-            }
-            _ => {}
-        }
-    }
-    let direct = StatBucket::from_api_usages(direct_usages, direct_api_count, direct_tool_count, 0);
-    let subagent = StatBucket {
-        output_timing: None,
-        api_call_count: subagent_api_count,
-        unknown_usage_api_call_count: 0,
-        tool_call_count: 0,
-        subagent_return_count: counted_subagent_stats.len() as u64,
-        usage: AggregatedUsage::aggregate_aggregated(subagent_samples),
-    };
-    let buckets = TurnStatBuckets::combine(direct, subagent);
-    let usage = &buckets.total.usage;
-    let tokens_used = goal_budget_tokens(&buckets.total).unwrap_or_default();
     let created_at_ms = goal
         .origin_seq
-        .and_then(|origin_seq| {
+        .and_then(|seq| {
             document
                 .events()
                 .iter()
-                .find(|event| event.seq == origin_seq)
+                .find(|event| event.seq == seq)
                 .map(|event| event.created_at_ms)
         })
         .unwrap_or(document.metadata.created_at_ms);
     Some(SessionGoalSummary {
         session_id: session_id.to_string(),
-        goal_id: format!(
-            "goal-v1-{}",
-            goal.origin_seq
-                .map_or(0, vulcan_session_core::v1::ids::Seq::value)
-        ),
+        goal_id: format!("goal-v1-{}", goal.origin_seq.map_or(0, Seq::value)),
         objective: goal.objective.clone(),
         status: session_goal_status_from_goal_state(goal.state),
         token_budget: goal.budget_tokens.map(saturating_u64_to_i64),
-        tokens_used: saturating_u64_to_i64(tokens_used),
-        usage_tokens: saturating_u64_to_i64(tokens_used),
-        api_call_count: saturating_u64_to_usize(buckets.total.api_call_count),
-        tool_call_count: saturating_u64_to_usize(buckets.total.tool_call_count),
-        input_tokens: saturating_u64_to_i64(usage.uncached_input_tokens.unwrap_or_default()),
-        cached_input_tokens: saturating_u64_to_i64(usage.cache_read_tokens.unwrap_or_default()),
-        output_tokens: saturating_u64_to_i64(usage.output_tokens.unwrap_or_default()),
-        reasoning_tokens: saturating_u64_to_i64(usage.reasoning_tokens.unwrap_or_default()),
-        total_tokens: saturating_u64_to_i64(usage.total_tokens.unwrap_or_default()),
+        usage_known: known_budget.is_some(),
+        tokens_used: saturating_u64_to_i64(known_budget.unwrap_or_default()),
+        usage_tokens: saturating_u64_to_i64(known_budget.unwrap_or_default()),
+        api_call_count: saturating_u64_to_usize(usage.request_count),
+        tool_call_count: saturating_u64_to_usize(usage.tool_call_count),
+        input_tokens: saturating_u64_to_i64(usage.uncached_input_tokens.sum),
+        cached_input_tokens: saturating_u64_to_i64(usage.cache_read_tokens.sum),
+        output_tokens: saturating_u64_to_i64(usage.output_tokens.sum),
+        reasoning_tokens: saturating_u64_to_i64(usage.reasoning_tokens.sum),
+        total_tokens: saturating_u64_to_i64(usage.total_tokens.sum),
         time_used_seconds: saturating_u64_to_i64(
-            work_time.map_or(0, |clock| clock.elapsed_ms / 1_000),
+            work_time.map_or(0, |clock| clock.elapsed_ms / 1000),
         ),
         work_time: work_time.map(|clock| vulcan_service_api::SessionGoalWorkTime {
             elapsed_ms: clock.elapsed_ms,
             observed_at_ms: clock.observed_at_ms,
         }),
         created_at_ms,
-        updated_at_ms,
+        updated_at_ms: document.metadata.updated_at_ms,
     })
 }
 

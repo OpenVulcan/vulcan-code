@@ -1111,6 +1111,10 @@ pub struct TurnStatsEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubagentReturnEvent {
+    /// True for new content-only returns; absent legacy values require a statistics pair.
+    /// 新正文回流为真；旧数据缺失该值时要求统计事件对。
+    #[serde(default, skip_serializing_if = "subagent_content_only_is_false")]
+    pub content_only: bool,
     /// Subagent session id that produced the content.
     /// 产出该内容的子代理会话 id。
     pub child_session_id: String,
@@ -1132,6 +1136,12 @@ pub struct SubagentReturnEvent {
     /// Terminal TurnStats seq inside the child session.
     /// 子会话内终态 TurnStats 的 seq。
     pub child_turn_stats_seq: Seq,
+}
+
+/// Preserves the legacy serialized shape when the content-only marker is absent.
+/// 正文回流标记未设置时保留旧序列化结构。
+fn subagent_content_only_is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Flow status of one subagent return into the parent turn.

@@ -184,7 +184,7 @@ fn usage_segment_merger_accumulates_all_statistics_fields() {
         ..SessionTurnStats::default()
     };
     let segment = SessionTurnUsageSegment {
-        kind: SessionTurnUsageSegmentKind::SubagentTask,
+        kind: SessionTurnUsageSegmentKind::AssistantResponse,
         trigger: None,
         execution_profile: None,
         provider_id: None,
@@ -216,7 +216,7 @@ fn usage_segment_merger_accumulates_all_statistics_fields() {
     assert_eq!(stats.usage_groups.len(), 1);
     assert_eq!(
         stats.usage_groups[0].kind,
-        SessionTurnUsageGroupKind::Subagent
+        SessionTurnUsageGroupKind::Regular
     );
     assert_eq!(stats.usage_groups[0].provider_call_count, 10);
     assert_eq!(stats.usage_groups[0].total_tokens, 120);
@@ -225,7 +225,7 @@ fn usage_segment_merger_accumulates_all_statistics_fields() {
 /// Verifies parent user-turn explicit child-agent segments stay out of aggregate totals.
 /// 验证父级用户轮次中的显式智能体分段不会进入顶层聚合总数。
 #[test]
-fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
+fn explicit_subagent_segments_are_excluded_from_parent_turn() {
     let mut stats = SessionTurnStats {
         turn_kind: SessionTurnStatsKind::UserTurn,
         provider_call_count: 1,
@@ -263,21 +263,13 @@ fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
     assert_eq!(stats.reasoning_tokens, 0);
     assert_eq!(stats.total_tokens, 13);
     assert_eq!(stats.cached_input_tokens, None);
-    assert_eq!(stats.usage_groups.len(), 1);
-    assert_eq!(
-        stats.usage_groups[0].kind,
-        SessionTurnUsageGroupKind::Subagent
-    );
-    assert_eq!(stats.usage_groups[0].provider_call_count, 1);
-    assert_eq!(stats.usage_groups[0].input_tokens, 100);
-    assert_eq!(stats.usage_groups[0].uncached_input_tokens, Some(60));
-    assert_eq!(stats.usage_groups[0].total_tokens, 130);
+    assert!(stats.usage_groups.is_empty());
 }
 
-/// Verifies wait_agent host-result usage is grouped into the parent turn without changing regular totals.
-/// 验证 wait_agent 宿主结果用量会分组进父级回合，且不会改变常规顶层统计。
+/// Verifies legacy wait_agent host-result usage is excluded from parent totals and groups.
+/// 验证旧 wait_agent 宿主结果用量不进入父回合总数与分组。
 #[test]
-fn wait_agent_host_usage_segments_group_without_polluting_parent_turn_totals() {
+fn legacy_wait_agent_usage_is_excluded_from_parent_turn() {
     let closing_record_id = "summary-current";
     let conversation_state = SessionConversationState {
         messages: vec![
@@ -342,17 +334,11 @@ fn wait_agent_host_usage_segments_group_without_polluting_parent_turn_totals() {
     assert_eq!(stats.output_tokens, 3);
     assert_eq!(stats.reasoning_tokens, 0);
     assert_eq!(stats.total_tokens, 13);
-    assert_eq!(stats.usage_groups.len(), 2);
+    assert_eq!(stats.usage_groups.len(), 1);
     assert_eq!(
         stats.usage_groups[0].kind,
         SessionTurnUsageGroupKind::Regular
     );
-    assert_eq!(
-        stats.usage_groups[1].kind,
-        SessionTurnUsageGroupKind::Subagent
-    );
-    assert_eq!(stats.usage_groups[1].input_tokens, 100);
-    assert_eq!(stats.usage_groups[1].total_tokens, 130);
 }
 
 /// Verifies an unaligned current turn never inherits historical canonical usage or tool calls.

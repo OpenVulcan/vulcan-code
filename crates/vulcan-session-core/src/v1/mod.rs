@@ -21,6 +21,7 @@ pub mod errors;
 pub mod event;
 pub mod goal;
 pub mod ids;
+pub mod lifetime_usage;
 pub mod projection;
 pub mod service_dto;
 pub mod stats;

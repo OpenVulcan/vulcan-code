@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
+import type { SessionProviderUsageSummary } from "@/types/conversation";
+import type { SessionUsageBucket } from "@/types/session-lifetime-usage";
 import {
   applySubagentPanelRouteResponse,
   applySessionAddonsChangedResponse,
@@ -53,6 +55,41 @@ describe("mergeWorkbenchSnapshot service instance ordering", () => {
 // Verifies a context-window node is sufficient to retain one session addon projection.
 // 验证上下文窗口节点足以保留一条会话附属投影。
 describe("applySessionAddonsChangedResponse context window", () => {
+  // A newer transport envelope must not replace newer usage with an older aggregate snapshot.
+  // 较新的传输包不能用旧累计快照覆盖较新的用量。
+  it("retains monotonic usage while applying other addon fields", () => {
+    const empty: SessionUsageBucket = {
+      requestCount: 0, unknownUsageCount: 0, toolCallCount: 0,
+      inputTokens: { sum: 0, samples: 0 }, uncachedInputTokens: { sum: 0, samples: 0 },
+      outputTokens: { sum: 0, samples: 0 }, reasoningTokens: { sum: 0, samples: 0 },
+      cacheReadTokens: { sum: 0, samples: 0 }, cacheWriteTokens: { sum: 0, samples: 0 },
+      totalTokens: { sum: 0, samples: 0 }, budgetTokens: { sum: 0, samples: 0 },
+      firstTokenMs: { sum: 0, samples: 0 }, requestDurationMs: { sum: 0, samples: 0 },
+      outputDurationMs: { sum: 0, samples: 0 }, measuredOutputTokens: 0,
+      cacheInputTokens: { sum: 0, samples: 0 }, measuredCacheReadTokens: 0,
+    };
+    const usage: SessionProviderUsageSummary = {
+      providerCallCount: 0, inFlightCallCount: 0, unknownUsageCallCount: 0, usageRevision: 8,
+      lifetime: { version: 1, rootSessionId: "root", revision: 8, updatedAtMs: 1,
+        main: empty, childrenTotal: empty, childrenBySessionId: {}, legacyIncomplete: false },
+    };
+    const current = applySessionAddonsChangedResponse(browserFallbackSnapshot(), {
+      conversationId: "root", revision: 100, sessionProviderUsage: usage,
+    });
+    const next = applySessionAddonsChangedResponse(current, {
+      conversationId: "root", revision: 101, sessionContextCompactionWindowNodeId: "compression-window-2",
+      sessionProviderUsage: { ...usage, usageRevision: 7, lifetime: { ...usage.lifetime!, revision: 7 } },
+    });
+    expect(next.sessionAddonsByConversation?.[0].sessionProviderUsage?.lifetime?.revision).toBe(8);
+    expect(next.sessionAddonsByConversation?.[0].sessionContextCompactionWindowNodeId).toBe("compression-window-2");
+    const staleSnapshot = { ...current, revision: 102, sessionAddonsByConversation: [{
+      conversationId: "root", sessionProviderUsage: { ...usage, usageRevision: 6, lifetime: { ...usage.lifetime!, revision: 6 } },
+    }] };
+    expect(mergeWorkbenchSnapshot(next, staleSnapshot).sessionAddonsByConversation?.[0].sessionProviderUsage?.lifetime?.revision).toBe(8);
+    expect(mergeWorkbenchSnapshot(next, staleSnapshot, { allowServiceRevisionReset: true })
+      .sessionAddonsByConversation?.[0].sessionProviderUsage?.lifetime?.revision).toBe(6);
+  });
+
   it("retains a node-id-only session addon response", () => {
     const current = browserFallbackSnapshot();
     const next = applySessionAddonsChangedResponse(current, {

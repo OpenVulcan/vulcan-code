@@ -12,8 +12,11 @@
 
 use crate::v1::config::{GoalConfig, GoalState};
 use crate::v1::document::SessionDocument;
-use crate::v1::event::{DisplayNoticeKind, EventBody, TurnStatsEvent};
+#[cfg(test)]
+use crate::v1::event::TurnStatsEvent;
+use crate::v1::event::{DisplayNoticeKind, EventBody};
 use crate::v1::ids::Seq;
+#[cfg(test)]
 use crate::v1::stats::goal_budget_tokens;
 
 /// A derived wall-clock checkpoint; the event stream, not a ticking counter, remains authoritative.
@@ -140,13 +143,13 @@ pub struct GoalContinuationDecision {
     pub reason: GoalStopReason,
 }
 
-/// Decides whether Goal auto-continue should schedule the next turn from the
-/// terminal turn statistic.
-/// 依据终态回合统计决定是否应调度下一个回合。
-pub fn decide_goal_continuation(
-    goal: &GoalConfig,
-    last_turn_stats: &TurnStatsEvent,
-) -> GoalContinuationDecision {
+/// Decides whether Goal auto-continue can run using usage since its frozen baseline.
+/// 使用冻结基线后的用量判断 Goal 是否可以自动继续。
+/// `goal` supplies lifecycle and budget; `spent` is unknown when required request dimensions are absent.
+/// `goal` 提供生命周期与预算；必要请求维度缺失时 `spent` 为未知。
+/// Returns the existing continuation decision and explicit stop reason.
+/// 返回既有续跑决策与明确停止原因。
+pub fn decide_goal_continuation(goal: &GoalConfig, spent: Option<u64>) -> GoalContinuationDecision {
     if !goal.enabled {
         return GoalContinuationDecision {
             should_continue: false,
@@ -170,7 +173,7 @@ pub fn decide_goal_continuation(
             should_continue: false,
             reason: GoalStopReason::BudgetExhausted {
                 budget: goal.budget_tokens.unwrap_or(0),
-                spent: spent_from_turn(last_turn_stats),
+                spent,
             },
         },
         GoalState::Active => match goal.budget_tokens {
@@ -178,32 +181,30 @@ pub fn decide_goal_continuation(
                 should_continue: true,
                 reason: GoalStopReason::Continue,
             },
-            Some(budget) => {
-                let spent = spent_from_turn(last_turn_stats);
-                match spent {
-                    Some(spent) if spent >= budget => GoalContinuationDecision {
-                        should_continue: false,
-                        reason: GoalStopReason::BudgetExhausted {
-                            budget,
-                            spent: Some(spent),
-                        },
+            Some(budget) => match spent {
+                Some(spent) if spent >= budget => GoalContinuationDecision {
+                    should_continue: false,
+                    reason: GoalStopReason::BudgetExhausted {
+                        budget,
+                        spent: Some(spent),
                     },
-                    Some(_) => GoalContinuationDecision {
-                        should_continue: true,
-                        reason: GoalStopReason::Continue,
-                    },
-                    None => GoalContinuationDecision {
-                        should_continue: false,
-                        reason: GoalStopReason::UnknownUsage,
-                    },
-                }
-            }
+                },
+                Some(_) => GoalContinuationDecision {
+                    should_continue: true,
+                    reason: GoalStopReason::Continue,
+                },
+                None => GoalContinuationDecision {
+                    should_continue: false,
+                    reason: GoalStopReason::UnknownUsage,
+                },
+            },
         },
     }
 }
 
 /// Computes the budget tokens spent by one terminal turn statistic.
 /// 计算一个终态回合统计花费的预算 token。
+#[cfg(test)]
 fn spent_from_turn(stats: &TurnStatsEvent) -> Option<u64> {
     goal_budget_tokens(&stats.buckets.total)
 }
@@ -279,6 +280,7 @@ mod tests {
             origin_seq: None,
             state,
             budget_cache: None,
+            usage_baseline: None,
         }
     }
 
@@ -288,7 +290,7 @@ mod tests {
     fn enabled_goal_continues_under_budget() {
         let decision = decide_goal_continuation(
             &goal(true, Some(100), GoalState::Active),
-            &stats_with_spent(10, 20),
+            spent_from_turn(&stats_with_spent(10, 20)),
         );
         assert!(decision.should_continue);
         assert_eq!(decision.reason, GoalStopReason::Continue);
@@ -300,7 +302,7 @@ mod tests {
     fn budget_exhaustion_triggers_stop() {
         let decision = decide_goal_continuation(
             &goal(true, Some(30), GoalState::Active),
-            &stats_with_spent(10, 20),
+            spent_from_turn(&stats_with_spent(10, 20)),
         );
         assert!(!decision.should_continue);
         assert_eq!(
@@ -324,7 +326,10 @@ mod tests {
             duration_ms: Some(1),
             buckets: TurnStatBuckets::combine(unknown, StatBucket::default()),
         };
-        let decision = decide_goal_continuation(&goal(true, Some(5), GoalState::Active), &stats);
+        let decision = decide_goal_continuation(
+            &goal(true, Some(5), GoalState::Active),
+            spent_from_turn(&stats),
+        );
         assert!(!decision.should_continue);
         assert_eq!(decision.reason, GoalStopReason::UnknownUsage);
     }
@@ -334,8 +339,10 @@ mod tests {
     #[test]
     fn terminal_states_never_continue() {
         for state in [GoalState::Completed, GoalState::Blocked, GoalState::Paused] {
-            let decision =
-                decide_goal_continuation(&goal(true, None, state), &stats_with_spent(1, 1));
+            let decision = decide_goal_continuation(
+                &goal(true, None, state),
+                spent_from_turn(&stats_with_spent(1, 1)),
+            );
             assert!(!decision.should_continue, "{state:?} must stop");
         }
     }
@@ -346,7 +353,7 @@ mod tests {
     fn paused_reports_paused_reason() {
         let decision = decide_goal_continuation(
             &goal(true, Some(100), GoalState::Paused),
-            &stats_with_spent(1, 1),
+            spent_from_turn(&stats_with_spent(1, 1)),
         );
         assert_eq!(decision.reason, GoalStopReason::Paused);
     }

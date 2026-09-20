@@ -208,18 +208,10 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
     for (const sample of children.values()) {
       if (sample.event.kind !== "subagent_return_stats") continue;
       addUsage(subagent, sample.event.totals.usage, sample.event.totals.api_call_count);
-      const timing = sample.event.totals.output_timing;
-      if (timing) {
-        outputTiming.requestCount += timing.request_count;
-        outputTiming.requestDurationMs += timing.request_duration_ms;
-        outputTiming.firstTokenLatencyMs += timing.first_token_latency_ms;
-        outputTiming.outputDurationMs += timing.output_duration_ms;
-        outputTiming.outputTokens += timing.output_tokens;
-      }
     }
-    // Complete canonical buckets cover child and direct facts outside the currently loaded window.
-    // 完整规范统计桶覆盖当前已加载窗口之外的子代理与本体事实。
-    const timing = buckets.total.output_timing;
+    // The canonical own bucket covers local timing outside the currently loaded window.
+    // 规范自身统计桶覆盖当前已加载窗口之外的本地计时。
+    const timing = buckets.direct.output_timing;
     if (timing) {
       outputTiming.requestCount = timing.request_count;
       outputTiming.requestDurationMs = timing.request_duration_ms;
