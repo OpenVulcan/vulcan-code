@@ -65,7 +65,7 @@ export function CoreBrowserRuntimeControls() {
       <span role="status">{busy
         ? (chinese ? "正在下载并验证 Core 浏览器组件，可离开此页面…" : "Downloading and verifying the Core browser. You may leave this page…")
         : status?.ready ? (chinese ? "Core 浏览器组件：已就绪" : "Core browser: ready")
-        : status ? (chinese ? "Core 浏览器组件：需要安装或修复" : "Core browser: installation or repair required")
+        : status ? (chinese ? "内置 Core 浏览器组件缺失或损坏，请修复应用安装" : "Built-in Core browser missing or damaged; repair the application installation")
         : (chinese ? "正在检查 Core 浏览器组件…" : "Checking Core browser…")}</span>
       {status?.canInstall && <Button type="button" size="sm" variant="outline" disabled={busy}
         onClick={() => void start()}>{chinese ? (status.ready ? "修复浏览器组件" : "安装／修复浏览器组件") : "Install / repair browser"}</Button>}

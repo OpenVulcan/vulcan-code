@@ -4,9 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createRequire } from 'node:module';
 import type net from 'node:net';
 import { chromium, type BrowserContext, type CDPSession, type Dialog, type FileChooser, type Page } from 'playwright-core';
 import { PlaywrightProxy } from './playwright-proxy.js';
+import { monitorHostCrash } from './crash-report.js';
+// Report the actual pinned driver, including when running an isolated packaged host.
+// 报告实际锁定驱动版本，包括运行隔离打包宿主时。
+const runtimeVersion = `chromium-playwright-${createRequire(import.meta.url)('playwright-core/package.json').version}`;
 import { writeControlDiscovery, BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION } from '../browser-host/control-discovery.js';
 import { listenForCoreControl, BROWSER_HOST_CONTROL_ACCEPT_TIMEOUT_MS } from '../browser-host/control-server.js';
 import {
@@ -860,7 +865,7 @@ class ChromiumHost {
         protocolVersion: BROWSER_HOST_PROTOCOL_VERSION,
         controlHost: control.host, controlPort: control.port, pid: process.pid,
         sessionId: this.options.sessionId, hostGeneration: this.options.hostGeneration,
-        runtimeVersion: 'chromium-playwright-1.64.0-alpha-2026-09-14', startedAt: String(Date.now()),
+        runtimeVersion, startedAt: String(Date.now()),
       });
       const socket = await control.waitForClient(BROWSER_HOST_CONTROL_ACCEPT_TIMEOUT_MS);
       this.serve(socket);
@@ -891,7 +896,7 @@ class ChromiumHost {
             this.write({
               protocolVersion: BROWSER_HOST_PROTOCOL_VERSION, sessionId: this.options.sessionId,
               hostGeneration: this.options.hostGeneration, pid: process.pid,
-              runtimeVersion: 'chromium-playwright-1.64.0-alpha-2026-09-14', capabilities: CAPABILITIES,
+              runtimeVersion, capabilities: CAPABILITIES,
             });
             for (const event of this.buffered.splice(0)) this.write(event);
             this.emit('hostReady', { url: this.context?.pages()[0]?.url() ?? null });
@@ -916,7 +921,11 @@ class ChromiumHost {
 // host 在 Chromium 已启动后发生错误时仍可执行部分启动清理。
 let host: ChromiumHost | null = null;
 try {
-  host = new ChromiumHost(parseOptions());
+  // Bind fatal diagnostics before asynchronous host work can fail outside startup's catch.
+  // 在异步宿主工作可能于启动捕获范围外失败之前绑定致命错误诊断。
+  const options = parseOptions();
+  monitorHostCrash(options.controlDirectory, options.sessionId, options.hostGeneration);
+  host = new ChromiumHost(options);
   await host.run();
 } catch (error) {
   diagnostic(`startup failed: ${String(error)}`);

@@ -416,7 +416,7 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
     let manager = BrowserManager::new();
     manager
         .configure_host_runtime(BrowserHostRuntimeConfig {
-            executable: package_path("desktopExecutable"),
+            executable: package_path("browserHostExecutable"),
             entry: package_path("browserHostEntry"),
             chromium_executable: package_path("chromiumExecutable"),
             profiles_root: temp.path().join("profiles"),
@@ -561,6 +561,51 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         serde_json::json!({"element": "Click here button", "target": reference}),
     )
     .await;
+    assert!(text_content(&call(&snapshot, owner, serde_json::json!({})).await).contains("Clicked"));
+
+    // Reproduce normal turn completion through the real Rust MCP transport before starting another turn.
+    // 在开启下一轮前，通过真实 Rust MCP 传输复现正常回合结束。
+    access
+        .shutdown_owned_stdio_partition("vulcan-browser", generation, owner)
+        .expect("stop first turn MCP");
+    manager
+        .revoke_automation_gateway(&first.session_id, &owner.to_string(), &first_connection)
+        .expect("revoke first turn without closing Chromium");
+    manager
+        .release_lease(&first.session_id, &first_lease)
+        .expect("release first turn lease");
+    // The next turn must preserve the same Core browser, page, and DOM changes.
+    // 下一轮必须保留同一 Core 浏览器、页面和 DOM 变化。
+    let (_, first_lease) = manager
+        .acquire_lease(
+            &first.session_id,
+            "w08-next-turn",
+            Some(Duration::from_secs(600)),
+        )
+        .expect("lease existing browser for next turn");
+    let first_connection = Uuid::new_v4().to_string();
+    let next_grant = manager
+        .open_automation_gateway(
+            &first.session_id,
+            &owner.to_string(),
+            &first_lease,
+            &first_connection,
+        )
+        .expect("open next turn gateway");
+    let next_config = plugin_conversation_mcp_server_config(
+        &plugins,
+        "vulcan-browser",
+        "playwright",
+        &OsPluginMcpSecretStore,
+        &owner.to_string(),
+        &next_grant.endpoint,
+    )
+    .expect("next turn MCP configuration");
+    access
+        .open_ordered_owned_stdio_partition("vulcan-browser", generation, owner, vec![next_config])
+        .await
+        .expect("start next turn MCP");
+    let snapshot = tool(&access, generation, owner, "browser_snapshot");
     assert!(text_content(&call(&snapshot, owner, serde_json::json!({})).await).contains("Clicked"));
 
     // A second real conversation receives a different Core host and official MCP partition.

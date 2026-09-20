@@ -588,10 +588,17 @@ impl CoreNativeBrowserRuntime {
         lease_secret: &str,
         connection_id: &str,
     ) -> Result<(), String> {
-        if manager.session_projection(browser_id)?.status == BrowserSessionStatus::Closed {
+        let projection = manager.session_projection(browser_id)?;
+        // A confirmed host exit destroys its gateway. Retire only the stale AI connection;
+        // the crashed browser and any uncertain Chromium operations remain blocked and visible.
+        // 已确认的宿主退出会销毁其网关。这里只退休陈旧 AI 连接；
+        // 崩溃浏览器及其未知 Chromium 操作仍保留阻塞状态并对外可见。
+        if matches!(
+            projection.status,
+            BrowserSessionStatus::Closed | BrowserSessionStatus::Crashed
+        ) {
             return Ok(());
         }
-        let projection = manager.session_projection(browser_id)?;
         if projection.automation_state == BrowserAutomationState::Attached {
             match manager.revoke_automation_gateway(browser_id, owner, connection_id) {
                 Ok(projection) => match projection.lease_state {
@@ -643,6 +650,8 @@ impl CoreNativeBrowserRuntime {
             heartbeat.abort();
             let _ = heartbeat.await;
         }
+        // These credentials belong only to the retiring owner generation.
+        // 这些凭据仅属于正在退休的所有者代次。
         let browser_id = connection.browser_id.clone();
         let lease_secret = connection.lease_secret.clone();
         let connection_id = connection.connection_id.clone();
@@ -651,60 +660,24 @@ impl CoreNativeBrowserRuntime {
             connection.plugin_generation,
             owner_session_id,
         );
-        // An MCP shutdown failure cannot leave the host grant live: the gateway must still be
-        // revoked, or the Chromium context closed before another controller can be considered.
-        // MCP 关闭失败也不能让宿主授权继续存活：仍须撤销网关，或在考虑其他控制者前关闭 Chromium。
+        // Always retire the host grant even when local MCP teardown fails. The shared helper
+        // recognizes confirmed host exit without clearing the browser's uncertainty block.
+        // 即使本地 MCP 清理失败，也必须退休宿主授权。共享方法识别已确认的宿主退出，
+        // 同时保留浏览器未知结果的阻塞状态。
         let gateway_retirement = match (browser_id, lease_secret, connection_id) {
             (Some(browser_id), Some(lease_secret), Some(connection_id)) => {
+                // The blocking host channel must not stall the asynchronous owner transition executor.
+                // 阻塞的宿主通道不得阻塞异步所有者转换执行器。
                 let manager = manager.clone();
                 let owner = owner_session_id.to_string();
                 tokio::task::spawn_blocking(move || {
-                    // A client may already have closed this Core browser. Its host and gateway
-                    // are then gone by authoritative lifecycle state, so only MCP revocation was needed.
-                    // 客户端可能已关闭此 Core 浏览器。权威生命周期已表明宿主和网关消失，
-                    // 因此此时只需先前完成的 MCP 撤销。
-                    if manager.session_projection(&browser_id)?.status
-                        == BrowserSessionStatus::Closed
-                    {
-                        return Ok::<(), String>(());
-                    }
-                    let projection = match manager
-                        .revoke_automation_gateway(&browser_id, &owner, &connection_id)
-                    {
-                        Ok(projection) => projection,
-                        Err(revoke_error) => {
-                            // An in-flight CDP command cannot be re-granted to a user. End the
-                            // entire browser only after the host confirms Chromium closed.
-                            // 在途 CDP 命令不能直接交给用户控制；只有宿主确认 Chromium 已关闭，
-                            // 才结束整个浏览器会话并释放被阻塞的归属。
-                            return manager
-                                .close_uncertain_automation_session(
-                                    &browser_id,
-                                    &owner,
-                                    &connection_id,
-                                )
-                                .map(|_| ())
-                                .map_err(|close_error| {
-                                    format!(
-                                        "automation revocation failed ({revoke_error}); browser context closure also failed ({close_error})"
-                                    )
-                                });
-                        }
-                    };
-                    match projection.lease_state {
-                        BrowserLeaseState::Held => {
-                            manager.release_lease(&browser_id, &lease_secret)?;
-                        }
-                        BrowserLeaseState::Free => {}
-                        BrowserLeaseState::Blocked
-                        | BrowserLeaseState::Revoking
-                        | BrowserLeaseState::Draining => {
-                            return Err(String::from(
-                                "browser lease is not releasable after automation revocation",
-                            ));
-                        }
-                    }
-                    Ok::<(), String>(())
+                    Self::retire_gateway_blocking(
+                        &manager,
+                        &browser_id,
+                        &owner,
+                        &lease_secret,
+                        &connection_id,
+                    )
                 })
                 .await
                 .map_err(|error| format!("browser gateway task failed: {error}"))?
@@ -712,18 +685,10 @@ impl CoreNativeBrowserRuntime {
             (None, None, None) => Ok(()),
             _ => Err(String::from("browser AI connection state is inconsistent")),
         };
-        let result = match (mcp_shutdown, gateway_retirement) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(mcp_error), Ok(())) => Err(format!("browser MCP shutdown failed: {mcp_error}")),
-            (Ok(()), Err(gateway_error)) => Err(gateway_error),
-            (Err(mcp_error), Err(gateway_error)) => Err(format!(
-                "browser MCP shutdown failed ({mcp_error}); gateway retirement failed ({gateway_error})"
-            )),
-        };
+        // Keep failure metadata available for exact cleanup retries rather than losing a live grant.
+        // 保留失败元数据供精确重试清理，避免遗失仍存活的授权。
+        let result = Self::combine_cleanup_results(mcp_shutdown, gateway_retirement);
         if result.is_err() {
-            // A failed retirement remains discoverable so the owner shutdown path can retry the
-            // exact MCP and host cleanup instead of silently losing an attached authorization.
-            // 退休失败时保留可发现元数据，使所有者关闭路径能够重试精确的 MCP 与宿主清理，避免静默丢失已挂接授权。
             connection.ready = false;
             connection.heartbeat = None;
             *pending_slot = Some(connection);
@@ -1765,6 +1730,75 @@ mod tests {
                 .unconfirmed_operations(&session.session_id)
                 .expect("unconfirmed operations")
                 .is_empty()
+        );
+    }
+
+    /// Retire stale owner metadata after a confirmed crash without clearing browser uncertainty.
+    /// 已确认崩溃后退休陈旧所有者元数据，但不清除浏览器未知结果。
+    #[tokio::test]
+    async fn crashed_host_does_not_poison_the_next_prompt() {
+        // Set up the exact blocked and detached state reported by a crashed production host.
+        // 构造生产宿主崩溃时上报的精确 blocked 与 detached 状态。
+        let manager = BrowserManager::new();
+        let owner = SessionId::new_v4();
+        let browser = manager
+            .create_owned_session(&owner.to_string(), BrowserProfileMode::Ephemeral)
+            .expect("browser session");
+        let (_, lease_secret) = manager
+            .acquire_lease(&browser.session_id, "ai:crash-test", None)
+            .expect("lease");
+        manager
+            .attach_automation(&browser.session_id, &lease_secret, "crashed-connection")
+            .expect("attach");
+        manager
+            .select_ai_browser(&owner.to_string(), &browser.session_id)
+            .expect("select");
+        manager
+            .mark_operation_unconfirmed(&browser.session_id, "automation.close outcome unknown")
+            .expect("uncertain operation");
+        manager
+            .record_host_crash(&browser.session_id, Some(1), "confirmed host exit")
+            .expect("host crash");
+        // A real empty MCP registry exercises the same retirement entry used after every turn.
+        // 真实的空 MCP 注册表验证每轮结束时使用的同一退休入口。
+        let mcp_runtime = vulcan_agent_runtime::mcp::bootstrap_mcp_runtime_access(Vec::new())
+            .await
+            .expect("MCP registry");
+        let slot =
+            CoreNativeBrowserRuntime::connection_slot(&manager, &owner.to_string()).expect("slot");
+        *slot.lock().await = Some(BrowserAiConnection {
+            plugin_generation: 1,
+            mcp_runtime,
+            browser_id: Some(browser.session_id.clone()),
+            lease_secret: Some(lease_secret),
+            connection_id: Some(String::from("crashed-connection")),
+            heartbeat: None,
+            ready: false,
+        });
+        manager
+            .retire_ai_connection_after_turn(owner)
+            .await
+            .expect("retire stale connection");
+        assert!(slot.lock().await.is_none());
+        assert!(
+            manager
+                .selected_ai_browser(&owner.to_string())
+                .expect("selection")
+                .is_none()
+        );
+        // Neither ordinary conversation recovery nor stale cleanup authorizes reuse of a crashed page.
+        // 普通会话恢复和陈旧连接清理都不会授权复用崩溃页面。
+        let projection = manager
+            .session_projection(&browser.session_id)
+            .expect("projection");
+        assert_eq!(projection.status, BrowserSessionStatus::Crashed);
+        assert_eq!(projection.lease_state, BrowserLeaseState::Blocked);
+        assert!(projection.requires_explicit_reopen);
+        assert_eq!(
+            manager
+                .unconfirmed_operations(&browser.session_id)
+                .expect("uncertainty"),
+            vec![String::from("automation.close outcome unknown")]
         );
     }
 }

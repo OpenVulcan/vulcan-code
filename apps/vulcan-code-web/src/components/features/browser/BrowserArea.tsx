@@ -349,7 +349,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     appliedSessionSequence.current = requestSequence;
     setSessions(next);
     setPollErrors((current) => current.sessions === null ? current : { ...current, sessions: null });
-    setSelectedSessionId((current) => current && next.some((session) => session.sessionId === current && session.status === "running")
+    // Preserve the selected crashed browser so its failure cannot disappear with the live frame.
+    // 保留选中的崩溃浏览器，避免其故障随实时画面一起消失。
+    setSelectedSessionId((current) => current && next.some((session) => session.sessionId === current && (session.status === "running" || session.status === "crashed"))
       ? current : null);
   }, [props.ownerSessionId]);
 
@@ -1183,20 +1185,24 @@ export function BrowserArea(props: { ownerSessionId: string }) {
         </Button>
       </div>
       <div className="flex gap-1 overflow-x-auto border-b pb-1" role="tablist" aria-label={chinese ? "活跃的 AI 浏览器" : "Active AI browsers"}>
-        {sessions.filter((session) => session.status === "running").map((session, index) => (
+        {sessions.filter((session) => session.status === "running" || session.status === "crashed").map((session, index) => (
           <button key={session.sessionId} type="button" role="tab" data-browser-session-id={session.sessionId}
             aria-selected={selectedSessionId === session.sessionId}
             className={`max-w-44 shrink-0 truncate rounded-t-md border border-b-0 px-3 py-1.5 text-xs ${selectedSessionId === session.sessionId ? "bg-muted font-medium text-foreground" : "bg-background text-muted-foreground"}`}
             title={session.currentUrl ?? session.sessionId}
             onClick={() => void selectSession(session.sessionId)}>
             {browserTabTitle(session.currentUrl) === "about:blank" ? `${chinese ? "浏览器" : "Browser"} ${index + 1}` : browserTabTitle(session.currentUrl)}
+            {session.status === "crashed" ? (chinese ? " · 异常退出" : " · Crashed") : null}
           </button>
         ))}
       </div>
       {selectedSession ? (
         <>
+          {selectedSession.status === "crashed" ? <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">
+            {chinese ? "Playwright 浏览器进程异常退出，当前页面已不可用。异常状态已保留，可继续会话并重新打开浏览器。" : "The Playwright browser host exited unexpectedly. This page is unavailable. You can continue the conversation and open a new browser."}
+          </p> : null}
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>{streamStatus === "connected" ? (chinese ? "实时画面" : "Live view") : (chinese ? "正在连接画面" : "Connecting view")}</span>
+            <span>{selectedSession.status === "crashed" ? (chinese ? "画面已中断" : "View interrupted") : streamStatus === "connected" ? (chinese ? "实时画面" : "Live view") : (chinese ? "正在连接画面" : "Connecting view")}</span>
             {selectedSession.blockedReason ? <span className="text-destructive">{selectedSession.blockedReason}</span> : null}
             {ownsControl ? (
               <Button type="button" size="sm" variant="outline" onClick={() => void releaseControl()}>{chinese ? "交还控制权" : "Release control"}</Button>

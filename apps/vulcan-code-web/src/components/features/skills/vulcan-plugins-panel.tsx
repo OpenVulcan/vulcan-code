@@ -211,9 +211,7 @@ export function VulcanPluginsPanel(props: {
     void Promise.all(vulcanPlugins.map(async (plugin) => {
       // ready is read from Core, which owns the plugin generation and private environment.
       // ready 从持有插件代次和私有环境的 Core 读取。
-      const ready = plugin.desiredEnabled
-        ? true
-        : await props.actions.onPluginEnvironmentReady(plugin.id).catch(() => false);
+      const ready = await props.actions.onPluginEnvironmentReady(plugin.id).catch(() => false);
       const task = await props.actions.onPluginEnvironmentInstallStatusForPlugin(plugin.id).catch(() => null);
       return [plugin.id, ready, task] as const;
     })).then((entries) => {
@@ -734,6 +732,7 @@ export function VulcanPluginsPanel(props: {
                     /> : null}
                     <Badge variant="outline">{plugin.extension?.origin === "userInstalled"
                       ? (locale.startsWith("zh") ? "用户插件" : "User plugin")
+                      : plugin.id === "vulcan-browser" ? (locale.startsWith("zh") ? "内置组件" : "Built-in component")
                       : t("skills.plugins.systemKind")}</Badge>
                     {plugin.version ? <Badge variant="secondary">v{plugin.version}</Badge> : null}
                     <Badge variant="outline">{plugin.extension?.hasLuaRuntime
@@ -751,8 +750,8 @@ export function VulcanPluginsPanel(props: {
                 {plugin.id === "vulcan-browser" ? <div className="space-y-2 text-xs">
                   <div>
                   {locale.startsWith("zh")
-                    ? `Playwright MCP 依赖：${environmentReadyByPlugin[plugin.id] === true ? "已安装" : environmentReadyByPlugin[plugin.id] === false ? "缺失或已损坏" : "检查中"}`
-                    : `Playwright MCP dependencies: ${environmentReadyByPlugin[plugin.id] === true ? "installed" : environmentReadyByPlugin[plugin.id] === false ? "missing or damaged" : "checking"}`}
+                    ? `内置 Playwright MCP：${environmentReadyByPlugin[plugin.id] === true ? "已就绪" : environmentReadyByPlugin[plugin.id] === false ? "缺失或已损坏，请修复应用安装" : "检查中"}`
+                    : `Built-in Playwright MCP: ${environmentReadyByPlugin[plugin.id] === true ? "ready" : environmentReadyByPlugin[plugin.id] === false ? "missing or damaged; repair the application installation" : "checking"}`}
                   </div>
                   <CoreBrowserRuntimeControls />
                 </div> : null}
@@ -868,6 +867,7 @@ export function VulcanPluginsPanel(props: {
                     ? (locale.startsWith("zh") ? "等待安装" : "Install queued")
                     : installTask?.state === "running"
                       ? (locale.startsWith("zh") ? "正在安装" : "Installing runtime")
+                      : plugin.id === "vulcan-browser" ? (locale.startsWith("zh") ? "修复本地环境" : "Repair local environment")
                       : (locale.startsWith("zh") ? "安装运行环境" : "Install runtime")}
                 </Button>
               ) : null}

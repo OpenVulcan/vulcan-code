@@ -283,6 +283,11 @@ function Invoke-SystemInitialization {
     Invoke-DependencyInstall -DependencyKind "lua"
     Invoke-DependencyInstall -DependencyKind "protoc"
 
+    # Prepare the browser's shared Node prerequisites without needing a previously started Core.
+    # 无需先启动 Core，即可准备浏览器所需的共享 Node 前置依赖。
+    & node (Join-Path $ScriptDir "scripts/managed-node.mjs") (Join-Path $ScriptDir "output")
+    if ($LASTEXITCODE -ne 0) { throw "Managed Node initialization failed." }
+
     Write-Host "==> System initialization completed."
 }
 

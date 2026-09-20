@@ -103,7 +103,7 @@ export async function resolveServiceExecutable(explicitPath: string | null): Pro
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
       schemaVersion: number; serviceExecutable: string; platform: string; architecture: string;
     };
-    if (manifest.schemaVersion !== 1 || manifest.platform !== process.platform || manifest.architecture !== process.arch) {
+    if (manifest.schemaVersion !== 2 || manifest.platform !== process.platform || manifest.architecture !== process.arch) {
       throw new Error('The desktop runtime layout does not match this platform or architecture.');
     }
     const root = path.dirname(path.resolve(manifestPath));

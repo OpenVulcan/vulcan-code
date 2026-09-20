@@ -5,6 +5,38 @@ use super::super::tests::{test_manager, write_user_plugin_package};
 use std::collections::BTreeSet;
 use std::fs;
 
+/// Verify a built-in component is usable offline before publishing its first private generation.
+/// 验证内置组件在首次发布私有代次之前即可离线就绪。
+#[test]
+fn bundled_environment_is_ready_without_an_install_step() {
+    // The isolated package has no registry permission and no existing private environment.
+    // 隔离插件没有注册表权限，也没有已有私有环境。
+    let temp = tempfile::tempdir().expect("create bundled fixture");
+    let runtime_root = temp.path().join("runtime");
+    let bundled_root = runtime_root.join("plugins");
+    let package = bundled_root.join("local-plugin");
+    write_user_plugin_package(&package, "local-plugin");
+    let manager = test_manager(&runtime_root, bundled_root);
+    manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .expect("catalog");
+    assert!(
+        manager
+            .plugin_environment_ready("local-plugin")
+            .expect("bundled readiness")
+    );
+    assert!(!runtime_root.join("plugin_runtime/local-plugin").exists());
+    let published = manager
+        .prepare_plugin_environment("local-plugin")
+        .expect("offline publication");
+    assert!(published.join(".vulcan-plugin-environment.json").is_file());
+    assert!(
+        manager
+            .plugin_environment_ready("local-plugin")
+            .expect("published readiness")
+    );
+}
+
 /// Verifies a user package changed after authorization cannot seed an execution environment.
 /// 验证授权后发生变化的用户插件包不能生成执行环境。
 #[test]

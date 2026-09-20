@@ -2179,7 +2179,7 @@ fn validate_plugin_process_dependencies(
 
 /// Reports whether a Node package manifest declares any installable dependency.
 /// 判断 Node 包清单是否声明任一需要安装的依赖。
-fn node_package_declares_dependencies(package: &Value) -> Result<bool, String> {
+pub(crate) fn node_package_declares_dependencies(package: &Value) -> Result<bool, String> {
     let object = package
         .as_object()
         .ok_or_else(|| "Plugin Node package manifest must contain an object.".to_string())?;

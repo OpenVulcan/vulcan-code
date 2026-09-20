@@ -161,6 +161,9 @@ invoke_system_initialization() {
     invoke_powershell_route deps host
     invoke_bundled_tools_deps
     invoke_powershell_route deps lua
+    # Prepare pinned Node prerequisites before browser synchronization, without starting Core.
+    # 在同步浏览器前准备锁定的 Node 前置依赖，无需启动 Core。
+    node "$ScriptDir/scripts/managed-node.mjs" "$ScriptDir/output"
     echo "==> System initialization completed."
 }
 

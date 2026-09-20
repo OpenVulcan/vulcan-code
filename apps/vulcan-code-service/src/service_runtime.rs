@@ -288,95 +288,28 @@ pub(crate) fn service_browser_host_runtime(
         read_runtime_layout_manifest_from, read_runtime_layout_manifest_with_path,
         resolve_layout_entry, runtime_layout_root,
     };
-
-    let manifest_and_path = match crate::runtime_layout::explicit_runtime_layout_path()? {
-        Some(explicit) => {
-            let manifest = read_runtime_layout_manifest_from(&explicit)?;
-            Some((manifest, explicit))
-        }
-        None => read_runtime_layout_manifest_with_path().ok(),
+    // Explicit distributions are authoritative; source debug launches use the workspace package.
+    // 显式发行物具有权威性；源码调试启动使用工作区发行包。
+    let (manifest, manifest_path) = match crate::runtime_layout::explicit_runtime_layout_path()? {
+        Some(explicit) => (read_runtime_layout_manifest_from(&explicit)?, explicit),
+        None => read_runtime_layout_manifest_with_path()?,
     };
-    let (executable, entry, chromium_executable) = match manifest_and_path {
-        Some((manifest, manifest_path)) => {
-            let root = runtime_layout_root(&manifest_path)?;
-            let executable = resolve_layout_entry(&root, &manifest.desktop_executable)?;
-            let entry = resolve_layout_entry(&root, &manifest.browser_host_entry)?;
-            let chromium_executable = if let Some(installed) =
-                crate::browser_runtime_install::installed_chromium(data_root, &entry)?
-            {
-                installed
-            } else {
-                let chromium_entry = manifest.chromium_executable.as_deref().ok_or_else(|| {
-                format!(
-                    "runtime layout {} does not include the optional standalone Chromium package",
-                    manifest_path.display()
-                )
-            })?;
-                resolve_layout_entry(&root, chromium_entry)?
-            };
-            if !executable.is_file() || !entry.is_file() || !chromium_executable.is_file() {
-                return Err(format!(
-                    "runtime layout {} declares a browser host that does not exist: {} / {} / {}",
-                    manifest_path.display(),
-                    executable.display(),
-                    entry.display(),
-                    chromium_executable.display()
-                ));
-            }
-            (executable, entry, chromium_executable)
-        }
-        None if cfg!(debug_assertions) => {
-            // Debug builds read the workspace desktop build, mirroring the WebUI static root rule.
-            // 调试构建读取工作区桌面端产物，与 WebUI 静态根规则一致。
-            let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..");
-            let desktop = workspace_root.join("apps").join("vulcan-code-desktop");
-            // Electron's installed executable path is platform-specific, including the macOS bundle.
-            // Electron 安装后的程序路径随平台变化，包含 macOS 应用包布局。
-            let runtime_entry = if cfg!(target_os = "windows") {
-                "electron.exe"
-            } else if cfg!(target_os = "macos") {
-                "Electron.app/Contents/MacOS/Electron"
-            } else {
-                "electron"
-            };
-            let executable = desktop
-                .join("node_modules")
-                .join("electron")
-                .join("dist")
-                .join(runtime_entry);
-            let entry = desktop.join("dist").join("chromium-host").join("main.js");
-            // A development browser runtime is explicit; it is never found by probing an
-            // unrelated installed browser or silently downloading one at service startup.
-            // 开发浏览器运行时必须显式指定；服务启动时绝不探测无关已安装浏览器或静默下载。
-            let chromium_executable = if let Some(installed) =
-                crate::browser_runtime_install::installed_chromium(data_root, &entry)?
-            {
-                installed
-            } else {
-                std::env::var_os("VULCAN_CHROMIUM_EXECUTABLE")
-                    .map(std::path::PathBuf::from)
-                    .ok_or_else(|| {
-                        String::from("development Core browser requires VULCAN_CHROMIUM_EXECUTABLE")
-                    })?
-            };
-            if !executable.is_file() || !entry.is_file() || !chromium_executable.is_file() {
-                return Err(format!(
-                    "the development browser host is not built: {} / {} / {}",
-                    executable.display(),
-                    entry.display(),
-                    chromium_executable.display()
-                ));
-            }
-            (executable, entry, chromium_executable)
-        }
-        None => {
-            return Err(String::from(
-                "no runtime layout manifest declares the Core browser host",
+    // Only the shipped manifest selects Node and Chromium; legacy user downloads cannot shadow it.
+    // 仅由随包清单选择 Node 与 Chromium；旧用户下载不能覆盖它。
+    let root = runtime_layout_root(&manifest_path)?;
+    let executable = resolve_layout_entry(&root, &manifest.browser_host_executable)?;
+    let entry = resolve_layout_entry(&root, &manifest.browser_host_entry)?;
+    let chromium_entry = manifest.chromium_executable.as_deref()
+        .ok_or("Built-in Chromium is missing. Repair the application installation (developers: run make sync and rebuild).")?;
+    let chromium_executable = resolve_layout_entry(&root, chromium_entry)?;
+    for file in [&executable, &entry, &chromium_executable] {
+        if !file.is_file() {
+            return Err(format!(
+                "Built-in browser component is missing: {}. Repair the application installation (developers: run make sync and rebuild).",
+                file.display()
             ));
         }
-    };
+    }
     Ok(vulcan_service_kernel::browser::BrowserHostRuntimeConfig {
         executable,
         entry,
@@ -583,22 +516,17 @@ impl HeadlessService {
         // The browser host runtime is configured before any session can be created, so a session
         // is never delivered without the background browser that owns it.
         // 在任何会话可被创建之前配置浏览器宿主运行时，因此绝不会交付没有后台浏览器拥有的会话。
-        // Register explicit recovery even when Chromium is absent; installation is always user initiated.
-        // 即使 Chromium 缺失也注册显式恢复能力；安装始终由用户主动触发。
+        // Shipped components are checked locally; sessions never download a replacement browser.
+        // 随包组件只进行本地检查；会话绝不下载替代浏览器。
         let browser_manager = vulcan_service_kernel::browser::service_browser_manager(&state)?;
         let browser_config = service_browser_host_runtime(&data_root);
-        let (browser_installer, installer_error) =
-            match crate::browser_runtime_install::installer(data_root.clone()) {
-                Ok(installer) => (Some(installer), None),
-                Err(error) => (None, Some(error)),
-            };
         browser_manager.configure_runtime_installation(
-            browser_installer,
+            None,
             Some(Arc::new({
                 let runtime_data_root = data_root.clone();
                 move || service_browser_host_runtime(&runtime_data_root)
             })),
-            installer_error.or_else(|| browser_config.as_ref().err().cloned()),
+            browser_config.as_ref().err().cloned(),
         )?;
         spawn_browser_host_reaper(Arc::clone(&state));
         match browser_config {

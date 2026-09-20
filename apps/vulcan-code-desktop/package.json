@@ -19,7 +19,7 @@
     "@types/node": "^25.9.1",
     "@types/ws": "8.18.1",
     "electron": "44.4.1",
-    "playwright-core": "1.64.0-alpha-2026-09-14",
+    "playwright-core": "1.64.0-alpha-1789764292000",
     "rcedit": "5.0.2",
     "typescript": "5.9.3"
   },

@@ -7,7 +7,7 @@ import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageRelativePath, verifyPackagedLayout, retainedChromiumPackage } from './desktop-runtime.mjs';
+import { packageRelativePath, verifyPackagedLayout } from './desktop-runtime.mjs';
 
 test('rejects an isolated distribution root outside generated target artifacts', () => {
   const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
@@ -64,7 +64,8 @@ const fixtureLayout = Object.freeze({
   serviceExecutable: 'bin/vulcan-code-service.exe',
   desktopExecutable: 'desktop/runtime/electron.exe',
   desktopEntry: 'desktop/runtime/resources/app/gui/main.js',
-  browserHostEntry: 'desktop/runtime/resources/app/chromium-host/main.js',
+  browserHostEntry: 'browser/runtime/chromium-host/main.js',
+  browserHostExecutable: 'dependencies/runtimes/node/node-24.18.0-windows-x64/node.exe',
   chromiumExecutable: 'browser/chromium/chrome-win64/chrome.exe',
   webuiRoot: 'webui',
 });
@@ -89,6 +90,7 @@ async function createFixture() {
     fixtureLayout.desktopExecutable,
     fixtureLayout.desktopEntry,
     fixtureLayout.browserHostEntry,
+    fixtureLayout.browserHostExecutable,
     fixtureLayout.chromiumExecutable,
   ];
   for (const relative of files) {
@@ -141,30 +143,6 @@ async function removeFixture(root) {
   await rm(root, { recursive: true, force: true });
 }
 
-test('rebuild without a Chromium source retains the verified existing package', async (t) => {
-  const root = await createReleaseFixture();
-  t.after(() => removeFixture(root));
-  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify({ ...releaseLayout(), platform: process.platform, architecture: process.arch }));
-  assert.equal(await retainedChromiumPackage(root), fixtureLayout.chromiumExecutable);
-  await verifyPackagedLayout(fixtureLayout, root);
-});
-
-test('a damaged retained browser fails before any package is removed', async (t) => {
-  const root = await createReleaseFixture();
-  t.after(() => removeFixture(root));
-  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify({ ...releaseLayout(), platform: process.platform, architecture: process.arch }));
-  await writeFile(path.join(root, fixtureLayout.chromiumExecutable), 'truncated');
-  await assert.rejects(retainedChromiumPackage(root), /size changed/);
-});
-
-test('a fresh distribution needs no implicit browser download', async (t) => {
-  const root = await createFixture();
-  t.after(() => removeFixture(root));
-  assert.equal(await retainedChromiumPackage(root), null);
-  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify(releaseLayout(false)));
-  assert.equal(await retainedChromiumPackage(root), null);
-});
-
 test('accepts a complete package layout', async (t) => {
   const root = await createFixture();
   t.after(() => removeFixture(root));
@@ -180,12 +158,12 @@ test('writes portable manifest paths from Windows distribution paths', async (t)
     'browser/chromium/chrome-win64/chrome.dll');
 });
 
-test('accepts a package without optional Chromium', async (t) => {
+test('rejects a package without built-in Chromium', async (t) => {
   const root = await createFixture();
   t.after(() => removeFixture(root));
   const layout = { ...fixtureLayout, chromiumExecutable: null };
   await rm(path.join(root, fixtureLayout.chromiumExecutable));
-  await verifyPackagedLayout(layout, root);
+  await assert.rejects(verifyPackagedLayout(layout, root), /Missing package input chromiumExecutable/);
 });
 
 test('accepts a complete release package with managed assets', async (t) => {
@@ -194,16 +172,16 @@ test('accepts a complete release package with managed assets', async (t) => {
   await verifyPackagedLayout({ ...releaseLayout() }, root);
 });
 
-test('accepts a release package without optional Chromium', async (t) => {
+test('rejects a release package without built-in Chromium', async (t) => {
   const root = await createReleaseFixture({ chromium: false });
   t.after(() => removeFixture(root));
-  await verifyPackagedLayout(releaseLayout(false), root);
+  await assert.rejects(verifyPackagedLayout(releaseLayout(false), root), /Missing package input chromiumExecutable/);
 });
 
 test('keeps debug layout checks independent from release-only assets', async (t) => {
   const root = await createFixture();
   t.after(() => removeFixture(root));
-  await verifyPackagedLayout({ ...fixtureLayout, chromiumExecutable: null }, root);
+  await verifyPackagedLayout(fixtureLayout, root);
 });
 
 for (const relative of ['resources', 'plugins', 'lua_runtime', 'tools']) {
@@ -219,7 +197,7 @@ test('rejects a release package without the matching managed Node runtime', asyn
   const root = await createReleaseFixture();
   t.after(() => removeFixture(root));
   await rm(path.join(root, 'dependencies/runtimes/node'), { recursive: true, force: true });
-  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Missing package input managedNodeRuntimeRoot/);
+  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Missing package input browserHostExecutable/);
 });
 
 test('rejects a release package without the matching managed Python runtime', async (t) => {
@@ -250,6 +228,7 @@ const requiredEntries = [
   ['desktopExecutable', fixtureLayout.desktopExecutable],
   ['desktopEntry', fixtureLayout.desktopEntry],
   ['browserHostEntry', fixtureLayout.browserHostEntry],
+  ['browserHostExecutable', fixtureLayout.browserHostExecutable],
   ['webuiRoot', fixtureLayout.webuiRoot],
   ['chromiumExecutable', fixtureLayout.chromiumExecutable],
 ];

@@ -17,7 +17,7 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 // 显式资源根让兼容性验收不依赖陈旧的共享 output 产物。
 const assetRoot = process.env.VULCAN_W08_ASSET_ROOT ?? path.join(repository, 'output');
 const managedNode = path.join(assetRoot, 'dependencies/runtimes/node/node-24.18.0-windows-x64/node.exe');
-const mcpCli = path.join(repository, 'target/w08-playwright-mcp-compat/node_modules/@playwright/mcp/cli.js');
+const mcpCli = path.join(assetRoot, 'plugins/vulcan-browser/node/node_modules/@playwright/mcp/cli.js');
 const chromiumExecutable = path.join(assetRoot, 'browser/chromium/chrome-win64/chrome.exe');
 const root = await mkdtemp(path.join(tmpdir(), 'vulcan-w08-official-mcp-'));
 const pageEvents = [];
@@ -102,8 +102,14 @@ class StdioMcpClient {
   /** 停止可丢弃的 MCP 子进程，并短暂等待其退出。 */
   async close() {
     if (this.child.exitCode !== null) return;
-    this.child.kill();
-    await bounded(new Promise(resolve => this.child.once('exit', resolve)), 'MCP process exit', 5_000).catch(() => {});
+    // rmcp ends stdin before its bounded kill fallback; reproduce that graceful shutdown here.
+    // rmcp 先结束 stdin 再执行有时限的强制终止；此处复现该正常关闭行为。
+    const exited = new Promise(resolve => this.child.once('exit', resolve));
+    this.child.stdin.end();
+    await bounded(exited, 'MCP process exit', 5_000).catch(async () => {
+      this.child.kill();
+      await exited;
+    });
   }
 }
 
@@ -182,6 +188,19 @@ try {
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.deepEqual(pageEvents, ['clicked']);
 
+  // Reproduce the production turn boundary: stop MCP before revoking its exact grant.
+  // 复现生产回合边界：先停止 MCP，再撤销其精确授权。
+  await client.close();
+  assert.equal((await proxy.close('w08-official-mcp')).status, 'revoked');
+  assert.ok(context.pages().some(page => page.url().startsWith(`http://127.0.0.1:${port}/`)), 'Turn completion closed the owned context.');
+  // A second turn must reuse the same pages through a fresh one-use endpoint.
+  // 第二轮必须通过新的一次性端点复用相同页面。
+  const nextGrant = await proxy.open('w08-official-mcp');
+  client = new StdioMcpClient(nextGrant.endpoint, path.join(root, 'mcp-output-next'));
+  await client.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vulcan-w08-next-turn', version: '1.0.0' } });
+  client.notify('notifications/initialized');
+  await callTool(client, 'browser_snapshot');
+
   const fileNavigation = await client.request('tools/call', {
     name: 'browser_navigate', arguments: { url: 'file:///C:/Windows/win.ini' },
   });
@@ -196,7 +215,7 @@ try {
   assert.ok(context.pages().some(page => page.url().startsWith(`http://127.0.0.1:${port}/`)), 'Revoking MCP must not close the owned context.');
   console.log(JSON.stringify({
     result: 'passed',
-    mcpVersion: '0.0.81',
+    mcpVersion: '0.0.82',
     server: initialized.serverInfo,
     toolNames: ['browser_navigate', 'browser_snapshot', 'browser_take_screenshot', 'browser_click'],
     screenshotBytes: Buffer.from(image.data, 'base64').length,

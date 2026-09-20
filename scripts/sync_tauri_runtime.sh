@@ -16,6 +16,10 @@ ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
 # OutputRootDir 在任何同步或递归清理之前完成验证。
 OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root)
 
+# Download locked browser dependencies only during explicit build synchronization.
+# 仅在显式构建同步期间下载锁定浏览器依赖。
+node "$ProjectDir/scripts/browser-runtime.mjs" prepare
+
 # SourceConfigDir points at repository-owned packaged configuration templates.
 # SourceConfigDir 指向仓库持有的打包配置模板目录。
 SourceConfigDir="$ProjectDir/config"
@@ -278,6 +282,11 @@ for SourceVulcanPluginDir in "$SourceVulcanPluginsDir"/*; do
     # DestinationVulcanPluginDir receives an incremental overlay so synchronization preserves unmanaged files.
     # DestinationVulcanPluginDir 接收增量覆盖，确保同步过程保留未管理文件。
     DestinationVulcanPluginDir="$OutputVulcanPluginsDir/$PluginName"
+    # Replace the application-owned browser dependencies instead of retaining obsolete files.
+    # 替换应用自有浏览器依赖，避免保留过期文件。
+    if [ "$PluginName" = "vulcan-browser" ]; then
+        rm -rf "$DestinationVulcanPluginDir/node/node_modules"
+    fi
     if ! copy_directory_contents "$SourceVulcanPluginDir" "$DestinationVulcanPluginDir" 0; then
         echo "Failed to deploy Vulcan Plugin package: $PluginName" >&2
         exit 1

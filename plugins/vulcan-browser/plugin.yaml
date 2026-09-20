@@ -9,7 +9,6 @@ permissions:
   - ui_host_context
   - process_node
   - process_session
-  - dependency_registry_network
   - config
 required_files:
   - ui/index.mjs
@@ -25,7 +24,7 @@ required_files:
 execution:
   dependencies:
     manifest: dependencies.yaml
-    install_mode: registry
+    install_mode: bundled
 lua_runtime:
   bundle: runtime/plugin.bundle.lua
   invoke_function: dispatch

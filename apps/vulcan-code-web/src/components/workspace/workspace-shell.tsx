@@ -626,7 +626,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         if (sessions.some((session) => session.ownerSessionId !== owner)) {
           throw new Error("Core browser list contains a different conversation owner.");
         }
-        const ids = sessions.filter((session) => session.status === "running").map((session) => session.sessionId);
+        // Keep crashed browsers discoverable; only an explicit close removes the diagnostic panel.
+        // 保留崩溃浏览器的可见入口；只有显式关闭才移除诊断面板。
+        const ids = sessions.filter((session) => session.status === "running" || session.status === "crashed").map((session) => session.sessionId);
         setAiBrowserState((current) => current.owner === owner && current.ids.length === ids.length
           && current.ids.every((id, index) => id === ids[index]) ? current : { owner, ids });
         const previous = observedBrowserIds.current.get(owner) ?? new Set<string>();

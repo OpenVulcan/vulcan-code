@@ -959,8 +959,8 @@ pub fn read_control_discovery(path: &std::path::Path) -> Option<BrowserHostContr
 /// 一次已规划的浏览器宿主进程启动。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserHostLaunchPlan {
-    /// Executable that hosts the browser, usually the shared desktop runtime.
-    /// 承载浏览器的可执行文件，通常是共享桌面运行时。
+    /// Managed Node executable that hosts the independent Core browser.
+    /// 承载独立 Core 浏览器的受管 Node 可执行程序。
     pub executable: std::path::PathBuf,
     /// Entry script of the browser host inside the runtime.
     /// 运行时内浏览器宿主的入口脚本。
@@ -1041,7 +1041,9 @@ impl BrowserHostLaunchPlan {
     /// 按稳定顺序返回文档规定的宿主参数。
     pub fn arguments(&self) -> Vec<String> {
         vec![
-            self.entry.to_string_lossy().into_owned(),
+            // Node's module loader rejects Windows verbatim paths even when the OS accepts them.
+            // 即使操作系统接受 Windows verbatim 路径，Node 模块加载器也会拒绝它们。
+            chromium_path_argument(&self.entry),
             format!("--session-id={}", self.session_id),
             format!("--host-generation={}", self.host_generation),
             format!(
@@ -1220,30 +1222,32 @@ impl BrowserHostSpawner for SystemBrowserHostSpawner {
         &self,
         plan: &BrowserHostLaunchPlan,
     ) -> Result<Box<dyn BrowserHostProcessHandle>, String> {
-        let child = std::process::Command::new(&plan.executable)
+        // Core starts the declared Node runtime, independently of the GUI's Electron process.
+        // Core 启动已声明的 Node 运行时，与 GUI 的 Electron 进程独立。
+        let mut command = std::process::Command::new(&plan.executable);
+        command
             .args(plan.arguments())
-            // Electron is reused only as the packaged Node runtime; Chromium is the actual page
-            // engine and is selected by the separately installed runtime manifest entry.
-            // Electron 仅作为打包的 Node 运行时复用；真正的页面引擎是独立安装且由布局清单选定的
-            // Chromium。
-            .env("ELECTRON_RUN_AS_NODE", "1")
-            // Measurement from W02: the Electron main process receives neither the spawner's
-            // standard-input pipe nor a clean standard-output stream, so both are deliberately
-            // closed and the control protocol runs on its own authenticated loopback connection.
-            // W02 实测：Electron 主进程既收不到启动方的标准输入管道，也拿不到干净的标准输出流，
-            // 因此两者都被有意关闭，控制协议运行在自身经鉴权的回环连接上。
+            .env_remove("ELECTRON_RUN_AS_NODE")
+            // Keep the established authenticated control channel independent of process stdio.
+            // 保持既有鉴权控制通道独立于进程标准输入输出。
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             // Standard error stays inherited so real host diagnostics reach the service log.
             // 标准错误保持继承，使真实宿主诊断进入服务日志。
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
-            .map_err(|error| {
-                format!(
-                    "failed to start the browser host {}: {error}",
-                    plan.executable.display()
-                )
-            })?;
+            .stderr(std::process::Stdio::inherit());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // A background browser must not open a separate Node console window.
+            // 后台浏览器不应弹出额外 Node 控制台窗口。
+            command.creation_flags(0x08000000);
+        }
+        let child = command.spawn().map_err(|error| {
+            format!(
+                "failed to start the browser host {}: {error}",
+                plan.executable.display()
+            )
+        })?;
         Ok(Box::new(SystemBrowserHostProcess { child }))
     }
 }
@@ -1252,8 +1256,8 @@ impl BrowserHostSpawner for SystemBrowserHostSpawner {
 /// 启动浏览器宿主所需的运行时配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserHostRuntimeConfig {
-    /// Executable that hosts the browser, usually the shared desktop runtime.
-    /// 承载浏览器的可执行文件，通常是共享桌面运行时。
+    /// Managed Node executable that hosts the independent Core browser.
+    /// 承载独立 Core 浏览器的受管 Node 可执行程序。
     pub executable: std::path::PathBuf,
     /// Entry script of the browser host inside the runtime.
     /// 运行时内浏览器宿主的入口脚本。
@@ -1837,7 +1841,7 @@ mod tests {
         );
         let plan = BrowserHostLaunchPlan {
             executable: std::path::PathBuf::from("electron.exe"),
-            entry: std::path::PathBuf::from("main.js"),
+            entry: std::path::PathBuf::from(r"\\?\F:\runtime\main.js"),
             chromium_executable: std::path::PathBuf::from(r"\\?\F:\runtime\chrome.exe"),
             session_id: String::from("session-1"),
             host_generation: String::from("1"),

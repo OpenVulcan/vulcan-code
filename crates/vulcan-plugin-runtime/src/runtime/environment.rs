@@ -262,12 +262,20 @@ fn inspect_plugin_execution_environment(
     }
     // destination is derived solely from the manager root and exact catalog identity.
     // destination 仅由管理器根目录和精确目录身份推导。
-    let destination = state
+    let mut destination = state
         .plugin_runtime_root
         .join(&plugin.id)
         .join(version)
         .join(&plugin.content_fingerprint);
-    if !destination.exists() {
+    // Built-in bundled sources already contain dependencies; private publication happens on use.
+    // 内置自带依赖的源码包已包含依赖；私有代次在使用时发布。
+    let bundled_source = !destination.exists()
+        && plugin.origin == crate::VulcanPluginPackageOrigin::Bundled
+        && manifest.execution.dependencies.install_mode
+            == VulcanPluginDependencyInstallMode::Bundled;
+    if bundled_source {
+        destination = plugin.package_root.clone();
+    } else if !destination.exists() {
         return Ok(None);
     }
     // expected_marker forbids treating an old or tampered environment as ready.
@@ -282,8 +290,10 @@ fn inspect_plugin_execution_environment(
         )
         .to_string(),
     };
-    validate_plugin_environment_marker(&destination, &expected_marker)?;
-    if manifest.execution.dependencies.install_mode == VulcanPluginDependencyInstallMode::Registry {
+    if !bundled_source {
+        validate_plugin_environment_marker(&destination, &expected_marker)?;
+    }
+    if manifest.execution.dependencies.manifest.is_some() {
         // dependency_file is the package-owned, already-authorized lock declaration.
         // dependency_file 是插件包自有且已授权的锁定依赖声明。
         let dependency_file = canonical_plugin_file(
@@ -313,16 +323,24 @@ fn inspect_plugin_execution_environment(
             // package_json 定位 pnpm 安装的精确 node_modules 目录。
             let package_json =
                 canonical_plugin_file(&destination, &node.package_json, "Node package manifest")?;
-            if !package_json
-                .parent()
-                .ok_or_else(|| String::from("Node package manifest has no parent directory."))?
-                .join("node_modules")
-                .is_dir()
+            // Dependency-free bundled Node entries do not require an empty node_modules directory.
+            // 无依赖的内置 Node 入口不需要空的 node_modules 目录。
+            let package = super::read_plugin_json_state(&package_json, "Node package manifest")
+                .map_err(|error| error.to_string())?;
+            if crate::catalog::node_package_declares_dependencies(&package)?
+                && !package_json
+                    .parent()
+                    .ok_or_else(|| String::from("Node package manifest has no parent directory."))?
+                    .join("node_modules")
+                    .is_dir()
             {
                 return Ok(None);
             }
         }
-        if let Some(python) = &dependencies.python_runtime {
+        if let Some(python) = &dependencies.python_runtime
+            && manifest.execution.dependencies.install_mode
+                == VulcanPluginDependencyInstallMode::Registry
+        {
             resolve_managed_runtime_install(
                 &state.managed_runtime_distribution_root,
                 ManagedRuntimeKind::Python,

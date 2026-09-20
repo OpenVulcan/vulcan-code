@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { browserPackageInputs, browserVersions, verifyBrowserDependencies } from './browser-runtime.mjs';
 
 // The repository is resolved from this script rather than the caller's working directory.
 // 仓库由脚本位置确定，不依赖调用方工作目录。
@@ -97,11 +98,10 @@ export async function verifyPackagedLayout(layout, distributionRoot = output) {
     { name: 'desktopExecutable', kind: 'file' },
     { name: 'desktopEntry', kind: 'file' },
     { name: 'browserHostEntry', kind: 'file' },
+    { name: 'browserHostExecutable', kind: 'file' },
+    { name: 'chromiumExecutable', kind: 'file' },
     { name: 'webuiRoot', kind: 'directory' },
   ];
-  if (layout.chromiumExecutable !== null && layout.chromiumExecutable !== undefined) {
-    entries.push({ name: 'chromiumExecutable', kind: 'file' });
-  }
   for (const { name, kind } of entries) {
     const relative = layout[name];
     if (typeof relative !== 'string' || !relative) {
@@ -258,26 +258,6 @@ async function verifyChromiumPackage(layout, distributionRoot) {
   }
 }
 
-// Retain a declared browser package when a rebuild supplies no replacement source.
-// 重建没有提供替换来源时，保留已声明的浏览器包。
-// distributionRoot is the existing package root; returns its verified executable or null for an absent package.
-// distributionRoot 是现有发行根；返回已验证的程序路径，尚无组件时返回 null。
-export async function retainedChromiumPackage(distributionRoot) {
-  let layout;
-  try {
-    layout = JSON.parse(await readFile(path.join(distributionRoot, 'runtime-layout.json'), 'utf8'));
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error(`Cannot retain existing browser package: ${error.message}`, { cause: error });
-  }
-  if (layout.chromiumExecutable === null || layout.chromiumExecutable === undefined) return null;
-  if (layout.platform !== process.platform || layout.architecture !== process.arch) {
-    throw new Error('Existing browser package targets another platform. Supply an explicit replacement Chromium source.');
-  }
-  await verifyChromiumPackage(layout, distributionRoot);
-  return layout.chromiumExecutable;
-}
-
 // Build a deterministic inventory so a relocated release can detect truncated Chromium payloads.
 // 构建确定性文件清单，使迁移后的发行物能够发现不完整的 Chromium 载荷。
 async function chromiumPackageInventory(root, current = root, files = []) {
@@ -306,8 +286,8 @@ async function chromiumPackageInventory(root, current = root, files = []) {
 async function writeChromiumPackageManifest(chromiumRoot, chromiumExecutable) {
   // Windows Chrome for Testing may exit 3 for --version even though Playwright launches it.
   // Windows 上 Chrome for Testing 的 --version 可能返回 3，但 Playwright 仍可正常启动它。
-  const requireDesktop = createRequire(path.join(repository, 'apps/vulcan-code-desktop/package.json'));
-  const { chromium } = requireDesktop('playwright-core');
+  const requireBrowser = createRequire(path.join(repository, 'plugins/vulcan-browser/node/package.json'));
+  const { chromium } = requireBrowser('playwright-core');
   const browser = await chromium.launch({ executablePath: chromiumExecutable, headless: true });
   let version;
   try {
@@ -323,6 +303,7 @@ async function writeChromiumPackageManifest(chromiumRoot, chromiumExecutable) {
     schemaVersion: 1,
     executable: packageRelativePath(output, chromiumExecutable),
     version,
+    playwrightVersion: browserVersions.playwright,
     files,
   }, null, 2) + '\n');
 }
@@ -384,39 +365,16 @@ async function main() {
     await verifyManagedRuntime(output, runtimeLayout, 'node');
     await verifyManagedRuntime(output, runtimeLayout, 'python');
   }
-  // The optional browser source is checked before the old package is touched.
-  // 在触碰旧发行物之前核对可选浏览器源目录。
-  const chromiumSourceRoot = process.env.VULCAN_CHROMIUM_SOURCE_ROOT;
-  let chromiumSource = null;
-  if (chromiumSourceRoot) {
-    const sourceRoot = path.resolve(chromiumSourceRoot);
-    const requireDesktop = createRequire(path.join(desktop, 'package.json'));
-    const previousBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
-    process.env.PLAYWRIGHT_BROWSERS_PATH = path.dirname(sourceRoot);
-    let sourceExecutable;
-    try {
-      const { chromium } = requireDesktop('playwright-core');
-      sourceExecutable = chromium.executablePath();
-    } finally {
-      if (previousBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
-      else process.env.PLAYWRIGHT_BROWSERS_PATH = previousBrowsersPath;
-    }
-    const executableRelative = path.relative(sourceRoot, sourceExecutable);
-    if (!executableRelative || executableRelative.startsWith('..') || path.isAbsolute(executableRelative)) {
-      throw new Error('The selected Chromium executable is outside VULCAN_CHROMIUM_SOURCE_ROOT.');
-    }
-    await access(sourceExecutable);
-    chromiumSource = { sourceRoot, executableRelative };
-  }
-  // Missing input means retain the verified installed package, never implicitly uninstall it.
-  // 缺少输入表示保留已验证安装包，绝不隐式卸载。
-  const retainedChromium = chromiumSource ? null : await retainedChromiumPackage(output);
+  // Require the adapted browser and synced plugin before modifying any existing distribution.
+  // 修改已有发行物前，必须具备已适配浏览器与已同步插件。
+  const chromiumSource = await browserPackageInputs(output);
+  await verifyBrowserDependencies(path.join(output, 'plugins/vulcan-browser/node'));
   await resetGeneratedDirectory('desktop/runtime');
   await resetGeneratedDirectory('webui');
-  if (chromiumSource) await resetGeneratedDirectory('browser/chromium');
-  // Electron runs the GUI and the host's Node script; the optional, exact Chromium package runs
-  // Core-owned pages and is never silently obtained from a system browser.
-  // Electron 运行 GUI 和宿主 Node 脚本；可选的精确 Chromium 包运行 Core 页面，绝不静默使用系统浏览器。
+  await resetGeneratedDirectory('browser/chromium');
+  await resetGeneratedDirectory('browser/runtime');
+  // Electron owns only GUI pages; managed Node and pinned Chromium own Core automation.
+  // Electron 仅拥有 GUI 页面；受管 Node 与锁定 Chromium 拥有 Core 自动化。
   // The compiled application preserves ESM and the CommonJS sandbox preload.
   // 编译应用保留 ESM 与沙箱使用的 CommonJS 预加载。
   const appEntry = process.platform === 'darwin'
@@ -464,10 +422,22 @@ async function main() {
       icon: path.join(repository, 'apps/vulcan-code-service/icons/icon.ico'),
     });
   }
-  await cp(path.join(desktop, 'dist'), appRoot, { recursive: true });
-  // The Node-mode host resolves its pinned Playwright driver inside the detached distribution.
-  // Node 模式宿主在脱离仓库的发行物内部解析锁定版本的 Playwright 驱动。
-  await cp(path.join(desktop, 'node_modules/playwright-core'), path.join(appRoot, 'node_modules/playwright-core'), { recursive: true, dereference: true });
+  await cp(path.join(desktop, 'dist/gui'), path.join(appRoot, 'gui'), { recursive: true });
+  await writeFile(path.join(appRoot, 'desktop-entry.js'), "import './gui/main.js';\n");
+  // Browser code and dependencies live outside Electron's resources and cannot load its Chromium.
+  // 浏览器代码与依赖位于 Electron 资源目录之外，不会加载其 Chromium。
+  const browserRoot = path.join(output, 'browser/runtime');
+  await mkdir(browserRoot, { recursive: true });
+  await cp(path.join(desktop, 'dist/chromium-host'), path.join(browserRoot, 'chromium-host'), {
+    recursive: true, filter: source => !source.endsWith('install.js') && !source.endsWith('.test.js'),
+  });
+  await mkdir(path.join(browserRoot, 'browser-host'), { recursive: true });
+  for (const name of ['control-discovery.js', 'control-server.js', 'cdp-discovery.js', 'host-protocol.js']) {
+    await cp(path.join(desktop, 'dist/browser-host', name), path.join(browserRoot, 'browser-host', name));
+  }
+  await cp(path.join(repository, 'plugins/vulcan-browser/node/node_modules/playwright-core'), path.join(browserRoot, 'node_modules/playwright-core'), { recursive: true, dereference: true });
+  await cp(path.join(desktop, 'node_modules/ws'), path.join(browserRoot, 'node_modules/ws'), { recursive: true, dereference: true });
+  await writeFile(path.join(browserRoot, 'package.json'), JSON.stringify({ private: true, type: 'module', browserVersions }));
   // The authenticated automation gateway uses the pinned WebSocket implementation at runtime.
   // 经鉴权的自动化网关在运行时使用锁定版本的 WebSocket 实现。
   await cp(path.join(desktop, 'node_modules/ws'), path.join(appRoot, 'node_modules/ws'), { recursive: true, dereference: true });
@@ -490,10 +460,9 @@ async function main() {
   // Read actual runtime and service versions from their authoritative artifacts.
   // 从权威制品读取实际运行时和服务版本。
   const electronPackage = JSON.parse(await readFile(path.join(desktop, 'node_modules/electron/package.json'), 'utf8'));
-  // A source root is explicit and must contain the executable selected by this locked Playwright
-  // version. Absence produces a desktop/service package with browser capability omitted.
-  // 源根目录必须显式指定，且须包含此锁定 Playwright 版本选定的可执行文件；缺失时发行物不声明浏览器能力。
-  let chromiumExecutable = retainedChromium;
+  // The prepared source always contains the executable selected by the adapted Playwright version.
+  // 已准备源码始终包含已适配 Playwright 版本选定的可执行程序。
+  let chromiumExecutable;
   if (chromiumSource) {
     const { sourceRoot, executableRelative } = chromiumSource;
     await cp(sourceRoot, path.join(output, 'browser/chromium'), { recursive: true, dereference: true });
@@ -501,10 +470,11 @@ async function main() {
     await writeChromiumPackageManifest(path.join(output, 'browser/chromium'), entry(chromiumExecutable));
   }
   const layout = {
-    schemaVersion: 1, profile,
+    schemaVersion: 2, profile,
     serviceExecutable,
     desktopExecutable: `desktop/runtime/${electronBinary}`,
-    desktopEntry: `${appEntry}/gui/main.js`, browserHostEntry: `${appEntry}/chromium-host/main.js`,
+    desktopEntry: `${appEntry}/gui/main.js`, browserHostEntry: 'browser/runtime/chromium-host/main.js',
+    browserHostExecutable: packageRelativePath(output, chromiumSource.executable),
     chromiumExecutable,
     webuiRoot: 'webui', runtimeVersion: electronPackage.version,
     platform: process.platform, architecture: process.arch,
@@ -513,14 +483,13 @@ async function main() {
   await verifyPackagedLayout(layout);
   await verifyServiceProfile(entry(layout.serviceExecutable));
   await writeFile(path.join(output, 'runtime-layout.json'), JSON.stringify(layout, null, 2) + '\n');
-  if (!chromiumExecutable) console.log('Core browser runtime omitted; set VULCAN_CHROMIUM_SOURCE_ROOT to package the pinned Chromium build.');
   console.log(`Desktop ${profile} distribution: ${output}`);
 } else {
   // Only the generated layout chooses processes and static resources.
   // 进程和静态资源只由生成的布局清单确定。
   const manifestPath = path.join(output, 'runtime-layout.json');
   const layout = JSON.parse(await readFile(manifestPath, 'utf8'));
-  if (layout.schemaVersion !== 1 || layout.profile !== profile
+  if (layout.schemaVersion !== 2 || layout.profile !== profile
     || layout.platform !== process.platform || layout.architecture !== process.arch) {
     throw new Error('The built distribution does not match the requested profile, platform, or architecture. Rebuild first.');
   }

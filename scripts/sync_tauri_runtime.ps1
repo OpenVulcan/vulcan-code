@@ -367,6 +367,11 @@ function Copy-DirectoryContents {
     }
 }
 
+# Prepare the bundled browser before copying plugins; all downloads belong to this build step.
+# 复制插件前准备内置浏览器；全部下载仅属于此构建步骤。
+& node (Join-Path $ProjectDir "scripts/browser-runtime.mjs") prepare
+if ($LASTEXITCODE -ne 0) { throw "Built-in browser preparation failed." }
+
 Write-Host "==> Syncing packaged config..."
 Copy-DirectoryContents -SourceDirectory $SourceConfigDir -DestinationDirectory $OutputConfigDir -KeepExistingRelativePaths $KeepExistingConfigRelativePaths
 
@@ -465,6 +470,16 @@ foreach ($VulcanPluginName in $SourceVulcanPluginNames) {
     $ResolvedDestinationVulcanPluginDir = [System.IO.Path]::GetFullPath($DestinationVulcanPluginDir)
     if (-not $ResolvedDestinationVulcanPluginDir.StartsWith($ResolvedOutputVulcanPluginsDir + [System.IO.Path]::DirectorySeparatorChar, $OutputPathComparison)) {
         throw "Refusing to deploy Vulcan Plugin outside runtime root: $ResolvedDestinationVulcanPluginDir"
+    }
+    # The built-in browser owns its complete npm tree; old versions must not survive an overlay.
+    # 内置浏览器拥有完整 npm 目录；旧版本文件不能在覆盖同步后残留。
+    if ($VulcanPluginName -eq "vulcan-browser") {
+        $BrowserModules = Join-Path $ResolvedDestinationVulcanPluginDir "node/node_modules"
+        if (Test-Path -LiteralPath $BrowserModules) {
+            if (-not (Remove-ItemAllowLocked -LiteralPath $BrowserModules -Recurse)) {
+                throw "Cannot replace the built-in browser dependency tree. Close the application and retry synchronization."
+            }
+        }
     }
     Copy-DirectoryContents `
         -SourceDirectory (Join-Path $SourceVulcanPluginsDir $VulcanPluginName) `

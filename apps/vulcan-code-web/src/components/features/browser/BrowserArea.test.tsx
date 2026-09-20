@@ -78,6 +78,27 @@ it("normalizes browser addresses before Core navigation", () => {
   expect(() => coreBrowserAddress("file:///private.txt")).toThrow();
 });
 
+// A crashed host must remain selectable and show its blocked state instead of vanishing.
+// 崩溃宿主必须保持可选择并展示阻塞状态，而不是消失。
+it("keeps a crashed Playwright browser visible with an explicit diagnostic", async () => {
+  const session: CoreBrowserSession = {
+    sessionId: "crashed-browser", ownerSessionId: "conversation-a", status: "crashed",
+    profileMode: "ephemeral", currentUrl: null, leaseState: "blocked",
+    blockedReason: "automation.close outcome unknown", automationState: "detached",
+    pageGeneration: "1", viewportGeneration: "1", controlEpoch: "2", hostGeneration: "1",
+    viewportSize: null, pageCount: 0, requiresExplicitReopen: true,
+  };
+  vi.mocked(listCoreBrowserSessions).mockResolvedValue([session]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
+  await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  await selectBrowser();
+  expect(browserTabs()[0].textContent).toContain("Crashed");
+  expect(host.textContent).toContain("The Playwright browser host exited unexpectedly");
+  expect(host.textContent).toContain("automation.close outcome unknown");
+  expect(host.textContent).not.toContain("Connecting view");
+  expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Take control')).toBe(false);
+});
+
 it("sends a bare domain through the address bar as an HTTPS Core navigation", async () => {
   // session is a running Core browser owned by the visible conversation.
   // session 是归属当前可见会话的运行中 Core 浏览器。

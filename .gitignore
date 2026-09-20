@@ -67,3 +67,6 @@ TASK_LOG.md
 # Vendored protoc provisioned by make init-system; required by lance-encoding via lancedb.
 # 由 make init-system 取得的随仓库 protoc；lancedb 经 lance-encoding 需要它。
 .cargo/protoc/
+# Browser npm payloads are prepared from the frozen lockfile during make sync.
+# 浏览器 npm 载荷在 make sync 期间根据冻结锁文件准备。
+/plugins/vulcan-browser/node/node_modules/
